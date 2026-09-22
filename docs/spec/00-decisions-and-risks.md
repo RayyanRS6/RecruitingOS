@@ -405,8 +405,17 @@ not verifiable by any API. Mitigation for risk R-OWN-1.
 **GitHub settings verified through the authenticated API on 22 September (afternoon):** `nmotaweh` is the sole owner
 (active); every member has two-factor authentication (the "members without 2FA" filter is empty); the organization's
 two-factor requirement is enabled; `recruiting-os` is private; the baseline commits carry the private no-reply address
-`332282127+nmotaweh@users.noreply.github.com` as author and committer. Still reading as allowed at the same time:
-"members can create public repositories" (founder reports it unticked; to be re-read).
+`332282127+nmotaweh@users.noreply.github.com` as author and committer. "Members can create public repositories" still reads as allowed through the API.
+
+**Provider and plan limitation L-GH-1 (founder record, 22 September 2026; not a failed configuration, not a Phase 1
+blocker):** on the organization's current GitHub plan the "Public" repository-creation option is shown checked and
+disabled in the interface and cannot be unticked; per the founder's reading of GitHub's documentation, restricting
+members to private-only creation needs GitHub Enterprise Cloud, and organization owners can create any repository type
+regardless. No Enterprise upgrade is recommended or initiated for the pilot. Compensating controls, decided by the
+founder: (1) Nadine is the only organization member and owner; (2) `recruiting-os` is confirmed private; (3) no
+additional member is added during the pilot; (4) repository visibility is checked at every release review; (5) any
+future member receives access only to the existing private repository; (6) creating additional repositories is outside
+the pilot process. The production team re-reads `private: true` on `recruiting-os` at each phase checkpoint.
 
 ### Phase 1 checkpoint: secure the source code (22 September 2026)
 
@@ -423,6 +432,7 @@ two-factor requirement is enabled; `recruiting-os` is private; the baseline comm
 | Branch protection on `main` | pull requests required (0 approvals for now; the founder may raise it), required check `verify` (strict), administrators included, force pushes blocked, deletion blocked; proven by a refused direct push ("Changes must be made through a pull request", "Required status check verify is expected") and a refused deletion | API read; push output |
 | Dependabot alerts | enabled | API read (204) |
 | Tag | `release-1-baseline` on the commit whose `verify` run passed | API read |
+| Repository visibility control | plan limitation L-GH-1 recorded with six compensating controls; `recruiting-os` private on every read | this record |
 | GitHub Actions policy | repository allows all actions; the workflow uses `actions/checkout`, `pnpm/action-setup`, `actions/setup-node`, `actions/upload-artifact` and a pinned gitleaks release; no permission broadened | API read |
 
 | Phase | Status | Evidence |
