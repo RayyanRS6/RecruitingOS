@@ -21,10 +21,10 @@
     "@ros/workflows": "workspace:*",
     "drizzle-orm": "^0.45.0",
     "hono": "^4.8.0",
+    "tsx": "^4.20.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
-    "tsx": "^4.20.0",
     "typescript": "^5.9.0"
   }
 }
