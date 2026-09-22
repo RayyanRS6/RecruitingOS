@@ -90,15 +90,15 @@ export class SupabaseIdentityProvider implements IdentityProvider {
     if (!r.id || !r.totp?.secret || !r.totp.uri) throw new IdentityError("mfa_unavailable", "The second-factor service returned an incomplete enrolment.");
     // The service returns the QR code as SVG markup; a data-URL prefix, if it ever sends one, is stripped so the page adds its own.
     const qr = r.totp.qr_code ?? null;
-    const qrCodeSvg = qr ? (qr.startsWith("data:") ? decodeURIComponent(qr.replace(/^data:image\/svg\+xml[^,]*,/, "")) : qr) : null;
-    return { factorId: r.id, secret: r.totp.secret, uri: r.totp.uri, qrCodeSvg: qrCodeSvg && qrCodeSvg.includes("<svg") ? qrCodeSvg : null };
+    const raw = qr ? (qr.startsWith("data:") ? decodeURIComponent(qr.replace(/^data:image\/svg\+xml[^,]*,/, "")) : qr) : null;
+    return { factorId: r.id, secret: r.totp.secret, uri: r.totp.uri, qrCodeSvg: raw && raw.includes("<svg") ? scalableSvg(raw) : null };
   }
-  async challengeFactor(accessToken: string, factorId: string): Promise<{ challengeId: string; expiresAt: string }> {
+  async challengeFactor(accessToken: string, factorId: string, _ctx?: { ip?: string }): Promise<{ challengeId: string; expiresAt: string }> {
     const r = await this.mfaRequest<{ id: string; expires_at?: number | string }>(accessToken, "POST", `/factors/${encodeURIComponent(factorId)}/challenge`, {});
     const exp = typeof r.expires_at === "number" ? new Date(r.expires_at * 1000).toISOString() : typeof r.expires_at === "string" ? r.expires_at : new Date(Date.now() + 5 * 60_000).toISOString();
     return { challengeId: r.id, expiresAt: exp };
   }
-  async verifyFactor(accessToken: string, input: { factorId: string; challengeId: string; code: string }): Promise<{ accessToken: string }> {
+  async verifyFactor(accessToken: string, input: { factorId: string; challengeId: string; code: string }, _ctx?: { ip?: string }): Promise<{ accessToken: string }> {
     const r = await this.mfaRequest<{ access_token?: string }>(accessToken, "POST", `/factors/${encodeURIComponent(input.factorId)}/verify`, { challenge_id: input.challengeId, code: input.code }, true);
     if (!r.access_token) throw new IdentityError("mfa_unavailable", "The second-factor service returned no session.");
     return { accessToken: r.access_token };
@@ -108,14 +108,30 @@ export class SupabaseIdentityProvider implements IdentityProvider {
   }
 }
 
+/** The service's error codes first; the HTTP status only decides what a code-less answer means. */
 function mapMfaError(code: string, status: number, verifying: boolean): string {
-  if (code === "mfa_verification_failed" || code === "mfa_totp_verify_failed" || (verifying && (status === 400 || status === 422))) return "mfa_code_invalid";
-  if (code === "mfa_challenge_expired") return "mfa_challenge_expired";
-  if (code === "mfa_factor_name_conflict") return "mfa_factor_conflict";
-  if (code === "mfa_factor_not_found") return verifying ? "mfa_challenge_invalid" : "mfa_factor_not_found";
-  if (code === "mfa_ip_address_mismatch") return "mfa_challenge_invalid";
-  if (code === "insufficient_aal") return "mfa_aal2_required";
-  if (code === "over_request_rate_limit" || status === 429) return "mfa_rate_limited";
-  if (status === 401 || code === "session_not_found" || code === "bad_jwt") return "mfa_session_invalid";
+  switch (code) {
+    case "mfa_verification_failed": case "mfa_totp_verify_failed": return "mfa_code_invalid";
+    case "mfa_challenge_expired": return "mfa_challenge_expired";
+    case "mfa_factor_name_conflict": return "mfa_factor_conflict";
+    case "mfa_factor_not_found": return verifying ? "mfa_challenge_invalid" : "mfa_factor_not_found";
+    case "mfa_ip_address_mismatch": return "mfa_ip_mismatch";
+    case "insufficient_aal": return "mfa_aal2_required";
+    case "over_request_rate_limit": return "mfa_rate_limited";
+    case "mfa_totp_verify_not_enabled": case "mfa_totp_enroll_not_enabled": case "mfa_verification_rejected": return "mfa_unavailable";
+    case "session_not_found": case "bad_jwt": case "no_authorization": return "mfa_session_invalid";
+  }
+  if (status === 429) return "mfa_rate_limited";
+  if (status === 401) return "mfa_session_invalid";
   return "mfa_unavailable";
+}
+
+/** The service's SVG names a pixel size and no viewBox, which an <img> cannot scale; a viewBox from that size makes it fit any box. */
+export function scalableSvg(svg: string): string {
+  const open = svg.match(/<svg\b[^>]*>/);
+  if (!open || /viewBox=/.test(open[0])) return svg;
+  const w = open[0].match(/\bwidth="(\d+(?:\.\d+)?)(?:px)?"/)?.[1];
+  const h = open[0].match(/\bheight="(\d+(?:\.\d+)?)(?:px)?"/)?.[1];
+  if (!w || !h) return svg;
+  return svg.replace(open[0], open[0].replace(/<svg\b/, `<svg viewBox="0 0 ${w} ${h}"`));
 }

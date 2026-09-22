@@ -20,7 +20,7 @@ export class FakeIdentityProvider implements IdentityProvider {
   readonly issuer = "https://fake-issuer.local/auth/v1";
   private codes = new Map<string, { input: FakeMintInput; codeChallenge: string; expiresAt: number }>();
   private factors = new Map<string, FakeFactor[]>();
-  private challenges = new Map<string, { factorId: string; subject: string; expiresAt: number }>();
+  private challenges = new Map<string, { factorId: string; subject: string; expiresAt: number; ip: string | null }>();
   /** Tests may pin the clock the code check uses. */
   clock: () => Date = () => new Date();
   constructor(private cfg: { apiBaseUrl: string; secret?: string }) {}
@@ -86,7 +86,9 @@ export class FakeIdentityProvider implements IdentityProvider {
   async enrolTotp(accessToken: string, input: { friendlyName: string; issuer: string }): Promise<TotpEnrolment> {
     const who = await this.holder(accessToken);
     const list = this.factors.get(who.subject) ?? [];
-    if (list.some((f) => f.status === "verified" && f.friendlyName === input.friendlyName)) throw new IdentityError("mfa_factor_conflict", "An authenticator with that name already exists.");
+    // The service refuses a name any existing factor holds, and a new factor beside a verified one without a level-2 token.
+    if (list.some((f) => f.friendlyName === input.friendlyName)) throw new IdentityError("mfa_factor_conflict", "An authenticator with that name already exists.");
+    if (list.some((f) => f.status === "verified") && who.aal !== "aal2") throw new IdentityError("mfa_aal2_required", "A second-factor session is needed to add another authenticator.");
     const factor: FakeFactor = { id: `fac_${base64url.encode(randomBytes(9))}`, friendlyName: input.friendlyName, secret: generateTotpSecret(), status: "unverified", createdAt: this.clock().toISOString() };
     this.factors.set(who.subject, [...list, factor]);
     const uri = otpauthUri({ issuer: input.issuer, account: who.email, secret: factor.secret });
@@ -94,19 +96,21 @@ export class FakeIdentityProvider implements IdentityProvider {
     const qrCodeSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="fake QR code"><rect width="120" height="120" fill="#fff"/><text x="8" y="64" font-size="10" font-family="monospace">fake QR ${factor.id.slice(4, 10)}</text></svg>`;
     return { factorId: factor.id, secret: factor.secret, uri, qrCodeSvg };
   }
-  async challengeFactor(accessToken: string, factorId: string): Promise<{ challengeId: string; expiresAt: string }> {
+  async challengeFactor(accessToken: string, factorId: string, ctx: { ip?: string } = {}): Promise<{ challengeId: string; expiresAt: string }> {
     const who = await this.holder(accessToken);
     const factor = (this.factors.get(who.subject) ?? []).find((f) => f.id === factorId);
     if (!factor) throw new IdentityError("mfa_factor_not_found", "That authenticator is not enrolled.");
     const id = `chl_${base64url.encode(randomBytes(9))}`;
     const expiresAt = this.clock().getTime() + 5 * 60_000;
-    this.challenges.set(id, { factorId, subject: who.subject, expiresAt });
+    this.challenges.set(id, { factorId, subject: who.subject, expiresAt, ip: ctx.ip ?? null });
     return { challengeId: id, expiresAt: new Date(expiresAt).toISOString() };
   }
-  async verifyFactor(accessToken: string, input: { factorId: string; challengeId: string; code: string }): Promise<{ accessToken: string }> {
+  async verifyFactor(accessToken: string, input: { factorId: string; challengeId: string; code: string }, ctx: { ip?: string } = {}): Promise<{ accessToken: string }> {
     const who = await this.holder(accessToken);
     const challenge = this.challenges.get(input.challengeId);
     if (!challenge || challenge.subject !== who.subject || challenge.factorId !== input.factorId) throw new IdentityError("mfa_challenge_invalid", "Start the code step again.");
+    // The service ties a challenge to the address that created it.
+    if ((challenge.ip ?? null) !== (ctx.ip ?? null)) throw new IdentityError("mfa_ip_mismatch", "Challenge and verification came from different addresses.");
     if (challenge.expiresAt < this.clock().getTime()) {
       this.challenges.delete(input.challengeId);
       throw new IdentityError("mfa_challenge_expired", "That code request expired. Try again.");

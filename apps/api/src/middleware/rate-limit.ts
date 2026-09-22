@@ -59,7 +59,7 @@ async function subjectOf(c: Context<Vars>, rule: Rule): Promise<string | undefin
 }
 
 function isCandidateSurface(path: string): boolean {
-  return path.startsWith("/c/") || path.startsWith("/careers/");
+  return path.startsWith("/c/") || path.startsWith("/careers/") || path.startsWith("/api/v1/auth/mfa");
 }
 
 function refuse(c: Context<Vars>, d: RateLimitDecision) {

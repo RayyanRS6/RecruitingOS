@@ -3,7 +3,7 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { eq } from "drizzle-orm";
 import { MagicLinkConsume, MagicLinkRequest } from "@ros/contracts";
 import { createHash, randomBytes } from "node:crypto";
-import { consumeMagicLink, createMagicLink, isStaffAccount, normalizeEmail, revokeSession, sealMfaTransaction, setActiveCompany, SignInRefused, MFA_TRANSACTION_TTL_MS } from "@ros/core";
+import { consumeMagicLink, createMagicLink, isStaffAccount, newMfaTransactionId, normalizeEmail, revokeSession, sealMfaTransaction, setActiveCompany, SignInRefused, MFA_TRANSACTION_TTL_MS } from "@ros/core";
 import { companies, memberships, users } from "@ros/db";
 import { mfaRoutes } from "./auth-mfa";
 import { MFA_COOKIE, mfaCookieOptions, needsSecondFactor, openSession, sessionCookieOptions, signInPolicy } from "./auth-shared";
@@ -66,7 +66,7 @@ authRoutes.get("/callback", async (c) => {
       // Microsoft has vouched for an ITS staff member; the authenticator step opens the session, not this route.
       deleteCookie(c, PKCE_COOKIE, { path: "/" });
       const now = container.engine.clock().getTime();
-      setCookie(c, MFA_COOKIE, sealMfaTransaction({ v: 1, accessToken, email: normalizeEmail(identity.email), provider: identity.provider, subject: identity.subject, stage: "start", factorIds: [], secret: null, uri: null, attempts: 0, expiresAt: now + MFA_TRANSACTION_TTL_MS }, container.env.SESSION_SECRET), mfaCookieOptions(container));
+      setCookie(c, MFA_COOKIE, sealMfaTransaction({ v: 1, id: newMfaTransactionId(), accessToken, email: normalizeEmail(identity.email), provider: identity.provider, subject: identity.subject, stage: "start", factorIds: [], secret: null, uri: null, notice: null, expiresAt: now + MFA_TRANSACTION_TTL_MS }, container.env.SESSION_SECRET), mfaCookieOptions(container));
       return c.redirect(`${container.env.APP_BASE_URL}/api/v1/auth/mfa`, 302);
     }
     const result = await openSession(container, c, identity);

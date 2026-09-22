@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
-import { expect, test, type Page } from "@playwright/test";
-import { expectAccessible } from "./helpers";
+import { expect, test } from "@playwright/test";
+import { expectAccessible, signInWithoutSecondFactor } from "./helpers";
 
 /**
  * The staff second factor in a real browser (founder approval, 22 September 2026): Microsoft vouches for an ITS staff
@@ -32,27 +32,16 @@ function totp(secret: string, now = Date.now()): string {
   return String(bin % 1_000_000).padStart(6, "0");
 }
 
-/** Microsoft sign-in through the fake consent page, without the second factor the fake would otherwise assert. */
-async function microsoftSignInWithoutSecondFactor(page: Page, email: string) {
-  await page.goto("/login");
-  await page.getByRole("link", { name: "Continue with Microsoft" }).click();
-  await expect(page.getByRole("heading", { name: /Sign in with/ })).toBeVisible();
-  await page.getByRole("textbox", { name: "Email" }).fill(email);
-  await page.getByLabel("Name").fill("Sam Staff");
-  const mfa = page.getByLabel("Second factor verified (TOTP)");
-  if (await mfa.isChecked()) await mfa.uncheck();
-  await page.getByRole("button", { name: "Continue" }).click();
-  await page.waitForURL(/\/api\/v1\/auth\/mfa/);
-}
-
 test.describe("staff second factor", () => {
   test("first sign-in enrols an authenticator, offers a backup, and the next sign-in asks for a code", async ({ page, baseURL }) => {
     const email = `staff-${Date.now().toString(36)}@identifiedtalent.com`;
-    await microsoftSignInWithoutSecondFactor(page, email);
+    await signInWithoutSecondFactor(page, { email, name: "Sam Staff" });
     await expect(page.getByRole("heading", { name: "Set up your authenticator app" })).toBeVisible();
     await expectAccessible(page, "authenticator enrolment");
     const key = (await page.locator("#setup-key").textContent())!.replace(/\s+/g, "");
     expect(key.length).toBeGreaterThanOrEqual(32);
+    // no session exists before the code
+    expect((await page.request.get(`${baseURL}/api/v1/auth/me`)).status()).toBe(401);
 
     const wrong = totp(key) === "000000" ? "111111" : "000000";
     await page.getByLabel("Six-digit code").fill(wrong);
@@ -72,7 +61,7 @@ test.describe("staff second factor", () => {
 
     // Sign out, sign in again: the enrolled authenticator is challenged and no key is shown.
     expect((await page.request.post(`${baseURL}/api/v1/auth/logout`)).ok()).toBeTruthy();
-    await microsoftSignInWithoutSecondFactor(page, email);
+    await signInWithoutSecondFactor(page, { email, name: "Sam Staff" });
     await expect(page.getByRole("heading", { name: "Enter your code" })).toBeVisible();
     await expect(page.locator("#setup-key")).toHaveCount(0);
     await expectAccessible(page, "authenticator code entry");
@@ -91,5 +80,22 @@ test.describe("staff second factor", () => {
     await page.waitForURL((u) => !u.pathname.startsWith("/api/"));
     const again = (await (await page.request.get(`${baseURL}/api/v1/auth/me`)).json()) as { auth: { aal: string } };
     expect(again.auth.aal).toBe("aal2");
+  });
+
+  test("five wrong codes end the attempt and no session exists afterwards", async ({ page, baseURL }) => {
+    const email = `lockout-${Date.now().toString(36)}@identifiedtalent.com`;
+    await signInWithoutSecondFactor(page, { email, name: "Lock Out" });
+    const key = (await page.locator("#setup-key").textContent())!.replace(/\s+/g, "");
+    const wrong = totp(key) === "000000" ? "111111" : "000000";
+    for (let i = 1; i <= 4; i++) {
+      await page.getByLabel("Six-digit code").fill(wrong);
+      await page.getByRole("button", { name: "Confirm and sign in" }).click();
+      await expect(page.getByRole("alert")).toContainText(i === 4 ? "last try" : "That code is not right");
+    }
+    await page.getByLabel("Six-digit code").fill(wrong);
+    await page.getByRole("button", { name: "Confirm and sign in" }).click();
+    await expect(page).toHaveURL(/\/login\?error=mfa_failed/);
+    await expect(page.getByRole("alert")).toContainText("too many times");
+    expect((await page.request.get(`${baseURL}/api/v1/auth/me`)).status()).toBe(401);
   });
 });

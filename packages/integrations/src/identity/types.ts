@@ -44,9 +44,10 @@ export interface IdentityProvider {
   verify(accessToken: string): Promise<VerifiedIdentity>;
   listFactors(accessToken: string): Promise<MfaFactor[]>;
   enrolTotp(accessToken: string, input: { friendlyName: string; issuer: string }): Promise<TotpEnrolment>;
-  challengeFactor(accessToken: string, factorId: string): Promise<{ challengeId: string; expiresAt: string }>;
+  /** The service binds a challenge to the address that created it; the caller names the address it acts for. */
+  challengeFactor(accessToken: string, factorId: string, ctx?: { ip?: string }): Promise<{ challengeId: string; expiresAt: string }>;
   /** A correct code answers the challenge and returns a new token at assurance level 2. */
-  verifyFactor(accessToken: string, input: { factorId: string; challengeId: string; code: string }): Promise<{ accessToken: string }>;
+  verifyFactor(accessToken: string, input: { factorId: string; challengeId: string; code: string }, ctx?: { ip?: string }): Promise<{ accessToken: string }>;
   unenrolFactor(accessToken: string, factorId: string): Promise<void>;
 }
 

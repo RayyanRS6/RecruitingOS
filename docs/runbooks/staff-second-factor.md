@@ -14,12 +14,18 @@ is refused everywhere (`docs/readiness/13`).
 3. First sign-in: the page enrols an authenticator app with the identity service (a QR code and a setup key shown once;
    the secret never touches the application's database or logs) and asks for the first code.
 4. Every sign-in: the page asks for the current six-digit code from the app. The application creates a challenge and
-   verifies the code in one request, through the identity service, with the person's own token.
+   verifies the code in one request, through the identity service, with the person's own token, so the service sees
+   one address for both.
 5. Only the token the service re-issues at assurance level 2 opens the application session (eight hours for staff).
-   Five wrong codes end the attempt; the person starts again at sign-in.
+   Attempts are counted on the server, not in the browser: five per sign-in (the fourth wrong code warns, the fifth
+   ends the attempt) and twelve per person in fifteen minutes across sign-ins, so a fresh Microsoft sign-in buys no
+   extra guesses. A wrong code is answered with a redirect, so refreshing the page never re-sends it.
 6. Right after the first enrolment, and at any later sign-in while only one authenticator exists, the page offers a
    backup authenticator on a second device. The identity service issues no recovery codes, so the backup is the
-   person's own way back in.
+   person's own way back in. Authenticators are named "Authenticator 1", "Authenticator 2" and so on at the service;
+   the backup step works only for the signed-in person whose sign-in it belongs to.
+7. The QR code is shown once. A refreshed page shows the same setup key as text, so a person who has not scanned
+   yet types the key into the app instead.
 
 Audit records, none of which carries a secret or a token: `mfa.enrolled`, `mfa.verified`, `mfa.failed` (with the
 attempt count), `mfa.backup_enrolled`, `mfa.reset_detected`, plus `session.opened` with `aal2`.
@@ -67,6 +73,7 @@ organization owner (Nadine) does it in the dashboard:
 | The code was wrong too many times. Sign in again. | five wrong codes | check the app's clock and account, sign in again |
 | The second-factor service is not available right now. | the identity service refused or rate-limited the call | wait a minute; if it persists, check the Supabase status page and the provider settings |
 | That code is not right. | wrong code, or the app's clock is off | enter the code showing now |
+| Please try again in N minutes | more than forty code posts from one address in fifteen minutes | wait; if this is not you, tell the platform owner |
 
 ## Staging verification (Phase 3, `docs/readiness/03` section 3)
 

@@ -5,7 +5,7 @@ import { BREAK_GLASS_MAX_MINUTES, acknowledgeAlert, audit, emit, entitlements, g
 import { BreakGlass, BusinessCalendarInput, PlanChange, RecalculateDeadlines } from "@ros/contracts";
 import { aiRuns, applications, companies, events, jobs, recruiterEscalations, roles, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
 import { requirePlatformAdmin, type Vars } from "../middleware/session";
-import { OUTCOME_STATEMENT, OutcomeError, PlatformRoleError, raiseAlert, correctOutcome, countActiveAdmins, grantPlatformRole, listPlatformRoleGrants, revokePlatformRole, type PlatformRole } from "@ros/core";
+import { OUTCOME_STATEMENT, OutcomeError, PlatformRoleError, raiseAlert, correctOutcome, countActiveAdmins, grantPlatformRole, listPlatformRoleGrants, revokeAllSessions, revokePlatformRole, type PlatformRole } from "@ros/core";
 import { CorrectOutcome } from "@ros/contracts";
 import { listCspReports, reviewCspReport } from "@ros/core";
 import { hiringOutcomes } from "@ros/db";
@@ -344,6 +344,25 @@ async function notifyOtherAdmins(container: Container, actorUserId: string, subj
 }
 
 /** Recorded hiring outcomes across customers, newest first, for correction (21 Sep, item 4). */
+/**
+ * Sign a person out everywhere (22 Sep 2026, staff second factor): after a lost device and the owner's reset at the
+ * identity service, an application session on that device must not outlive the reset. Audited with the reason.
+ */
+adminRoutes.post("/users/:userId/sessions/revoke", async (c) => {
+  const container = c.get("container");
+  const s = c.get("session")!;
+  const body = (await c.req.json().catch(() => ({}))) as { reason?: string; confirm?: boolean };
+  const reason = String(body.reason ?? "").trim();
+  if (body.confirm !== true) return c.json({ error: { code: "confirmation_required", message: "Confirm that every session of this person should end." } }, 400);
+  if (reason.length < 5) return c.json({ error: { code: "reason_required", message: "Give a reason of at least five characters." } }, 400);
+  const userId = c.req.param("userId") ?? "";
+  const [who] = await container.db.select({ id: users.id, email: users.email }).from(users).where(eq(users.id, userId)).limit(1);
+  if (!who) return c.json({ error: { code: "not_found", message: "No such person." } }, 404);
+  const ended = await revokeAllSessions(container.db, who.id, { now: container.engine.clock() });
+  await audit(container.db, { companyId: null, actor: { kind: "user", id: s.user.id, name: s.user.name ?? s.user.email }, action: "session.revoked", target: { type: "user", id: who.id }, reason, details: { email: who.email, sessionsEnded: ended, by: "administrator" } });
+  return c.json({ ok: true, sessionsEnded: ended });
+});
+
 adminRoutes.get("/outcomes", async (c) => {
   const db = c.get("container").db;
   const rows = await db.select({ id: hiringOutcomes.id, companyId: hiringOutcomes.companyId, companyName: companies.name, applicationId: hiringOutcomes.applicationId, roleId: hiringOutcomes.roleId, milestone: hiringOutcomes.milestone, outcome: hiringOutcomes.outcome, hireDate: hiringOutcomes.hireDate, offerAcceptedAt: hiringOutcomes.offerAcceptedAt, recordedBy: hiringOutcomes.recordedBy, recordedAt: hiringOutcomes.recordedAt, correctionOf: hiringOutcomes.correctionOf, correctedAt: hiringOutcomes.correctedAt, correctionReason: hiringOutcomes.correctionReason })

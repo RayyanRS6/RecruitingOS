@@ -558,10 +558,19 @@ sign-in, challenge and verification in one request, five attempts, a backup auth
 token is at hand, a dashboard reset recorded as `mfa.reset_detected`; the real provider speaks the service's documented
 endpoints (checked against the service's source and OpenAPI description on 22 Sep) with the person's token and the
 publishable key; migration 0015 adds `users.mfa_enrolled_at`; runbook `docs/runbooks/staff-second-factor.md`. Tests:
-`apps/api/src/mfa.test.ts` (8) and `tests/e2e/specs/staff-mfa.spec.ts`. Recovery is a backup authenticator plus the
-owner-run reset, because the service issues no recovery codes and the application holds no admin key. Enforcement is
-unchanged: the JSON session route and every administrator and recruiter route still refuse a staff session without
-`aal2`.
+`apps/api/src/mfa.test.ts` (14) and `tests/e2e/specs/staff-mfa.spec.ts` (2). Recovery is a backup authenticator plus
+the owner-run reset, because the service issues no recovery codes and the application holds no admin key. Enforcement
+is unchanged: the JSON session route and every administrator and recruiter route still refuse a staff session without
+`aal2`. An adversarial review (four lenses, two refuters per finding) found eighteen items, all fixed the same day: the
+attempt counter had lived in the replayable cookie (now counted server-side per transaction id and per person); the
+backup step was not bound to the signed-in person; cancel and skip could be triggered cross-site; the service's QR
+image lacked a viewBox and would have been clipped; the error mapping put the status fallback before the service's
+codes so a disabled setting read as a wrong code; fixed authenticator names could dead-end the backup path; a refresh
+of the backup page re-enrolled; a wrong code was answered from the POST so a refresh re-sent it; a failure after the
+session cookie was set read as a failed sign-in; the fake was looser than the service (address binding, level-2 rule
+for a second factor); the browser journey still expected the old refusal; and the tests lacked negatives for a level-1
+token from the service, provider failures, a forged cookie, a stranger's session on the backup step, the address
+limit's page and the person-wide cap.
 
 | Phase | Status | Evidence |
 |---|---|---|

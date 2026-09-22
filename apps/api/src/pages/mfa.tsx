@@ -8,15 +8,17 @@ import { Layout } from "./layout";
  * per-request nonce. The secret shown at enrolment comes from the identity service and is never written anywhere by
  * this application.
  */
-const CodeForm: FC<{ action: string; cancelAction: string; error?: string | null; label: string; button: string }> = (p) => (
+const CodeForm: FC<{ action: string; cancelAction: string; error?: string | null; label: string; button: string; cancelLabel?: string }> = (p) => (
+  <>
   <form method="post" action={p.action}>
     {p.error ? <div class="err" role="alert">{p.error}</div> : null}
     <label for="code">{p.label}</label>
     <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength={6} required autofocus />
     <p><button class="btn" type="submit">{p.button}</button></p>
     <p><small>Codes change every 30 seconds. Enter the one showing now.</small></p>
-    <p><small><a href={p.cancelAction}>Cancel and return to sign-in</a></small></p>
   </form>
+  <form method="post" action={p.cancelAction}><p><button class="btn btn-quiet" type="submit">{p.cancelLabel ?? "Cancel and return to sign-in"}</button></p></form>
+  </>
 );
 
 function grouped(secret: string): string {
@@ -33,14 +35,14 @@ export const EnrolPage: FC<{ productName: string; secret: string; uri: string; q
     </p>
     <div class="card">
       <h2>1. Add the account to your app</h2>
-      {p.qrSvg ? <p><img alt="QR code to scan with your authenticator app" width={180} height={180} src={`data:image/svg+xml;utf8,${encodeURIComponent(p.qrSvg)}`} /></p> : null}
+      {p.qrSvg ? <p><img alt="QR code to scan with your authenticator app" width={200} height={200} src={`data:image/svg+xml;utf8,${encodeURIComponent(p.qrSvg)}`} /></p> : <p class="notice">The QR code is shown only once. If you have not added the account yet, type the setup key by hand.</p>}
       <p>Scan the code, or enter this key by hand:</p>
       <p>Setup key: <code id="setup-key">{grouped(p.secret)}</code></p>
       <p><small>Time-based, six digits, 30 seconds. Manual entry link: <a href={p.uri}>open in an authenticator app</a>.</small></p>
     </div>
     <div class="card">
       <h2>2. Enter the code the app shows</h2>
-      <CodeForm action={p.action} cancelAction={p.cancelAction} error={p.error} label="Six-digit code" button={p.backup ? "Confirm backup authenticator" : "Confirm and sign in"} />
+      <CodeForm action={p.action} cancelAction={p.cancelAction} error={p.error} label="Six-digit code" button={p.backup ? "Confirm backup authenticator" : "Confirm and sign in"} cancelLabel={p.backup ? "Not now, continue to the app" : undefined} />
     </div>
   </Layout>
 );
@@ -63,7 +65,7 @@ export const BackupOfferPage: FC<{ backupHref: string; skipAction: string; conti
     <div class="card">
       <p><a class="btn" href={p.backupHref}>Add a backup authenticator</a></p>
       <form method="post" action={p.skipAction}>
-        <p><button class="btn" type="submit" style="background:var(--bg2);color:var(--accent-ink);border:1px solid var(--line)">Not now</button></p>
+        <p><button class="btn btn-quiet" type="submit">Not now</button></p>
       </form>
       <p><small>You can add one at any later sign-in from this same screen. <a href={p.continueHref}>Continue to the app</a>.</small></p>
     </div>
