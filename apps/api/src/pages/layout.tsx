@@ -25,6 +25,7 @@ h1{font-size:28px;line-height:1.15;margin:0 0 6px;letter-spacing:-.01em}h2{font-
 label{display:block;font-weight:600;margin:14px 0 6px}input[type=text],input[type=email],input[type=tel],textarea,select{width:100%;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--bg2);color:var(--ink);font:inherit}
 .check{display:flex;gap:10px;align-items:flex-start;margin:12px 0;font-weight:400}.check input{margin-top:4px;width:18px;height:18px}
 .btn{display:inline-block;background:var(--accent);color:#fff;border:0;border-radius:8px;padding:14px 20px;font:inherit;font-weight:600;cursor:pointer;text-decoration:none;width:100%;text-align:center}
+.btn-quiet{background:var(--bg2);color:var(--accent-ink);border:1px solid var(--line)}
 .btn:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .notice{font-size:13px;color:var(--ink3);border-left:3px solid var(--line);padding:6px 12px;margin:14px 0}
 .steps{padding-left:20px;color:var(--ink2)}.steps li{margin:6px 0}

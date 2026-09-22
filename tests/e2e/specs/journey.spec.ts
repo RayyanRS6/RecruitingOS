@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn } from "./helpers";
+import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn, signInWithoutSecondFactor } from "./helpers";
 
 /**
  * The release-1 journey in a real browser: sign in, set up the company, publish a role, receive an applicant, declare
@@ -112,12 +112,16 @@ test.describe("owner and candidate journey", () => {
 });
 
 test.describe("staff sign-in policy in the browser", () => {
-  test("Microsoft without a second factor is refused with plain guidance; with it, staff land on the queue", async ({ page }) => {
+  test("Google is refused for staff with plain guidance; Microsoft without a second factor continues on the authenticator page; with it, staff land on the queue", async ({ page }) => {
     await signIn(page, { email: `nadine+${run}@identifiedtalent.com`, name: "Nadine", provider: "google" });
     await expect(page.getByRole("alert").filter({ hasText: /Microsoft 365/ })).toBeVisible();
     await expectAccessible(page, "login error");
-    await signIn(page, { email: `nadine+${run}@identifiedtalent.com`, name: "Nadine", provider: "azure", aal2: false });
-    await expect(page.getByRole("alert").filter({ hasText: /second factor/ })).toBeVisible();
+    // Since 22 September a staff sign-in without a second factor is not refused: it continues on the authenticator page.
+    await signInWithoutSecondFactor(page, { email: `nadine+${run}@identifiedtalent.com`, name: "Nadine" });
+    await expect(page.getByRole("heading", { name: "Set up your authenticator app" })).toBeVisible();
+    expect((await page.request.get("/api/v1/auth/me")).status()).toBe(401);
+    await page.getByRole("button", { name: "Cancel and return to sign-in" }).click();
+    await expect(page).toHaveURL(/\/login/);
     await signIn(page, { email: `nadine+${run}@identifiedtalent.com`, name: "Nadine", provider: "azure", aal2: true });
     await expect(page).not.toHaveURL(/\/login/);
     const me = await (await page.request.get("/api/v1/auth/me")).json() as { auth: { provider: string; aal: string; mfaVerifiedAt: string | null } };

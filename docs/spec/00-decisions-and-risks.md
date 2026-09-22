@@ -544,7 +544,33 @@ Findings while preparing the sign-in screens (from the code and the providers' o
    email domains can be told apart; added to the Entra screens. The registration stays multi-tenant with personal
    accounts (`docs/spec/13` section 4a), so the provider's "Azure Tenant URL" stays empty (the common endpoint).
 
-Microsoft Entra registration walkthrough started 22 Sep (one screen per message), Nadine as the only owner.
+Microsoft Entra registration walkthrough started 22 Sep (one screen per message), Nadine as the only owner: screens 1
+to 3 done (registration with the Supabase callback as Web redirect URI, delegated openid, profile, email and User.Read
+with admin consent in the ITS tenant; optional claims added through Token configuration, not the manifest: `email` and
+`xms_edov` on the ID token, `xms_edov` on the access token); client secret and Supabase provider next.
+
+**Founder approval, 22 September (night): build and test staff TOTP enrolment, verification, recovery and
+enforcement before real staff sign-in is enabled, through a protected pull request with tests, without weakening or
+bypassing the second-factor requirement.** Built the same day (pull request 5): the identity-provider interface and
+fake gained factor enrolment, challenge, verification and removal; the sign-in callback seals the level-1 token in an
+encrypted ten-minute cookie and sends staff to the authenticator page; enrolment on the first sign-in, a code on every
+sign-in, challenge and verification in one request, five attempts, a backup authenticator offered while the level-2
+token is at hand, a dashboard reset recorded as `mfa.reset_detected`; the real provider speaks the service's documented
+endpoints (checked against the service's source and OpenAPI description on 22 Sep) with the person's token and the
+publishable key; migration 0015 adds `users.mfa_enrolled_at`; runbook `docs/runbooks/staff-second-factor.md`. Tests:
+`apps/api/src/mfa.test.ts` (14) and `tests/e2e/specs/staff-mfa.spec.ts` (2). Recovery is a backup authenticator plus
+the owner-run reset, because the service issues no recovery codes and the application holds no admin key. Enforcement
+is unchanged: the JSON session route and every administrator and recruiter route still refuse a staff session without
+`aal2`. An adversarial review (four lenses, two refuters per finding) found eighteen items, all fixed the same day: the
+attempt counter had lived in the replayable cookie (now counted server-side per transaction id and per person); the
+backup step was not bound to the signed-in person; cancel and skip could be triggered cross-site; the service's QR
+image lacked a viewBox and would have been clipped; the error mapping put the status fallback before the service's
+codes so a disabled setting read as a wrong code; fixed authenticator names could dead-end the backup path; a refresh
+of the backup page re-enrolled; a wrong code was answered from the POST so a refresh re-sent it; a failure after the
+session cookie was set read as a failed sign-in; the fake was looser than the service (address binding, level-2 rule
+for a second factor); the browser journey still expected the old refusal; and the tests lacked negatives for a level-1
+token from the service, provider failures, a forged cookie, a stranger's session on the backup step, the address
+limit's page and the person-wide cap.
 
 | Phase | Status | Evidence |
 |---|---|---|

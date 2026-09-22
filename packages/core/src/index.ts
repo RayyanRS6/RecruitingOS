@@ -29,3 +29,4 @@ export * from "./platform-roles";
 export * from "./outcomes";
 export * from "./rate-limit";
 export * from "./csp";
+export * from "./mfa-transaction";

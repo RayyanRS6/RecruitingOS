@@ -18,6 +18,8 @@ const HOUR = 3_600_000;
 /** The policy table. Limits are per subject per window; overrides come from RATE_LIMIT_OVERRIDES (tests, staging rehearsals). */
 export const POLICIES = {
   authSession: { name: "auth.session", rules: [{ by: "ip", windowMs: 15 * MIN, limit: 30 }] },
+  /** Code entry for the staff second factor: the transaction itself allows five tries; this bounds the address. */
+  authMfa: { name: "auth.mfa", rules: [{ by: "ip", windowMs: 15 * MIN, limit: 40 }] },
   authMagicLink: { name: "auth.magic_link", rules: [{ by: "ip", windowMs: 15 * MIN, limit: 10 }, { by: "email", windowMs: 15 * MIN, limit: 5, field: "email" }] },
   apply: { name: "apply", rules: [{ by: "ip", windowMs: HOUR, limit: 30 }, { by: "role", windowMs: HOUR, limit: 600, param: "roleId" }] },
   screen: { name: "candidate.screen", rules: [{ by: "token", windowMs: HOUR, limit: 120, param: "token" }, { by: "ip", windowMs: HOUR, limit: 240 }] },
@@ -57,7 +59,7 @@ async function subjectOf(c: Context<Vars>, rule: Rule): Promise<string | undefin
 }
 
 function isCandidateSurface(path: string): boolean {
-  return path.startsWith("/c/") || path.startsWith("/careers/");
+  return path.startsWith("/c/") || path.startsWith("/careers/") || path.startsWith("/api/v1/auth/mfa");
 }
 
 function refuse(c: Context<Vars>, d: RateLimitDecision) {

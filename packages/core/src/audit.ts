@@ -57,7 +57,13 @@ export type AuditAction =
   | "data_request.resolved"
   /** Email suppression list (item 5). */
   | "suppression.added"
-  | "suppression.released";
+  | "suppression.released"
+  /** Staff second factor (22 Sep 2026): enrolment, verification, failures and a reset seen at the identity service. Never the secret or a token. */
+  | "mfa.enrolled"
+  | "mfa.verified"
+  | "mfa.failed"
+  | "mfa.backup_enrolled"
+  | "mfa.reset_detected";
 
 /** Privileged and access actions. Distinct from domain events: this answers "who looked at what, and why." */
 export async function audit(
