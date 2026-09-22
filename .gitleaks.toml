@@ -21,6 +21,7 @@ regexes = [
   '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0''',
   '''GOCSPX-(fake|x)\b''',
   '''ya29\.a0AfH6SMBfakeAccessTokenValue''',
+  '''inbound-secret-for-tests-0123456789''',
   '''upstash-token-for-tests-abcdefghij''',
   '''postgres://[a-z_]+:pass@host''',
   '''fake-issuer-development-secret-not-for-prod''',

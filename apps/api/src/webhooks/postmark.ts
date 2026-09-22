@@ -17,8 +17,11 @@ postmarkWebhook.post("/inbound", async (c) => {
   const container = c.get("container");
   const secret = container.env.raw.POSTMARK_INBOUND_SECRET;
   if (secret) {
+    // Postmark carries credentials as HTTP basic auth in the webhook URL (https://inbound:<secret>@host/...); a header
+    // or a query string are still accepted for tools that cannot set basic auth.
     const provided = c.req.query("secret") ?? c.req.header("x-inbound-secret") ?? "";
-    if (!safeEqual(provided, secret)) return c.json({ error: { code: "unauthorized", message: "bad secret" } }, 401);
+    const ok = verifyPostmarkWebhookAuth({ authorization: c.req.header("authorization"), secretHeader: c.req.header("x-inbound-secret") }, secret) || (!!provided && safeEqual(provided, secret));
+    if (!ok) return c.json({ error: { code: "unauthorized", message: "bad secret" } }, 401);
   } else if (container.env.NODE_ENV === "production") {
     return c.json({ error: { code: "misconfigured", message: "POSTMARK_INBOUND_SECRET is not set" } }, 503);
   }

@@ -11,6 +11,7 @@ Run on the staging deployment after the accounts in `docs/spec/13` exist and `do
 
 ## 2. Database
 
+- [ ] `scripts/staging-db-setup.sh` run by the founder on her own machine: migrations applied, `ros_app` and `ros_worker` passwords set, Vault grants applied, both roles verified by the script (evidence: the script's `verified:` lines, pasted without the connection strings).
 - [ ] Migrations 0000 to 0014 applied with `MIGRATE_DATABASE_URL` from a trusted machine; `_migrations` lists all.
 - [ ] `provision-roles.sql` and `vault-grants.sql` applied; `select current_user` is `ros_app` from the API and `ros_worker` from the worker.
 - [ ] `pnpm test` suites `rls.test.ts`, `tenancy.test.ts`, `security-coverage.test.ts`, `outcomes.test.ts`, `privacy-requests.test.ts` and `core.test.ts` run against staging Postgres (test database) and pass.
