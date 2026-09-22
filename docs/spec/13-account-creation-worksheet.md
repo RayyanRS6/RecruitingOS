@@ -93,6 +93,38 @@ Conventions: owners = Nadine and Paul (named human accounts); billing = `billing
 - Verify: a test task runs in staging from the dashboard; the worker connects as `ros_worker`.
 - Revoke or rotate: regenerate the environment secret key; remove a member.
 
+## 6a. Railway (worker host, decision 1 of 22 September 2026)
+
+- Where: https://railway.com. Project `recruiting-os-staging` (created 22 September in the founder's default
+  workspace; the docs offer no rename, so the workspace name stays and the project name carries the meaning).
+- What runs there: `apps/api/src/worker.ts`, the always-on queue poller (workflows, reminders, timers, credential
+  revocations, privacy deadlines). It listens on no port, so no public networking, no domain, no health-check path.
+- Service creation: in the project, `New`, then the GitHub repository `identified-talent-solutions/recruiting-os`
+  (the Railway GitHub App must have access to that private repository), branch `main`. Railway reads `railway.json` at
+  the repository root: builder Railpack, build command `pnpm worker:check` (a typecheck; the worker runs from source
+  with `tsx`, which is a runtime dependency of `@ros/api` for that reason), start command `pnpm worker:start`, restart
+  policy On Failure with ten retries. Root directory stays `/` because the pnpm workspace installs from the root; Node
+  comes from `.node-version` (24). Watch paths: `apps/api/**`, `packages/**`, `package.json`, `pnpm-lock.yaml`,
+  `railway.json`, `.node-version`.
+- Region: **US West Metal (California)**, the closest offered to the Oregon database; changeable later without downtime.
+- Environment: the project's default `production` environment holds the staging worker (the project is the staging
+  one); a production project or environment follows the production database.
+- Spend: Workspace Usage page, Set Usage Limits, hard limit $10 (the minimum) with the email alert; Railway stops every
+  workload at the limit and restarts them when it is raised.
+- Variables (service Variables tab; every secret sealed after entry): `NODE_ENV=production`, `WORKER_DATABASE_URL`
+  (the pooler connection string as `ros_worker`; sealed), `SESSION_SECRET` (sealed; the same value as Vercel's),
+  `SECRET_STORE=vault`, `AI_PROVIDER=anthropic`, `ANTHROPIC_API_KEY` (sealed), `AUTH_PROVIDER=supabase`,
+  `SUPABASE_URL`, `SUPABASE_ANON_KEY` (sealed), `APP_BASE_URL` and `WEB_BASE_URL` (the staging address, for links in
+  messages), `EMAIL_PROVIDER`, `SMS_PROVIDER`, `CALENDAR_PROVIDER`, `ANALYTICS_PROVIDER` = `fake` until each is
+  connected, `STORAGE_PROVIDER=memory` until the storage adapter lands (the worker cannot read résumés the API stored
+  in another process's memory, so résumé extraction on staging waits for that adapter), `PRODUCT_NAME`,
+  `ITS_QUEUE_EMAIL`, `EMAIL_REPLY_TO`, `PRIVACY_EMAIL`, `WORKER_POLL_MS=1000`, `LOG_LEVEL=info`. `DATABASE_URL` is not
+  needed on the worker: the production guard accepts `WORKER_DATABASE_URL` alone.
+- Verify: the deploy log shows `[worker] started (db: postgres as ros_worker, ai: anthropic)` and no `refusing to
+  start`; the queue tab in the console shows jobs being claimed by a worker id.
+- Revoke or rotate: reset the `ros_worker` password in Supabase and update the sealed variable; delete the service to
+  stop all work.
+
 ## 7. Postmark
 
 - Where: https://account.postmarkapp.com/sign_up.
