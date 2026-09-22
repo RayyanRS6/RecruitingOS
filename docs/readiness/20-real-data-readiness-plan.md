@@ -51,7 +51,7 @@ No real candidate information enters the system until all twenty-two have passed
 ## C. Pilot scope (founder's configuration)
 
 One design partner · one role · US candidates only · one customer administrator · one hiring manager · Nadine as
-platform owner and ITS escalation contact · limited candidate volume · 60 to 90 days · no software charge initially ·
+platform owner and ITS escalation contact · the role's full applicant volume may be accepted (founder amendment of 22 September, `docs/spec/20`; volume monitoring and a stop-accepting switch are release-1 work) · 60 to 90 days · no software charge initially ·
 daily oversight by Nadine during the first week · weekly design-partner meeting · human approval before consequential
 candidate actions · a human decision for every decline · no automatic rejection · no SMS · no interview recording · no
 automated offers · no background-check data · no onboarding · no passive sourcing · no job-board automation · manual
@@ -70,7 +70,7 @@ on manual availability and ICS unless the partner requires a connected calendar;
 | 6 | Who may access it | on `/privacy` | same block |
 | 7 | How to request access, correction, withdrawal or deletion | on `/privacy` and the status page | same block |
 | 8 | The `privacy@identifiedtalent.com` contact | on `/privacy` | same block |
-| 9 | A link to the current privacy notice | on the form | none |
+| 9 | A link to the current privacy notice | on the job, status and screening pages; **not on the form** (the form shows the one-sentence notice text with no link; corrected 22 September after verification) | add the link to the form |
 | 10 | An affirmative acknowledgment before submission, no pre-checked box | **missing**: the form records which notice versions were shown but has no acknowledgment checkbox | add a required, unchecked checkbox; record it with the notice versions |
 
 The SMS consent checkbox must not appear while texting is off (verify in the rehearsal; today it renders whenever the

@@ -474,7 +474,44 @@ successfully seconds earlier). Playwright now retries a failed journey once on C
 This is a test-infrastructure setting, not a product change; a production-mode server cannot be used for CI because
 the production guards refuse the fake providers.
 
+### Scope amendments of 22 September 2026 (evening)
+
+**Amendment 1, founder-approved: job distribution is release-1 scope.** The founder's instruction is recorded verbatim
+in `docs/spec/20-job-distribution.md` appendix A: hosted job pages under `jobs.identifiedtalent.com`, candidate
+self-application, mobile-accessible, JobPosting structured data, a sitemap, a documented public feed, board-specific
+tracked links (LinkedIn, Indeed, ZipRecruiter, referral, direct, other), source and source detail on every
+application, a posting package, manual posting instructions and per-board status, nine posting states, no "live" until
+the board URL is verified, stored board URLs, per-posting pause and close, a manual-closure checklist on role close,
+volume monitoring and a stop-accepting switch, no automatic rejection of excess applicants, a realistic-volume test,
+no tracking parameters in candidate-facing records, the client company named as employer. Operating model: the design
+partner owns or authorizes its employer accounts; ITS posts, verifies and closes by hand; one client, one role, the
+role's full applicant volume. Partner track (Indeed, ZipRecruiter, LinkedIn) documented, not implemented. Not
+authorized: scraping, unapproved board APIs, automated paid sponsorship, passive sourcing, SMS, recording, automated
+rejection, automated offers, onboarding. The "before coding" inspection the founder asked for (existing functionality,
+missing functionality, infrastructure, tests, launch impact, effect on the Supabase instructions) is `docs/spec/20`
+sections 1 to 6; its findings were adversarially verified and two overstatements corrected (a public-URL column
+exists but has no route; pausing a role already stops intake without rejecting anyone). Effect on the Supabase
+instructions: none. `docs/readiness/20` section C now reads "the role's full applicant volume". **No code has been
+written for this amendment**; it starts after the founder approves the sales-ready gap analysis below.
+
+**Amendment 2, founder objective, presented for approval: release 1 is a sales-ready founding-customer product.**
+Recorded in substance (the founder's message arrived mid-turn and its verbatim text did not survive the session's
+context compaction; the founder is asked to confirm this record or resend the text): positioning "ITS AI Recruiting
+Department, Founding Partner Program"; ITS sells a managed recruiting outcome, contracts and invoices by hand with no
+payment processor, Nadine onboards each customer, United States only, an honest customer-facing limitation sheet;
+nine requirement areas (A customer setup, B role workflow, C job distribution, D candidate experience, E recruiting
+intelligence, F hiring workflow, G reporting, H production operations, I commercial readiness) with the capability
+list of each recorded as the row headings of `docs/spec/21`; scope still deferred (SMS, recording, automated offers
+and rejection, onboarding, passive sourcing, job-board APIs, automated sponsorship, any payment processor); the
+founder's rule "do not expand the code immediately", a twelve-item gap analysis first, then stop for approval, while
+the authorized Supabase setup continues. The analysis is `docs/spec/21-sales-ready-gap-analysis.md`, produced by eight
+independent readers with adversarial verification of every area. **Status: presented, not approved; no code
+written.** Its section 6 records that charging a founding customer is the "paid customers" stop point of risk
+R-LEGAL-1 (point 6 above), which the founder must decide before the first invoice.
+
 | Phase | Status | Evidence |
 |---|---|---|
 | 1 Secure the source code | approved 22 Sep | this section |
-| 2 External account inventory | inventory approved 22 Sep with decisions 1 to 4; account creation in progress, Supabase first | `docs/spec/19` |
+| 2 External account inventory | inventory approved 22 Sep with decisions 1 to 4; merge run 35785468084 green on `6f99b55`; Supabase organization and staging project: founder walkthrough started 22 Sep (one screen per message) | `docs/spec/19` |
+| Scope amendment 1: job distribution | approved 22 Sep; inspection delivered; no code yet | `docs/spec/20` |
+| Scope amendment 2: sales-ready founding-customer product | gap analysis delivered 22 Sep; awaiting founder approval; no code | `docs/spec/21` |
