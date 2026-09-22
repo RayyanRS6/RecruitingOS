@@ -23,7 +23,8 @@
     "e2e": "pnpm --filter @ros/e2e e2e",
     "db:validate": "pnpm --filter @ros/db validate",
     "secret-scan": "tsx scripts/secret-scan.ts",
-    "ci:local": "bash scripts/ci-local.sh"
+    "ci:local": "bash scripts/ci-local.sh",
+    "db:provision": "pnpm --filter @ros/db provision"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
