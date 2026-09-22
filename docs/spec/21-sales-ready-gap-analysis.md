@@ -86,7 +86,7 @@ The rows below are the specific shortfalls on top of that.
 | F | Human advancement | **The post-interview decision has no screen**: "finalist" is reachable only through the API; the "how did it go" notice links to a sheet with no decision card. |
 | F | Candidate communication | Every message is a lifecycle template through the fake email adapter; no owner-to-candidate free-form message; a candidate's reply to any email (the decline template invites one) is never captured, only text and web-screen replies are recorded. |
 | G | Stage counts, AI recommendations, overrides | Computed and rendered per role or per candidate; no test asserts the counts; no rates or summaries. |
-| H | Authentication and staff MFA | The staff second factor is Supabase TOTP, and the product has no step that enrols a factor or verifies a challenge; the sign-in exchange returns the token straight after the Microsoft step, so on the real service every ITS staff sign-in is refused as "second factor required". Customers are unaffected. Found 22 September while preparing the staging sign-in screens (`docs/spec/00` Supabase checkpoint). |
+| H | Authentication and staff MFA | Found 22 September: the product had no step that enrolled or verified an authenticator, so every real staff sign-in would have been refused. **Built the same day under the founder's approval** (enrolment, verification, backup, reset detection; `apps/api/src/mfa.test.ts`, `tests/e2e/specs/staff-mfa.spec.ts`, `docs/runbooks/staff-second-factor.md`); proof on the staging identity service is Phase 3 work. |
 | H | Email and inbound replies | Postmark send and inbound JSON untested; only the intake address is parsed; no account, domain or DNS. |
 | H | Shared rate limiting | Only the fake counter exists; production would run per-process limits with a standing alert. |
 | H | Monitoring and scrubbing | Scrubber written and tested, Sentry SDK not a dependency, so nothing reports anywhere; no uptime, queue-age or worker-liveness alert. |
@@ -183,8 +183,8 @@ the real-data blockers, plus what the founder's own scope decisions add.
 
 15. The eval suites run once on the Anthropic provider on staging with thresholds met, and the screening conversation
     rehearsed on the real model, including a follow-up and the HUMAN hand-off (`docs/spec/08`).
-16. The staff second-factor enrolment and challenge step (section 2, area H); without it no ITS administrator can sign
-    in to staging or production.
+16. The staff second-factor enrolment and challenge step (section 2, area H): built 22 September, proven on staging in
+    Phase 3 before any real staff sign-in.
 
 ## 7. Prioritization
 
@@ -195,7 +195,7 @@ the real-data blockers, plus what the founder's own scope decisions add.
 | Job distribution (`docs/spec/20`): pages on the jobs host, tracked links, source detail, posting package, states, verification, closure checklist, volume switch, sitemap, feed | 3 to 5 |
 | Supabase Storage adapter with quarantine and a malware scanner (decision 2) | 2 to 3 |
 | Upstash adapter (decision 4) and Sentry SDK (decision 3) | 1 to 2 |
-| Supabase TOTP enrolment and challenge for staff sign-in (enrol on first sign-in, verify on every sign-in, administrator-assisted reset), with the redirect allow-list entry | 1 to 2 |
+| Supabase TOTP enrolment and challenge for staff sign-in (enrol on first sign-in, verify on every sign-in, owner-run reset): **done 22 Sep, pull request 5**; the redirect allow-list entry waits for the staging host | done |
 | Invitation accepted through Microsoft and Google sign-in (no single-factor email-link session in production); validated member updates; last-owner guard; removal ends sessions; tests that sign in as each role | 1 to 2 |
 | Post-interview decision card (next round, finalist, not moving forward); packet editor must-have save fixed and tested | 1 |
 | Acknowledgment checkbox and transparency block; SMS checkbox hidden while texting is off | 1 |

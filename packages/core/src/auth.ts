@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull, ne } from "drizzle-orm";
 import { magicLinks, memberships, randomToken, sessions, users, type Queryable } from "@ros/db";
 import { activeGrantFor } from "./platform-roles";
 
@@ -140,6 +140,17 @@ export async function setActiveCompany(q: Queryable, sessionId: string, companyI
 
 export async function revokeSession(q: Queryable, sessionToken: string): Promise<void> {
   await q.update(sessions).set({ revokedAt: new Date().toISOString() }).where(eq(sessions.tokenHash, hashToken(sessionToken)));
+}
+
+/** Ends every open session of a person (a lost device, a reset second factor, an administrator's "sign out everywhere"). Returns how many were ended. */
+export async function revokeAllSessions(q: Queryable, userId: string, opts: { exceptSessionId?: string; now?: Date } = {}): Promise<number> {
+  const now = (opts.now ?? new Date()).toISOString();
+  const rows = await q
+    .update(sessions)
+    .set({ revokedAt: now })
+    .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt), ...(opts.exceptSessionId ? [ne(sessions.id, opts.exceptSessionId)] : [])))
+    .returning({ id: sessions.id });
+  return rows.length;
 }
 
 export function safeEqual(a: string, b: string): boolean {
