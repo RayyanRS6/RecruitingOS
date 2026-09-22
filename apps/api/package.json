@@ -19,6 +19,7 @@
     "@ros/integrations": "workspace:*",
     "@ros/playbooks": "workspace:*",
     "@ros/workflows": "workspace:*",
+    "@sentry/node": "10.74.0",
     "drizzle-orm": "^0.45.0",
     "hono": "^4.8.0",
     "zod": "^4.0.0"

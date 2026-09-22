@@ -10,3 +10,4 @@ export * from "./domain/events";
 export * from "./domain/interview";
 export * from "./api";
 export * from "./security/redact";
+export * from "./security/observability";
