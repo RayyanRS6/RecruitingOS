@@ -37,7 +37,7 @@ env:
 
 jobs:
   verify:
-    name: lockfile, types, tests, evals, build, e2e, audit, scanning, migrations
+    name: verify # the required status check on main: lockfile install, secret scans, audit, typecheck, migration validation, tests, evals, build, browser journeys with accessibility checks
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

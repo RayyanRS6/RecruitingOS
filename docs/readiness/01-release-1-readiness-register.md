@@ -55,7 +55,7 @@ Maintained by the production team; last updated 21 September 2026. Status vocabu
 | Item | Status | Owner | Evidence when done |
 |---|---|---|---|
 | Microsoft 365 confirmation, GoDaddy access, MFA, DNS zone export | Blocked (in progress by Nadine and Paul) | Nadine, Paul | `13` §0, §1 verifications recorded |
-| 1Password Business, GitHub, Supabase, Vercel, Trigger.dev, Postmark, Google Cloud, Sentry, PostHog, Anthropic, Twilio | 1Password Business done (founder, 22 Sep: Nadine and Paul owners, MFA, five vaults); GitHub organization `identified-talent-solutions` and private repository `recruiting-os` created 22 Sep (owners Nadine and Paul per the founder; the API lists one owner so far, see `docs/spec/00` section Q); the rest Blocked (accounts not created); whether Twilio and Trigger.dev are created now or later is the founder's decision (gate 1.9 of `docs/readiness/16`) | Nadine, Paul | `docs/spec/17-staging-handoff.md` **Evidence** lines |
+| 1Password Business, GitHub, Supabase, Vercel, Trigger.dev, Postmark, Google Cloud, Sentry, PostHog, Anthropic, Twilio | 1Password Business done (founder, 22 Sep: Nadine and Paul owners, MFA, five vaults); GitHub organization `identified-talent-solutions` and private repository `recruiting-os` created 22 Sep (Nadine sole owner by founder decision; risk R-OWN-1 in `docs/spec/00` section Q); the rest Blocked (accounts not created); whether Twilio and Trigger.dev are created now or later is the founder's decision (gate 1.9 of `docs/readiness/16`) | Nadine, Paul | `docs/spec/17-staging-handoff.md` **Evidence** lines |
 
 ## E. Gates before a design partner's real candidate data
 

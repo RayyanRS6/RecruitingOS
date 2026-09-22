@@ -380,6 +380,24 @@ Founder corrections recorded 22 September:
   "members can create public repositories" as allowed; reported to the founder for correction in the organization
   settings (Phase 1 checkpoint).
 
+Founder correction, 22 September (later): **Paul will not participate in the Recruiting OS accounts or the GitHub
+organization at this time.** Nadine is the sole organization owner for the pilot. Nobody else is invited (not Paul, not
+`platform@`, not Claude, not a contractor). Where the readiness documents name Paul for a step (entering secrets, applying
+DNS records, running the restore drill, the rotation drill, the tabletop), Nadine acts, or the step is re-assigned in the
+Phase 2 account inventory.
+
+**Risk R-OWN-1 (temporary ownership and recovery risk, not a Phase 1 blocker):** a single human owner on the GitHub
+organization and on every ITS account means that loss of that account, its MFA device or its recovery codes locks ITS
+out of its own code and services. Mitigations in place or required: recovery codes for GitHub and every provider stored
+in the 1Password vault (founder attestation recorded below when given); the organization's MFA requirement on; a second
+owner added as soon as the founder names one. Review at each phase checkpoint.
+
+Settings the founder reported on 22 September that the authenticated API did **not** confirm at the time of the Phase 1
+checkpoint (each with the exact screen given to the founder): the organization's two-factor requirement (reported off),
+"members can create public repositories" (reported allowed), and two-factor authentication on the founder's own account
+(the organization's "members without 2FA" filter listed it). These are recorded as open until a fresh API read confirms
+them; they do not block the code steps of Phase 1.
+
 | Phase | Status | Evidence |
 |---|---|---|
 | 1 Secure the source code | in progress 22 Sep | this section, Phase 1 checkpoint |
