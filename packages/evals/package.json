@@ -1,0 +1,22 @@
+{
+  "name": "@ros/evals",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "eval": "tsx src/runner.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@ros/agents": "workspace:*",
+    "@ros/ai": "workspace:*",
+    "@ros/contracts": "workspace:*",
+    "@ros/db": "workspace:*",
+    "@ros/integrations": "workspace:*",
+    "@ros/playbooks": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}

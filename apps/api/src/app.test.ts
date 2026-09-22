@@ -1,0 +1,393 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
+import { aiRuns, applications, approvalRequests, assessments, communications, events, postings, recruiterEscalations, roles, screens, workflowRuns } from "@ros/db";
+import { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
+import { createApp } from "./app";
+import { createContainer, type Container } from "./container";
+
+/**
+ * Slice 1 through the HTTP layer: sign up → company → intake conversation → packet → approval → publish →
+ * apply (web and email-in) → acknowledgment → eligibility → brief → ask a recruiter → admin inspection.
+ */
+describe("Slice 1 API", () => {
+  let container: Container;
+  let app: ReturnType<typeof createApp>;
+  let cookie = "";
+  let companySlug = "";
+  let roleId = "";
+  let sessionId = "";
+
+  const json = (method: string, path: string, body?: unknown, extra: Record<string, string> = {}) =>
+    app.request(path, { method, headers: { "content-type": "application/json", cookie, ...extra }, body: body ? JSON.stringify(body) : undefined });
+
+  // The engine clock: today at noon Pacific (inside SMS contact hours) plus whatever the test advances.
+  const BASE = (() => { const d = new Date(); d.setUTCHours(19, 0, 0, 0); return d.getTime(); })();
+  const setClock = (offsetMs: number) => { (container.engine as unknown as { now: () => Date }).now = () => new Date(BASE + offsetMs); };
+
+  beforeAll(async () => {
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    app = createApp(container);
+    setClock(0);
+  });
+  afterAll(async () => {
+    await container.close();
+  });
+
+  it("signs up with a magic link", async () => {
+    const r1 = await json("POST", "/api/v1/auth/magic-link", { email: "dana@brightline.test" });
+    expect(r1.status).toBe(200);
+    const { devLink } = (await r1.json()) as { devLink: string };
+    const token = new URL(devLink).searchParams.get("token")!;
+    const r2 = await json("POST", "/api/v1/auth/magic-link/consume", { token });
+    expect(r2.status).toBe(200);
+    cookie = r2.headers.get("set-cookie")!.split(";")[0];
+    const me = await json("GET", "/api/v1/auth/me");
+    expect(me.status).toBe(200);
+    expect(((await me.json()) as { user: { email: string } }).user.email).toBe("dana@brightline.test");
+    // a used link cannot be reused
+    expect((await json("POST", "/api/v1/auth/magic-link/consume", { token })).status).toBe(401);
+  });
+
+  it("signs in from the emailed link with a top-level redirect", async () => {
+    const r1 = await json("POST", "/api/v1/auth/magic-link", { email: "link@brightline.test" });
+    const { devLink } = (await r1.json()) as { devLink: string };
+    expect(devLink).toMatch(/\/api\/v1\/auth\/consume\?token=/);
+    const r2 = await app.request(devLink.replace(container.env.APP_BASE_URL, ""), { redirect: "manual" });
+    expect(r2.status).toBe(302);
+    expect(r2.headers.get("location")).toBe(`${container.env.WEB_BASE_URL}/setup/company`);
+    expect(r2.headers.get("set-cookie")).toMatch(/ros_session=/);
+    const again = await app.request(devLink.replace(container.env.APP_BASE_URL, ""), { redirect: "manual" });
+    expect(again.headers.get("location")).toMatch(/error=expired/);
+  });
+
+  it("creates the company with trial entitlements", async () => {
+    const r = await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "50-99", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] });
+    expect(r.status).toBe(201);
+    const co = (await r.json()) as { slug: string; planKey: string };
+    companySlug = co.slug;
+    expect(co.planKey).toBe("trial");
+    const cur = await json("GET", "/api/v1/companies/current");
+    expect(cur.status).toBe(200);
+  });
+
+  it("runs the intake conversation and compiles a role packet", async () => {
+    const r1 = await json("POST", "/api/v1/intake/conversation/messages", { message: "I need a dental hygienist in Irvine. Full time. $45 to $55 an hour. I need someone who can start within 30 days." });
+    expect(r1.status).toBe(200);
+    const c1 = (await r1.json()) as { reply: string; intakeSessionId: string; readyToCompile: boolean };
+    sessionId = c1.intakeSessionId;
+    expect(c1.reply).toMatch(/playbook|market/i);
+    expect(c1.readyToCompile).toBe(false);
+
+    const r2 = await json("POST", `/api/v1/intake/sessions/${sessionId}/messages`, { message: "It's a replacement, our hygienist moved. Ceiling is $58. Interviewers: Dr. Chen and me. I decide. Must-haves: active CA RDH license, perio experience. Deal-breakers: can't work Saturdays." });
+    expect(r2.status).toBe(200);
+    const c2 = (await r2.json()) as { reply: { readyToCompile: boolean; factsExtracted: { compensationCeiling: number; mustHaves: string[] } } };
+    expect(c2.reply.readyToCompile).toBe(true);
+    expect(c2.reply.factsExtracted.compensationCeiling).toBe(58);
+    expect(c2.reply.factsExtracted.mustHaves.length).toBeGreaterThanOrEqual(2);
+
+    const r3 = await json("POST", `/api/v1/intake/sessions/${sessionId}/compile`);
+    expect(r3.status).toBe(201);
+    const compiled = (await r3.json()) as { roleId: string; version: number; packet: { identity: { title: string }; compensation: { ceiling: number; discloseRange: boolean }; compliance: { jurisdictions: string[]; notices: string[] }; requirements: { eligibility: Array<{ type: string }> } } };
+    roleId = compiled.roleId;
+    expect(compiled.version).toBe(1);
+    expect(compiled.packet.identity.title).toBe("Registered Dental Hygienist");
+    expect(compiled.packet.compensation.ceiling).toBe(58);
+    expect(compiled.packet.compliance.jurisdictions).toContain("US-CA");
+    expect(compiled.packet.compliance.notices).toContain("pay_transparency");
+    expect(compiled.packet.requirements.eligibility.some((e) => e.type === "license")).toBe(true);
+
+    // The packet is proposed and an approval is pending; the role is not open yet.
+    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { status: string; pendingApprovals: unknown[] };
+    expect(role.status).toBe("pending_approval");
+    expect(role.pendingApprovals).toHaveLength(1);
+    const brief = (await (await json("GET", "/api/v1/brief")).json()) as { cards: Array<{ kind: string; title: string }> };
+    expect(brief.cards.some((c) => c.kind === "decision" && /Approve the role/.test(c.title))).toBe(true);
+  });
+
+  it("resumes an open conversation after a reload and lets the owner start over", async () => {
+    // the compiled session no longer resumes
+    const none = (await (await json("GET", "/api/v1/intake/sessions/current")).json()) as { session: null | { id: string } };
+    expect(none.session).toBeNull();
+    const r1 = await json("POST", "/api/v1/intake/conversation/messages", { message: "I need a front office coordinator in Irvine, $22 to $26 an hour, full time." });
+    const { intakeSessionId } = (await r1.json()) as { intakeSessionId: string };
+    const cur = (await (await json("GET", "/api/v1/intake/sessions/current")).json()) as { session: { id: string; messages: Array<{ role: string }>; missingFacts: string[] } };
+    expect(cur.session.id).toBe(intakeSessionId);
+    expect(cur.session.messages.map((m) => m.role)).toEqual(["owner", "assistant"]);
+    expect(cur.session.missingFacts).toContain("reason_for_hire");
+    const ab = await json("POST", `/api/v1/intake/sessions/${intakeSessionId}/abandon`);
+    expect(ab.status).toBe(200);
+    expect(((await ab.json()) as { status: string }).status).toBe("abandoned");
+    const after = (await (await json("GET", "/api/v1/intake/sessions/current")).json()) as { session: null | { id: string } };
+    expect(after.session).toBeNull();
+    // an abandoned conversation cannot be continued
+    expect((await json("POST", `/api/v1/intake/sessions/${intakeSessionId}/messages`, { message: "It's a replacement." })).status).toBe(409);
+    const evs = await container.db.select().from(events).where(eq(events.type, "intake.abandoned"));
+    expect(evs).toHaveLength(1);
+  });
+
+  it("approval opens the role and publishes to every channel", async () => {
+    const r = await json("POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "Looks right." });
+    expect(r.status).toBe(200);
+    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { status: string; currentPacketVersion: number; postings: Array<{ channel: string; status: string; intakeToken: string | null; instructions: string | null }> };
+    expect(role.status).toBe("open");
+    expect(role.currentPacketVersion).toBe(1);
+    const byChannel = Object.fromEntries(role.postings.map((p) => [p.channel, p]));
+    // Founder decision F4: only verified states. Email-in is not connected in development (no inbound domain).
+    expect(byChannel.careers_page.status).toBe("live_verified");
+    expect(byChannel.google_jobs.status).toBe("awaiting_verification");
+    expect(byChannel.email_in.status).toBe("not_connected");
+    expect(byChannel.linkedin_basic.status).toBe("manual_action_required");
+    expect(byChannel.indeed.status).toBe("manual_action_required");
+    expect(byChannel.indeed.instructions).toMatch(/apply/);
+    expect(byChannel.email_in.intakeToken).toBeTruthy();
+    const runs = await container.db.select().from(workflowRuns);
+    expect(runs.map((x) => `${x.workflowKey}:${x.status}`).sort()).toEqual(["publish_role:completed", "role_approval:completed", "stuck_role_detector:waiting"]);
+    const feed = await app.request("/feeds/linkedin.xml");
+    expect(await feed.text()).toContain("Registered Dental Hygienist");
+  });
+
+  it("serves the job page with JobPosting markup and notices", async () => {
+    const r = await app.request(`/careers/${companySlug}/jobs/${roleId}`);
+    expect(r.status).toBe(200);
+    const html = await r.text();
+    expect(html).toContain('"@type":"JobPosting"');
+    expect(html).toMatch(/artificial intelligence/);
+    expect(html).toMatch(/\$45–\$55 an hour/);
+  });
+
+  it("accepts a web application, acknowledges within the workflow, extracts the resume, passes eligibility, is assessed, and is invited to a screen under policy", async () => {
+    const form = new FormData();
+    form.set("firstName", "Maria");
+    form.set("lastName", "Reyes");
+    form.set("email", "maria.reyes@example.com");
+    form.set("phone", "(949) 555-0100");
+    form.set("smsConsent", "yes");
+    form.set("locationText", "Tustin, CA");
+    form.set("resume", new File([`Maria Reyes, RDH\nmaria.reyes@example.com | (949) 555-0100\n\nRegistered Dental Hygienist at Smile Bright Dental 2019 - present\nDental Hygienist at Coastal Family Dentistry 2015 - 2019\n\nLicenses: RDH license CA #RDH12345, active\nCertifications: BLS/CPR current\nSkills: Dentrix, periodontal charting, digital radiography`], "maria-reyes.txt", { type: "text/plain" }));
+    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string; type: string }> } } } };
+    for (const rule of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${rule.key}`, "yes");
+    form.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
+    const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });
+    expect(r.status).toBe(302);
+    const location = r.headers.get("location")!;
+    expect(location).toMatch(/^\/c\/status\//);
+
+    const apps = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
+    expect(apps).toHaveLength(1);
+    const a = apps[0];
+    // Slice 2: eligible → assessed (triaged) → policy application.invite_screen = auto_notify → invited by text (consented) and email
+    expect(a.stage).toBe("screen_invited");
+    expect(a.eligibility?.passed).toBe(true);
+    const [asmt] = await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id));
+    expect(asmt.kind).toBe("triage");
+    expect(["strong", "potential"]).toContain(asmt.overall);
+    expect(asmt.result.recommendation).toBe("screen");
+    for (const s of asmt.result.strengths) if (s.evidence.quote) expect(s.evidence.source).toBe("resume");
+    const [scr] = await container.db.select().from(screens).where(eq(screens.applicationId, a.id));
+    expect(scr.status).toBe("invited");
+    expect(scr.channel).toBe("sms");
+    const sms = (container.integrations.sms as FakeSmsAdapter).sent;
+    expect(sms.find((m) => m.to === "+19495550100")?.body).toMatch(/AI assistant|AI-assisted/);
+    expect(sms.find((m) => m.to === "+19495550100")?.body).toMatch(/HUMAN/);
+    expect(a.extraction?.licenses.map((l) => l.name)).toContain("RDH");
+    expect(a.extraction?.positions.length).toBeGreaterThanOrEqual(1);
+    const outbox = (container.integrations.email as FakeEmailAdapter).sent;
+    const ack = outbox.find((m) => m.to === "maria.reyes@example.com" && /received your application/.test(m.subject));
+    expect(ack).toBeTruthy();
+    expect(outbox.find((m) => m.to === "maria.reyes@example.com" && /screening conversation/.test(m.subject))?.text).toMatch(/\/c\/screen\//);
+    expect(ack!.text).toMatch(/AI recruiting assistant/);
+    expect(ack!.text).toMatch(/HUMAN/);
+    const comms = await container.db.select().from(communications).where(eq(communications.applicationId, a.id));
+    expect(comms[0].status).toBe("sent");
+    expect(comms[0].disclosureIncluded).toBe(true);
+    const runs = await container.db.select().from(aiRuns).where(eq(aiRuns.task, "resume.extract"));
+    expect(runs).toHaveLength(1);
+    expect(await container.db.select().from(aiRuns).where(eq(aiRuns.task, "triage.assess"))).toHaveLength(1);
+    const status = await app.request(location);
+    const statusHtml = await status.text();
+    expect(statusHtml).toMatch(/Maria/);
+    expect(statusHtml).toMatch(/\/c\/screen\//);
+  });
+
+  it("holds an ineligible applicant for a person: reminds, never declines automatically; the decline message goes out only after a human decision", async () => {
+    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string; type: string }> } } } };
+    const license = role.currentPacket.packet.requirements.eligibility.find((e) => e.type === "license")!;
+    const submit = async (email: string, first: string) => {
+      const form = new FormData();
+      form.set("firstName", first);
+      form.set("lastName", "Nolicense");
+      form.set("email", email);
+      form.set("noResume", "I worked as a dental assistant for three years and am studying for my hygiene license.");
+      for (const rule of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${rule.key}`, rule.key === license.key ? "no" : "yes");
+      const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });
+      expect(r.status).toBe(302);
+    };
+    await submit("jon@example.com", "Jon");
+    await submit("ana@example.com", "Ana");
+    const list = (await (await json("GET", `/api/v1/roles/${roleId}/applications?stage=ineligible`)).json()) as Array<{ id: string; candidate: { name: string } }>;
+    expect(list).toHaveLength(2);
+    const jon = list.find((x) => x.candidate.name.startsWith("Jon"))!;
+    const ana = list.find((x) => x.candidate.name.startsWith("Ana"))!;
+    // the owner overrides one before the window ends
+    const ov = await json("POST", `/api/v1/applications/${jon.id}/actions`, { action: "override_eligibility", note: "She is sitting the exam next week." });
+    expect(ov.status).toBe(200);
+    // time passes: advance the engine clock by 25 hours and drain the timers
+    setClock(25 * 3600_000);
+    await container.drain();
+    const after = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
+    // overridden eligibility: assessed, but the owner reviews (no automatic screen when a rule was overridden)
+    expect(after.find((x) => x.id === jon.id)!.stage).toBe("triaged");
+    // Founder decision (correction 6): the timer is operational, never adverse action. Ana is still held and reminded; nothing was sent to her.
+    expect(after.find((x) => x.id === ana.id)!.stage).toBe("ineligible");
+    let outbox = (container.integrations.email as FakeEmailAdapter).sent;
+    expect(outbox.find((m) => m.to === "ana@example.com" && /Your application to/.test(m.subject))).toBeFalsy();
+    const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
+    expect(notes.some((n) => n.kind === "application.ineligible_review_due" && /Ana/.test(n.title))).toBe(true);
+    // after three days without a decision an ITS recruiter is brought in; still nothing is sent to Ana
+    setClock(80 * 3600_000);
+    await container.drain();
+    const held = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, ana.id));
+    expect(held.some((e) => e.kind === "review")).toBe(true);
+    expect((await container.db.select().from(applications).where(eq(applications.id, ana.id)))[0].stage).toBe("ineligible");
+    // only a person declines, and the decline message goes out only then
+    const decline = await json("POST", `/api/v1/applications/${ana.id}/actions`, { action: "reject", reason: "eligibility", note: "No active license." });
+    expect(decline.status).toBe(200);
+    expect(((await decline.json()) as { dispositionSent: boolean }).dispositionSent).toBe(true);
+    const [anaRow] = await container.db.select().from(applications).where(eq(applications.id, ana.id));
+    expect(anaRow.stage).toBe("rejected");
+    expect(anaRow.rejectReason).toBe("eligibility");
+    outbox = (container.integrations.email as FakeEmailAdapter).sent;
+    expect(outbox.find((m) => m.to === "ana@example.com" && /Your application to/.test(m.subject))).toBeTruthy();
+    expect(outbox.find((m) => m.to === "jon@example.com" && /Your application to/.test(m.subject))).toBeFalsy();
+    setClock(0);
+  });
+
+  it("ingests an Indeed-style forwarded application through the intake address", async () => {
+    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { postings: Array<{ channel: string; intakeToken: string | null }> };
+    const token = role.postings.find((p) => p.channel === "email_in")!.intakeToken!;
+    const r = await app.request("/webhooks/postmark/inbound", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ From: "noreply@indeed.com", FromName: "Indeed", To: `apply-${token}@${container.integrations.env.intakeDomain}`, Subject: "New applicant: Luis Ortega - Registered Dental Hygienist", TextBody: "Luis Ortega applied via Indeed.\nEmail: luis.ortega@example.com\nPhone: 949-555-0199", Attachments: [{ Name: "Luis-Ortega.txt", ContentType: "text/plain", Content: Buffer.from("Luis Ortega\nRegistered Dental Hygienist at Harbor Dental 2020 - present\nRDH license CA active").toString("base64"), ContentLength: 80 }] }),
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { matched: boolean; applicationId: string };
+    expect(body.matched).toBe(true);
+    const [a] = await container.db.select().from(applications).where(eq(applications.id, body.applicationId));
+    expect(a.source).toBe("email_in");
+    // no eligibility answers by email: unverifiable, not failed; assessed and invited to a screen by email (no SMS consent)
+    expect(a.stage).toBe("screen_invited");
+    expect(a.eligibility?.unverifiable.length).toBeGreaterThan(0);
+    const [scr] = await container.db.select().from(screens).where(eq(screens.applicationId, a.id));
+    expect(scr.channel).toBe("web");
+    expect(a.extraction?.positions[0]?.employer).toBe("Harbor Dental");
+  });
+
+  it("dedupes a repeat application from the same candidate", async () => {
+    const form = new FormData();
+    form.set("firstName", "Maria");
+    form.set("lastName", "Reyes");
+    form.set("email", "Maria.Reyes@example.com");
+    form.set("noResume", "Applying again");
+    const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });
+    expect(r.status).toBe(302);
+    const apps = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
+    expect(apps.filter((x) => x.source === "careers_page")).toHaveLength(3);
+    const dup = await container.db.select().from(events).where(eq(events.type, "application.duplicate_detected"));
+    expect(dup).toHaveLength(1);
+  });
+
+  it("recovers from a transient email outage with a retry", async () => {
+    (container.integrations.email as FakeEmailAdapter).failNext(1);
+    const form = new FormData();
+    form.set("firstName", "Priya");
+    form.set("lastName", "Shah");
+    form.set("email", "priya@example.com");
+    form.set("noResume", "Hygienist, 6 years.");
+    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
+    for (const rule of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${rule.key}`, "yes");
+    await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });
+    let [a] = await container.db.select().from(applications).where(eq(applications.candidateId, (await container.db.select().from(applications)).find(() => true)!.candidateId)).limit(0);
+    void a;
+    const runsBefore = await container.db.select().from(workflowRuns).where(eq(workflowRuns.workflowKey, "application_intake"));
+    const waiting = runsBefore.find((x) => x.status === "waiting" && x.lastError?.includes("acknowledgment"));
+    expect(waiting).toBeTruthy();
+    const retried = await container.db.select().from(events).where(eq(events.type, "workflow.retried"));
+    expect(retried.length).toBeGreaterThanOrEqual(1);
+    // the retry timer fires
+    setClock(60_000);
+    await container.drain();
+    setClock(0);
+    const [run] = await container.db.select().from(workflowRuns).where(eq(workflowRuns.id, waiting!.id));
+    expect(run.status).toBe("completed");
+    const outbox = (container.integrations.email as FakeEmailAdapter).sent;
+    expect(outbox.find((m) => m.to === "priya@example.com")).toBeTruthy();
+  });
+
+  it("escalates to a recruiter with full context and shows it in the brief", async () => {
+    const apps = (await (await json("GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string }>;
+    const r = await json("POST", "/api/v1/escalations", { kind: "review", roleId, applicationId: apps[0].id, question: "Is Maria worth a working interview?" });
+    expect(r.status).toBe(201);
+    const outbox = (container.integrations.email as FakeEmailAdapter).sent;
+    const queueMail = outbox.find((m) => /^\[review\]/.test(m.subject));
+    expect(queueMail).toBeTruthy();
+    // correction 11: the queue notification never carries the customer's words
+    expect(queueMail!.text).not.toContain("Maria");
+    expect(queueMail!.text).toContain("Summary:");
+    const brief = (await (await json("GET", "/api/v1/brief")).json()) as { cards: Array<{ kind: string }> };
+    expect(brief.cards.some((c) => c.kind === "escalation")).toBe(true);
+    // the recruiter queue needs a platform role
+    expect((await json("GET", "/api/v1/escalations")).status).toBe(403);
+  });
+
+  it("rejecting on judgment requires a human with a reason, and is audited", async () => {
+    const apps = (await (await json("GET", `/api/v1/roles/${roleId}/applications?stage=triaged`)).json()) as Array<{ id: string }>;
+    expect(apps.length).toBeGreaterThan(0);
+    const bad = await json("POST", `/api/v1/applications/${apps[0].id}/actions`, { action: "reject" });
+    expect(bad.status).toBe(400);
+    const ok = await json("POST", `/api/v1/applications/${apps[0].id}/actions`, { action: "reject", reason: "not_a_match_experience", note: "Wants Saturdays off." });
+    expect(ok.status).toBe(200);
+    const detail = (await (await json("GET", `/api/v1/applications/${apps[0].id}`)).json()) as { stage: string; timeline: Array<{ type: string }> };
+    expect(detail.stage).toBe("rejected");
+    expect(detail.timeline.some((e) => e.type === "human.override")).toBe(true);
+  });
+
+  it("enforces the trial's one-active-role entitlement", async () => {
+    const s = await json("POST", "/api/v1/intake/sessions", { initialMessage: "I need a front office coordinator in Irvine, $22 to $26 an hour, full time. Just draft it." });
+    const { session } = (await s.json()) as { session: { id: string } };
+    const r = await json("POST", `/api/v1/intake/sessions/${session.id}/compile`);
+    expect(r.status).toBe(402);
+  });
+
+  it("blocks admin routes for non-admins and exposes runs to admins", async () => {
+    expect((await json("GET", "/api/v1/admin/runs")).status).toBe(403);
+    const { users } = await import("@ros/db");
+    const { grantPlatformRole } = await import("@ros/core");
+    const [dana] = await container.db.select().from(users).where(eq(users.email, "dana@brightline.test"));
+    await grantPlatformRole(container.db, { userId: dana.id, role: "platform_admin", actor: { kind: "system", id: "test_seed" }, reason: "test seed", source: "test_seed" });
+    // the role alone is not enough (21 Sep, item 2): the email-link session has no second factor
+    const noMfa = await json("GET", "/api/v1/admin/runs", undefined, { "x-admin-reason": "test" });
+    expect(noMfa.status).toBe(403);
+    expect(((await noMfa.json()) as { error: { code: string } }).error.code).toBe("mfa_required");
+    const { signInWithIdentity } = await import("./test-helpers");
+    const adminCookie = await signInWithIdentity(app, container, { email: "dana@brightline.test", provider: "azure", aal2: true });
+    const asAdmin = (method: string, path: string) => json(method, path, undefined, { "x-admin-reason": "test", cookie: adminCookie });
+    const r = await asAdmin("GET", "/api/v1/admin/runs");
+    expect(r.status).toBe(200);
+    const runs = (await r.json()) as Array<{ id: string; workflowKey: string }>;
+    const detail = (await (await asAdmin("GET", `/api/v1/admin/runs/${runs[0].id}`)).json()) as { steps: unknown[]; events: unknown[] };
+    expect(detail.steps.length).toBeGreaterThan(0);
+    expect(detail.events.length).toBeGreaterThan(0);
+    const costs = (await (await asAdmin("GET", "/api/v1/admin/costs")).json()) as Array<{ task: string }>;
+    expect(costs.some((c) => c.task === "intake.turn")).toBe(true);
+  });
+
+  it("keeps postings and approvals consistent", async () => {
+    const posts = await container.db.select().from(postings).where(eq(postings.roleId, roleId));
+    expect(posts.length).toBe(6);
+    const pend = await container.db.select().from(approvalRequests).where(eq(approvalRequests.status, "pending"));
+    expect(pend.filter((p) => p.roleId === roleId)).toHaveLength(0);
+    const [role] = await container.db.select().from(roles).where(eq(roles.id, roleId));
+    expect(role.status).toBe("open");
+  });
+});

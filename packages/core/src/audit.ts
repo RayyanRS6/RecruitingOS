@@ -1,0 +1,78 @@
+import type { Actor, Subject } from "@ros/contracts";
+import { auditRecords, type Queryable } from "@ros/db";
+import { guardOutbound } from "./secrets";
+
+export type AuditAction =
+  | "candidate.viewed"
+  | "candidate.exported"
+  | "export.created"
+  | "policy.changed"
+  | "membership.changed"
+  | "data.deleted"
+  | "admin.bypass"
+  | "credentials.updated"
+  | "notice.changed"
+  | "session.revoked"
+  | "escalation.context_viewed"
+  | "assessment.flagged"
+  | "staff.access_granted"
+  | "staff.access_ended"
+  | "staff.tenant_accessed"
+  | "admin.break_glass"
+  | "plan.changed"
+  /** A recruiter or administrator looked at the pre-acceptance preview of a customer's request (correction 11). */
+  | "escalation.preview_viewed"
+  | "calendar.changed"
+  | "escalation.sla_recalculated"
+  /** Secret lifecycle (correction 10): every read of a stored credential is recorded with service, purpose, tenant and integration. */
+  | "secret.stored"
+  | "secret.read"
+  | "secret.rotated"
+  | "secret.deleted"
+  | "secret.delete_failed"
+  | "credentials.deleted"
+  | "alert.acknowledged"
+  | "session.opened"
+  | "signin.refused"
+  | "platform_role.changed"
+  | "platform_role.revoked"
+  /** A listed bootstrap email signed in after administrators already existed: the list is ignored (21 Sep, item 2). */
+  | "bootstrap.ignored"
+  /** The customer ended a recruiter's access early (21 Sep, item 1). */
+  | "staff.access_revoked"
+  /** Human-recorded hiring outcomes (21 Sep, item 4). */
+  | "outcome.recorded"
+  /** A rate limit tripped (21 Sep, item 5): the key is a hash, never the subject. */
+  | "security.rate_limited"
+  | "outcome.corrected"
+  | "role.outcome_recorded"
+  /** Privacy requests (correction 7). */
+  | "data_request.created"
+  /** The same candidate re-sent the same request within a day: the earlier record is answered again, nothing new is created (21 Sep, item 3). */
+  | "data_request.replayed"
+  | "data_request.updated"
+  | "data.exported"
+  | "data.corrected"
+  | "data.anonymized"
+  | "data_request.resolved"
+  /** Email suppression list (item 5). */
+  | "suppression.added"
+  | "suppression.released";
+
+/** Privileged and access actions. Distinct from domain events: this answers "who looked at what, and why." */
+export async function audit(
+  q: Queryable,
+  input: { companyId: string | null; actor: Actor; action: AuditAction; target?: Subject | null; reason?: string; ip?: string; details?: Record<string, unknown> },
+): Promise<void> {
+  // Correction 10: an audit record never carries a credential; the guard refuses (outside production) or scrubs.
+  const safe = guardOutbound({ reason: input.reason ?? null, details: input.details ?? {} }, `audit record ${input.action}`);
+  await q.insert(auditRecords).values({
+    companyId: input.companyId,
+    actor: input.actor,
+    action: input.action,
+    target: input.target ?? null,
+    reason: safe.reason,
+    ip: input.ip ?? null,
+    details: safe.details,
+  });
+}

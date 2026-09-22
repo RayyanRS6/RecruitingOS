@@ -1,0 +1,10 @@
+-- Run once per environment by an operator with the migration (owner) role, AFTER `pnpm db:migrate`.
+-- Replace the placeholders. The application connects as ros_app; the worker connects as ros_worker.
+-- Neither role is a superuser, neither bypasses row-level security, and neither owns any table.
+--
+--   ALTER ROLE ros_app    LOGIN PASSWORD '<app-password>';
+--   ALTER ROLE ros_worker LOGIN PASSWORD '<worker-password>';
+--
+-- Then set DATABASE_URL to the ros_app connection string and WORKER_DATABASE_URL to the ros_worker one.
+-- The API refuses to boot in production if its role is a superuser, bypasses RLS, or cannot switch to app_tenant.
+-- On Supabase: run this in the SQL editor as the project owner; use the pooler host with the new roles.

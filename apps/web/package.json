@@ -1,0 +1,23 @@
+{
+  "name": "@ros/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@ros/contracts": "workspace:*",
+    "@ros/ui": "workspace:*",
+    "@tanstack/react-query": "^5.80.0",
+    "next": "^15.5.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.9.0"
+  },
+  "description": "The signed-in pages (owner, recruiter, administrator) as React components; routed and served by apps/shell (Next.js)."
+}

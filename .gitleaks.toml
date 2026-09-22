@@ -1,0 +1,30 @@
+# Secret scanning configuration (21 Sep, item 7). Extends the default rules; the allowlist names the fake values the
+# tests use on purpose so the scan stays meaningful. Anything else that looks like a credential fails the build.
+title = "recruiting-os"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake, documented development values and generated files"
+paths = [
+  '''pnpm-lock\.yaml''',
+  '''\.next/''',
+  '''node_modules/''',
+  '''packages/evals/results/''',
+]
+regexes = [
+  '''dev-only-[a-z-]+''',
+  '''(?i)fake[_-]?(refresh|access)?[_-]?token''',
+  '''ScrubMe''',
+  '''sk-ant-api03-FakeFakeFakeFakeFake''',
+  '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0''',
+  '''GOCSPX-(fake|x)\b''',
+  '''ya29\.a0AfH6SMBfakeAccessTokenValue''',
+  '''postgres://[a-z_]+:pass@host''',
+  '''fake-issuer-development-secret-not-for-prod''',
+  '''whsec-test''',
+  '''wh-secret-for-tests-1234567890''',
+  '''AbCdEfGh1234567890abcdefghijk''',
+  '''example\.(com|test|invalid)''',
+]

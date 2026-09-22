@@ -1,0 +1,26 @@
+{
+  "name": "@ros/workflows",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@ros/agents": "workspace:*",
+    "@ros/ai": "workspace:*",
+    "@ros/contracts": "workspace:*",
+    "@ros/core": "workspace:*",
+    "@ros/db": "workspace:*",
+    "@ros/integrations": "workspace:*",
+    "drizzle-orm": "^0.45.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}

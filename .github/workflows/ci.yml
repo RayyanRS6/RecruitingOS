@@ -1,0 +1,101 @@
+# Continuous integration for Recruiting OS (founder instruction of 21 September 2026, item 7).
+# Everything runs against fakes: no live credential, account or candidate data is used or needed. Pull requests from
+# forks get the same checks with no secrets at all. Artifacts hold the Playwright report only (synthetic data).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_ENV: test
+  CI: "1"
+  # Fake providers only. Nothing here is a secret; nothing here reaches a real service.
+  AI_PROVIDER: fake
+  EMAIL_PROVIDER: fake
+  SMS_PROVIDER: fake
+  AUTH_PROVIDER: fake
+  CALENDAR_PROVIDER: fake
+  ANALYTICS_PROVIDER: fake
+  SECRET_STORE: memory
+  STORAGE_PROVIDER: memory
+  PGLITE_DIR: "memory://"
+  WORKER_INLINE: "true"
+  COMP_BLS_ENABLED: "false"
+  MAGIC_LINK_ENABLED: "true"
+  RATE_LIMIT_STORE: shared
+  RATE_LIMIT_SHARED_PROVIDER: fake
+  CSP_MODE: report-only
+
+jobs:
+  verify:
+    name: lockfile, types, tests, evals, build, e2e, audit, scanning, migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks scans history on pull requests
+
+      - uses: pnpm/action-setup@v4 # reads "packageManager" from package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install from the lockfile only
+        run: pnpm install --frozen-lockfile
+
+      - name: Secret scanning (gitleaks, pinned release, no licence or secret needed)
+        run: |
+          set -euo pipefail
+          curl -sSL -o gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tgz" | sha256sum -c -
+          tar -xzf gitleaks.tgz gitleaks
+          ./gitleaks git --config .gitleaks.toml --redact --no-banner --exit-code 1 .
+          ./gitleaks dir --config .gitleaks.toml --redact --no-banner --exit-code 1 .
+
+      - name: Secret scanning (repository patterns)
+        run: pnpm secret-scan
+
+      - name: Dependency vulnerability audit
+        run: pnpm audit --audit-level high
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Migration validation (numbering, destructive statements, row-level security, tenant grants)
+        run: pnpm db:validate
+
+      - name: Service-role guard, row-level security, tenant isolation, unit and integration tests
+        run: pnpm test
+
+      - name: AI evals against the fake provider
+        run: pnpm eval
+
+      - name: Next.js production build
+        run: pnpm --filter @ros/shell build
+
+      - name: Playwright browsers
+        run: pnpm --filter @ros/e2e exec playwright install --with-deps chromium
+
+      - name: End-to-end journeys with accessibility checks
+        run: pnpm e2e
+
+      - name: Playwright report (synthetic data only)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: tests/e2e/report
+          retention-days: 7
+          if-no-files-found: warn

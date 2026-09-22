@@ -1,0 +1,13 @@
+{
+  "name": "@ros/scenario",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "typecheck": "tsc -p tsconfig.json" },
+  "dependencies": {
+    "@ros/db": "workspace:*",
+    "@ros/integrations": "workspace:*",
+    "drizzle-orm": "^0.45.0"
+  },
+  "devDependencies": { "typescript": "^5.9.0", "vitest": "^3.2.0" }
+}

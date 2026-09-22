@@ -1,0 +1,24 @@
+{
+  "intake.golden": {
+    "minPassRate": 1
+  },
+  "intake.illegal_criteria": {
+    "minPassRate": 1
+  },
+  "resume.extraction": {
+    "minPassRate": 0.9
+  },
+  "resume.hallucination": {
+    "minPassRate": 1
+  },
+  "triage.edge_cases": {
+    "minPassRate": 1
+  },
+  "triage.hallucination": {
+    "minPassRate": 1
+  },
+  "screen.conversation": {
+    "minPassRate": 1
+  },
+  "_note": "Thresholds gate prompt promotion (docs/11). The fake provider validates the harness; real thresholds are measured with AI_PROVIDER=anthropic."
+}

@@ -1,0 +1,32 @@
+/// <reference path="./pdf-parse.d.ts" />
+/**
+ * Turns an uploaded resume into text. PDF via pdf-parse, DOCX via mammoth, text/markdown as-is.
+ * Scanned PDFs with no text layer return an empty string; the workflow records `resume.extraction_failed`
+ * and the application continues (the candidate can still be screened by their answers).
+ */
+export async function documentToText(bytes: Uint8Array, mime: string, filename: string): Promise<string> {
+  const lower = filename.toLowerCase();
+  const isPdf = mime === "application/pdf" || lower.endsWith(".pdf");
+  const isDocx = mime.includes("wordprocessingml") || lower.endsWith(".docx");
+  const isText = mime.startsWith("text/") || lower.endsWith(".txt") || lower.endsWith(".md");
+  try {
+    if (isPdf) {
+      const mod = await import("pdf-parse/lib/pdf-parse.js");
+      const pdfParse = (mod as unknown as { default?: (b: Buffer) => Promise<{ text: string }> }).default ?? (mod as unknown as (b: Buffer) => Promise<{ text: string }>);
+      const res = await pdfParse(Buffer.from(bytes));
+      return (res.text ?? "").trim();
+    }
+    if (isDocx) {
+      const mammoth = await import("mammoth");
+      const res = await mammoth.extractRawText({ buffer: Buffer.from(bytes) });
+      return (res.value ?? "").trim();
+    }
+    if (isText) return Buffer.from(bytes).toString("utf8").trim();
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+export const ALLOWED_RESUME_TYPES = new Set(["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/plain", "text/markdown"]);
+export const MAX_RESUME_BYTES = 8 * 1024 * 1024;

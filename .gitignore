@@ -1,0 +1,66 @@
+node_modules/
+
+# --- Secrets and environment (never committed) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+credentials*.json
+service-account*.json
+.netrc
+.npmrc
+
+# --- Local databases, data and exports ---
+.data/
+**/.data/
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.sql.gz
+exports/
+**/exports/
+backups/
+
+# --- Recordings and candidate documents (never in the repository) ---
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.webm
+*.mp4
+*.mov
+recordings/
+uploads/
+candidate-documents/
+resumes/
+*.pdf
+*.docx
+!docs/**/*.md
+
+# --- Local tooling (machine-specific paths) ---
+.claude/
+
+# --- Build, cache and tool output ---
+.next/
+dist/
+build/
+.turbo/
+.vercel/
+.pnpm-store/
+*.tsbuildinfo
+coverage/
+tests/e2e/report/
+tests/e2e/test-results/
+playwright-report/
+test-results/
+packages/evals/results/*.json
+apps/shell/next-env.d.ts.bak
+*.log
+.DS_Store
+Thumbs.db
