@@ -15,6 +15,8 @@ Identified Talent Solutions uses the following providers to deliver the Service.
 | Microsoft Corporation | staff sign-in (Microsoft Entra) | United States |
 | Functional Software, Inc. (Sentry) | error monitoring (no candidate identifiers) | United States |
 | PostHog, Inc. | product analytics (no candidate identifiers) | United States |
-| Trigger.dev (planned) | background workflow execution | United States |
+| Railway Corporation | hosting of the background processing service | United States |
+| Upstash, Inc. | request-rate counters (no personal data) | United States |
+| Trigger.dev (deferred) | background workflow execution | United States |
 
 Changes: we notify customers [30] days before adding a subprocessor that will process candidate data.

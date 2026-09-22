@@ -435,6 +435,18 @@ the pilot process. The production team re-reads `private: true` on `recruiting-o
 | Repository visibility control | plan limitation L-GH-1 recorded with six compensating controls; `recruiting-os` private on every read | this record |
 | GitHub Actions policy | repository allows all actions; the workflow uses `actions/checkout`, `pnpm/action-setup`, `actions/setup-node`, `actions/upload-artifact` and a pinned gitleaks release; no permission broadened | API read |
 
+**Phase 1 approved by the founder, 22 September.**
+
+**Phase 2, external account inventory (22 September):** inventory in `docs/spec/19-external-account-inventory.md`,
+approved by the founder subject to four decisions recorded there in full: (1) Railway is the worker host (staging
+first, hard usage limit, subprocessor); (2) a Supabase Storage adapter with direct-to-storage uploads is authorized as
+release-1 infrastructure under fourteen requirements, the service-role key never reaching the application; (3) the
+official Sentry SDK is authorized, staging first, with scrubbing proven by a synthetic error; (4) the Upstash adapter is
+authorized, staging first, HMAC subjects only, fail-safe documented. Deferrals unchanged; Postmark before real
+communications; Supabase production and PITR before real data. First pilot on manual availability and ICS; a Microsoft
+365 partner preferred. Railway and Upstash added to `docs/readiness/07` and `docs/legal-drafts/09`.
+
 | Phase | Status | Evidence |
 |---|---|---|
-| 1 Secure the source code | checkpoint delivered 22 Sep; awaiting founder approval | this section |
+| 1 Secure the source code | approved 22 Sep | this section |
+| 2 External account inventory | inventory approved 22 Sep with decisions 1 to 4; account creation in progress, Supabase first | `docs/spec/19` |

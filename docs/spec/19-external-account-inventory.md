@@ -112,6 +112,49 @@ PITR is the single largest line and is only needed on production, before the fir
 - Gates (`docs/readiness/16`): 1.6 (rate-limit counter: Upstash Free, adapter to write), 1.9 (Twilio later, Trigger.dev later, worker host: Railway), 2.1 (accounts), 2.2 (sign-in registrations), 2.9 (test identities: a Google test customer only if Google is on the path; a Microsoft staff test account with a second factor; a candidate test mailbox), 3.6, 3.15.
 - Register (`docs/readiness/01`) section D is updated when accounts exist; today it lists GitHub and 1Password done and the rest not created.
 
+## I. Founder decisions of 22 September 2026 (inventory approved subject to these)
+
+**Decision 1, worker host: Railway approved** for the staging and pilot worker. Requirements: one staging worker service
+first; GitHub authentication with MFA; a hard usage limit and a billing alert; staging and production separate;
+only the existing worker process (`apps/api/src/worker.ts`) runs there; Railway recorded as a subprocessor for
+counsel; no production service yet; Railway never hosts the primary database or the web application.
+
+**Decision 2, résumé storage: a Supabase Storage adapter is authorized as release-1 infrastructure.** Direct-to-storage
+uploads (files never pass through Vercel); the 8 MB maximum stays. Requirements: private bucket only, no public bucket
+and no permanent public file URL; tenant- and candidate-scoped object paths; random, non-guessable object names;
+short-lived upload and download authorization; the application never receives the service-role key; allowed file
+types enforced by extension, MIME type and file signature; executable, encrypted, malformed and oversized files
+refused; uploads quarantined until validation and malware scanning pass; upload, read, replacement and deletion
+recorded in the audit log; disconnect and deletion workflows remove inaccessible files per the approved retention
+policy; tests prove one tenant cannot read, list, replace or delete another tenant's files; synthetic files only until
+every real-data gate passes. If the design cannot avoid exposing the service-role key, stop and present a safer scoped
+design first. Malware scanning and the retention policy are real-data blockers, not synthetic-staging blockers.
+
+**Decision 3, Sentry: the official SDK is authorized as release-1 infrastructure.** Staging first; United States region
+if selectable; sensitive-data collection disabled; request bodies, authorization headers, cookies, tokens, emails,
+phone numbers, résumé contents and candidate identifiers scrubbed; source maps protected; a synthetic test error must
+prove scrubbing before approval; no Sentry recording, replay or candidate-page session capture; production stays
+unconfigured until staging passes.
+
+**Decision 4, shared rate limiting: the Upstash adapter is authorized as release-1 infrastructure.** Staging first;
+United States region; HMAC-derived subjects only; no raw email address, phone number, candidate token or IP address
+stored as a key; expiration on every key; fail-safe behaviour documented and tested; webhook retries never rejected
+incorrectly; Upstash recorded as a subprocessor for counsel; production stays unconfigured until staging passes.
+
+**Deferred, unchanged:** Trigger.dev; Twilio and SMS; Microsoft Calendar; recording; automated offers; onboarding;
+passive sourcing; job-board APIs; Google Cloud unless a design partner requires Google sign-in or Google Calendar.
+Postmark stays required before real candidate communications. Supabase production and point-in-time recovery stay
+required before real candidate data.
+
+**First design-partner path:** the manual availability and ICS workflow unless a partner requires a connected calendar;
+calendar OAuth must not delay the initial pilot; a Microsoft 365 partner is preferred if that keeps Google Cloud off
+the critical path; Microsoft Calendar itself stays deferred because manual scheduling exists.
+
+**Next action approved:** merge this record; then create Supabase (organization and `recruiting-os-staging`) one screen
+at a time, one action per message, no secret ever pasted in chat, each value's 1Password vault named; stop after the
+Supabase organization and staging project exist and give a checkpoint. Broad Phase 3 deployment waits for that
+checkpoint's approval.
+
 ## H. Sources (official pages read 22 September 2026)
 
 supabase.com/pricing · supabase.com/docs/guides/platform/backups · vercel.com/pricing · vercel.com/docs/plans/hobby ·
