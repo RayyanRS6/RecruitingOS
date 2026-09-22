@@ -578,3 +578,11 @@ limit's page and the person-wide cap.
 | 2 External account inventory | inventory approved 22 Sep with decisions 1 to 4; Supabase organization and `recruiting-os-staging` created 22 Sep (checkpoint above, four security facts pending); Microsoft Entra registration in progress | `docs/spec/19`, this section |
 | Scope amendment 1: job distribution | approved 22 Sep; inspection delivered; no code yet | `docs/spec/20` |
 | Scope amendment 2: sales-ready founding-customer product | gap analysis delivered 22 Sep; awaiting founder approval; no code | `docs/spec/21` |
+
+Founder-run database setup, revised 22 Sep at the founder's request after she found that the Session pooler string carries a
+`[YOUR-PASSWORD]` placeholder and that Supabase warns special characters in a password must be percent-encoded:
+`scripts/staging-db-setup.sh` now asks for the string with the placeholder in it and for the password separately without
+echo, percent-encodes the password and replaces exactly one placeholder inside the script (the password travels to the
+encoder on standard input, never as an argument, in history, on disk or in output), refuses a string whose placeholder is
+missing or repeated before the password is asked for, and is covered by `packages/db/src/connection-string.test.ts`
+(special characters, exact placeholder matching, refusals, no secret in any error message).
