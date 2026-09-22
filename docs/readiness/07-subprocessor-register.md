@@ -5,7 +5,7 @@ Status: **Draft for counsel** (`docs/legal-drafts/09` is the customer-facing lis
 | Provider | Purpose | Data | Region | Contract basis | Status |
 |---|---|---|---|---|---|
 | Vercel | hosting the application and API | request data in transit; no candidate data at rest | US | Vercel terms + DPA | account not created |
-| Supabase | database, authentication, file storage, secret store | all product data: customers, candidates, applications, resumes, messages, audit; credentials in Vault | US (us-west-1) | Supabase terms + DPA | account not created |
+| Supabase | database, authentication, file storage, secret store | all product data: customers, candidates, applications, resumes, messages, audit; credentials in Vault | US, West US (Oregon), us-west-2 | Supabase terms + DPA | organization and staging project created 22 Sep (reference `vjuaiyjmtrenbrmujvtc`); production project not created; DPA not yet accepted (gate 2.7) |
 | Trigger.dev (D22, later) | durable workflow runs | workflow state (ids, timestamps; candidate fields the steps load) | US | terms + DPA | deferred; own engine until then |
 | Anthropic | AI model calls | role text, resume text, screening answers, candidate names as they appear in text (no phone or email is sent; see `08`) | US | Anthropic commercial terms; no training on API data | account not created |
 | Postmark (ActiveCampaign) | transactional email out and inbound applications | recipient address, message content, attachments (resumes for email-in) | US | terms + DPA | account not created |
