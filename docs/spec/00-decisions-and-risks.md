@@ -398,6 +398,43 @@ checkpoint (each with the exact screen given to the founder): the organization's
 (the organization's "members without 2FA" filter listed it). These are recorded as open until a fresh API read confirms
 them; they do not block the code steps of Phase 1.
 
+**Founder attestation, 22 September 2026 (recorded verbatim in substance):** GitHub recovery codes for the `nmotaweh`
+account are stored in the "Recovery and Emergency" vault in 1Password Business, outside GitHub. Given in chat by Nadine;
+not verifiable by any API. Mitigation for risk R-OWN-1.
+
+**GitHub settings verified through the authenticated API on 22 September (afternoon):** `nmotaweh` is the sole owner
+(active); every member has two-factor authentication (the "members without 2FA" filter is empty); the organization's
+two-factor requirement is enabled; `recruiting-os` is private; the baseline commits carry the private no-reply address
+`332282127+nmotaweh@users.noreply.github.com` as author and committer. "Members can create public repositories" still reads as allowed through the API.
+
+**Provider and plan limitation L-GH-1 (founder record, 22 September 2026; not a failed configuration, not a Phase 1
+blocker):** on the organization's current GitHub plan the "Public" repository-creation option is shown checked and
+disabled in the interface and cannot be unticked; per the founder's reading of GitHub's documentation, restricting
+members to private-only creation needs GitHub Enterprise Cloud, and organization owners can create any repository type
+regardless. No Enterprise upgrade is recommended or initiated for the pilot. Compensating controls, decided by the
+founder: (1) Nadine is the only organization member and owner; (2) `recruiting-os` is confirmed private; (3) no
+additional member is added during the pilot; (4) repository visibility is checked at every release review; (5) any
+future member receives access only to the existing private repository; (6) creating additional repositories is outside
+the pilot process. The production team re-reads `private: true` on `recruiting-os` at each phase checkpoint.
+
+### Phase 1 checkpoint: secure the source code (22 September 2026)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Inspection of the working tree | no secret values, no personal address, no candidate document, recording, export or local database outside ignored folders; synthetic names only; no file over 5 MB | this record |
+| Secret scan | repository patterns clean; gitleaks 8.30.1 clean over tree and history after allowlisting two literal test fixtures (`email-failures.test.ts:18`, `rate-limit.test.ts:42`), each proven to match only that value | `.gitleaks.toml`; CI step |
+| `.gitignore` | environment files (template kept), keys, local databases, exports, recordings, candidate documents, build output, browser-test reports, local tooling | `.gitignore` |
+| Repository | `https://github.com/identified-talent-solutions/recruiting-os`, private, default branch `main` | API read |
+| Baseline commit | `1456684227ca59cba555dfb46ea4c3f07520ae63`, 378 files, author and committer the private no-reply address | API read |
+| Second commit | `0911b24d2af813d7ee93e17d2f39a2eb4826c09b`: required check named `verify`; sole-owner decision and risk R-OWN-1 recorded | API read |
+| CI run 1 (baseline) | run 35775158233, success: lockfile install, gitleaks, repository secret scan, dependency audit, typecheck, migration validation, service-role guard + RLS + tenant isolation + unit and integration tests, AI evals on the fake provider, production build, Playwright with axe | Actions |
+| CI run 2 (`verify`) | run 35775929825 on `0911b24`: see the checkpoint report | Actions |
+| Branch protection on `main` | pull requests required (0 approvals for now; the founder may raise it), required check `verify` (strict), administrators included, force pushes blocked, deletion blocked; proven by a refused direct push ("Changes must be made through a pull request", "Required status check verify is expected") and a refused deletion | API read; push output |
+| Dependabot alerts | enabled | API read (204) |
+| Tag | `release-1-baseline` on the commit whose `verify` run passed | API read |
+| Repository visibility control | plan limitation L-GH-1 recorded with six compensating controls; `recruiting-os` private on every read | this record |
+| GitHub Actions policy | repository allows all actions; the workflow uses `actions/checkout`, `pnpm/action-setup`, `actions/setup-node`, `actions/upload-artifact` and a pinned gitleaks release; no permission broadened | API read |
+
 | Phase | Status | Evidence |
 |---|---|---|
-| 1 Secure the source code | in progress 22 Sep | this section, Phase 1 checkpoint |
+| 1 Secure the source code | checkpoint delivered 22 Sep; awaiting founder approval | this section |
