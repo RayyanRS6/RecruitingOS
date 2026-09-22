@@ -14,6 +14,8 @@ Status: **Draft for counsel** (`docs/legal-drafts/09` is the customer-facing lis
 | Microsoft (Entra) | staff sign-in | staff identity claims only | US | Microsoft 365 existing tenant | registration not created |
 | Sentry | error tracking | scrubbed error events (no cookies, tokens, or candidate identifiers; opaque user id) | US | terms + DPA | account not created |
 | PostHog | product analytics | allow-listed funnel events with keyed identifiers; no candidate PII; nothing from candidate pages | US | terms + DPA | account not created |
+| Railway | hosting the background worker process (jobs, reminders, timers) | the worker loads what its jobs need: candidate fields, messages, interview times, in memory during a job; nothing at rest on Railway | US | Railway terms + DPA | account not created (founder decision 1, 22 Sep) |
+| Upstash (Redis) | shared request-rate counters | HMAC-derived keys and counts only; no address, email, phone or token | US | Upstash terms + DPA | account not created (founder decision 4, 22 Sep) |
 | GoDaddy | registrar, DNS, existing website | none (DNS records) | US | existing | in place |
 | 1Password | credential storage for ITS | ITS credentials only | US | to be created | account not created |
 

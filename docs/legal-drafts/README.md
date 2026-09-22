@@ -1,5 +1,7 @@
 # Legal drafts for attorney review
 
+**Founder decision of 22 September 2026 (risk R-LEGAL-1, `docs/spec/00` section Q): counsel review is deferred; the first controlled real-candidate pilot proceeds under these drafts, labelled unreviewed and not attorney-approved, with the risk accepted by the founder and raised again before paid customers, other jurisdictions, SMS, recording, automated rejection or broader release. This label stays on every draft until counsel returns it.**
+
 **Every document in this folder is a draft prepared by the production team for review by Identified Talent Solutions' counsel. None is legally approved, none has been reviewed by an attorney, and none may be sent to a design partner or shown to a candidate until counsel returns it and the founder records the approval in `docs/spec/11` (the counsel register).** Product text that already appears in the software (notices, disclosures, consent language) is marked as such; counsel's edits flow back into the code through `packages/core/src/compliance.ts`.
 
 | # | Draft | Counsel register item | Where it will be used |

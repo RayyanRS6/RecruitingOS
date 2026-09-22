@@ -435,6 +435,46 @@ the pilot process. The production team re-reads `private: true` on `recruiting-o
 | Repository visibility control | plan limitation L-GH-1 recorded with six compensating controls; `recruiting-os` private on every read | this record |
 | GitHub Actions policy | repository allows all actions; the workflow uses `actions/checkout`, `pnpm/action-setup`, `actions/setup-node`, `actions/upload-artifact` and a pinned gitleaks release; no permission broadened | API read |
 
+**Phase 1 approved by the founder, 22 September.**
+
+**Phase 2, external account inventory (22 September):** inventory in `docs/spec/19-external-account-inventory.md`,
+approved by the founder subject to four decisions recorded there in full: (1) Railway is the worker host (staging
+first, hard usage limit, subprocessor); (2) a Supabase Storage adapter with direct-to-storage uploads is authorized as
+release-1 infrastructure under fourteen requirements, the service-role key never reaching the application; (3) the
+official Sentry SDK is authorized, staging first, with scrubbing proven by a synthetic error; (4) the Upstash adapter is
+authorized, staging first, HMAC subjects only, fail-safe documented. Deferrals unchanged; Postmark before real
+communications; Supabase production and PITR before real data. First pilot on manual availability and ICS; a Microsoft
+365 partner preferred. Railway and Upstash added to `docs/readiness/07` and `docs/legal-drafts/09`.
+
+**Founder decision, 22 September 2026 (evening): skip the synthetic design-partner testing phase and proceed toward a
+controlled real-candidate pilot.** Recorded as instructed:
+
+1. Counsel review is deferred.
+2. The legal documents stay labelled unreviewed and not attorney-approved (`docs/legal-drafts/README.md`).
+3. The absence of counsel approval does not block the first controlled real-candidate pilot.
+4. **Risk R-LEGAL-1, founder-accepted, 22 September 2026.** Scope: the initial unpaid design-partner pilot only (one
+   partner, one role, US candidates, limited volume, 60 to 90 days, no software charge), run under the drafts in
+   `docs/legal-drafts/` as they stand. Compensating controls: the pilot scope and human-decision rules in
+   `docs/readiness/20` section C; the minimum candidate transparency and affirmative acknowledgment in section D; data
+   minimization in section E; the twenty-two technical blockers in section B, every one proven with evidence before any
+   real candidate; the partner's written acceptance of the pilot agreement and data-processing terms labelled
+   unreviewed; the incident-response plan with a named lead; the privacy mailbox and the 45-day provisional
+   privacy-request deadline (M1); SMS, recording, automated rejection and offers off; daily founder oversight in week one.
+5. This decision does not eliminate or reduce any legal or privacy obligation of ITS or the design partner; it records
+   that the founder proceeds without counsel's review for this pilot.
+6. The risk is surfaced again, as a stop point, before paid customers, additional jurisdictions, SMS, recording,
+   automated rejection, a second design partner, or broader release (`docs/readiness/20` section F).
+
+The decision does not authorize skipping technical staging verification. The real-data readiness plan is
+`docs/readiness/20-real-data-readiness-plan.md`.
+
+CI note, 22 September: the browser journeys run in CI against the Next.js development server, which reset one
+connection mid-test on a documentation-only commit (run 35783580371, `ECONNRESET` on a request the same test had made
+successfully seconds earlier). Playwright now retries a failed journey once on CI only; locally a failure still fails.
+This is a test-infrastructure setting, not a product change; a production-mode server cannot be used for CI because
+the production guards refuse the fake providers.
+
 | Phase | Status | Evidence |
 |---|---|---|
-| 1 Secure the source code | checkpoint delivered 22 Sep; awaiting founder approval | this section |
+| 1 Secure the source code | approved 22 Sep | this section |
+| 2 External account inventory | inventory approved 22 Sep with decisions 1 to 4; account creation in progress, Supabase first | `docs/spec/19` |

@@ -13,10 +13,10 @@ Before any account:
 - [ ] 1.3 GoDaddy secured; DNS zone copy saved (Paul, you)
 - [ ] 1.4 First administrator chosen (you)
 - [ ] 1.5 Queue mailbox chosen (you)
-- [ ] 1.6 Rate-limit counter chosen (you)
+- [x] 1.6 Rate-limit counter chosen: Upstash, US region (22 Sep)
 - [ ] 1.7 Counsel engaged (you)
 - [ ] 1.8 Privacy-request handler named (you)
-- [ ] 1.9 Twilio, Trigger.dev and the worker host: now or later (you)
+- [x] 1.9 Twilio later, Trigger.dev later, worker host Railway (22 Sep)
 - [x] 1.10 1Password Business exists (founder confirmed 22 Sep 2026: Nadine and Paul owners, MFA on, five vaults)
 
 Creating staging:
