@@ -21,7 +21,8 @@ const EXTRA: Array<{ name: string; re: RegExp }> = [
   { name: "GitHub token", re: /\bgh[pousr]_[A-Za-z0-9]{30,}\b/ },
   { name: "Supabase service-role JWT reference", re: /SUPABASE_SERVICE_ROLE_KEY\s*=\s*["']?ey/ },
 ];
-const ALLOW = [/dev-only-[a-z-]+/, /fake-issuer-development-secret-not-for-prod/, /whsec-test/, /example\.(com|test|invalid)/, /:(?:pass|password|CHANGE_ME|<[^>]+>)@/];
+/** `[YOUR-PASSWORD]` is the Supabase dashboard's own placeholder: a connection string still holding it carries no secret. */
+const ALLOW = [/dev-only-[a-z-]+/, /fake-issuer-development-secret-not-for-prod/, /whsec-test/, /example\.(com|test|invalid)/, /:(?:pass|password|CHANGE_ME|<[^>]+>|\[YOUR-PASSWORD\])@/];
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
