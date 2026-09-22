@@ -509,9 +509,46 @@ independent readers with adversarial verification of every area. **Status: prese
 written.** Its section 6 records that charging a founding customer is the "paid customers" stop point of risk
 R-LEGAL-1 (point 6 above), which the founder must decide before the first invoice.
 
+### Supabase checkpoint (22 September 2026, night)
+
+The founder created the accounts herself; the team received only non-secret identifiers and checked what can be
+checked without any credential.
+
+| Item | Result | Evidence |
+|---|---|---|
+| Organization | `Identified Talent Solutions`; slug not yet reported | founder |
+| Staging project | `recruiting-os-staging`, West US (Oregon), Micro compute, reference `vjuaiyjmtrenbrmujvtc` | founder; the public discovery document at `https://vjuaiyjmtrenbrmujvtc.supabase.co/auth/v1/.well-known/openid-configuration` answers with issuer `https://vjuaiyjmtrenbrmujvtc.supabase.co/auth/v1` |
+| Token signing | asymmetric ES256 key published at `/auth/v1/.well-known/jwks.json` (key id `088b9c33-48cd-4d10-800b-ae96acf30def`); the code verifies through the JWKS, so no JWT secret is entered anywhere | public fetch by the team, 22 Sep |
+| Unused default project | `nmotaweh's Project` (East US, Ohio) deleted by the founder; which organization held it not yet reported | founder |
+| Database password | stored in the 1Password vault "Recruiting OS Staging"; never shared in chat | founder attestation |
+| Plan Pro, spend cap on, account MFA on, organization MFA required | **not yet reported** (the founder's reply carried unfilled placeholders); each is a screen if "no" | pending |
+| Production project | not created (before real data, with point-in-time recovery) | plan |
+
+Findings while preparing the sign-in screens (from the code and the providers' official pages, 22 Sep):
+
+1. **Staff second factor is Supabase TOTP, and the product has no enrolment or challenge step.** The code refuses a staff
+   session without `aal2` (`packages/core/src/identity.ts`), but nothing enrols a TOTP factor or verifies a challenge,
+   and the PKCE exchange returns the token straight after the Microsoft step. On the real service every ITS staff
+   sign-in will be refused with "second factor required" until that step is built; customers are unaffected. This is
+   release-1 scope already promised ("Microsoft sign-in with TOTP", `docs/readiness/03` section 3), not new scope; it is
+   added to `docs/spec/21` as a P0 build item and waits for the founder's approval with the rest of P0.
+2. The application sends `redirect_to = <APP_BASE_URL>/api/v1/auth/callback`; Supabase honours it only if it is on the
+   project's redirect allow list (Authentication, URL Configuration), which no document mentioned. Added to `docs/spec/13`
+   and `docs/readiness/03`; the entry waits for the staging hostname.
+3. `SUPABASE_JWT_ISSUER` is not read by the code (the issuer derives from `SUPABASE_URL`); retired in `docs/spec/13`.
+   `SUPABASE_JWT_SECRET` is not needed for a project on asymmetric keys. `SESSION_SECRET`, `COOKIE_DOMAIN` and
+   `WEB_BASE_URL` are still read by the code although `docs/spec/13` marked them retiring; corrected.
+4. Supabase's region list names the project's region "West US (Oregon), us-west-2"; the earlier `us-west-1` label in
+   `docs/spec/13` and `docs/readiness/07` was wrong and is corrected.
+5. Supabase's Azure guide recommends the optional `xms_edov` claim on the Entra registration so verified and unverified
+   email domains can be told apart; added to the Entra screens. The registration stays multi-tenant with personal
+   accounts (`docs/spec/13` section 4a), so the provider's "Azure Tenant URL" stays empty (the common endpoint).
+
+Microsoft Entra registration walkthrough started 22 Sep (one screen per message), Nadine as the only owner.
+
 | Phase | Status | Evidence |
 |---|---|---|
 | 1 Secure the source code | approved 22 Sep | this section |
-| 2 External account inventory | inventory approved 22 Sep with decisions 1 to 4; merge run 35785468084 green on `6f99b55`; Supabase organization and staging project: founder walkthrough started 22 Sep (one screen per message) | `docs/spec/19` |
+| 2 External account inventory | inventory approved 22 Sep with decisions 1 to 4; Supabase organization and `recruiting-os-staging` created 22 Sep (checkpoint above, four security facts pending); Microsoft Entra registration in progress | `docs/spec/19`, this section |
 | Scope amendment 1: job distribution | approved 22 Sep; inspection delivered; no code yet | `docs/spec/20` |
 | Scope amendment 2: sales-ready founding-customer product | gap analysis delivered 22 Sep; awaiting founder approval; no code | `docs/spec/21` |
