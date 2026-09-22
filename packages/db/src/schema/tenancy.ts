@@ -43,6 +43,8 @@ export const users = pgTable(
     /** The managed identity service's subject and the provider it came through (D19). Null until the first delegated sign-in. */
     authProvider: text("auth_provider"),
     authSubject: text("auth_subject"),
+    /** When the person first verified an authenticator app with the identity service (staff second factor). */
+    mfaEnrolledAt: ts("mfa_enrolled_at"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

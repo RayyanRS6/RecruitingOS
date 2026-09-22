@@ -21,7 +21,9 @@ write the cached role column at all.
 There has to be a first administrator. The environment variable `BOOTSTRAP_ADMIN_EMAILS` exists only for that moment.
 
 1. Set `BOOTSTRAP_ADMIN_EMAILS` to one staff address (whoever will be the first administrator) before the first start.
-2. That person signs in with Microsoft 365 and a second factor. Because the list is honoured only while **no
+2. That person signs in with Microsoft 365 and a second factor: on the very first sign-in the second-factor page
+   enrols an authenticator app (`docs/runbooks/staff-second-factor.md`), and the bootstrap applies only to the level-2
+   session that results. Because the list is honoured only while **no
    administrator exists**, the first qualifying sign-in writes one ledger row with source `bootstrap`, sets the role, and
    records an audit entry `platform_role.changed` plus an alert `platform_role.changed` in the console.
 3. Remove `BOOTSTRAP_ADMIN_EMAILS` from the environment and restart.

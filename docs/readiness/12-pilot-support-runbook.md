@@ -9,6 +9,7 @@ Status: **Built with mocks** (the product surfaces exist); the human process sta
 | Design partner owner or team | "Bring in a recruiter" in the product; `support@identifiedtalent.com` | ITS recruiter queue (with the generic preview); the shared support mailbox | per the escalation SLA by category (candidate issue 4 business hours; negotiation and platform blocking 2; others 8) |
 | Candidate | reply to any message with HUMAN; the status page form; `privacy@` for privacy requests | recruiter queue (candidate issue); privacy requests console (admins only) | 4 business hours for a person; privacy requests within the deadline |
 | ITS staff | Slack/Teams (internal) | | |
+| ITS staff who lost every authenticator | a call or in person, never email alone | same day | the platform owner runs the dashboard reset in `docs/runbooks/staff-second-factor.md` and notes it in the queue mailbox |
 
 ## Daily (business days)
 

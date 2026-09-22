@@ -1,10 +1,12 @@
-import { Hono, type Context } from "hono";
+import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { eq } from "drizzle-orm";
 import { MagicLinkConsume, MagicLinkRequest } from "@ros/contracts";
 import { createHash, randomBytes } from "node:crypto";
-import { audit, consumeMagicLink, createMagicLink, isStaffAccount, normalizeEmail, openSessionFromIdentity, revokeSession, setActiveCompany, SignInRefused, type SignInPolicy } from "@ros/core";
-import { companies, memberships, users, withPlatform } from "@ros/db";
+import { consumeMagicLink, createMagicLink, isStaffAccount, normalizeEmail, revokeSession, sealMfaTransaction, setActiveCompany, SignInRefused, MFA_TRANSACTION_TTL_MS } from "@ros/core";
+import { companies, memberships, users } from "@ros/db";
+import { mfaRoutes } from "./auth-mfa";
+import { MFA_COOKIE, mfaCookieOptions, needsSecondFactor, openSession, sessionCookieOptions, signInPolicy } from "./auth-shared";
 import { FakeEmailAdapter, FakeIdentityProvider, IdentityError, base64url } from "@ros/integrations";
 import { SESSION_COOKIE, clientIp, isPlatformStaff, type Vars } from "../middleware/session";
 import { activeStaffGrant } from "@ros/core";
@@ -24,39 +26,13 @@ export function consumeLink(container: Container, token: string): string {
   return `${container.env.APP_BASE_URL}/api/v1/auth/consume?token=${encodeURIComponent(token)}`;
 }
 
-function sessionCookieOptions(container: Container) {
-  return {
-    httpOnly: true,
-    sameSite: "Lax" as const,
-    secure: container.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: 30 * 24 * 3600,
-    ...(container.env.raw.COOKIE_DOMAIN ? { domain: container.env.raw.COOKIE_DOMAIN } : {}),
-  };
-}
-
-/**
- * Opens the session in one platform transaction (the bootstrap grant and the session row commit together). A refusal
- * rolls that transaction back, so its audit record is written again outside it: refusals are never silent.
- */
-async function openSession(container: Container, c: Context<Vars>, identity: Parameters<typeof openSessionFromIdentity>[1]["identity"]) {
-  try {
-    return await withPlatform(container.db, (tx) => openSessionFromIdentity(tx, { identity, policy: signInPolicy(container), ip: clientIp(c), userAgent: c.req.header("user-agent") }));
-  } catch (err) {
-    if (err instanceof SignInRefused && err.auditRecord) await audit(container.db, err.auditRecord);
-    throw err;
-  }
-}
-
-function signInPolicy(container: Container): SignInPolicy {
-  return { staffDomains: container.env.ITS_STAFF_EMAIL_DOMAINS, staffProvider: "azure", requireStaffMfa: true, bootstrapAdmins: container.env.BOOTSTRAP_ADMIN_EMAILS };
-}
-
 /** What the sign-in page offers: delegated providers always; the email link only where it is enabled. */
 authRoutes.get("/config", async (c) => {
   const container = c.get("container");
   return c.json({ mode: container.integrations.identity.id, providers: container.integrations.identity.providers(), magicLink: container.env.MAGIC_LINK_ENABLED, staffDomains: container.env.ITS_STAFF_EMAIL_DOMAINS });
 });
+
+authRoutes.route("/mfa", mfaRoutes);
 
 const PKCE_COOKIE = "ros_pkce";
 
@@ -86,6 +62,13 @@ authRoutes.get("/callback", async (c) => {
   try {
     const { accessToken } = await container.integrations.identity.exchangeCode({ code, codeVerifier: verifier });
     const identity = await container.integrations.identity.verify(accessToken);
+    if (await needsSecondFactor(container, identity)) {
+      // Microsoft has vouched for an ITS staff member; the authenticator step opens the session, not this route.
+      deleteCookie(c, PKCE_COOKIE, { path: "/" });
+      const now = container.engine.clock().getTime();
+      setCookie(c, MFA_COOKIE, sealMfaTransaction({ v: 1, accessToken, email: normalizeEmail(identity.email), provider: identity.provider, subject: identity.subject, stage: "start", factorIds: [], secret: null, uri: null, attempts: 0, expiresAt: now + MFA_TRANSACTION_TTL_MS }, container.env.SESSION_SECRET), mfaCookieOptions(container));
+      return c.redirect(`${container.env.APP_BASE_URL}/api/v1/auth/mfa`, 302);
+    }
     const result = await openSession(container, c, identity);
     deleteCookie(c, PKCE_COOKIE, { path: "/" });
     setCookie(c, SESSION_COOKIE, result.sessionToken, sessionCookieOptions(container));
