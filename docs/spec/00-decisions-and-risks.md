@@ -446,6 +446,28 @@ authorized, staging first, HMAC subjects only, fail-safe documented. Deferrals u
 communications; Supabase production and PITR before real data. First pilot on manual availability and ICS; a Microsoft
 365 partner preferred. Railway and Upstash added to `docs/readiness/07` and `docs/legal-drafts/09`.
 
+**Founder decision, 22 September 2026 (evening): skip the synthetic design-partner testing phase and proceed toward a
+controlled real-candidate pilot.** Recorded as instructed:
+
+1. Counsel review is deferred.
+2. The legal documents stay labelled unreviewed and not attorney-approved (`docs/legal-drafts/README.md`).
+3. The absence of counsel approval does not block the first controlled real-candidate pilot.
+4. **Risk R-LEGAL-1, founder-accepted, 22 September 2026.** Scope: the initial unpaid design-partner pilot only (one
+   partner, one role, US candidates, limited volume, 60 to 90 days, no software charge), run under the drafts in
+   `docs/legal-drafts/` as they stand. Compensating controls: the pilot scope and human-decision rules in
+   `docs/readiness/20` section C; the minimum candidate transparency and affirmative acknowledgment in section D; data
+   minimization in section E; the twenty-two technical blockers in section B, every one proven with evidence before any
+   real candidate; the partner's written acceptance of the pilot agreement and data-processing terms labelled
+   unreviewed; the incident-response plan with a named lead; the privacy mailbox and the 45-day provisional
+   privacy-request deadline (M1); SMS, recording, automated rejection and offers off; daily founder oversight in week one.
+5. This decision does not eliminate or reduce any legal or privacy obligation of ITS or the design partner; it records
+   that the founder proceeds without counsel's review for this pilot.
+6. The risk is surfaced again, as a stop point, before paid customers, additional jurisdictions, SMS, recording,
+   automated rejection, a second design partner, or broader release (`docs/readiness/20` section F).
+
+The decision does not authorize skipping technical staging verification. The real-data readiness plan is
+`docs/readiness/20-real-data-readiness-plan.md`.
+
 | Phase | Status | Evidence |
 |---|---|---|
 | 1 Secure the source code | approved 22 Sep | this section |
