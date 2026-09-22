@@ -468,6 +468,12 @@ controlled real-candidate pilot.** Recorded as instructed:
 The decision does not authorize skipping technical staging verification. The real-data readiness plan is
 `docs/readiness/20-real-data-readiness-plan.md`.
 
+CI note, 22 September: the browser journeys run in CI against the Next.js development server, which reset one
+connection mid-test on a documentation-only commit (run 35783580371, `ECONNRESET` on a request the same test had made
+successfully seconds earlier). Playwright now retries a failed journey once on CI only; locally a failure still fails.
+This is a test-infrastructure setting, not a product change; a production-mode server cannot be used for CI because
+the production guards refuse the fake providers.
+
 | Phase | Status | Evidence |
 |---|---|---|
 | 1 Secure the source code | approved 22 Sep | this section |

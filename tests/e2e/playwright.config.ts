@@ -16,7 +16,9 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: 1,
-  retries: 0,
+  // One retry on CI only: the journeys run against `next dev`, which occasionally resets a connection while it compiles a
+  // route (seen 22 Sep 2026 as ECONNRESET on a documentation-only commit). Locally a failure must fail.
+  retries: process.env.CI ? 1 : 0,
   reporter: [["list"], ["html", { open: "never", outputFolder: "report" }]],
   use: { baseURL: base, trace: "retain-on-failure", screenshot: "only-on-failure", video: "off" },
   projects: [
