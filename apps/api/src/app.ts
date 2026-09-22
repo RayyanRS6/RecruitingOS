@@ -51,6 +51,9 @@ export function createApp(container: Container) {
   app.use("/c/*", candidateCsp);
   app.use("/careers/*", candidateCsp);
   app.use("/privacy", candidateCsp);
+  // The staff second-factor pages are server-rendered HTML under the API: same policy, same nonce.
+  app.use("/api/v1/auth/mfa", candidateCsp);
+  app.use("/api/v1/auth/mfa/*", candidateCsp);
   // Browsers post policy violations here (both report formats). Paths and origins only; never a token or a query string.
   app.post("/api/csp-report", rateLimit(POLICIES.cspReport), async (c) => {
     let body: unknown = null;

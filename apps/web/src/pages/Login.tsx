@@ -8,6 +8,9 @@ import { api, ApiError } from "../api/client";
 
 const API_BASE = (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_API_URL ?? "";
 const ERRORS: Record<string, string> = {
+  mfa_expired: "The second-factor step timed out. Sign in again.",
+  mfa_failed: "The code was wrong too many times. Sign in again.",
+  mfa_unavailable: "The second-factor service is not available right now. Try again in a few minutes.",
   expired: "That sign-in link is invalid or has expired. Request a new one.",
   signin_incomplete: "The sign-in did not complete. Start again.",
   staff_provider_required: "ITS staff sign in with their Microsoft 365 account.",

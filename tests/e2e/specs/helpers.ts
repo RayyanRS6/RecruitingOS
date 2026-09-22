@@ -8,7 +8,23 @@ export async function expectAccessible(page: Page, name: string) {
   if (results.violations.length) throw new Error(`accessibility violations on ${name}:\n${summary}`);
 }
 
-/** Signs in through the fake identity provider's consent page, exactly as a person would with Google or Microsoft. */
+/**
+ * Microsoft sign-in through the fake consent page with the second factor unchecked. For an ITS staff address this ends on
+ * the authenticator page under /api/v1/auth/mfa (22 September 2026), which is why it does not wait for an app URL.
+ */
+export async function signInWithoutSecondFactor(page: Page, input: { email: string; name: string }) {
+  await page.goto("/login");
+  await page.getByRole("link", { name: "Continue with Microsoft" }).click();
+  await expect(page.getByRole("heading", { name: /Sign in with/ })).toBeVisible();
+  await page.getByRole("textbox", { name: "Email" }).fill(input.email);
+  await page.getByLabel("Name").fill(input.name);
+  const mfa = page.getByLabel("Second factor verified (TOTP)");
+  if (await mfa.isChecked()) await mfa.uncheck();
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.waitForURL(/\/api\/v1\/auth\/mfa/);
+}
+
+/** Signs in through the fake identity provider's consent page, exactly as a person would with Google or Microsoft. A staff address needs aal2 here; use signInWithoutSecondFactor for the authenticator step. */
 export async function signIn(page: Page, input: { email: string; name: string; provider: "google" | "azure"; aal2?: boolean }) {
   await page.goto("/login");
   await page.getByRole("link", { name: `Continue with ${input.provider === "azure" ? "Microsoft" : "Google"}` }).click();
