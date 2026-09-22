@@ -49,3 +49,21 @@ Until the founder decides, staging runs `RATE_LIMIT_SHARED_PROVIDER=fake`, which
 
 - No provider account was created or connected.
 - No limits were placed on the ITS queue email or on outbound email (that is the email provider's domain).
+
+
+## Record (22 and 23 September 2026)
+
+- 22 Sep: the founder approved Upstash (decision 4, `docs/spec/00` section Q; requirements: staging first, United States
+  region, HMAC subjects only, an expiry on every key, the fail-safe documented, webhook retries safe).
+- 23 Sep: the founder created the staging database `recruiting-os-staging-rate-limit` (AWS Oregon, us-west-2, Free plan,
+  REST endpoint `https://complete-narwhal-292092.upstash.io`); the token stays with the founder. Eviction was created On
+  and is to be turned Off: counters carry their own expiry, and eviction would drop them first under memory pressure.
+- 23 Sep: the adapter is built (`UpstashSharedCounter`, `packages/core/src/rate-limit.ts`): one REST request per hit
+  running a Lua script that increments the window key and sets its expiry on the first hit, atomically, so no key can
+  outlive its window; keys are the keyed hashes only; the token travels as a bearer header and is registered for
+  scrubbing. **Fail-safe:** if Upstash cannot be reached or refuses (network error, 5xx, 429), the process keeps counting
+  the affected keys in its own memory for the rest of the window and raises the alert `rate_limit.shared_unavailable`
+  once an hour; limits then apply per process, nothing is refused because the store is down, and nothing passes
+  uncounted. Webhook retries stay safe: only accepted deliveries are counted (unchanged). Proof on staging is Phase 3.
+- Variables (Vercel Preview and Railway, both): `RATE_LIMIT_STORE=shared`, `RATE_LIMIT_SHARED_PROVIDER=upstash`,
+  `UPSTASH_REDIS_REST_URL` (the endpoint above), `UPSTASH_REDIS_REST_TOKEN` (sensitive; sealed on Railway).
