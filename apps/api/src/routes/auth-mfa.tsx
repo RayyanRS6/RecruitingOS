@@ -114,10 +114,7 @@ mfaRoutes.post("/", rateLimit(POLICIES.authMfa), async (c) => {
   const code = String(typeof form.code === "string" ? form.code : "").replace(/\s+/g, "");
   const attempts = tx.attempts + 1;
   const ip = clientIp(c);
-  if (attempts > MFA_MAX_ATTEMPTS) {
-    await audit(container.db, { companyId: null, actor: { kind: "system", id: "sign_in" }, action: "mfa.failed", reason: "too_many_attempts", ip, details: { email: tx.email, stage: tx.stage, attempts } });
-    return toLogin(c, container, "mfa_failed");
-  }
+  if (attempts > MFA_MAX_ATTEMPTS) return toLogin(c, container, "mfa_failed");
   let newToken: string | null = null;
   if (/^\d{6}$/.test(code)) {
     // Challenge and verify in the same request: the identity service requires both to come from one address, and a
@@ -136,8 +133,13 @@ mfaRoutes.post("/", rateLimit(POLICIES.authMfa), async (c) => {
   }
   if (!newToken) {
     await audit(container.db, { companyId: null, actor: { kind: "system", id: "sign_in" }, action: "mfa.failed", reason: /^\d{6}$/.test(code) ? "code_invalid" : "code_format", ip, details: { email: tx.email, stage: tx.stage, attempt: attempts, remaining: MFA_MAX_ATTEMPTS - attempts } });
+    if (attempts >= MFA_MAX_ATTEMPTS) {
+      // The fifth wrong code ends the attempt: the person starts again at sign-in, with Microsoft, and a fresh five.
+      await audit(container.db, { companyId: null, actor: { kind: "system", id: "sign_in" }, action: "mfa.failed", reason: "too_many_attempts", ip, details: { email: tx.email, stage: tx.stage, attempts } });
+      return toLogin(c, container, "mfa_failed");
+    }
     saveTx(c, container, { ...tx, attempts });
-    return renderStage(c, container, tx, attempts >= MFA_MAX_ATTEMPTS ? `${WRONG_CODE} This is your last try.` : WRONG_CODE);
+    return renderStage(c, container, tx, attempts === MFA_MAX_ATTEMPTS - 1 ? `${WRONG_CODE} This is your last try.` : WRONG_CODE);
   }
   try {
     if (tx.stage === "backup_enrol") {

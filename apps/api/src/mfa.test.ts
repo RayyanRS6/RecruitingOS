@@ -164,16 +164,19 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
   it("five wrong codes end the attempt; the person starts over at sign-in", async () => {
     const { jar } = await browserSignIn({ email: "recruiter@identifiedtalent.com", name: "Riley Recruiter", provider: "azure", aal2: false });
     const secret = setupKeyOf(await (await get(jar, "/api/v1/auth/mfa")).text());
-    for (let i = 1; i <= 5; i++) {
+    for (let i = 1; i <= 4; i++) {
       const r = await postCode(jar, wrongCode(secret));
       expect(r.status).toBe(200);
       const text = await r.text();
       expect(text).toContain("That code is not right");
-      if (i === 5) expect(text).toContain("last try");
+      if (i === 4) expect(text).toContain("last try");
     }
-    const sixth = await postCode(jar, totp(secret));
-    expect(sixth.status).toBe(302);
-    expect(sixth.headers.get("location")).toContain("/login?error=mfa_failed");
+    const fifth = await postCode(jar, wrongCode(secret));
+    expect(fifth.status).toBe(302);
+    expect(fifth.headers.get("location")).toContain("/login?error=mfa_failed");
+    // The transaction is gone: even the right code no longer works.
+    const afterwards = await postCode(jar, totp(secret));
+    expect(afterwards.headers.get("location")).toContain("/login?error=mfa_expired");
     expect(jar.ros_mfa).toBeUndefined();
     expect(jar.ros_session).toBeUndefined();
     const failed = await auditsOf("mfa.failed");
