@@ -133,7 +133,7 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     if (env.AI_PROVIDER === "fake") throw new Error("AI_PROVIDER=fake is not allowed in production");
     if (env.AUTH_PROVIDER !== "supabase") throw new Error("AUTH_PROVIDER must be \"supabase\" in production: sign-in is delegated to the managed identity service (D19)");
     if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) throw new Error("SUPABASE_URL and SUPABASE_ANON_KEY must be set in production for sign-in");
-    if (!env.DATABASE_URL) throw new Error("DATABASE_URL must be set in production");
+    if (!env.DATABASE_URL && !env.WORKER_DATABASE_URL) throw new Error("DATABASE_URL (the API) or WORKER_DATABASE_URL (the worker) must be set in production");
     if (env.WORKER_INLINE) throw new Error("WORKER_INLINE must be false in production: run the worker as its own process with WORKER_DATABASE_URL");
   }
   return env;
