@@ -104,6 +104,10 @@ Success looks like:
 - start: `[worker] started (db: postgres as worker, ai: anthropic)` and no `refusing to start`;
 - no repeated restarts.
 
+If the logs show `password authentication failed for user "ros_worker"` (28P01), see "When a host refuses an
+application string" in `docs/runbooks/staging-database-setup.md`: test the 1Password value with
+`bash scripts/staging-db-check-role.sh` before rotating anything.
+
 Then, on your machine, `bash scripts/staging-db-status.sh` shows `sessions of the application roles: … ros_worker 1
 idle` (the worker's pooled connection) and no pending migrations. Report the started line and that status line.
 
