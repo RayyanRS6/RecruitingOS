@@ -1,3 +1,4 @@
+import { X509Certificate } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT, PgTransaction } from "drizzle-orm/pg-core";
@@ -50,10 +51,31 @@ export type TlsTrust = { ca: string; rejectUnauthorized: true };
 
 export function tlsOptionsFromEnv(env: Record<string, string | undefined> = process.env, caFile?: string | null): TlsTrust | undefined {
   const file = caFile ?? env.DATABASE_SSL_CA_FILE;
-  const pem = file ? readFileSync(file, "utf8") : env.DATABASE_SSL_CA;
-  if (!pem || !pem.includes("BEGIN CERTIFICATE")) return undefined;
-  return { ca: pem, rejectUnauthorized: true };
+  const raw = file ? readFileSync(file, "utf8") : env.DATABASE_SSL_CA;
+  if (!raw || !raw.trim()) return undefined;
+  const source = file ? `the certificate file ${file}` : "DATABASE_SSL_CA";
+  return { ca: normalizePem(raw, source), rejectUnauthorized: true };
 }
+
+/**
+ * A certificate as people paste it: Windows line endings, a trailing newline, or a hosted environment's one-line
+ * field with literal "\n" sequences. Normalised, then parsed, so a value the TLS layer would silently ignore is
+ * refused with a clear message instead.
+ */
+export function normalizePem(raw: string, source: string): string {
+  const pem = raw.replace(/\r\n?/g, "\n").replace(/\\n/g, "\n").trim() + "\n";
+  if (!/-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/.test(pem)) throw new Error(`${source} is not a PEM certificate (it must start with -----BEGIN CERTIFICATE-----)`);
+  try {
+    new X509Certificate(pem);
+  } catch {
+    throw new Error(`${source} is not a certificate this runtime can parse; download it again from Supabase`);
+  }
+  return pem;
+}
+
+/** The modes and switches that would weaken or remove TLS; refused whatever else the string says. */
+const REFUSED_SSL_MODES = new Set(["disable", "no-verify"]);
+const REFUSED_SSL_VALUES = new Set(["0", "false", "no-verify"]);
 
 /**
  * The driver options for a connection string plus our own TLS trust. node-postgres parses the connection string
@@ -65,16 +87,32 @@ export function tlsOptionsFromEnv(env: Record<string, string | undefined> = proc
  * credential never travels in the clear.
  */
 export function connectionConfig(url: string, trust: TlsTrust | undefined): { connectionString: string; ssl?: TlsTrust } {
-  const u = new URL(url);
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    // Never rethrow the driver's or the platform's error: its `input` would carry the string and the password.
+    throw new Error("the database connection string is not a valid URL");
+  }
   const mode = u.searchParams.get("sslmode");
-  if (mode === "disable" || mode === "allow") throw new Error(`sslmode=${mode} is not allowed: connections to the database always verify TLS`);
+  if (mode && REFUSED_SSL_MODES.has(mode)) throw new Error(`sslmode=${mode} is not allowed: connections to the database always verify TLS`);
+  const sslParam = u.searchParams.get("ssl");
+  if (sslParam && REFUSED_SSL_VALUES.has(sslParam.toLowerCase())) throw new Error(`ssl=${sslParam} is not allowed: connections to the database always verify TLS`);
+  if (u.searchParams.has("uselibpqcompat")) throw new Error("uselibpqcompat is not allowed in the connection string: its sslmode meanings weaken verification");
   const rootCertFile = u.searchParams.get("sslrootcert");
-  const ca = rootCertFile ? readFileSync(rootCertFile, "utf8") : trust?.ca;
+  let ca = trust ? normalizePem(trust.ca, "the certificate") : undefined;
+  if (rootCertFile) {
+    let fromString: string;
+    try {
+      fromString = normalizePem(readFileSync(rootCertFile, "utf8"), `the certificate file ${rootCertFile} named in the connection string`);
+    } catch (err) {
+      throw new Error(err instanceof Error && /not a PEM|not a certificate/.test(err.message) ? err.message : `the certificate file named in the connection string (sslrootcert) could not be read`);
+    }
+    if (ca && ca !== fromString) throw new Error("two different certificates were given (DATABASE_SSL_CA_FILE or DATABASE_SSL_CA, and sslrootcert in the connection string); keep one");
+    ca = fromString;
+  }
   if (!ca) return { connectionString: url };
-  u.searchParams.delete("sslmode");
-  u.searchParams.delete("sslrootcert");
-  u.searchParams.delete("sslcert");
-  u.searchParams.delete("sslkey");
+  for (const p of ["sslmode", "sslrootcert", "sslcert", "sslkey", "ssl"]) u.searchParams.delete(p);
   return { connectionString: u.toString(), ssl: { ca, rejectUnauthorized: true } };
 }
 

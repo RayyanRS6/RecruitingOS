@@ -1,6 +1,5 @@
-import { readFileSync } from "node:fs";
 import type { TLSSocket } from "node:tls";
-import { createDb } from "../client";
+import { connectionConfig, createDb, tlsOptionsFromEnv } from "../client";
 import { migrationStatus } from "../migrate";
 import { describeConnectionError } from "./db-errors";
 import { describeCertificate, fingerprintOfDer, smallPool, withSsl } from "./provisioning";
@@ -19,15 +18,20 @@ if (!owner) {
 }
 const ownerUrl = withSsl(owner);
 
-// TLS first: which certificate this computer trusts, and which authority the server actually presents.
-const caFile = process.env.DATABASE_SSL_CA_FILE;
-const caPem = caFile ? readFileSync(caFile, "utf8") : process.env.DATABASE_SSL_CA;
-const ca = caPem ? describeCertificate(caPem) : null;
-if (caFile && !ca) console.log(`status: tls: the file at DATABASE_SSL_CA_FILE is not a certificate`);
-else if (ca) console.log(`status: tls: trusting ${ca.subject} (SHA-256 ${ca.fingerprint}, valid until ${ca.validTo})`);
-else console.log("status: tls: no CA certificate given (DATABASE_SSL_CA_FILE); only certificates this computer already trusts will verify");
+// TLS first: which certificate the driver will verify with, and which authority the server actually presents.
+let ca: ReturnType<typeof describeCertificate> = null;
+let probe: ReturnType<typeof smallPool> | null = null;
 {
-  const probe = smallPool(ownerUrl.toString());
+  try {
+    const cfg = connectionConfig(ownerUrl.toString(), tlsOptionsFromEnv(process.env));
+    ca = cfg.ssl ? describeCertificate(cfg.ssl.ca) : null;
+    if (ca) console.log(`status: tls: trusting ${ca.subject} (SHA-256 ${ca.fingerprint}, valid until ${ca.validTo})`);
+    else console.log("status: tls: no CA certificate given (DATABASE_SSL_CA_FILE); only certificates this computer already trusts will verify");
+    probe = smallPool(ownerUrl.toString());
+  } catch (err) {
+    console.error(`status: tls: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(2);
+  }
   try {
     const client = await probe.connect();
     try {

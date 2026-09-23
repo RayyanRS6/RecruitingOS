@@ -634,4 +634,10 @@ downloaded certificate but the driver still refused the chain. Cause: node-postg
 `sslrootcert` from the string whenever it holds a certificate and passes one trust object (certificate, full
 verification, host name checked); `sslmode=disable` is refused. Proven through the founder's exact command path
 against the staging pooler with a deliberately wrong password (TLS verified, password refused). Tests
-`packages/db/src/tls.test.ts` pin the driver behaviour and the fix.
+`packages/db/src/tls.test.ts` pin the driver behaviour and the fix. A two-lens adversarial review of the fix found
+that the driver's own `ssl=` parameter overrode the certificate the same way and that `ssl=0` or `sslmode=no-verify`
+would have weakened or removed TLS silently; that a certificate named in the string could silently win over the one
+given explicitly; that a one-line pasted certificate (literal `\n`) would be accepted and then ignored by the TLS
+layer; and that a malformed connection string could surface the password through the platform's URL error. All four
+are fixed and tested: every weakening switch is refused, the explicit certificate wins and a conflict is refused,
+pasted certificates are normalised and parsed before use, and URL errors carry a fixed message.

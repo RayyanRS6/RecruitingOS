@@ -42,7 +42,15 @@ an empty `ssl` object, and verification ran against the operating system's store
 the driver one trust object: the certificate, full verification, host name checked. Proven through the exact
 `bash scripts/staging-db-status.sh` path against the staging pooler with a deliberately wrong password: with the
 certificate the server answers "password authentication failed" (TLS verified, then refused at the password);
-without it, the certificate refusal. `sslmode=disable` is refused outright.
+without it, the certificate refusal. Every way of weakening TLS in the string is refused outright, certificate or
+not: `sslmode=disable` or `no-verify`, the driver's own `ssl=0`, `ssl=false` or `ssl=no-verify`, and `uselibpqcompat`.
+A certificate given explicitly (`DATABASE_SSL_CA_FILE` or `DATABASE_SSL_CA`) wins over an `sslrootcert` in the string,
+and two different certificates are refused. A pasted certificate is normalised first (Windows line endings, a trailing
+newline, or a hosted environment's one-line field with literal `\n`), then parsed; a value the TLS layer would have
+silently ignored is refused with a clear message. The proof ran four ways through the exact command path: with the
+certificate (password refused, so TLS verified), with the certificate as one-line text in `DATABASE_SSL_CA` (the
+hosted shape; same), with a string carrying `ssl=no-verify` (refused before connecting), and without a certificate
+(certificate refusal).
 
 ## What the setup does, step by step, and what an interruption leaves behind
 

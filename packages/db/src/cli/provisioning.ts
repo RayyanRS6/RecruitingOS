@@ -12,7 +12,12 @@ export type AppRole = (typeof APP_ROLES)[number];
 
 /** Adds sslmode=verify-full unless the string already says how to handle TLS. */
 export function withSsl(u: string): URL {
-  const url = new URL(u);
+  let url: URL;
+  try {
+    url = new URL(u);
+  } catch {
+    throw new Error("the database connection string is not a valid URL");
+  }
   if (!url.searchParams.get("sslmode")) url.searchParams.set("sslmode", "verify-full");
   return url;
 }
