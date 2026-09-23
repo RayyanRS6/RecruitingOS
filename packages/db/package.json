@@ -16,7 +16,8 @@
     "migrate": "tsx src/cli/migrate.ts",
     "seed": "tsx src/cli/seed.ts",
     "validate": "tsx src/cli/validate.ts",
-    "provision": "tsx src/cli/provision.ts"
+    "provision": "tsx src/cli/provision.ts",
+    "status": "tsx src/cli/status.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.3.16",

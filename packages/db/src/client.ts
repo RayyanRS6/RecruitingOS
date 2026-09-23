@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT, PgTransaction } from "drizzle-orm/pg-core";
 import type { ExtractTablesWithRelations } from "drizzle-orm";
@@ -20,6 +20,13 @@ export type DbHandle = {
   close(): Promise<void>;
   /** Escape hatch for raw SQL (migrations, health checks). */
   execRaw(sqlText: string): Promise<void>;
+  /**
+   * Runs statements on one connection inside one transaction: all of them take effect, or none. With
+   * `onDuplicate: "skip"`, a statement that fails because its object already exists (table, index, type, policy,
+   * role, column, function, schema, or a unique row) is rolled back to a savepoint and skipped, so a migration that
+   * was interrupted halfway can be completed. Returns the indexes of skipped statements.
+   */
+  execAtomic(statements: string[], opts?: { onDuplicate?: "skip" | "fail" }): Promise<{ skipped: number[] }>;
   /** Parameterised query for adapters that need SQL without the ORM (the secret store). Values are never logged. */
   query(text: string, params: unknown[]): Promise<Array<Record<string, unknown>>>;
 };
@@ -29,7 +36,38 @@ export type CreateDbOptions = {
   /** PGlite data directory, or "memory://" for tests. */
   pgliteDir?: string;
   role?: DbRole;
+  /** Path to a CA certificate file for TLS verification when the server's certificate is not signed by a public CA. */
+  sslCaFile?: string | null;
 };
+
+/**
+ * TLS trust for Postgres connections. Supabase signs its database and pooler certificates with its own authority,
+ * which no operating system trusts by itself, so `sslmode=verify-full` needs that certificate: DATABASE_SSL_CA_FILE
+ * (a path, on a person's machine) or DATABASE_SSL_CA (the certificate text, in a hosted environment). Verification
+ * is never switched off here.
+ */
+export function tlsOptionsFromEnv(env: Record<string, string | undefined> = process.env, caFile?: string | null): { ca: string; rejectUnauthorized: true } | undefined {
+  const file = caFile ?? env.DATABASE_SSL_CA_FILE;
+  const pem = file ? readFileSync(file, "utf8") : env.DATABASE_SSL_CA;
+  if (!pem || !pem.includes("BEGIN CERTIFICATE")) return undefined;
+  return { ca: pem, rejectUnauthorized: true };
+}
+
+/** Postgres error codes that mean "this already exists": the marks a half-applied migration leaves behind. */
+export const DUPLICATE_OBJECT_CODES = new Set(["42P07", "42710", "42701", "42P06", "42723", "42P04", "23505", "42P16"]);
+
+/** Marks an error with the index of the statement that raised it, for the migration report. */
+function tagStatement(err: unknown, index: number): unknown {
+  if (err && typeof err === "object") (err as { statementIndex?: number }).statementIndex = index;
+  return err;
+}
+
+export function isDuplicateObjectError(err: unknown): boolean {
+  const e = err as { code?: string; message?: string } | null;
+  if (!e) return false;
+  if (e.code && DUPLICATE_OBJECT_CODES.has(e.code)) return true;
+  return !e.code && typeof e.message === "string" && /already exists|duplicate key value/i.test(e.message);
+}
 
 /**
  * Creates the database client. Production uses DATABASE_URL (node-postgres) as a non-privileged role
@@ -46,7 +84,9 @@ export async function createDb(opts: CreateDbOptions = {}): Promise<DbHandle> {
   if (url) {
     const { drizzle } = await import("drizzle-orm/node-postgres");
     const pg = await import("pg");
-    const pool = new pg.default.Pool({ connectionString: url });
+    const ssl = tlsOptionsFromEnv(process.env, opts.sslCaFile);
+    const max = Math.max(1, Math.min(20, Number(process.env.DATABASE_POOL_MAX ?? "5") || 5));
+    const pool = new pg.default.Pool({ connectionString: url, max, ...(ssl ? { ssl } : {}) });
     pool.on("connect", (client) => {
       client.query("SET app.platform = 'on'").catch(() => {
         /* the boot check reports a connection that cannot enter platform mode */
@@ -60,6 +100,40 @@ export async function createDb(opts: CreateDbOptions = {}): Promise<DbHandle> {
       close: () => pool.end(),
       execRaw: async (text) => {
         await pool.query(text);
+      },
+      execAtomic: async (statements, o = {}) => {
+        const client = await pool.connect();
+        const skipped: number[] = [];
+        try {
+          await client.query("BEGIN");
+          for (let i = 0; i < statements.length; i++) {
+            if (o.onDuplicate === "skip") {
+              await client.query("SAVEPOINT ros_stmt");
+              try {
+                await client.query(statements[i]!);
+                await client.query("RELEASE SAVEPOINT ros_stmt");
+              } catch (err) {
+                if (!isDuplicateObjectError(err)) throw tagStatement(err, i);
+                await client.query("ROLLBACK TO SAVEPOINT ros_stmt");
+                await client.query("RELEASE SAVEPOINT ros_stmt");
+                skipped.push(i);
+              }
+            } else {
+              try {
+                await client.query(statements[i]!);
+              } catch (err) {
+                throw tagStatement(err, i);
+              }
+            }
+          }
+          await client.query("COMMIT");
+        } catch (err) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw err;
+        } finally {
+          client.release();
+        }
+        return { skipped };
       },
       query: async (text, params) => (await pool.query(text, params as never[])).rows as Array<Record<string, unknown>>,
     };
@@ -79,6 +153,32 @@ export async function createDb(opts: CreateDbOptions = {}): Promise<DbHandle> {
     close: () => client.close(),
     execRaw: async (text) => {
       await client.exec(text);
+    },
+    execAtomic: async (statements, o = {}) => {
+      const skipped: number[] = [];
+      await client.transaction(async (tx) => {
+        for (let i = 0; i < statements.length; i++) {
+          if (o.onDuplicate === "skip") {
+            await tx.exec("SAVEPOINT ros_stmt");
+            try {
+              await tx.exec(statements[i]!);
+              await tx.exec("RELEASE SAVEPOINT ros_stmt");
+            } catch (err) {
+              if (!isDuplicateObjectError(err)) throw tagStatement(err, i);
+              await tx.exec("ROLLBACK TO SAVEPOINT ros_stmt");
+              await tx.exec("RELEASE SAVEPOINT ros_stmt");
+              skipped.push(i);
+            }
+          } else {
+            try {
+              await tx.exec(statements[i]!);
+            } catch (err) {
+              throw tagStatement(err, i);
+            }
+          }
+        }
+      });
+      return { skipped };
     },
     query: async (text, params) => (await client.query(text, params as never[])).rows as Array<Record<string, unknown>>,
   };

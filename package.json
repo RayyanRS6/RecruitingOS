@@ -25,6 +25,7 @@
     "secret-scan": "tsx scripts/secret-scan.ts",
     "ci:local": "bash scripts/ci-local.sh",
     "db:provision": "pnpm --filter @ros/db provision",
+    "db:status": "pnpm --filter @ros/db status",
     "worker:check": "pnpm --filter @ros/api typecheck",
     "worker:start": "pnpm --filter @ros/api worker"
   },

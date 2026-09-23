@@ -12,7 +12,11 @@ const CLIENT_DIRS = ["apps/web/src", "apps/shell/app", "apps/shell/components", 
 const SERVER_DIRS = ["apps/api/src", "packages", "scripts"];
 // Repo-relative files permitted to reference the service-role key, each documented in docs/spec/09. The secret scanner
 // names the variable only as a pattern it hunts for; no application module is permitted in release 1.
-const ALLOWLIST: string[] = ["scripts/secret-scan.ts"];
+/**
+ * Files that may mention the words: the scanner names the pattern; the database status report names Supabase's
+ * Data API role "service_role" to report that it holds no privilege in public (migration 0017). Neither touches a key.
+ */
+const ALLOWLIST: string[] = ["scripts/secret-scan.ts", "packages/db/src/cli/status.ts"];
 const PATTERNS = [/SUPABASE_SERVICE_ROLE_KEY/, /service_role/i, /SERVICE_ROLE/];
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -31,7 +35,7 @@ describe("service-role key guard", () => {
     const hits = CLIENT_DIRS.flatMap((d) => walk(join(ROOT, d))).filter((f) => PATTERNS.some((re) => re.test(readFileSync(f, "utf8"))));
     expect(hits.map((f) => f.replace(ROOT + "/", ""))).toEqual([]);
   });
-  it("server code references it only from the allowlist (empty for release 1)", () => {
+  it("server code references it only from the documented allowlist", () => {
     const hits = SERVER_DIRS.flatMap((d) => walk(join(ROOT, d))).filter((f) => PATTERNS.some((re) => re.test(readFileSync(f, "utf8")))).map((f) => f.replace(ROOT + "/", ""));
     expect(hits.filter((f) => !ALLOWLIST.includes(f))).toEqual([]);
   });
