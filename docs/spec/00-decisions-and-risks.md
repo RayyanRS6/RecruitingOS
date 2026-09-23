@@ -603,3 +603,27 @@ download links for staff, and removal with an audit record on deletion. Runbook 
 tests `sigv4.test.ts`, `storage.test.ts`, `file-inspection.test.ts`, `storage-uploads.test.ts`. One honest caveat: the
 provider's S3 access keys are storage-only but reach every bucket in the project, so the project holds exactly one
 bucket for this application. The staging bucket and keys are a founder action (runbook §"The staging bucket").
+
+Staging database setup, second revision (22 Sep): the founder's first run exited 1 (the error text did not reach the
+team). Root cause of the fragility, independent of the error: the migration runner applied statements one by one
+without a transaction and recorded a file only after its last statement, so a failure mid-file left a half-applied,
+unrecorded migration that a rerun could not pass. Now every migration file applies in one transaction with its ledger
+row; the first pending migration is completed with "already exists" statements skipped and counted; later migrations
+run strictly; provisioning is idempotent (fresh passwords every run, Vault grants skipped with a clear line until
+Supabase Vault is enabled, a `grants` mode, verification that reports a plain diagnosis); `scripts/staging-db-status.sh`
+reports read-only and without secrets; a CA certificate file can be given for TLS verification without ever switching
+it off. Nothing resets or deletes the staging database. Runbook `docs/runbooks/staging-database-setup.md`; tests
+`migrate.test.ts`, `provisioning.test.ts`.
+
+Findings from the recovery investigation (22 Sep, three investigators, adversarially checked), recorded for the
+register: (1) TLS: Supabase's pooler and database certificates chain to Supabase's own root authority, which no
+computer trusts by itself; `sslmode=verify-full` therefore needs the dashboard-downloaded certificate, on a person's
+machine (`DATABASE_SSL_CA_FILE`) and in Vercel and Railway (`DATABASE_SSL_CA`). The migration step had been connecting
+without TLS at all; now every owner connection verifies. (2) Supabase's project default privileges grant every table
+created in `public` to the Data API roles `anon`, `authenticated` and `service_role`; platform tables without row-level
+security would be readable with the publishable key. Migration 0017 revokes those privileges and the defaults; the
+founder removes `public` from the exposed schemas (readiness blocker 2a). (3) The application relies on per-connection
+state (`app.platform`), which transaction pooling does not keep: the application strings use the Session pooler until
+every platform read runs inside `withPlatform` (readiness blocker 2b). (4) Vault's function signatures differ from the
+ones the grants named; the grants now resolve them at run time. (5) The pooler may refuse a freshly set password for a
+few seconds; verification retries for thirty. Nothing in any of this resets or deletes the staging database.

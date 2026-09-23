@@ -1,59 +1,54 @@
 #!/usr/bin/env bash
-# Recruiting OS: one-time staging database setup, run by the founder in her own Terminal app from the repository root.
+# Recruiting OS: staging database setup, run by the founder in her own Terminal app from the repository root.
+#
+# Safe to run again after an interruption (founder request, 22 Sep 2026): migrations already applied are skipped, a
+# migration that an earlier run left half-applied is completed, the application role passwords are set afresh, the
+# Vault grants are re-applied, and every role is verified. Running it again replaces the application passwords, so a
+# DATABASE_URL or WORKER_DATABASE_URL entered earlier into Vercel or Railway must be replaced with the new values.
+#
+# Modes:  bash scripts/staging-db-setup.sh          full setup (default)
+#         bash scripts/staging-db-setup.sh grants   Vault grants and checks only, after enabling Supabase Vault;
+#                                                   passwords and connection strings are left alone
+#         bash scripts/staging-db-status.sh         read-only report of where things stand
 #
 # Asks for two things, separately: the Session pooler connection string exactly as Supabase shows it (with the
 # [YOUR-PASSWORD] placeholder still in it; it holds no secret) and the database password (typed without echo). The
 # password is percent-encoded and put in place of the one placeholder by packages/db/src/cli/fill-password.ts, which
-# receives it on standard input: it is never on a command line, never in this shell's history, never written to disk,
-# and never printed. The completed string lives only in this process and the migration and provisioning steps it runs.
-# A pasted string without the placeholder, or with it more than once, stops the script before the password is asked for.
-#
-# Then: migrations, generated passwords for ros_app and ros_worker, the Vault grants, verification of each role, and the
-# two application connection strings printed once for 1Password, Vercel and Railway.
+# receives it on standard input: never on a command line, never in this shell's history, never written to disk, and
+# never printed. The completed string lives only in this process and the steps it runs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 if ! command -v node >/dev/null 2>&1 && [ -d "$HOME/.local/its-toolchain/node/bin" ]; then export PATH="$HOME/.local/its-toolchain/node/bin:$PATH"; fi
 command -v pnpm >/dev/null 2>&1 || { echo "pnpm is not on the PATH of this terminal."; exit 1; }
-
-PLACEHOLDER='[YOUR-PASSWORD]'
-echo "Recruiting OS: staging database setup."
+MODE="${1:-full}"
+case "$MODE" in full|grants) ;; *) echo "Usage: bash scripts/staging-db-setup.sh [full|grants]"; exit 1 ;; esac
+# shellcheck source=scripts/lib/db-owner-url.sh
+. scripts/lib/db-owner-url.sh
+echo "Recruiting OS: staging database setup (${MODE} mode). Safe to run again; see the notes at the top of this script."
 echo
-echo "Step 1 of 2. In Supabase open the project, Connect, Session pooler, and copy the connection string exactly as"
-echo "shown, with ${PLACEHOLDER} still in it. Do not fill the password in. Paste it here (it holds no secret):"
-read -r -p "> " URI
-URI="${URI#"${URI%%[![:space:]]*}"}"
-URI="${URI%"${URI##*[![:space:]]}"}"
-case "$URI" in
-  postgres://*|postgresql://*) ;;
-  *) echo "That does not look like a Postgres connection string (it must start with postgresql://)."; exit 1 ;;
-esac
-STRIPPED="${URI//"$PLACEHOLDER"/}"
-COUNT=$(( (${#URI} - ${#STRIPPED}) / ${#PLACEHOLDER} ))
-if [ "$COUNT" -ne 1 ]; then
-  echo "The connection string must contain ${PLACEHOLDER} exactly once (found ${COUNT}). Copy it again from Supabase without filling in the password."
-  exit 1
+read_owner_url || exit 1
+echo
+
+if [ "$MODE" = "grants" ]; then
+  echo "1/1 Vault grants and checks (passwords and connection strings unchanged)"
+  ROS_PROVISION_MODE=grants pnpm --silent --filter @ros/db provision
+  exit $?
 fi
 
-echo
-echo "Step 2 of 2. Type the database password from the Recruiting OS Staging vault and press Return."
-echo "Nothing you type is shown, saved to history, written to disk, or sent anywhere but the database:"
-read -rs -p "> " PASSWORD
-echo
-if [ -z "$PASSWORD" ]; then echo "The password was empty."; exit 1; fi
-
-# printf is a shell builtin, so the password goes straight down the pipe and never appears as a process argument.
-if ! OWNER="$(printf '%s' "$PASSWORD" | ROS_OWNER_URI="$URI" pnpm --silent --filter @ros/db exec tsx src/cli/fill-password.ts)"; then
-  echo "The connection string could not be completed. Nothing was changed."
+gen() { local s; s="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 40 || true)"; [ "${#s}" -eq 40 ] || { echo 'could not generate a password'; exit 1; }; printf '%s' "$s"; }
+export ROS_APP_PASSWORD="$(gen)" ROS_WORKER_PASSWORD="$(gen)"
+echo "1/3 applying migrations (already-applied ones are skipped; an interrupted one is completed)"
+if ! pnpm --silent db:migrate; then
+  echo
+  echo "The migrations stopped (see the line above for the file, the statement and the code). Nothing from the failed"
+  echo "migration was kept. Run: bash scripts/staging-db-status.sh for a read-only report, then run this script again."
   exit 1
 fi
-unset PASSWORD
-
-gen() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 40; }
-export MIGRATE_DATABASE_URL="$OWNER" ROS_APP_PASSWORD="$(gen)" ROS_WORKER_PASSWORD="$(gen)"
-unset OWNER
-echo
-echo "1/3 applying migrations"
-pnpm --silent db:migrate
-echo "2/3 application roles, vault grants, verification"
-pnpm --silent --filter @ros/db provision
+echo "2/3 application roles, Vault grants, verification"
+if ! pnpm --silent --filter @ros/db provision; then
+  echo
+  echo "Provisioning stopped (see the lines above). Run: bash scripts/staging-db-status.sh for a read-only report, then"
+  echo "run this script again; it is safe to repeat."
+  exit 1
+fi
 echo "3/3 done"
