@@ -35,6 +35,23 @@ The hosted environments need the same trust: alongside `DATABASE_URL` in Vercel 
 enter `DATABASE_SSL_CA` (not sensitive) with the certificate's text. `DATABASE_SSL_CA_FILE` is the path form for a
 person's machine.
 
+One driver detail, found on the founder's second run (22 Sep): node-postgres parses the connection string after the
+explicit options and lets the parsed values win, so an `sslmode` in the string turned the certificate we passed into
+an empty `ssl` object, and verification ran against the operating system's store again. The client now strips
+`sslmode` (and `sslrootcert`, whose file it reads instead) from the string whenever it holds a certificate, and hands
+the driver one trust object: the certificate, full verification, host name checked. Proven through the exact
+`bash scripts/staging-db-status.sh` path against the staging pooler with a deliberately wrong password: with the
+certificate the server answers "password authentication failed" (TLS verified, then refused at the password);
+without it, the certificate refusal. Every way of weakening TLS in the string is refused outright, certificate or
+not: `sslmode=disable` or `no-verify`, the driver's own `ssl=0`, `ssl=false` or `ssl=no-verify`, and `uselibpqcompat`.
+A certificate given explicitly (`DATABASE_SSL_CA_FILE` or `DATABASE_SSL_CA`) wins over an `sslrootcert` in the string,
+and two different certificates are refused. A pasted certificate is normalised first (Windows line endings, a trailing
+newline, or a hosted environment's one-line field with literal `\n`), then parsed; a value the TLS layer would have
+silently ignored is refused with a clear message. The proof ran four ways through the exact command path: with the
+certificate (password refused, so TLS verified), with the certificate as one-line text in `DATABASE_SSL_CA` (the
+hosted shape; same), with a string carrying `ssl=no-verify` (refused before connecting), and without a certificate
+(certificate refusal).
+
 ## What the setup does, step by step, and what an interruption leaves behind
 
 | Step | What it does | If it fails here | Rerun |

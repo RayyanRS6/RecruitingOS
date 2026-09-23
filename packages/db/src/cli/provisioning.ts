@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
-import { tlsOptionsFromEnv } from "../client";
+import { connectionConfig, tlsOptionsFromEnv } from "../client";
 
 /** Pure helpers behind provision.ts and status.ts, kept apart so they can be tested without a server. */
 
@@ -12,7 +12,12 @@ export type AppRole = (typeof APP_ROLES)[number];
 
 /** Adds sslmode=verify-full unless the string already says how to handle TLS. */
 export function withSsl(u: string): URL {
-  const url = new URL(u);
+  let url: URL;
+  try {
+    url = new URL(u);
+  } catch {
+    throw new Error("the database connection string is not a valid URL");
+  }
   if (!url.searchParams.get("sslmode")) url.searchParams.set("sslmode", "verify-full");
   return url;
 }
@@ -32,8 +37,7 @@ export function roleUrl(ownerUrl: URL, role: AppRole, password: string): string 
 
 /** One-connection pool with the TLS trust from the environment; the same for the owner and for verification. */
 export function smallPool(url: string, env: Record<string, string | undefined> = process.env): pg.Pool {
-  const ssl = tlsOptionsFromEnv(env);
-  return new pg.Pool({ connectionString: url, max: 1, ...(ssl ? { ssl } : {}) });
+  return new pg.Pool({ ...connectionConfig(url, tlsOptionsFromEnv(env)), max: 1 });
 }
 
 /** The Vault grant statements from packages/db/scripts/vault-grants.sql, split at the migration marker, comments removed. */
