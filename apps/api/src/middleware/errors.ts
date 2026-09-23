@@ -1,6 +1,7 @@
 import type { Context } from "hono";
 import { ZodError } from "zod";
-import { AuthError, PermissionError, SecretLeakError, SignInRefused, StaffProviderRequired, TransitionError, redact, redactString } from "@ros/core";
+import { AuthError, PermissionError, SecretLeakError, SignInRefused, StaffProviderRequired, TransitionError, maskTokenPath, redact, redactString } from "@ros/core";
+import { reportError } from "../observability";
 
 export class HttpError extends Error {
   constructor(public status: number, public code: string, message: string, public details?: unknown) {
@@ -23,6 +24,8 @@ export function errorHandler(err: unknown, c: Context) {
   }
   const message = redactString(err instanceof Error ? err.message : String(err));
   console.error("[api] unhandled", redact(err));
+  // Reported with the route only: no query string, no body, no headers (decision 3).
+  reportError(err, { process: "api", method: c.req.method, path: maskTokenPath(c.req.path) });
   return c.json({ error: { code: "internal", message: process.env.NODE_ENV === "production" ? "Something went wrong. It has been logged." : message } }, 500);
 }
 

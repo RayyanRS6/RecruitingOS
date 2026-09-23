@@ -23,7 +23,7 @@ export function modelTableFromEnv(env: Record<string, string | undefined> = proc
   return {
     judgment: env.AI_MODEL_JUDGMENT ?? "claude-opus-5",
     standard: env.AI_MODEL_STANDARD ?? "claude-sonnet-5",
-    fast: env.AI_MODEL_FAST ?? "claude-haiku-4-5",
+    fast: env.AI_MODEL_FAST ?? "claude-haiku-4-5-20251001",
   };
 }
 

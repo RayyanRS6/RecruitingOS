@@ -3,6 +3,7 @@ packages:
   - "packages/*"
   - "tests/*"
 allowBuilds:
+  '@sentry/cli': false
   esbuild: true
 # Dependency audit (21 Sep, item 7): next pins a postcss with two high advisories; 8.5.x is a compatible patch line.
 overrides:

@@ -1,5 +1,5 @@
 import type { Context, MiddlewareHandler } from "hono";
-import { audit, raiseAlert, rateLimitKey, type RateLimitDecision } from "@ros/core";
+import { audit, raiseAlert, rateLimitKey, type RateLimitDecision, maskTokenPath } from "@ros/core";
 import { clientIp, type Vars } from "./session";
 
 /**
@@ -87,7 +87,7 @@ async function recordTrip(c: Context<Vars>, policy: string, rule: Rule, key: str
   if (trips.count !== 1 && trips.count !== ALERT_AFTER_TRIPS) return;
   const companyId = c.get("tenant")?.companyId ?? null;
   const keyHash = key.slice(0, 16);
-  await audit(container.db, { companyId, actor: { kind: "system", id: "rate_limit" }, action: "security.rate_limited", reason: policy, ip: clientIp(c), details: { policy, subject: rule.by, keyHash, path: c.req.path.replace(/\/c\/(status|screen|schedule)\/[^/]+/, "/c/$1/[token]"), count: d.count, limit: d.limit, trips: trips.count } }).catch(() => undefined);
+  await audit(container.db, { companyId, actor: { kind: "system", id: "rate_limit" }, action: "security.rate_limited", reason: policy, ip: clientIp(c), details: { policy, subject: rule.by, keyHash, path: maskTokenPath(c.req.path), count: d.count, limit: d.limit, trips: trips.count } }).catch(() => undefined);
   const mark = `${key}:${trips.resetAt}`;
   if (trips.count >= ALERT_AFTER_TRIPS && !alerted.has(mark)) {
     alerted.add(mark);

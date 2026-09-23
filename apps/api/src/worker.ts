@@ -1,4 +1,6 @@
+import "./instrument";
 import { createContainer } from "./container";
+import { reportError } from "./observability";
 
 /**
  * Production worker entry: polls the queue and runs workflows. Scale horizontally; leases prevent double execution.
@@ -15,6 +17,7 @@ while (!stopping) {
     if (n === 0) await new Promise((r) => setTimeout(r, container.env.WORKER_POLL_MS));
   } catch (err) {
     console.error("[worker] tick failed", err);
+    reportError(err, { process: "worker", where: "tick" });
     await new Promise((r) => setTimeout(r, 2000));
   }
 }
