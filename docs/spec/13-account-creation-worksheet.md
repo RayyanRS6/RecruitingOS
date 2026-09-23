@@ -148,6 +148,20 @@ Conventions: owners = Nadine and Paul (named human accounts); billing = `billing
 - Verify: an interviewer on a test account completes OAuth in staging; the token is stored through Supabase Vault; free/busy reads work; disconnect deletes the secret; then the full staging journey passes. Only then is the provider shown as connected.
 - Revoke or rotate: reset the client secret in the console and update the environment variables; a user revokes access at https://myaccount.google.com/permissions and the app deletes the stored token.
 
+## 8a. Upstash Redis (shared rate-limit counter, decision 4)
+
+- Where: https://console.upstash.com, created directly (not through the Vercel Marketplace) so the account stays under ITS.
+- Created 23 September: database `recruiting-os-staging-rate-limit`, AWS Oregon (us-west-2), Free plan (256 MB, 500,000
+  commands a month, one database), TLS always on, REST endpoint `https://complete-narwhal-292092.upstash.io`.
+  Eviction: **Off** (to be corrected from On): counters expire on their own; eviction would drop them first.
+- Secrets: the REST token (Connect → REST tab → `UPSTASH_REDIS_REST_TOKEN`) is entered by the founder into Vercel
+  (Preview, sensitive) and Railway (sealed); never in chat. The read-only token is not used. Rotation: the database's
+  **Reset Credentials** in its settings, then update both hosts.
+- Production later: a second database on pay-as-you-go with a $10 monthly budget (the budget rate-limits the database
+  rather than billing beyond it).
+- Verify: on staging the console shows no `rate_limit.not_shared` alert, and a limit tripped from two application
+  instances shows one count (`docs/readiness/03`).
+
 ## 9. Sentry
 
 - Where: https://sentry.io/signup/.

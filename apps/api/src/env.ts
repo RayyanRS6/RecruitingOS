@@ -73,6 +73,9 @@ export type Env = {
   /** Which shared counter to use; only "fake" exists until the founder selects a provider. */
   RATE_LIMIT_SHARED_PROVIDER: string;
   RATE_LIMIT_SHARED_URL: string | null;
+  /** Upstash Redis REST endpoint and token (decision 4); the token is a secret entered by the founder at the host. */
+  UPSTASH_REDIS_REST_URL: string | null;
+  UPSTASH_REDIS_REST_TOKEN: string | null;
   /** Per-policy limit overrides, JSON like {"api.user":5}; tests and staging rehearsals only. */
   RATE_LIMIT_OVERRIDES: Record<string, number>;
   /** How many proxies in front of the API append to X-Forwarded-For (Vercel: 1). The address that many hops from the right is the client; anything a client sends itself is ignored. */
@@ -117,6 +120,8 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     RATE_LIMIT_STORE: get("RATE_LIMIT_STORE", "memory"),
     RATE_LIMIT_SHARED_PROVIDER: get("RATE_LIMIT_SHARED_PROVIDER", "fake"),
     RATE_LIMIT_SHARED_URL: source.RATE_LIMIT_SHARED_URL ?? null,
+    UPSTASH_REDIS_REST_URL: source.UPSTASH_REDIS_REST_URL ?? null,
+    UPSTASH_REDIS_REST_TOKEN: source.UPSTASH_REDIS_REST_TOKEN ?? null,
     RATE_LIMIT_OVERRIDES: (() => { try { const v = JSON.parse(get("RATE_LIMIT_OVERRIDES", "{}")) as Record<string, unknown>; return Object.fromEntries(Object.entries(v).filter(([, n]) => typeof n === "number")) as Record<string, number>; } catch { return {}; } })(),
     CSP_MODE: get("CSP_MODE", "report-only") === "enforce" ? "enforce" : "report-only",
     TRUST_PROXY_HOPS: Math.max(0, Number(get("TRUST_PROXY_HOPS", "1")) || 0),

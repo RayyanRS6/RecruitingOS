@@ -10,6 +10,7 @@ import { guardEmailAdapter } from "@ros/integrations";
 import type { Actor } from "@ros/contracts";
 import { toProductEvent } from "@ros/integrations";
 import { loadEnv, type Env } from "./env";
+import { registerSecretValue } from "@ros/core";
 
 export type Container = {
   env: Env;
@@ -29,6 +30,14 @@ export type Container = {
 
 export async function createContainer(opts: { env?: Record<string, string | undefined>; memory?: boolean; now?: () => Date; role?: DbRole } = {}): Promise<Container> {
   const env = loadEnv(opts.env ?? process.env);
+  // Every runtime secret the environment carries is registered so logs, error responses and error reports scrub it (correction 10).
+  for (const name of ["SESSION_SECRET", "ANTHROPIC_API_KEY", "POSTMARK_SERVER_TOKEN", "POSTMARK_INBOUND_SECRET", "POSTMARK_WEBHOOK_SECRET", "UPSTASH_REDIS_REST_TOKEN", "TWILIO_AUTH_TOKEN", "GOOGLE_OAUTH_CLIENT_SECRET", "SUPABASE_JWT_SECRET"]) {
+    const v = env.raw[name];
+    if (v && v.length >= 12 && !v.startsWith("dev-only")) registerSecretValue(v);
+  }
+  for (const name of ["DATABASE_URL", "WORKER_DATABASE_URL", "MIGRATE_DATABASE_URL"]) {
+    try { const pw = env.raw[name] ? decodeURIComponent(new URL(env.raw[name]!).password) : ""; if (pw.length >= 12) registerSecretValue(pw); } catch { /* not a URL */ }
+  }
   const role: DbRole = opts.role ?? "app";
   if (role === "worker" && env.NODE_ENV === "production" && !env.WORKER_DATABASE_URL) throw new Error("WORKER_DATABASE_URL must be set in production for the worker (a separate, non-privileged database role)");
   const databaseUrl = role === "worker" ? env.WORKER_DATABASE_URL ?? env.DATABASE_URL : env.DATABASE_URL;
@@ -42,7 +51,13 @@ export async function createContainer(opts: { env?: Record<string, string | unde
   }
   if (env.NODE_ENV !== "production" || env.raw.RUN_MIGRATIONS_ON_BOOT === "true") await migrate(handle);
   await seedPlatform(handle.db);
-  const rateLimits = createRateLimitStore(env);
+  const rateLimits = createRateLimitStore(env, {
+    // The shared store degraded to per-process counting (decision 4 fail-safe): one alert an hour, never a refused request.
+    onDegraded: (reason) => {
+      console.warn(`[rate-limit] shared store unavailable, counting per process: ${reason}`);
+      void raiseAlert(handle.db, { kind: "rate_limit.shared_unavailable", severity: "high", title: "Shared rate-limit store unreachable; limits apply per process", body: "The Upstash counter could not be reached or refused the request. Limits are counted in this process's memory until it answers again. Check the Upstash console, the monthly budget and the REST token.", details: { reason: reason.slice(0, 200) } }).catch(() => undefined);
+    },
+  });
   if (env.NODE_ENV === "production" && (env.RATE_LIMIT_STORE !== "shared" || env.RATE_LIMIT_SHARED_PROVIDER === "fake")) {
     console.warn("[rate-limit] production is running without a shared rate-limit store; limits are per process. Select a provider (docs/readiness/15) before real traffic.");
     await raiseAlert(handle.db, { kind: "rate_limit.not_shared", severity: "high", title: "Rate limits are not shared between processes", body: "RATE_LIMIT_STORE is not a real shared store. Limits apply per process only. Select a provider (docs/readiness/15) before real candidate traffic.", details: { store: env.RATE_LIMIT_STORE, provider: env.RATE_LIMIT_SHARED_PROVIDER } }).catch(() => undefined);

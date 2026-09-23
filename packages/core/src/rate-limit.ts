@@ -98,14 +98,74 @@ export class FakeSharedCounter implements SharedCounter {
   static reset(url?: string) { if (url) FakeSharedCounter.tables.delete(url); else FakeSharedCounter.tables.clear(); }
 }
 
-export type RateLimitConfig = { RATE_LIMIT_STORE: string; RATE_LIMIT_SHARED_PROVIDER: string; RATE_LIMIT_SHARED_URL: string | null };
+/**
+ * Upstash Redis over its REST API (founder decision 4 of 22 September 2026). One request per hit: a Lua script that
+ * increments the window key and, on the first hit, gives it the window's remaining time as its expiry, in one atomic
+ * step, so no key can outlive its window. Keys are the keyed hashes the store builds; the token is sent as a bearer
+ * header and never appears in a key, a URL or a log.
+ *
+ * Fail-safe, documented here and in docs/readiness/15: if the service cannot be reached or refuses (network error,
+ * 5xx, 429), the counter keeps counting the affected keys in this process's own memory for the rest of the window and
+ * reports the degradation once an hour through `onDegraded`. Limits then apply per process, never nowhere; nothing is
+ * ever refused because the shared store is down, and nothing is ever let through without being counted.
+ */
+export class UpstashSharedCounter implements SharedCounter {
+  readonly id = "upstash";
+  private readonly local = new FakeSharedCounter(`local-fallback:${Math.random().toString(36).slice(2)}`);
+  private lastDegradedAt = 0;
+  constructor(private readonly cfg: { url: string; token: string; fetch?: typeof fetch; onDegraded?: (reason: string) => void; degradedReportEveryMs?: number }) {
+    if (!/^https:\/\//.test(cfg.url)) throw new Error("UPSTASH_REDIS_REST_URL must be an https URL");
+    if (!cfg.token) throw new Error("UPSTASH_REDIS_REST_TOKEN must be set for the upstash rate-limit provider");
+  }
+  /** INCR then PEXPIRE on the first hit, atomically. Returns the count. */
+  private static readonly INCR_SCRIPT = "local c = redis.call('INCR', KEYS[1]) if c == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end return c";
+  private async command(body: unknown[]): Promise<unknown> {
+    const f = this.cfg.fetch ?? fetch;
+    const res = await f(this.cfg.url.replace(/\/$/, ""), { method: "POST", headers: { authorization: `Bearer ${this.cfg.token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+    if (!res.ok) throw new Error(`upstash ${res.status}`);
+    const json = (await res.json()) as { result?: unknown; error?: string };
+    if (json.error) throw new Error(`upstash: ${json.error}`);
+    return json.result;
+  }
+  private degraded(reason: string, now: number) {
+    const every = this.cfg.degradedReportEveryMs ?? 3_600_000;
+    if (now - this.lastDegradedAt >= every) {
+      this.lastDegradedAt = now;
+      try { this.cfg.onDegraded?.(reason); } catch { /* reporting must never fail a request */ }
+    }
+  }
+  async incr(key: string, ttlMs: number, now: number): Promise<number> {
+    try {
+      const r = await this.command(["EVAL", UpstashSharedCounter.INCR_SCRIPT, 1, key, Math.max(1000, Math.ceil(ttlMs))]);
+      return Number(r);
+    } catch (err) {
+      this.degraded(err instanceof Error ? err.message : String(err), now);
+      return this.local.incr(key, ttlMs, now);
+    }
+  }
+  async get(key: string, now: number): Promise<number> {
+    try {
+      const r = await this.command(["GET", key]);
+      return r === null || r === undefined ? 0 : Number(r);
+    } catch (err) {
+      this.degraded(err instanceof Error ? err.message : String(err), now);
+      return this.local.get(key, now);
+    }
+  }
+}
 
-/** Chooses the store from configuration. Only "memory" and the fake shared counter exist until the founder selects a provider. */
-export function createRateLimitStore(cfg: RateLimitConfig): RateLimitStore {
+export type RateLimitConfig = { RATE_LIMIT_STORE: string; RATE_LIMIT_SHARED_PROVIDER: string; RATE_LIMIT_SHARED_URL: string | null; UPSTASH_REDIS_REST_URL?: string | null; UPSTASH_REDIS_REST_TOKEN?: string | null };
+
+/** Chooses the store from configuration: memory, the fake shared counter for rehearsal, or Upstash (decision 4). */
+export function createRateLimitStore(cfg: RateLimitConfig, opts: { fetch?: typeof fetch; onDegraded?: (reason: string) => void } = {}): RateLimitStore {
   if (cfg.RATE_LIMIT_STORE === "memory") return new MemoryRateLimitStore();
   if (cfg.RATE_LIMIT_STORE !== "shared") throw new Error(`RATE_LIMIT_STORE must be "memory" or "shared", got "${cfg.RATE_LIMIT_STORE}"`);
   if (cfg.RATE_LIMIT_SHARED_PROVIDER === "fake") return new SharedRateLimitStore(new FakeSharedCounter(cfg.RATE_LIMIT_SHARED_URL ?? "fake://default"));
-  throw new Error(`No shared rate-limit adapter is implemented for provider "${cfg.RATE_LIMIT_SHARED_PROVIDER}". The founder selects one (docs/readiness/15-rate-limiting-provider.md); until then use RATE_LIMIT_SHARED_PROVIDER=fake for rehearsal.`);
+  if (cfg.RATE_LIMIT_SHARED_PROVIDER === "upstash") {
+    if (!cfg.UPSTASH_REDIS_REST_URL || !cfg.UPSTASH_REDIS_REST_TOKEN) throw new Error("RATE_LIMIT_SHARED_PROVIDER=upstash needs UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN");
+    return new SharedRateLimitStore(new UpstashSharedCounter({ url: cfg.UPSTASH_REDIS_REST_URL, token: cfg.UPSTASH_REDIS_REST_TOKEN, fetch: opts.fetch, onDegraded: opts.onDegraded }));
+  }
+  throw new Error(`No shared rate-limit adapter is implemented for provider "${cfg.RATE_LIMIT_SHARED_PROVIDER}". Use "upstash" (docs/readiness/15-rate-limiting-provider.md) or "fake" for rehearsal.`);
 }
 
 /** Keyed hash (HMAC with a deployment secret) of policy and subject; the limiter never sees the subject, and nobody without the secret can guess a key. */
