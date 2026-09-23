@@ -41,7 +41,7 @@ try {
   const roles = (await ownerPool.query("select rolname, rolcanlogin from pg_roles where rolname in ('ros_app','ros_worker','app_tenant')")).rows as Array<{ rolname: string; rolcanlogin: boolean }>;
   const missing = ["ros_app", "ros_worker", "app_tenant"].filter((r) => !roles.some((x) => x.rolname === r));
   if (missing.length) {
-    say("roles present", "failed", `${missing.join(", ")} missing: the migrations have not been applied; run scripts/staging-db-setup.sh again`);
+    say("roles present", "failed", `${missing.join(", ")} missing. If migrations 0001 and 0003 are not recorded yet, run scripts/staging-db-setup.sh again; if they are, the role was removed by hand and its grants with it: tell the team before doing anything else`);
     process.exit(1);
   }
   say("roles present", "done", "ros_app, ros_worker, app_tenant");

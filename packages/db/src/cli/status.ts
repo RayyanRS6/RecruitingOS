@@ -106,9 +106,10 @@ try {
   }
 
   // Supabase's Data API roles must have nothing in public (migration 0017); a no-op elsewhere.
-  const api = await q<{ rolname: string; usage: boolean; tables: number }>("select r.rolname, has_schema_privilege(r.rolname, 'public', 'USAGE') as usage, (select count(*)::int from information_schema.table_privileges tp where tp.grantee = r.rolname and tp.table_schema = 'public') as tables from pg_roles r where r.rolname in ('anon','authenticated','service_role') order by 1");
+  // Explicit grants only: USAGE that reaches a role through PUBLIC is not something these revokes touch.
+  const api = await q<{ rolname: string; usage: boolean; tables: number }>("select r.rolname, exists (select 1 from pg_namespace n, aclexplode(n.nspacl) a where n.nspname = 'public' and a.grantee = r.oid and a.privilege_type = 'USAGE') as usage, (select count(*)::int from information_schema.table_privileges tp where tp.grantee = r.rolname and tp.table_schema = 'public') as tables from pg_roles r where r.rolname in ('anon','authenticated','service_role') order by 1");
   if (api.length) {
-    for (const r of api) console.log(`status: data api role ${r.rolname}: schema usage ${r.usage ? "YES (should be revoked)" : "no"}, table privileges ${r.tables}${r.tables ? " (should be 0)" : ""}`);
+    for (const r of api) console.log(`status: data api role ${r.rolname}: explicit schema grant ${r.usage ? "YES (should be revoked)" : "no"}, table privileges ${r.tables}${r.tables ? " (should be 0)" : ""}`);
     if (api.some((r) => r.usage || r.tables)) todo.push("revoke the Data API roles' access to public (migration 0017 does it; run scripts/staging-db-setup.sh again), then remove public from the exposed schemas in Supabase (Project Settings, Data API)");
   }
 } finally {
