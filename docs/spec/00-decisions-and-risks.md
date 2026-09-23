@@ -657,3 +657,10 @@ strings stopped working at the rotation; they had been entered nowhere; the data
 Remaining founder actions for the staging URL, one at a time: the private `resumes` bucket and S3 access keys
 (`docs/runbooks/resume-storage.md`), the Vercel Preview environment variables, the Supabase Auth redirect allow list,
 the Railway worker service; then the Data API exposed-schemas setting (readiness blocker 2a).
+
+**Branch `production` created (22 Sep):** Vercel would not accept `production` as the Production Branch until it
+existed, so the team created it as a pointer to the then-current `main` (`8627372`) and protected it exactly like
+`main` (pull request required, `verify` required and strict, administrators included, no force push, no deletion).
+No code differs from `main`; no production environment variables exist, so any deployment Vercel makes from it
+refuses to start and serves nothing. A production release will be a deliberate pull request from `main` into
+`production` after the production accounts and gates in `docs/readiness/20` are done; nothing merges there before.
