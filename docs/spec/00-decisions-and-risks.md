@@ -648,3 +648,12 @@ rotated by running the setup again (fresh passwords, earlier sessions ended, old
 prints the strings at all: each goes to the clipboard in turn for 1Password and the clipboard is cleared afterwards
 (`--print` remains for a non-Mac). The status report now shows the application roles' active sessions. Recorded so
 the pattern is not repeated: a credential shown on a screen is a credential that can be photographed.
+
+**Checkpoint, staging database (22 Sep):** the founder's rerun of `scripts/staging-db-setup.sh` completed: roles
+present, passwords set (the rotation after the screenshot exposure; no earlier sessions existed to end), Vault grants
+applied (Supabase Vault is present on the project), both application roles verified through the Session pooler, the
+two connection strings delivered to 1Password by clipboard and never shown. The incident is closed: the exposed
+strings stopped working at the rotation; they had been entered nowhere; the database holds synthetic data only.
+Remaining founder actions for the staging URL, one at a time: the private `resumes` bucket and S3 access keys
+(`docs/runbooks/resume-storage.md`), the Vercel Preview environment variables, the Supabase Auth redirect allow list,
+the Railway worker service; then the Data API exposed-schemas setting (readiness blocker 2a).

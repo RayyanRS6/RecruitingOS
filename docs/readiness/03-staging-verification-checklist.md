@@ -18,7 +18,7 @@ Run on the staging deployment after the accounts in `docs/spec/13` exist and `do
 
 ## 2. Database
 
-- [ ] `scripts/staging-db-setup.sh` run by the founder on her own machine: migrations applied, `ros_app` and `ros_worker` passwords set, Vault grants applied, both roles verified by the script (evidence: the script's `provision:` and `verified:` lines, pasted without the connection strings; `scripts/staging-db-status.sh` output showing no pending migrations and the Vault grants in place).
+- [x] `scripts/staging-db-setup.sh` run by the founder on her own machine (22 Sep, after the rotation): `provision: roles present: done`, `passwords set: done`, `earlier sessions ended: done (0 of 0)`, `vault grants: done (5 statements)`, `verified: ros_app … can enter app_tenant`, `verified: ros_worker …`, both through `aws-0-us-west-2.pooler.supabase.com:5432`, not superusers, no row-level-security bypass. Strings delivered to 1Password by clipboard, never shown. The status report is still to be pasted once (no pending migrations, Data API roles).
 - [ ] Every migration in `packages/db/migrations` applied with `MIGRATE_DATABASE_URL` from a trusted machine (the runner enforces contiguous numbering); `scripts/staging-db-status.sh` shows none pending.
 - [ ] `provision-roles.sql` and `vault-grants.sql` applied; `select current_user` is `ros_app` from the API and `ros_worker` from the worker.
 - [ ] `pnpm test` suites `rls.test.ts`, `tenancy.test.ts`, `security-coverage.test.ts`, `outcomes.test.ts`, `privacy-requests.test.ts` and `core.test.ts` run against staging Postgres (test database) and pass.
