@@ -664,3 +664,13 @@ existed, so the team created it as a pointer to the then-current `main` (`862737
 No code differs from `main`; no production environment variables exist, so any deployment Vercel makes from it
 refuses to start and serves nothing. A production release will be a deliberate pull request from `main` into
 `production` after the production accounts and gates in `docs/readiness/20` are done; nothing merges there before.
+
+**Staging web application reachable (23 Sep):** the founder created the Vercel project (root `apps/shell`, Next.js,
+Corepack for pnpm 12.3.4), set Production tracking to the protected `production` branch, switched Preview
+protection off, chose region `pdx1`, entered the Preview variables for `main`, and the health check answered
+`{"ok":true,"db":"postgres","ai":"anthropic","worker":"external"}` at
+`https://recruiting-os-git-main-identified-talent-solutions.vercel.app`. The founder confirmed decision 1 (Railway;
+no Trigger.dev integration, no change to the database-backed worker). Next: the Railway worker service
+(`docs/runbooks/railway-worker.md`, one screen at a time), then the Supabase Auth redirect allow list for that
+address. Follow-up recorded: Railway's `railway.json` mechanism is deprecated in favour of its Infrastructure as Code
+with legacy support ending 1 December 2026; migrate before then.
