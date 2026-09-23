@@ -162,9 +162,17 @@ export const documents = pgTable(
     sha256: text("sha256").notNull(),
     textExtracted: text("text_extracted"),
     extractedByAiRunId: uuid("extracted_by_ai_run_id"),
+    /** quarantined (uploaded, not yet checked) → clean (checked and scanned, at its final key) | rejected (refused; bytes removed). */
+    status: text("status").notNull().default("clean"),
+    /** direct (browser to storage), server (through the application), email (inbound attachment). */
+    uploadedVia: text("uploaded_via").notNull().default("server"),
+    validatedAt: ts("validated_at"),
+    scanEngine: text("scan_engine"),
+    scanVerdict: text("scan_verdict"),
+    rejectedReason: text("rejected_reason"),
     createdAt: createdAt(),
   },
-  (t) => [index("documents_company_candidate_idx").on(t.companyId, t.candidateId), index("documents_application_idx").on(t.applicationId)],
+  (t) => [index("documents_company_candidate_idx").on(t.companyId, t.candidateId), index("documents_application_idx").on(t.applicationId), index("documents_company_status_idx").on(t.companyId, t.status)],
 );
 
 export type ApplicationAnswers = { eligibility?: Record<string, unknown>; screening?: Record<string, unknown>; noResume?: Record<string, string>; noticeVersionsShown?: string[] };

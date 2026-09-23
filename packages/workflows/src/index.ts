@@ -9,6 +9,7 @@ import type { EngineDeps, EngineOptions, Services } from "./types";
 
 export * from "./types";
 export { WorkflowEngine };
+export { processQuarantinedDocument, type QuarantineOutcome } from "./documents";
 
 /** Creates the engine with every workflow definition registered. */
 export function createEngine(deps: { db: EngineDeps["db"]; services: Omit<Services, "engine"> }, opts: EngineOptions = {}): WorkflowEngine {

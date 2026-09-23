@@ -63,7 +63,13 @@ export type AuditAction =
   | "mfa.verified"
   | "mfa.failed"
   | "mfa.backup_enrolled"
-  | "mfa.reset_detected";
+  | "mfa.reset_detected"
+  /** Résumé files (founder decision 2, 22 Sep 2026): who uploaded, read, replaced or deleted which file. Never the contents. */
+  | "document.uploaded"
+  | "document.read"
+  | "document.replaced"
+  | "document.deleted"
+  | "document.rejected";
 
 /** Privileged and access actions. Distinct from domain events: this answers "who looked at what, and why." */
 export async function audit(

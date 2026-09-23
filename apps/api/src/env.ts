@@ -66,6 +66,7 @@ export type Env = {
   PRODUCT_NAME: string;
   /** The dedicated privacy-request address shown to candidates (founder decision, correction 7). */
   PRIVACY_EMAIL: string;
+  /** memory (tests), local (development), supabase (staging and production; decision 2). */
   STORAGE_PROVIDER: string;
   STORAGE_DIR: string;
   /** "memory" (one process, local) or "shared" (several API processes share counters); see docs/readiness/15. */
@@ -140,6 +141,7 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) throw new Error("SUPABASE_URL and SUPABASE_ANON_KEY must be set in production for sign-in");
     if (!env.DATABASE_URL && !env.WORKER_DATABASE_URL) throw new Error("DATABASE_URL (the API) or WORKER_DATABASE_URL (the worker) must be set in production");
     if (env.WORKER_INLINE) throw new Error("WORKER_INLINE must be false in production: run the worker as its own process with WORKER_DATABASE_URL");
+    if (env.STORAGE_PROVIDER !== "supabase") throw new Error("STORAGE_PROVIDER must be \"supabase\" in production: résumés live in private object storage, never on a function's disk or in memory (decision 2)");
   }
   return env;
 }

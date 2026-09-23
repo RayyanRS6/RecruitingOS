@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useSearchParams } from "../nav";
 import { Alert, Button, Card, Chip, EmptyState, ErrorState, EvidenceChip, Field, Segmented, Sheet, Skeleton, StatusChip, Timeline } from "@ros/ui";
-import { api, ApiError, type ApplicationDetail, type ApplicationSummary, type AssessmentResult, type RoleSummary, type Screen } from "../api/client";
+import { api, ApiError, type ApplicationDetail, type ApplicationSummary, type AssessmentResult, type RoleSummary, type Screen, API_BASE } from "../api/client";
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
 
@@ -274,7 +274,24 @@ function ApplicationSheet({ id, roleId, onClose }: { id: string; roleId: string;
                 {a.extraction.skills.length ? <p className="small muted">Skills mentioned: {a.extraction.skills.join(", ")}</p> : null}
                 {a.extraction.anomalies.length ? <Alert tone="caution">{a.extraction.anomalies.map((an) => `${an.kind.replace(/_/g, " ")}: ${an.detail}`).join("; ")} — flagged for a human look, never used to decline.</Alert> : null}
               </div>
-            ) : a.answers.noResume?.summary ? <p className="small" style={{ whiteSpace: "pre-wrap" }}>{a.answers.noResume.summary}</p> : <p className="muted small">No resume text available{a.documents.length ? " (the file could not be read; a person should open it)" : ""}.</p>}
+            ) : a.answers.noResume?.summary ? <p className="small" style={{ whiteSpace: "pre-wrap" }}>{a.answers.noResume.summary}</p> : <p className="muted small">No resume text available{a.documents.some((d) => d.status === "clean") ? " (the file could not be read; open it below)" : ""}.</p>}
+            {a.documents.length ? (
+              <ul className="small" style={{ margin: "10px 0 0", paddingLeft: 18 }}>
+                {a.documents.map((d) => (
+                  <li key={d.id}>
+                    {d.status === "clean" ? (
+                      <><a href={`${API_BASE}/api/v1/applications/${a.id}/documents/${d.id}/file`} target="_blank" rel="noopener noreferrer">Open {d.filename}</a> <span className="muted">({Math.max(1, Math.round(d.sizeBytes / 1024))} KB; this open is recorded)</span></>
+                    ) : d.status === "quarantined" ? (
+                      <span className="muted">{d.filename}: being checked and scanned before anyone can open it.</span>
+                    ) : d.status === "rejected" ? (
+                      <span className="muted">{d.filename}: refused ({(d.rejectedReason ?? "unknown").replace(/_/g, " ")}) and removed. The candidate can send another.</span>
+                    ) : (
+                      <span className="muted">{d.filename}: removed.</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </Card>
 
           <Card title="Eligibility answers">

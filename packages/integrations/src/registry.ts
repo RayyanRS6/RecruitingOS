@@ -5,6 +5,10 @@ import { IndeedAdapter, LinkedInBasicJobsAdapter, ZipRecruiterAdapter } from "./
 import { BlsOewsAdapter } from "./comp/bls";
 import { TwilioSmsAdapter } from "./sms/twilio";
 import { LocalStorageAdapter, MemoryStorageAdapter } from "./storage/local";
+import { GrantSigner } from "./storage/grants";
+import { SupabaseStorageAdapter } from "./storage/supabase";
+import { FakeMalwareScanner } from "./scanning/fake";
+import type { MalwareScanner } from "./scanning/types";
 import { MemorySecretStore } from "./secrets/memory";
 import { SupabaseVaultSecretStore } from "./secrets/vault";
 import type { SecretStore, SqlExecutor } from "./secrets/types";
@@ -25,6 +29,8 @@ export type Integrations = {
   jobBoards: Record<string, JobBoardAdapter>;
   comp: CompAdapter;
   storage: StorageAdapter;
+  /** Malware scanning of quarantined uploads; a fake until a real engine is authorized (real-data blocker). */
+  scanner: MalwareScanner;
   secrets: SecretStore;
   /** Provider-side revocation by provider key (google, microsoft, ...). Fakes in development; real ones arrive with each adapter. */
   revokers: Record<string, CredentialRevoker>;
@@ -57,7 +63,8 @@ export function createIntegrations(env: Record<string, string | undefined> = pro
   ];
   const jobBoards = Object.fromEntries(boards.map((b) => [b.channel, b]));
   const comp = new BlsOewsAdapter(env.BLS_API_KEY, fetch, env.COMP_BLS_ENABLED !== "false");
-  const storage: StorageAdapter = opts.memoryStorage || env.STORAGE_PROVIDER === "memory" ? new MemoryStorageAdapter() : new LocalStorageAdapter(env.STORAGE_DIR ?? "./.data/files");
+  const storage = createStorage(env, opts, appBaseUrl);
+  const scanner: MalwareScanner = createScanner(env);
   const secrets: SecretStore = env.SECRET_STORE === "vault" && opts.secretsExecutor ? new SupabaseVaultSecretStore(opts.secretsExecutor) : new MemorySecretStore();
   const revokers: Record<string, CredentialRevoker> = Object.fromEntries(["google", "microsoft", "fake"].map((p) => [p, new FakeCredentialRevoker(p)]));
   const identity: IdentityProvider = env.AUTH_PROVIDER === "supabase"
@@ -73,6 +80,7 @@ export function createIntegrations(env: Record<string, string | undefined> = pro
     jobBoards,
     comp,
     storage,
+    scanner,
     secrets,
     revokers,
     identity,
@@ -85,11 +93,36 @@ export function createIntegrations(env: Record<string, string | undefined> = pro
       { kind: "sms", provider: sms.id, status: sms.status },
       ...boards.map((b) => ({ kind: "jobboard", provider: b.channel, status: b.status })),
       { kind: "comp", provider: comp.id, status: comp.status },
-      { kind: "storage", provider: storage.id, status: "live" as const },
+      { kind: "storage", provider: storage.id, status: storage.status },
+      { kind: "scanner", provider: scanner.id, status: scanner.status },
       { kind: "secrets", provider: secrets.id, status: secrets.status },
       { kind: "identity", provider: identity.id, status: identity.status },
       ...Object.values(calendars).map((cal) => ({ kind: "calendar", provider: cal.provider, status: cal.status })),
       { kind: "analytics", provider: analytics.id, status: analytics.status },
     ],
   };
+}
+
+/**
+ * Storage by STORAGE_PROVIDER: `memory` (tests), `local` (development, files under STORAGE_DIR), `supabase` (staging and
+ * production, decision 2). Anything else is refused rather than silently falling back to the disk. Configuration
+ * errors name the variable, never a value.
+ */
+function createStorage(env: Record<string, string | undefined>, opts: { memoryStorage?: boolean }, appBaseUrl: string): StorageAdapter {
+  const provider = opts.memoryStorage ? "memory" : (env.STORAGE_PROVIDER ?? "local");
+  const signer = new GrantSigner(env.SESSION_SECRET ?? "dev-only-session-secret", appBaseUrl);
+  if (provider === "memory") return new MemoryStorageAdapter(signer);
+  if (provider === "local") return new LocalStorageAdapter(env.STORAGE_DIR ?? "./.data/files", signer);
+  if (provider === "supabase") {
+    const missing = ["STORAGE_S3_ENDPOINT", "STORAGE_S3_REGION", "STORAGE_BUCKET", "STORAGE_S3_ACCESS_KEY_ID", "STORAGE_S3_SECRET_ACCESS_KEY"].filter((k) => !env[k]);
+    if (missing.length) throw new Error(`STORAGE_PROVIDER=supabase needs ${missing.join(", ")}`);
+    return new SupabaseStorageAdapter({ endpoint: env.STORAGE_S3_ENDPOINT!, region: env.STORAGE_S3_REGION!, bucket: env.STORAGE_BUCKET!, accessKeyId: env.STORAGE_S3_ACCESS_KEY_ID!, secretAccessKey: env.STORAGE_S3_SECRET_ACCESS_KEY! });
+  }
+  throw new Error(`STORAGE_PROVIDER=${provider} is not a known storage provider (memory, local, supabase)`);
+}
+
+function createScanner(env: Record<string, string | undefined>): MalwareScanner {
+  const provider = env.SCAN_PROVIDER ?? "fake";
+  if (provider === "fake") return new FakeMalwareScanner();
+  throw new Error(`SCAN_PROVIDER=${provider} is not a known scanner (fake); a real engine is a real-data gate, not yet authorized`);
 }

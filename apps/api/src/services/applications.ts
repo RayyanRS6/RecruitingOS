@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-import type { Actor } from "@ros/contracts";
-import { dedupeKey, emit, normalizeEmailForDedupe, normalizePhone } from "@ros/core";
+import { inspectResumeFile, type Actor } from "@ros/contracts";
+import { audit, dedupeKey, emit, normalizeEmailForDedupe, normalizePhone } from "@ros/core";
 import { applications, candidates, documents, randomToken, roles, uuidv7, type Tx } from "@ros/db";
-import { documentToText } from "@ros/agents";
 import type { Container } from "../container";
+import { quarantineKey } from "../uploads";
 
 export type NewApplication = {
   companyId: string;
@@ -20,10 +20,19 @@ export type NewApplication = {
   noticeVersionsShown: string[];
   eligibilityAnswers: Record<string, unknown>;
   noResumeAnswers?: Record<string, string>;
-  resume?: { filename: string; mime: string; bytes: Uint8Array } | null;
+  resume?: ResumeInput | null;
   ip?: string;
   note?: string;
 };
+
+/**
+ * A résumé arrives one of two ways: as bytes the application received itself (the no-script apply form, an inbound
+ * email attachment), or already in storage under a quarantine key the browser uploaded to directly. Either way the
+ * document starts as `quarantined`; the worker inspects and scans it, moves it to its final key and extracts the text.
+ */
+export type ResumeInput =
+  | { kind: "bytes"; filename: string; mime: string; bytes: Uint8Array; via: "server" | "email" }
+  | { kind: "stored"; filename: string; mime: string; storageKey: string; sizeBytes: number; via: "direct" };
 
 /**
  * Creates (or updates) the candidate and application, stores the resume, records consent, emits the facts,
@@ -83,16 +92,34 @@ export async function createApplication(tx: Tx, container: Container, input: New
   }
 
   if (input.resume && !application.resumeDocumentId) {
-    const sha256 = createHash("sha256").update(input.resume.bytes).digest("hex");
-    const storageKey = `${input.companyId}/${application.id}/${uuidv7()}-${input.resume.filename.replace(/[^A-Za-z0-9._-]/g, "_")}`;
-    await container.integrations.storage.put(storageKey, input.resume.bytes, input.resume.mime);
-    const text = await documentToText(input.resume.bytes, input.resume.mime, input.resume.filename);
-    const [doc] = await tx
-      .insert(documents)
-      .values({ companyId: input.companyId, candidateId: candidate.id, applicationId: application.id, kind: "resume", filename: input.resume.filename, mime: input.resume.mime, sizeBytes: input.resume.bytes.byteLength, storageKey, sha256, textExtracted: text || null })
-      .returning();
-    await tx.update(applications).set({ resumeDocumentId: doc.id }).where(eq(applications.id, application.id));
-    application = { ...application, resumeDocumentId: doc.id };
+    const r = input.resume;
+    let stored: { storageKey: string; sizeBytes: number; sha256: string; mime: string } | null = null;
+    let refusal: { reason: string; detail: string } | null = null;
+    if (r.kind === "stored") {
+      stored = { storageKey: r.storageKey, sizeBytes: r.sizeBytes, sha256: "pending", mime: r.mime };
+    } else {
+      // A quick look at the bytes before anything is kept; the worker repeats it in quarantine together with the scan.
+      const look = inspectResumeFile(r.bytes, { mime: r.mime, filename: r.filename });
+      if (!look.ok) refusal = { reason: look.reason, detail: look.detail };
+      else {
+        const storageKey = quarantineKey(input.companyId, role.id, uuidv7(), look.extension);
+        await container.integrations.storage.put(storageKey, r.bytes, look.mime);
+        stored = { storageKey, sizeBytes: r.bytes.byteLength, sha256: createHash("sha256").update(r.bytes).digest("hex"), mime: look.mime };
+      }
+    }
+    if (refusal) {
+      // Nothing is kept. The application continues without a résumé; the owner sees why on the candidate's page.
+      await emit(tx, { type: "document.rejected", companyId: input.companyId, actor, subject: { type: "application", id: application.id }, payload: { stage: "received", reason: refusal.reason, detail: refusal.detail, via: r.via } });
+    } else if (stored) {
+      const [doc] = await tx
+        .insert(documents)
+        .values({ companyId: input.companyId, candidateId: candidate.id, applicationId: application.id, kind: "resume", filename: r.filename.slice(0, 200), mime: stored.mime, sizeBytes: stored.sizeBytes, storageKey: stored.storageKey, sha256: stored.sha256, textExtracted: null, status: "quarantined", uploadedVia: r.via })
+        .returning();
+      await tx.update(applications).set({ resumeDocumentId: doc.id }).where(eq(applications.id, application.id));
+      application = { ...application, resumeDocumentId: doc.id };
+      await emit(tx, { type: "document.uploaded", companyId: input.companyId, actor, subject: { type: "application", id: application.id }, payload: { documentId: doc.id, via: r.via, sizeBytes: stored.sizeBytes, mime: stored.mime } });
+      await audit(tx, { companyId: input.companyId, actor, action: "document.uploaded", target: { type: "document", id: doc.id }, ip: input.ip, details: { applicationId: application.id, via: r.via, sizeBytes: stored.sizeBytes, mime: stored.mime } });
+    }
   }
 
   if (!duplicate) {

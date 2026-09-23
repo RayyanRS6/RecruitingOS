@@ -23,6 +23,7 @@ import { privacyRequestRoutes } from "./routes/privacy-requests";
 import { redactString } from "@ros/core";
 import { twilioWebhook } from "./webhooks/twilio";
 import { candidatePages } from "./pages/candidate";
+import { fileRoutes } from "./routes/files";
 import { postmarkWebhook } from "./webhooks/postmark";
 import { POLICIES, apiRateLimit, rateLimit, webhookRateLimit } from "./middleware/rate-limit";
 import { contextStorage } from "hono/context-storage";
@@ -40,13 +41,13 @@ export function createApp(container: Container) {
   // 21 Sep, item 5: per-user and per-tenant limits on the API, per-address for anonymous calls, generous per-provider limits on webhooks.
   app.use("/api/*", apiRateLimit());
   app.use("/webhooks/*", webhookRateLimit());
-  for (const p of ["/c/*", "/careers/*", "/privacy", "/feeds/*"]) app.use(p, rateLimit(POLICIES.candidatePages));
+  for (const p of ["/c/*", "/careers/*", "/privacy", "/feeds/*", "/files/*"]) app.use(p, rateLimit(POLICIES.candidatePages));
   // 21 Sep, item 6: candidate pages carry a strict policy with a per-request nonce; report-only until reviewed (CSP_MODE).
   const candidateCsp: MiddlewareHandler<Vars> = async (c, next) => {
     const nonce = makeNonce();
     c.set("nonce", nonce);
     await next();
-    if ((c.res.headers.get("content-type") ?? "").includes("text/html")) c.res.headers.set(cspHeaderName(container.env.CSP_MODE), buildCandidateCsp({ nonce, production: container.env.NODE_ENV === "production", reportPath: "/api/csp-report" }));
+    if ((c.res.headers.get("content-type") ?? "").includes("text/html")) c.res.headers.set(cspHeaderName(container.env.CSP_MODE), buildCandidateCsp({ nonce, production: container.env.NODE_ENV === "production", reportPath: "/api/csp-report", connectOrigins: container.integrations.storage.browserOrigins() }));
   };
   app.use("/c/*", candidateCsp);
   app.use("/careers/*", candidateCsp);
@@ -91,6 +92,7 @@ export function createApp(container: Container) {
   app.route("/api/v1/roles", roleInterviewRoutes);
   app.route("/api/v1/me", meRoutes);
   app.route("/", schedulePages);
+  app.route("/files", fileRoutes);
   app.route("/webhooks/postmark", postmarkWebhook);
   app.route("/webhooks/twilio", twilioWebhook);
   app.route("/", candidatePages);

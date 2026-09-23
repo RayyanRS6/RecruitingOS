@@ -15,7 +15,8 @@ export function makeNonce(): string {
   return randomBytes(16).toString("base64");
 }
 
-export function buildCandidateCsp(input: { nonce: string; production: boolean; reportPath?: string }): string {
+/** `connectOrigins`: the object store a candidate's browser uploads a résumé to, when it is not this origin (decision 2). */
+export function buildCandidateCsp(input: { nonce: string; production: boolean; reportPath?: string; connectOrigins?: string[] }): string {
   const directives = [
     "default-src 'none'",
     "base-uri 'none'",
@@ -28,7 +29,7 @@ export function buildCandidateCsp(input: { nonce: string; production: boolean; r
     "style-src-attr 'unsafe-inline'",
     `script-src 'nonce-${input.nonce}' 'strict-dynamic'`,
     "font-src 'self'",
-    "connect-src 'self'",
+    `connect-src 'self'${(input.connectOrigins ?? []).map((o) => ` ${o}`).join("")}`,
     "manifest-src 'self'",
     ...(input.production ? ["upgrade-insecure-requests"] : []),
     ...(input.reportPath ? [`report-uri ${input.reportPath}`] : []),

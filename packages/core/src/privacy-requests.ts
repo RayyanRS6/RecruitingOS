@@ -119,7 +119,9 @@ export async function anonymizeCandidate(
   const docs = await q.select().from(documents).where(eq(documents.candidateId, cand.id));
   for (const d of docs) {
     await input.deleteFile(d.storageKey);
-    await q.update(documents).set({ textExtracted: null, filename: `${token}.removed`, storageKey: `removed/${token}/${d.id}`, sizeBytes: 0, sha256: "removed" }).where(eq(documents.id, d.id));
+    await q.update(documents).set({ textExtracted: null, filename: `${token}.removed`, storageKey: `removed/${token}/${d.id}`, sizeBytes: 0, sha256: "removed", status: "deleted", rejectedReason: null }).where(eq(documents.id, d.id));
+    await audit(q, { companyId: input.companyId, actor: input.actor, action: "document.deleted", target: { type: "document", id: d.id }, reason: "deletion request fulfilled", details: { candidateId: cand.id, applicationId: d.applicationId } });
+    await emit(q, { type: "document.deleted", companyId: input.companyId, actor: input.actor, subject: { type: "candidate", id: cand.id }, payload: { documentId: d.id } });
   }
   const apps = await q.select({ id: applications.id }).from(applications).where(eq(applications.candidateId, cand.id));
   const appIds = apps.map((a) => a.id);

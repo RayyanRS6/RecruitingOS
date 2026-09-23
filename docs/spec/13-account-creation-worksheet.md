@@ -116,8 +116,8 @@ Conventions: owners = Nadine and Paul (named human accounts); billing = `billing
   `SECRET_STORE=vault`, `AI_PROVIDER=anthropic`, `ANTHROPIC_API_KEY` (sealed), `AUTH_PROVIDER=supabase`,
   `SUPABASE_URL`, `SUPABASE_ANON_KEY` (sealed), `APP_BASE_URL` and `WEB_BASE_URL` (the staging address, for links in
   messages), `EMAIL_PROVIDER`, `SMS_PROVIDER`, `CALENDAR_PROVIDER`, `ANALYTICS_PROVIDER` = `fake` until each is
-  connected, `STORAGE_PROVIDER=memory` until the storage adapter lands (the worker cannot read résumés the API stored
-  in another process's memory, so résumé extraction on staging waits for that adapter), `PRODUCT_NAME`,
+  connected, `STORAGE_PROVIDER=supabase` with the `STORAGE_S3_*` values from the runbook (`docs/runbooks/resume-storage.md`;
+  adapter built 22 Sep: private bucket `resumes`, direct browser uploads, quarantine, worker-side checks), `PRODUCT_NAME`,
   `ITS_QUEUE_EMAIL`, `EMAIL_REPLY_TO`, `PRIVACY_EMAIL`, `WORKER_POLL_MS=1000`, `LOG_LEVEL=info`. `DATABASE_URL` is not
   needed on the worker: the production guard accepts `WORKER_DATABASE_URL` alone.
 - Verify: the deploy log shows `[worker] started (db: postgres as ros_worker, ai: anthropic)` and no `refusing to
@@ -230,15 +230,16 @@ Status: existing = used by the code today; planned = introduced by the Next.js p
 | SUPABASE_SERVICE_ROLE_KEY | **not provisioned to the application in release 1** | yes | The service-role key bypasses row-level security. Ordinary requests use the authenticated Supabase client and the `ros_app` database role; the worker uses `ros_worker`; JWT verification uses `SUPABASE_JWT_SECRET` or the project's JWKS; storage uses S3-compatible credentials. It may be used only for a narrowly defined, documented, reviewed, tested, and audited server-side administrative operation that cannot be done through authenticated RLS; never in the browser, never `NEXT_PUBLIC_*`, never for candidate, company, role, application, or recruiter operations. `tests/policy/service-role-guard.test.ts` fails on any client reference and on any server reference outside the (currently empty) allowlist. |
 | SUPABASE_JWT_SECRET | Vercel server only, and only for a project on the legacy shared secret | yes | not needed for staging: the project publishes ES256 signing keys and the code verifies through the JWKS (checked 22 Sep) |
 | AUTH_PROVIDER, AUTH_SIGNIN_PROVIDERS, ITS_STAFF_EMAIL_DOMAINS, MAGIC_LINK_ENABLED | Vercel, Trigger.dev | no | existing (`supabase`; `azure,google`; `identifiedtalent.com`; `false` in production) |
-| STORAGE_S3_ENDPOINT, STORAGE_S3_REGION | Vercel, Trigger.dev | no | planned (Supabase Storage S3 endpoint) |
-| STORAGE_S3_ACCESS_KEY_ID, STORAGE_S3_SECRET_ACCESS_KEY | Vercel server, Trigger.dev | yes | planned (scoped storage credentials; not the service role) |
+| STORAGE_S3_ENDPOINT, STORAGE_S3_REGION | Vercel, Railway | no | built 22 Sep (Supabase Storage S3 endpoint; `docs/runbooks/resume-storage.md`) |
+| STORAGE_S3_ACCESS_KEY_ID, STORAGE_S3_SECRET_ACCESS_KEY | Vercel server, Railway (sealed) | yes | built 22 Sep (the project's S3 access keys: storage only, never the service role; not bucket-scoped at the provider, so one bucket per project) |
 | PRIVACY_EMAIL | Vercel | no | existing (`privacy@identifiedtalent.com`) |
 | ANALYTICS_PROVIDER, POSTHOG_HOST | Vercel, Trigger.dev | no | existing (`fake` until PostHog exists) |
 | POSTHOG_PROJECT_API_KEY | Vercel server, Trigger.dev | yes (server-side capture) | existing |
 | ANALYTICS_SALT | Vercel server, Trigger.dev | yes | existing; different per environment |
 | SUPABASE_JWT_ISSUER | none | no | retired 22 Sep: not read by the code; the issuer is derived from `SUPABASE_URL` |
-| STORAGE_PROVIDER | Vercel, Trigger.dev | no | existing (`supabase` planned) |
-| STORAGE_BUCKET | Vercel, Trigger.dev | no | planned |
+| STORAGE_PROVIDER | Vercel, Railway | no | `supabase` required in production (built 22 Sep) |
+| STORAGE_BUCKET | Vercel, Railway | no | built 22 Sep (`resumes`) |
+| SCAN_PROVIDER | Vercel, Railway | no | `fake` only; a real engine is a real-data gate |
 | STORAGE_DIR | local only | no | existing |
 | SECRET_STORE | Vercel, Trigger.dev (`vault`) | no | existing |
 | AI_PROVIDER | Vercel, Trigger.dev | no | existing |

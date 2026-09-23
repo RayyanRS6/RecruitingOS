@@ -45,7 +45,7 @@ postmarkWebhook.post("/inbound", async (c) => {
   }
   const applicant = extractApplicantFromInbound(mail);
   const attachment = mail.attachments.find((a) => /pdf|word|text/.test(a.contentType) || /\.(pdf|docx|txt)$/i.test(a.filename));
-  const resume = attachment ? { filename: attachment.filename, mime: attachment.contentType, bytes: new Uint8Array(Buffer.from(attachment.contentBase64, "base64")) } : null;
+  const resume = attachment ? { kind: "bytes" as const, filename: attachment.filename, mime: attachment.contentType, bytes: new Uint8Array(Buffer.from(attachment.contentBase64, "base64")), via: "email" as const } : null;
   try {
     const result = await withTenant(container.db, posting.companyId, (tx) =>
       createApplication(tx, container, {
