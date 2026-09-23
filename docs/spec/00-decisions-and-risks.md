@@ -664,3 +664,11 @@ existed, so the team created it as a pointer to the then-current `main` (`862737
 No code differs from `main`; no production environment variables exist, so any deployment Vercel makes from it
 refuses to start and serves nothing. A production release will be a deliberate pull request from `main` into
 `production` after the production accounts and gates in `docs/readiness/20` are done; nothing merges there before.
+
+**Worker host, restated (23 Sep):** decision 1 of 22 Sep chose Railway for the worker and deferred Trigger.dev; PR 6
+delivered the Railway configuration (`railway.json`, `pnpm worker:start`, the same `apps/api/src/worker.ts`). The
+account worksheet still named Trigger.dev as a home for variables and as an account to create, which led the
+founder to create a Trigger.dev project and enter the staging worker variables there. Corrected here: the worksheet
+now names Railway everywhere and marks the Trigger.dev section deferred. No Trigger.dev code exists or is planned for
+release 1; moving the queue there would be an architectural change to the engine (a database-backed queue with
+leases, retries and timers) and needs a founder decision on its own.
