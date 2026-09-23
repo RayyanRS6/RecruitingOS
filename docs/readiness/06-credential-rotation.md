@@ -4,12 +4,12 @@ Status: **Not started** (plan only). Every credential is created and entered by 
 
 | Credential | Where it lives | Rotate every | How to rotate | How to verify | How to revoke fast |
 |---|---|---|---|---|---|
-| Database role passwords (`ros_app`, `ros_worker`, owner) | Supabase; values in Vercel and Trigger.dev | 90 days, or at once on suspicion | `ALTER ROLE ... PASSWORD` in the SQL editor; update the variable; redeploy | `/healthz`; worker log "started ... as ros_worker" | same as rotate |
+| Database role passwords (`ros_app`, `ros_worker`, owner) | Supabase; values in Vercel and Railway | 90 days, or at once on suspicion | `ALTER ROLE ... PASSWORD` in the SQL editor; update the variable; redeploy | `/healthz`; worker log "started ... as ros_worker" | same as rotate |
 | Supabase anon key, JWT secret | Supabase; Vercel | 180 days | regenerate in Project settings → API; update variables | sign in works; `identity.test.ts` against staging | regenerate |
 | Postmark server token, webhook secret, inbound secret | Postmark; Vercel | 180 days | create a new token, switch, delete the old | send a test message; post a test webhook | delete token in Postmark |
 | Google OAuth client secret (calendar) | Google Cloud; Vercel | 180 days | add a second secret, switch, remove the first | connect a test calendar | delete the client secret; users reconnect |
 | Microsoft Entra sign-in client secret | Entra; Supabase Auth provider settings | 12 months (Entra expiry) | new secret in Certificates & secrets; update Supabase | staff sign-in | delete in Entra |
-| Anthropic API key | Anthropic console; Vercel and Trigger.dev | 90 days | create, switch, revoke | one intake turn in staging | revoke in the console |
+| Anthropic API key | Anthropic console; Vercel and Railway | 90 days | create, switch, revoke | one intake turn in staging | revoke in the console |
 | Twilio auth token | Twilio; Vercel | 90 days | secondary token, promote, delete primary | webhook signature verification test | delete |
 | Sentry DSN, PostHog project key | providers; Vercel | 12 months | regenerate | a scrubbed test event arrives | regenerate |
 | Calendar refresh tokens (per interviewer) | Supabase Vault only | on disconnect, on revocation, or when a probe fails three times | automatic: the worker revokes at the provider and deletes the secret (`connections.ts`) | audit `credentials.deleted` | disconnect in Setup or the admin retry |
