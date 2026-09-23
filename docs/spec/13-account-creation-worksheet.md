@@ -168,7 +168,8 @@ Conventions: owners = Nadine and Paul (named human accounts); billing = `billing
 - Who: Nadine signs up with her ITS address; organization `identified-talent-solutions`; Paul as Owner.
 - Owners: Nadine, Paul. Billing: `billing@`. Recovery: MFA codes in the vault. MFA: required at the organization. Region: US. Plan: Team. Spend alert: $30/month.
 - Projects: `api`, `web`; alerts to `dev-alerts@`; data scrubbing on with additional fields `token`, `email`, `phone`, `authorization`.
-- Environment variables: `SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_DSN` (non-secret), `SENTRY_AUTH_TOKEN` (build-time, for source maps), `SENTRY_ENVIRONMENT`.
+- Environment variables: `SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_DSN` (non-secret), `SENTRY_ENVIRONMENT`, `SENTRY_TRACES_SAMPLE_RATE` (default 0). No `SENTRY_AUTH_TOKEN` in release 1: source maps are not uploaded, so no auth token exists to protect, and the SDK's command-line tool is blocked from running install scripts (`pnpm-workspace.yaml`).
+- Built 22 Sep (decision 3): `@sentry/nextjs` in the shell (server side through `apps/shell/instrumentation.ts`, Node runtime only; browser side through `apps/shell/instrumentation-client.ts` for the staff application only, no replay, no tracing, no integrations) and `@sentry/node` in the worker and standalone API (`apps/api/src/instrument.ts`, the only API file that imports the SDK). Every process shares `sentryOptions`: `sendDefaultPii` false, no replay, tracing off unless `SENTRY_TRACES_SAMPLE_RATE` says otherwise, and every event, transaction and breadcrumb scrubbed by shape (authorization and cookie headers, cookies, request bodies, link tokens and OAuth codes in URLs, identity beyond an opaque id) and by every registered secret value (`packages/contracts/src/security/observability.ts`). Unhandled API errors reach the tracker through one process-wide hook with the route only (candidate link tokens masked); handled errors are not reported. Version 10.74.0, the newest release older than the workspace's 24-hour minimum release age. Off until `SENTRY_DSN` is set.
 - Verify: a test error from staging appears with the URL token scrubbed.
 - Revoke or rotate: regenerate the auth token; DSNs can be rotated by creating a new client key.
 
@@ -269,8 +270,9 @@ Status: existing = used by the code today; planned = introduced by the Next.js p
 | MS_OAUTH_CLIENT_ID, MS_OAUTH_CLIENT_SECRET, MS_OAUTH_TENANT | deferred (calendar registration only) | secret (client secret) | deferred |
 | TRIGGER_SECRET_KEY | Vercel | yes | planned |
 | TRIGGER_PROJECT_REF | Vercel | no | planned |
-| SENTRY_DSN, NEXT_PUBLIC_SENTRY_DSN, SENTRY_ENVIRONMENT | Vercel, Trigger.dev | no | planned |
-| SENTRY_AUTH_TOKEN | Vercel (build) | yes | planned |
+| SENTRY_DSN, SENTRY_ENVIRONMENT, SENTRY_TRACES_SAMPLE_RATE | Vercel, Railway | no | built 22 Sep; values pending |
+| NEXT_PUBLIC_SENTRY_DSN | Vercel | no | built 22 Sep; optional (staff application only) |
+| SENTRY_AUTH_TOKEN | none | yes | not used in release 1 (no source-map upload) |
 | NEXT_PUBLIC_POSTHOG_KEY, NEXT_PUBLIC_POSTHOG_HOST | Vercel (owner, recruiter, admin interfaces only) | no | planned; never loaded on candidate routes (correction 14) |
 | BLS_API_KEY | Vercel, Trigger.dev | yes (low value) | existing, optional |
 | COMP_BLS_ENABLED | Vercel, Trigger.dev | no | existing |

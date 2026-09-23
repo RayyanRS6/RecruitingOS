@@ -446,6 +446,13 @@ authorized, staging first, HMAC subjects only, fail-safe documented. Deferrals u
 communications; Supabase production and PITR before real data. First pilot on manual availability and ICS; a Microsoft
 365 partner preferred. Railway and Upstash added to `docs/readiness/07` and `docs/legal-drafts/09`.
 
+Decision 3 build record (22 Sep): the official SDK is wired in every process (`docs/spec/13` §9) behind one
+process-wide reporting hook, with `sendDefaultPii` off, no replay or session capture, tracing off by default, and
+every event scrubbed by shape and by registered secret value; unhandled API errors carry the route only, with candidate
+link tokens masked by the same rule the audit log and CSP reports use. Version 10.74.0 rather than the day's release,
+because the workspace refuses packages younger than 24 hours. Off until the founder enters `SENTRY_DSN`; the staging
+synthetic-error proof (`docs/readiness/03` §5) is still to run.
+
 **Founder decision, 22 September 2026 (evening): skip the synthetic design-partner testing phase and proceed toward a
 controlled real-candidate pilot.** Recorded as instructed:
 

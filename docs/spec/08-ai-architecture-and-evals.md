@@ -19,7 +19,7 @@ Code: `packages/ai` (provider interface, Anthropic adapter, routing, prompt regi
 |---|---|---|---|---|---|
 | intake.turn | intake | judgment → claude-opus-5 | company, playbook + matched role (cached), benchmark, facts, transcript | `IntakeTurn` | facts merged with dedupe; ≤3 questions enforced by schema |
 | intake.compile | intake | judgment → claude-opus-5 | same + full transcript | `RolePacket` | `finalizePacket`: jurisdictions, mandatory notices, pay-transparency forcing, ceiling ≥ max, min ≤ max, disclosure text, must-haves ≤ 6, declined criteria stripped, provenance |
-| resume.extract | triage | fast → claude-haiku-4-5 | resume text (≤40k chars) | `ResumeExtraction` | quotes verified (`verifyQuotes`) |
+| resume.extract | triage | fast → claude-haiku-4-5-20251001 | resume text (≤40k chars) | `ResumeExtraction` | quotes verified (`verifyQuotes`) |
 | triage.assess | triage | standard → claude-sonnet-5 | packet (cached), resume, extraction, application answers, eligibility, prior applications | `EvidenceAssessment` | `verifyAssessmentQuotes`; recommendation is information only |
 | screen.turn | screening | standard → claude-sonnet-5 | packet (cached), progress, answers, transcript, focus unknowns, latest message | `ScreenTurn` | `enforceTurnRules` (valid question keys, ≤2 follow-ups, bounded), `redactProtected` on recorded answers, keyword commands handled before the model |
 | screen.assess | screening | standard → claude-sonnet-5 | packet, transcript, answers | `ScreenAssessment` | quotes verified against the transcript |

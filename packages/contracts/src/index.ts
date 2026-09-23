@@ -11,3 +11,4 @@ export * from "./domain/interview";
 export * from "./api";
 export * from "./security/redact";
 export * from "./security/file-inspection";
+export * from "./security/observability";

@@ -45,6 +45,11 @@ export type NormalizedCspReport = { mode: string; surface: "candidate" | "app"; 
 
 const TOKEN_PATH = /\/c\/(status|screen|schedule)\/[^/?#]+/g;
 
+/** A request path with every candidate link token replaced by `[token]`: safe for audit records, error reports and logs. */
+export function maskTokenPath(path: string): string {
+  return path.replace(TOKEN_PATH, "/c/$1/[token]");
+}
+
 function pathOnly(value: unknown): string | null {
   if (typeof value !== "string" || !value) return null;
   try {
