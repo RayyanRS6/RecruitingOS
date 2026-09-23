@@ -71,6 +71,22 @@ export function fingerprintOfDer(der: Buffer): string {
   return createHash("sha256").update(der).digest("hex").toUpperCase().match(/.{2}/g)!.join(":");
 }
 
+/** Which application role an already-complete connection string is for, without touching its password. */
+export function applicationRoleOf(url: string): { ok: true; role: AppRole; host: string; port: string } | { ok: false; error: string } {
+  let u: URL;
+  try {
+    u = new URL(url.trim());
+  } catch {
+    return { ok: false, error: "that is not a valid connection string" };
+  }
+  if (!/^postgres(ql)?:$/.test(u.protocol)) return { ok: false, error: "that is not a Postgres connection string" };
+  const user = decodeURIComponent(u.username);
+  const role = (["ros_app", "ros_worker"] as const).find((r) => user === r || user.startsWith(`${r}.`));
+  if (!role) return { ok: false, error: user.startsWith("postgres") ? "that is the owner's string, not an application string; test DATABASE_URL or WORKER_DATABASE_URL" : "the user in that string is not an application role (ros_app or ros_worker)" };
+  if (!u.password) return { ok: false, error: "that string carries no password" };
+  return { ok: true, role, host: u.hostname, port: u.port || "5432" };
+}
+
 /** The pooler caches role credentials briefly; a fresh password can be refused for a few seconds. */
 export function isTransientAuthAfterRotation(err: unknown): boolean {
   const e = (err ?? {}) as { code?: string; message?: string };

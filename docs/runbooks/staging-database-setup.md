@@ -130,6 +130,22 @@ The owner's own password is a separate credential (the one you type at the promp
 these scripts; if it were ever exposed, reset it in Supabase (Project Settings, Database, Reset database password) and
 update the vault.
 
+## When a host refuses an application string (28P01 "password authentication failed")
+
+Three copies of each application string exist: the one the setup delivered to 1Password, and the ones entered into
+Vercel (`DATABASE_URL`) and Railway (`WORKER_DATABASE_URL`). Find the wrong copy before rotating:
+
+```bash
+bash scripts/staging-db-check-role.sh
+```
+
+Paste the value from 1Password (hidden), give the certificate, and read one line: "this string works" means 1Password
+is right and the copy on the host differs (re-paste it there, sealed, and deploy again); "FAILED: the database
+refused the user name or password" means the 1Password value itself is stale (for example the field kept the value
+from an earlier run), and the only way to a working pair is `bash scripts/staging-db-setup.sh` again: it sets fresh
+passwords for both roles and delivers both strings; then replace both host copies. Nothing else resets or reveals a
+password.
+
 ## After a successful run
 
 The two strings are in 1Password (Recruiting OS Staging). Enter `DATABASE_URL` into Vercel (Preview environment,
