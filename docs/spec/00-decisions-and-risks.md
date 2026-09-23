@@ -641,3 +641,10 @@ given explicitly; that a one-line pasted certificate (literal `\n`) would be acc
 layer; and that a malformed connection string could surface the password through the platform's URL error. All four
 are fixed and tested: every weakening switch is refused, the explicit certificate wins and a conflict is refused,
 pasted certificates are normalised and parsed before use, and URL errors carry a fixed message.
+
+Incident, 22 Sep: the founder shared a screenshot that showed the two application connection strings the setup had
+printed. Neither had been entered anywhere; the database holds synthetic data only. Handling: both role passwords are
+rotated by running the setup again (fresh passwords, earlier sessions ended, old strings dead), and the setup no longer
+prints the strings at all: each goes to the clipboard in turn for 1Password and the clipboard is cleared afterwards
+(`--print` remains for a non-Mac). The status report now shows the application roles' active sessions. Recorded so
+the pattern is not repeated: a credential shown on a screen is a credential that can be photographed.

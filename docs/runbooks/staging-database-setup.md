@@ -100,9 +100,39 @@ or the password. The kinds:
   setup: Supabase, Project Settings, Data API, remove `public` from the exposed schemas (the application never uses
   the Data API).
 
+## How the two connection strings reach 1Password (never the screen)
+
+On a Mac the setup no longer prints the strings. After verification it places each one on the clipboard in turn,
+tells you which 1Password field to paste it into (item "Recruiting OS staging database", vault Recruiting OS
+Staging, fields `DATABASE_URL` and `WORKER_DATABASE_URL`), and waits until you type `pasted` and press Return: a bare
+Return, or keystrokes typed before the prompt appeared, do not count. The clipboard is cleared at the end, after ten
+minutes without confirmation, when the input closes, when the copy fails, and when the process is interrupted (Ctrl-C
+or the window closing: a signal handler clears it before exit). Nothing is written to the terminal, a log or a file,
+so there is nothing to photograph or copy by mistake. `--print` shows them once instead; not recommended. Two things
+the script cannot control: if Universal Clipboard is on, a value also reaches your other Apple devices' clipboards
+until it is cleared; and a clipboard-history app (Raycast, Alfred, Paste, Maccy) records every clipboard change, so
+pause it first and clear its history afterwards.
+
+## Rotating the application passwords after an exposure
+
+Every full run is a rotation: `ALTER ROLE … PASSWORD` gives `ros_app` and `ros_worker` fresh random passwords, every
+session those roles had is ended where the owner may end them (the report says how many of how many; if the server
+refuses, it says so and the run continues), the old strings stop working at once (the pooler may honour them for a
+few more seconds), and the new strings are delivered as above. Nothing is reset or deleted. So, after an exposure:
+
+1. Run `bash scripts/staging-db-setup.sh` (full mode). Paste each new string into 1Password when asked.
+2. Replace the strings anywhere the old ones had been entered (nothing, on 22 Sep).
+3. `bash scripts/staging-db-status.sh` afterwards lists the application roles' sessions. Idle pooler connections left
+   by the verification step are normal for a few minutes; active sessions while the application is not running are
+   not, and are worth a look.
+
+The owner's own password is a separate credential (the one you type at the prompt). It is not printed or delivered by
+these scripts; if it were ever exposed, reset it in Supabase (Project Settings, Database, Reset database password) and
+update the vault.
+
 ## After a successful run
 
-Store the two strings in 1Password (Recruiting OS Staging), enter `DATABASE_URL` into Vercel (Preview environment,
+The two strings are in 1Password (Recruiting OS Staging). Enter `DATABASE_URL` into Vercel (Preview environment,
 sensitive) and `WORKER_DATABASE_URL` into Railway (sealed), each with `DATABASE_SSL_CA` beside it. Paste back only the
 `provision:` and `verified:` lines and the status report.
 If the Vault grants were skipped, enable Supabase Vault (Dashboard, Database, Extensions, `supabase_vault`) and run

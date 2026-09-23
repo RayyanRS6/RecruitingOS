@@ -87,6 +87,9 @@ try {
     if (r !== "app_tenant" && !row.rolcanlogin) todo.push(`set the ${r} password (run scripts/staging-db-setup.sh again)`);
   }
 
+  const sessions = await q<{ usename: string; active: number; idle: number }>("select usename, count(*) filter (where state <> 'idle')::int as active, count(*) filter (where state = 'idle')::int as idle from pg_stat_activity where usename in ('ros_app','ros_worker') group by usename order by usename").catch(() => [] as never[]);
+  console.log(`status: sessions of the application roles: ${sessions.length ? sessions.map((s) => `${s.usename} ${s.active} active, ${s.idle} idle`).join("; ") : "none"} (idle pooler connections from a recent verification are normal for a few minutes; active ones while the application is not running are not)`);
+
   const vault = (await q<{ present: boolean }>("select exists (select 1 from pg_namespace where nspname = 'vault') as present"))[0]!.present;
   if (!vault) {
     console.log("status: vault: schema not present (enable Supabase Vault: Dashboard, Database, Extensions, supabase_vault)");
@@ -123,4 +126,4 @@ if (todo.length) {
   console.log(`\nstatus: still to do:\n${todo.map((t) => `  - ${t}`).join("\n")}`);
   process.exit(3);
 }
-console.log("\nstatus: everything is in place. If DATABASE_URL and WORKER_DATABASE_URL are not stored in 1Password yet, run scripts/staging-db-setup.sh again: it sets fresh passwords and prints the two strings once.");
+console.log("\nstatus: everything is in place. If DATABASE_URL and WORKER_DATABASE_URL are not stored in 1Password yet, run scripts/staging-db-setup.sh again: it sets fresh passwords and delivers the two strings to the clipboard for 1Password (or shows them once with --print).");
