@@ -32,6 +32,9 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,
     env: {
+      // The dev server restarts itself when the V8 heap passes 80% of its limit (next/dist/server/lib/start-server.js),
+      // which would wipe the in-memory database mid-run; give it a limit the runner can afford.
+      NODE_OPTIONS: "--max-old-space-size=6144",
       NODE_ENV: "development", PGLITE_DIR: "memory://", APP_BASE_URL: base, WEB_BASE_URL: base,
       AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", SMS_PROVIDER: "fake", AUTH_PROVIDER: "fake", CALENDAR_PROVIDER: "fake", ANALYTICS_PROVIDER: "fake",
       SECRET_STORE: "memory", STORAGE_PROVIDER: "memory", WORKER_INLINE: "true", WORKER_POLL_MS: "250", COMP_BLS_ENABLED: "false", MAGIC_LINK_ENABLED: "true",

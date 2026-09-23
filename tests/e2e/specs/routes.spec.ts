@@ -41,6 +41,7 @@ test.describe("route inventory", () => {
   });
 
   test("an owner sees every company route; recruiter and admin routes send them home", async ({ page, baseURL }) => {
+    test.setTimeout(300_000); // seven routes with accessibility scans, then the candidate pages: long on a loaded runner
     await signIn(page, { email: `owner+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
     await createCompanyThroughTheForm(page, `Brightline ${run}`);
     const seeded = await seedRoleAndApplicant(page.request, baseURL!, "Luis", "Ortega");
