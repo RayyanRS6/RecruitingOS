@@ -244,7 +244,7 @@ Status: existing = used by the code today; planned = introduced by the Next.js p
 | STORAGE_BUCKET | Vercel, Railway | no | built 22 Sep (`resumes`) |
 | SCAN_PROVIDER | Vercel, Railway | no | `fake` only; a real engine is a real-data gate |
 | STORAGE_DIR | local only | no | existing |
-| SECRET_STORE | Vercel, Trigger.dev (`vault`) | no | existing |
+| SECRET_STORE | Vercel, Railway (`vault`) | no | existing |
 | AI_PROVIDER | Vercel, Railway | no | existing |
 | ANTHROPIC_API_KEY | Railway, Vercel | yes | existing |
 | AI_MODEL_JUDGMENT, AI_MODEL_STANDARD, AI_MODEL_FAST | Vercel, Railway | no | existing |
