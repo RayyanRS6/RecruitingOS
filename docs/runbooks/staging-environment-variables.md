@@ -3,6 +3,37 @@
 Status: written 22 September 2026 for the first staging deployment. Every value here is either a constant, a value the
 founder already holds in 1Password, or a public identifier. No secret is written here or in chat.
 
+## Creating the Vercel project (once; facts from vercel.com/docs, read 22 Sep)
+
+The project did not exist on 22 Sep: an import is only saved when its first deployment is made. On the **New Project**
+import screen for the private repository, under team Identified Talent Solutions:
+
+1. **Root Directory**: Edit, choose `apps/shell`. The workspace packages install from the repository root
+   (`pnpm-workspace.yaml`); if a build ever reports files outside the root directory, the "Include files outside
+   the root directory" switch under Settings, Build and Deployment, Root Directory must be on.
+2. **Framework Preset**: Next.js (select it if the screen still shows Other after the root change). Leave Build
+   Command, Output Directory and Install Command at their defaults, no Override.
+3. **Environment Variables on this screen**: exactly one, `ENABLE_EXPERIMENTAL_COREPACK` = `1`, not sensitive. It
+   makes Vercel use the package manager pinned in `package.json` (`pnpm@12.3.4`) instead of the pnpm 9 or 10 it
+   would pick from the lockfile version, which our lockfile needs. Enter nothing else here: variables added on the
+   import screen apply to every environment, and the runtime ones below belong to Preview, branch `main`, only.
+4. **Deploy.** The build is expected to succeed and the site to answer with an error until the runtime variables
+   exist; that first deployment is what creates the project. Node.js needs no setting: `package.json` declares
+   `engines.node: ">=24"`, which Vercel maps to the latest 24.x, its default.
+
+Then, in the project's **Settings**:
+
+- **Environments**, **Production**, **Branch Tracking**: change `main` to `production`, Save. From then on every
+  push to `main` is a Preview deployment with the stable branch address
+  `https://recruiting-os-git-main-<team-slug>.vercel.app`; the `production` branch does not exist yet and deploys
+  nothing until it does.
+- **Deployment Protection**: Vercel Authentication off for Preview deployments (candidate pages and webhooks must
+  be reachable without a Vercel login; the application's own sign-in protects the staff pages).
+- **Functions**, **Region**: Portland, US West (`pdx1`), next to the Oregon database.
+
+The branch address appears with the first Preview deployment from `main` after the tracking change: either wait for
+the next merge to `main`, or Deployments, **Create Deployment**, branch `main`.
+
 ## Before entering anything
 
 1. **The staging address.** The Vercel project `recruiting-os` deploys `main` as a Preview (the Production Branch is
