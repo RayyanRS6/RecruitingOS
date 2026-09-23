@@ -87,6 +87,9 @@ try {
     if (r !== "app_tenant" && !row.rolcanlogin) todo.push(`set the ${r} password (run scripts/staging-db-setup.sh again)`);
   }
 
+  const sessions = await q<{ usename: string; n: number }>("select usename, count(*)::int as n from pg_stat_activity where usename in ('ros_app','ros_worker') group by usename order by usename").catch(() => [] as never[]);
+  console.log(`status: active sessions of the application roles: ${sessions.length ? sessions.map((s) => `${s.usename} ${s.n}`).join(", ") : "none"}`);
+
   const vault = (await q<{ present: boolean }>("select exists (select 1 from pg_namespace where nspname = 'vault') as present"))[0]!.present;
   if (!vault) {
     console.log("status: vault: schema not present (enable Supabase Vault: Dashboard, Database, Extensions, supabase_vault)");

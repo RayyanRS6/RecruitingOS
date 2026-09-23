@@ -1,3 +1,4 @@
+import { deliverToClipboard, macClipboardIo } from "./deliver";
 import { describeConnectionError } from "./db-errors";
 import { formatStep, isTransientAuthAfterRotation, PASSWORD_SHAPE, roleUrl, smallPool, vaultGrantStatements, withSsl } from "./provisioning";
 
@@ -13,6 +14,11 @@ import { formatStep, isTransientAuthAfterRotation, PASSWORD_SHAPE, roleUrl, smal
  *   grants Vault grants and catalog checks only; nothing about passwords changes and nothing is printed to store
  * Vault grants are skipped with a clear line when the vault schema is not present yet (Supabase Vault not enabled);
  * run the grants mode after enabling it. Errors are described, never echoed with the connection string.
+ *
+ * Every full run is also a rotation: the roles get fresh passwords, their earlier sessions are ended, and the old
+ * strings stop working at once. Delivery of the two new strings (ROS_PROVISION_DELIVERY): `clipboard` places each on
+ * the clipboard in turn for 1Password and clears it afterwards, never printing; `print` (default when run by hand)
+ * shows them once.
  */
 const mode = process.env.ROS_PROVISION_MODE === "grants" ? "grants" : "full";
 const owner = process.env.MIGRATE_DATABASE_URL;
@@ -63,6 +69,13 @@ try {
       c.release();
     }
     say("passwords set", "done", "ros_app and ros_worker can log in with the new passwords; any earlier ones no longer work");
+    // A rotation after an exposure must also end whatever was already connected with the old passwords.
+    try {
+      const ended = (await ownerPool.query("select count(pg_terminate_backend(pid))::int as n from pg_stat_activity where usename in ('ros_app','ros_worker') and pid <> pg_backend_pid()")).rows[0] as { n: number };
+      say("earlier sessions ended", "done", `${ended.n} session${ended.n === 1 ? "" : "s"} of the application roles`);
+    } catch {
+      say("earlier sessions ended", "skipped", "the owner may not end other roles' sessions here; none should exist before the strings are entered anywhere");
+    }
   } else {
     const noLogin = roles.filter((r) => r.rolname !== "app_tenant" && !r.rolcanlogin).map((r) => r.rolname);
     say("passwords set", noLogin.length ? "skipped" : "done", noLogin.length ? `${noLogin.join(", ")} cannot log in yet: run the setup in full mode` : "unchanged in grants mode");
@@ -132,10 +145,24 @@ if (!verifiedAll) {
   console.error("\nprovision: the passwords are set and the grants are applied, but a role could not be verified through the pooler (see above). Fix the cause and run the setup again; it is safe to repeat and will set fresh passwords.");
   process.exit(1);
 }
-console.log("\nStore these two values in 1Password (vault: Recruiting OS Staging) now. They are shown once and never again.");
-console.log("Then enter them where they belong: DATABASE_URL into Vercel (Preview environment, sensitive); WORKER_DATABASE_URL into Railway (sealed).");
-console.log("Both environments also need DATABASE_SSL_CA (not sensitive): the text of the Supabase CA certificate you downloaded, so verify-full can verify.\n");
-console.log(`DATABASE_URL=${appUrl}`);
-console.log(`WORKER_DATABASE_URL=${workerUrl}\n`);
-console.log("Do not paste either value into chat, email or a file. Close this window when they are stored.");
+const delivery = process.env.ROS_PROVISION_DELIVERY === "clipboard" ? "clipboard" : "print";
+if (delivery === "clipboard") {
+  console.log("\nThe two connection strings are ready. They are not shown; they go to the clipboard one at a time for 1Password (vault: Recruiting OS Staging).");
+  console.log("Later they go where they belong: DATABASE_URL into Vercel (Preview environment, sensitive); WORKER_DATABASE_URL into Railway (sealed); both with DATABASE_SSL_CA.\n");
+  const result = await deliverToClipboard(
+    [
+      { name: "DATABASE_URL", value: appUrl, where: "It goes into Vercel later." },
+      { name: "WORKER_DATABASE_URL", value: workerUrl, where: "It goes into Railway later." },
+    ],
+    macClipboardIo(),
+  );
+  if (result.timedOut) process.exit(1);
+} else {
+  console.log("\nStore these two values in 1Password (vault: Recruiting OS Staging) now. They are shown once and never again.");
+  console.log("Then enter them where they belong: DATABASE_URL into Vercel (Preview environment, sensitive); WORKER_DATABASE_URL into Railway (sealed).");
+  console.log("Both environments also need DATABASE_SSL_CA (not sensitive): the text of the Supabase CA certificate you downloaded, so verify-full can verify.\n");
+  console.log(`DATABASE_URL=${appUrl}`);
+  console.log(`WORKER_DATABASE_URL=${workerUrl}\n`);
+  console.log("Do not paste either value into chat, email or a file, and do not photograph this window. Close it when they are stored.");
+}
 if (!vaultGranted) console.log("Reminder: the Vault grants are still pending (see above); run: bash scripts/staging-db-setup.sh grants after enabling Supabase Vault.");
