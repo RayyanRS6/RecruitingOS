@@ -48,7 +48,7 @@ read_ca_file() {
   for d in $DIRS; do for f in "$d/prod-ca-2021.crt" "$d/prod-supabase.cer"; do if [ -z "$DEFAULT" ] && [ -f "$f" ]; then DEFAULT="$f"; fi; done; done
   IFS="$OLDIFS"
   echo
-  echo "Step 3 of 3 (TLS). Supabase signs its database certificates with its own authority, which this computer does not"
+  echo "TLS. Supabase signs its database certificates with its own authority, which this computer does not"
   echo "trust by itself. Download it once: Supabase, Project Settings, Database, SSL Configuration, Download certificate"
   echo "(a file named prod-ca-2021.crt). Then give its path here. The certificate is public; it is not a secret."
   if [ -n "$DEFAULT" ]; then read -r -p "Path to the certificate [${DEFAULT}]: " CA; CA="${CA:-$DEFAULT}"; else read -r -p "Path to the certificate (press Return to continue without it): " CA; fi

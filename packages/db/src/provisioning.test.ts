@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { describeConnectionError, diagnoseConnectionError } from "./cli/db-errors";
-import { describeCertificate, formatStep, isTransientAuthAfterRotation, roleUrl, vaultGrantStatements, withSsl } from "./cli/provisioning";
+import { applicationRoleOf, describeCertificate, formatStep, isTransientAuthAfterRotation, roleUrl, vaultGrantStatements, withSsl } from "./cli/provisioning";
 
 const OWNER = "postgresql://postgres.abcdefghijklmnopqrst:pass@aws-0-us-west-2.pooler.supabase.com:5432/postgres";
 
@@ -33,6 +33,15 @@ describe("provisioning helpers", () => {
     expect(isTransientAuthAfterRotation({ code: "28P01" })).toBe(true);
     expect(isTransientAuthAfterRotation({ message: "Tenant or user not found" })).toBe(true);
     expect(isTransientAuthAfterRotation({ code: "ENOTFOUND" })).toBe(false);
+  });
+  it("recognises which application role a complete string is for, and refuses the owner's string and nonsense, without touching the password", () => {
+    expect(applicationRoleOf("postgresql://ros_worker.abcdefghijklmnopqrst:pass@aws-0-us-west-2.pooler.supabase.com:5432/postgres?sslmode=verify-full\n")).toEqual({ ok: true, role: "ros_worker", host: "aws-0-us-west-2.pooler.supabase.com", port: "5432" });
+    expect(applicationRoleOf("postgres://ros_app:pass@db.example.com/postgres")).toEqual({ ok: true, role: "ros_app", host: "db.example.com", port: "5432" });
+    expect(applicationRoleOf(OWNER.replace("pass", "x"))).toMatchObject({ ok: false, error: expect.stringMatching(/owner's string/) });
+    expect(applicationRoleOf("postgresql://someone:pass@h.example.com/db")).toMatchObject({ ok: false, error: expect.stringMatching(/not an application role/) });
+    expect(applicationRoleOf("postgresql://ros_worker.ref@h.example.com/db")).toMatchObject({ ok: false, error: expect.stringMatching(/no password/) });
+    expect(applicationRoleOf("mysql://ros_app:pass@h.example.com/db")).toMatchObject({ ok: false, error: expect.stringMatching(/not a Postgres/) });
+    expect(applicationRoleOf("not a url")).toMatchObject({ ok: false, error: expect.stringMatching(/not a valid/) });
   });
   it("formats step lines", () => {
     expect(formatStep({ step: "vault grants", state: "skipped", detail: "schema vault is not present" })).toBe("provision: vault grants: skipped (schema vault is not present)");
