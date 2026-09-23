@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { FakeSharedCounter, MemoryRateLimitStore, SharedRateLimitStore, createRateLimitStore, entitlements, rateLimitKey } from "@ros/core";
+import { FakeSharedCounter, MemoryRateLimitStore, SharedRateLimitStore, UpstashSharedCounter, createRateLimitStore, entitlements, rateLimitKey } from "@ros/core";
 import { adminAlerts, applications, auditRecords } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -47,11 +47,66 @@ describe("rate limiting", () => {
     expect(rateLimitKey("secret-a", "x", "email", "a@b.test")).not.toBe(rateLimitKey("secret-b", "x", "email", "a@b.test"));
   });
 
+  it("the Upstash counter increments and expires a window key in one atomic script, shares counts across stores, and never puts the token or a subject in a key", async () => {
+    const calls: Array<{ url: string; body: unknown[]; auth: string }> = [];
+    const table = new Map<string, number>();
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as unknown[];
+      calls.push({ url, body, auth: (init?.headers as Record<string, string>).authorization });
+      if (body[0] === "EVAL") { const key = String(body[3]); const n = (table.get(key) ?? 0) + 1; table.set(key, n); return new Response(JSON.stringify({ result: n })); }
+      if (body[0] === "GET") return new Response(JSON.stringify({ result: table.has(String(body[1])) ? String(table.get(String(body[1]))) : null }));
+      return new Response(JSON.stringify({ error: "unknown" }));
+    }) as unknown as typeof fetch;
+    const mk = () => new SharedRateLimitStore(new UpstashSharedCounter({ url: "https://complete-narwhal-292092.upstash.io", token: "upstash-token-for-tests-abcdefghij", fetch: fakeFetch }));
+    const a = mk();
+    const b = mk();
+    const now = 1_760_000_000_000;
+    const key = rateLimitKey("s", "auth.mfa", "ip", "203.0.113.5");
+    expect((await a.hit(key, 60_000, 3, now)).count).toBe(1);
+    expect((await b.hit(key, 60_000, 3, now)).count).toBe(2);
+    expect((await a.peek(key, 60_000, 3, now)).count).toBe(2);
+    expect((await b.hit(key, 60_000, 3, now)).allowed).toBe(true);
+    expect((await a.hit(key, 60_000, 3, now)).allowed).toBe(false);
+    const first = calls[0]!;
+    expect(first.url).toBe("https://complete-narwhal-292092.upstash.io");
+    expect(first.auth).toBe("Bearer upstash-token-for-tests-abcdefghij");
+    expect(first.body[0]).toBe("EVAL");
+    expect(String(first.body[1])).toContain("PEXPIRE");
+    expect(first.body[2]).toBe(1);
+    expect(String(first.body[3])).toMatch(/^rl:[0-9a-f]{40}:\d+$/);
+    // the expiry is the rest of the window plus a second, never longer than the window
+    expect(Number(first.body[4])).toBeLessThanOrEqual(61_000);
+    expect(Number(first.body[4])).toBeGreaterThan(0);
+    for (const c of calls) { expect(JSON.stringify(c.body)).not.toContain("203.0.113.5"); expect(JSON.stringify(c.body)).not.toContain("upstash-token"); }
+  });
+
+  it("when Upstash is unreachable the counter keeps counting in this process, reports the degradation once, and refuses nothing for that reason", async () => {
+    let fail = true;
+    const fakeFetch = (async () => { if (fail) throw new Error("ECONNRESET"); return new Response(JSON.stringify({ result: 1 })); }) as unknown as typeof fetch;
+    const reports: string[] = [];
+    const counter = new UpstashSharedCounter({ url: "https://x.upstash.io", token: "upstash-token-for-tests-abcdefghij", fetch: fakeFetch, onDegraded: (r) => reports.push(r), degradedReportEveryMs: 3_600_000 });
+    const store = new SharedRateLimitStore(counter);
+    const now = 1_760_000_000_000;
+    expect((await store.hit("k", 60_000, 2, now)).count).toBe(1);
+    expect((await store.hit("k", 60_000, 2, now)).count).toBe(2);
+    expect((await store.hit("k", 60_000, 2, now)).allowed).toBe(false);
+    expect(reports.length).toBe(1);
+    // a 429 or 5xx from the service degrades the same way
+    fail = false;
+    const refusing = new UpstashSharedCounter({ url: "https://x.upstash.io", token: "upstash-token-for-tests-abcdefghij", fetch: (async () => new Response("{}", { status: 429 })) as unknown as typeof fetch, onDegraded: (r) => reports.push(r) });
+    expect(await refusing.incr("k2", 1000, now)).toBe(1);
+    expect(await refusing.incr("k2", 1000, now)).toBe(2);
+    expect(reports.length).toBe(2);
+    expect(reports[1]).toContain("429");
+  });
+
   it("the store factory: memory, the fake shared counter, and a refusal for any provider that is not implemented", () => {
     expect(createRateLimitStore({ RATE_LIMIT_STORE: "memory", RATE_LIMIT_SHARED_PROVIDER: "fake", RATE_LIMIT_SHARED_URL: null }).id).toBe("memory");
     expect(createRateLimitStore({ RATE_LIMIT_STORE: "shared", RATE_LIMIT_SHARED_PROVIDER: "fake", RATE_LIMIT_SHARED_URL: "fake://x" }).id).toBe("shared:fake");
-    expect(() => createRateLimitStore({ RATE_LIMIT_STORE: "shared", RATE_LIMIT_SHARED_PROVIDER: "upstash", RATE_LIMIT_SHARED_URL: "https://x" })).toThrow(/founder selects one/);
+    expect(() => createRateLimitStore({ RATE_LIMIT_STORE: "shared", RATE_LIMIT_SHARED_PROVIDER: "somethingelse", RATE_LIMIT_SHARED_URL: "https://x" })).toThrow(/No shared rate-limit adapter/);
     expect(() => createRateLimitStore({ RATE_LIMIT_STORE: "redis", RATE_LIMIT_SHARED_PROVIDER: "fake", RATE_LIMIT_SHARED_URL: null })).toThrow(/memory.*shared/);
+    expect(() => createRateLimitStore({ RATE_LIMIT_STORE: "shared", RATE_LIMIT_SHARED_PROVIDER: "upstash", RATE_LIMIT_SHARED_URL: null })).toThrow(/UPSTASH_REDIS_REST_URL/);
+    expect(createRateLimitStore({ RATE_LIMIT_STORE: "shared", RATE_LIMIT_SHARED_PROVIDER: "upstash", RATE_LIMIT_SHARED_URL: null, UPSTASH_REDIS_REST_URL: "https://complete-narwhal-292092.upstash.io", UPSTASH_REDIS_REST_TOKEN: "upstash-token-for-tests-abcdefghij" }).id).toBe("shared:upstash");
   });
 
   describe("on the API and the candidate pages", () => {
