@@ -19,7 +19,7 @@ Run on the staging deployment after the accounts in `docs/spec/13` exist and `do
 ## 2. Database
 
 - [ ] `scripts/staging-db-setup.sh` run by the founder on her own machine: migrations applied, `ros_app` and `ros_worker` passwords set, Vault grants applied, both roles verified by the script (evidence: the script's `provision:` and `verified:` lines, pasted without the connection strings; `scripts/staging-db-status.sh` output showing no pending migrations and the Vault grants in place).
-- [ ] Migrations 0000 to 0014 applied with `MIGRATE_DATABASE_URL` from a trusted machine; `_migrations` lists all.
+- [ ] Every migration in `packages/db/migrations` applied with `MIGRATE_DATABASE_URL` from a trusted machine (the runner enforces contiguous numbering); `scripts/staging-db-status.sh` shows none pending.
 - [ ] `provision-roles.sql` and `vault-grants.sql` applied; `select current_user` is `ros_app` from the API and `ros_worker` from the worker.
 - [ ] `pnpm test` suites `rls.test.ts`, `tenancy.test.ts`, `security-coverage.test.ts`, `outcomes.test.ts`, `privacy-requests.test.ts` and `core.test.ts` run against staging Postgres (test database) and pass.
 - [ ] Point-in-time recovery enabled; a restore into a scratch project completed (`05-backup-and-recovery.md`).
