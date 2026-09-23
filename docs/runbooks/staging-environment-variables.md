@@ -25,8 +25,9 @@ Then, in the project's **Settings**:
 
 - **Environments**, **Production**, **Branch Tracking**: change `main` to `production`, Save. From then on every
   push to `main` is a Preview deployment with the stable branch address
-  `https://recruiting-os-git-main-<team-slug>.vercel.app`; the `production` branch does not exist yet and deploys
-  nothing until it does.
+  `https://recruiting-os-git-main-<team-slug>.vercel.app`. The `production` branch exists (created 22 Sep as a
+  pointer to `main`, protected like `main`) so the setting can be saved; it has no environment variables, so its
+  deployments refuse to start until a production release is deliberately made.
 - **Deployment Protection**: Vercel Authentication off for Preview deployments (candidate pages and webhooks must
   be reachable without a Vercel login; the application's own sign-in protects the staff pages).
 - **Functions**, **Region**: Portland, US West (`pdx1`), next to the Oregon database.
