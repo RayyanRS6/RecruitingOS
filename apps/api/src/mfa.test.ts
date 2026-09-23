@@ -88,9 +88,11 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
     expect(jar.ros_session).toBeUndefined();
     expect(jar.ros_mfa).toBeTruthy();
     expect(jar.ros_pkce).toBeUndefined();
-    // The transaction is sealed: the provider token (a JWT) is not readable from the cookie.
-    expect(jar.ros_mfa).not.toContain("eyJ");
-    expect(jar.ros_mfa!.startsWith("v1.")).toBe(true);
+    // The transaction is sealed: the provider token (a JWT) is not readable from the cookie. Checked by structure
+    // (a version prefix and three base64url parts), not by the absence of a three-letter substring, which a random
+    // ciphertext can contain by chance.
+    expect(jar.ros_mfa).toMatch(/^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+    expect(jar.ros_mfa).not.toMatch(/eyJ[A-Za-z0-9_-]{20,}\.eyJ/);
     expect((await h.me(jar)).status).toBe(401);
 
     const page = await h.get(jar, "/api/v1/auth/mfa");
@@ -137,7 +139,7 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
     // Neither the secret nor any token reaches the audit trail.
     const everything = JSON.stringify(await container.db.select().from(auditRecords));
     expect(everything).not.toContain(primarySecret);
-    expect(everything).not.toContain("eyJ");
+    expect(everything).not.toMatch(/eyJ[A-Za-z0-9_-]{20,}\.eyJ/);
 
     const skip = await h.post(jar, "/api/v1/auth/mfa/skip");
     expect(skip.status).toBe(302);
