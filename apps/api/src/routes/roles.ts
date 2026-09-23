@@ -5,8 +5,9 @@ import { OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, assertCan, audit, emit, g
 import { users } from "@ros/db";
 import { sendDisposition } from "@ros/agents";
 import { aiRuns, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviews, postings, rolePackets, roles, screens, withTenant } from "@ros/db";
-import { actorOf, applicationScopeGuard, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
+import { actorOf, applicationScopeGuard, clientIp, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
+import { DOWNLOAD_URL_TTL_SECONDS, safeFilename } from "../uploads";
 import type { Container } from "../container";
 
 /** Founder decision (correction 6): candidate-facing decline communication only after the human decision is recorded. */
@@ -216,7 +217,7 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const [app] = await tx.select().from(applications).where(eq(applications.id, c.req.param("id"))).limit(1);
     if (!app) return null;
     const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
-    const docs = await tx.select({ id: documents.id, kind: documents.kind, filename: documents.filename, mime: documents.mime, sizeBytes: documents.sizeBytes, hasText: documents.textExtracted }).from(documents).where(eq(documents.applicationId, app.id));
+    const docs = await tx.select({ id: documents.id, kind: documents.kind, filename: documents.filename, mime: documents.mime, sizeBytes: documents.sizeBytes, hasText: documents.textExtracted, status: documents.status, uploadedVia: documents.uploadedVia, rejectedReason: documents.rejectedReason, validatedAt: documents.validatedAt }).from(documents).where(eq(documents.applicationId, app.id));
     const asmts = await tx.select().from(assessments).where(eq(assessments.applicationId, app.id)).orderBy(desc(assessments.createdAt));
     const comms = await tx.select().from(communications).where(eq(communications.applicationId, app.id)).orderBy(desc(communications.createdAt));
     const timeline = await tx.select().from(events).where(and(eq(events.subjectType, "application"), eq(events.subjectId, app.id))).orderBy(desc(events.occurredAt)).limit(100);
@@ -230,6 +231,27 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
   });
   if (!row) throw new HttpError(404, "not_found", "Application not found.");
   return c.json(row);
+});
+
+/**
+ * The file itself (decision 2): only a checked and scanned document, only to a member who may read the application,
+ * only through a short-lived single-object link, and every read is audited with who, which file and why not more.
+ */
+applicationRoutes.get("/:id/documents/:documentId/file", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  assertCan(t.role, "application.read");
+  const container = c.get("container");
+  const found = await withTenant(container.db, t.companyId, async (tx) => {
+    const [doc] = await tx.select().from(documents).where(and(eq(documents.id, c.req.param("documentId")), eq(documents.applicationId, c.req.param("id")))).limit(1);
+    if (!doc) return null;
+    if (doc.status !== "clean") return { doc, url: null };
+    const link = await container.integrations.storage.createDownloadUrl(doc.storageKey, { expiresSeconds: DOWNLOAD_URL_TTL_SECONDS, filename: safeFilename(doc.filename), contentType: doc.mime });
+    await audit(tx, { companyId: t.companyId, actor: actorOf(c), action: "document.read", target: { type: "document", id: doc.id }, ip: clientIp(c), details: { applicationId: doc.applicationId, filename: safeFilename(doc.filename), expiresAt: link.expiresAt } });
+    return { doc, url: link.url };
+  });
+  if (!found) throw new HttpError(404, "not_found", "Document not found.");
+  if (!found.url) throw new HttpError(409, "not_available", found.doc.status === "quarantined" ? "This file is still being checked." : "This file was refused or removed and cannot be opened.");
+  return c.redirect(found.url, 302);
 });
 
 applicationRoutes.post("/:id/actions", requireTenant, async (c) => {

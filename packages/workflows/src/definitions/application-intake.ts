@@ -3,12 +3,13 @@ import { createEscalation, evaluateEligibility, emit, gate, notify, resolvePolic
 import { applications, assessments, candidates, companies, documents, rolePackets, roles } from "@ros/db";
 import { assessApplication, extractResume, sendAcknowledgment } from "@ros/agents";
 import type { WorkflowDefinition } from "../types";
+import { processQuarantinedDocument } from "../documents";
 
 type State = { applicationId: string; roleId: string; ineligibleUntil?: string; heldAt?: string; remindersSent?: number };
 
 /**
  * From "application received" to "ready for the owner" (docs/06 `application_intake`).
- * acknowledge → extract → eligibility → (ineligible: hold for a person, remind, escalate an overdue review; never decline) | (eligible → assess)
+ * acknowledge → validate (quarantined résumé checked, scanned, moved) → extract → eligibility → (ineligible: hold for a person, remind, escalate an overdue review; never decline) | (eligible → assess)
  */
 export const applicationIntake: WorkflowDefinition<State> = {
   key: "application_intake",
@@ -36,6 +37,17 @@ export const applicationIntake: WorkflowDefinition<State> = {
         await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "received", by: "system", actor: ctx.actor, correlationId: ctx.run.id });
         await emit(ctx.q, { type: "application.acknowledged", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { channel: "email", status: res.status }, correlationId: ctx.run.id });
       }
+      return { kind: "next", step: "validate" };
+    },
+
+    /** Decision 2: a résumé is only ever read after the worker has inspected and scanned it. A scanner outage retries; a refused file is recorded and the application goes on without it. */
+    async validate(ctx) {
+      const loaded = await load(ctx.q, ctx.state.applicationId);
+      if (!loaded) return { kind: "fail", error: "application not found", retryable: false };
+      const { app } = loaded;
+      if (!app.resumeDocumentId) return { kind: "next", step: "extract" };
+      const result = await processQuarantinedDocument(ctx.q, ctx.services.integrations, { documentId: app.resumeDocumentId, companyId: ctx.companyId, actor: ctx.actor, correlationId: ctx.run.id, now: ctx.now });
+      if (result.outcome === "retry") return { kind: "fail", error: `résumé scan unavailable: ${result.error}`, retryable: true };
       return { kind: "next", step: "extract" };
     },
 
@@ -46,6 +58,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
       if (app.extraction) return { kind: "next", step: "eligibility" };
       if (!app.resumeDocumentId) return { kind: "next", step: "eligibility" };
       const [doc] = await ctx.q.select().from(documents).where(eq(documents.id, app.resumeDocumentId)).limit(1);
+      if (doc && doc.status !== "clean") return { kind: "next", step: "eligibility" }; // refused or still quarantined: nothing to read
       if (!doc?.textExtracted) {
         await emit(ctx.q, { type: "resume.extraction_failed", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { reason: "no text could be read from the resume" }, correlationId: ctx.run.id });
         return { kind: "next", step: "eligibility" };

@@ -11,6 +11,7 @@ import type { Actor } from "@ros/contracts";
 import { toProductEvent } from "@ros/integrations";
 import { loadEnv, type Env } from "./env";
 import { registerSecretValue } from "@ros/core";
+import { UploadGrants } from "./uploads";
 
 export type Container = {
   env: Env;
@@ -22,6 +23,8 @@ export type Container = {
   engine: WorkflowEngine;
   /** Shared rate limiting (21 Sep, item 5): memory locally, a shared counter for several processes. */
   rateLimits: RateLimitStore;
+  /** Seals the grant a browser hands the apply form after a direct-to-storage upload (decision 2). */
+  uploadGrants: UploadGrants;
   /** Kicks the inline worker after a request commits; returns a promise tests can await. */
   kick(): Promise<void>;
   drain(): Promise<void>;
@@ -31,7 +34,7 @@ export type Container = {
 export async function createContainer(opts: { env?: Record<string, string | undefined>; memory?: boolean; now?: () => Date; role?: DbRole } = {}): Promise<Container> {
   const env = loadEnv(opts.env ?? process.env);
   // Every runtime secret the environment carries is registered so logs, error responses and error reports scrub it (correction 10).
-  for (const name of ["SESSION_SECRET", "ANTHROPIC_API_KEY", "POSTMARK_SERVER_TOKEN", "POSTMARK_INBOUND_SECRET", "POSTMARK_WEBHOOK_SECRET", "UPSTASH_REDIS_REST_TOKEN", "TWILIO_AUTH_TOKEN", "GOOGLE_OAUTH_CLIENT_SECRET", "SUPABASE_JWT_SECRET"]) {
+  for (const name of ["SESSION_SECRET", "ANTHROPIC_API_KEY", "POSTMARK_SERVER_TOKEN", "POSTMARK_INBOUND_SECRET", "POSTMARK_WEBHOOK_SECRET", "UPSTASH_REDIS_REST_TOKEN", "TWILIO_AUTH_TOKEN", "GOOGLE_OAUTH_CLIENT_SECRET", "SUPABASE_JWT_SECRET", "STORAGE_S3_SECRET_ACCESS_KEY"]) {
     const v = env.raw[name];
     if (v && v.length >= 12 && !v.startsWith("dev-only")) registerSecretValue(v);
   }
@@ -162,6 +165,7 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     integrations,
     engine,
     rateLimits,
+    uploadGrants: new UploadGrants(env.SESSION_SECRET),
     kick,
     drain,
     close: () => { clearInterval(suppressionRefresh); return handle.close(); },

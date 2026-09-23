@@ -39,6 +39,7 @@ export const SubjectType = z.enum([
   "policy",
   "ai_run",
   "business_calendar",
+  "document",
 ]);
 export type SubjectType = z.infer<typeof SubjectType>;
 

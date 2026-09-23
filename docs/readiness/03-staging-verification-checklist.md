@@ -9,6 +9,13 @@ Run on the staging deployment after the accounts in `docs/spec/13` exist and `do
 - [ ] Worker process running with `WORKER_DATABASE_URL` (as `ros_worker`); `/healthz` reports `worker: external`.
 - [ ] Boot check passes: the API connects as `ros_app`; "refusing to start" never appears.
 
+## 1a. Résumé storage (decision 2; `docs/runbooks/resume-storage.md`)
+
+- [ ] `STORAGE_PROVIDER=supabase` on Vercel and Railway; bucket `resumes` is Private with an 8 MB limit and the four allowed types; `SUPABASE_SERVICE_ROLE_KEY` still absent everywhere.
+- [ ] A browser apply with a PDF lands under `quarantine/` and then under the company prefix; the row goes `quarantined` → `clean`; the owner opens it from the candidate page and `document.read` is audited.
+- [ ] A renamed program is refused (`executable`), the EICAR file is refused (`infected`), both removed from the bucket; a fulfilled deletion removes the file and audits `document.deleted`.
+- [ ] No `connect-src` policy report names the storage origin; no public URL exists for any object.
+
 ## 2. Database
 
 - [ ] `scripts/staging-db-setup.sh` run by the founder on her own machine: migrations applied, `ros_app` and `ros_worker` passwords set, Vault grants applied, both roles verified by the script (evidence: the script's `verified:` lines, pasted without the connection strings).

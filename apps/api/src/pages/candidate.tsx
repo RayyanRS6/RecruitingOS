@@ -2,18 +2,19 @@
 /** @jsxImportSource hono/jsx */
 import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { ApplyRequest, CandidateSmsPreference, type RolePacket } from "@ros/contracts";
-import { ALLOWED_RESUME_TYPES, MAX_RESUME_BYTES, openScreen, requestHuman, runScreenTurn } from "@ros/agents";
+import { ApplyRequest, CandidateSmsPreference, MAX_RESUME_BYTES, inspectResumeFile, type RolePacket } from "@ros/contracts";
+import { openScreen, requestHuman, runScreenTurn } from "@ros/agents";
 import { STAGE_LABEL, audit, createDataRequest, emit, fulfilSmsOptOut, fulfilWithdrawal, humanResponseExpectation, loadBusinessCalendar, noticesFor, notify, openHumanReview, resolveJurisdictions, transition } from "@ros/core";
 import { CandidatePrivacyRequest } from "@ros/contracts";
 import { sendPrivacyAcknowledgment, sendPrivacyCompletion } from "@ros/agents";
-import { applications, candidates, communications, companies, dataRequests, interviews, rolePackets, roles, screens, withPlatform, withTenant } from "@ros/db";
+import { applications, candidates, communications, companies, dataRequests, interviews, rolePackets, roles, screens, uuidv7, withPlatform, withTenant } from "@ros/db";
 import { jobPostingJsonLd, refFor } from "@ros/integrations";
 import { randomToken } from "@ros/db";
+import { UPLOAD_GRANT_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS, checkUploadIntent, quarantineKey } from "../uploads";
 import type { Vars } from "../middleware/session";
 import type { Container } from "../container";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
-import { createApplication } from "../services/applications";
+import { createApplication, type ResumeInput } from "../services/applications";
 import { screenDeps } from "../services/screens";
 import { Layout, currentNonce } from "./layout";
 
@@ -102,8 +103,9 @@ function ApplyForm(props: { company: { slug: string; name: string }; role: { id:
       <h1>Apply</h1>
       <p>Three minutes. Upload a resume, or answer four short questions instead.</p>
       {props.error ? <div class="err">{props.error}</div> : null}
-      <form method="post" enctype="multipart/form-data">
+      <form method="post" enctype="multipart/form-data" data-upload-intent={`/careers/${props.company.slug}/jobs/${props.role.id}/upload-intent`}>
         <input type="text" name="website" tabindex={-1} autocomplete="off" style="position:absolute;left:-10000px" aria-hidden="true" />
+        <input type="hidden" name="uploadGrant" value="" />
         <label for="firstName">First name</label>
         <input id="firstName" type="text" name="firstName" required value={v.firstName ?? ""} />
         <label for="lastName">Last name</label>
@@ -117,6 +119,7 @@ function ApplyForm(props: { company: { slug: string; name: string }; role: { id:
         <input id="locationText" type="text" name="locationText" value={v.locationText ?? ""} />
         <label for="resume">Resume (PDF, Word, or text; up to 8 MB)</label>
         <input id="resume" type="file" name="resume" accept=".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" />
+        <small id="upload-note" aria-live="polite"></small>
         <label for="noResume">No resume? Tell us about your most recent work and what you are looking for.</label>
         <textarea id="noResume" name="noResume" rows={4}>{v.noResume ?? ""}</textarea>
         {eligibility.length ? <h2>A few quick questions</h2> : null}
@@ -143,9 +146,35 @@ function ApplyForm(props: { company: { slug: string; name: string }; role: { id:
         <input type="hidden" name="noticeVersionsShown" value={props.notices.map((n) => `${n.key}@${n.version}`).join(",")} />
         <button class="btn" type="submit">Send my application</button>
       </form>
+      <script nonce={currentNonce()} dangerouslySetInnerHTML={{ __html: APPLY_UPLOAD_JS }} />
     </Layout>
   );
 }
+
+/**
+ * Direct-to-storage upload (founder decision 2): with script, the résumé goes from the browser straight to storage
+ * under a short-lived, single-object authorization and the form carries only a sealed grant; without script, or if
+ * the upload fails, the form posts the file itself as before. Plain ES5, no inline handlers (the policy forbids them),
+ * no third-party code, nothing about the person leaves the page except the file's name, size and type.
+ */
+const APPLY_UPLOAD_JS = `(function(){
+var form=document.querySelector('form[data-upload-intent]');if(!form||!window.fetch||!window.FormData){return;}
+var input=form.querySelector('input[type=file][name=resume]');var grant=form.querySelector('input[name=uploadGrant]');var note=document.getElementById('upload-note');var submit=form.querySelector('button[type=submit]');
+if(!input||!grant){return;}
+var busy=false;
+function say(t){if(note){note.textContent=t;}}
+function fallback(file){form.removeAttribute('data-upload-intent');if(file.size>4*1024*1024){say('The direct upload did not work and files over 4 MB cannot be sent another way. Please try again in a moment.');busy=false;if(submit){submit.disabled=false;}return;}form.submit();}
+form.addEventListener('submit',function(ev){
+if(busy){ev.preventDefault();return;}
+var file=input.files&&input.files[0];if(!file||grant.value){return;}
+ev.preventDefault();busy=true;if(submit){submit.disabled=true;}say('Uploading your resume\u2026');
+fetch(form.getAttribute('data-upload-intent'),{method:'POST',headers:{'content-type':'application/json'},credentials:'same-origin',body:JSON.stringify({filename:file.name,size:file.size,type:file.type})})
+.then(function(r){return r.json().then(function(j){if(!r.ok){throw new Error((j&&j.error&&j.error.message)||'The upload was refused.');}return j;});})
+.then(function(j){return fetch(j.url,{method:j.method,headers:j.headers,body:file}).then(function(r){if(!r.ok){throw new Error('The upload did not complete.');}grant.value=j.grant;});})
+.then(function(){input.value='';say('Resume uploaded.');busy=false;if(submit){submit.disabled=false;}form.submit();})
+.catch(function(e){say((e&&e.message)||'The upload did not work.');fallback(file);});
+});
+})();`;
 
 candidatePages.get("/careers/:slug/jobs/:roleId/apply", async (c) => {
   const container = c.get("container");
@@ -155,6 +184,27 @@ candidatePages.get("/careers/:slug/jobs/:roleId/apply", async (c) => {
   // Funnel measurement without identity (correction 14): a random per-visit reference, no cookie, no candidate data, no client script.
   void container.integrations.analytics.capture({ name: "application_started", subjectRef: randomToken(12), companyRef: refFor(job.company.id, container.integrations.analyticsSalt), at: new Date().toISOString(), properties: { source: "careers_page" } }).catch(() => undefined);
   return c.html(<ApplyForm company={job.company} role={job.role} packet={job.packet} notices={notices} />);
+});
+
+/**
+ * Step one of a direct upload: the browser describes the file (name, size, type) and receives a short-lived
+ * authorization to put exactly one object under a quarantine key, plus the sealed grant the form will carry.
+ */
+candidatePages.post("/careers/:slug/jobs/:roleId/upload-intent", rateLimit(POLICIES.apply), async (c) => {
+  const container = c.get("container");
+  const job = await loadJob(container.db, c.req.param("slug") ?? "", c.req.param("roleId") ?? "");
+  if (!job || job.role.status !== "open") return c.json({ error: { code: "not_found", message: "This role is not accepting applications." } }, 404);
+  let raw: unknown = null;
+  try { raw = await c.req.json(); } catch { raw = null; }
+  const intent = checkUploadIntent(raw);
+  if (!intent.ok) return c.json({ error: { code: "invalid_file", message: intent.error } }, 400);
+  const uploadId = uuidv7();
+  const key = quarantineKey(job.company.id, job.role.id, uploadId, intent.extension);
+  const now = container.engine.clock();
+  const upload = await container.integrations.storage.createUploadUrl(key, { contentType: intent.mime, expiresSeconds: UPLOAD_URL_TTL_SECONDS });
+  const grant = container.uploadGrants.seal({ v: 1, companyId: job.company.id, roleId: job.role.id, uploadId, key, filename: intent.filename, mime: intent.mime, size: intent.size, exp: Math.floor(now.getTime() / 1000) + UPLOAD_GRANT_TTL_SECONDS });
+  await withTenant(container.db, job.company.id, (tx) => emit(tx, { type: "document.upload_authorized", companyId: job.company.id, actor: { kind: "candidate", id: "applicant" }, subject: { type: "role", id: job.role.id }, payload: { uploadId, extension: intent.extension, sizeBytes: intent.size } }));
+  return c.json({ uploadId, url: upload.url, method: upload.method, headers: upload.headers, grant, expiresAt: upload.expiresAt, maxBytes: MAX_RESUME_BYTES });
 });
 
 candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.apply), async (c) => {
@@ -188,15 +238,31 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
   }
   if (parsed.data.website) return c.html(<Layout title="Thanks"><h1>Thanks</h1><p>Your application was received.</p></Layout>); // honeypot: pretend success
 
-  let resume: { filename: string; mime: string; bytes: Uint8Array } | null = null;
-  const file = body.resume;
-  if (file && typeof file === "object" && "arrayBuffer" in file) {
-    const f = file as File;
-    if (f.size > 0) {
-      if (f.size > MAX_RESUME_BYTES) return c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} error="Resume files must be under 8 MB." />, 400);
-      const mime = f.type || "application/octet-stream";
-      if (!ALLOWED_RESUME_TYPES.has(mime) && !/\.(pdf|docx|txt|md)$/i.test(f.name)) return c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} error="Please upload a PDF, Word (.docx), or text file." />, 400);
-      resume = { filename: f.name, mime, bytes: new Uint8Array(await f.arrayBuffer()) };
+  let resume: ResumeInput | null = null;
+  const values = { firstName: parsed.data.firstName, lastName: parsed.data.lastName, email: parsed.data.email, phone: parsed.data.phone ?? "", locationText: parsed.data.locationText ?? "" };
+  const grantToken = str("uploadGrant");
+  if (grantToken) {
+    // The browser uploaded straight to storage; the grant names the object. It must be for this company and role.
+    const grant = container.uploadGrants.open(grantToken, container.engine.clock());
+    if (!grant || grant.companyId !== company.id || grant.roleId !== role.id) return c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} error="Your uploaded resume could not be attached (the upload expired). Please attach the file again." values={values} />, 400);
+    const head = await container.integrations.storage.head(grant.key);
+    if (!head || head.size === 0) return c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} error="Your uploaded resume did not arrive. Please attach the file again." values={values} />, 400);
+    if (head.size > MAX_RESUME_BYTES) {
+      await container.integrations.storage.delete(grant.key);
+      return c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} error="Resume files must be under 8 MB." values={values} />, 400);
+    }
+    resume = { kind: "stored", filename: grant.filename, mime: grant.mime, storageKey: grant.key, sizeBytes: head.size, via: "direct" };
+  } else {
+    const file = body.resume;
+    if (file && typeof file === "object" && "arrayBuffer" in file) {
+      const f = file as File;
+      if (f.size > 0) {
+        if (f.size > MAX_RESUME_BYTES) return c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} error="Resume files must be under 8 MB." values={values} />, 400);
+        const bytes = new Uint8Array(await f.arrayBuffer());
+        const look = inspectResumeFile(bytes, { mime: f.type, filename: f.name });
+        if (!look.ok) return c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} error={look.reason === "unsupported_type" || look.reason === "type_mismatch" ? "Please upload a PDF, Word (.docx), or text file." : `That file cannot be used: ${look.detail}.`} values={values} />, 400);
+        resume = { kind: "bytes", filename: f.name, mime: look.mime, bytes, via: "server" };
+      }
     }
   }
   if (!resume && !parsed.data.noResumeAnswers) {

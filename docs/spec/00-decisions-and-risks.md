@@ -63,7 +63,7 @@ Severity: **High** (fix before any real candidate data), **Medium** (fix in rele
 | S3 | ~~Integration credentials with application-side encryption~~ **Closed in slice 3**: a managed secret store (Supabase Vault) replaces application-side cryptography; verification on a real project pending D23. | High | Implement AES-256-GCM envelope encryption with key ids before the calendar connection ships; never log tokens; rotate on disconnect. |
 | S4 | Candidate tokens in URLs (`/c/status/:token`, `/c/screen/:token`) are written to request logs by the Hono logger and may leak through the `Referer` header to third parties (links on the page). | Medium | Redact path tokens in logs; set `Referrer-Policy: no-referrer` on candidate pages; add `robots: noindex`; give screen and schedule tokens expiries (status tokens stay long-lived by design, and can be rotated by the candidate from the status page). |
 | S5 | The in-memory rate limiter does not work across more than one API process and keys on `X-Forwarded-For` without a trusted-proxy check. | Medium | Move limits to Postgres (a `rate_limits` table with a sliding window) or the platform's edge rate limiting; trust the forwarding header only from the platform's proxy. |
-| S6 | Resume parsing (PDF and DOCX) runs in the API request path on untrusted files; no malware scanning. | Medium | Move text extraction into the worker (`application_intake` step `extract`), cap CPU time and memory, reject files over 8 MB (already), keep the scanning hook as a no-op adapter with status `disabled` and say so in Setup. |
+| S6 | Resume parsing (PDF and DOCX) runs in the API request path on untrusted files; no malware scanning. | Medium | **Done 22 Sep (decision 2):** files are quarantined and parsed only by the worker after a signature check and a scan (`application_intake` step `validate`); the 8 MB limit stays; the scanner is a fake with status `fake` until a real engine is authorized (real-data blocker 8). |
 | S7 | Candidate pages use inline styles and one inline `onsubmit`; `secureHeaders()` sets a default CSP that would block them if tightened. | Medium | Move the inline handler to a small script with a nonce; set a CSP with nonces on candidate pages and the web app. |
 | S8 | CSRF: state-changing JSON routes rely on `SameSite=Lax` cookies plus CORS. Candidate form posts are unauthenticated by design (token in path). | Low | Keep; add an `Origin` check on `/api/*` mutations; candidate forms add a per-render CSRF token. |
 | S9 | Email-in intake: anyone who learns an intake address can create applications; parsed text goes to the model. | Low | Rate limit per intake address; mark email-in applications with the source; the fairness rules treat content as data; add the injection cases to the eval suite (already partly covered). |
@@ -593,3 +593,13 @@ echo, percent-encodes the password and replaces exactly one placeholder inside t
 encoder on standard input, never as an argument, in history, on disk or in output), refuses a string whose placeholder is
 missing or repeated before the password is asked for, and is covered by `packages/db/src/connection-string.test.ts`
 (special characters, exact placeholder matching, refusals, no secret in any error message).
+
+Decision 2 build record (22 Sep): the Supabase Storage adapter (`packages/integrations/src/storage/supabase.ts`, S3
+protocol, signature version 4 without a cloud SDK, the project's storage-only S3 keys and never the service-role key)
+with direct browser uploads under five-minute single-object authorizations, a quarantine key per upload, worker-side
+inspection by file signature and structure (`packages/contracts/src/security/file-inspection.ts`), a scanner adapter
+(fake until a real engine is authorized), promotion to a random tenant- and candidate-scoped key, audited two-minute
+download links for staff, and removal with an audit record on deletion. Runbook `docs/runbooks/resume-storage.md`;
+tests `sigv4.test.ts`, `storage.test.ts`, `file-inspection.test.ts`, `storage-uploads.test.ts`. One honest caveat: the
+provider's S3 access keys are storage-only but reach every bucket in the project, so the project holds exactly one
+bucket for this application. The staging bucket and keys are a founder action (runbook §"The staging bucket").

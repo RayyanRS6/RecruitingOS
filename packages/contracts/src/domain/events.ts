@@ -10,7 +10,7 @@ export const EventType = z.enum([
   "role.approved", "role.opened", "role.paused", "role.resumed", "role.filled", "role.closed",
   "posting.requested", "posting.published", "posting.awaiting_verification", "posting.manual_action_required", "posting.not_connected", "posting.failed", "posting.expired", "posting.spend_recorded",
   "application.received", "application.acknowledged", "application.duplicate_detected", "candidate.created", "candidate.merged",
-  "resume.ingested", "resume.extraction_failed", "eligibility.evaluated", "application.ineligible", "application.hold_reminded", "application.triaged",
+  "resume.ingested", "resume.extraction_failed", "document.upload_authorized", "document.uploaded", "document.validated", "document.rejected", "document.deleted", "eligibility.evaluated", "application.ineligible", "application.hold_reminded", "application.triaged",
   "assessment.created", "application.stage_changed", "application.inactive", "application.withdrawn", "application.rejected",
   "application.moved_to_talent_pool",
   "screen.invited", "screen.started", "screen.completed", "screen.abandoned", "screen.expired", "screen.human_requested", "screen.assessed",
