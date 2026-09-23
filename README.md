@@ -28,3 +28,4 @@ Set `AI_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` to use real models; the defa
 ## Scripts
 
 `pnpm test`, `pnpm typecheck`, `pnpm eval` (evaluation suites; `AI_PROVIDER=anthropic pnpm eval` for real models), `pnpm db:migrate`, `pnpm db:seed`, `pnpm --filter @ros/api worker` (production worker entry).
+
