@@ -71,10 +71,11 @@ try {
     say("passwords set", "done", "ros_app and ros_worker can log in with the new passwords; any earlier ones no longer work");
     // A rotation after an exposure must also end whatever was already connected with the old passwords.
     try {
-      const ended = (await ownerPool.query("select count(pg_terminate_backend(pid))::int as n from pg_stat_activity where usename in ('ros_app','ros_worker') and pid <> pg_backend_pid()")).rows[0] as { n: number };
-      say("earlier sessions ended", "done", `${ended.n} session${ended.n === 1 ? "" : "s"} of the application roles`);
-    } catch {
-      say("earlier sessions ended", "skipped", "the owner may not end other roles' sessions here; none should exist before the strings are entered anywhere");
+      const ended = (await ownerPool.query("select count(*) filter (where pg_terminate_backend(pid))::int as n, count(*)::int as total from pg_stat_activity where usename in ('ros_app','ros_worker') and pid <> pg_backend_pid()")).rows[0] as { n: number; total: number };
+      say("earlier sessions ended", "done", `${ended.n} of ${ended.total} session${ended.total === 1 ? "" : "s"} of the application roles`);
+    } catch (err) {
+      if ((err as { code?: string }).code === "42501") say("earlier sessions ended", "skipped", "the owner is not permitted to end other roles' sessions on this server; if the old strings were ever entered anywhere, ask Supabase support to end them");
+      else throw err;
     }
   } else {
     const noLogin = roles.filter((r) => r.rolname !== "app_tenant" && !r.rolcanlogin).map((r) => r.rolname);
@@ -149,14 +150,21 @@ const delivery = process.env.ROS_PROVISION_DELIVERY === "clipboard" ? "clipboard
 if (delivery === "clipboard") {
   console.log("\nThe two connection strings are ready. They are not shown; they go to the clipboard one at a time for 1Password (vault: Recruiting OS Staging).");
   console.log("Later they go where they belong: DATABASE_URL into Vercel (Preview environment, sensitive); WORKER_DATABASE_URL into Railway (sealed); both with DATABASE_SSL_CA.\n");
-  const result = await deliverToClipboard(
-    [
-      { name: "DATABASE_URL", value: appUrl, where: "It goes into Vercel later." },
-      { name: "WORKER_DATABASE_URL", value: workerUrl, where: "It goes into Railway later." },
-    ],
-    macClipboardIo(),
-  );
-  if (result.timedOut) process.exit(1);
+  let result: { delivered: string[]; timedOut: boolean };
+  try {
+    result = await deliverToClipboard(
+      [
+        { name: "DATABASE_URL", value: appUrl, where: "It goes into Vercel later." },
+        { name: "WORKER_DATABASE_URL", value: workerUrl, where: "It goes into Railway later." },
+      ],
+      macClipboardIo(),
+    );
+  } catch {
+    console.error("provision: the clipboard could not be written; nothing was delivered and the clipboard was cleared. Run the setup again (it sets fresh passwords), with --print if this Mac has no clipboard tool.");
+    process.exit(1);
+  }
+  if (!vaultGranted) console.log("Reminder: the Vault grants are still pending (see above); run: bash scripts/staging-db-setup.sh grants after enabling Supabase Vault.");
+  process.exit(result.timedOut ? 1 : 0);
 } else {
   console.log("\nStore these two values in 1Password (vault: Recruiting OS Staging) now. They are shown once and never again.");
   console.log("Then enter them where they belong: DATABASE_URL into Vercel (Preview environment, sensitive); WORKER_DATABASE_URL into Railway (sealed).");
