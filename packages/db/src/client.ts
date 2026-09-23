@@ -53,8 +53,13 @@ export function tlsOptionsFromEnv(env: Record<string, string | undefined> = proc
   return { ca: pem, rejectUnauthorized: true };
 }
 
-/** Postgres error codes that mean "this already exists": the marks a half-applied migration leaves behind. */
-export const DUPLICATE_OBJECT_CODES = new Set(["42P07", "42710", "42701", "42P06", "42723", "42P04", "23505", "42P16"]);
+/**
+ * Postgres error codes that mean "this object already exists": the marks a half-applied migration leaves behind.
+ * Deliberately narrow: a unique violation (23505) is accepted only from an INSERT (a seed row already present), never
+ * from CREATE UNIQUE INDEX or ADD CONSTRAINT, where it means the data is not unique; 42P16 is a definition error, not
+ * a duplicate.
+ */
+export const DUPLICATE_OBJECT_CODES = new Set(["42P07", "42710", "42701", "42P06", "42723", "42P04"]);
 
 /** Marks an error with the index of the statement that raised it, for the migration report. */
 function tagStatement(err: unknown, index: number): unknown {
@@ -62,11 +67,16 @@ function tagStatement(err: unknown, index: number): unknown {
   return err;
 }
 
-export function isDuplicateObjectError(err: unknown): boolean {
+export function isDuplicateObjectError(err: unknown, statement = ""): boolean {
   const e = err as { code?: string; message?: string } | null;
   if (!e) return false;
   if (e.code && DUPLICATE_OBJECT_CODES.has(e.code)) return true;
-  return !e.code && typeof e.message === "string" && /already exists|duplicate key value/i.test(e.message);
+  if (e.code === "23505") return /^\s*INSERT\b/i.test(statement);
+  if (!e.code && typeof e.message === "string") {
+    if (/already exists/i.test(e.message)) return true;
+    if (/duplicate key value/i.test(e.message)) return /^\s*INSERT\b/i.test(statement);
+  }
+  return false;
 }
 
 /**
@@ -113,7 +123,7 @@ export async function createDb(opts: CreateDbOptions = {}): Promise<DbHandle> {
                 await client.query(statements[i]!);
                 await client.query("RELEASE SAVEPOINT ros_stmt");
               } catch (err) {
-                if (!isDuplicateObjectError(err)) throw tagStatement(err, i);
+                if (!isDuplicateObjectError(err, statements[i]!)) throw tagStatement(err, i);
                 await client.query("ROLLBACK TO SAVEPOINT ros_stmt");
                 await client.query("RELEASE SAVEPOINT ros_stmt");
                 skipped.push(i);
@@ -164,7 +174,7 @@ export async function createDb(opts: CreateDbOptions = {}): Promise<DbHandle> {
               await tx.exec(statements[i]!);
               await tx.exec("RELEASE SAVEPOINT ros_stmt");
             } catch (err) {
-              if (!isDuplicateObjectError(err)) throw tagStatement(err, i);
+              if (!isDuplicateObjectError(err, statements[i]!)) throw tagStatement(err, i);
               await tx.exec("ROLLBACK TO SAVEPOINT ros_stmt");
               await tx.exec("RELEASE SAVEPOINT ros_stmt");
               skipped.push(i);

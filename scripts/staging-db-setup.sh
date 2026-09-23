@@ -23,7 +23,7 @@ command -v pnpm >/dev/null 2>&1 || { echo "pnpm is not on the PATH of this termi
 MODE="${1:-full}"
 case "$MODE" in full|grants) ;; *) echo "Usage: bash scripts/staging-db-setup.sh [full|grants]"; exit 1 ;; esac
 # shellcheck source=scripts/lib/db-owner-url.sh
-. "$(dirname "$0")/lib/db-owner-url.sh"
+. scripts/lib/db-owner-url.sh
 echo "Recruiting OS: staging database setup (${MODE} mode). Safe to run again; see the notes at the top of this script."
 echo
 read_owner_url || exit 1
@@ -35,7 +35,7 @@ if [ "$MODE" = "grants" ]; then
   exit $?
 fi
 
-gen() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 40; }
+gen() { local s; s="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 40 || true)"; [ "${#s}" -eq 40 ] || { echo 'could not generate a password'; exit 1; }; printf '%s' "$s"; }
 export ROS_APP_PASSWORD="$(gen)" ROS_WORKER_PASSWORD="$(gen)"
 echo "1/3 applying migrations (already-applied ones are skipped; an interrupted one is completed)"
 if ! pnpm --silent db:migrate; then

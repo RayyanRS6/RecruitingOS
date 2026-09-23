@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 if ! command -v node >/dev/null 2>&1 && [ -d "$HOME/.local/its-toolchain/node/bin" ]; then export PATH="$HOME/.local/its-toolchain/node/bin:$PATH"; fi
 command -v pnpm >/dev/null 2>&1 || { echo "pnpm is not on the PATH of this terminal."; exit 1; }
 # shellcheck source=scripts/lib/db-owner-url.sh
-. "$(dirname "$0")/lib/db-owner-url.sh"
+. scripts/lib/db-owner-url.sh
 echo "Recruiting OS: staging database status (read-only)."
 echo
 read_owner_url || exit 1

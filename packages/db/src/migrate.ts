@@ -52,7 +52,7 @@ async function ensureLedger(handle: DbHandle): Promise<Set<string>> {
 
 export class MigrationError extends Error {
   constructor(public readonly file: string, public readonly statementIndex: number, public readonly statementCount: number, public readonly code: string | undefined, message: string, public readonly statementHead: string) {
-    super(`migration ${file} failed at statement ${statementIndex + 1} of ${statementCount}${code ? ` (${code})` : ""}: ${message}`);
+    super(statementIndex >= statementCount ? `migration ${file} ${message}` : `migration ${file} failed at statement ${statementIndex + 1} of ${statementCount}${code ? ` (${code})` : ""}: ${message}`);
   }
 }
 
@@ -81,6 +81,7 @@ export async function migrate(handle: DbHandle, opts: { log?: (s: string) => voi
     } catch (err) {
       const e = err as { code?: string; message?: string; statementIndex?: number };
       const at = typeof e.statementIndex === "number" ? e.statementIndex : locateFailure(err, file.statements);
+      if (at === file.statements.length) throw new MigrationError(file.name, at, file.statements.length, e.code, `could not record it in _migrations after applying it: ${String(e.message ?? err)}`, ledgerRow);
       throw new MigrationError(file.name, at, file.statements.length, e.code, String(e.message ?? err), file.statements[at]?.slice(0, 80) ?? "");
     }
     appliedNow.push(file.name);

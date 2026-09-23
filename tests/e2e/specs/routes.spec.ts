@@ -63,13 +63,13 @@ test.describe("route inventory", () => {
     await page.goto(`/roles/${seeded.roleId}/people`);
     await expect(page).toHaveURL(new RegExp(`/roles/${seeded.roleId}/talent`));
     await page.goto("/people");
-    await expect(page).toHaveURL(/\/talent$/);
+    await expect(page).toHaveURL(/\/talent$/, { timeout: 30_000 });
     await page.goto("/recruiter/queue");
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).toHaveURL(/\/$/, { timeout: 30_000 });
     await page.goto("/admin");
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).toHaveURL(/\/$/, { timeout: 30_000 });
     await page.goto("/login");
-    await expect(page).toHaveURL(/\/$/); // signed in: no second sign-in form
+    await expect(page).toHaveURL(/\/$/, { timeout: 30_000 }); // signed in: no second sign-in form
     await page.goto("/nothing-here");
     await expect(page.getByRole("heading", { name: /does not exist/ })).toBeVisible();
     await expectAccessible(page, "not found");

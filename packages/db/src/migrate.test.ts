@@ -100,13 +100,75 @@ describe("migration runner: atomic files, repair of an interrupted file, status"
     expect(await migrate(handle, { dir })).toEqual(["0005_bad.sql"]);
   });
 
-  it("recognises duplicate-object errors by code and, without a code, by message", () => {
+  it("recognises duplicate-object errors by code and, without a code, by message; a unique violation counts only for an INSERT", () => {
     expect(isDuplicateObjectError({ code: "42P07", message: "relation exists" })).toBe(true);
-    expect(isDuplicateObjectError({ code: "23505", message: "duplicate key value violates unique constraint" })).toBe(true);
+    expect(isDuplicateObjectError({ code: "23505", message: "duplicate key value violates unique constraint" }, "INSERT INTO plans (key) VALUES ('starter')")).toBe(true);
+    expect(isDuplicateObjectError({ code: "23505", message: "could not create unique index" }, "CREATE UNIQUE INDEX x ON t (a)")).toBe(false);
+    expect(isDuplicateObjectError({ code: "23505", message: "could not create unique index" }, "ALTER TABLE t ADD CONSTRAINT u UNIQUE (a)")).toBe(false);
+    expect(isDuplicateObjectError({ code: "42P16", message: "column is in a primary key" })).toBe(false);
     expect(isDuplicateObjectError({ code: "42601", message: "syntax error" })).toBe(false);
     expect(isDuplicateObjectError({ message: 'relation "x" already exists' })).toBe(true);
+    expect(isDuplicateObjectError({ message: "duplicate key value violates unique constraint" }, "INSERT INTO t VALUES (1)")).toBe(true);
+    expect(isDuplicateObjectError({ message: "duplicate key value violates unique constraint" }, "CREATE UNIQUE INDEX i ON t (a)")).toBe(false);
     expect(isDuplicateObjectError({ message: "permission denied" })).toBe(false);
     expect(isDuplicateObjectError(null)).toBe(false);
+  });
+
+  it("repair never hides bad data or a bad definition: a unique index over duplicate rows and an invalid ALTER fail even in the first pending file", async () => {
+    await handle.execRaw(`CREATE TABLE t_dup (a int); INSERT INTO t_dup VALUES (1), (1);`);
+    write("0006_unique.sql", `CREATE UNIQUE INDEX t_dup_a ON t_dup (a);`);
+    let error: MigrationError | null = null;
+    try {
+      await migrate(handle, { dir });
+    } catch (e) {
+      error = e as MigrationError;
+    }
+    expect(error?.file).toBe("0006_unique.sql");
+    expect(error?.code).toBe("23505");
+    expect(await ledger()).not.toContain("0006_unique.sql");
+    write("0006_unique.sql", `DELETE FROM t_dup WHERE a = 1;
+--> statement-breakpoint
+CREATE UNIQUE INDEX t_dup_a ON t_dup (a);`);
+    expect(await migrate(handle, { dir })).toEqual(["0006_unique.sql"]);
+    await handle.execRaw(`CREATE TABLE t_pk (id int primary key)`);
+    write("0007_invalid.sql", `ALTER TABLE t_pk ALTER COLUMN id DROP NOT NULL;`);
+    await expect(migrate(handle, { dir })).rejects.toMatchObject({ file: "0007_invalid.sql", code: "42P16" });
+    expect(await ledger()).not.toContain("0007_invalid.sql");
+    write("0007_invalid.sql", `ALTER TABLE t_pk ADD COLUMN note text;`);
+    expect(await migrate(handle, { dir })).toEqual(["0007_invalid.sql"]);
+  });
+
+  it("a seed row already present is skipped in the first pending file, and a failure to record the file is named as such", async () => {
+    write("0008_seed.sql", `CREATE TABLE t_seed (k text primary key);
+--> statement-breakpoint
+INSERT INTO t_seed (k) VALUES ('starter');`);
+    await handle.execRaw(`CREATE TABLE t_seed (k text primary key); INSERT INTO t_seed (k) VALUES ('starter');`);
+    const logs: string[] = [];
+    expect(await migrate(handle, { dir, log: (s) => logs.push(s) })).toEqual(["0008_seed.sql"]);
+    expect(logs.some((l) => l.includes("had 2 of 2 statements already applied"))).toBe(true);
+    // a ledger failure (the row already present) is reported as a recording failure, not as a statement number past the end
+    await handle.execRaw(`DELETE FROM _migrations WHERE name = '0008_seed.sql'`);
+    await handle.execRaw(`INSERT INTO _migrations (name) VALUES ('0009_taken.sql')`);
+    await handle.execRaw(`DELETE FROM _migrations WHERE name = '0009_taken.sql'`);
+    write("0009_ledger.sql", `CREATE TABLE t_ledger (id int);`);
+    await handle.execRaw(`INSERT INTO _migrations (name) VALUES ('0009_ledger.sql')`);
+    await handle.execRaw(`DELETE FROM _migrations WHERE name = '0009_ledger.sql'`);
+    // simulate a concurrent run that recorded the file between our read and our insert
+    const original = handle.execAtomic.bind(handle);
+    handle.execAtomic = async (statements, o) => {
+      await handle.execRaw(`INSERT INTO _migrations (name) VALUES ('0009_ledger.sql') ON CONFLICT DO NOTHING`);
+      return original(statements, o);
+    };
+    let error: MigrationError | null = null;
+    try {
+      await migrate(handle, { dir });
+    } catch (e) {
+      error = e as MigrationError;
+    } finally {
+      handle.execAtomic = original;
+    }
+    expect(error?.message).toContain("could not record it in _migrations");
+    expect(error?.message).not.toMatch(/statement \d+ of/);
   });
 
   it("lists the objects a migration creates for the status report", () => {
