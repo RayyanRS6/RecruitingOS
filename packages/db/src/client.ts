@@ -46,11 +46,36 @@ export type CreateDbOptions = {
  * (a path, on a person's machine) or DATABASE_SSL_CA (the certificate text, in a hosted environment). Verification
  * is never switched off here.
  */
-export function tlsOptionsFromEnv(env: Record<string, string | undefined> = process.env, caFile?: string | null): { ca: string; rejectUnauthorized: true } | undefined {
+export type TlsTrust = { ca: string; rejectUnauthorized: true };
+
+export function tlsOptionsFromEnv(env: Record<string, string | undefined> = process.env, caFile?: string | null): TlsTrust | undefined {
   const file = caFile ?? env.DATABASE_SSL_CA_FILE;
   const pem = file ? readFileSync(file, "utf8") : env.DATABASE_SSL_CA;
   if (!pem || !pem.includes("BEGIN CERTIFICATE")) return undefined;
   return { ca: pem, rejectUnauthorized: true };
+}
+
+/**
+ * The driver options for a connection string plus our own TLS trust. node-postgres parses the connection string
+ * AFTER the explicit options and lets the parsed values win: an `sslmode` in the string becomes `ssl: {}` and silently
+ * discards the certificate we passed, so verification runs against the operating system's store and fails with
+ * SELF_SIGNED_CERT_IN_CHAIN (found on the founder's machine, 22 Sep). So when we hold a certificate, the string
+ * loses its `sslmode` and `sslrootcert` (a file named there is read into the trust instead) and the driver gets one
+ * `ssl` object: the certificate, full verification, host name checked. `sslmode=disable` is refused: the owner
+ * credential never travels in the clear.
+ */
+export function connectionConfig(url: string, trust: TlsTrust | undefined): { connectionString: string; ssl?: TlsTrust } {
+  const u = new URL(url);
+  const mode = u.searchParams.get("sslmode");
+  if (mode === "disable" || mode === "allow") throw new Error(`sslmode=${mode} is not allowed: connections to the database always verify TLS`);
+  const rootCertFile = u.searchParams.get("sslrootcert");
+  const ca = rootCertFile ? readFileSync(rootCertFile, "utf8") : trust?.ca;
+  if (!ca) return { connectionString: url };
+  u.searchParams.delete("sslmode");
+  u.searchParams.delete("sslrootcert");
+  u.searchParams.delete("sslcert");
+  u.searchParams.delete("sslkey");
+  return { connectionString: u.toString(), ssl: { ca, rejectUnauthorized: true } };
 }
 
 /**
@@ -94,9 +119,8 @@ export async function createDb(opts: CreateDbOptions = {}): Promise<DbHandle> {
   if (url) {
     const { drizzle } = await import("drizzle-orm/node-postgres");
     const pg = await import("pg");
-    const ssl = tlsOptionsFromEnv(process.env, opts.sslCaFile);
     const max = Math.max(1, Math.min(20, Number(process.env.DATABASE_POOL_MAX ?? "5") || 5));
-    const pool = new pg.default.Pool({ connectionString: url, max, ...(ssl ? { ssl } : {}) });
+    const pool = new pg.default.Pool({ ...connectionConfig(url, tlsOptionsFromEnv(process.env, opts.sslCaFile)), max });
     pool.on("connect", (client) => {
       client.query("SET app.platform = 'on'").catch(() => {
         /* the boot check reports a connection that cannot enter platform mode */

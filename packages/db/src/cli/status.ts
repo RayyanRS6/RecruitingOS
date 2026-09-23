@@ -9,8 +9,8 @@ import { describeCertificate, fingerprintOfDer, smallPool, withSsl } from "./pro
  * Read-only report of the staging database for the founder (22 Sep 2026): which migrations are applied, whether the
  * next one was interrupted halfway, whether the application roles exist and can log in, whether Supabase Vault is
  * present and granted. Changes nothing. Prints no connection string, password or row data, so the output can be
- * pasted back in full. Exit code 0 when everything is in place, 3 when setup still has work to do, 2 when it could
- * not connect.
+ * pasted back in full. Exits 0 when everything is in place and non-zero otherwise (3 while setup still has work to
+ * do, 2 when it could not connect; pnpm may flatten the code it shows).
  */
 const owner = process.env.MIGRATE_DATABASE_URL;
 if (!owner) {

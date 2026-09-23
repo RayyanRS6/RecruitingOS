@@ -627,3 +627,11 @@ state (`app.platform`), which transaction pooling does not keep: the application
 every platform read runs inside `withPlatform` (readiness blocker 2b). (4) Vault's function signatures differ from the
 ones the grants named; the grants now resolve them at run time. (5) The pooler may refuse a freshly set password for a
 few seconds; verification retries for thirty. Nothing in any of this resets or deletes the staging database.
+
+Staging database setup, third revision (22 Sep): the founder's rerun of the read-only status report read the
+downloaded certificate but the driver still refused the chain. Cause: node-postgres lets a connection string's
+`sslmode` override an explicit `ssl` option, discarding the certificate. The client now removes `sslmode` and
+`sslrootcert` from the string whenever it holds a certificate and passes one trust object (certificate, full
+verification, host name checked); `sslmode=disable` is refused. Proven through the founder's exact command path
+against the staging pooler with a deliberately wrong password (TLS verified, password refused). Tests
+`packages/db/src/tls.test.ts` pin the driver behaviour and the fix.

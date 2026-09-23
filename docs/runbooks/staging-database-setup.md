@@ -35,6 +35,15 @@ The hosted environments need the same trust: alongside `DATABASE_URL` in Vercel 
 enter `DATABASE_SSL_CA` (not sensitive) with the certificate's text. `DATABASE_SSL_CA_FILE` is the path form for a
 person's machine.
 
+One driver detail, found on the founder's second run (22 Sep): node-postgres parses the connection string after the
+explicit options and lets the parsed values win, so an `sslmode` in the string turned the certificate we passed into
+an empty `ssl` object, and verification ran against the operating system's store again. The client now strips
+`sslmode` (and `sslrootcert`, whose file it reads instead) from the string whenever it holds a certificate, and hands
+the driver one trust object: the certificate, full verification, host name checked. Proven through the exact
+`bash scripts/staging-db-status.sh` path against the staging pooler with a deliberately wrong password: with the
+certificate the server answers "password authentication failed" (TLS verified, then refused at the password);
+without it, the certificate refusal. `sslmode=disable` is refused outright.
+
 ## What the setup does, step by step, and what an interruption leaves behind
 
 | Step | What it does | If it fails here | Rerun |
