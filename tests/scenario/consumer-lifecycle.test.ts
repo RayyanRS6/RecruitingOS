@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { applications, assessments, rolePackets, roles, screens } from "@ros/db";
-import { FakeEmailAdapter } from "@ros/integrations";
+import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "../../apps/api/src/app";
 import { createContainer, type Container } from "../../apps/api/src/container";
 

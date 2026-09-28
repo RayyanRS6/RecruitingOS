@@ -1,6 +1,4 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
-import { users } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { signInStaff } from "./test-helpers";

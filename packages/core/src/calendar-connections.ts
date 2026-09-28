@@ -76,7 +76,7 @@ export async function availabilitySourceFor(q: Queryable, companyId: string, use
   const connection = await calendarConnectionFor(q, companyId, userId);
   const availability = await availabilityFor(q, companyId, userId);
   if (connection && connection.status === "live" && connection.secretRef) return { source: "calendar", connection, availability };
-  if (availability && availability.windows.length) return { source: "declared", connection, availability };
+  if (availability?.windows.length) return { source: "declared", connection, availability };
   return { source: "none", connection, availability };
 }
 
@@ -89,6 +89,6 @@ export async function membersWithCalendarStatus(q: Queryable, companyId: string)
   return rows.map((r) => {
     const conn = conns.filter((c) => c.userId === r.userId).find((c) => c.status === "live" || c.status === "manual_action_required") ?? conns.find((c) => c.userId === r.userId) ?? null;
     const a = avail.find((x) => x.userId === r.userId) ?? null;
-    return { ...r, calendar: conn ? { provider: conn.provider, status: conn.status, email: conn.externalAccountId, connectedAt: conn.connectedAt, lastError: conn.lastError, credentialsDeleted: publicConnection(conn).credentialsDeleted } : null, availability: a ? { timezone: a.timezone, windows: a.windows.length, bufferMinutes: a.bufferMinutes, maxPerDay: a.maxPerDay } : null, schedulable: !!(conn && conn.status === "live") || !!(a && a.windows.length) };
+    return { ...r, calendar: conn ? { provider: conn.provider, status: conn.status, email: conn.externalAccountId, connectedAt: conn.connectedAt, lastError: conn.lastError, credentialsDeleted: publicConnection(conn).credentialsDeleted } : null, availability: a ? { timezone: a.timezone, windows: a.windows.length, bufferMinutes: a.bufferMinutes, maxPerDay: a.maxPerDay } : null, schedulable: !!(conn && conn.status === "live") || !!(a?.windows.length) };
   });
 }

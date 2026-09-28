@@ -91,7 +91,7 @@ export class SupabaseIdentityProvider implements IdentityProvider {
     // The service returns the QR code as SVG markup; a data-URL prefix, if it ever sends one, is stripped so the page adds its own.
     const qr = r.totp.qr_code ?? null;
     const raw = qr ? (qr.startsWith("data:") ? decodeURIComponent(qr.replace(/^data:image\/svg\+xml[^,]*,/, "")) : qr) : null;
-    return { factorId: r.id, secret: r.totp.secret, uri: r.totp.uri, qrCodeSvg: raw && raw.includes("<svg") ? scalableSvg(raw) : null };
+    return { factorId: r.id, secret: r.totp.secret, uri: r.totp.uri, qrCodeSvg: raw?.includes("<svg") ? scalableSvg(raw) : null };
   }
   async challengeFactor(accessToken: string, factorId: string, _ctx?: { ip?: string }): Promise<{ challengeId: string; expiresAt: string }> {
     const r = await this.mfaRequest<{ id: string; expires_at?: number | string }>(accessToken, "POST", `/factors/${encodeURIComponent(factorId)}/challenge`, {});

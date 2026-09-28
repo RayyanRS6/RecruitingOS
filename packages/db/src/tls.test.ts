@@ -31,7 +31,7 @@ CMTyZKG3XEu5Ghl1LEnI3QmEKsqaCLv12BnVjbkSeZsMnevJPs1Ye6TjjJwdik5P
 o/bKiIz+Fq8=
 -----END CERTIFICATE-----`;
 /** What the driver receives: the certificate normalised to one trailing newline. */
-const NORM = PEM.trim() + "\n";
+const NORM = `${PEM.trim()}\n`;
 const TRUST = { ca: NORM, rejectUnauthorized: true as const };
 const URL_MODE = "postgresql://postgres.ref:pass@aws-0-us-west-2.pooler.supabase.com:5432/postgres?sslmode=verify-full";
 

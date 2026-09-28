@@ -28,10 +28,6 @@ export const SECRET_VALUE_PATTERNS: ReadonlyArray<RegExp> = [
   /("(?:access_token|refresh_token|client_secret|id_token|api_key|apikey|password|authorization|private_key)"\s*:\s*")([^"]*)(")/gi, // JSON text
 ];
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 /** Removes known secret shapes and every supplied value from a string. */
 export function redactText(text: string, values: Iterable<string> = []): string {
   let out = text;

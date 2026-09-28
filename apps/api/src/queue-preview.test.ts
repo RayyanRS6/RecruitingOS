@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { ESCALATION_PREVIEW_FIELDS, ESCALATION_PREVIEW_FORBIDDEN_KEYS, defaultUrgency, entitlements, genericSummary } from "@ros/core";
-import { applications, auditRecords, staffAccessGrants, users } from "@ros/db";
+import { applications, auditRecords, staffAccessGrants } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -15,7 +15,7 @@ import { signInAdmin, signInStaff } from "./test-helpers";
 const SENSITIVE_STRINGS = ["Maria", "Reyes", "maria.reyes", "555-0100", "$60", "working interview", "Dentrix", "Coastal Family"];
 
 function allKeys(value: unknown, out = new Set<string>()): Set<string> {
-  if (Array.isArray(value)) value.forEach((v) => allKeys(v, out));
+  if (Array.isArray(value)) for (const v of value) allKeys(v, out);
   else if (value && typeof value === "object") for (const [k, v] of Object.entries(value as Record<string, unknown>)) { out.add(k); allKeys(v, out); }
   return out;
 }

@@ -38,7 +38,7 @@ let probe: ReturnType<typeof smallPool> | null = null;
       const stream = (client as unknown as { connection?: { stream?: TLSSocket } }).connection?.stream;
       const peer = stream && typeof stream.getPeerCertificate === "function" ? stream.getPeerCertificate(true) : null;
       let root = peer;
-      for (let i = 0; root && root.issuerCertificate && root.issuerCertificate !== root && i < 6; i++) root = root.issuerCertificate;
+      for (let i = 0; root?.issuerCertificate && root.issuerCertificate !== root && i < 6; i++) root = root.issuerCertificate;
       if (root?.raw) {
         const fp = fingerprintOfDer(root.raw);
         console.log(`status: tls: the server's chain ends at "${root.subject?.CN ?? "?"}" (SHA-256 ${fp})${ca ? (fp === ca.fingerprint ? "; matches the certificate you provided" : "; DOES NOT match the certificate you provided") : ""}`);
@@ -73,7 +73,7 @@ try {
   const m = await migrationStatus(handle);
   console.log(`status: migrations applied: ${m.applied.length}${m.applied.length ? ` (last: ${m.applied[m.applied.length - 1]})` : ""}`);
   console.log(`status: migrations pending: ${m.pending.length}${m.pending.length ? ` (next: ${m.pending[0]})` : ""}`);
-  if (m.partial && m.partial.existing.length) {
+  if (m.partial?.existing.length) {
     console.log(`status: ${m.partial.file} was interrupted halfway: ${m.partial.existing.length} of ${m.partial.total} objects it creates already exist (${m.partial.existing.join(", ")}). The setup completes it safely when run again.`);
   }
   if (m.pending.length) todo.push("apply the pending migrations (run scripts/staging-db-setup.sh again)");

@@ -149,8 +149,8 @@ describe("content-security policy on candidate pages", () => {
   });
 
   it("reports are bounded, reviews need a real id, and a recurrence keeps the reviewer's note while asking for another look", async () => {
-    const longPath = "/" + "x".repeat(5000);
-    expect((await app.request("/api/csp-report", { method: "POST", headers: { "content-type": "application/csp-report" }, body: JSON.stringify({ "csp-report": { "document-uri": `http://localhost:3000${longPath}`, "violated-directive": "img-src", "blocked-uri": "https://" + "h".repeat(600) + ".example", "line-number": 12.5 } }) })).status).toBe(204);
+    const longPath = `/${"x".repeat(5000)}`;
+    expect((await app.request("/api/csp-report", { method: "POST", headers: { "content-type": "application/csp-report" }, body: JSON.stringify({ "csp-report": { "document-uri": `http://localhost:3000${longPath}`, "violated-directive": "img-src", "blocked-uri": `https://${"h".repeat(600)}.example`, "line-number": 12.5 } }) })).status).toBe(204);
     const [long] = (await container.db.select().from(cspReports)).filter((r) => r.documentPath.startsWith("/xxx"));
     expect(long.documentPath.length).toBeLessThanOrEqual(300);
     expect((long.blockedOrigin ?? "").length).toBeLessThanOrEqual(200);

@@ -222,7 +222,7 @@ describe("candidate privacy requests", () => {
     const before = (await container.db.select().from(dr)).length;
     const auditsBefore = (await container.db.select().from(auditRecords)).length;
     // a forged or truncated token is a 404 and writes nothing
-    expect((await form("/c/status/" + token.slice(0, -2) + "zz/privacy", { kind: "access" })).status).toBe(404);
+    expect((await form(`/c/status/${token.slice(0, -2)}zz/privacy`, { kind: "access" })).status).toBe(404);
     expect((await form("/c/status/not-a-token/privacy", { kind: "access" })).status).toBe(404);
     expect((await form("/c/status/not-a-token/withdraw", { confirm: "yes" })).status).toBe(404);
     expect((await form("/c/status/not-a-token/sms", { pref: "off" })).status).toBe(404);

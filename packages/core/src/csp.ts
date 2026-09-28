@@ -83,7 +83,7 @@ export function normalizeCspReports(body: unknown, userAgent: string | null | un
   }
   const out: NormalizedCspReport[] = [];
   for (const r of items) {
-    const documentPath = pathOnly(r["document-uri"] ?? r.documentURL ?? r["documentURL"]) ?? "/";
+    const documentPath = pathOnly(r["document-uri"] ?? r.documentURL ?? r.documentURL) ?? "/";
     const violated = String(r["violated-directive"] ?? r.violatedDirective ?? r["effective-directive"] ?? r.effectiveDirective ?? "").slice(0, 120);
     if (!violated) continue;
     out.push({

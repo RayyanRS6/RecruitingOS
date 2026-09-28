@@ -185,7 +185,7 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
 schedulePages.get("/c/schedule/:token/ics", async (c) => {
   const container = c.get("container");
   const b = await loadByToken(container.db, c.req.param("token") ?? "");
-  if (!b || !b.packet) return c.notFound();
+  if (!b?.packet) return c.notFound();
   if (b.iv.status !== "scheduled" || !b.iv.startsAt) return c.notFound();
   const ics = interviewIcs({ interview: b.iv, company: b.company, packet: b.packet, candidate: b.candidate, fromAddress: container.integrations.env.fromAddress, method: "REQUEST", appBaseUrl: container.env.APP_BASE_URL });
   return c.body(ics, 200, { "content-type": "text/calendar; charset=utf-8; method=REQUEST", "content-disposition": 'attachment; filename="interview.ics"', "cache-control": "no-store" });
@@ -218,7 +218,7 @@ schedulePages.post("/c/schedule/:token/reschedule", rateLimit(POLICIES.reschedul
 schedulePages.post("/c/schedule/:token/cancel", rateLimit(POLICIES.cancelInterview), async (c) => {
   const container = c.get("container");
   const b = await loadByToken(container.db, c.req.param("token") ?? "");
-  if (!b || !b.packet) return c.notFound();
+  if (!b?.packet) return c.notFound();
   if (["cancelled", "completed"].includes(b.iv.status)) return c.redirect(`/c/schedule/${b.iv.scheduleToken}/confirmed`);
   const confirmBody = await c.req.parseBody();
   if (confirmBody.confirm !== "yes") return c.redirect(`/c/schedule/${b.iv.scheduleToken}?confirm=cancel`);

@@ -14,7 +14,6 @@ function manual(board: string, input: PostingInput, extra: string): PublishResul
 export class IndeedAdapter implements JobBoardAdapter {
   readonly channel = "indeed";
   readonly status = "manual_action_required" as const;
-  constructor(_creds: { clientId?: string; clientSecret?: string }) {}
   async publish(input: PostingInput): Promise<PublishResult> {
     return manual("Indeed", input, "Sponsored spend on Indeed is billed by Indeed to your account.");
   }
@@ -24,7 +23,6 @@ export class IndeedAdapter implements JobBoardAdapter {
 export class ZipRecruiterAdapter implements JobBoardAdapter {
   readonly channel = "ziprecruiter";
   readonly status = "manual_action_required" as const;
-  constructor(_apiKey: string | undefined) {}
   async publish(input: PostingInput): Promise<PublishResult> {
     return manual("ZipRecruiter", input, "");
   }
@@ -35,7 +33,6 @@ export class ZipRecruiterAdapter implements JobBoardAdapter {
 export class LinkedInBasicJobsAdapter implements JobBoardAdapter {
   readonly channel = "linkedin_basic";
   readonly status = "manual_action_required" as const;
-  constructor(_feedUrl: string) {}
   async publish(input: PostingInput): Promise<PublishResult> {
     return manual("LinkedIn (a free listing from your company page)", input, "");
   }

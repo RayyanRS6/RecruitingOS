@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -19,6 +19,9 @@ const SERVER_DIRS = ["apps/api/src", "packages", "scripts"];
 const ALLOWLIST: string[] = ["scripts/secret-scan.ts", "packages/db/src/cli/status.ts"];
 const PATTERNS = [/SUPABASE_SERVICE_ROLE_KEY/, /service_role/i, /SERVICE_ROLE/];
 
+/** Repo-relative with forward slashes on every platform, so the allowlist matches on Windows checkouts too. */
+const rel = (f: string) => relative(ROOT, f).split("\\").join("/");
+
 function walk(dir: string, out: string[] = []): string[] {
   if (!statSync(dir).isDirectory()) { out.push(dir); return out; }
   for (const name of readdirSync(dir)) {
@@ -33,10 +36,10 @@ function walk(dir: string, out: string[] = []): string[] {
 describe("service-role key guard", () => {
   it("client code never references the service-role key", () => {
     const hits = CLIENT_DIRS.flatMap((d) => walk(join(ROOT, d))).filter((f) => PATTERNS.some((re) => re.test(readFileSync(f, "utf8"))));
-    expect(hits.map((f) => f.replace(ROOT + "/", ""))).toEqual([]);
+    expect(hits.map(rel)).toEqual([]);
   });
   it("server code references it only from the documented allowlist", () => {
-    const hits = SERVER_DIRS.flatMap((d) => walk(join(ROOT, d))).filter((f) => PATTERNS.some((re) => re.test(readFileSync(f, "utf8")))).map((f) => f.replace(ROOT + "/", ""));
+    const hits = SERVER_DIRS.flatMap((d) => walk(join(ROOT, d))).filter((f) => PATTERNS.some((re) => re.test(readFileSync(f, "utf8")))).map(rel);
     expect(hits.filter((f) => !ALLOWLIST.includes(f))).toEqual([]);
   });
   it("no public environment variable carries a secret or the service role", () => {
@@ -44,7 +47,7 @@ describe("service-role key guard", () => {
     const bad: string[] = [];
     for (const f of files) {
       const m = readFileSync(f, "utf8").match(/NEXT_PUBLIC_[A-Z0-9_]*(SECRET|SERVICE|TOKEN|PRIVATE)[A-Z0-9_]*/g);
-      if (m) bad.push(`${f.replace(ROOT + "/", "")}: ${m.join(", ")}`);
+      if (m) bad.push(`${rel(f)}: ${m.join(", ")}`);
     }
     expect(bad).toEqual([]);
   });

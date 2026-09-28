@@ -52,7 +52,7 @@ export type TlsTrust = { ca: string; rejectUnauthorized: true };
 export function tlsOptionsFromEnv(env: Record<string, string | undefined> = process.env, caFile?: string | null): TlsTrust | undefined {
   const file = caFile ?? env.DATABASE_SSL_CA_FILE;
   const raw = file ? readFileSync(file, "utf8") : env.DATABASE_SSL_CA;
-  if (!raw || !raw.trim()) return undefined;
+  if (!raw?.trim()) return undefined;
   const source = file ? `the certificate file ${file}` : "DATABASE_SSL_CA";
   return { ca: normalizePem(raw, source), rejectUnauthorized: true };
 }
@@ -63,7 +63,7 @@ export function tlsOptionsFromEnv(env: Record<string, string | undefined> = proc
  * refused with a clear message instead.
  */
 export function normalizePem(raw: string, source: string): string {
-  const pem = raw.replace(/\r\n?/g, "\n").replace(/\\n/g, "\n").trim() + "\n";
+  const pem = `${raw.replace(/\r\n?/g, "\n").replace(/\\n/g, "\n").trim()}\n`;
   if (!/-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/.test(pem)) throw new Error(`${source} is not a PEM certificate (it must start with -----BEGIN CERTIFICATE-----)`);
   try {
     new X509Certificate(pem);

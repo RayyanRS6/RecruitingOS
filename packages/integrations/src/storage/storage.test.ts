@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { GrantSigner } from "./grants";
 import { MemoryStorageAdapter } from "./local";
-import { StorageError, SupabaseStorageAdapter } from "./supabase";
+import { type StorageError, SupabaseStorageAdapter } from "./supabase";
 import { createIntegrations } from "../registry";
 
 const SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";

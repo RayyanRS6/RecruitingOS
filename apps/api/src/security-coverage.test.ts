@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray } from "drizzle-orm";
 import { entitlements } from "@ros/core";
-import { applications, auditRecords, events, interviews, users, withTenant } from "@ros/db";
+import { applications, auditRecords, events, interviews, withTenant } from "@ros/db";
 import { PRODUCT_EVENT_NAMES, toProductEvent, type FakeAnalyticsAdapter, type FakeGoogleCalendarProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
