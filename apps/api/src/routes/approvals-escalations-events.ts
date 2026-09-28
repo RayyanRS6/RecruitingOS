@@ -65,7 +65,7 @@ escalationRoutes.post("/", requireTenant, async (c) => {
     to: container.env.ITS_QUEUE_EMAIL,
     from: `${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`,
     subject: `[${body.kind}] ${preview.urgency} urgency: respond by ${new Date(created.slaDueAt).toLocaleString("en-US", { timeZone })} (${timeZone})`,
-    text: `A customer asked for a recruiter.\n\nCategory: ${body.kind}\nUrgency: ${preview.urgency}\nNeeds: ${preview.requiredExpertise}\nSummary: ${preview.summary}\n\nAccept it in the queue to open the full request: ${container.env.WEB_BASE_URL}/recruiter/queue/${created.id}`,
+    text: `A customer asked for a recruiter.\n\nCategory: ${body.kind}\nUrgency: ${preview.urgency}\nNeeds: ${preview.requiredExpertise}\nSummary: ${preview.summary}\n\nAccept it in the queue to open the full request: ${container.env.APP_BASE_URL}/recruiter/queue/${created.id}`,
     idempotencyKey: `escalation:${created.id}`,
     tags: { template: "escalation" },
   });

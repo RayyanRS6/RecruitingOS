@@ -45,7 +45,6 @@ Non-secret block for the RAW Editor (replace nothing but the two mailbox address
 ```
 NODE_ENV=production
 APP_BASE_URL=https://recruiting-os-git-main-identified-talent-solutions.vercel.app
-WEB_BASE_URL=https://recruiting-os-git-main-identified-talent-solutions.vercel.app
 SECRET_STORE=vault
 AUTH_PROVIDER=supabase
 AUTH_SIGNIN_PROVIDERS=azure
@@ -57,8 +56,7 @@ STORAGE_BUCKET=resumes
 STORAGE_S3_ENDPOINT=https://vjuaiyjmtrenbrmujvtc.storage.supabase.co/storage/v1/s3
 STORAGE_S3_REGION=us-west-2
 SCAN_PROVIDER=fake
-RATE_LIMIT_STORE=shared
-RATE_LIMIT_SHARED_PROVIDER=upstash
+RATE_LIMIT_STORE=upstash
 UPSTASH_REDIS_REST_URL=https://complete-narwhal-292092.upstash.io
 EMAIL_PROVIDER=fake
 EMAIL_FROM_DOMAIN=hire.identifiedtalent.com
@@ -75,8 +73,9 @@ WORKER_INLINE=false
 WORKER_POLL_MS=1000
 CSP_MODE=report-only
 DATABASE_POOL_MAX=5
-LOG_LEVEL=info
 ```
+
+(`WEB_BASE_URL`, `RATE_LIMIT_SHARED_PROVIDER` and `LOG_LEVEL` are no longer read; remove them if an older setup has them.)
 
 Secrets, one **New Variable** each, then **Seal**:
 
@@ -120,7 +119,10 @@ is the right failure. Railway warns at 75, 90 and 100 percent.
 ## What the worker does once it runs
 
 It polls the `jobs` table and runs the six workflows (role approval, publish role, application intake including the
-résumé quarantine check, screen, stuck-role detection, interview scheduling with reminders) and the five registered
-jobs (credential revocation and deletion, interview calendar-event cancellation, the daily privacy-deadline check,
-email retry, the SMS fallback). Every step is idempotent and leased; a failed step retries with backoff up to the
-workflow's maximum, then the run is marked failed and escalated. Nothing about this changed for Railway.
+résumé quarantine check, screen, stuck-role detection, interview scheduling with reminders) and the registered jobs:
+the outbox (every email and text the product queues inside a transaction is sent here, after that transaction
+committed, once), credential revocation and deletion, interview calendar-event cancellation, the daily privacy-deadline
+check, the daily maintenance sweep (expired sessions and sign-in links, finished jobs, old webhook receipts and policy
+reports, interrupted sends), email retry and the SMS fallback. Every step is idempotent and leased; a failed step
+retries with backoff up to the workflow's maximum, then the run is marked failed and escalated. Until the worker runs,
+no email or text leaves staging: the messages wait in the queue as `queued` rows in `communications`.

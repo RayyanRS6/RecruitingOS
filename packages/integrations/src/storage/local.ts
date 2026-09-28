@@ -84,7 +84,7 @@ export class MemoryStorageAdapter implements StorageAdapter {
   readonly id = "memory";
   readonly status = "fake" as const;
   private files = new Map<string, { bytes: Uint8Array; contentType: string }>();
-  constructor(private signer: GrantSigner = new GrantSigner("dev-only-memory-storage", "http://localhost:3001")) {}
+  constructor(private signer: GrantSigner = new GrantSigner("dev-only-memory-storage", "http://localhost:3000")) {}
   async put(key: string, bytes: Uint8Array, contentType: string): Promise<{ key: string }> {
     this.files.set(key, { bytes, contentType });
     return { key };

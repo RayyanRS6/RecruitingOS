@@ -15,12 +15,12 @@
 |---|---|---|
 | Language and runtime | TypeScript (strict), Node.js 24 LTS | One language across API, worker, web, agents; typed contracts shared end to end |
 | Monorepo | pnpm workspaces | Fast, strict dependency boundaries, small |
-| API | Hono on `@hono/node-server` | Tiny, fast, standards-based (Web `Request`/`Response`), Zod integration, JSX server rendering for candidate pages, trivially testable with `app.request()` |
+| API | Hono, mounted inside the Next.js app (`apps/shell`) as route handlers under `/api`, `/c`, `/careers`, `/webhooks`, `/feeds`, `/privacy` and `/healthz` | Tiny, fast, standards-based (Web `Request`/`Response`), Zod integration, JSX server rendering for candidate pages, trivially testable with `app.request()`; one deployment and one origin, so no CORS and no second host |
 | Candidate-facing pages | Server-rendered with `hono/jsx`, progressively enhanced, no client framework | Mobile-first, fast on bad phones, indexable by Google Jobs, no build step |
-| Web app (owner, recruiter, admin) | Vite + React 19 + React Router + TanStack Query | An application, not a site; fast iteration; the marketing site stays where ITS already has it. Next.js was considered and rejected for the app because SSR buys nothing behind a login |
+| Web app (owner, recruiter, admin) | Next.js 15 (App Router) + React 19 + TanStack Query, on Vercel; the page components live in `apps/web` and are rendered by the shell's routes | An application behind a login; the marketing site stays where ITS already has it |
 | Design system | `packages/ui`: CSS custom properties plus React components | Doc 07 |
 | Database | Postgres 16+ with pgvector; **PGlite** (Postgres in WebAssembly) for local development and tests | Same SQL and same migrations locally and in production; no local Postgres install; pgvector works in both |
-| ORM and migrations | Drizzle ORM with drizzle-kit SQL migrations | Schema in TypeScript, plain SQL migrations reviewed in PRs, works with `pg` and PGlite drivers |
+| ORM and migrations | Drizzle ORM for queries; hand-written SQL migrations in `packages/db/migrations` (validated by `pnpm db:validate`; a test checks the Drizzle schema against the migrated database) | Schema in TypeScript, plain SQL migrations reviewed in PRs, works with `pg` and PGlite drivers |
 | Queue and workflows | Own engine in `packages/workflows` on Postgres (`jobs`, `workflow_runs`, `workflow_steps`) using `FOR UPDATE SKIP LOCKED` | Readable, testable, no extra service; upgrade path is Temporal or Inngest behind the same `defineWorkflow` API |
 | AI | `packages/ai`: provider interface; Anthropic adapter first; fake adapter for tests; model routing by task tier | Doc 03 § AI layer |
 | Email out | Postmark (transactional) with a product-controlled sending domain; SPF, DKIM, DMARC | Deliverability without Google restricted-scope OAuth |
@@ -32,10 +32,10 @@
 | E-signature | Dropbox Sign API (pending account) with a fake adapter | Slice 4 |
 | Background checks | Checkr (pending account) | Version 1 |
 | Compensation data | BLS OEWS public API (keyless v1 with limits; v2 with a free key) plus vertical playbook ranges | Slice 1 |
-| Auth | Passwordless magic links (email) and signed session cookies; platform roles for ITS staff | No passwords to leak; SSO later via WorkOS if needed |
-| Secrets | Environment variables in deployment; integration credentials encrypted at rest with an app-managed key (AES-256-GCM) | |
-| Logging and errors | pino structured logs; Sentry-compatible error reporting hook | |
-| Hosting (production) | API and worker as two processes on a container platform (Render, Fly, or Railway); web app as static files behind a CDN; managed Postgres with point-in-time recovery (Neon, Supabase, or RDS); object storage (S3-compatible) for documents | Doc 15 |
+| Auth | Supabase Auth (Google and Microsoft, PKCE) verified server-side; the application's own session cookie; a second factor for ITS staff; the email link only outside production; platform roles in a ledger | No passwords to leak; sign-in delegated to a managed identity service (D19) |
+| Secrets | Environment variables at the host (Vercel, Railway); integration credentials in Supabase Vault, written by the API role, read only by the worker role | Never application-side cryptography for stored credentials (F1) |
+| Logging and errors | Redacted console logs shipped by the host; Sentry (scrubbed, no replay) when a DSN is set | |
+| Hosting (staging and production) | Vercel for the Next.js app (app, API, candidate pages, webhooks); Railway for the worker; Supabase for Postgres, Vault, Storage and Auth; Upstash Redis for shared rate limits | Doc 14 |
 
 ## Process topology
 
@@ -60,7 +60,9 @@
                                                    └──────────────────────────┘
 ```
 
-In development, `WORKER_INLINE=true` runs the worker loop inside the API process against PGlite. In tests, the engine is driven synchronously (`runUntilIdle()`), so a whole lifecycle can be asserted in one test.
+The diagram above is the original release-1 sketch. As deployed (decision D20 and docs/14): the Next.js shell (`apps/shell`, on Vercel) serves the signed-in pages and mounts the Hono application in-process under `/api`, `/c`, `/careers`, `/webhooks`, `/feeds`, `/privacy` and `/healthz`, so there is one origin and no separate API host; the worker (`apps/api/src/worker.ts`, on Railway) is the only process that runs workflows and jobs, including the outbox that sends every queued email and text after the transaction that queued it committed. Steps that call the model do so in a prepare phase with no transaction open.
+
+In development, `WORKER_INLINE=true` runs the worker loop inside the shell process against PGlite. In tests, the engine is driven synchronously (`runUntilIdle()`), so a whole lifecycle can be asserted in one test.
 
 ## The AI layer (`packages/ai`)
 

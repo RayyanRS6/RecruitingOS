@@ -87,12 +87,12 @@ async function recordTrip(c: Context<Vars>, policy: string, rule: Rule, key: str
   if (trips.count !== 1 && trips.count !== ALERT_AFTER_TRIPS) return;
   const companyId = c.get("tenant")?.companyId ?? null;
   const keyHash = key.slice(0, 16);
-  await audit(container.db, { companyId, actor: { kind: "system", id: "rate_limit" }, action: "security.rate_limited", reason: policy, ip: clientIp(c), details: { policy, subject: rule.by, keyHash, path: maskTokenPath(c.req.path), count: d.count, limit: d.limit, trips: trips.count } }).catch(() => undefined);
+  await audit(container.db, { companyId, actor: { kind: "system", id: "rate_limit" }, action: "security.rate_limited", reason: policy, ip: clientIp(c), details: { policy, subject: rule.by, keyHash, path: maskTokenPath(c.req.path), count: d.count, limit: d.limit, trips: trips.count } }).catch((err) => console.warn(`[rate-limit] could not record the security event: ${err instanceof Error ? err.message : String(err)}`));
   const mark = `${key}:${trips.resetAt}`;
   if (trips.count >= ALERT_AFTER_TRIPS && !alerted.has(mark)) {
     alerted.add(mark);
     if (alerted.size > 5000) alerted.clear();
-    await raiseAlert(container.db, { kind: "security.suspicious_activity", severity: "high", title: `Repeated rate-limit trips: ${policy}`, body: `The same ${rule.by} tripped the ${policy} limit ${trips.count} times in one window. Key hash ${keyHash}. Check the security audit records for the path and address.`, companyId, details: { policy, subject: rule.by, keyHash, trips: trips.count } }).catch(() => undefined);
+    await raiseAlert(container.db, { kind: "security.suspicious_activity", severity: "high", title: `Repeated rate-limit trips: ${policy}`, body: `The same ${rule.by} tripped the ${policy} limit ${trips.count} times in one window. Key hash ${keyHash}. Check the security audit records for the path and address.`, companyId, details: { policy, subject: rule.by, keyHash, trips: trips.count } }).catch((err) => console.warn(`[rate-limit] could not raise the suspicious-activity alert: ${err instanceof Error ? err.message : String(err)}`));
   }
 }
 

@@ -4,20 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
     "worker": "tsx src/worker.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@hono/node-server": "^1.14.0",
     "@ros/agents": "workspace:*",
     "@ros/ai": "workspace:*",
     "@ros/contracts": "workspace:*",
     "@ros/core": "workspace:*",
     "@ros/db": "workspace:*",
     "@ros/integrations": "workspace:*",
-    "@ros/playbooks": "workspace:*",
     "@ros/workflows": "workspace:*",
     "@sentry/node": "10.74.0",
     "drizzle-orm": "^0.45.0",

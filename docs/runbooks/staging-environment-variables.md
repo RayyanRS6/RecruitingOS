@@ -40,8 +40,8 @@ the next merge to `main`, or Deployments, **Create Deployment**, branch `main`.
 1. **The staging address.** The Vercel project `recruiting-os` deploys `main` as a Preview (the Production Branch is
    `production`). Its stable address is the `main` alias: Vercel, project `recruiting-os`, **Deployments**, open the
    latest deployment from `main`, and under **Domains** copy the address of the form
-   `https://recruiting-os-git-main-<team>.vercel.app`. That is `APP_BASE_URL` and `WEB_BASE_URL` below, and later the
-   Supabase Auth redirect address.
+   `https://recruiting-os-git-main-<team>.vercel.app`. That is `APP_BASE_URL` below, and later the Supabase Auth
+   redirect address.
 2. **Two generated secrets.** In your own Terminal app, run the line below once for `SESSION_SECRET` and once for
    `ANALYTICS_SALT`; each puts a fresh random value on the clipboard, never on the screen. Paste each into a new
    1Password item "Recruiting OS staging application" (fields `SESSION_SECRET`, `ANALYTICS_SALT`), then into Vercel.
@@ -60,7 +60,6 @@ the next merge to `main`, or Deployments, **Create Deployment**, branch `main`.
 | Variable | Value | Where the value comes from | Sensitive |
 |---|---|---|---|
 | `APP_BASE_URL` | the `main` alias, e.g. `https://recruiting-os-git-main-<team>.vercel.app` | step 1 | no |
-| `WEB_BASE_URL` | the same address | step 1 | no |
 | `SESSION_SECRET` | generated | step 2 | **yes** |
 | `ANALYTICS_SALT` | generated | step 2 | **yes** |
 | `SECRET_STORE` | `vault` | constant | no |
@@ -81,8 +80,7 @@ the next merge to `main`, or Deployments, **Create Deployment**, branch `main`.
 | `STORAGE_S3_ACCESS_KEY_ID` | the access key ID | 1Password, "Recruiting OS staging storage" | **yes** |
 | `STORAGE_S3_SECRET_ACCESS_KEY` | the secret access key | 1Password, "Recruiting OS staging storage" | **yes** |
 | `SCAN_PROVIDER` | `fake` | constant (a real engine is a real-data gate) | no |
-| `RATE_LIMIT_STORE` | `shared` | constant | no |
-| `RATE_LIMIT_SHARED_PROVIDER` | `upstash` | constant | no |
+| `RATE_LIMIT_STORE` | `upstash` | constant | no |
 | `UPSTASH_REDIS_REST_URL` | `https://complete-narwhal-292092.upstash.io` | the Upstash database page (reported 22 Sep) | no |
 | `UPSTASH_REDIS_REST_TOKEN` | the REST token | Upstash console, database `recruiting-os-staging-rate-limit`, REST API panel; store it in 1Password ("Recruiting OS staging rate limit") first | **yes** |
 | `EMAIL_PROVIDER` | `fake` | constant until Postmark is set up (messages are recorded, not sent; never described as connected) | no |
@@ -103,8 +101,10 @@ the next merge to `main`, or Deployments, **Create Deployment**, branch `main`.
 
 Not set on purpose: `SENTRY_DSN` (the Sentry projects do not exist yet; reporting stays off), `WORKER_DATABASE_URL`
 and `MIGRATE_DATABASE_URL` (never on Vercel), `SUPABASE_SERVICE_ROLE_KEY` (never anywhere), `MAGIC_LINK_ENABLED`
-(production defaults to off), `RUN_MIGRATIONS_ON_BOOT` (production never migrates on boot; migrations run from the
-founder's machine).
+(production defaults to off), `RUN_MIGRATIONS_ON_BOOT` (production never migrates on boot and refuses to start while
+a migration is pending; migrations run from the founder's machine or the `migrate` GitHub workflow). No longer read:
+`WEB_BASE_URL` (the app and the API share `APP_BASE_URL`), `RATE_LIMIT_SHARED_PROVIDER`, `RATE_LIMIT_SHARED_URL`,
+`LOG_LEVEL`; remove them if present.
 
 ## After entering them
 

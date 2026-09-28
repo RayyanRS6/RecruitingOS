@@ -4,6 +4,7 @@ import { FakeSharedCounter, MemoryRateLimitStore, SharedRateLimitStore, UpstashS
 import { adminAlerts, applications, auditRecords } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { loadEnv } from "./env";
 
 /**
  * Founder instruction of 21 September 2026, item 5: shared, provider-neutral rate limiting on every public surface,
@@ -52,7 +53,7 @@ describe("rate limiting", () => {
     const table = new Map<string, number>();
     const fakeFetch = (async (url: string, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as unknown[];
-      calls.push({ url, body, auth: (init?.headers as Record<string, string>).authorization });
+      calls.push({ url, body, auth: (init?.headers as Record<string, string> | undefined)?.authorization ?? "" });
       if (body[0] === "EVAL") { const key = String(body[3]); const n = (table.get(key) ?? 0) + 1; table.set(key, n); return new Response(JSON.stringify({ result: n })); }
       if (body[0] === "GET") return new Response(JSON.stringify({ result: table.has(String(body[1])) ? String(table.get(String(body[1]))) : null }));
       return new Response(JSON.stringify({ error: "unknown" }));
@@ -100,13 +101,16 @@ describe("rate limiting", () => {
     expect(reports[1]).toContain("429");
   });
 
-  it("the store factory: memory, the fake shared counter, and a refusal for any provider that is not implemented", () => {
-    expect(createRateLimitStore({ RATE_LIMIT_STORE: "memory", RATE_LIMIT_SHARED_PROVIDER: "fake", RATE_LIMIT_SHARED_URL: null }).id).toBe("memory");
-    expect(createRateLimitStore({ RATE_LIMIT_STORE: "shared", RATE_LIMIT_SHARED_PROVIDER: "fake", RATE_LIMIT_SHARED_URL: "fake://x" }).id).toBe("shared:fake");
-    expect(() => createRateLimitStore({ RATE_LIMIT_STORE: "shared", RATE_LIMIT_SHARED_PROVIDER: "somethingelse", RATE_LIMIT_SHARED_URL: "https://x" })).toThrow(/No shared rate-limit adapter/);
-    expect(() => createRateLimitStore({ RATE_LIMIT_STORE: "redis", RATE_LIMIT_SHARED_PROVIDER: "fake", RATE_LIMIT_SHARED_URL: null })).toThrow(/memory.*shared/);
-    expect(() => createRateLimitStore({ RATE_LIMIT_STORE: "shared", RATE_LIMIT_SHARED_PROVIDER: "upstash", RATE_LIMIT_SHARED_URL: null })).toThrow(/UPSTASH_REDIS_REST_URL/);
-    expect(createRateLimitStore({ RATE_LIMIT_STORE: "shared", RATE_LIMIT_SHARED_PROVIDER: "upstash", RATE_LIMIT_SHARED_URL: null, UPSTASH_REDIS_REST_URL: "https://complete-narwhal-292092.upstash.io", UPSTASH_REDIS_REST_TOKEN: "upstash-token-for-tests-abcdefghij" }).id).toBe("shared:upstash");
+  it("the store factory: memory, the fake shared counter, upstash, and a refusal for anything else", () => {
+    expect(createRateLimitStore({ RATE_LIMIT_STORE: "memory" }).id).toBe("memory");
+    expect(createRateLimitStore({ RATE_LIMIT_STORE: "fake" }).id).toBe("shared:fake");
+    expect(() => createRateLimitStore({ RATE_LIMIT_STORE: "somethingelse" })).toThrow(/memory.*upstash.*fake/);
+    expect(() => createRateLimitStore({ RATE_LIMIT_STORE: "shared" })).toThrow(/memory.*upstash.*fake/);
+    expect(() => createRateLimitStore({ RATE_LIMIT_STORE: "upstash" })).toThrow(/UPSTASH_REDIS_REST_URL/);
+    expect(createRateLimitStore({ RATE_LIMIT_STORE: "upstash", UPSTASH_REDIS_REST_URL: "https://complete-narwhal-292092.upstash.io", UPSTASH_REDIS_REST_TOKEN: "upstash-token-for-tests-abcdefghij" }).id).toBe("shared:upstash");
+    // the earlier spelling is still understood by the environment loader
+    expect(loadEnv({ RATE_LIMIT_STORE: "shared", RATE_LIMIT_SHARED_PROVIDER: "upstash" }).RATE_LIMIT_STORE).toBe("upstash");
+    expect(loadEnv({ RATE_LIMIT_STORE: "shared" }).RATE_LIMIT_STORE).toBe("fake");
   });
 
   describe("on the API and the candidate pages", () => {
@@ -117,7 +121,7 @@ describe("rate limiting", () => {
     let companySlug = "";
     let roleId = "";
     let statusToken = "";
-    const env = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "shared", RATE_LIMIT_SHARED_PROVIDER: "fake", RATE_LIMIT_SHARED_URL: "fake://rate-limit-test", RATE_LIMIT_OVERRIDES: JSON.stringify({ "api.user": 6, "webhook.auth_failed": 3, "auth.magic_link": 4 }), POSTMARK_WEBHOOK_SECRET: "whsec-test" };
+    const env = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", RATE_LIMIT_OVERRIDES: JSON.stringify({ "api.user": 6, "webhook.auth_failed": 3, "auth.magic_link": 4 }), POSTMARK_WEBHOOK_SECRET: "whsec-test" };
     const post = (a: ReturnType<typeof createApp>, path: string, body: unknown, headers: Record<string, string> = {}) => a.request(path, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
     const form = (path: string, fields: Record<string, string>, headers: Record<string, string> = {}) => app.request(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "text/html", ...headers }, body: new URLSearchParams(fields).toString() });
     const signIn = async (email: string) => {

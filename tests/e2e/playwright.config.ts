@@ -36,7 +36,7 @@ export default defineConfig({
       // the default limit is half the machine's memory), which wipes the in-memory database mid-run. Give it most of
       // the runner's memory and skip development source maps, which are the largest part of that heap.
       NODE_OPTIONS: "--max-old-space-size=12288",
-      NODE_ENV: "development", PGLITE_DIR: "memory://", APP_BASE_URL: base, WEB_BASE_URL: base,
+      NODE_ENV: "development", PGLITE_DIR: "memory://", APP_BASE_URL: base,
       AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", SMS_PROVIDER: "fake", AUTH_PROVIDER: "fake", CALENDAR_PROVIDER: "fake", ANALYTICS_PROVIDER: "fake",
       SECRET_STORE: "memory", STORAGE_PROVIDER: "memory", WORKER_INLINE: "true", WORKER_POLL_MS: "250", COMP_BLS_ENABLED: "false", MAGIC_LINK_ENABLED: "true",
       BOOTSTRAP_ADMIN_EMAILS: "admin-e2e@identifiedtalent.com",
