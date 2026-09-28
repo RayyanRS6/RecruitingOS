@@ -1,11 +1,12 @@
 import type { Actor } from "@ros/contracts";
 import { markConfirmationSent, type DataRequestRow } from "@ros/core";
-import { communications, type Queryable } from "@ros/db";
+import type { Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
+import { queueCommunication } from "./outbox";
 
 /**
  * Plain-language acknowledgment and completion messages for privacy requests, sent from the dedicated privacy address
- * (correction 7). Recorded as communications when a candidate record exists; never carries another person's data.
+ * (correction 7). Recorded as communications and sent through the outbox; never carries another person's data.
  */
 const KIND_TEXT: Record<string, string> = {
   access: "a copy of the information we hold about you",
@@ -29,8 +30,7 @@ We will complete it by ${due} and confirm when it is done. Reference: ${row.id.s
 Questions? Write to ${input.privacyEmail}.
 
 Identified Talent Solutions, on behalf of ${input.companyName}`;
-  const result = await integrations.email.send({ to: row.requesterEmail, from: `${input.companyName} privacy requests <${integrations.env.fromAddress}>`, replyTo: input.privacyEmail, subject: `We received your request (${row.id.slice(0, 8)})`, text, idempotencyKey: `privacy_ack:${row.id}`, tags: { template: "privacy_ack" } });
-  if (row.candidateId) await q.insert(communications).values({ companyId: row.companyId, candidateId: row.candidateId, applicationId: row.applicationId, direction: "outbound", channel: "email", fromAddress: integrations.env.fromAddress, toAddress: row.requesterEmail, subject: `We received your request (${row.id.slice(0, 8)})`, bodyText: text, templateKey: "privacy_ack", provider: integrations.email.id, providerMessageId: result.status === "sent" ? result.providerMessageId : null, status: result.status === "sent" ? "sent" : result.status === "pending" ? "queued" : "failed", disclosureIncluded: false, sentBy: input.actor });
+  await queueCommunication(q, integrations, { channel: "email", companyId: row.companyId, candidateId: row.candidateId ?? null, applicationId: row.applicationId ?? null, to: row.requesterEmail, from: `${input.companyName} privacy requests <${integrations.env.fromAddress}>`, replyTo: input.privacyEmail, subject: `We received your request (${row.id.slice(0, 8)})`, text, templateKey: "privacy_ack", idempotencyKey: `privacy_ack:${row.id}`, tags: { template: "privacy_ack" }, actor: input.actor });
 }
 
 export async function sendPrivacyCompletion(q: Queryable, integrations: Integrations, input: { row: DataRequestRow; companyName: string; privacyEmail: string; actor: Actor; attachment?: { filename: string; contentType: string; contentBase64: string } }): Promise<void> {
@@ -46,7 +46,14 @@ ${row.kind === "delete" && row.status === "fulfilled" ? "Where a legal retention
 Reference: ${row.id.slice(0, 8)}. Questions? Write to ${input.privacyEmail}.
 
 Identified Talent Solutions, on behalf of ${input.companyName}`.replace(/\n{3,}/g, "\n\n");
-  const result = await integrations.email.send({ to: row.requesterEmail, from: `${input.companyName} privacy requests <${integrations.env.fromAddress}>`, replyTo: input.privacyEmail, subject: `${row.status === "declined" ? "About your request" : "Your request is complete"} (${row.id.slice(0, 8)})`, text, idempotencyKey: `privacy_done:${row.id}`, tags: { template: "privacy_done" }, attachments: input.attachment ? [input.attachment] : undefined });
-  if (row.candidateId && row.kind !== "delete") await q.insert(communications).values({ companyId: row.companyId, candidateId: row.candidateId, applicationId: row.applicationId, direction: "outbound", channel: "email", fromAddress: integrations.env.fromAddress, toAddress: row.requesterEmail, subject: `Your request (${row.id.slice(0, 8)})`, bodyText: text, templateKey: "privacy_done", provider: integrations.email.id, providerMessageId: result.status === "sent" ? result.providerMessageId : null, status: result.status === "sent" ? "sent" : result.status === "pending" ? "queued" : "failed", disclosureIncluded: false, sentBy: input.actor });
+  const from = `${input.companyName} privacy requests <${integrations.env.fromAddress}>`;
+  const subject = `${row.status === "declined" ? "About your request" : "Your request is complete"} (${row.id.slice(0, 8)})`;
+  if (row.kind === "delete") {
+    // The one message that must leave no row behind: after a deletion nothing may still name the person. Sent directly
+    // (an administrator's action, outside any candidate workflow), so a duplicate is at worst a second courtesy note.
+    await integrations.email.send({ to: row.requesterEmail, from, replyTo: input.privacyEmail, subject, text, idempotencyKey: `privacy_done:${row.id}`, tags: { template: "privacy_done" } });
+  } else {
+    await queueCommunication(q, integrations, { channel: "email", companyId: row.companyId, candidateId: row.candidateId ?? null, applicationId: row.applicationId ?? null, to: row.requesterEmail, from, replyTo: input.privacyEmail, subject, text, templateKey: "privacy_done", idempotencyKey: `privacy_done:${row.id}`, tags: { template: "privacy_done" }, attachments: input.attachment ? [input.attachment] : null, actor: input.actor });
+  }
   await markConfirmationSent(q, row);
 }

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { addBusinessHours } from "@ros/core";
 import { and, eq } from "drizzle-orm";
 import { aiRuns, applications, approvalRequests, assessments, candidates, entitlements, events, interventions, recruiterEscalations, screens, workflowRuns, companies } from "@ros/db";
-import { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
+import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 

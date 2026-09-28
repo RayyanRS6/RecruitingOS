@@ -13,7 +13,10 @@ export type OutboundEmail = {
   subject: string;
   text: string;
   html?: string;
-  /** Idempotency key: the same key never sends twice. */
+  /**
+   * The outbox's key for this message. Providers receive it as metadata only; none of them de-duplicates on it, so
+   * the guarantee that one key sends once is kept by the outbox (packages/agents/src/outbox.ts), not by adapters.
+   */
   idempotencyKey: string;
   tags?: Record<string, string>;
   /** Small files such as an iCalendar invitation; content is base64. */

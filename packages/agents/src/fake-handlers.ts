@@ -1,6 +1,5 @@
 import type { EvidenceAssessment, IntakeFacts, IntakeTurn, ResumeExtraction, RolePacket, ScreenAssessment, ScreenProgress, ScreenTurn } from "@ros/contracts";
 import type { FakeProvider, IntakeContext, StructuredRequest } from "@ros/ai";
-import type { ResumeInput } from "@ros/ai";
 import { redactProtected } from "./screening";
 
 /**
@@ -113,15 +112,15 @@ function fakeIntakeTurn(c: ReturnType<typeof contextFrom>): IntakeTurn {
       .filter((s) => s && !/^(i|me|myself)$/i.test(s) && !/^(our|the|my|a|an|who)\b/.test(s) || /^me$/i.test(s));
   }
   if (!facts.whatFailureLooksLike) {
-    const f = all.match(/fail(?:ure)? (?:would look like|looks like|means)\s*[:\-]?\s*([^.\n]+)/i)
+    const f = all.match(/fail(?:ure)? (?:would look like|looks like|means)\s*[:-]?\s*([^.\n]+)/i)
       ?? all.match(/(?:did not|didn't|does not|doesn't|hasn't|has not) work(?:ed)? out (?:if|when|would be)\s+([^.\n]+)/i);
     if (f) facts.whatFailureLooksLike = f[1].trim();
   }
-  const mh = last.match(/must[\s-]?haves?\s*[:\-]\s*([^\n]+)/i) ?? last.match(/\bmust have\s+(?:an?\s+)?([^.\n]+)/i);
+  const mh = last.match(/must[\s-]?haves?\s*[:-]\s*([^\n]+)/i) ?? last.match(/\bmust have\s+(?:an?\s+)?([^.\n]+)/i);
   if (mh) facts.mustHaves = [...facts.mustHaves, ...mh[1].split(/;|,| and (?:be |have )?/).map((s) => s.trim()).filter(Boolean)];
-  const nh = last.match(/nice[\s-]?to[\s-]?haves?\s*[:\-]\s*([^\n]+)/i);
+  const nh = last.match(/nice[\s-]?to[\s-]?haves?\s*[:-]\s*([^\n]+)/i);
   if (nh) facts.niceToHaves = [...facts.niceToHaves, ...nh[1].split(/;|,/).map((s) => s.trim()).filter(Boolean)];
-  const db = last.match(/deal[\s-]?breakers?\s*[:\-]\s*([^\n]+)/i);
+  const db = last.match(/deal[\s-]?breakers?\s*[:-]\s*([^\n]+)/i);
   if (db) facts.dealBreakers = [...facts.dealBreakers, ...db[1].split(/;|,/).map((s) => s.trim()).filter(Boolean)];
 
   const declinedNow: IntakeFacts["declinedCriteria"] = [];

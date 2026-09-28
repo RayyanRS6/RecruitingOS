@@ -2,7 +2,7 @@
 /** @jsxImportSource hono/jsx */
 import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { ApplyRequest, CandidateSmsPreference, MAX_RESUME_BYTES, inspectResumeFile, type RolePacket } from "@ros/contracts";
+import { ApplyRequest, CandidateSmsPreference, MAX_RESUME_BYTES, formatPayRange, inspectResumeFile, type RolePacket } from "@ros/contracts";
 import { openScreen, requestHuman, runScreenTurn } from "@ros/agents";
 import { STAGE_LABEL, audit, createDataRequest, emit, fulfilSmsOptOut, fulfilWithdrawal, humanResponseExpectation, loadBusinessCalendar, noticesFor, notify, openHumanReview, resolveJurisdictions, transition } from "@ros/core";
 import { CandidatePrivacyRequest } from "@ros/contracts";
@@ -11,7 +11,7 @@ import { applications, candidates, communications, companies, dataRequests, inte
 import { jobPostingJsonLd, refFor } from "@ros/integrations";
 import { randomToken } from "@ros/db";
 import { UPLOAD_GRANT_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS, checkUploadIntent, quarantineKey } from "../uploads";
-import type { Vars } from "../middleware/session";
+import { clientIp, type Vars } from "../middleware/session";
 import type { Container } from "../container";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { createApplication, type ResumeInput } from "../services/applications";
@@ -21,16 +21,14 @@ import { Layout, currentNonce } from "./layout";
 export const candidatePages = new Hono<Vars>();
 
 function money(p: RolePacket): string {
-  const c = p.compensation;
-  if (!c.discloseRange) return "";
-  return c.basis === "hourly" ? `$${c.min}–$${c.max} an hour` : `$${c.min.toLocaleString()}–$${c.max.toLocaleString()} a year`;
+  return formatPayRange(p.compensation, { onlyIfDisclosed: true });
 }
 
 async function loadJob(db: Vars["Variables"]["container"]["db"], slug: string, roleId: string) {
   const [company] = await db.select().from(companies).where(eq(companies.slug, slug)).limit(1);
   if (!company) return null;
   const [role] = await db.select().from(roles).where(and(eq(roles.id, roleId), eq(roles.companyId, company.id))).limit(1);
-  if (!role || !role.currentPacketVersion) return null;
+  if (!role?.currentPacketVersion) return null;
   const [pv] = await db.select().from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, role.currentPacketVersion))).limit(1);
   if (!pv) return null;
   return { company, role, packet: pv.packet };
@@ -104,7 +102,7 @@ function ApplyForm(props: { company: { slug: string; name: string }; role: { id:
       <p>Three minutes. Upload a resume, or answer four short questions instead.</p>
       {props.error ? <div class="err">{props.error}</div> : null}
       <form method="post" enctype="multipart/form-data" data-upload-intent={`/careers/${props.company.slug}/jobs/${props.role.id}/upload-intent`}>
-        <input type="text" name="website" tabindex={-1} autocomplete="off" style="position:absolute;left:-10000px" aria-hidden="true" />
+        <input type="text" name="website" tabindex={-1} autocomplete="off" style="position:absolute;left:-10000px" aria-label="Leave this field empty" />
         <input type="hidden" name="uploadGrant" value="" />
         <label for="firstName">First name</label>
         <input id="firstName" type="text" name="firstName" required value={v.firstName ?? ""} />
@@ -179,7 +177,7 @@ fetch(form.getAttribute('data-upload-intent'),{method:'POST',headers:{'content-t
 candidatePages.get("/careers/:slug/jobs/:roleId/apply", async (c) => {
   const container = c.get("container");
   const job = await loadJob(container.db, c.req.param("slug"), c.req.param("roleId"));
-  if (!job || job.role.status !== "open") return c.notFound();
+  if (job?.role.status !== "open") return c.notFound();
   const notices = noticesFor(resolveJurisdictions([...job.packet.identity.locations, ...job.company.locations]), job.company.settings.notices);
   // Funnel measurement without identity (correction 14): a random per-visit reference, no cookie, no candidate data, no client script.
   void container.integrations.analytics.capture({ name: "application_started", subjectRef: randomToken(12), companyRef: refFor(job.company.id, container.integrations.analyticsSalt), at: new Date().toISOString(), properties: { source: "careers_page" } }).catch(() => undefined);
@@ -193,7 +191,7 @@ candidatePages.get("/careers/:slug/jobs/:roleId/apply", async (c) => {
 candidatePages.post("/careers/:slug/jobs/:roleId/upload-intent", rateLimit(POLICIES.apply), async (c) => {
   const container = c.get("container");
   const job = await loadJob(container.db, c.req.param("slug") ?? "", c.req.param("roleId") ?? "");
-  if (!job || job.role.status !== "open") return c.json({ error: { code: "not_found", message: "This role is not accepting applications." } }, 404);
+  if (job?.role.status !== "open") return c.json({ error: { code: "not_found", message: "This role is not accepting applications." } }, 404);
   let raw: unknown = null;
   try { raw = await c.req.json(); } catch { raw = null; }
   const intent = checkUploadIntent(raw);
@@ -210,7 +208,7 @@ candidatePages.post("/careers/:slug/jobs/:roleId/upload-intent", rateLimit(POLIC
 candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.apply), async (c) => {
   const container = c.get("container");
   const job = await loadJob(container.db, c.req.param("slug") ?? "", c.req.param("roleId") ?? "");
-  if (!job || job.role.status !== "open") return c.notFound();
+  if (job?.role.status !== "open") return c.notFound();
   const { company, role, packet } = job;
   const notices = noticesFor(resolveJurisdictions([...packet.identity.locations, ...company.locations]), company.settings.notices);
   const body = await c.req.parseBody({ all: true });
@@ -269,7 +267,8 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
     return c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} error="Upload a resume or tell us about your recent work in the box provided." values={{ firstName: parsed.data.firstName, lastName: parsed.data.lastName, email: parsed.data.email, phone: parsed.data.phone ?? "", locationText: parsed.data.locationText ?? "" }} />, 400);
   }
 
-  const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim();
+  // The consent record carries the address the trusted proxy reports, never one the client wrote into the header.
+  const ip = clientIp(c);
   const result = await withTenant(container.db, company.id, (tx) =>
     createApplication(tx, container, {
       companyId: company.id,
@@ -437,7 +436,7 @@ candidatePages.get("/c/screen/:token", async (c) => {
   let screen = b.screen;
   const active = ["invited", "reminded", "in_progress"].includes(screen.status);
   if (active && !screen.transcript.some((t) => t.role === "assistant")) {
-    await withTenant(container.db, company.id, (tx) => openScreen(tx, screenDeps(container), { screenId: screen.id, actor: { kind: "system", id: "screen_web" } }));
+    await openScreen(container.db, company.id, screenDeps(container), { screenId: screen.id, actor: { kind: "system", id: "screen_web" } });
     screen = (await container.db.select().from(screens).where(eq(screens.id, screen.id)).limit(1))[0];
   }
   const total = packet.screening.questions.length;
@@ -487,7 +486,7 @@ candidatePages.post("/c/screen/:token", rateLimit(POLICIES.screen), async (c) =>
   const body = await c.req.parseBody();
   const message = typeof body.message === "string" ? body.message.trim().slice(0, 2000) : "";
   if (!message) return c.redirect(`/c/screen/${b.screen.token}?error=empty`);
-  const result = await withTenant(container.db, b.company.id, (tx) => runScreenTurn(tx, screenDeps(container), { screenId: b.screen.id, message, channel: "web", actor: { kind: "system", id: "screen_web" } }));
+  const result = await runScreenTurn(container.db, b.company.id, screenDeps(container), { screenId: b.screen.id, message, channel: "web", actor: { kind: "system", id: "screen_web" } });
   await container.kick();
   return c.redirect(`/c/screen/${b.screen.token}${result.kind === "error" ? "?error=trouble" : ""}`);
 });
@@ -570,7 +569,7 @@ candidatePages.post("/c/status/:token/withdraw", rateLimit(POLICIES.withdraw), a
       }
       const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
       const [role] = await tx.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
-      await notify(tx, { companyId: app.companyId, kind: "candidate.withdrawn", title: `${cand.firstName} ${cand.lastName} withdrew`, body: `They withdrew from ${role.title} using the link on their status page.`, action: { label: "See talent", href: `/roles/${app.roleId}/people` } });
+      await notify(tx, { companyId: app.companyId, kind: "candidate.withdrawn", title: `${cand.firstName} ${cand.lastName} withdrew`, body: `They withdrew from ${role.title} using the link on their status page.`, action: { label: "See talent", href: `/roles/${app.roleId}/talent` } });
     });
     // the withdrawal is also a recorded request, fulfilled at once, so the audit trail and the confirmation are the same as for any other request (platform role: the tenant role cannot write that table)
     await withPlatform(container.db, async (tx) => {

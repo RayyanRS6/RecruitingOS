@@ -3,6 +3,7 @@ import type { Actor } from "@ros/contracts";
 import { createEscalation, emit, gate, notify, resolvePolicy } from "@ros/core";
 import { applications, approvalRequests, interventions, memberships, roles, screens, users, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
+import { queueCommunication } from "./outbox";
 
 /**
  * The stuck-role detector and its intervention ladder (docs/02 "Customer success", docs/06 `stuck_role_detector`).
@@ -31,13 +32,13 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
     if (waiting.length) {
       const oldest = Math.min(...waiting.map((a) => Date.parse(a.stageChangedAt)));
       const days = Math.floor((now.getTime() - oldest) / DAYS);
-      if (days >= 3) out.push({ detector: "candidates_waiting", roleId: role.id, roleTitle: role.title, days, title: `${waiting.length} ${waiting.length === 1 ? "candidate has" : "candidates have"} been waiting on you for ${days} days (${role.title})`, body: "They are ready for a decision: invite to a screen, interview, or decline with a reason. Candidates who wait more than a week usually move on.", action: { label: "Review them", href: `/roles/${role.id}/people` } });
+      if (days >= 3) out.push({ detector: "candidates_waiting", roleId: role.id, roleTitle: role.title, days, title: `${waiting.length} ${waiting.length === 1 ? "candidate has" : "candidates have"} been waiting on you for ${days} days (${role.title})`, body: "They are ready for a decision: invite to a screen, interview, or decline with a reason. Candidates who wait more than a week usually move on.", action: { label: "Review them", href: `/roles/${role.id}/talent` } });
     }
     const invites = await q.select().from(screens).where(and(eq(screens.companyId, companyId), inArray(screens.status, ["invited", "reminded"]), inArray(screens.applicationId, apps.map((a) => a.id).length ? apps.map((a) => a.id) : ["00000000-0000-0000-0000-000000000000"])));
     const stale = invites.filter((s) => s.invitedAt && now.getTime() - Date.parse(s.invitedAt) >= 3 * DAYS);
     if (stale.length) {
       const days = Math.floor((now.getTime() - Math.min(...stale.map((s) => Date.parse(s.invitedAt!)))) / DAYS);
-      out.push({ detector: "screens_unanswered", roleId: role.id, roleTitle: role.title, days, title: `${stale.length} screening ${stale.length === 1 ? "invite has" : "invites have"} gone unanswered for ${days} days (${role.title})`, body: "A reminder went out automatically. A recruiter can call them, or you can move on to the next candidates.", action: { label: "See who", href: `/roles/${role.id}/people?stage=screen_invited` } });
+      out.push({ detector: "screens_unanswered", roleId: role.id, roleTitle: role.title, days, title: `${stale.length} screening ${stale.length === 1 ? "invite has" : "invites have"} gone unanswered for ${days} days (${role.title})`, body: "A reminder went out automatically. A recruiter can call them, or you can move on to the next candidates.", action: { label: "See who", href: `/roles/${role.id}/talent?stage=screen_invited` } });
     }
     const pending = await q.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.status, "pending")));
     const oldPending = pending.filter((p) => p.actionType !== "role_packet.approve" && now.getTime() - Date.parse(p.createdAt) >= 2 * DAYS);
@@ -56,7 +57,7 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
 export type LadderLevel = "brief" | "message" | "offer_recruiter" | "escalation";
 const LADDER: LadderLevel[] = ["brief", "message", "offer_recruiter", "escalation"];
 
-export type LadderDeps = { integrations: Integrations; webBaseUrl: string; itsQueueEmail: string; now: Date; actor: Actor };
+export type LadderDeps = { integrations: Integrations; appBaseUrl: string; itsQueueEmail: string; now: Date; actor: Actor };
 
 /**
  * Applies the ladder to today's detections and closes interventions whose condition has cleared.
@@ -93,17 +94,23 @@ export async function runInterventionLadder(q: Queryable, deps: LadderDeps, comp
   return results;
 }
 
+/** Team-facing mail goes through the outbox like everything sent from inside a transaction. */
+function teamMail(q: Queryable, deps: LadderDeps, companyId: string, input: { to: string; subject: string; text: string; idempotencyKey: string; templateKey: string; tags?: Record<string, string> }) {
+  return queueCommunication(q, deps.integrations, { channel: "email", companyId, to: input.to, from: `${deps.integrations.env.productName} <${deps.integrations.env.fromAddress}>`, subject: input.subject, text: input.text, templateKey: input.templateKey, idempotencyKey: input.idempotencyKey, tags: { template: input.templateKey, ...(input.tags ?? {}) }, actor: deps.actor }, deps.now);
+}
+
 async function sendIntervention(q: Queryable, deps: LadderDeps, companyId: string, d: Detection, level: LadderLevel): Promise<void> {
-  const href = `${deps.webBaseUrl}${d.action.href}`;
+  const href = `${deps.appBaseUrl}${d.action.href}`;
   if (level === "brief") {
     await notify(q, { companyId, kind: `stuck.${d.detector}`, title: d.title, body: d.body, action: d.action });
     return;
   }
   const owners = await q.select({ email: users.email, name: users.name, userId: users.id }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(memberships.companyId, companyId), inArray(memberships.role, ["owner", "admin", "hiring_manager"]), eq(memberships.status, "active")));
+  const day = deps.now.toISOString().slice(0, 10);
   if (level === "message") {
     await notify(q, { companyId, kind: `stuck.${d.detector}`, title: d.title, body: d.body, action: d.action });
     for (const o of owners) {
-      await deps.integrations.email.send({ to: o.email, from: `${deps.integrations.env.productName} <${deps.integrations.env.fromAddress}>`, subject: d.title, text: `${o.name ? `Hi ${o.name.split(" ")[0]},` : "Hi,"}\n\n${d.body}\n\n${d.action.label}: ${href}\n\nIf you would rather a recruiter handled this, reply to this email or use "Ask a recruiter" in the app.`, idempotencyKey: `intervention:${companyId}:${d.roleId}:${d.detector}:message:${deps.now.toISOString().slice(0, 10)}`, tags: { template: "intervention", detector: d.detector } });
+      await teamMail(q, deps, companyId, { to: o.email, subject: d.title, text: `${o.name ? `Hi ${o.name.split(" ")[0]},` : "Hi,"}\n\n${d.body}\n\n${d.action.label}: ${href}\n\nIf you would rather a recruiter handled this, reply to this email or use "Ask a recruiter" in the app.`, idempotencyKey: `intervention:${companyId}:${d.roleId}:${d.detector}:message:${day}:${o.userId}`, templateKey: "intervention", tags: { detector: d.detector } });
     }
     return;
   }
@@ -113,11 +120,11 @@ async function sendIntervention(q: Queryable, deps: LadderDeps, companyId: strin
     const body = `${d.body}\n\nAn ITS recruiter can review the shortlist, reach out to candidates, and get this moving. It is one click from the role page or the brief.`;
     await notify(q, { companyId, kind: "stuck.offer_recruiter", title: `Want a recruiter to take a look at ${d.roleTitle}?`, body, action: { label: "Ask a recruiter", href: d.action.href } });
     for (const o of owners) {
-      await deps.integrations.email.send({ to: o.email, from: `${deps.integrations.env.productName} <${deps.integrations.env.fromAddress}>`, subject: `Want a recruiter to look at ${d.roleTitle}?`, text: `${body}\n\nOpen: ${href}`, idempotencyKey: `intervention:${companyId}:${d.roleId}:${d.detector}:offer:${deps.now.toISOString().slice(0, 10)}`, tags: { template: "intervention", detector: d.detector } });
+      await teamMail(q, deps, companyId, { to: o.email, subject: `Want a recruiter to look at ${d.roleTitle}?`, text: `${body}\n\nOpen: ${href}`, idempotencyKey: `intervention:${companyId}:${d.roleId}:${d.detector}:offer:${day}:${o.userId}`, templateKey: "intervention", tags: { detector: d.detector } });
     }
     return;
   }
   const esc = await createEscalation(q, { companyId, roleId: d.roleId, kind: "stuck_role", question: `${d.title}. ${d.body} The owner has not acted after a brief line, a message, and an offer of help. Please review the role and reach out.`, requestedBy: deps.actor });
   await notify(q, { companyId, kind: "stuck.escalated", title: `A recruiter is reviewing ${d.roleTitle}`, body: "It has been waiting a while, so an ITS recruiter is taking a look and will reach out.", action: { label: "See role", href: `/roles/${d.roleId}` } });
-  await deps.integrations.email.send({ to: deps.itsQueueEmail, from: `${deps.integrations.env.productName} <${deps.integrations.env.fromAddress}>`, subject: `[stuck_role] ${d.title}`, text: `${d.body}\n\nOpen the queue: ${deps.webBaseUrl}/recruiter/queue/${esc.id}`, idempotencyKey: `escalation:${esc.id}`, tags: { template: "escalation" } });
+  await teamMail(q, deps, companyId, { to: deps.itsQueueEmail, subject: `[stuck_role] ${d.title}`, text: `${d.body}\n\nOpen the queue: ${deps.appBaseUrl}/recruiter/queue/${esc.id}`, idempotencyKey: `escalation:${esc.id}`, templateKey: "escalation" });
 }

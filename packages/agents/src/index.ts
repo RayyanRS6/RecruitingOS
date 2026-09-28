@@ -9,3 +9,4 @@ export * from "./interview-messages";
 export * from "./interview-calendar";
 export * from "./privacy-messages";
 export * from "./email-failures";
+export * from "./outbox";

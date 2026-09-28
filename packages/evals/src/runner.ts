@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FakeProvider, createRuntimeAsync, intakeCompilePrompt, intakeTurnPrompt, resumeExtractPrompt, runPrompt, screenTurnPrompt, triageAssessPrompt, type AiRuntime, type IntakeContext, type ScreenContext } from "@ros/ai";
+import { FakeProvider, createRuntime, intakeCompilePrompt, intakeTurnPrompt, resumeExtractPrompt, runPrompt, screenTurnPrompt, triageAssessPrompt, type AiRuntime, type IntakeContext, type ScreenContext } from "@ros/ai";
 import { advanceProgress, enforceTurnRules, finalizePacket, mergeFacts, redactProtected, registerFakeHandlers, verifyQuotes } from "@ros/agents";
 import type { IntakeFacts, IntakeMessage, RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
 import { createDb, migrate } from "@ros/db";
@@ -25,8 +25,8 @@ async function main() {
   if (env.AI_PROVIDER === "fake") {
     const fake = new FakeProvider();
     registerFakeHandlers(fake);
-    rt = await createRuntimeAsync(env, fake);
-  } else rt = await createRuntimeAsync(env);
+    rt = await createRuntime(env, fake);
+  } else rt = await createRuntime(env);
   const q = handle.db;
   const results: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; costUsd?: number }>; passRate: number }> = {};
 

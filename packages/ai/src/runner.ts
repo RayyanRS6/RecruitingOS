@@ -1,5 +1,4 @@
-import type { Queryable } from "@ros/db";
-import { aiRuns } from "@ros/db";
+import { aiRuns, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import { estimateCostUsd } from "./pricing";
 import { promptHash, type PromptDef } from "./prompts/registry";
 import { modelForTask, modelTableFromEnv, type ModelTable } from "./routing";
@@ -14,17 +13,17 @@ export type RunOutcome<T> =
   | { ok: true; output: T; runId: string; model: string }
   | { ok: false; runId: string; model: string; reason: "refused" | "invalid" | "error"; error: string };
 
+export type RunMeta = { companyId: string | null; workflowRunId?: string | null; inputRef?: Record<string, unknown>; maxTokens?: number };
+
+/** What one prompt call produced, before anything is written: the model's answer (or failure) and what it cost. */
+export type PromptCall<TOutput> = { result: StructuredResult<TOutput>; model: string; hash: string; attempts: number };
+
 /**
- * Runs a prompt with structured output, validates, retries once on invalid output with the error fed back,
- * and records an `ai_runs` row every time (docs/16: what did the AI see, conclude, why).
+ * Calls the model with structured output, validates, and retries once on invalid output with the error fed back.
+ * Touches no database: the caller records the outcome with `recordRun` inside whichever transaction suits it, or uses
+ * `runPromptDetached`, which does both without holding a transaction open around the call.
  */
-export async function runPrompt<TInput, TOutput>(
-  q: Queryable,
-  rt: AiRuntime,
-  prompt: PromptDef<TInput, TOutput>,
-  input: TInput,
-  meta: { companyId: string | null; workflowRunId?: string | null; inputRef?: Record<string, unknown>; maxTokens?: number },
-): Promise<RunOutcome<TOutput>> {
+export async function callPrompt<TInput, TOutput>(rt: AiRuntime, prompt: PromptDef<TInput, TOutput>, input: TInput, meta: RunMeta): Promise<PromptCall<TOutput>> {
   const model = modelForTask(prompt.task, rt.models);
   const system = prompt.system(input);
   const messages = prompt.messages(input);
@@ -59,7 +58,12 @@ export async function runPrompt<TInput, TOutput>(
     if (result.error.startsWith("provider")) break; // do not retry outages here; the workflow engine retries the step
   }
   if (!result) throw new Error("unreachable");
+  return { result, model, hash, attempts };
+}
 
+/** Records an `ai_runs` row for a call (docs/16: what did the AI see, conclude, why) and turns it into an outcome. */
+export async function recordRun<TInput, TOutput>(q: Queryable, rt: AiRuntime, prompt: PromptDef<TInput, TOutput>, meta: RunMeta, call: PromptCall<TOutput>): Promise<RunOutcome<TOutput>> {
+  const { result, model, hash, attempts } = call;
   const usage = result.usage;
   const [row] = await q
     .insert(aiRuns)
@@ -91,6 +95,26 @@ export async function runPrompt<TInput, TOutput>(
   return { ok: false, runId: row.id, model, reason: result.error.startsWith("provider") ? "error" : "invalid", error: result.error };
 }
 
+/**
+ * Call, then record, on a connection that holds nothing while the model thinks: the call happens first, and the
+ * `ai_runs` row is written afterwards in its own short transaction (tenant-scoped when the run belongs to a company).
+ * The row is written whether the call succeeded or not, so every call is accounted for even when the caller's later
+ * work fails. This is the entry point for every production path.
+ */
+export async function runPromptDetached<TInput, TOutput>(db: Db, rt: AiRuntime, prompt: PromptDef<TInput, TOutput>, input: TInput, meta: RunMeta): Promise<RunOutcome<TOutput>> {
+  const call = await callPrompt(rt, prompt, input, meta);
+  return meta.companyId ? withTenant(db, meta.companyId, (q) => recordRun(q, rt, prompt, meta, call)) : withPlatform(db, (q) => recordRun(q, rt, prompt, meta, call));
+}
+
+/**
+ * Call and record on the given handle. Only for callers that hold no transaction open around `q` (the evaluation
+ * harness, unit tests); application code uses `runPromptDetached` so a transaction never waits on a model.
+ */
+export async function runPrompt<TInput, TOutput>(q: Queryable, rt: AiRuntime, prompt: PromptDef<TInput, TOutput>, input: TInput, meta: RunMeta): Promise<RunOutcome<TOutput>> {
+  const call = await callPrompt(rt, prompt, input, meta);
+  return recordRun(q, rt, prompt, meta, call);
+}
+
 function extractConfidence(output: unknown): string | null {
   if (output && typeof output === "object" && "confidence" in output) {
     const c = (output as { confidence?: unknown }).confidence;
@@ -99,7 +123,11 @@ function extractConfidence(output: unknown): string | null {
   return null;
 }
 
-export function createRuntime(env: Record<string, string | undefined> = process.env, fake?: AiProvider): AiRuntime {
+/**
+ * Builds the runtime for the configured provider: the deterministic fake (never in production) or the Anthropic SDK,
+ * which is loaded lazily so the test path never imports it.
+ */
+export async function createRuntime(env: Record<string, string | undefined> = process.env, fake?: AiProvider): Promise<AiRuntime> {
   const providerId = env.AI_PROVIDER ?? "fake";
   const models = modelTableFromEnv(env);
   if (providerId === "fake") {
@@ -108,17 +136,11 @@ export function createRuntime(env: Record<string, string | undefined> = process.
     return { provider: fake, models: { judgment: "fake", standard: "fake", fast: "fake" } };
   }
   if (providerId === "anthropic") {
-    // lazy import keeps the SDK out of the test path
-    throw new Error("use createRuntimeAsync for the anthropic provider");
+    const { AnthropicProvider } = await import("./providers/anthropic");
+    return { provider: new AnthropicProvider(env.ANTHROPIC_API_KEY), models };
   }
   throw new Error(`unknown AI_PROVIDER ${providerId}`);
 }
 
-export async function createRuntimeAsync(env: Record<string, string | undefined> = process.env, fake?: AiProvider): Promise<AiRuntime> {
-  const providerId = env.AI_PROVIDER ?? "fake";
-  if (providerId === "anthropic") {
-    const { AnthropicProvider } = await import("./providers/anthropic");
-    return { provider: new AnthropicProvider(env.ANTHROPIC_API_KEY), models: modelTableFromEnv(env) };
-  }
-  return createRuntime(env, fake);
-}
+/** @deprecated use createRuntime; kept one release for callers that still name the async variant. */
+export const createRuntimeAsync = createRuntime;

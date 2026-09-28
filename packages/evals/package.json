@@ -12,7 +12,6 @@
     "@ros/ai": "workspace:*",
     "@ros/contracts": "workspace:*",
     "@ros/db": "workspace:*",
-    "@ros/integrations": "workspace:*",
     "@ros/playbooks": "workspace:*"
   },
   "devDependencies": {

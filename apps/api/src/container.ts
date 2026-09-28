@@ -1,17 +1,20 @@
-import { FakeProvider, createRuntimeAsync, type AiRuntime } from "@ros/ai";
-import { cancelInterviewEvents, registerFakeHandlers } from "@ros/agents";
-import { createDb, inspectConnectionRole, jobs, migrate, problemsWithConnectionRole, seedPlatform, withPlatform, withTenant, type Db, type DbHandle, type DbRole } from "@ros/db";
+import { createRuntime, type AiRuntime, type FakeProvider } from "@ros/ai";
+import { cancelInterviewEvents } from "@ros/agents";
+import { createDb, inspectConnectionRole, migrate, migrationStatus, problemsWithConnectionRole, seedPlatform, withPlatform, withTenant, type Db, type DbHandle, type DbRole } from "@ros/db";
 import { countActiveAdmins, createRateLimitStore, raiseAlert, type RateLimitStore } from "@ros/core";
 import { createIntegrations, type Integrations } from "@ros/integrations";
 import { createEngine, type WorkflowEngine } from "@ros/workflows";
 import { REVOKE_JOB_KIND, checkPrivacyRequestDeadlines, listSuppressions, onSuppressionChange, revokeAndDeleteCredentials, setEventSink } from "@ros/core";
-import { retryCommunication, sendFallbackSms } from "@ros/agents";
+import { SEND_JOB_KIND, retryCommunication, sendFallbackSms, sendQueuedCommunication } from "@ros/agents";
 import { guardEmailAdapter } from "@ros/integrations";
 import type { Actor } from "@ros/contracts";
 import { toProductEvent } from "@ros/integrations";
 import { loadEnv, type Env } from "./env";
 import { registerSecretValue } from "@ros/core";
 import { UploadGrants } from "./uploads";
+import { MAINTENANCE_JOB_KIND, runMaintenance } from "./maintenance";
+
+const PRIVACY_DEADLINE_JOB_KIND = "privacy.deadline_check";
 
 export type Container = {
   env: Env;
@@ -52,18 +55,24 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     if (env.NODE_ENV === "production") throw new Error(`refusing to start: ${problems.join("; ")}`);
     console.warn(`[db] ${problems.join("; ")}`);
   }
-  if (env.NODE_ENV !== "production" || env.raw.RUN_MIGRATIONS_ON_BOOT === "true") await migrate(handle);
+  if (env.NODE_ENV !== "production" || env.raw.RUN_MIGRATIONS_ON_BOOT === "true") {
+    await migrate(handle);
+  } else {
+    // Production never migrates on boot (a release step does, docs/14); it also never runs against a schema it does not expect.
+    const status = await migrationStatus(handle);
+    if (status.pending.length) throw new Error(`refusing to start: ${status.pending.length} migration${status.pending.length === 1 ? " is" : "s are"} not applied (${status.pending.join(", ")}). Run pnpm db:migrate (or the migrate workflow) before deploying.`);
+  }
   await seedPlatform(handle.db);
   const rateLimits = createRateLimitStore(env, {
     // The shared store degraded to per-process counting (decision 4 fail-safe): one alert an hour, never a refused request.
     onDegraded: (reason) => {
       console.warn(`[rate-limit] shared store unavailable, counting per process: ${reason}`);
-      void raiseAlert(handle.db, { kind: "rate_limit.shared_unavailable", severity: "high", title: "Shared rate-limit store unreachable; limits apply per process", body: "The Upstash counter could not be reached or refused the request. Limits are counted in this process's memory until it answers again. Check the Upstash console, the monthly budget and the REST token.", details: { reason: reason.slice(0, 200) } }).catch(() => undefined);
+      void raiseAlert(handle.db, { kind: "rate_limit.shared_unavailable", severity: "high", title: "Shared rate-limit store unreachable; limits apply per process", body: "The Upstash counter could not be reached or refused the request. Limits are counted in this process's memory until it answers again. Check the Upstash console, the monthly budget and the REST token.", details: { reason: reason.slice(0, 200) } }).catch((err) => console.warn(`[rate-limit] could not raise the degradation alert: ${err instanceof Error ? err.message : String(err)}`));
     },
   });
-  if (env.NODE_ENV === "production" && (env.RATE_LIMIT_STORE !== "shared" || env.RATE_LIMIT_SHARED_PROVIDER === "fake")) {
-    console.warn("[rate-limit] production is running without a shared rate-limit store; limits are per process. Select a provider (docs/readiness/15) before real traffic.");
-    await raiseAlert(handle.db, { kind: "rate_limit.not_shared", severity: "high", title: "Rate limits are not shared between processes", body: "RATE_LIMIT_STORE is not a real shared store. Limits apply per process only. Select a provider (docs/readiness/15) before real candidate traffic.", details: { store: env.RATE_LIMIT_STORE, provider: env.RATE_LIMIT_SHARED_PROVIDER } }).catch(() => undefined);
+  if (env.NODE_ENV === "production" && env.RATE_LIMIT_STORE !== "upstash") {
+    console.warn("[rate-limit] production is running without a shared rate-limit store; limits are per process. Set RATE_LIMIT_STORE=upstash (docs/readiness/15) before real traffic.");
+    await raiseAlert(handle.db, { kind: "rate_limit.not_shared", severity: "high", title: "Rate limits are not shared between processes", body: "RATE_LIMIT_STORE is not the shared store. Limits apply per process only. Set RATE_LIMIT_STORE=upstash (docs/readiness/15) before real candidate traffic.", details: { store: env.RATE_LIMIT_STORE } }).catch((err) => console.warn(`[rate-limit] could not raise the alert: ${err instanceof Error ? err.message : String(err)}`));
   }
   if (env.BOOTSTRAP_ADMIN_EMAILS.length && (await countActiveAdmins(handle.db)) > 0) {
     console.warn("[auth] BOOTSTRAP_ADMIN_EMAILS is set but administrators already exist: the list grants nothing and every match is audited as ignored. Remove the variable.");
@@ -72,14 +81,17 @@ export async function createContainer(opts: { env?: Record<string, string | unde
   let fake: FakeProvider | null = null;
   let ai: AiRuntime;
   if (env.AI_PROVIDER === "fake") {
-    fake = new FakeProvider();
+    // The deterministic fake and its 48 KB of handlers are loaded only when asked for, so they stay out of the production bundle.
+    const [{ FakeProvider: Fake }, { registerFakeHandlers }] = await Promise.all([import("@ros/ai"), import("@ros/agents")]);
+    fake = new Fake();
     registerFakeHandlers(fake);
-    ai = await createRuntimeAsync(env.raw, fake);
+    ai = await createRuntime(env.raw, fake);
   } else {
-    ai = await createRuntimeAsync(env.raw);
+    ai = await createRuntime(env.raw);
   }
+  // Every value the adapters read is the normalized one from loadEnv, so a default lives in one place only.
   const integrations = createIntegrations(
-    { ...env.raw, STORAGE_DIR: env.STORAGE_DIR, EMAIL_FROM_ADDRESS: env.EMAIL_FROM_ADDRESS, EMAIL_REPLY_TO: env.EMAIL_REPLY_TO, PRODUCT_NAME: env.PRODUCT_NAME, SECRET_STORE: env.SECRET_STORE },
+    { ...env.raw, APP_BASE_URL: env.APP_BASE_URL, STORAGE_DIR: env.STORAGE_DIR, EMAIL_FROM_DOMAIN: env.EMAIL_FROM_DOMAIN, EMAIL_FROM_ADDRESS: env.EMAIL_FROM_ADDRESS, EMAIL_REPLY_TO: env.EMAIL_REPLY_TO, EMAIL_INTAKE_DOMAIN: env.EMAIL_INTAKE_DOMAIN, ITS_QUEUE_EMAIL: env.ITS_QUEUE_EMAIL, PRODUCT_NAME: env.PRODUCT_NAME, SECRET_STORE: env.SECRET_STORE },
     { memoryStorage: opts.memory || env.STORAGE_PROVIDER === "memory", secretsExecutor: (text, params) => handle.query(text, params) },
   );
   // Item 5 (18 Sep): every email send consults the do-not-send list first, whatever adapter is underneath. The list is held
@@ -98,9 +110,11 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     if (pe) void integrations.analytics.capture(pe);
   });
   const engine = createEngine(
-    { db: handle.db, services: { ai, integrations, env: { appBaseUrl: env.APP_BASE_URL, webBaseUrl: env.WEB_BASE_URL, itsQueueEmail: env.ITS_QUEUE_EMAIL } } },
+    { db: handle.db, services: { ai, integrations, env: { appBaseUrl: env.APP_BASE_URL, itsQueueEmail: env.ITS_QUEUE_EMAIL } } },
     { now: opts.now },
   );
+  // The outbox stamps its send jobs on the engine's clock, so a message queued "now" is due on the clock that runs the queue.
+  integrations.clock = () => engine.clock();
 
   // Correction 10: disconnecting queues revocation and deletion; the worker (the only role that can read the value) runs it.
   engine.registerJob(REVOKE_JOB_KIND, async (payload, ctx) => {
@@ -124,10 +138,24 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     await withTenant(handle.db, companyId, (tx) => cancelInterviewEvents(tx, integrations, { interviewId, actor }));
   });
 
-  // Privacy-request deadlines are checked daily (correction 7): the job re-queues itself; a person sees an alert ten days before and when overdue.
-  engine.registerJob("privacy.deadline_check", async (_payload, ctx) => {
+  // Privacy-request deadlines are checked daily (correction 7): the job re-arms itself; a person sees an alert ten days before and when overdue.
+  engine.registerJob(PRIVACY_DEADLINE_JOB_KIND, async (_payload, ctx) => {
     await checkPrivacyRequestDeadlines(handle.db, ctx.now);
-    await handle.db.insert(jobs).values({ kind: "privacy.deadline_check", payload: {}, runAt: new Date(ctx.now.getTime() + 24 * 3600_000).toISOString(), maxAttempts: 3 });
+    await engine.ensureQueued(handle.db, { kind: PRIVACY_DEADLINE_JOB_KIND, runAt: new Date(ctx.now.getTime() + 24 * 3600_000) });
+  });
+
+  // The daily sweep (docs/14, retention): finished jobs, expired sessions and sign-in links, old receipts and reports, interrupted sends.
+  engine.registerJob(MAINTENANCE_JOB_KIND, async (_payload, ctx) => {
+    await runMaintenance(handle.db, ctx.now);
+    await engine.ensureQueued(handle.db, { kind: MAINTENANCE_JOB_KIND, runAt: new Date(ctx.now.getTime() + 24 * 3600_000) });
+  });
+
+  // The outbox: every email and text queued inside a transaction is sent here, after that transaction committed, once.
+  engine.registerJob(SEND_JOB_KIND, async (payload, ctx) => {
+    const communicationId = String(payload.communicationId ?? "");
+    const companyId = String(payload.companyId ?? "");
+    if (!communicationId || !companyId) return;
+    await sendQueuedCommunication(handle.db, integrations, { communicationId, companyId }, ctx);
   });
 
   engine.registerJob("email.retry", async (payload, ctx) => {
@@ -138,6 +166,11 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     if (!applicationId) return;
     await withPlatform(handle.db, (tx) => sendFallbackSms(tx, integrations, { applicationId, communicationId: (payload.communicationId as string | null) ?? null, appBaseUrl: env.APP_BASE_URL }));
   });
+
+  // The recurring jobs exist from the first boot of any process; tests arm them explicitly so a moved clock never runs a sweep by surprise.
+  if (env.NODE_ENV !== "test") {
+    for (const kind of [PRIVACY_DEADLINE_JOB_KIND, MAINTENANCE_JOB_KIND]) await engine.ensureQueued(handle.db, { kind });
+  }
 
   let draining: Promise<void> | null = null;
   const drain = async () => {

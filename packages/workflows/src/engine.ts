@@ -1,8 +1,8 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { SYSTEM_ACTOR, createEscalation, emit } from "@ros/core";
 import { jobs, randomToken, rowsOf, workflowRuns, workflowSteps, withTenant, type Queryable, type Tx, type WaitCondition } from "@ros/db";
-import type { EngineDeps, EngineOptions, RunRow, StartInput, StepContext, StepResult, WakePayload, WorkflowDefinition } from "./types";
+import type { EngineDeps, EngineOptions, PrepareContext, RunRow, StartInput, StepContext, StepResult, WakePayload, WorkflowDefinition } from "./types";
 
 /**
  * A durable, Postgres-backed workflow engine (docs/06).
@@ -10,6 +10,8 @@ import type { EngineDeps, EngineOptions, RunRow, StartInput, StepContext, StepRe
  * - A run is a row; every step execution is a ledger row; the queue is the `jobs` table.
  * - Steps run inside a tenant transaction; if the process dies mid-step the transaction rolls back and the
  *   job lease expires, so the step re-executes. Steps are written to be idempotent.
+ * - A step with slow external work (a model call) declares a `prepare` phase that runs before its transaction opens,
+ *   so no connection or lock is held while a provider is thinking; messages leave through the outbox after commit.
  * - `wait` suspends the run on a human decision, an event, or a timer; `signal` wakes event and human waits;
  *   timers are jobs with a future `run_at`.
  * - Failures retry with exponential backoff; after `maxAttempts` the run fails, emits `workflow.failed`, and
@@ -93,6 +95,25 @@ export class WorkflowEngine {
   /** Registers a handler for a queued job kind other than workflow ticks (for example credential revocation). */
   registerJob(kind: string, handler: JobHandler): void {
     this.jobHandlers.set(kind, handler);
+  }
+
+  /** Queues a job for a registered handler. Call inside the caller's transaction so the job commits with its cause. */
+  async enqueue(q: Queryable, input: { kind: string; payload?: Record<string, unknown>; runAt?: Date; maxAttempts?: number }): Promise<void> {
+    if (input.kind !== "workflow.tick" && !this.jobHandlers.has(input.kind)) throw new Error(`no handler registered for job kind ${input.kind}`);
+    await q.insert(jobs).values({ kind: input.kind, payload: input.payload ?? {}, runAt: (input.runAt ?? this.now()).toISOString(), maxAttempts: input.maxAttempts ?? 5 });
+  }
+
+  /**
+   * Queues a job of this kind unless one is already waiting (queued and not being run). This is how a recurring job is
+   * seeded at boot by any process and re-armed by its own run: the run that is arming the next one is locked, so it does
+   * not count, and two processes booting together leave one chain, not two.
+   */
+  async ensureQueued(q: Queryable, input: { kind: string; runAt?: Date; maxAttempts?: number }): Promise<boolean> {
+    if (!this.jobHandlers.has(input.kind)) throw new Error(`no handler registered for job kind ${input.kind}`);
+    const [waiting] = await q.select({ id: jobs.id }).from(jobs).where(and(eq(jobs.kind, input.kind), eq(jobs.status, "queued"), isNull(jobs.lockedAt))).limit(1);
+    if (waiting) return false;
+    await q.insert(jobs).values({ kind: input.kind, payload: {}, runAt: (input.runAt ?? this.now()).toISOString(), maxAttempts: input.maxAttempts ?? 3 });
+    return true;
   }
 
   /** Claims due jobs with SKIP LOCKED semantics and processes them. Returns the number processed. */
@@ -179,13 +200,19 @@ export class WorkflowEngine {
   private async executeStep(def: WorkflowDefinition, run: RunRow, wake: WakePayload): Promise<"continue" | "stop"> {
     const companyId = run.companyId!;
     const stepKey = run.currentStep;
-    const fn = def.steps[stepKey];
-    if (!fn) throw new Error(`workflow ${def.key} has no step ${stepKey}`);
+    const step = def.steps[stepKey];
+    if (!step) throw new Error(`workflow ${def.key} has no step ${stepKey}`);
     const seq = await this.nextSeq(run.id);
     const actor: Actor = { kind: "system", id: `workflow:${def.key}` };
 
     let outcome: StepResult | { kind: "threw"; error: string };
     try {
+      // The slow half of a two-phase step runs here, with no transaction open.
+      let prepared: unknown ;
+      if (typeof step !== "function") {
+        const pctx: PrepareContext = { run, companyId, state: run.state, services: this.deps.services, wake, now: this.now(), actor, db: this.deps.db, read: (fn) => withTenant(this.deps.db, companyId, fn) };
+        prepared = await step.prepare(pctx);
+      }
       outcome = await withTenant(this.deps.db, companyId, async (q) => {
         const ctx: StepContext = {
           run,
@@ -201,7 +228,7 @@ export class WorkflowEngine {
             return rows.length > 0;
           },
         };
-        const res = await fn(ctx);
+        const res = typeof step === "function" ? await step(ctx) : await step.run(ctx, prepared);
         await this.applyResult(q, def, run, stepKey, seq, res, wake, actor);
         return res;
       });
@@ -214,7 +241,7 @@ export class WorkflowEngine {
       return this.handleRetry(def, run, stepKey, seq, error, actor);
     }
     if (outcome.kind === "fail") {
-      await this.failForGood(def, run, stepKey, seq, outcome.error, actor);
+      await this.failForGood(def, run, stepKey, outcome.error, actor);
       return "stop";
     }
     return outcome.kind === "next" ? "continue" : "stop";
@@ -251,7 +278,7 @@ export class WorkflowEngine {
     const max = def.maxAttempts ?? 3;
     await this.deps.db.insert(workflowSteps).values({ runId: run.id, companyId: run.companyId, stepKey, seq, status: "error", input: {}, output: {}, attempts, error, finishedAt: this.now().toISOString() });
     if (attempts >= max) {
-      await this.failForGood(def, run, stepKey, seq, error, actor, attempts);
+      await this.failForGood(def, run, stepKey, error, actor, attempts);
       return "stop";
     }
     const delayMs = Math.min(10 * 60_000, 2000 * 2 ** (attempts - 1));
@@ -263,7 +290,7 @@ export class WorkflowEngine {
     return "stop";
   }
 
-  private async failForGood(def: WorkflowDefinition, run: RunRow, stepKey: string, seq: number, error: string, actor: Actor, attempts = run.attempts + 1): Promise<void> {
+  private async failForGood(def: WorkflowDefinition, run: RunRow, stepKey: string, error: string, actor: Actor, attempts = run.attempts + 1): Promise<void> {
     await this.deps.db.update(workflowRuns).set({ status: "failed", attempts, lastError: error, wait: null }).where(eq(workflowRuns.id, run.id));
     await emit(this.deps.db, { type: "workflow.failed", companyId: run.companyId, actor, subject: { type: "workflow_run", id: run.id }, payload: { step: stepKey, error, attempts }, correlationId: run.id });
     if (run.companyId) {

@@ -1,6 +1,6 @@
 import type { OfferedSlot, RolePacket } from "@ros/contracts";
 import { buildIcs, disclosureLine, formatInZone, groupSlotsByDay } from "@ros/core";
-import { type Queryable, type interviews } from "@ros/db";
+import type { Queryable, interviews } from "@ros/db";
 import type { Integrations, SendResult } from "@ros/integrations";
 import { deliver, type MessageInput } from "./coordinator";
 

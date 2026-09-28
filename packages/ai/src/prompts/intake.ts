@@ -49,8 +49,7 @@ export const intakeTurnPrompt: PromptDef<IntakeContext, IntakeTurn> = {
     { text: ctx.benchmark ? `Compensation benchmark for ${ctx.benchmark.metro} (${ctx.benchmark.basis}): p25 ${ctx.benchmark.p25}, p50 ${ctx.benchmark.p50}, p75 ${ctx.benchmark.p75}. Source: ${ctx.benchmark.source}.` : "No compensation benchmark available yet." },
     { text: `Facts established so far (JSON): ${JSON.stringify(ctx.facts)}` },
   ],
-  messages: (ctx) =>
-    ctx.messages.map((m) => ({ role: m.role === "owner" ? ("user" as const) : ("assistant" as const), content: m.content })).filter((m, i, arr) => i === arr.length - 1 || true),
+  messages: (ctx) => ctx.messages.map((m) => ({ role: m.role === "owner" ? ("user" as const) : ("assistant" as const), content: m.content })),
 };
 
 const COMPILE_SYSTEM = `You compile the Role Packet from established facts. The packet is the single object every later step of hiring reads: posting, screening, interviews, scorecards, and the offer. Be complete, specific, and honest about assumptions.

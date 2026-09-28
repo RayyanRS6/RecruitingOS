@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
-import { aiRuns, applications, approvalRequests, assessments, communications, events, postings, recruiterEscalations, roles, screens, workflowRuns } from "@ros/db";
-import { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
+import { and, eq, sql } from "drizzle-orm";
+import { aiRuns, applications, approvalRequests, assessments, candidates, communications, events, jobs, postings, recruiterEscalations, roles, screens, workflowRuns } from "@ros/db";
+import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 
@@ -48,16 +48,31 @@ describe("Slice 1 API", () => {
     expect((await json("POST", "/api/v1/auth/magic-link/consume", { token })).status).toBe(401);
   });
 
-  it("signs in from the emailed link with a top-level redirect", async () => {
+  it("signs in from the emailed link: opening it changes nothing, the button signs in with a top-level redirect, and the link works once", async () => {
     const r1 = await json("POST", "/api/v1/auth/magic-link", { email: "link@brightline.test" });
     const { devLink } = (await r1.json()) as { devLink: string };
     expect(devLink).toMatch(/\/api\/v1\/auth\/consume\?token=/);
-    const r2 = await app.request(devLink.replace(container.env.APP_BASE_URL, ""), { redirect: "manual" });
+    const token = new URL(devLink).searchParams.get("token")!;
+    // a mail scanner or a preview fetches the link: the page shows a button and consumes nothing
+    const page = await app.request(devLink.replace(container.env.APP_BASE_URL, ""), { redirect: "manual" });
+    expect(page.status).toBe(200);
+    expect(page.headers.get("set-cookie")).toBeNull();
+    expect(await page.text()).toMatch(/Continue to/);
+    const press = () => app.request("/api/v1/auth/consume", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token }).toString(), redirect: "manual" });
+    const r2 = await press();
     expect(r2.status).toBe(302);
-    expect(r2.headers.get("location")).toBe(`${container.env.WEB_BASE_URL}/setup/company`);
+    expect(r2.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/setup/company`);
     expect(r2.headers.get("set-cookie")).toMatch(/ros_session=/);
-    const again = await app.request(devLink.replace(container.env.APP_BASE_URL, ""), { redirect: "manual" });
+    const again = await press();
     expect(again.headers.get("location")).toMatch(/error=expired/);
+  });
+
+  it("two requests carrying the same link open exactly one session", async () => {
+    const r1 = await json("POST", "/api/v1/auth/magic-link", { email: "race@brightline.test" });
+    const { devLink } = (await r1.json()) as { devLink: string };
+    const token = new URL(devLink).searchParams.get("token")!;
+    const attempts = await Promise.all([0, 1, 2].map(() => json("POST", "/api/v1/auth/magic-link/consume", { token })));
+    expect(attempts.map((r) => r.status).sort()).toEqual([200, 401, 401]);
   });
 
   it("creates the company with trial entitlements", async () => {
@@ -297,7 +312,7 @@ describe("Slice 1 API", () => {
     expect(dup).toHaveLength(1);
   });
 
-  it("recovers from a transient email outage with a retry", async () => {
+  it("recovers from a transient email outage: the message is queued, the workflow moves on, and the outbox retries the send exactly once", async () => {
     (container.integrations.email as FakeEmailAdapter).failNext(1);
     const form = new FormData();
     form.set("firstName", "Priya");
@@ -307,21 +322,28 @@ describe("Slice 1 API", () => {
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
     for (const rule of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${rule.key}`, "yes");
     await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });
-    let [a] = await container.db.select().from(applications).where(eq(applications.candidateId, (await container.db.select().from(applications)).find(() => true)!.candidateId)).limit(0);
-    void a;
-    const runsBefore = await container.db.select().from(workflowRuns).where(eq(workflowRuns.workflowKey, "application_intake"));
-    const waiting = runsBefore.find((x) => x.status === "waiting" && x.lastError?.includes("acknowledgment"));
-    expect(waiting).toBeTruthy();
-    const retried = await container.db.select().from(events).where(eq(events.type, "workflow.retried"));
-    expect(retried.length).toBeGreaterThanOrEqual(1);
+    const [priya] = await container.db.select().from(candidates).where(eq(candidates.email, "priya@example.com"));
+    // the acknowledgment is recorded and queued; the provider refused it once, so the outbox job waits for its retry
+    const [ack] = await container.db.select().from(communications).where(and(eq(communications.candidateId, priya.id), eq(communications.templateKey, "acknowledgment")));
+    expect(ack.status).toBe("queued");
+    expect(ack.error).toMatch(/outage/);
+    expect(ack.sendAttempts).toBe(1);
+    const [job] = await container.db.select().from(jobs).where(and(eq(jobs.kind, "communication.send"), sql`${jobs.payload}->>'communicationId' = ${ack.id}`));
+    expect(job.status).toBe("queued");
+    expect(job.lastError).toMatch(/outage/);
+    // the workflow itself was never held up by the provider: it acknowledged and moved on
+    const runs = await container.db.select().from(workflowRuns).where(eq(workflowRuns.workflowKey, "application_intake"));
+    expect(runs.some((x) => x.status === "waiting" && x.lastError?.includes("acknowledgment"))).toBe(false);
+    expect((await container.db.select().from(events).where(eq(events.type, "message.retried"))).some((e) => e.subjectId === ack.id)).toBe(true);
     // the retry timer fires
     setClock(60_000);
     await container.drain();
     setClock(0);
-    const [run] = await container.db.select().from(workflowRuns).where(eq(workflowRuns.id, waiting!.id));
-    expect(run.status).toBe("completed");
+    const [sent] = await container.db.select().from(communications).where(eq(communications.id, ack.id));
+    expect(sent.status).toBe("sent");
+    expect(sent.providerMessageId).toBeTruthy();
     const outbox = (container.integrations.email as FakeEmailAdapter).sent;
-    expect(outbox.find((m) => m.to === "priya@example.com")).toBeTruthy();
+    expect(outbox.filter((m) => m.to === "priya@example.com" && /received your application/.test(m.subject))).toHaveLength(1);
   });
 
   it("escalates to a recruiter with full context and shows it in the brief", async () => {

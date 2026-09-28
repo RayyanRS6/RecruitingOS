@@ -27,6 +27,3 @@ export async function documentToText(bytes: Uint8Array, mime: string, filename: 
   }
   return "";
 }
-
-export const ALLOWED_RESUME_TYPES = new Set(["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/plain", "text/markdown"]);
-export const MAX_RESUME_BYTES = 8 * 1024 * 1024;

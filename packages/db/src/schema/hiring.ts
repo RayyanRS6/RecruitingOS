@@ -374,9 +374,20 @@ export const communications = pgTable(
     failureType: text("failure_type"),
     retryOf: uuid("retry_of"),
     retryAttempt: integer("retry_attempt").notNull().default(0),
+    /**
+     * Outbox (migration 0019): a message is written as `queued` inside the transaction that decided to send it; the
+     * worker sends it after commit and marks it `sent` or `failed`. The key makes a retried step reuse its row.
+     */
+    idempotencyKey: text("idempotency_key"),
+    sendingAt: ts("sending_at"),
+    sendAttempts: integer("send_attempts").notNull().default(0),
+    replyTo: text("reply_to"),
+    tags: jsonb("tags").$type<Record<string, string>>().notNull().default({}),
+    attachments: jsonb("attachments").$type<Array<{ filename: string; contentType: string; contentBase64: string }> | null>(),
+    correlationId: text("correlation_id"),
     createdAt: createdAt(),
   },
-  (t) => [index("communications_company_candidate_idx").on(t.companyId, t.candidateId, t.createdAt), index("communications_application_idx").on(t.applicationId), index("communications_provider_message_idx").on(t.providerMessageId)],
+  (t) => [index("communications_company_candidate_idx").on(t.companyId, t.candidateId, t.createdAt), index("communications_application_idx").on(t.applicationId), index("communications_provider_message_idx").on(t.providerMessageId), uniqueIndex("communications_idempotency_key_idx").on(t.idempotencyKey)],
 );
 
 export const offers = pgTable(
