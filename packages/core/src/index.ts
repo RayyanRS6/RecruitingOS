@@ -30,3 +30,5 @@ export * from "./outcomes";
 export * from "./rate-limit";
 export * from "./csp";
 export * from "./mfa-transaction";
+export * from "./sealed";
+export * from "./html";

@@ -14,7 +14,7 @@ export type { MalwareScanner, ScanResult } from "./scanning/types";
 export { MemorySecretStore } from "./secrets/memory";
 export { FakeAnalyticsAdapter, PostHogServerAdapter } from "./analytics/adapters";
 export { toProductEvent, refFor } from "./analytics/mapping";
-export { FakeCredentialRevoker, type CredentialRevoker } from "./secrets/revoke";
+export { CalendarCredentialRevoker, FakeCredentialRevoker, type CredentialRevoker } from "./secrets/revoke";
 export { SuppressingEmailAdapter, fakePostmarkEvent, guardEmailAdapter, parsePostmarkEvent, verifyPostmarkWebhookAuth, type EmailEvent } from "./email/postmark-webhooks";
 export { FakeIdentityProvider, type FakeMintInput } from "./identity/fake";
 export { SupabaseIdentityProvider, scalableSvg } from "./identity/supabase";

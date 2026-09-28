@@ -34,7 +34,7 @@ const WRONG_CODE = "That code is not right. Check the app and try again.";
 
 function paths(container: Container) {
   const base = `${container.env.APP_BASE_URL}/api/v1/auth/mfa`;
-  return { base, backup: `${base}/backup`, skip: `${base}/skip`, cancel: `${base}/cancel`, home: `${container.env.WEB_BASE_URL}/` };
+  return { base, backup: `${base}/backup`, skip: `${base}/skip`, cancel: `${base}/cancel`, home: `${container.env.APP_BASE_URL}/` };
 }
 
 function readTx(c: Context<Vars>, container: Container): MfaTransaction | null {
@@ -48,7 +48,7 @@ function clearTx(c: Context<Vars>, container: Container) {
 }
 function toLogin(c: Context<Vars>, container: Container, code: string | null) {
   clearTx(c, container);
-  return c.redirect(`${container.env.WEB_BASE_URL}/login${code ? `?error=${encodeURIComponent(code)}` : ""}`, 302);
+  return c.redirect(`${container.env.APP_BASE_URL}/login${code ? `?error=${encodeURIComponent(code)}` : ""}`, 302);
 }
 function providerFailure(c: Context<Vars>, container: Container, err: unknown) {
   if (err instanceof IdentityError) return toLogin(c, container, err.code === "mfa_session_invalid" ? "mfa_expired" : "mfa_unavailable");

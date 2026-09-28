@@ -77,7 +77,7 @@ companyRoutes.post("/current/invites", requireTenant, async (c) => {
     to: body.email,
     from: `${company.name} via ${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`,
     subject: `You're invited to help ${company.name} hire`,
-    text: `${c.get("session")!.user.name ?? c.get("session")!.user.email} invited you to ${company.name}'s hiring workspace as ${body.role.replace("_", " ")}.\n\nAccept (valid 15 minutes; request a new link any time):\n${link}`,
+    text: `${c.get("session")!.user.name ?? c.get("session")!.user.email} invited you to ${company.name}'s hiring workspace as ${body.role.replace("_", " ")}.\n\nAccept (the link works once and stays valid for seven days; ask for a new one any time):\n${link}`,
     idempotencyKey: `invite:${token.slice(0, 12)}`,
     tags: { template: "invite" },
   });
@@ -171,7 +171,7 @@ companyRoutes.post("/current/staff-access/:grantId/revoke", requireTenant, async
       await audit(container.db, { companyId: t.companyId, actor: { kind: "system", id: "email" }, action: "staff.access_revoked", target: { type: "user", id: result.recruiterUserId }, reason: "recruiter notification failed", details: { grantId: result.grant.id, error: sent.error } });
     }
   }
-  await container.integrations.email.send({ to: container.env.ITS_QUEUE_EMAIL, from, subject: `[access ended] ${result.companyName} ended a recruiter's access`, text: `Recruiter: ${result.recruiter?.name ?? result.recruiter?.email ?? result.recruiterUserId}\nReason given by the customer: ${reason}\n${result.escalationId ? `The request is open again in the queue: ${container.env.WEB_BASE_URL}/recruiter/queue/${result.escalationId}` : ""}`, idempotencyKey: `grant_revoked_queue:${result.grant.id}`, tags: { template: "staff_access_revoked_queue" } });
+  await container.integrations.email.send({ to: container.env.ITS_QUEUE_EMAIL, from, subject: `[access ended] ${result.companyName} ended a recruiter's access`, text: `Recruiter: ${result.recruiter?.name ?? result.recruiter?.email ?? result.recruiterUserId}\nReason given by the customer: ${reason}\n${result.escalationId ? `The request is open again in the queue: ${container.env.APP_BASE_URL}/recruiter/queue/${result.escalationId}` : ""}`, idempotencyKey: `grant_revoked_queue:${result.grant.id}`, tags: { template: "staff_access_revoked_queue" } });
   return c.json({ ok: true, grantId: result.grant.id, endedAt: now.toISOString(), escalationId: result.escalationId, recruiterNotified });
 });
 

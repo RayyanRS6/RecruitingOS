@@ -143,7 +143,7 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
 
     const skip = await h.post(jar, "/api/v1/auth/mfa/skip");
     expect(skip.status).toBe(302);
-    expect(skip.headers.get("location")).toBe(`${container.env.WEB_BASE_URL}/`);
+    expect(skip.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/`);
     expect(jar.ros_mfa).toBeUndefined();
   });
 
@@ -168,7 +168,7 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
     expect(setupKeyOf(await (await h.get(jar, "/api/v1/auth/mfa/backup")).text())).toBe(backupSecret);
     const done = await h.postCode(jar, totp(backupSecret));
     expect(done.status).toBe(302);
-    expect(done.headers.get("location")).toBe(`${container.env.WEB_BASE_URL}/`);
+    expect(done.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/`);
     expect(jar.ros_mfa).toBeUndefined();
     expect((await h.auditsOf("mfa.backup_enrolled")).length).toBe(1);
     const [user] = await container.db.select().from(users).where(eq(users.email, NADINE));
@@ -181,7 +181,7 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
     await h.get(jar, "/api/v1/auth/mfa");
     const done = await h.postCode(jar, totp(backupSecret));
     expect(done.status).toBe(302);
-    expect(done.headers.get("location")).toBe(`${container.env.WEB_BASE_URL}/`);
+    expect(done.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/`);
     expect((await h.meJson(jar)).auth.aal).toBe("aal2");
     expect(jar.ros_mfa).toBeUndefined();
   });
@@ -244,7 +244,7 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
     const opened = openMfaTransaction(sealed, container.env.SESSION_SECRET)!;
     expect(opened.email).toBe("late@identifiedtalent.com");
     const rewritten = sealMfaTransaction({ ...opened, stage: "backup_offer" } as MfaTransaction, "some-other-secret-value-for-the-test");
-    expect((await app.request("/api/v1/auth/mfa/backup", { headers: { cookie: `ros_mfa=${rewritten}` } })).headers.get("location")).toBe(`${container.env.WEB_BASE_URL}/`);
+    expect((await app.request("/api/v1/auth/mfa/backup", { headers: { cookie: `ros_mfa=${rewritten}` } })).headers.get("location")).toBe(`${container.env.APP_BASE_URL}/`);
     // Ten minutes and one second later the sealed transaction is dead.
     const engine = container.engine as unknown as { now: () => Date };
     const realNow = engine.now;
@@ -260,11 +260,11 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
 
   it("customers and level-2 staff never see the step; a staff Google sign-in is still refused; the JSON route still refuses level 1", async () => {
     const customer = await h.browserSignIn({ email: "dana@brightline.test", name: "Dana", provider: "google", aal2: false });
-    expect(customer.res.headers.get("location")).toBe(`${container.env.WEB_BASE_URL}/setup/company`);
+    expect(customer.res.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/setup/company`);
     expect(customer.jar.ros_session).toBeTruthy();
     expect(customer.jar.ros_mfa).toBeUndefined();
     const staffAal2 = await h.browserSignIn({ email: "paul@identifiedtalent.com", name: "Paul", provider: "azure", aal2: true });
-    expect(staffAal2.res.headers.get("location")).toBe(`${container.env.WEB_BASE_URL}/`);
+    expect(staffAal2.res.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/`);
     expect(staffAal2.jar.ros_mfa).toBeUndefined();
     const staffGoogle = await h.browserSignIn({ email: "paul@identifiedtalent.com", name: "Paul", provider: "google", aal2: false });
     expect(staffGoogle.res.headers.get("location")).toContain("/login?error=staff_provider_required");
@@ -285,11 +285,11 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
     const customer = await h.browserSignIn({ email: "eve@brightline.test", name: "Eve", provider: "google", aal2: false });
     const stolen: Jar = { ros_mfa: jar.ros_mfa!, ros_session: customer.jar.ros_session! };
     const r = await h.get(stolen, "/api/v1/auth/mfa/backup");
-    expect(r.headers.get("location")).toBe(`${container.env.WEB_BASE_URL}/`);
+    expect(r.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/`);
     expect(stolen.ros_mfa).toBeUndefined();
     // no session at all: home, nothing enrolled
     const noSession: Jar = { ros_mfa: jar.ros_mfa! };
-    expect((await h.get(noSession, "/api/v1/auth/mfa/backup")).headers.get("location")).toBe(`${container.env.WEB_BASE_URL}/`);
+    expect((await h.get(noSession, "/api/v1/auth/mfa/backup")).headers.get("location")).toBe(`${container.env.APP_BASE_URL}/`);
     const [user] = await container.db.select().from(users).where(eq(users.email, email));
     const factors = await idp().listFactors(idp().mint({ email, provider: "azure", aal: "aal2", subject: user!.authSubject! }));
     expect(factors.filter((f) => f.status === "verified").length).toBe(1);
@@ -310,7 +310,7 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
     expect(jar.ros_session).toBeUndefined();
     // the person's own cancel works and audits nothing about the secret
     const cancel = await h.post(jar, "/api/v1/auth/mfa/cancel", {}, { "sec-fetch-site": "same-origin" });
-    expect(cancel.headers.get("location")).toBe(`${container.env.WEB_BASE_URL}/login`);
+    expect(cancel.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/login`);
     expect(jar.ros_mfa).toBeUndefined();
   });
 

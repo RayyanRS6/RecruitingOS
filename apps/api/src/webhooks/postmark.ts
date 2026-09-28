@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { eq, and } from "drizzle-orm";
-import { recordWebhookReceipt, safeEqual } from "@ros/core";
+import { recordWebhookReceipt } from "@ros/core";
 import { handleEmailEvent } from "@ros/agents";
 import { inboundEmails, postings, roles, withPlatform, withTenant } from "@ros/db";
 import { extractApplicantFromInbound, extractIntakeToken, parsePostmarkEvent, parsePostmarkInbound, verifyPostmarkWebhookAuth } from "@ros/integrations";
@@ -17,11 +17,10 @@ postmarkWebhook.post("/inbound", async (c) => {
   const container = c.get("container");
   const secret = container.env.raw.POSTMARK_INBOUND_SECRET;
   if (secret) {
-    // Postmark carries credentials as HTTP basic auth in the webhook URL (https://inbound:<secret>@host/...); a header
-    // or a query string are still accepted for tools that cannot set basic auth.
-    const provided = c.req.query("secret") ?? c.req.header("x-inbound-secret") ?? "";
-    const ok = verifyPostmarkWebhookAuth({ authorization: c.req.header("authorization"), secretHeader: c.req.header("x-inbound-secret") }, secret) || (!!provided && safeEqual(provided, secret));
-    if (!ok) return c.json({ error: { code: "unauthorized", message: "bad secret" } }, 401);
+    // Postmark carries credentials as HTTP basic auth in the webhook URL (https://inbound:<secret>@host/...); the
+    // x-inbound-secret header is accepted for tools that cannot set basic auth. Never the query string: platforms log
+    // full request URLs, and a secret in one would end up in those logs.
+    if (!verifyPostmarkWebhookAuth({ authorization: c.req.header("authorization"), secretHeader: c.req.header("x-inbound-secret") }, secret)) return c.json({ error: { code: "unauthorized", message: "bad secret" } }, 401);
   } else if (container.env.NODE_ENV === "production") {
     return c.json({ error: { code: "misconfigured", message: "POSTMARK_INBOUND_SECRET is not set" } }, 503);
   }
@@ -39,7 +38,7 @@ postmarkWebhook.post("/inbound", async (c) => {
     return c.json({ ok: true, matched: false });
   }
   const [role] = await container.db.select().from(roles).where(eq(roles.id, posting.roleId)).limit(1);
-  if (!role || role.status !== "open") {
+  if (role?.status !== "open") {
     await container.db.update(inboundEmails).set({ status: "unmatched", companyId: posting.companyId, error: "role not open" }).where(eq(inboundEmails.id, inbound.id));
     return c.json({ ok: true, matched: false });
   }

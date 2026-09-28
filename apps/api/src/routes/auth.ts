@@ -1,11 +1,12 @@
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { eq } from "drizzle-orm";
-import { MagicLinkConsume, MagicLinkRequest } from "@ros/contracts";
+import { MagicLinkConsume, MagicLinkRequest, type MeResponse, type MembershipRole } from "@ros/contracts";
 import { createHash, randomBytes } from "node:crypto";
-import { consumeMagicLink, createMagicLink, isStaffAccount, newMfaTransactionId, normalizeEmail, revokeSession, sealMfaTransaction, setActiveCompany, SignInRefused, MFA_TRANSACTION_TTL_MS } from "@ros/core";
-import { companies, memberships, users } from "@ros/db";
+import { consumeMagicLink, createMagicLink, escapeHtml, hashToken, isStaffAccount, newMfaTransactionId, normalizeEmail, revokeSession, sealMfaTransaction, setActiveCompany, SignInRefused, MFA_TRANSACTION_TTL_MS } from "@ros/core";
+import { companies, magicLinks, memberships, users, withPlatform } from "@ros/db";
 import { mfaRoutes } from "./auth-mfa";
+import { renderSignInLinkPage } from "../pages/signin-link";
 import { MFA_COOKIE, mfaCookieOptions, needsSecondFactor, openSession, sessionCookieOptions, signInPolicy } from "./auth-shared";
 import { FakeEmailAdapter, FakeIdentityProvider, IdentityError, base64url } from "@ros/integrations";
 import { SESSION_COOKIE, clientIp, isPlatformStaff, type Vars } from "../middleware/session";
@@ -17,10 +18,9 @@ import { POLICIES, rateLimit } from "../middleware/rate-limit";
 export const authRoutes = new Hono<Vars>();
 
 /**
- * Sign-in links point at the API, which sets the session cookie on a top-level navigation and redirects into
- * the web app. That is the reliable way to set a cookie from a link (no XHR involved) and it works when the
- * API and the app share a site. Cookies ignore ports, so in development localhost:3001 sets a cookie that
- * localhost:5173 sends.
+ * Sign-in and invitation links point at the API, which shows a one-button page; pressing it sets the session cookie on
+ * a top-level navigation and redirects into the app. That is the reliable way to set a cookie from a link, and opening
+ * the link alone (a mail scanner, a preview) never consumes it.
  */
 export function consumeLink(container: Container, token: string): string {
   return `${container.env.APP_BASE_URL}/api/v1/auth/consume?token=${encodeURIComponent(token)}`;
@@ -52,13 +52,14 @@ authRoutes.get("/start/:provider", async (c) => {
 /** The identity service returns here with a single-use code; the code is exchanged server-side and the token verified before a session opens. */
 authRoutes.get("/callback", async (c) => {
   const container = c.get("container");
-  const fail = (code: string) => { deleteCookie(c, PKCE_COOKIE, { path: "/" }); return c.redirect(`${container.env.WEB_BASE_URL}/login?error=${encodeURIComponent(code)}`, 302); };
+  const fail = (code: string) => { deleteCookie(c, PKCE_COOKIE, { path: "/" }); return c.redirect(`${container.env.APP_BASE_URL}/login?error=${encodeURIComponent(code)}`, 302); };
   const pkce = getCookie(c, PKCE_COOKIE);
   const code = c.req.query("code");
   if (!pkce || !code) return fail("signin_incomplete");
   const [verifier, state] = pkce.split(".");
+  // The state is mandatory and must be the one this browser was given; PKCE binds the code, the state binds the flow.
   const returnedState = c.req.query("state");
-  if (returnedState && returnedState !== state) return fail("signin_incomplete");
+  if (!returnedState || returnedState !== state) return fail("signin_incomplete");
   try {
     const { accessToken } = await container.integrations.identity.exchangeCode({ code, codeVerifier: verifier });
     const identity = await container.integrations.identity.verify(accessToken);
@@ -72,7 +73,7 @@ authRoutes.get("/callback", async (c) => {
     const result = await openSession(container, c, identity);
     deleteCookie(c, PKCE_COOKIE, { path: "/" });
     setCookie(c, SESSION_COOKIE, result.sessionToken, sessionCookieOptions(container));
-    return c.redirect(`${container.env.WEB_BASE_URL}${result.activeCompanyId || result.staff ? "/" : "/setup/company"}`, 302);
+    return c.redirect(`${container.env.APP_BASE_URL}${result.activeCompanyId || result.staff ? "/" : "/setup/company"}`, 302);
   } catch (err) {
     if (err instanceof SignInRefused || err instanceof IdentityError) return fail(err.code);
     throw err;
@@ -104,7 +105,7 @@ authRoutes.get("/fake/authorize", async (c) => {
   const container = c.get("container");
   if (container.env.NODE_ENV === "production" || !(container.integrations.identity instanceof FakeIdentityProvider)) return c.notFound();
   const q = c.req.query();
-  const esc = (s: string) => s.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]!);
+  const esc = escapeHtml;
   return c.html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Fake sign-in (development)</title>
 <style>body{font-family:system-ui,sans-serif;max-width:480px;margin:8vh auto;padding:0 16px;color:#1b1b1b}label{display:block;margin:12px 0 4px}input[type=text],input[type=email]{width:100%;padding:8px;border:1px solid #bbb;border-radius:6px}button{margin-top:16px;padding:10px 16px;border-radius:6px;border:0;background:#1f4b99;color:#fff;font-size:15px}.note{background:#fff4d6;padding:10px;border-radius:6px;font-size:14px}</style></head>
 <body><h1>Sign in with ${esc(q.provider === "azure" ? "Microsoft" : q.provider === "google" ? "Google" : q.provider ?? "provider")} (fake)</h1>
@@ -154,16 +155,28 @@ authRoutes.post("/magic-link", rateLimit(POLICIES.authMagicLink), async (c) => {
   return c.json({ ok: true, ...dev });
 });
 
-/** The link in the email: consume, set the cookie, and redirect into the app. */
+/**
+ * The link in the email opens a page with one button; nothing is consumed by opening it, so a mail scanner or a link
+ * preview cannot burn the single-use link. The button posts the token, which opens the session and redirects into the app.
+ */
 authRoutes.get("/consume", async (c) => {
   const container = c.get("container");
   const token = c.req.query("token") ?? "";
+  if (!token) return c.redirect(`${container.env.APP_BASE_URL}/login?error=expired`, 302);
+  const [link] = await container.db.select({ inviteCompanyId: magicLinks.inviteCompanyId }).from(magicLinks).where(eq(magicLinks.tokenHash, hashToken(token))).limit(1);
+  return c.html(renderSignInLinkPage({ token, productName: container.env.PRODUCT_NAME, action: `${container.env.APP_BASE_URL}/api/v1/auth/consume`, invite: !!link?.inviteCompanyId }));
+});
+
+authRoutes.post("/consume", async (c) => {
+  const container = c.get("container");
+  const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
+  const token = typeof form.token === "string" ? form.token : "";
   try {
-    const result = await consumeMagicLink(container.db, { token, ip: clientIp(c), userAgent: c.req.header("user-agent") });
+    const result = await withPlatform(container.db, (tx) => consumeMagicLink(tx, { token, ip: clientIp(c), userAgent: c.req.header("user-agent") }));
     setCookie(c, SESSION_COOKIE, result.sessionToken, sessionCookieOptions(container));
-    return c.redirect(`${container.env.WEB_BASE_URL}${result.activeCompanyId ? "/" : "/setup/company"}`, 302);
+    return c.redirect(`${container.env.APP_BASE_URL}${result.activeCompanyId ? "/" : "/setup/company"}`, 302);
   } catch {
-    return c.redirect(`${container.env.WEB_BASE_URL}/login?error=expired`, 302);
+    return c.redirect(`${container.env.APP_BASE_URL}/login?error=expired`, 302);
   }
 });
 
@@ -171,7 +184,7 @@ authRoutes.get("/consume", async (c) => {
 authRoutes.post("/magic-link/consume", async (c) => {
   const body = MagicLinkConsume.parse(await c.req.json());
   const container = c.get("container");
-  const result = await consumeMagicLink(container.db, { token: body.token, ip: clientIp(c), userAgent: c.req.header("user-agent") });
+  const result = await withPlatform(container.db, (tx) => consumeMagicLink(tx, { token: body.token, ip: clientIp(c), userAgent: c.req.header("user-agent") }));
   setCookie(c, SESSION_COOKIE, result.sessionToken, sessionCookieOptions(container));
   return c.json({ ok: true, userId: result.userId, activeCompanyId: result.activeCompanyId });
 });
@@ -192,14 +205,15 @@ authRoutes.get("/me", async (c) => {
     .from(memberships)
     .innerJoin(companies, eq(companies.id, memberships.companyId))
     .where(eq(memberships.userId, s.user.id));
-  return c.json({
+  const body: MeResponse = {
     user: { id: s.user.id, email: s.user.email, name: s.user.name, platformRole: s.user.platformRole },
     auth: { provider: s.identityProvider, aal: s.aal, mfaVerifiedAt: s.mfaVerifiedAt },
-    memberships: ms.map((m) => ({ companyId: m.companyId, companyName: m.name, companySlug: m.slug, role: m.role })),
+    memberships: ms.map((m) => ({ companyId: m.companyId, companyName: m.name, companySlug: m.slug, role: m.role as MembershipRole })),
     activeCompanyId: c.get("tenant")?.companyId ?? null,
     staffAccess: c.get("tenant")?.staff ? { ...c.get("tenant")!.staff!, companyName: (await container.db.select({ name: companies.name }).from(companies).where(eq(companies.id, c.get("tenant")!.companyId)).limit(1))[0]?.name ?? null } : null,
     ai: { provider: container.ai.provider.id },
-  });
+  };
+  return c.json(body);
 });
 
 authRoutes.post("/switch", async (c) => {

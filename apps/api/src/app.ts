@@ -1,5 +1,4 @@
 import { Hono, type MiddlewareHandler } from "hono";
-import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { secureHeaders } from "hono/secure-headers";
 import { and, eq } from "drizzle-orm";
@@ -36,7 +35,7 @@ export function createApp(container: Container) {
   // Request logs never carry a credential or an OAuth code (correction 10).
   if (container.env.NODE_ENV !== "test") app.use("*", logger((line) => console.log(redactString(line))));
   app.use("*", secureHeaders());
-  app.use("/api/*", cors({ origin: [container.env.WEB_BASE_URL], credentials: true, allowHeaders: ["Content-Type", "X-Admin-Reason"] }));
+  // The API is served by the same Next.js deployment as the app (one origin, APP_BASE_URL), so no cross-origin access is granted.
   app.use("*", sessionMiddleware(container));
   // 21 Sep, item 5: per-user and per-tenant limits on the API, per-address for anonymous calls, generous per-provider limits on webhooks.
   app.use("/api/*", apiRateLimit());
@@ -52,9 +51,10 @@ export function createApp(container: Container) {
   app.use("/c/*", candidateCsp);
   app.use("/careers/*", candidateCsp);
   app.use("/privacy", candidateCsp);
-  // The staff second-factor pages are server-rendered HTML under the API: same policy, same nonce.
+  // The staff second-factor pages and the sign-in link page are server-rendered HTML under the API: same policy, same nonce.
   app.use("/api/v1/auth/mfa", candidateCsp);
   app.use("/api/v1/auth/mfa/*", candidateCsp);
+  app.use("/api/v1/auth/consume", candidateCsp);
   // Browsers post policy violations here (both report formats). Paths and origins only; never a token or a query string.
   app.post("/api/csp-report", rateLimit(POLICIES.cspReport), async (c) => {
     let body: unknown = null;
@@ -69,7 +69,9 @@ export function createApp(container: Container) {
       await container.db.select({ id: companies.id }).from(companies).limit(1);
       return c.json({ ok: true, db: container.handle.kind, ai: container.ai.provider.id, worker: container.env.WORKER_INLINE ? "inline" : "external" });
     } catch (err) {
-      return c.json({ ok: false, error: String(err) }, 503);
+      // An anonymous endpoint never shows a driver error (it can name hosts, roles or a connection string); the log has it, redacted.
+      console.error(`[healthz] database check failed: ${redactString(err instanceof Error ? err.message : String(err))}`);
+      return c.json({ ok: false, error: "database unavailable" }, 503);
     }
   });
 
@@ -96,11 +98,6 @@ export function createApp(container: Container) {
   app.route("/webhooks/postmark", postmarkWebhook);
   app.route("/webhooks/twilio", twilioWebhook);
   app.route("/", candidatePages);
-
-  app.get("/api/v1/integrations", async (c) => {
-    if (!c.get("session")) return c.json({ error: { code: "unauthorized", message: "Sign in." } }, 401);
-    return c.json(container.integrations.statuses());
-  });
 
   /** LinkedIn Basic Jobs feed: every open role across tenants (public job data only). */
   app.get("/feeds/linkedin.xml", async (c) => {

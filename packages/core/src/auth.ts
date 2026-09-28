@@ -3,7 +3,10 @@ import { and, eq, gt, isNull, ne } from "drizzle-orm";
 import { magicLinks, memberships, randomToken, sessions, users, type Queryable } from "@ros/db";
 import { activeGrantFor } from "./platform-roles";
 
-const MAGIC_LINK_TTL_MS = 15 * 60_000;
+/** A sign-in link is short-lived. */
+export const MAGIC_LINK_TTL_MS = 15 * 60_000;
+/** A team invitation is a link too, but people open it hours or days later, so it lives longer. */
+export const INVITE_LINK_TTL_MS = 7 * 24 * 3600_000;
 const SESSION_IDLE_MS = 30 * 24 * 3600_000;
 /** Staff sessions are shorter (I8): eight hours, sliding, and never extended to the customer window. */
 export const STAFF_SESSION_MS = 8 * 3600_000;
@@ -16,13 +19,14 @@ export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
-/** Creates a single-use magic link. The caller sends it through the email adapter. */
+/** Creates a single-use link. The caller sends it through the email adapter. Invitations live longer than sign-in links. */
 export async function createMagicLink(
   q: Queryable,
-  input: { email: string; ip?: string; inviteCompanyId?: string; inviteRole?: string },
+  input: { email: string; ip?: string; inviteCompanyId?: string; inviteRole?: string; ttlMs?: number },
 ): Promise<{ token: string; expiresAt: string }> {
   const token = randomToken(32);
-  const expiresAt = new Date(Date.now() + MAGIC_LINK_TTL_MS).toISOString();
+  const ttl = input.ttlMs ?? (input.inviteCompanyId ? INVITE_LINK_TTL_MS : MAGIC_LINK_TTL_MS);
+  const expiresAt = new Date(Date.now() + ttl).toISOString();
   await q.insert(magicLinks).values({
     email: normalizeEmail(input.email),
     tokenHash: hashToken(token),
@@ -39,19 +43,22 @@ export class AuthError extends Error {
   code = "unauthorized";
 }
 
-/** Consumes a magic link: creates the user if needed, applies any invitation, and opens a session. */
+/**
+ * Consumes a magic link: creates the user if needed, applies any invitation, and opens a session. The link is claimed
+ * in one conditional UPDATE, so two requests carrying the same token (a double click, a mail scanner and the person)
+ * can never both open a session: exactly one wins the row.
+ */
 export async function consumeMagicLink(
   q: Queryable,
   input: { token: string; ip?: string; userAgent?: string },
 ): Promise<{ sessionToken: string; userId: string; activeCompanyId: string | null }> {
   const now = new Date().toISOString();
   const [link] = await q
-    .select()
-    .from(magicLinks)
+    .update(magicLinks)
+    .set({ usedAt: now })
     .where(and(eq(magicLinks.tokenHash, hashToken(input.token)), isNull(magicLinks.usedAt), gt(magicLinks.expiresAt, now)))
-    .limit(1);
+    .returning();
   if (!link) throw new AuthError("This sign-in link is invalid or has expired. Request a new one.");
-  await q.update(magicLinks).set({ usedAt: now }).where(eq(magicLinks.id, link.id));
 
   let [user] = await q.select().from(users).where(eq(users.email, link.email)).limit(1);
   if (!user) [user] = await q.insert(users).values({ email: link.email }).returning();

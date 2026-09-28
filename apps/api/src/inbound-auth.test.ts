@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 
-/** The inbound webhook accepts Postmark's own credential form (basic auth in the URL) as well as a header or query string. */
+/** The inbound webhook accepts Postmark's own credential form (basic auth in the URL) or a header. A secret in the query string is refused: query strings end up in logs and proxies. */
 describe("inbound email webhook authentication", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
@@ -18,11 +18,11 @@ describe("inbound email webhook authentication", () => {
     await container.close();
   });
 
-  it("basic auth with the secret as the password is accepted; a header and a query string still work; anything else is refused", async () => {
+  it("basic auth with the secret as the password is accepted; a header works; a query string and anything else are refused", async () => {
     const basic = `Basic ${Buffer.from(`inbound:${SECRET}`).toString("base64")}`;
     expect((await post({ authorization: basic })).status).not.toBe(401);
     expect((await post({ "x-inbound-secret": SECRET })).status).not.toBe(401);
-    expect((await post({}, `/webhooks/postmark/inbound?secret=${SECRET}`)).status).not.toBe(401);
+    expect((await post({}, `/webhooks/postmark/inbound?secret=${SECRET}`)).status).toBe(401);
     expect((await post({ authorization: `Basic ${Buffer.from("inbound:wrong").toString("base64")}` })).status).toBe(401);
     expect((await post({ "x-inbound-secret": "wrong" })).status).toBe(401);
     expect((await post({})).status).toBe(401);

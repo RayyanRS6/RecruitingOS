@@ -279,7 +279,9 @@ export const integrations = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [uniqueIndex("integrations_company_provider_idx").on(t.companyId, t.provider)],
+  // One connection per company, provider, kind and person. The SQL migration (0008) declares it NULLS NOT DISTINCT so a
+  // company-wide connection (user_id null) is unique too; Drizzle cannot express that clause, so the SQL is canonical.
+  (t) => [uniqueIndex("integrations_company_provider_kind_user_idx").on(t.companyId, t.provider, t.kind, t.userId)],
 );
 
 export const auditRecords = pgTable(
