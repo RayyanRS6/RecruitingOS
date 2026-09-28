@@ -1,28 +1,14 @@
 import { Hono } from "hono";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome } from "@ros/contracts";
-import { OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, assertCan, audit, emit, gate, listOutcomes, openEscalationsFor, ownerGroup, recordApplicationOutcome, recordRoleOutcome, transition } from "@ros/core";
+import { OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, assertCan, audit, emit, listOutcomes, openEscalationsFor, ownerGroup, recordApplicationOutcome, recordRoleOutcome } from "@ros/core";
 import { users } from "@ros/db";
-import { sendDisposition } from "@ros/agents";
 import { aiRuns, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviews, postings, rolePackets, roles, screens, withTenant } from "@ros/db";
 import { actorOf, applicationScopeGuard, clientIp, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { DOWNLOAD_URL_TTL_SECONDS, safeFilename } from "../uploads";
 import type { Container } from "../container";
-
-/** Founder decision (correction 6): candidate-facing decline communication only after the human decision is recorded. */
-async function sendDeclineAfterHumanDecision(tx: Parameters<Parameters<typeof withTenant>[2]>[0], container: Container, input: { companyId: string; app: typeof applications.$inferSelect; actor: ReturnType<typeof actorOf>; reason: string }): Promise<boolean> {
-  const { companyId, app, actor, reason } = input;
-  const d = await gate(tx, { companyId, roleId: app.roleId, applicationId: app.id, actionType: "disposition.send", subject: { type: "application", id: app.id }, proposal: { reason }, requestedBy: actor });
-  if (d.outcome !== "execute") return false;
-  const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
-  const [role] = await tx.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
-  const [company] = await tx.select().from(companies).where(eq(companies.id, companyId)).limit(1);
-  const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
-  if (!cand || !role || !company || !pv) return false;
-  const res = await sendDisposition(tx, container.integrations, { application: app, candidate: cand, role, company, packet: pv.packet, actor, reason: reason === "eligibility" ? "eligibility" : "human" });
-  return res.status === "sent" || res.status === "pending";
-}
+import { allowedApplicationActions, applicationFactsFrom, performApplicationAction, sendDeclineAfterHumanDecision } from "../services/application-actions";
 
 export const roleRoutes = new Hono<Vars>();
 roleRoutes.use("/:id", roleScopeGuard);
@@ -34,15 +20,24 @@ roleRoutes.get("/", requireTenant, async (c) => {
   const status = c.req.query("status");
   const rows = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const list = await tx.select().from(roles).where(status ? and(eq(roles.companyId, t.companyId), eq(roles.status, status)) : eq(roles.companyId, t.companyId)).orderBy(desc(roles.createdAt));
-    const out = [];
-    for (const r of t.staff?.scope.roleId ? list.filter((x) => x.id === t.staff!.scope.roleId) : list) {
-      const apps = await tx.select({ stage: applications.stage }).from(applications).where(eq(applications.roleId, r.id));
+    const visible = t.staff?.scope.roleId ? list.filter((x) => x.id === t.staff!.scope.roleId) : list;
+    if (!visible.length) return [];
+    // Three queries for the whole list, whatever its length: the roles, their applicants by stage, their open decisions.
+    const roleIds = visible.map((r) => r.id);
+    const stageCounts = await tx.select({ roleId: applications.roleId, stage: applications.stage, n: count() }).from(applications).where(inArray(applications.roleId, roleIds)).groupBy(applications.roleId, applications.stage);
+    const pendingCounts = await tx.select({ roleId: approvalRequests.roleId, n: count() }).from(approvalRequests).where(and(inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending"))).groupBy(approvalRequests.roleId);
+    return visible.map((r) => {
       const counts: Record<string, number> = {};
-      for (const a of apps) counts[ownerGroup(a.stage)] = (counts[ownerGroup(a.stage)] ?? 0) + 1;
-      const pending = await tx.select({ id: approvalRequests.id }).from(approvalRequests).where(and(eq(approvalRequests.roleId, r.id), eq(approvalRequests.status, "pending")));
-      out.push({ ...r, counts: { total: apps.length, ...counts }, needsYou: pending.length, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null });
-    }
-    return out;
+      let total = 0;
+      for (const row of stageCounts) {
+        if (row.roleId !== r.id) continue;
+        const n = Number(row.n);
+        total += n;
+        counts[ownerGroup(row.stage)] = (counts[ownerGroup(row.stage)] ?? 0) + n;
+      }
+      const needsYou = Number(pendingCounts.find((p) => p.roleId === r.id)?.n ?? 0);
+      return { ...r, counts: { total, ...counts }, needsYou, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null };
+    });
   });
   return c.json(rows);
 });
@@ -165,7 +160,7 @@ roleRoutes.post("/:id/postings/:channel/retry", requireTenant, async (c) => {
   const container = c.get("container");
   await withTenant(container.db, t.companyId, async (tx) => {
     const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
-    if (!role || role.status !== "open") throw new HttpError(409, "not_open", "The role must be open to post.");
+    if (role?.status !== "open") throw new HttpError(409, "not_open", "The role must be open to post.");
     await tx.update(postings).set({ status: "pending", error: null }).where(and(eq(postings.roleId, role.id), eq(postings.channel, c.req.param("channel"))));
     await container.engine.start(tx, { workflowKey: "publish_role", companyId: t.companyId, subject: { type: "role", id: role.id }, state: { roleId: role.id, packetVersion: role.currentPacketVersion }, actor: actorOf(c) });
   });
@@ -227,7 +222,8 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const packetLabels = pv ? { mustHaves: pv.packet.requirements.mustHaves.map((m) => ({ key: m.key, text: m.text })), competencies: pv.packet.competencies.map((c) => ({ key: c.key, name: c.name })), questions: pv.packet.screening.questions.map((q) => ({ key: q.key, question: q.question })) } : { mustHaves: [], competencies: [], questions: [] };
     const pendingApprovals = await tx.select({ id: approvalRequests.id, actionType: approvalRequests.actionType, rationale: approvalRequests.rationale, createdAt: approvalRequests.createdAt }).from(approvalRequests).where(and(eq(approvalRequests.applicationId, app.id), eq(approvalRequests.status, "pending")));
     await audit(tx, { companyId: t.companyId, actor: actorOf(c), action: "candidate.viewed", target: { type: "application", id: app.id } });
-    return { ...app, stageLabel: STAGE_LABEL[app.stage], group: ownerGroup(app.stage), candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: comms, timeline, screens: scr.map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, assessmentId: s.assessmentId })), pendingApprovals, packetLabels };
+    const allowedActions = allowedApplicationActions(applicationFactsFrom(app, scr.map((s) => s.status), ivs));
+    return { ...app, stageLabel: STAGE_LABEL[app.stage], group: ownerGroup(app.stage), allowedActions, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: comms, timeline, screens: scr.map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, assessmentId: s.assessmentId })), pendingApprovals, packetLabels };
   });
   if (!row) throw new HttpError(404, "not_found", "Application not found.");
   return c.json(row);
@@ -258,80 +254,10 @@ applicationRoutes.post("/:id/actions", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   const body = ApplicationAction.parse(await c.req.json());
   const container = c.get("container");
-  const by = t.role;
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     const [app] = await tx.select().from(applications).where(eq(applications.id, c.req.param("id"))).limit(1);
     if (!app) throw new HttpError(404, "not_found", "Application not found.");
-    switch (body.action) {
-      case "reject": {
-        assertCan(t.role, "application.reject");
-        if (!body.reason) throw new HttpError(400, "reason_required", "A reason is required to decline a candidate.");
-        await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "rejected", by, actor: actorOf(c), reason: body.reason, payload: { note: body.note ?? null } });
-        await tx.update(applications).set({ rejectNote: body.note ?? null }).where(eq(applications.id, app.id));
-        await emit(tx, { type: "application.rejected", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { reason: body.reason, byHuman: true } });
-        await emit(tx, { type: "human.override", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { action: "reject", reason: body.reason } });
-        const dispositionSent = await sendDeclineAfterHumanDecision(tx, container, { companyId: t.companyId, app, actor: actorOf(c), reason: body.reason });
-        return { ok: true, stage: "rejected", dispositionSent };
-      }
-      case "override_eligibility": {
-        assertCan(t.role, "application.act");
-        if (app.stage !== "ineligible") throw new HttpError(409, "invalid", "Only ineligible applications can be overridden.");
-        if (!body.note?.trim()) throw new HttpError(400, "reason_required", "Say why you are keeping them in; it is recorded so the system can learn.");
-        await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "eligible", by, actor: actorOf(c), reason: body.note });
-        await emit(tx, { type: "human.override", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { action: "override_eligibility", note: body.note } });
-        return { ok: true, stage: "eligible" };
-      }
-      case "review_anyway": {
-        // The exclusion view's "review anyway" (docs/FOUNDER-CONTEXT.md §10): reopen an application that an owner-authored eligibility rule declined.
-        assertCan(t.role, "application.act");
-        if (app.stage !== "rejected" || app.rejectReason !== "eligibility") throw new HttpError(409, "invalid", "Only applications declined on an eligibility answer can be reopened here.");
-        await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "eligible", by, actor: actorOf(c), reason: body.note ?? "review anyway" });
-        await tx.update(applications).set({ rejectedAt: null, rejectReason: null, rejectNote: null }).where(eq(applications.id, app.id));
-        await emit(tx, { type: "human.override", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { action: "review_anyway", note: body.note ?? null } });
-        const { runId } = await container.engine.start(tx, { workflowKey: "application_intake", companyId: t.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: app.roleId }, idempotencyKey: `application_intake:${app.id}:reopen:${Date.now()}`, actor: actorOf(c) });
-        return { ok: true, stage: "eligible", workflowRunId: runId };
-      }
-      case "move_to_talent_pool": {
-        assertCan(t.role, "application.act");
-        await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "talent_pool", by, actor: actorOf(c), reason: body.note });
-        await tx.update(candidates).set({ inTalentPool: true }).where(eq(candidates.id, app.candidateId));
-        await emit(tx, { type: "application.moved_to_talent_pool", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: {} });
-        return { ok: true, stage: "talent_pool" };
-      }
-      case "hold": {
-        assertCan(t.role, "application.act");
-        await emit(tx, { type: "human.override", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { action: "hold", note: body.note ?? null } });
-        return { ok: true, stage: app.stage };
-      }
-      case "invite_screen": {
-        assertCan(t.role, "application.act");
-        if (!["triaged", "eligible", "received", "screen_invited", "screening"].includes(app.stage)) throw new HttpError(409, "invalid", `Cannot invite someone who is ${STAGE_LABEL[app.stage].toLowerCase()}.`);
-        const open = await tx.select({ id: screens.id }).from(screens).where(and(eq(screens.applicationId, app.id), inArray(screens.status, ["invited", "reminded", "in_progress"]))).limit(1);
-        if (open[0]) throw new HttpError(409, "already_invited", "They already have an open screening invitation.");
-        // The owner's click is the approval when a policy asked for one.
-        const pend = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.applicationId, app.id), eq(approvalRequests.actionType, "application.invite_screen"), eq(approvalRequests.status, "pending")));
-        for (const p of pend) {
-          await tx.update(approvalRequests).set({ status: "approved", decidedBy: t.userId, decidedAt: new Date().toISOString(), decisionNote: body.note ?? "invited from the candidate page" }).where(eq(approvalRequests.id, p.id));
-          await emit(tx, { type: "approval.granted", companyId: t.companyId, actor: actorOf(c), subject: { type: "approval_request", id: p.id }, payload: { actionType: p.actionType }, correlationId: p.workflowRunId });
-          await container.engine.signal(tx, { companyId: t.companyId, key: `approval:${p.id}`, payload: { decision: "approved" } });
-        }
-        const { runId } = await container.engine.start(tx, { workflowKey: "screen", companyId: t.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: app.roleId, channel: body.channel, invitedBy: t.userId }, idempotencyKey: `screen:${app.id}:${Date.now()}`, actor: actorOf(c) });
-        await emit(tx, { type: "human.override", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { action: "invite_screen", channel: body.channel ?? "auto", note: body.note ?? null, workflowRunId: runId } });
-        return { ok: true, stage: app.stage, workflowRunId: runId };
-      }
-      case "advance_to_interview": {
-        assertCan(t.role, "application.act");
-        await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "interview_recommended", by, actor: actorOf(c), reason: body.note ?? "owner decision" });
-        const pend = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.applicationId, app.id), eq(approvalRequests.actionType, "application.recommend_interview"), eq(approvalRequests.status, "pending")));
-        for (const p of pend) {
-          await tx.update(approvalRequests).set({ status: "approved", decidedBy: t.userId, decidedAt: new Date().toISOString(), decisionNote: body.note ?? "advanced from the candidate page" }).where(eq(approvalRequests.id, p.id));
-          await container.engine.signal(tx, { companyId: t.companyId, key: `approval:${p.id}`, payload: { decision: "approved" } });
-        }
-        await emit(tx, { type: "candidate.recommended", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { by: "human" } });
-        await emit(tx, { type: "human.override", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { action: "advance_to_interview", note: body.note ?? null } });
-        return { ok: true, stage: "interview_recommended", next: "Marked as recommended for interview. Open the candidate and choose \"Interview\" to pick the round and interviewers; times go out to the candidate from there." };
-      }
-    }
+    return performApplicationAction(tx, container, { app, body, tenant: t, actor: actorOf(c) });
   });
   await container.kick();
   return c.json(result);
@@ -375,7 +301,7 @@ async function tellRecruiterAboutOutcome(container: Container, companyId: string
     const to = e.assignedToUserId ? (await container.db.select({ email: users.email }).from(users).where(eq(users.id, e.assignedToUserId)).limit(1))[0]?.email : container.env.ITS_QUEUE_EMAIL;
     if (!to || told.has(to)) continue;
     told.add(to);
-    await container.integrations.email.send({ to, from, subject: `${company?.name ?? "A customer"} recorded an outcome for ${role?.title ?? "a role"}`, text: `${what}\n\nThe customer recorded this themselves; the decision was made outside Recruiting OS. Your open request: ${container.env.WEB_BASE_URL}/recruiter/queue/${e.id}`, idempotencyKey: `${key}:${to}`, tags: { template: "outcome_recorded" } });
+    await container.integrations.email.send({ to, from, subject: `${company?.name ?? "A customer"} recorded an outcome for ${role?.title ?? "a role"}`, text: `${what}\n\nThe customer recorded this themselves; the decision was made outside Recruiting OS. Your open request: ${container.env.APP_BASE_URL}/recruiter/queue/${e.id}`, idempotencyKey: `${key}:${to}`, tags: { template: "outcome_recorded" } });
   }
 }
 

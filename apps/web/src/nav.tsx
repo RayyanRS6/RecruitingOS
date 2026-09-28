@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, type CSSProperties, type ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import NextLink from "next/link";
 import { useParams as nextUseParams, usePathname, useRouter, useSearchParams as nextUseSearchParams } from "next/navigation";
 
@@ -30,17 +30,4 @@ export function useNavigate(): (to: string, opts?: { replace?: boolean }) => voi
 export function useSearchParams(): [URLSearchParams] {
   const sp = nextUseSearchParams();
   return [new URLSearchParams(sp?.toString() ?? "")];
-}
-
-export function useLocation(): { pathname: string } {
-  return { pathname: usePathname() ?? "/" };
-}
-
-export function Navigate(props: { to: string; replace?: boolean }) {
-  const router = useRouter();
-  useEffect(() => {
-    if (props.replace) router.replace(props.to);
-    else router.push(props.to);
-  }, [props.to, props.replace, router]);
-  return null;
 }

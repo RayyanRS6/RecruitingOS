@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "../nav";
 import { Alert, Button, Card, Chip, ErrorState, Field, Segmented, Sheet, Skeleton } from "@ros/ui";
+import { formatPayRange } from "@ros/contracts";
 import { api, ApiError, type RoleDetail as RoleDetailT, type RolePacket } from "../api/client";
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
@@ -99,7 +100,7 @@ export function RoleDetail() {
             <div className="row">
               <Chip>Packet v{r.currentPacket!.version}</Chip>
               <Button size="sm" onClick={() => setEditing(true)}>Edit</Button>
-              <Link to={`/roles/${r.id}/people`} className="btn primary sm">People ({r.counts ? Object.values(r.counts).reduce((a, b) => a + b, 0) : 0})</Link>
+              <Link to={`/roles/${r.id}/talent`} className="btn primary sm">Talent ({r.counts ? Object.values(r.counts).reduce((a, b) => a + b, 0) : 0})</Link>
             </div>
           </div>
 
@@ -170,7 +171,7 @@ export function RoleDetail() {
                   {po.error ? <Alert tone="critical">{po.error}</Alert> : null}
                   <div className="row" style={{ marginTop: 8 }}>
                     {po.status === "failed" ? <Button size="sm" onClick={() => retry.mutate(po.channel)}>Retry</Button> : null}
-                    {po.instructions?.includes("@") ? <Button size="sm" onClick={() => { const addr = po.instructions!.match(/apply-[a-z0-9]+@[a-z0-9.\-]+/i)?.[0]; if (addr) { navigator.clipboard.writeText(addr); toast("Copied the intake address."); } }}>Copy intake address</Button> : null}
+                    {po.instructions?.includes("@") ? <Button size="sm" onClick={() => { const addr = po.instructions!.match(/apply-[a-z0-9]+@[a-z0-9.-]+/i)?.[0]; if (addr) { navigator.clipboard.writeText(addr); toast("Copied the intake address."); } }}>Copy intake address</Button> : null}
                   </div>
                 </Card>
               ))}
@@ -198,8 +199,7 @@ export function RoleDetail() {
 const POSTING_STATE_LABEL: Record<string, string> = { live_verified: "Live and verified", awaiting_verification: "Submitted, awaiting verification", manual_action_required: "Manual action required", not_connected: "Not connected", failed: "Failed" };
 
 function money(p: RolePacket): string {
-  const c = p.compensation;
-  return c.basis === "hourly" ? `$${c.min}–$${c.max} an hour` : `$${c.min.toLocaleString()}–$${c.max.toLocaleString()} a year`;
+  return formatPayRange(p.compensation);
 }
 
 function channelName(c: string): string {

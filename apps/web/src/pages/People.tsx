@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams, useSearchParams } from "../nav";
+import { Link, useNavigate, useParams, useSearchParams } from "../nav";
 import { Alert, Button, Card, Chip, EmptyState, ErrorState, EvidenceChip, Field, Segmented, Sheet, Skeleton, StatusChip, Timeline } from "@ros/ui";
-import { api, ApiError, type ApplicationDetail, type ApplicationSummary, type AssessmentResult, type RoleSummary, type Screen, API_BASE } from "../api/client";
+import { api, ApiError, type ApplicationCapability, type ApplicationDetail, type ApplicationSummary, type AssessmentResult, type RoleSummary, type Screen } from "../api/client";
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
 
@@ -13,6 +13,7 @@ type Group = "all" | "waiting_on_you" | "in_process" | "not_moving_forward" | "h
 /** People: candidates grouped in plain language, evidence first, decisions as buttons, and "Ask a recruiter" on every one. */
 export function People() {
   const params = useParams();
+  const nav = useNavigate();
   const [search] = useSearchParams();
   const roles = useQuery({ queryKey: ["roles"], queryFn: () => api.get<RoleSummary[]>("/api/v1/roles") });
   const roleId = params.id ?? roles.data?.find((r) => r.status === "open")?.id ?? roles.data?.[0]?.id;
@@ -32,7 +33,7 @@ export function People() {
         </div>
         <div className="row">
           {roles.data && roles.data.length > 1 ? (
-            <select className="select" style={{ width: "auto" }} value={roleId ?? ""} onChange={(e) => (window.location.href = `/roles/${e.target.value}/people`)} aria-label="Role">
+            <select className="select" style={{ width: "auto" }} value={roleId ?? ""} onChange={(e) => nav(`/roles/${e.target.value}/talent`)} aria-label="Role">
               {roles.data.map((r) => <option key={r.id} value={r.id}>{r.title}</option>)}
             </select>
           ) : null}
@@ -49,7 +50,7 @@ export function People() {
               {list.map((a) => (
                 <Card key={a.id} needsYou={a.group === "waiting_on_you"}>
                   <div className="card-title">
-                    <h2 style={{ fontSize: 16 }}><button className="btn quiet" style={{ padding: 0, fontFamily: "var(--display)", fontSize: 16 }} onClick={() => setOpenId(a.id)}>{a.candidate?.name ?? "Unknown"}</button></h2>
+                    <h2 style={{ fontSize: 16 }}><button type="button" className="btn quiet" style={{ padding: 0, fontFamily: "var(--display)", fontSize: 16 }} onClick={() => setOpenId(a.id)}>{a.candidate?.name ?? "Unknown"}</button></h2>
                     <div className="row"><Chip tone="source">{a.source.replace("_", " ")}</Chip><StatusChip stage={a.stage} label={a.stageLabel} group={a.group} /></div>
                   </div>
                   <div className="row small" style={{ color: "var(--ink-2)" }}>
@@ -127,8 +128,11 @@ function ApplicationSheet({ id, roleId, onClose }: { id: string; roleId: string;
   const a = q.data;
   const openScreen = a?.screens.find((s) => ["invited", "reminded", "in_progress"].includes(s.status)) ?? null;
   const latestScreen = a?.screens[0] ?? null;
-  const canInvite = !!a && ["triaged", "eligible", "received"].includes(a.stage) && !openScreen;
-  const canInterview = !!a && ["triaged", "screen_complete", "interview_recommended", "interview_complete", "eligible", "screen_invited", "screening"].includes(a.stage) && !a.interviews.some((i) => ["proposed", "scheduling", "scheduled"].includes(i.status));
+  /** The API decides what may be done right now; the page only shows it. */
+  const can = (action: ApplicationCapability) => !!a && a.allowedActions.includes(action);
+  const canInvite = can("invite_screen");
+  const canInterview = can("interview");
+  const refresh = async () => { await qc.invalidateQueries({ queryKey: ["application", id] }); await qc.invalidateQueries({ queryKey: ["applications", roleId] }); await qc.invalidateQueries({ queryKey: ["interviews"] }); await qc.invalidateQueries({ queryKey: ["brief"] }); };
   const [interviewOpen, setInterviewOpen] = useState(false);
   const members = useQuery({ queryKey: ["members"], queryFn: () => api.get<Array<{ userId: string; name: string | null; email: string; role: string; status: string; schedulable: boolean }>>("/api/v1/companies/current/members"), enabled: interviewOpen });
   const nextRound = a ? a.interviewPlan.find((r) => !a.interviews.some((i) => i.roundKey === r.key && ["completed"].includes(i.status))) ?? a.interviewPlan[0] : undefined;
@@ -163,6 +167,7 @@ function ApplicationSheet({ id, roleId, onClose }: { id: string; roleId: string;
               {a.interviews.map((i) => <p key={i.id} className="small"><Link to={`/interviews/${i.id}`}>{i.title}</Link> · {i.status.replace(/_/g, " ")}{i.startsAt ? ` · ${new Date(i.startsAt).toLocaleString("en-US", { timeZone: i.timezone ?? undefined, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : i.status === "scheduling" ? ` · ${i.offeredSlots.length} times offered` : ""}{i.decision ? ` · decision: ${i.decision.replace(/_/g, " ")}` : ""}</p>)}
             </Card>
           ) : null}
+          {can("record_decision") ? <DecisionCard a={a} roleId={roleId} onDone={refresh} /> : null}
           {interviewOpen ? (
             <Card needsYou lift title="Approve an interview">
               <p className="small" style={{ color: "var(--ink-2)" }}>Your approval is what starts scheduling; the assistant never does this on its own. Times are offered to the candidate from the interviewers' calendars or declared hours.</p>
@@ -185,13 +190,13 @@ function ApplicationSheet({ id, roleId, onClose }: { id: string; roleId: string;
               </div>
             </Card>
           ) : null}
-          {a.group === "waiting_on_you" || a.stage === "eligible" || canInterview ? (
+          {a.group === "waiting_on_you" || a.stage === "eligible" || canInterview || canInvite ? (
             <Card needsYou={a.group === "waiting_on_you" || a.stage === "eligible"} title="What would you like to do?">
               <div className="row">
                 <Button variant="primary" size="sm" disabled={!canInvite} loading={act.isPending && act.variables?.action === "invite_screen"} title={openScreen ? "A screening invitation is already open" : canInvite ? (a.candidate.consent.sms?.granted && a.candidate.phone ? "By text and email" : "By email, answered on the web") : "Not available at this stage"} onClick={() => act.mutate({ action: "invite_screen" })}>Invite to a screen</Button>
                 <Button size="sm" disabled={!canInterview} title={canInterview ? "Approve an interview round and pick the interviewers; times go out to the candidate" : a?.interviews.some((i) => ["proposed", "scheduling", "scheduled"].includes(i.status)) ? "An interview is already in motion" : "Not available at this stage"} onClick={() => setInterviewOpen(true)}>Interview</Button>
-                <Button size="sm" onClick={() => act.mutate({ action: "hold", note: "Holding for now" })}>Hold</Button>
-                <Button size="sm" variant="destructive" onClick={() => setConfirmReject(true)}>Decline</Button>
+                <Button size="sm" disabled={!can("hold")} onClick={() => act.mutate({ action: "hold", note: "Holding for now" })}>Hold</Button>
+                <Button size="sm" variant="destructive" disabled={!can("reject")} onClick={() => setConfirmReject(true)}>Decline</Button>
                 <AskRecruiter roleId={roleId} applicationId={a.id} size="sm" />
               </div>
               {confirmReject ? (
@@ -211,7 +216,7 @@ function ApplicationSheet({ id, roleId, onClose }: { id: string; roleId: string;
             </Card>
           ) : null}
           {["hired", "withdrawn", "rejected", "talent_pool", "declined"].includes(a.stage) ? <RecordedOutcome id={a.id} /> : null}
-          {!["hired", "withdrawn", "rejected", "declined"].includes(a.stage) ? (
+          {can("record_outcome") ? (
             <Card title="Record what happened">
               <p className="small muted">Hired, withdrew, declined, or no hire. You record it; the platform never makes or sends an offer, and it asks for no pay, tax, identity or banking details.</p>
               {!outcomeOpen ? <div className="row" style={{ marginTop: 8 }}><Button size="sm" onClick={() => setOutcomeOpen(true)}>Record an outcome</Button></div> : (
@@ -280,7 +285,7 @@ function ApplicationSheet({ id, roleId, onClose }: { id: string; roleId: string;
                 {a.documents.map((d) => (
                   <li key={d.id}>
                     {d.status === "clean" ? (
-                      <><a href={`${API_BASE}/api/v1/applications/${a.id}/documents/${d.id}/file`} target="_blank" rel="noopener noreferrer">Open {d.filename}</a> <span className="muted">({Math.max(1, Math.round(d.sizeBytes / 1024))} KB; this open is recorded)</span></>
+                      <><a href={`/api/v1/applications/${a.id}/documents/${d.id}/file`} target="_blank" rel="noopener noreferrer">Open {d.filename}</a> <span className="muted">({Math.max(1, Math.round(d.sizeBytes / 1024))} KB; this open is recorded)</span></>
                     ) : d.status === "quarantined" ? (
                       <span className="muted">{d.filename}: being checked and scanned before anyone can open it.</span>
                     ) : d.status === "rejected" ? (
@@ -314,6 +319,51 @@ function ApplicationSheet({ id, roleId, onClose }: { id: string; roleId: string;
         </div>
       )}
     </Sheet>
+  );
+}
+
+/**
+ * The decision after an interview is a person's (docs/06; release 1 records it, scorecards and debriefs come later).
+ * Shown when the last interview is over and nobody has decided yet: next round, finalist, or not moving forward with a reason.
+ */
+function DecisionCard({ a, roleId, onDone }: { a: ApplicationDetail; roleId: string; onDone: () => Promise<void> }) {
+  const [decision, setDecision] = useState<"finalist" | "not_moving_forward" | null>(null);
+  const [reason, setReason] = useState("not_a_match_experience");
+  const [note, setNote] = useState("");
+  const record = useMutation({
+    mutationFn: (body: { decision: "next_round" | "finalist" | "not_moving_forward"; reason?: string; note?: string }) => api.post<{ stage: string; nextRoundKey: string | null }>(`/api/v1/applications/${a.id}/decision`, body),
+    onSuccess: async (_r, body) => { toast(body.decision === "finalist" ? "Marked as a finalist." : body.decision === "next_round" ? "Next round. Choose \"Interview\" to pick the interviewers; times go out from there." : "Recorded. The candidate gets a respectful message."); setDecision(null); setNote(""); await onDone(); },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record the decision."),
+  });
+  const last = a.interviews.find((i) => ["completed", "no_show"].includes(i.status) && !i.decision);
+  const idx = last ? a.interviewPlan.findIndex((r) => r.key === last.roundKey) : -1;
+  const hasNextRound = idx >= 0 && idx + 1 < a.interviewPlan.length;
+  return (
+    <Card needsYou lift title="How did the interview go?">
+      <p className="small" style={{ color: "var(--ink-2)" }}>{last ? `${last.title}${last.outcome === "no_show_candidate" ? " (the candidate did not attend)" : last.outcome === "no_show_interviewer" ? " (the interviewer did not attend)" : ""}. ` : ""}The decision is yours and is recorded with your name; nothing here is scored by software.</p>
+      {!decision ? (
+        <div className="row" style={{ marginTop: 10 }}>
+          {hasNextRound ? <Button size="sm" variant="primary" loading={record.isPending} onClick={() => record.mutate({ decision: "next_round" })}>Next round</Button> : null}
+          <Button size="sm" variant={hasNextRound ? undefined : "primary"} onClick={() => setDecision("finalist")}>Finalist</Button>
+          <Button size="sm" variant="destructive" onClick={() => setDecision("not_moving_forward")}>Not moving forward</Button>
+          <AskRecruiter roleId={roleId} applicationId={a.id} size="sm" />
+        </div>
+      ) : (
+        <div className="stack" style={{ marginTop: 12 }}>
+          {decision === "not_moving_forward" ? (
+            <>
+              <Alert tone="caution">Declining after an interview is your decision and is recorded with your reason. The candidate gets a respectful message.</Alert>
+              <Field label="Reason" htmlFor="decision-reason"><select id="decision-reason" className="select" value={reason} onChange={(e) => setReason(e.target.value)}>{REJECT_REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field>
+            </>
+          ) : null}
+          <Field label={decision === "finalist" ? "What stood out (kept internally)" : "Note (kept internally)"} htmlFor="decision-note"><input id="decision-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+          <div className="row">
+            <Button variant={decision === "finalist" ? "primary" : "destructive"} loading={record.isPending} onClick={() => record.mutate({ decision, reason: decision === "not_moving_forward" ? reason : undefined, note: note.trim() || undefined })}>{decision === "finalist" ? "Confirm finalist" : "Confirm decline"}</Button>
+            <Button variant="quiet" onClick={() => setDecision(null)}>Cancel</Button>
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }
 

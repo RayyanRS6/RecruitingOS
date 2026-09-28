@@ -49,7 +49,7 @@ policyRoutes.put("/", requireTenant, async (c) => {
   const row = await withTenant(container.db, t.companyId, async (tx) => {
     const where = body.roleId ? and(eq(policies.companyId, t.companyId), eq(policies.roleId, body.roleId), eq(policies.actionType, body.actionType)) : and(eq(policies.companyId, t.companyId), isNull(policies.roleId), eq(policies.actionType, body.actionType));
     const [existing] = await tx.select().from(policies).where(where).limit(1);
-    let saved;
+    let saved: typeof policies.$inferSelect;
     if (existing) [saved] = await tx.update(policies).set({ level: body.level, approverRoles: body.approverRoles }).where(eq(policies.id, existing.id)).returning();
     else [saved] = await tx.insert(policies).values({ companyId: t.companyId, roleId: body.roleId ?? null, actionType: body.actionType, level: body.level, approverRoles: body.approverRoles, createdBy: actorOf(c) }).returning();
     await emit(tx, { type: "policy.changed", companyId: t.companyId, actor: actorOf(c), subject: { type: "policy", id: saved.id }, payload: { actionType: body.actionType, level: body.level, roleId: body.roleId ?? null, previous: existing?.level ?? null } });

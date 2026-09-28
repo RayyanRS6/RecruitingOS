@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "../nav";
-import { Button, Card, Chip, EmptyState, ErrorState, PipelineBar, Skeleton } from "@ros/ui";
+import { Card, Chip, EmptyState, ErrorState, PipelineBar, Skeleton } from "@ros/ui";
 import { api, type RoleSummary } from "../api/client";
 
 const STATUS: Record<string, { label: string; tone: "accent" | "needs" | "neutral" | "good" | "caution" }> = {
@@ -49,7 +49,7 @@ export function Roles() {
                 <PipelineBar counts={r.counts} total={r.counts.total} />
                 <div className="row" style={{ marginTop: 12 }}>
                   <Link to={`/roles/${r.id}`} className="btn secondary sm">Open</Link>
-                  <Link to={`/roles/${r.id}/people`} className="btn secondary sm">People</Link>
+                  <Link to={`/roles/${r.id}/talent`} className="btn secondary sm">Talent</Link>
                 </div>
               </Card>
             );

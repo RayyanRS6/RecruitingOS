@@ -151,7 +151,6 @@ function actionLabel(a: string): string {
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const ZONES = ["America/Los_Angeles", "America/Denver", "America/Phoenix", "America/Chicago", "America/New_York"];
-const API_BASE = (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_API_URL ?? "";
 
 /** My availability (docs/04 /setup/availability): a calendar connection, or declared windows, or both (windows constrain the calendar). */
 function MyAvailability() {
@@ -191,12 +190,12 @@ function MyAvailability() {
           {q.isLoading ? <Skeleton lines={2} /> : c && c.status !== "not_connected" ? (
             <div className="row" style={{ justifyContent: "space-between" }}>
               <span>{c.provider} · {c.externalAccountId} <Chip tone={c.status === "live" ? "good" : "needs"}>{c.status === "live" ? "connected" : c.status.replace(/_/g, " ")}</Chip>{c.lastError ? <span className="small muted"> {c.lastError}</span> : null}</span>
-              <div className="row">{c.status !== "live" ? <a className="btn secondary sm" href={`${API_BASE}/api/v1/integrations/calendar/google/connect`}>Reconnect</a> : null}<Button size="sm" variant="quiet" loading={disconnect.isPending} onClick={() => disconnect.mutate()}>Disconnect</Button></div>
+              <div className="row">{c.status !== "live" ? <a className="btn secondary sm" href="/api/v1/integrations/calendar/google/connect">Reconnect</a> : null}<Button size="sm" variant="quiet" loading={disconnect.isPending} onClick={() => disconnect.mutate()}>Disconnect</Button></div>
             </div>
           ) : (
             <div className="row" style={{ justifyContent: "space-between" }}>
               <span className="small muted">Not connected. With a calendar, times are offered from your real free time; without one, your declared hours below are used.</span>
-              {q.data?.providers.some((p) => p.key === "google" && p.status !== "not_connected") ? <a className="btn primary sm" href={`${API_BASE}/api/v1/integrations/calendar/google/connect`}>Connect Google Calendar</a> : <span className="small muted">Google Calendar is not configured for this deployment yet.</span>}
+              {q.data?.providers.some((p) => p.key === "google" && p.status !== "not_connected") ? <a className="btn primary sm" href="/api/v1/integrations/calendar/google/connect">Connect Google Calendar</a> : <span className="small muted">Google Calendar is not configured for this deployment yet.</span>}
             </div>
           )}
           <p className="small muted" style={{ marginTop: 6 }}>We ask only for events on your calendar and free/busy times. Disconnecting deletes the credential; you can see when that is done.</p>

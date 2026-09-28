@@ -113,7 +113,7 @@ interviewRoutes.get("/:id", requireTenant, async (c) => {
     for (const p of s.participants) {
       const conn = await calendarConnectionFor(tx, t.companyId, p.userId);
       const avail = await availabilityFor(tx, t.companyId, p.userId);
-      sources.push({ userId: p.userId, source: conn && conn.status === "live" ? "calendar" : avail && avail.windows.length ? "declared" : "none", calendarStatus: conn?.status ?? null });
+      sources.push({ userId: p.userId, source: conn && conn.status === "live" ? "calendar" : avail?.windows.length ? "declared" : "none", calendarStatus: conn?.status ?? null });
     }
     return { ...s, timeline, availabilitySources: sources };
   });

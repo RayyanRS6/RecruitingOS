@@ -80,7 +80,9 @@ export function Home() {
     onError: (err) => setTurns((t) => [...t, { role: "system", content: err instanceof ApiError ? err.message : "Could not draft the packet." }]),
   });
 
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [turns.length]);
+  // Scroll to the newest message whenever one is added.
+  const turnCount = turns.length;
+  useEffect(() => { if (turnCount) endRef.current?.scrollIntoView({ block: "end" }); }, [turnCount]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -110,9 +112,9 @@ export function Home() {
 
       <Card title="Your recruiting chief of staff">
         <div className="stack" style={{ gap: 10 }}>
-          {turns.length === 0 ? <Bubble role="assistant">Tell me who you need. For example: "I need a performance marketing manager in Los Angeles. $95,000 to $115,000. Hybrid, three days in the office. Someone who can start within 45 days."</Bubble> : null}
-          {turns.map((t, i) => <Bubble key={i} role={t.role}>{t.content}</Bubble>)}
-          {send.isPending ? <Bubble role="system">Thinking…</Bubble> : null}
+          {turns.length === 0 ? <Bubble from="assistant">Tell me who you need. For example: "I need a performance marketing manager in Los Angeles. $95,000 to $115,000. Hybrid, three days in the office. Someone who can start within 45 days."</Bubble> : null}
+          {turns.map((t, i) => <Bubble key={i} from={t.role}>{t.content}</Bubble>)}
+          {send.isPending ? <Bubble from="system">Thinking…</Bubble> : null}
           {/* Screen readers hear each new assistant reply without leaving the message box (accessibility checklist, known gap closed 21 Sep). */}
           <div className="sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="intake-announcer">{send.isPending ? "The assistant is thinking." : (turns.filter((t) => t.role !== "user").at(-1)?.content ?? "")}</div>
           {ready && sessionId ? (

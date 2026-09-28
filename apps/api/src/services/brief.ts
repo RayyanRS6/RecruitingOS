@@ -31,7 +31,7 @@ export async function composeBrief(tx: Tx, companyId: string): Promise<{ generat
       cards.push({ kind: "decision", title: `Approve the role: ${role?.title ?? "new role"}`, body: p.rationale ?? "Review the role packet and approve it to start posting.", roleId: p.roleId ?? undefined, approvalRequestId: p.id, actions: [{ label: "Review and approve", method: "GET", path: `/roles/${p.roleId}` }] });
     } else if (p.actionType === "application.invite_screen" || p.actionType === "application.recommend_interview") {
       const verb = p.actionType === "application.invite_screen" ? "Invite to a screen" : "Interview";
-      cards.push({ kind: "decision", title: `${verb}? ${role?.title ?? ""}`.trim(), body: p.rationale ?? "", roleId: p.roleId ?? undefined, applicationId: p.applicationId ?? undefined, approvalRequestId: p.id, actions: [{ label: `Yes, ${verb.toLowerCase()}`, method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "approve" } }, { label: "Review first", method: "GET", path: `/roles/${p.roleId}/people` }] });
+      cards.push({ kind: "decision", title: `${verb}? ${role?.title ?? ""}`.trim(), body: p.rationale ?? "", roleId: p.roleId ?? undefined, applicationId: p.applicationId ?? undefined, approvalRequestId: p.id, actions: [{ label: `Yes, ${verb.toLowerCase()}`, method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "approve" } }, { label: "Review first", method: "GET", path: `/roles/${p.roleId}/talent` }] });
     } else {
       cards.push({ kind: "decision", title: `Decision needed: ${p.actionType.replace(/[._]/g, " ")}`, body: p.rationale ?? "", roleId: p.roleId ?? undefined, applicationId: p.applicationId ?? undefined, approvalRequestId: p.id, actions: [{ label: "Decide", method: "POST", path: `/api/v1/approvals/${p.id}/decide` }] });
     }
@@ -43,15 +43,15 @@ export async function composeBrief(tx: Tx, companyId: string): Promise<{ generat
     const waiting = apps.filter((a) => ownerGroup(a.stage) === "waiting_on_you" || a.stage === "eligible");
     const ineligible = apps.filter((a) => a.stage === "ineligible");
     if (fresh.length) {
-      cards.push({ kind: "new_applicants", title: `${fresh.length} ${fresh.length === 1 ? "person" : "people"} applied to ${role.title} since yesterday`, body: waiting.length ? `${waiting.length} ${waiting.length === 1 ? "is" : "are"} ready for your review.` : "They are being acknowledged and checked for eligibility.", roleId: role.id, actions: [{ label: "See applicants", method: "GET", path: `/roles/${role.id}/people` }] });
+      cards.push({ kind: "new_applicants", title: `${fresh.length} ${fresh.length === 1 ? "person" : "people"} applied to ${role.title} since yesterday`, body: waiting.length ? `${waiting.length} ${waiting.length === 1 ? "is" : "are"} ready for your review.` : "They are being acknowledged and checked for eligibility.", roleId: role.id, actions: [{ label: "See applicants", method: "GET", path: `/roles/${role.id}/talent` }] });
     }
     if (waiting.length) {
       const names = await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, waiting.slice(0, 5).map((a) => a.candidateId)));
-      const list = waiting.slice(0, 5).map((a) => { const n = names.find((x) => x.id === a.candidateId); return `${n?.firstName ?? ""} ${n?.lastName ?? ""}`.trim() + ` (${STAGE_LABEL[a.stage]})`; }).join(", ");
-      cards.push({ kind: "needs_review", title: `${waiting.length} ${waiting.length === 1 ? "candidate needs" : "candidates need"} your review for ${role.title}`, body: list, roleId: role.id, actions: [{ label: "Review", method: "GET", path: `/roles/${role.id}/people` }, { label: "Bring in a recruiter", method: "POST", path: `/api/v1/escalations`, body: { kind: "review", roleId: role.id } }] });
+      const list = waiting.slice(0, 5).map((a) => { const n = names.find((x) => x.id === a.candidateId); return `${`${n?.firstName ?? ""} ${n?.lastName ?? ""}`.trim()} (${STAGE_LABEL[a.stage]})`; }).join(", ");
+      cards.push({ kind: "needs_review", title: `${waiting.length} ${waiting.length === 1 ? "candidate needs" : "candidates need"} your review for ${role.title}`, body: list, roleId: role.id, actions: [{ label: "Review", method: "GET", path: `/roles/${role.id}/talent` }, { label: "Bring in a recruiter", method: "POST", path: `/api/v1/escalations`, body: { kind: "review", roleId: role.id } }] });
     }
     if (ineligible.length) {
-      cards.push({ kind: "needs_review", title: `${ineligible.length} ${ineligible.length === 1 ? "applicant" : "applicants"} for ${role.title} did not meet an eligibility rule`, body: "Held for your decision. Nothing is sent to them unless you decline; override if the answer was a mistake.", roleId: role.id, actions: [{ label: "Review", method: "GET", path: `/roles/${role.id}/people?stage=ineligible` }] });
+      cards.push({ kind: "needs_review", title: `${ineligible.length} ${ineligible.length === 1 ? "applicant" : "applicants"} for ${role.title} did not meet an eligibility rule`, body: "Held for your decision. Nothing is sent to them unless you decline; override if the answer was a mistake.", roleId: role.id, actions: [{ label: "Review", method: "GET", path: `/roles/${role.id}/talent?stage=ineligible` }] });
     }
     const manualPostings = await tx.select().from(postings).where(and(eq(postings.roleId, role.id), eq(postings.status, "manual_action_required")));
     if (manualPostings.length) {
@@ -63,7 +63,7 @@ export async function composeBrief(tx: Tx, companyId: string): Promise<{ generat
     const doneToday = scr.filter((s) => s.status === "completed" && (s.completedAt ?? "") >= since).length;
     if (invited + talking + doneToday > 0) {
       const parts = [invited ? `${invited} invited` : "", talking ? `${talking} answering now` : "", doneToday ? `${doneToday} completed since yesterday` : ""].filter(Boolean);
-      cards.push({ kind: "screening", title: `Screening for ${role.title}: ${parts.join(", ")}`, body: doneToday ? "Completed screens are in \"Waiting on you\" with the scorecard." : "Candidates answer in their own time; you will see the scorecard when they finish.", roleId: role.id, actions: [{ label: "See people", method: "GET", path: `/roles/${role.id}/people` }] });
+      cards.push({ kind: "screening", title: `Screening for ${role.title}: ${parts.join(", ")}`, body: doneToday ? "Completed screens are in \"Waiting on you\" with the scorecard." : "Candidates answer in their own time; you will see the scorecard when they finish.", roleId: role.id, actions: [{ label: "See people", method: "GET", path: `/roles/${role.id}/talent` }] });
     }
   }
   for (const d of await detectStuckRoles(tx, companyId, new Date())) {

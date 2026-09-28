@@ -17,11 +17,17 @@ export const MagicLinkConsume = z.object({ token: z.string().min(10) });
 export const MembershipRole = z.enum(["owner", "admin", "hiring_manager", "interviewer", "hr", "recruiter"]);
 export type MembershipRole = z.infer<typeof MembershipRole>;
 
+/** The signed-in person as GET /api/v1/auth/me answers it; the API builds this shape and the web client reads it, so neither can drift. */
 export const MeResponse = z.object({
   user: z.object({ id: z.string(), email: z.string(), name: z.string().nullable(), platformRole: z.string() }),
+  auth: z.object({ provider: z.string(), aal: z.enum(["aal1", "aal2"]), mfaVerifiedAt: z.string().nullable() }),
   memberships: z.array(z.object({ companyId: z.string(), companyName: z.string(), companySlug: z.string(), role: MembershipRole })),
   activeCompanyId: z.string().nullable(),
+  /** Present when an ITS recruiter is inside a customer under a scoped, time-limited grant. */
+  staffAccess: z.object({ grantId: z.string(), kind: z.string(), purpose: z.string(), expiresAt: z.string(), companyName: z.string().nullable(), scope: z.object({ escalationId: z.string().nullable(), roleId: z.string().nullable(), applicationId: z.string().nullable() }) }).nullable(),
+  ai: z.object({ provider: z.string() }),
 });
+export type MeResponse = z.infer<typeof MeResponse>;
 
 // Companies
 export const CreateCompany = z.object({

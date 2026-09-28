@@ -54,7 +54,7 @@ function Runs() {
         <Table head={["Workflow", "Subject", "Status", "Step", "Waiting on", "Attempts", "Error", "Updated", ""]}>
           {q.data!.map((r) => (
             <tr key={r.id}>
-              <td><button className="btn quiet sm" onClick={() => setOpenId(r.id)}>{r.workflowKey}</button></td>
+              <td><button type="button" className="btn quiet sm" onClick={() => setOpenId(r.id)}>{r.workflowKey}</button></td>
               <td className="small">{r.subject.type} {r.subject.id.slice(0, 8)}</td>
               <td><Chip tone={r.status === "failed" ? "critical" : r.status === "waiting" ? "caution" : r.status === "completed" ? "good" : "accent"}>{r.status}</Chip></td>
               <td>{r.currentStep}</td>
@@ -108,13 +108,13 @@ function AiRuns() {
   );
 }
 
-type Alert = { id: string; kind: string; severity: string; title: string; body: string; status: string; companyId: string | null; target: { type: string; id: string } | null; details: Record<string, unknown>; createdAt: string };
+type AlertRow = { id: string; kind: string; severity: string; title: string; body: string; status: string; companyId: string | null; target: { type: string; id: string } | null; details: Record<string, unknown>; createdAt: string };
 type Pending = { id: string; provider: string; kind: string; status: string; lastError: string | null; disconnectedAt: string | null };
 type Suppression = { id: string; address: string; reason: string; source: string; active: boolean; count: number; firstAt: string; lastAt: string; details: Record<string, unknown> };
 
 function Failures() {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["admin", "failures"], queryFn: () => api.get<{ failedRuns: Array<{ id: string; workflowKey: string; lastError: string | null; updatedAt: string }>; failedJobs: Array<{ id: number; kind: string; lastError: string | null }>; failedAi: Array<{ id: string; task: string; status: string; error: string | null; createdAt: string }>; alerts: Alert[]; pendingDeletions: Pending[] }>("/api/v1/admin/failures", reason), refetchInterval: 15000 });
+  const q = useQuery({ queryKey: ["admin", "failures"], queryFn: () => api.get<{ failedRuns: Array<{ id: string; workflowKey: string; lastError: string | null; updatedAt: string }>; failedJobs: Array<{ id: number; kind: string; lastError: string | null }>; failedAi: Array<{ id: string; task: string; status: string; error: string | null; createdAt: string }>; alerts: AlertRow[]; pendingDeletions: Pending[] }>("/api/v1/admin/failures", reason), refetchInterval: 15000 });
   const ack = useMutation({ mutationFn: (id: string) => api.post(`/api/v1/admin/alerts/${id}/acknowledge`, {}, reason), onSuccess: () => { toast("Acknowledged."); qc.invalidateQueries({ queryKey: ["admin", "failures"] }); } });
   const retry = useMutation({ mutationFn: (integrationId: string) => api.post(`/api/v1/admin/integrations/${integrationId}/retry-deletion`, {}, reason), onSuccess: () => { toast("Credential deleted."); qc.invalidateQueries({ queryKey: ["admin", "failures"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Retry failed.") });
   const suppressions = useQuery({ queryKey: ["admin", "suppressions"], queryFn: () => api.get<Suppression[]>("/api/v1/admin/email-suppressions", reason) });
