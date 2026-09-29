@@ -39,6 +39,7 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
     fd.set("firstName", "Dana"); fd.set("lastName", `Example${applicant}`); fd.set("email", `dana${applicant}@example.com`); fd.set("smsConsent", "no"); fd.set("locationText", "Irvine, CA");
     for (const k of eligibilityKeys) fd.set(`elig_${k}`, "yes");
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
+    fd.set("acknowledged", "yes");
     extra(fd);
     const r = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
     const token = r.status === 302 ? r.headers.get("location")!.split("/c/status/")[1]!.split("?")[0]! : "";

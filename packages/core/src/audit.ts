@@ -69,7 +69,16 @@ export type AuditAction =
   | "document.read"
   | "document.replaced"
   | "document.deleted"
-  | "document.rejected";
+  | "document.rejected"
+  /** Job distribution (docs/spec/20): a person recorded, verified, paused, resumed, closed, retried or confirmed the removal of a posting; changed a tracked link; flipped the accepting-applications switch. */
+  | "posting.changed"
+  | "application_link.changed"
+  | "role.applications_toggled"
+  /** Team invitations (docs/spec/21, area A): sent, sent again, withdrawn, accepted at sign-in. Never the token. */
+  | "invitation.sent"
+  | "invitation.resent"
+  | "invitation.revoked"
+  | "invitation.accepted";
 
 /** Privileged and access actions. Distinct from domain events: this answers "who looked at what, and why." */
 export async function audit(

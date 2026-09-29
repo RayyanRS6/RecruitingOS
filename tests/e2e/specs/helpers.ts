@@ -60,6 +60,7 @@ export async function seedRoleAndApplicant(request: APIRequestContext, base: str
     firstName: first, lastName: last, email: `${first.toLowerCase()}.${last.toLowerCase()}+${Date.now().toString(36)}@example.com`, locationText: "Tustin, CA",
     resume: { name: "resume.txt", mimeType: "text/plain", buffer: Buffer.from(`${first} ${last}, RDH\nRegistered Dental Hygienist at Coastal Family Dentistry 2019 - present`) },
     noticeVersionsShown: "ai_use@2026-09-01,privacy@2026-09-01",
+    acknowledged: "yes",
   };
   for (const rule of role.currentPacket.packet.requirements.eligibility) multipart[`elig_${rule.key}`] = "yes";
   const applied = await request.post(`${base}/careers/${company.slug}/jobs/${roleId}/apply`, { multipart, maxRedirects: 0 });

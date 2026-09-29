@@ -9,7 +9,7 @@ import { clientIp, type Vars } from "./session";
  * trips raises an alert for the ITS console. Webhooks are limited generously and never refuse a provider's valid retry.
  */
 export type SubjectKind = "ip" | "user" | "tenant" | "token" | "email" | "role" | "provider" | "auth_failure";
-export type Rule = { by: SubjectKind; windowMs: number; limit: number; /** route param holding the token or role id */ param?: string; /** JSON body field holding the email */ field?: string };
+export type Rule = { by: SubjectKind; windowMs: number; limit: number; /** route param holding the token or role id */ param?: string; /** body field holding the email (a JSON body) or the token (a posted form) */ field?: string };
 export type Policy = { name: string; rules: Rule[] };
 
 const MIN = 60_000;
@@ -21,6 +21,8 @@ export const POLICIES = {
   /** Code entry for the staff second factor: the transaction itself allows five tries; this bounds the address. */
   authMfa: { name: "auth.mfa", rules: [{ by: "ip", windowMs: 15 * MIN, limit: 40 }] },
   authMagicLink: { name: "auth.magic_link", rules: [{ by: "ip", windowMs: 15 * MIN, limit: 10 }, { by: "email", windowMs: 15 * MIN, limit: 5, field: "email" }] },
+  /** "Email me a sign-in link" on the team invitation page: the link goes to the invited address only, so the second rule is per invitation (the form's token), whoever holds the link and from wherever they post it. */
+  authInviteEmail: { name: "auth.invite_email", rules: [{ by: "ip", windowMs: 15 * MIN, limit: 10 }, { by: "token", windowMs: 15 * MIN, limit: 3, field: "token" }] },
   apply: { name: "apply", rules: [{ by: "ip", windowMs: HOUR, limit: 30 }, { by: "role", windowMs: HOUR, limit: 600, param: "roleId" }] },
   screen: { name: "candidate.screen", rules: [{ by: "token", windowMs: HOUR, limit: 120, param: "token" }, { by: "ip", windowMs: HOUR, limit: 240 }] },
   screenHuman: { name: "candidate.screen_human", rules: [{ by: "token", windowMs: HOUR, limit: 30, param: "token" }, { by: "ip", windowMs: HOUR, limit: 60 }] },
@@ -41,12 +43,20 @@ export const POLICIES = {
   candidatePages: { name: "candidate.pages", rules: [{ by: "ip", windowMs: MIN, limit: 240 }] },
 } satisfies Record<string, Policy>;
 
+/** A field of a posted form (the invitation page's token, for instance). Hono caches the parsed body, so the handler reads it again for free. */
+async function formField(c: Context<Vars>, field: string): Promise<string | undefined> {
+  try {
+    const v = (await c.req.parseBody())[field];
+    return typeof v === "string" && v ? v : undefined;
+  } catch { return undefined; }
+}
+
 async function subjectOf(c: Context<Vars>, rule: Rule): Promise<string | undefined> {
   switch (rule.by) {
     case "ip": case "auth_failure": return clientIp(c) ?? "unknown";
     case "user": return c.get("session")?.user.id;
     case "tenant": return c.get("tenant")?.companyId;
-    case "token": case "role": return c.req.param(rule.param ?? "token");
+    case "token": case "role": return rule.field ? formField(c, rule.field) : c.req.param(rule.param ?? "token");
     case "provider": return c.req.path.split("/")[2] ?? "unknown";
     case "email": {
       try {

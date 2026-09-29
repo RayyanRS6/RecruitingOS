@@ -11,4 +11,6 @@ export interface MalwareScanner {
   readonly id: string;
   readonly status: AdapterStatus;
   scan(bytes: Uint8Array, meta: { filename: string; mime: string }): Promise<ScanResult>;
+  /** A real engine answers whether it is reachable (the boot check calls this); the fake has nothing to check. Never throws. */
+  check?(): Promise<AdapterStatus>;
 }

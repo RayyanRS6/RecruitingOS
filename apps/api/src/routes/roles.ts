@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome } from "@ros/contracts";
-import { OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, assertCan, audit, emit, listOutcomes, openEscalationsFor, ownerGroup, recordApplicationOutcome, recordRoleOutcome } from "@ros/core";
+import { OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, assertCan, audit, can, emit, listOutcomes, openEscalationsFor, ownerGroup, recordApplicationOutcome, recordRoleOutcome } from "@ros/core";
 import { users } from "@ros/db";
 import { aiRuns, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviews, postings, rolePackets, roles, screens, withTenant } from "@ros/db";
 import { actorOf, applicationScopeGuard, clientIp, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
@@ -9,6 +9,7 @@ import { HttpError } from "../middleware/errors";
 import { DOWNLOAD_URL_TTL_SECONDS, safeFilename } from "../uploads";
 import type { Container } from "../container";
 import { allowedApplicationActions, applicationFactsFrom, performApplicationAction, sendDeclineAfterHumanDecision } from "../services/application-actions";
+import { replayHeldEmails } from "../webhooks/postmark";
 
 export const roleRoutes = new Hono<Vars>();
 roleRoutes.use("/:id", roleScopeGuard);
@@ -57,7 +58,7 @@ roleRoutes.get("/:id", requireTenant, async (c) => {
     const counts: Record<string, number> = {};
     for (const a of apps) counts[a.stage] = (counts[a.stage] ?? 0) + 1;
     const redact = (p: typeof current) => (p && !canSeeComp ? { ...p, packet: { ...p.packet, compensation: { ...p.packet.compensation, min: 0, max: 0, mid: 0, ceiling: 0 } } } : p);
-    return { ...role, currentPacket: redact(current), packetVersions: packets.map((p) => ({ id: p.id, version: p.version, status: p.status, source: p.source, changeSummary: p.changeSummary, createdAt: p.createdAt, createdBy: p.createdBy })), postings: posts, counts, pendingApprovals: pending };
+    return { ...role, currentPacket: redact(current), packetVersions: packets.map((p) => ({ id: p.id, version: p.version, status: p.status, source: p.source, changeSummary: p.changeSummary, createdAt: p.createdAt, createdBy: p.createdBy })), postings: posts, boardsStillUp: posts.filter((p) => p.closureRequired && !p.closureConfirmedAt).map((p) => p.channel), counts, pendingApprovals: pending };
   });
   if (!row) throw new HttpError(404, "not_found", "Role not found.");
   return c.json(row);
@@ -67,7 +68,12 @@ roleRoutes.get("/:id/packets", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.read");
   const rows = await withTenant(c.get("container").db, t.companyId, (tx) => tx.select().from(rolePackets).where(eq(rolePackets.roleId, c.req.param("id"))).orderBy(desc(rolePackets.version)));
-  return c.json(rows);
+  if (can(t.role, "compensation.read")) return c.json(rows);
+  // Interviewers never see pay (docs/spec/21, area A): the figures are left out, never shown as zero.
+  return c.json(rows.map((p) => {
+    const { min: _min, mid: _mid, max: _max, ceiling: _ceiling, ...rest } = p.packet.compensation;
+    return { ...p, packet: { ...p.packet, compensation: rest } };
+  }));
 });
 
 /** A human edit creates a new version; nothing is overwritten. If the role is open, the new version becomes current and postings refresh. */
@@ -143,30 +149,13 @@ for (const action of ["pause", "resume"] as const) {
       return updated;
     });
     await container.kick();
+    // Applications that arrived by email while the role was paused were held (C19); resuming adds them to the role.
+    if (action === "resume") await replayHeldEmails(container, { companyId: t.companyId, roleId: row.id });
     return c.json(row);
   });
 }
 
-roleRoutes.get("/:id/postings", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "role.read");
-  const rows = await withTenant(c.get("container").db, t.companyId, (tx) => tx.select().from(postings).where(eq(postings.roleId, c.req.param("id"))));
-  return c.json(rows);
-});
-
-roleRoutes.post("/:id/postings/:channel/retry", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "role.manage");
-  const container = c.get("container");
-  await withTenant(container.db, t.companyId, async (tx) => {
-    const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
-    if (role?.status !== "open") throw new HttpError(409, "not_open", "The role must be open to post.");
-    await tx.update(postings).set({ status: "pending", error: null }).where(and(eq(postings.roleId, role.id), eq(postings.channel, c.req.param("channel"))));
-    await container.engine.start(tx, { workflowKey: "publish_role", companyId: t.companyId, subject: { type: "role", id: role.id }, state: { roleId: role.id, packetVersion: role.currentPacketVersion }, actor: actorOf(c) });
-  });
-  await container.kick();
-  return c.json({ ok: true });
-});
+// The posting routes (GET /:id/postings, the per-channel actions, links, volume, the accepting switch) live in routes/postings.ts.
 
 roleRoutes.get("/:id/applications", requireTenant, async (c) => {
   const t = c.get("tenant")!;

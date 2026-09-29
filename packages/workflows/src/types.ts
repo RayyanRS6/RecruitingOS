@@ -9,8 +9,8 @@ export type RunRow = typeof workflowRuns.$inferSelect;
 export type Services = {
   ai: AiRuntime;
   integrations: Integrations;
-  /** `jobsBaseUrl` is the public job-page host (JOBS_BASE_URL): every candidate-facing job link and tracked link is built from it. */
-  env: { appBaseUrl: string; jobsBaseUrl: string; itsQueueEmail: string };
+  /** `jobsBaseUrl` is the public job-page host (JOBS_BASE_URL): every candidate-facing job link and tracked link is built from it. `smsEnabled` is SMS_ENABLED: while off, candidate copy promises nothing by text. */
+  env: { appBaseUrl: string; jobsBaseUrl: string; itsQueueEmail: string; smsEnabled: boolean };
   engine: WorkflowEngine;
 };
 
@@ -100,4 +100,18 @@ export type EngineOptions = {
   leaseMs?: number;
 };
 
-export type EngineDeps = { db: Db; services: Services };
+/** What the engine tells the process about a queued job that failed for good: the kind and the ids, never the payload. */
+export type JobFailedInfo = { kind: string; jobId: number; attempts: number; error: string };
+/** What the engine tells the process about a workflow run that failed for good: keys and ids, never the state. */
+export type StepFailedInfo = { workflowKey: string; runId: string; step: string; attempts: number; error: string; companyId: string | null };
+
+export type EngineDeps = {
+  db: Db;
+  services: Services;
+  /**
+   * Observability hooks (H2). The engine cannot import the process's error reporter, so the container wires these to
+   * it. Called after the failure is recorded; a hook that throws changes nothing about the queue.
+   */
+  onJobFailed?: (info: JobFailedInfo) => void;
+  onStepFailed?: (info: StepFailedInfo) => void;
+};

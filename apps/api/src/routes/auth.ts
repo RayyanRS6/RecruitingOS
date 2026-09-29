@@ -1,13 +1,14 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { MagicLinkConsume, MagicLinkRequest, type MeResponse, type MembershipRole } from "@ros/contracts";
 import { createHash, randomBytes } from "node:crypto";
-import { consumeMagicLink, createMagicLink, escapeHtml, hashToken, isStaffAccount, newMfaTransactionId, normalizeEmail, revokeSession, sealMfaTransaction, setActiveCompany, SignInRefused, MFA_TRANSACTION_TTL_MS } from "@ros/core";
-import { companies, magicLinks, memberships, users, withPlatform } from "@ros/db";
+import { InvitationRefused, audit, consumeMagicLink, createMagicLink, escapeHtml, findInvitationByToken, hashInvitationToken, invitationState, isStaffAccount, newMfaTransactionId, normalizeEmail, revokeSession, roleInWords, sealMfaTransaction, setActiveCompany, SignInRefused, MFA_TRANSACTION_TTL_MS } from "@ros/core";
+import { companies, memberships, users, withPlatform } from "@ros/db";
 import { mfaRoutes } from "./auth-mfa";
 import { renderSignInLinkPage } from "../pages/signin-link";
-import { MFA_COOKIE, mfaCookieOptions, needsSecondFactor, openSession, sessionCookieOptions, signInPolicy } from "./auth-shared";
+import { renderInvitePage, type InvitePageProps } from "../pages/invite";
+import { MFA_COOKIE, clearInviteCookie, mfaCookieOptions, needsSecondFactor, openSession, readInviteCookie, sessionCookieOptions, setInviteCookie, signInPolicy } from "./auth-shared";
 import { FakeEmailAdapter, FakeIdentityProvider, IdentityError, base64url } from "@ros/integrations";
 import { SESSION_COOKIE, clientIp, isPlatformStaff, type Vars } from "../middleware/session";
 import { activeStaffGrant } from "@ros/core";
@@ -163,20 +164,38 @@ authRoutes.get("/consume", async (c) => {
   const container = c.get("container");
   const token = c.req.query("token") ?? "";
   if (!token) return c.redirect(`${container.env.APP_BASE_URL}/login?error=expired`, 302);
-  const [link] = await container.db.select({ inviteCompanyId: magicLinks.inviteCompanyId }).from(magicLinks).where(eq(magicLinks.tokenHash, hashToken(token))).limit(1);
-  return c.html(renderSignInLinkPage({ token, productName: container.env.PRODUCT_NAME, action: `${container.env.APP_BASE_URL}/api/v1/auth/consume`, invite: !!link?.inviteCompanyId }));
+  // A team invitation is no longer carried by the link (migration 0022): the page is the plain sign-in one; the sealed
+  // invite cookie, if the person came from an invitation page, is honoured when the button is pressed.
+  return c.html(renderSignInLinkPage({ token, productName: container.env.PRODUCT_NAME, action: `${container.env.APP_BASE_URL}/api/v1/auth/consume`, invite: !!readInviteCookie(c, container) }));
 });
+
+/** The email-link path honours a carried invitation like the delegated sign-in does: accepted, the cookie goes; the wrong address keeps it; a dead invitation drops it. */
+async function consumeWithInvitation(c: Context<Vars>, container: Container, token: string) {
+  const invitationTokenHash = readInviteCookie(c, container);
+  try {
+    const result = await withPlatform(container.db, (tx) => consumeMagicLink(tx, { token, ip: clientIp(c), userAgent: c.req.header("user-agent"), invitationTokenHash }));
+    if (invitationTokenHash) clearInviteCookie(c, container);
+    return result;
+  } catch (err) {
+    if (err instanceof InvitationRefused) {
+      if (err.code === "invite_expired") clearInviteCookie(c, container);
+      // The transaction rolled back, so the refusal is recorded outside it, as openSession does: refusals are never silent.
+      await audit(container.db, { companyId: null, actor: { kind: "system", id: "sign_in" }, action: "signin.refused", reason: err.code, ip: clientIp(c), details: { provider: "magic_link", ...(err.email ? { email: err.email } : {}) } });
+    }
+    throw err;
+  }
+}
 
 authRoutes.post("/consume", async (c) => {
   const container = c.get("container");
   const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
   const token = typeof form.token === "string" ? form.token : "";
   try {
-    const result = await withPlatform(container.db, (tx) => consumeMagicLink(tx, { token, ip: clientIp(c), userAgent: c.req.header("user-agent") }));
+    const result = await consumeWithInvitation(c, container, token);
     setCookie(c, SESSION_COOKIE, result.sessionToken, sessionCookieOptions(container));
     return c.redirect(`${container.env.APP_BASE_URL}${result.activeCompanyId ? "/" : "/setup/company"}`, 302);
-  } catch {
-    return c.redirect(`${container.env.APP_BASE_URL}/login?error=expired`, 302);
+  } catch (err) {
+    return c.redirect(`${container.env.APP_BASE_URL}/login?error=${err instanceof InvitationRefused ? err.code : "expired"}`, 302);
   }
 });
 
@@ -184,9 +203,70 @@ authRoutes.post("/consume", async (c) => {
 authRoutes.post("/magic-link/consume", async (c) => {
   const body = MagicLinkConsume.parse(await c.req.json());
   const container = c.get("container");
-  const result = await withPlatform(container.db, (tx) => consumeMagicLink(tx, { token: body.token, ip: clientIp(c), userAgent: c.req.header("user-agent") }));
+  let result: Awaited<ReturnType<typeof consumeWithInvitation>>;
+  try {
+    result = await consumeWithInvitation(c, container, body.token);
+  } catch (err) {
+    if (err instanceof InvitationRefused) throw new HttpError(403, err.code, err.message);
+    throw err;
+  }
   setCookie(c, SESSION_COOKIE, result.sessionToken, sessionCookieOptions(container));
-  return c.json({ ok: true, userId: result.userId, activeCompanyId: result.activeCompanyId });
+  return c.json({ ok: true, userId: result.userId, activeCompanyId: result.activeCompanyId, invitationsAccepted: result.invitationsAccepted });
+});
+
+/** What the invitation page needs to say about one link. Never the token hash; the token itself only goes back into the page's own form. */
+async function invitePageFor(container: Container, token: string): Promise<InvitePageProps> {
+  const base = { productName: container.env.PRODUCT_NAME, providers: container.integrations.identity.providers(), startBase: `${container.env.APP_BASE_URL}/api/v1/auth/start`, magicLink: container.env.MAGIC_LINK_ENABLED, emailAction: `${container.env.APP_BASE_URL}/api/v1/auth/invite/email`, token, loginHref: `${container.env.APP_BASE_URL}/login` };
+  const found = await withPlatform(container.db, async (tx) => {
+    const inv = await findInvitationByToken(tx, token);
+    if (!inv) return null;
+    const [company] = await tx.select({ name: companies.name }).from(companies).where(eq(companies.id, inv.companyId)).limit(1);
+    return { inv, companyName: company?.name ?? null };
+  });
+  if (!found) return { ...base, state: "unknown", companyName: null, email: null, roleWords: null };
+  return { ...base, state: invitationState(found.inv, container.engine.clock()), companyName: found.companyName, email: found.inv.email, roleWords: roleInWords(found.inv.role) };
+}
+
+/**
+ * The team invitation link (docs/spec/21, area A). Opening it signs nobody in and consumes nothing: the page names the
+ * company and the role and offers Google or Microsoft (and the email link where the deployment enables it). The
+ * invitation rides in a sealed cookie that every sign-in path honours only for the invited address.
+ */
+authRoutes.get("/invite", async (c) => {
+  const container = c.get("container");
+  const token = c.req.query("token") ?? "";
+  const page = await invitePageFor(container, token);
+  if (page.state === "pending") setInviteCookie(c, container, hashInvitationToken(token));
+  return c.html(renderInvitePage(page));
+});
+
+/** "Email me a sign-in link" from the invitation page: the link goes to the invited address only; the form carries no address of its own. */
+authRoutes.post("/invite/email", rateLimit(POLICIES.authInviteEmail), async (c) => {
+  const container = c.get("container");
+  const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
+  const token = typeof form.token === "string" ? form.token : "";
+  if (!container.env.MAGIC_LINK_ENABLED) throw new HttpError(410, "magic_link_disabled", "Email links are not offered here. Sign in with Google or Microsoft.");
+  const page = await invitePageFor(container, token);
+  if (page.state !== "pending" || !page.email) return c.html(renderInvitePage(page));
+  const email = page.email;
+  const { token: linkToken } = await withPlatform(container.db, (tx) => createMagicLink(tx, { email, ip: clientIp(c) }));
+  const link = consumeLink(container, linkToken);
+  await container.integrations.email.send({
+    to: email,
+    from: `${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`,
+    subject: `Your sign-in link to join ${page.companyName ?? "your team"}`,
+    text: `Click to sign in and join ${page.companyName ?? "your team"} (valid for 15 minutes):\n${link}\n\nIf you did not request this, ignore this email.`,
+    idempotencyKey: `magic:${linkToken.slice(0, 12)}`,
+    tags: { template: "magic_link" },
+  });
+  setInviteCookie(c, container, hashInvitationToken(token));
+  return c.html(renderInvitePage({ ...page, state: "sent" }));
+});
+
+/** Drops a carried invitation (after "that invitation was sent to a different address") so the person can sign in as themselves. */
+authRoutes.post("/invite/forget", async (c) => {
+  clearInviteCookie(c, c.get("container"));
+  return c.json({ ok: true });
 });
 
 authRoutes.post("/logout", async (c) => {
@@ -200,11 +280,12 @@ authRoutes.get("/me", async (c) => {
   const s = c.get("session");
   if (!s) throw new HttpError(401, "unauthorized", "Not signed in.");
   const container = c.get("container");
+  // Active memberships only: a removed person's former company is not theirs to see or switch to.
   const ms = await container.db
     .select({ companyId: memberships.companyId, role: memberships.role, name: companies.name, slug: companies.slug })
     .from(memberships)
     .innerJoin(companies, eq(companies.id, memberships.companyId))
-    .where(eq(memberships.userId, s.user.id));
+    .where(and(eq(memberships.userId, s.user.id), eq(memberships.status, "active")));
   const body: MeResponse = {
     user: { id: s.user.id, email: s.user.email, name: s.user.name, platformRole: s.user.platformRole },
     auth: { provider: s.identityProvider, aal: s.aal, mfaVerifiedAt: s.mfaVerifiedAt },

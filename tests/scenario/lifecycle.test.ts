@@ -29,7 +29,8 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
   const advance = async (ms: number) => { setClock(clockOffset + ms); await container.drain(); };
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", STORAGE_PROVIDER: "memory" } });
+    // Texting on for the scenario: step 5 consents to texts and step 7 runs the screen by SMS (decision M2 keeps texting off by default).
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", STORAGE_PROVIDER: "memory", SMS_ENABLED: "true" } });
     app = createApp(container);
     setClock(0);
     const { devLink } = (await (await json("POST", "/api/v1/auth/magic-link", { email: "dana@brightline.test" })).json()) as { devLink: string };
@@ -139,6 +140,7 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     form.set("firstName", "Maria"); form.set("lastName", "Reyes"); form.set("email", "maria.reyes@example.com"); form.set("phone", "949-555-0100"); form.set("smsConsent", "yes");
     form.set("resume", new File(["Maria Reyes, RDH\nRegistered Dental Hygienist at Smile Bright Dental 2019 - present\nRDH license CA active\nBLS current\nDentrix, periodontal charting"], "maria.txt", { type: "text/plain" }));
     for (const r of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${r.key}`, "yes");
+    form.set("acknowledged", "yes");
     const res = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     expect(res.status).toBe(302);
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
@@ -172,6 +174,7 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     form.set("resume", new File(["Luis Ortega\nDental Hygienist at Harbor Dental 2020 - present"], "luis.txt", { type: "text/plain" }));
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
     for (const r of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${r.key}`, "yes");
+    form.set("acknowledged", "yes");
     await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     const retried = await eventsOf("workflow.retried");
     expect(retried.length).toBeGreaterThanOrEqual(1);
@@ -280,6 +283,7 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     form.set("firstName", "Sam"); form.set("lastName", "Nguyen"); form.set("email", "sam@example.com"); form.set("phone", "949-555-0177"); form.set("smsConsent", "yes");
     form.set("resume", new File(["Sam Nguyen\nRegistered Dental Hygienist at Bright Smiles 2017 - present\nRDH license CA active\nPerio therapy, Dentrix"], "sam.txt", { type: "text/plain" }));
     for (const r of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${r.key}`, "yes");
+    form.set("acknowledged", "yes");
     await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     await container.drain();
     const sam = (await container.db.select().from(applications).where(eq(applications.roleId, roleId))).find((x) => x.source === "careers_page" && x.stage === "screen_invited")!;

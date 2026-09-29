@@ -1,12 +1,11 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { and, eq, gt, isNull, ne } from "drizzle-orm";
 import { magicLinks, memberships, randomToken, sessions, users, type Queryable } from "@ros/db";
+import { acceptPendingInvitations } from "./invitations";
 import { activeGrantFor } from "./platform-roles";
 
-/** A sign-in link is short-lived. */
+/** A sign-in link is short-lived. Team invitations are no longer links that sign a person in: see ./invitations. */
 export const MAGIC_LINK_TTL_MS = 15 * 60_000;
-/** A team invitation is a link too, but people open it hours or days later, so it lives longer. */
-export const INVITE_LINK_TTL_MS = 7 * 24 * 3600_000;
 const SESSION_IDLE_MS = 30 * 24 * 3600_000;
 /** Staff sessions are shorter (I8): eight hours, sliding, and never extended to the customer window. */
 export const STAFF_SESSION_MS = 8 * 3600_000;
@@ -19,22 +18,11 @@ export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
-/** Creates a single-use link. The caller sends it through the email adapter. Invitations live longer than sign-in links. */
-export async function createMagicLink(
-  q: Queryable,
-  input: { email: string; ip?: string; inviteCompanyId?: string; inviteRole?: string; ttlMs?: number },
-): Promise<{ token: string; expiresAt: string }> {
+/** Creates a single-use link. The caller sends it through the email adapter. */
+export async function createMagicLink(q: Queryable, input: { email: string; ip?: string; ttlMs?: number }): Promise<{ token: string; expiresAt: string }> {
   const token = randomToken(32);
-  const ttl = input.ttlMs ?? (input.inviteCompanyId ? INVITE_LINK_TTL_MS : MAGIC_LINK_TTL_MS);
-  const expiresAt = new Date(Date.now() + ttl).toISOString();
-  await q.insert(magicLinks).values({
-    email: normalizeEmail(input.email),
-    tokenHash: hashToken(token),
-    expiresAt,
-    ip: input.ip ?? null,
-    inviteCompanyId: input.inviteCompanyId ?? null,
-    inviteRole: input.inviteRole ?? null,
-  });
+  const expiresAt = new Date(Date.now() + (input.ttlMs ?? MAGIC_LINK_TTL_MS)).toISOString();
+  await q.insert(magicLinks).values({ email: normalizeEmail(input.email), tokenHash: hashToken(token), expiresAt, ip: input.ip ?? null });
   return { token, expiresAt };
 }
 
@@ -44,14 +32,15 @@ export class AuthError extends Error {
 }
 
 /**
- * Consumes a magic link: creates the user if needed, applies any invitation, and opens a session. The link is claimed
- * in one conditional UPDATE, so two requests carrying the same token (a double click, a mail scanner and the person)
- * can never both open a session: exactly one wins the row.
+ * Consumes a magic link: creates the user if needed, accepts any open team invitation for the address (and the one the
+ * browser carried, when its hash is given), and opens a session. The link is claimed in one conditional UPDATE, so two
+ * requests carrying the same token (a double click, a mail scanner and the person) can never both open a session:
+ * exactly one wins the row.
  */
 export async function consumeMagicLink(
   q: Queryable,
-  input: { token: string; ip?: string; userAgent?: string },
-): Promise<{ sessionToken: string; userId: string; activeCompanyId: string | null }> {
+  input: { token: string; ip?: string; userAgent?: string; invitationTokenHash?: string | null },
+): Promise<{ sessionToken: string; userId: string; activeCompanyId: string | null; invitationsAccepted: number }> {
   const now = new Date().toISOString();
   const [link] = await q
     .update(magicLinks)
@@ -66,23 +55,10 @@ export async function consumeMagicLink(
   // holder needs Microsoft and a second factor. The invite path arrives here too.
   if (user.platformRole !== "none" || (await activeGrantFor(q, user.id))) throw new StaffProviderRequired();
 
-  let activeCompanyId: string | null = null;
-  if (link.inviteCompanyId && link.inviteRole) {
-    const existing = await q
-      .select()
-      .from(memberships)
-      .where(and(eq(memberships.companyId, link.inviteCompanyId), eq(memberships.userId, user.id)))
-      .limit(1);
-    if (existing[0]) {
-      await q.update(memberships).set({ status: "active", role: link.inviteRole }).where(eq(memberships.id, existing[0].id));
-    } else {
-      await q.insert(memberships).values({ companyId: link.inviteCompanyId, userId: user.id, role: link.inviteRole, status: "active" });
-    }
-    activeCompanyId = link.inviteCompanyId;
-  } else {
-    const ms = await q.select().from(memberships).where(and(eq(memberships.userId, user.id), eq(memberships.status, "active"))).limit(1);
-    activeCompanyId = ms[0]?.companyId ?? null;
-  }
+  // Team invitations (docs/spec/21, area A): the one this browser carried and any other open one for the address.
+  const invited = await acceptPendingInvitations(q, { user: { id: user.id, email: user.email, name: user.name }, tokenHash: input.invitationTokenHash ?? null, staff: false, ip: input.ip });
+  const ms = await q.select().from(memberships).where(and(eq(memberships.userId, user.id), eq(memberships.status, "active"))).limit(1);
+  const activeCompanyId = invited.activeCompanyId ?? ms[0]?.companyId ?? null;
 
   const sessionToken = randomToken(32);
   await q.insert(sessions).values({
@@ -96,7 +72,7 @@ export async function consumeMagicLink(
     identityProvider: "magic_link",
     aal: "aal1",
   });
-  return { sessionToken, userId: user.id, activeCompanyId };
+  return { sessionToken, userId: user.id, activeCompanyId, invitationsAccepted: invited.accepted.length };
 }
 
 export type SessionContext = {

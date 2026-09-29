@@ -1,6 +1,8 @@
-# Applies the pending database migrations to one environment, on purpose, by a person: the release step (docs/14).
-# Production never migrates on boot and refuses to start while a migration is pending, so this runs before a deploy
-# that needs a schema change. The owner connection string lives only in the GitHub environment's secrets.
+# Applies the pending database migrations to one environment, on purpose, by a person: the release step (docs/14,
+# docs/runbooks/release-migrations.md). Production never migrates on boot and refuses to start while a migration is
+# pending, so this runs before a deploy that needs a schema change. The owner connection string lives only in the
+# GitHub environment's secrets. A pending migration is the expected state when this starts: the status report before
+# the apply step never fails the run (H4); the one after it fails only if a migration is still pending.
 name: migrate
 
 on:
@@ -44,11 +46,11 @@ jobs:
       - name: Migration validation (numbering, destructive statements, row-level security, tenant grants)
         run: pnpm db:validate
 
-      - name: What is pending
-        run: pnpm db:status
+      - name: What is pending (a pending migration is expected here and never stops the run)
+        run: pnpm db:status --report-only
 
       - name: Apply
         run: pnpm db:migrate
 
-      - name: Confirm nothing is pending
-        run: pnpm db:status
+      - name: Confirm no migration is pending
+        run: pnpm db:status --fail-on-pending-migrations

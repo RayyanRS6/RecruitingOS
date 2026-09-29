@@ -2,7 +2,7 @@
 
 A founder-facing guide for the day the accounts exist. Written 18 September 2026. Nadine or Paul creates every account and enters every secret value (`docs/spec/12` §I); Claude receives only the non-secret references listed here, in a message or in `docs/spec/13` appendix D. **Never paste a secret into chat, a file, a screenshot, or an issue.** A service is called "connected" only when its evidence line is satisfied and recorded in the readiness register (`docs/readiness/01`).
 
-Variable names are exactly those in `.env.example`. "Where entered" is always Vercel → Project → Settings → Environment Variables (server scope) and, for the worker, the worker's environment (Trigger.dev or the worker host), unless stated.
+Variable names are exactly those in `.env.example`. "Where entered" is always Vercel → Project → Settings → Environment Variables (server scope) and, for the worker, the Railway `worker` service's Variables tab (`docs/runbooks/railway-worker.md`; Trigger.dev is deferred by decision 1 of 22 September), unless stated.
 
 ## Order
 
@@ -22,7 +22,7 @@ Variable names are exactly those in `.env.example`. "Where entered" is always Ve
 
 - **Provides:** a Vercel team owned by `platform@` with Nadine and Paul as members; a project linked to the private GitHub repository, root `apps/shell`; a staging environment (preview) and production; domain `recruiting.identifiedtalent.com` (CNAME per Vercel; do not touch `app.`).
 - **Non-secret reference:** the project name, the preview URL, the production domain.
-- **Variables:** everything in `.env.example` except the dev-only defaults; `APP_BASE_URL` and `WEB_BASE_URL` both `https://recruiting.identifiedtalent.com` (staging: the preview URL); `WORKER_INLINE=false`; `BOOTSTRAP_ADMIN_EMAILS` for the first administrator's first sign-in only, then removed (one-time bootstrap; see `docs/readiness/13-administrator-bootstrap.md`); `CSP_MODE=report-only` until the reports are reviewed (`docs/readiness/18`); `RATE_LIMIT_STORE=shared` with the provider the founder selects (`docs/readiness/15`), `RATE_LIMIT_SHARED_PROVIDER=fake` until then.
+- **Variables:** everything in `.env.example` except the dev-only defaults; `APP_BASE_URL` `https://recruiting.identifiedtalent.com` (staging: the preview URL; `WEB_BASE_URL` is no longer read); `WORKER_INLINE=false`; `BOOTSTRAP_ADMIN_EMAILS` for the first administrator's first sign-in only, then removed (one-time bootstrap; see `docs/readiness/13-administrator-bootstrap.md`); `CSP_MODE=report-only` until the reports are reviewed (`docs/readiness/18`); `RATE_LIMIT_STORE=upstash` with `UPSTASH_REDIS_REST_URL` and the sealed token (`docs/readiness/15`; `RATE_LIMIT_SHARED_PROVIDER` is no longer read); `SENTRY_ENVIRONMENT=staging`.
 - **Verify:** the deployment builds; `/healthz` on the URL; `/login` shows the provider buttons.
 - **Disconnect:** disable the deployment; remove the domain.
 - **Evidence:** the deployment URL and a passing `/healthz`.

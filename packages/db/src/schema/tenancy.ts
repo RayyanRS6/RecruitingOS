@@ -1,5 +1,5 @@
 import { boolean, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import type { Location } from "@ros/contracts";
+import type { Actor, Location } from "@ros/contracts";
 import { createdAt, id, ts, updatedAt } from "./columns";
 
 export type CompanySettings = {
@@ -95,7 +95,7 @@ export const magicLinks = pgTable(
     id: id(),
     email: text("email").notNull(),
     tokenHash: text("token_hash").notNull(),
-    /** Optional: invitation context so the link lands in the right company. */
+    /** No longer written or read: invitations are rows of their own (migration 0022). Kept because migrations are append-only. */
     inviteCompanyId: uuid("invite_company_id"),
     inviteRole: text("invite_role"),
     expiresAt: ts("expires_at").notNull(),
@@ -104,6 +104,33 @@ export const magicLinks = pgTable(
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("magic_links_token_idx").on(t.tokenHash), index("magic_links_email_idx").on(t.email)],
+);
+
+/**
+ * A team invitation (migration 0022): who was invited to which company, as what, by whom. The emailed link carries a
+ * random token; only its hash is kept. Accepted by a Google or Microsoft sign-in (or the email link where enabled) with
+ * the invited address; never deleted, it ends as accepted, revoked or expired.
+ */
+export const invitations = pgTable(
+  "invitations",
+  {
+    id: id(),
+    companyId: uuid("company_id").notNull().references(() => companies.id),
+    /** Lower-cased; the sign-in compares it with the verified address, case-insensitively. */
+    email: text("email").notNull(),
+    role: text("role").notNull(), // owner | admin | hiring_manager | interviewer | hr
+    name: text("name"),
+    invitedBy: jsonb("invited_by").$type<Actor>().notNull(),
+    tokenHash: text("token_hash").notNull(),
+    status: text("status").notNull().default("pending"), // pending | accepted | revoked | expired
+    expiresAt: ts("expires_at").notNull(),
+    acceptedAt: ts("accepted_at"),
+    acceptedUserId: uuid("accepted_user_id"),
+    revokedAt: ts("revoked_at"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("invitations_token_hash_idx").on(t.tokenHash), index("invitations_company_status_idx").on(t.companyId, t.status), index("invitations_email_status_idx").on(t.email, t.status)],
 );
 
 export const plans = pgTable("plans", {

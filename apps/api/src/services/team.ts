@@ -1,0 +1,194 @@
+import { and, count, eq, inArray } from "drizzle-orm";
+import type { Actor, InviteMember, UpdateMember } from "@ros/contracts";
+import { audit, createInvitation, disconnectCalendar, emit, invitationLink, listPendingInvitations, membersWithCalendarStatus, normalizeEmail, notify, publicInvitation, resendInvitation, revokeAllSessions, revokeInvitation, roleInWords, type InvitationRow } from "@ros/core";
+import { queueCommunication } from "@ros/agents";
+import { companies, interviewParticipants, interviews, memberships, users, withPlatform, withTenant, type Tx } from "@ros/db";
+import type { Container } from "../container";
+import { HttpError } from "../middleware/errors";
+import type { Tenant } from "../middleware/session";
+
+/**
+ * The team behind /companies/current/members and /companies/current/invitations (docs/spec/21, area A). Every
+ * tenant-table write runs inside the caller's tenant transaction; ending a person's sessions is a platform write and
+ * runs after that transaction has committed. Messages to people go through the outbox, never straight to a provider.
+ */
+
+type Team = { tenant: Tenant; actor: Actor; container: Container };
+
+/** Active members only, each with their scheduling readiness. Removed people are gone from the list. */
+export async function listTeam({ tenant, container }: Omit<Team, "actor">) {
+  const rows = await withTenant(container.db, tenant.companyId, (tx) => membersWithCalendarStatus(tx, tenant.companyId));
+  return rows.filter((r) => r.status === "active");
+}
+
+export async function listInvitations({ tenant, container }: Omit<Team, "actor">) {
+  const now = container.engine.clock();
+  const rows = await withTenant(container.db, tenant.companyId, (tx) => listPendingInvitations(tx, tenant.companyId, now));
+  return rows.map((r) => publicInvitation(r, now));
+}
+
+/** The link only a development stand-in may show on screen; production never returns it. */
+function devLinkOf(container: Container, link: string): { devLink?: string } {
+  return container.env.NODE_ENV !== "production" && container.integrations.email.id === "fake-email" ? { devLink: link } : {};
+}
+
+async function companyNameOf(tx: Tx, companyId: string): Promise<string> {
+  const [company] = await tx.select({ name: companies.name }).from(companies).where(eq(companies.id, companyId)).limit(1);
+  return company?.name ?? "your team";
+}
+
+/** One email per invitation, through the outbox inside the tenant transaction, so a rolled-back invite sends nothing. */
+async function queueInvitationEmail(tx: Tx, team: Team, input: { invitation: InvitationRow; token: string; companyName: string; inviterName: string; again: boolean }): Promise<string> {
+  const { container, tenant, actor } = team;
+  const link = invitationLink(container.env.APP_BASE_URL, input.token);
+  const product = container.env.PRODUCT_NAME;
+  const inv = input.invitation;
+  const ways = container.env.MAGIC_LINK_ENABLED ? "Google or Microsoft, or ask for an emailed sign-in link" : "Google or Microsoft";
+  const text = [
+    inv.name ? `Hi ${inv.name},\n` : null,
+    `${input.inviterName} invited you to ${input.companyName}'s hiring workspace on ${product}, as ${roleInWords(inv.role)}.`,
+    `Accept the invitation:\n${link}`,
+    `The link works for seven days. Sign in with ${ways}, using this address (${inv.email}): the invitation belongs to it.`,
+    "If you were not expecting this, you can ignore this email.",
+  ].filter((line) => line !== null).join("\n\n");
+  await queueCommunication(tx, container.integrations, {
+    companyId: tenant.companyId,
+    channel: "email",
+    to: inv.email,
+    from: `${input.companyName} via ${product} <${container.integrations.env.fromAddress}>`,
+    subject: input.again ? `Reminder: ${input.inviterName} invited you to ${input.companyName} on ${product}` : `${input.inviterName} invited you to ${input.companyName} on ${product}`,
+    text,
+    templateKey: "invite",
+    tags: { template: "invite" },
+    idempotencyKey: `invite:${inv.id}:${inv.tokenHash.slice(0, 12)}`,
+    actor,
+  });
+  return link;
+}
+
+/**
+ * Creates the invitation and queues its one email. Refused: an address on an ITS staff domain (recruiters join through
+ * a scoped grant, never as members) and an address that is already an active member. An older open invitation for
+ * the same address is replaced by the new one.
+ */
+export async function inviteMember(team: Team, input: { body: InviteMember; inviterName: string }) {
+  const { container, tenant, actor } = team;
+  const email = normalizeEmail(input.body.email);
+  const domain = email.split("@")[1] ?? "";
+  if (container.env.ITS_STAFF_EMAIL_DOMAINS.includes(domain)) throw new HttpError(400, "staff_domain", "That address belongs to ITS. Recruiters are not team members; they get access through Bring in a recruiter, for one request at a time.");
+  const now = container.engine.clock();
+  const result = await withTenant(container.db, tenant.companyId, async (tx) => {
+    const [member] = await tx.select({ id: memberships.id }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(memberships.companyId, tenant.companyId), eq(memberships.status, "active"), eq(users.email, email))).limit(1);
+    if (member) throw new HttpError(409, "already_member", `${email} is already on your team.`);
+    const companyName = await companyNameOf(tx, tenant.companyId);
+    const created = await createInvitation(tx, { companyId: tenant.companyId, email, role: input.body.role, name: input.body.name ?? null, invitedBy: actor, now });
+    const link = await queueInvitationEmail(tx, team, { invitation: created.row, token: created.token, companyName, inviterName: input.inviterName, again: false });
+    return { row: created.row, link, replaced: created.replaced.length };
+  });
+  await container.kick();
+  return { ok: true as const, invitation: publicInvitation(result.row, now), replaced: result.replaced, ...devLinkOf(container, result.link) };
+}
+
+/** A fresh link (the old one stops working) and another seven days; the email goes out again. */
+export async function resendMemberInvitation(team: Team, input: { invitationId: string; inviterName: string }) {
+  const { container, tenant, actor } = team;
+  const now = container.engine.clock();
+  const result = await withTenant(container.db, tenant.companyId, async (tx) => {
+    const rotated = await resendInvitation(tx, { invitationId: input.invitationId, companyId: tenant.companyId, actor, now });
+    if (!rotated) throw new HttpError(404, "not_found", "No open invitation with that id.");
+    const companyName = await companyNameOf(tx, tenant.companyId);
+    const link = await queueInvitationEmail(tx, team, { invitation: rotated.row, token: rotated.token, companyName, inviterName: input.inviterName, again: true });
+    return { row: rotated.row, link };
+  });
+  await container.kick();
+  return { ok: true as const, invitation: publicInvitation(result.row, now), ...devLinkOf(container, result.link) };
+}
+
+export async function revokeMemberInvitation(team: Team, input: { invitationId: string }) {
+  const { container, tenant, actor } = team;
+  const now = container.engine.clock();
+  const row = await withTenant(container.db, tenant.companyId, (tx) => revokeInvitation(tx, { invitationId: input.invitationId, companyId: tenant.companyId, actor, now }));
+  if (!row) throw new HttpError(404, "not_found", "No open invitation with that id.");
+  return { ok: true as const, invitation: publicInvitation(row, now) };
+}
+
+const OPEN_INTERVIEW_STATUSES = ["proposed", "scheduling", "scheduled"];
+
+/**
+ * A role change or a removal. The rules, in the order they are checked: the target must be an active member (404);
+ * nobody changes their own membership (409 self_change); the last active owner is neither demoted nor removed
+ * (409 last_owner); only an owner grants or takes the owner role, including by removal (403 owner_only). Either change
+ * ends the person's sessions so it applies at once. Removal also disconnects their calendar (its credential deletion is
+ * queued exactly as the disconnect route does), takes them off the interviews still ahead that counted on them, and
+ * tells the owners and admins those interviews need another interviewer.
+ */
+export async function updateMember(team: Team, input: { userId: string; body: UpdateMember }) {
+  const { container, tenant, actor } = team;
+  const { userId, body } = input;
+  const removing = body.status === "removed";
+  if (body.role === undefined && body.status === undefined) throw new HttpError(400, "invalid_request", "Say what to change: a new role, or status removed.");
+  if (userId === tenant.userId) throw new HttpError(409, "self_change", "You cannot change your own role or remove yourself. Ask another owner or admin to do it.");
+  const now = container.engine.clock();
+  const outcome = await withTenant(container.db, tenant.companyId, async (tx) => {
+    const [target] = await tx
+      .select({ id: memberships.id, role: memberships.role, email: users.email, name: users.name })
+      .from(memberships)
+      .innerJoin(users, eq(users.id, memberships.userId))
+      .where(and(eq(memberships.companyId, tenant.companyId), eq(memberships.userId, userId), eq(memberships.status, "active")))
+      .limit(1);
+    if (!target) throw new HttpError(404, "not_found", "That person is not an active member of your team.");
+    const newRole = body.role ?? target.role;
+    const roleChanges = newRole !== target.role;
+    if (!removing && !roleChanges) return { row: { userId, role: target.role, status: "active" }, changed: false, removed: false, calendarDeletionQueued: false, interviewsFlagged: 0 };
+    if (target.role === "owner") {
+      const [owners] = await tx.select({ n: count() }).from(memberships).where(and(eq(memberships.companyId, tenant.companyId), eq(memberships.role, "owner"), eq(memberships.status, "active")));
+      if (Number(owners?.n ?? 0) <= 1) throw new HttpError(409, "last_owner", "This is the only owner. Make someone else an owner first.");
+    }
+    if ((target.role === "owner" || newRole === "owner") && tenant.role !== "owner") throw new HttpError(403, "owner_only", "Only an owner can make someone an owner, or change an owner's role.");
+    const who = target.name ?? target.email;
+    if (!removing) {
+      const [updated] = await tx.update(memberships).set({ role: newRole }).where(eq(memberships.id, target.id)).returning();
+      await emit(tx, { type: "membership.changed", companyId: tenant.companyId, actor, subject: { type: "user", id: userId }, payload: { role: newRole, previousRole: target.role, status: "active" } });
+      await audit(tx, { companyId: tenant.companyId, actor, action: "membership.changed", target: { type: "user", id: userId }, reason: `role changed from ${target.role} to ${newRole}`, details: { from: target.role, to: newRole } });
+      return { row: { userId, role: updated.role, status: updated.status }, changed: true, removed: false, calendarDeletionQueued: false, interviewsFlagged: 0 };
+    }
+    const [updated] = await tx.update(memberships).set({ status: "removed" }).where(eq(memberships.id, target.id)).returning();
+    // The same path as POST /integrations/calendar/:provider/disconnect: the connection is unusable now, the credential's deletion is queued.
+    const calendar = await disconnectCalendar(tx, { companyId: tenant.companyId, userId, reason: "removed from the team", actor, now });
+    // Interviews still ahead that counted on this person: they come off them outright. Nothing that reads participants
+    // (the scheduling workflow, the calendar bridge, the interview routes) looks at a status, so a row left behind would
+    // keep them on the schedule, in the candidate's messages and on the bookings. The notification, the event and the
+    // audit record below keep the count.
+    const ahead = await tx
+      .select({ participantId: interviewParticipants.id, interviewId: interviews.id, title: interviews.title, calendarRefs: interviews.calendarRefs })
+      .from(interviewParticipants)
+      .innerJoin(interviews, eq(interviews.id, interviewParticipants.interviewId))
+      .where(and(eq(interviewParticipants.companyId, tenant.companyId), eq(interviewParticipants.userId, userId), inArray(interviews.status, OPEN_INTERVIEW_STATUSES)));
+    if (ahead.length) await tx.delete(interviewParticipants).where(inArray(interviewParticipants.id, ahead.map((p) => p.participantId)));
+    for (const p of ahead) {
+      // A booking in their calendar cannot be managed once the calendar is disconnected; its reference goes with them.
+      if (!(userId in p.calendarRefs)) continue;
+      const { [userId]: _gone, ...refs } = p.calendarRefs;
+      await tx.update(interviews).set({ calendarRefs: refs }).where(eq(interviews.id, p.interviewId));
+    }
+    if (ahead.length) {
+      const titles = [...new Set(ahead.map((p) => p.title))].slice(0, 5).join(", ");
+      await notify(tx, { companyId: tenant.companyId, kind: "member.removed_interviews", title: `${who} was removed; ${ahead.length === 1 ? "an interview needs" : `${ahead.length} interviews need`} another interviewer`, body: `${titles}. Open each interview and add an interviewer, or cancel it.`, action: { label: "Open interviews", href: "/interviews" }, roles: ["owner", "admin"] });
+    }
+    await emit(tx, { type: "member.removed", companyId: tenant.companyId, actor, subject: { type: "user", id: userId }, payload: { role: target.role, calendarDeletionQueued: !!calendar?.queued, interviewsFlagged: ahead.length } });
+    await emit(tx, { type: "membership.changed", companyId: tenant.companyId, actor, subject: { type: "user", id: userId }, payload: { role: target.role, status: "removed" } });
+    await audit(tx, { companyId: tenant.companyId, actor, action: "membership.changed", target: { type: "user", id: userId }, reason: "removed from the team", details: { role: target.role, calendarDeletionQueued: !!calendar?.queued, interviewsFlagged: ahead.length } });
+    return { row: { userId, role: updated.role, status: updated.status }, changed: true, removed: true, calendarDeletionQueued: !!calendar?.queued, interviewsFlagged: ahead.length };
+  });
+  let sessionsEnded = 0;
+  if (outcome.changed) {
+    // Sessions are a platform table: ended after the membership change has committed, so the new role (or none) applies at once.
+    sessionsEnded = await withPlatform(container.db, async (tx) => {
+      const n = await revokeAllSessions(tx, userId, { now });
+      if (n > 0) await audit(tx, { companyId: tenant.companyId, actor, action: "session.revoked", target: { type: "user", id: userId }, reason: outcome.removed ? "removed from the team" : "role changed", details: { sessionsEnded: n } });
+      return n;
+    });
+    if (outcome.removed) await container.kick();
+  }
+  return { ...outcome.row, sessionsEnded, calendarDeletionQueued: outcome.calendarDeletionQueued, interviewsFlagged: outcome.interviewsFlagged };
+}

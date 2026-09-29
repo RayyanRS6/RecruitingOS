@@ -49,6 +49,7 @@ describe("release-1 security coverage", () => {
     fd.set("resume", new File([`${first} Tester, RDH\nRegistered Dental Hygienist 2019 - present`], "r.txt", { type: "text/plain" }));
     for (const rule of role?.currentPacket.packet.requirements.eligibility ?? []) fd.set(`elig_${rule.key}`, "yes");
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
+    fd.set("acknowledged", "yes");
     const r = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
     expect(r.status).toBe(302);
     await container.drain();

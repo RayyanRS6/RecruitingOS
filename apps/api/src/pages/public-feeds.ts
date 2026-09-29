@@ -1,0 +1,150 @@
+import { Hono } from "hono";
+import { and, eq } from "drizzle-orm";
+import { companies, rolePackets, roles, withPlatform } from "@ros/db";
+import { jobFeedJson, jobFeedXml, jobValidThrough, linkedInFeedXml, schemaEmploymentType, type FeedJob } from "@ros/integrations";
+import type { Container } from "../container";
+import type { Vars } from "../middleware/session";
+import { jobUrls } from "../services/job-urls";
+
+/**
+ * The public job surfaces search engines and approved boards read (docs/spec/20 items 5 and 6): the sitemap, the
+ * robots file, the common job-board XML feed, the same listings as JSON, and the LinkedIn Basic Jobs feed. Every URL
+ * is built from JOBS_BASE_URL; only open roles that accept applications are listed, with the client company named as
+ * the employer; public job data only, never a candidate or a tracking token. Each document is rebuilt at most once
+ * every five minutes per process. The fields and the cadence are documented in docs/15-integrations.md.
+ */
+export const publicFeeds = new Hono<Vars>();
+
+export const PUBLIC_FEED_CACHE_MS = 5 * 60_000;
+
+type Listing = { roleId: string; title: string; updatedAt: string; datePosted: string; companyName: string; slug: string; vertical: string; packet: typeof rolePackets.$inferSelect.packet };
+
+type Cached = { at: number; body: string };
+const caches = new WeakMap<Container, Map<string, Cached>>();
+
+/** Forgets every cached document of this container (tests, and a deployment that wants a fresh build on demand). */
+export function resetPublicFeedCache(container: Container): void {
+  caches.delete(container);
+}
+
+async function cached(container: Container, key: string, build: () => Promise<string>): Promise<string> {
+  const now = container.engine.clock().getTime();
+  let store = caches.get(container);
+  if (!store) {
+    store = new Map();
+    caches.set(container, store);
+  }
+  const hit = store.get(key);
+  if (hit && now - hit.at < PUBLIC_FEED_CACHE_MS && now >= hit.at) return hit.body;
+  const body = await build();
+  store.set(key, { at: now, body });
+  return body;
+}
+
+/** Open roles that accept applications, with the approved packet the role currently runs on. Platform read: the feeds span every company. */
+async function listings(container: Container): Promise<Listing[]> {
+  const rows = await withPlatform(container.db, (tx) =>
+    tx
+      .select({ roleId: roles.id, title: roles.title, updatedAt: roles.updatedAt, openedAt: roles.openedAt, createdAt: roles.createdAt, companyName: companies.name, slug: companies.slug, vertical: companies.vertical, packet: rolePackets.packet })
+      .from(roles)
+      .innerJoin(companies, eq(companies.id, roles.companyId))
+      .innerJoin(rolePackets, and(eq(rolePackets.roleId, roles.id), eq(rolePackets.version, roles.currentPacketVersion)))
+      .where(and(eq(roles.status, "open"), eq(roles.acceptingApplications, true)))
+      .orderBy(roles.openedAt),
+  );
+  return rows.map((r) => ({ roleId: r.roleId, title: r.title, updatedAt: r.updatedAt, datePosted: (r.openedAt ?? r.createdAt).slice(0, 10), companyName: r.companyName, slug: r.slug, vertical: r.vertical, packet: r.packet }));
+}
+
+const xmlText = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+
+/** Careers pages of companies with at least one listed role, then every listed job page, each with its last change. */
+export function sitemapXml(env: Container["env"], rows: Listing[]): string {
+  const careers = new Map<string, { loc: string; lastmod: string }>();
+  const jobs: Array<{ loc: string; lastmod: string }> = [];
+  for (const r of rows) {
+    const urls = jobUrls(env, { slug: r.slug, roleId: r.roleId });
+    const lastmod = new Date(r.updatedAt).toISOString();
+    const page = careers.get(r.slug);
+    if (!page || page.lastmod < lastmod) careers.set(r.slug, { loc: urls.careers, lastmod });
+    jobs.push({ loc: urls.job, lastmod });
+  }
+  const entries = [...careers.values(), ...jobs].map((u) => `  <url>\n    <loc>${xmlText(u.loc)}</loc>\n    <lastmod>${u.lastmod}</lastmod>\n  </url>`).join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries}\n</urlset>\n`;
+}
+
+export function robotsTxt(env: Container["env"]): string {
+  return ["User-agent: *", "Allow: /careers/", "Disallow: /c/", "Disallow: /api/", "Disallow: /a/", "Disallow: /files/", "Disallow: /dev/", "Disallow: /webhooks/", "", `Sitemap: ${env.JOBS_BASE_URL}/sitemap.xml`, ""].join("\n");
+}
+
+function feedJob(env: Container["env"], r: Listing): FeedJob {
+  const urls = jobUrls(env, { slug: r.slug, roleId: r.roleId });
+  const p = r.packet;
+  const loc = p.identity.locations[0];
+  const comp = p.compensation;
+  return {
+    referenceNumber: r.roleId,
+    title: p.identity.title,
+    url: urls.job,
+    applyUrl: urls.apply,
+    company: r.companyName,
+    city: loc?.city,
+    state: loc?.region,
+    country: loc?.country ?? "US",
+    postalCode: loc?.postalCode,
+    description: p.description.publicJobDescription,
+    datePosted: r.datePosted,
+    validThrough: jobValidThrough({ datePosted: r.datePosted }),
+    employmentType: schemaEmploymentType(p.identity.employmentType),
+    salary: comp.discloseRange ? { min: comp.min, max: comp.max, currency: comp.currency, basis: comp.basis } : null,
+    category: r.vertical,
+    remote: p.identity.remotePolicy === "remote",
+  };
+}
+
+function feedMeta(container: Container) {
+  return { publisher: container.env.PRODUCT_NAME, publisherUrl: container.env.JOBS_BASE_URL, lastBuildDate: container.engine.clock() };
+}
+
+publicFeeds.get("/sitemap.xml", async (c) => {
+  const container = c.get("container");
+  const body = await cached(container, "sitemap", async () => sitemapXml(container.env, await listings(container)));
+  return c.body(body, 200, { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "public, max-age=300" });
+});
+
+publicFeeds.get("/robots.txt", (c) => c.body(robotsTxt(c.get("container").env), 200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=3600" }));
+
+publicFeeds.get("/feeds/jobs.xml", async (c) => {
+  const container = c.get("container");
+  const body = await cached(container, "jobs.xml", async () => jobFeedXml((await listings(container)).map((r) => feedJob(container.env, r)), feedMeta(container)));
+  return c.body(body, 200, { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "public, max-age=300" });
+});
+
+publicFeeds.get("/feeds/jobs.json", async (c) => {
+  const container = c.get("container");
+  const body = await cached(container, "jobs.json", async () => JSON.stringify(jobFeedJson((await listings(container)).map((r) => feedJob(container.env, r)), feedMeta(container))));
+  return c.body(body, 200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "public, max-age=300" });
+});
+
+/** LinkedIn Basic Jobs: the same listings in LinkedIn's XML, the publisher URL set and each job pointing at its canonical page on the job host. */
+publicFeeds.get("/feeds/linkedin.xml", async (c) => {
+  const container = c.get("container");
+  const body = await cached(container, "linkedin.xml", async () =>
+    linkedInFeedXml(
+      (await listings(container)).map((r) => {
+        const loc = r.packet.identity.locations[0];
+        const comp = r.packet.compensation;
+        return {
+          partnerJobId: r.roleId,
+          company: r.companyName,
+          title: r.packet.identity.title,
+          description: r.packet.description.publicJobDescription,
+          location: [loc?.city, loc?.region, loc?.country ?? "US"].filter(Boolean).join(", "),
+          applyUrl: jobUrls(container.env, { slug: r.slug, roleId: r.roleId }).job,
+          salaryText: comp.discloseRange ? `${comp.max} ${comp.currency} ${comp.basis}` : undefined,
+        };
+      }),
+      { publisherUrl: container.env.JOBS_BASE_URL, lastBuildDate: container.engine.clock() },
+    ),
+  );
+  return c.body(body, 200, { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "public, max-age=300" });
+});

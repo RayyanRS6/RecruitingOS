@@ -79,7 +79,7 @@ the next merge to `main`, or Deployments, **Create Deployment**, branch `main`.
 | `STORAGE_S3_REGION` | `us-west-2` | the S3 Configuration screen (reported 22 Sep) | no |
 | `STORAGE_S3_ACCESS_KEY_ID` | the access key ID | 1Password, "Recruiting OS staging storage" | **yes** |
 | `STORAGE_S3_SECRET_ACCESS_KEY` | the secret access key | 1Password, "Recruiting OS staging storage" | **yes** |
-| `SCAN_PROVIDER` | `fake` | constant (a real engine is a real-data gate) | no |
+| `SCAN_PROVIDER` | `fake` | constant for the app, which never scans a file; the worker on Railway switches to `clamav` once the ClamAV service exists (`docs/runbooks/resume-storage.md`) | no |
 | `RATE_LIMIT_STORE` | `upstash` | constant | no |
 | `UPSTASH_REDIS_REST_URL` | `https://complete-narwhal-292092.upstash.io` | the Upstash database page (reported 22 Sep) | no |
 | `UPSTASH_REDIS_REST_TOKEN` | the REST token | Upstash console, database `recruiting-os-staging-rate-limit`, REST API panel; store it in 1Password ("Recruiting OS staging rate limit") first | **yes** |

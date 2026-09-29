@@ -49,6 +49,7 @@ describe("content-security policy on candidate pages", () => {
     fd.set("resume", new File(["Ivy Chen, RDH"], "ivy.txt", { type: "text/plain" }));
     for (const rule of role.currentPacket.packet.requirements.eligibility) fd.set(`elig_${rule.key}`, "yes");
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
+    fd.set("acknowledged", "yes");
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
     statusToken = r.headers.get("location")!.split("/c/status/")[1].split("?")[0];
     await container.drain();

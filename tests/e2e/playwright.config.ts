@@ -22,8 +22,9 @@ export default defineConfig({
   reporter: [["list"], ["html", { open: "never", outputFolder: "report" }]],
   use: { baseURL: base, trace: "retain-on-failure", screenshot: "only-on-failure", video: "off" },
   projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "phone", use: { ...devices["iPhone 13"], browserName: "chromium" }, testMatch: /routes\.spec\.ts/ },
+    { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: /candidate-phone\.spec\.ts/ },
+    // The candidate journey (apply with the acknowledgment, the screen, the schedule page) runs on the phone only: that is where candidates are (docs/spec/20 item 3).
+    { name: "phone", use: { ...devices["iPhone 13"], browserName: "chromium" }, testMatch: /routes\.spec\.ts|candidate-phone\.spec\.ts/ },
   ],
   webServer: {
     command: `pnpm --filter @ros/shell exec next dev -p ${port} --disable-source-maps`,

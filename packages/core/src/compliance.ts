@@ -74,6 +74,17 @@ export function noticesFor(jurisdictions: string[], overrides?: Record<string, {
   return out;
 }
 
+/**
+ * The notices a candidate page renders as text. Two keys stay defined but are never shown as notices: `recording` is
+ * for a feature release 1 does not have (docs/readiness/20 section F), and `sms_consent` is a consent checkbox, not a
+ * notice, rendered by the apply form only while texting is on. Neither belongs in the versions recorded as shown.
+ */
+export const NOTICES_NOT_RENDERED: readonly NoticeKey[] = ["recording", "sms_consent"];
+
+export function candidateNotices(notices: Notice[]): Notice[] {
+  return notices.filter((n) => !NOTICES_NOT_RENDERED.includes(n.key));
+}
+
 /** The disclosure line every automated candidate message carries. */
 export function disclosureLine(companyName: string): string {
   return `This message was sent by the hiring team at ${companyName} with help from an AI recruiting assistant. Reply HUMAN at any time to reach a person.`;

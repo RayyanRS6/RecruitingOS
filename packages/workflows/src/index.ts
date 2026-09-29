@@ -4,6 +4,7 @@ import { publishRole } from "./definitions/publish-role";
 import { applicationIntake } from "./definitions/application-intake";
 import { screen } from "./definitions/screen";
 import { stuckRoleDetector } from "./definitions/stuck-role-detector";
+export { DEFAULT_VOLUME_ALERT_PER_DAY, localDays, type LocalDays } from "./volume-days";
 import { scheduleInterview } from "./definitions/schedule-interview";
 import type { EngineDeps, EngineOptions, Services } from "./types";
 
@@ -12,9 +13,9 @@ export { WorkflowEngine };
 export { processQuarantinedDocument, type QuarantineOutcome } from "./documents";
 
 /** Creates the engine with every workflow definition registered. */
-export function createEngine(deps: { db: EngineDeps["db"]; services: Omit<Services, "engine"> }, opts: EngineOptions = {}): WorkflowEngine {
+export function createEngine(deps: { db: EngineDeps["db"]; services: Omit<Services, "engine">; onJobFailed?: EngineDeps["onJobFailed"]; onStepFailed?: EngineDeps["onStepFailed"] }, opts: EngineOptions = {}): WorkflowEngine {
   const services = deps.services as Services;
-  const engine = new WorkflowEngine({ db: deps.db, services }, opts);
+  const engine = new WorkflowEngine({ db: deps.db, services, onJobFailed: deps.onJobFailed, onStepFailed: deps.onStepFailed }, opts);
   (services as { engine: WorkflowEngine }).engine = engine;
   engine.register(roleApproval);
   engine.register(publishRole);

@@ -8,7 +8,8 @@ import { normalizeEmail } from "./auth";
  * The do-not-send list for email. Every send consults it (the container wraps the email adapter); the webhook processor
  * and administrators write it; every change is audited. Platform-wide by address.
  */
-export type SuppressionReason = "hard_bounce" | "spam_complaint" | "soft_bounce_repeated" | "manual";
+/** `subscription_change` is Postmark telling us the recipient (or someone at Postmark) unsubscribed the address (H10); it is honoured like a manual block, never retried. */
+export type SuppressionReason = "hard_bounce" | "spam_complaint" | "soft_bounce_repeated" | "manual" | "subscription_change";
 export type SuppressionRow = typeof emailSuppressions.$inferSelect;
 
 /**

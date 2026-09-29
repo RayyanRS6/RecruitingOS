@@ -11,6 +11,7 @@ export { LocalStorageAdapter, MemoryStorageAdapter } from "./storage/local";
 export { GrantSigner, type GrantPayload } from "./storage/grants";
 export { SupabaseStorageAdapter, StorageError } from "./storage/supabase";
 export { FakeMalwareScanner, EICAR_TEST_STRING } from "./scanning/fake";
+export { ClamAvScanner, parseClamdReply, CLAMAV_DEFAULT_PORT, CLAMAV_DEFAULT_TIMEOUT_MS, type ClamAvOptions } from "./scanning/clamav";
 export type { MalwareScanner, ScanResult } from "./scanning/types";
 export { MemorySecretStore } from "./secrets/memory";
 export { FakeAnalyticsAdapter, PostHogServerAdapter } from "./analytics/adapters";

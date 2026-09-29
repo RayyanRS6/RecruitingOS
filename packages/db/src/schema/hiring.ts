@@ -173,7 +173,7 @@ export const applicationLinks = pgTable(
   (t) => [uniqueIndex("application_links_token_idx").on(t.token), index("application_links_company_role_idx").on(t.companyId, t.roleId), index("application_links_posting_idx").on(t.postingId)],
 );
 
-export type ConsentRecord = Record<string, { granted: boolean; at: string; source: string; noticeVersion?: string; ip?: string }>;
+export type ConsentRecord = Record<string, { granted: boolean; at: string; source: string; noticeVersion?: string; ip?: string; /** application_terms only: the candidate ticked the acknowledgment box on the form. */ acknowledged?: boolean }>;
 export type CandidatePreferences = { smsOptOut?: boolean; emailOptOut?: boolean; contactWindow?: string; talentPoolOptOut?: boolean };
 
 export const candidates = pgTable(
@@ -234,7 +234,9 @@ export const documents = pgTable(
   (t) => [index("documents_company_candidate_idx").on(t.companyId, t.candidateId), index("documents_application_idx").on(t.applicationId), index("documents_company_status_idx").on(t.companyId, t.status)],
 );
 
-export type ApplicationAnswers = { eligibility?: Record<string, unknown>; screening?: Record<string, unknown>; noResume?: Record<string, string>; noticeVersionsShown?: string[] };
+/** The candidate's affirmative acknowledgment on the apply form: when it was ticked, which notice versions the server rendered above it, and the address the trusted proxy reported. */
+export type ApplicationAcknowledgment = { at: string; noticeVersions: string[]; ip?: string };
+export type ApplicationAnswers = { eligibility?: Record<string, unknown>; screening?: Record<string, unknown>; noResume?: Record<string, string>; noticeVersionsShown?: string[]; acknowledgment?: ApplicationAcknowledgment };
 
 export const applications = pgTable(
   "applications",

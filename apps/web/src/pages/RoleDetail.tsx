@@ -1,22 +1,35 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "../nav";
+import { Link, useNavigate, useParams, useSearchParams } from "../nav";
 import { Alert, Button, Card, Chip, ErrorState, Field, Segmented, Sheet, Skeleton } from "@ros/ui";
 import { formatPayRange } from "@ros/contracts";
 import { api, ApiError, type RoleDetail as RoleDetailT, type RolePacket } from "../api/client";
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
+import { AcceptingSwitch, ClosedBanner, PostingTab, StillUpAlert } from "./RolePosting";
 
 type Tab = "overview" | "requirements" | "evaluation" | "posting" | "history";
+const TABS: readonly Tab[] = ["overview", "requirements", "evaluation", "posting", "history"];
+/** `?tab=posting` opens the Posting tab straight from a notification or a brief card. */
+function tabFrom(value: string | null): Tab {
+  return value && (TABS as readonly string[]).includes(value) ? (value as Tab) : "overview";
+}
 
 /** The role page: approve the packet as one thing, see where it is posted, and edit without losing history. */
 export function RoleDetail() {
   const { id } = useParams();
   const qc = useQueryClient();
   const role = useQuery({ queryKey: ["role", id], queryFn: () => api.get<RoleDetailT>(`/api/v1/roles/${id}`) });
-  const [tab, setTab] = useState<Tab>("overview");
+  const [search] = useSearchParams();
+  const navigate = useNavigate();
+  const wantedTab = search.get("tab");
+  const [tab, setTab] = useState<Tab>(tabFrom(wantedTab));
+  // A notification or a brief card followed while this page is already open only changes the query string: follow it.
+  useEffect(() => { if (wantedTab) setTab(tabFrom(wantedTab)); }, [wantedTab]);
+  // A tab picked by hand keeps the address honest, so the next `?tab=posting` link is seen as a change.
+  const pickTab = (next: Tab) => { setTab(next); if (wantedTab && wantedTab !== next) navigate(`/roles/${id}?tab=${next}`, { replace: true }); };
   const [editing, setEditing] = useState(false);
 
   const approve = useMutation({
@@ -34,11 +47,6 @@ export function RoleDetail() {
     onSuccess: async () => { toast("Role closed; the outcome is recorded with your name."); setClosing(null); await qc.invalidateQueries({ queryKey: ["role", id] }); await qc.invalidateQueries({ queryKey: ["roles"] }); },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not close the role."),
   });
-  const retry = useMutation({
-    mutationFn: (channel: string) => api.post(`/api/v1/roles/${id}/postings/${channel}/retry`),
-    onSuccess: () => { toast("Retrying."); qc.invalidateQueries({ queryKey: ["role", id] }); },
-  });
-
   if (role.isLoading) return <Skeleton lines={5} />;
   if (role.error || !role.data) return <ErrorState message="Could not load this role." onRetry={() => role.refetch()} />;
   const r = role.data;
@@ -55,11 +63,15 @@ export function RoleDetail() {
         </div>
         <div className="row">
           <AskRecruiter roleId={r.id} />
+          <AcceptingSwitch role={r} />
           {r.status === "open" ? <Button onClick={() => status.mutate("pause")}>Pause</Button> : null}
           {r.status === "paused" ? <Button onClick={() => status.mutate("resume")}>Resume</Button> : null}
           {["open", "paused"].includes(r.status) ? <Button variant="destructive" onClick={() => setClosing({ outcome: "filled_outside_platform", reason: "" })}>Close</Button> : null}
         </div>
       </div>
+
+      <StillUpAlert channels={r.boardsStillUp ?? []} roleStatus={r.status} onOpen={() => pickTab("posting")} />
+      <ClosedBanner role={r} />
 
       {closing ? (
         <Card needsYou title="Close this role">
@@ -96,7 +108,7 @@ export function RoleDetail() {
       {p ? (
         <>
           <div className="row" style={{ justifyContent: "space-between" }}>
-            <Segmented value={tab} onChange={setTab} ariaLabel="Role packet sections" options={[{ value: "overview", label: "Overview" }, { value: "requirements", label: "Requirements" }, { value: "evaluation", label: "How we'll evaluate" }, { value: "posting", label: "Posting" }, { value: "history", label: "History" }]} />
+            <Segmented value={tab} onChange={pickTab} ariaLabel="Role packet sections" options={[{ value: "overview", label: "Overview" }, { value: "requirements", label: "Requirements" }, { value: "evaluation", label: "How we'll evaluate" }, { value: "posting", label: "Posting" }, { value: "history", label: "History" }]} />
             <div className="row">
               <Chip>Packet v{r.currentPacket!.version}</Chip>
               <Button size="sm" onClick={() => setEditing(true)}>Edit</Button>
@@ -156,28 +168,7 @@ export function RoleDetail() {
             </div>
           ) : null}
 
-          {tab === "posting" ? (
-            <div className="stack">
-              {r.status !== "open" ? <Alert tone="caution">Posting starts when the role is approved and open.</Alert> : null}
-              {r.postings.map((po) => (
-                <Card key={po.id}>
-                  <div className="card-title">
-                    <h2 style={{ fontSize: 15 }}>{channelName(po.channel)}</h2>
-                    <Chip tone={po.status === "live_verified" ? "good" : po.status === "failed" ? "critical" : po.status === "manual_action_required" ? "needs" : po.status === "awaiting_verification" ? "accent" : "neutral"}>{POSTING_STATE_LABEL[po.status] ?? po.status}</Chip>
-                  </div>
-                  {po.externalUrl ? <p className="small"><a href={po.externalUrl} target="_blank" rel="noreferrer">{po.externalUrl}</a></p> : null}
-                  {po.instructions ? <p className="small" style={{ color: "var(--ink-2)", marginTop: 6 }}>{po.instructions}</p> : null}
-                  {po.channel === "email_in" && po.externalUrl === null && po.intakeToken ? null : null}
-                  {po.error ? <Alert tone="critical">{po.error}</Alert> : null}
-                  <div className="row" style={{ marginTop: 8 }}>
-                    {po.status === "failed" ? <Button size="sm" onClick={() => retry.mutate(po.channel)}>Retry</Button> : null}
-                    {po.instructions?.includes("@") ? <Button size="sm" onClick={() => { const addr = po.instructions!.match(/apply-[a-z0-9]+@[a-z0-9.-]+/i)?.[0]; if (addr) { navigator.clipboard.writeText(addr); toast("Copied the intake address."); } }}>Copy intake address</Button> : null}
-                  </div>
-                </Card>
-              ))}
-              {r.postings.length === 0 ? <p className="muted">Nothing posted yet.</p> : null}
-            </div>
-          ) : null}
+          {tab === "posting" ? <PostingTab roleId={r.id} roleStatus={r.status} /> : null}
 
           {tab === "history" ? (
             <Card title="Packet versions">
@@ -195,15 +186,8 @@ export function RoleDetail() {
   );
 }
 
-/** The five channel states (founder decision F4). Nothing is called live without verification. */
-const POSTING_STATE_LABEL: Record<string, string> = { live_verified: "Live and verified", awaiting_verification: "Submitted, awaiting verification", manual_action_required: "Manual action required", not_connected: "Not connected", failed: "Failed" };
-
 function money(p: RolePacket): string {
   return formatPayRange(p.compensation);
-}
-
-function channelName(c: string): string {
-  return { careers_page: "Your careers page", google_jobs: "Google for Jobs", email_in: "Applications by email (Indeed and others)", linkedin_basic: "LinkedIn basic listing", indeed: "Indeed", ziprecruiter: "ZipRecruiter" }[c] ?? c;
 }
 
 /** Owner-friendly edit of the most-changed fields; recruiters can edit the whole packet as JSON. Every save is a new version. */

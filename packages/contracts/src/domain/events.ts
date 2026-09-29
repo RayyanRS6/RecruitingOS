@@ -4,6 +4,8 @@ import { Actor, Subject } from "./common";
 /** The event taxonomy (docs/04). Payloads are validated where they matter; others are open objects. */
 export const EventType = z.enum([
   "company.created", "company.updated", "user.invited", "user.joined", "membership.changed",
+  // Team membership through invitations (docs/spec/21, area A): someone joined on an invitation, was removed, or an invitation was withdrawn.
+  "member.joined", "member.removed", "invitation.revoked",
   "integration.connected", "integration.failed", "policy.changed", "plan.changed", "entitlement.exceeded",
   "intake.started", "intake.turn_completed", "intake.compiled", "intake.abandoned",
   "role.created", "role_packet.proposed", "role_packet.approved", "role_packet.edited",

@@ -1,6 +1,6 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { SYSTEM_ACTOR, createEscalation, emit } from "@ros/core";
+import { SYSTEM_ACTOR, createEscalation, emit, raiseAlert } from "@ros/core";
 import { jobs, randomToken, rowsOf, workflowRuns, workflowSteps, withTenant, type Queryable, type Tx, type WaitCondition } from "@ros/db";
 import type { EngineDeps, EngineOptions, PrepareContext, RunRow, StartInput, StepContext, StepResult, WakePayload, WorkflowDefinition } from "./types";
 
@@ -39,6 +39,11 @@ export class WorkflowEngine {
 
   definitions(): string[] {
     return [...this.defs.keys()];
+  }
+
+  /** The identity this engine claims jobs with (`jobs.locked_by`); the worker writes its heartbeat under the same id. */
+  identity(): string {
+    return this.workerId;
   }
 
   /** Starts a run. Call inside the caller's tenant transaction so the run and its trigger commit together. */
@@ -149,6 +154,7 @@ export class WorkflowEngine {
         const max = Number(job.max_attempts);
         if (attempts >= max) {
           await this.deps.db.update(jobs).set({ status: "failed", lastError: message }).where(eq(jobs.id, id));
+          await this.jobFailedForGood({ kind: String(job.kind), jobId: id, attempts, error: message });
         } else {
           const delay = Math.min(60_000, 1000 * 2 ** attempts);
           await this.deps.db.update(jobs).set({ lastError: message, lockedAt: null, lockedBy: null, runAt: new Date(this.now().getTime() + delay).toISOString() }).where(eq(jobs.id, id));
@@ -156,6 +162,30 @@ export class WorkflowEngine {
       }
     }
     return rows.length;
+  }
+
+  /**
+   * A queued job that used up its attempts is never silent (H2): a person sees an alert in the console, and the
+   * process's error reporter hears about it with the kind and the ids only, never the payload. Neither may break the
+   * loop: the job is already marked failed and the next job is waiting.
+   */
+  private async jobFailedForGood(info: { kind: string; jobId: number; attempts: number; error: string }): Promise<void> {
+    try {
+      await raiseAlert(this.deps.db, {
+        kind: "job.failed",
+        severity: "high",
+        title: `A background job gave up: ${info.kind}`,
+        body: `Job ${info.jobId} (${info.kind}) failed ${info.attempts} ${info.attempts === 1 ? "time" : "times"} and will not run again on its own. Last error: ${info.error.slice(0, 300)}. Open the Failures tab, fix the cause, then retry or re-queue it.`,
+        details: { jobId: info.jobId, kind: info.kind, attempts: info.attempts, lastError: info.error.slice(0, 500) },
+      });
+    } catch (err) {
+      console.error(`[queue] could not raise the job.failed alert for job ${info.jobId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    try {
+      this.deps.onJobFailed?.(info);
+    } catch {
+      // a reporting hook never affects the queue
+    }
   }
 
   /** Drives the queue until nothing is due. Used by tests and by the inline dev worker. */
@@ -293,6 +323,12 @@ export class WorkflowEngine {
   private async failForGood(def: WorkflowDefinition, run: RunRow, stepKey: string, error: string, actor: Actor, attempts = run.attempts + 1): Promise<void> {
     await this.deps.db.update(workflowRuns).set({ status: "failed", attempts, lastError: error, wait: null }).where(eq(workflowRuns.id, run.id));
     await emit(this.deps.db, { type: "workflow.failed", companyId: run.companyId, actor, subject: { type: "workflow_run", id: run.id }, payload: { step: stepKey, error, attempts }, correlationId: run.id });
+    try {
+      // The process's error reporter hears about the failed run with keys and ids only (H2); never the run's state.
+      this.deps.onStepFailed?.({ workflowKey: def.key, runId: run.id, step: stepKey, attempts, error, companyId: run.companyId });
+    } catch {
+      // a reporting hook never affects the run
+    }
     if (run.companyId) {
       try {
         await withTenant(this.deps.db, run.companyId, async (q) => {

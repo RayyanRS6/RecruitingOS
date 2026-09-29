@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { inspectResumeFile, type Actor } from "@ros/contracts";
 import { audit, dedupeKey, emit, normalizeEmailForDedupe, normalizePhone } from "@ros/core";
-import { applications, candidates, documents, randomToken, roles, uuidv7, type Tx } from "@ros/db";
+import { applications, candidates, documents, randomToken, roles, uuidv7, type ApplicationAcknowledgment, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import { quarantineKey } from "../uploads";
 
@@ -23,6 +23,8 @@ export type NewApplication = {
   smsConsent: boolean;
   consentSource: string;
   noticeVersionsShown: string[];
+  /** The apply form's affirmative acknowledgment (docs/readiness/20 section D item 10); absent for email-in and manual adds, which have no form. */
+  acknowledgment?: ApplicationAcknowledgment | null;
   eligibilityAnswers: Record<string, unknown>;
   noResumeAnswers?: Record<string, string>;
   resume?: ResumeInput | null;
@@ -57,7 +59,7 @@ export async function createApplication(tx: Tx, container: Container, input: New
   let candidate = key ? (await tx.select().from(candidates).where(and(eq(candidates.companyId, input.companyId), eq(candidates.dedupeKey, key))).limit(1))[0] : undefined;
   const consent = {
     ...(candidate?.consent ?? {}),
-    application_terms: { granted: true, at: now, source: input.consentSource, ip: input.ip },
+    application_terms: { granted: true, at: now, source: input.consentSource, ip: input.ip, ...(input.acknowledgment ? { acknowledged: true } : {}) },
     ai_notice: { granted: true, at: now, source: input.consentSource, noticeVersion: input.noticeVersionsShown.join(",") },
     ...(input.smsConsent ? { sms: { granted: true, at: now, source: input.consentSource, ip: input.ip } } : {}),
   };
@@ -92,7 +94,7 @@ export async function createApplication(tx: Tx, container: Container, input: New
         sourceDetail: input.sourceDetail ?? null,
         linkId: input.linkId ?? null,
         stage: "applied",
-        answers: { eligibility: input.eligibilityAnswers, noResume: input.noResumeAnswers, noticeVersionsShown: input.noticeVersionsShown },
+        answers: { eligibility: input.eligibilityAnswers, noResume: input.noResumeAnswers, noticeVersionsShown: input.noticeVersionsShown, ...(input.acknowledgment ? { acknowledgment: input.acknowledgment } : {}) },
         statusToken: randomToken(24),
       })
       .returning();

@@ -10,15 +10,21 @@ The schemas are the source of truth; this document is the map.
 | POST | `/auth/magic-link` | `{email}` → `{ok}` | Rate-limited; always 200 |
 | POST | `/auth/magic-link/consume` | `{token}` → `{user, memberships}` | Sets session cookie |
 | GET | `/auth/consume?token=` | → 302 to the web app | The link in the email. Sets the cookie on a top-level navigation, then redirects to `/` or `/setup/company`; an invalid or used token redirects to `/login?error=expired` |
+| GET | `/auth/invite?token=` | → HTML | The team invitation link. Signs nobody in: names the company and role, offers "Continue with Google" / "Continue with Microsoft" (and an emailed link only when `MAGIC_LINK_ENABLED`), and parks the invitation's token hash in the sealed `ros_invite` cookie (30 minutes). Every sign-in path then accepts the invitation when the verified address is the invited one (membership with the invited role, session opened in that company, `member.joined`, audit `invitation.accepted`); a different address is refused with `/login?error=invite_email_mismatch` and the cookie kept; an expired or withdrawn invitation with `invite_expired`. Without the cookie, any sign-in with the invited address accepts its open invitations too (never for ITS staff accounts) |
+| POST | `/auth/invite/email` | form `{token}` → HTML | "Email me a sign-in link" from the invitation page; the link goes to the invited address only; 410 when email links are off |
+| POST | `/auth/invite/forget` | → `{ok}` | Drops the carried invitation so the person can sign in as themselves |
 | POST | `/auth/logout` | → `{ok}` | |
-| GET | `/auth/me` | → `{user, memberships, activeCompanyId}` | |
+| GET | `/auth/me` | → `{user, memberships, activeCompanyId}` | Active memberships only |
 
 ## Companies and users
 | POST | `/companies` | `CreateCompany` → `Company` | Creates the owner membership; seeds default policies and entitlements (trial) |
 | GET/PATCH | `/companies/current` | → `Company` | Settings include locations, notices, retention |
-| GET | `/companies/current/members` | → `Membership[]` | |
-| POST | `/companies/current/invites` | `{email, role}` → `Membership` | Sends magic link |
-| PATCH | `/companies/current/members/:userId` | `{role|status}` → `Membership` | Audited |
+| GET | `/companies/current/members` | → `Member[]` | Active members only, each with calendar and availability status |
+| GET | `/companies/current/invitations` | → `Invitation[]` | Open invitations: `{id, email, role, name, expiresAt, invitedBy: {name}}`; never the token |
+| POST | `/companies/current/members/invite` (also `/companies/current/invites`) | `InviteMember` `{email, role, name?}` → `{ok, invitation, replaced}` (dev: `devLink`) | `members.manage`. Creates an `invitations` row and queues one email through the outbox with `/api/v1/auth/invite?token=`; 400 `staff_domain` for an ITS address; 409 `already_member`; an older open invitation for the address is replaced; audited `invitation.sent` |
+| POST | `/companies/current/invitations/:id/resend` | → `{ok, invitation}` (dev: `devLink`) | New link, seven more days, email again; the old link stops working; audited `invitation.resent` |
+| POST | `/companies/current/invitations/:id/revoke` | → `{ok, invitation}` | The link stops working; audited `invitation.revoked` |
+| PATCH | `/companies/current/members/:userId` | `UpdateMember` `{role?, status?: 'active'|'removed'}` → `{userId, role, status, sessionsEnded, calendarDeletionQueued, interviewsFlagged}` | `members.manage`. 404 unless the target is an active member; 409 `self_change`; 409 `last_owner`; 403 `owner_only` (only an owner grants or takes the owner role, including by removal). Either change ends the person's sessions. Removal also disconnects their calendar (credential deletion queued as `/integrations/calendar/:provider/disconnect` does), flags the interviews still ahead that counted on them and tells the owners; emits `member.removed`; audited |
 
 ## Intake and roles
 | POST | `/intake/sessions` | `{initialMessage?}` → `IntakeSession` | Starts `intake_to_packet` |

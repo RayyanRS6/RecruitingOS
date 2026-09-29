@@ -6,10 +6,10 @@ import { Alert, Button, Card, Chip, ErrorState, Field, Segmented, Skeleton, Tabl
 import { api, ApiError, type MyCalendar } from "../api/client";
 import { useSearchParams } from "../nav";
 import { toast } from "../toast";
+import { TeamCard } from "./TeamCard";
 
-type Company = { id: string; name: string; slug: string; vertical: string; sizeBand: string; planKey: string; status: string; plan?: { key: string; name: string; limits: Record<string, number | null> } | null; usage?: Record<string, { used: number; limit: number | null }>; locations: Array<{ city?: string; region?: string }>; settings: { website?: string; pilot?: { startedAt: string; endsAt: string; extendedUntil?: string } }; integrations: Array<{ kind: string; provider: string; status: string }>; ai: { provider: string } };
-type Member = { userId: string; role: string; status: string; email: string; name: string | null; calendar: { provider: string; status: string; email: string | null } | null; availability: { timezone: string; windows: number } | null; schedulable: boolean };
-type PolicyRow = { group: string; actionType: string; level: "auto" | "auto_notify" | "approval" | "human_only"; approverRoles: string[]; source: string; locked: boolean; defaultLevel: string };
+type Company ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; planKey: string; status: string; plan?: { key: string; name: string; limits: Record<string, number | null> } | null; usage?: Record<string, { used: number; limit: number | null }>; locations: Array<{ city?: string; region?: string }>; settings: { website?: string; pilot?: { startedAt: string; endsAt: string; extendedUntil?: string } }; integrations: Array<{ kind: string; provider: string; status: string }>; ai: { provider: string } };
+type PolicyRow ={ group: string; actionType: string; level: "auto" | "auto_notify" | "approval" | "human_only"; approverRoles: string[]; source: string; locked: boolean; defaultLevel: string };
 
 const LEVELS = [
   { value: "auto", label: "Do it" },
@@ -21,17 +21,11 @@ const LEVELS = [
 export function Setup() {
   const qc = useQueryClient();
   const company = useQuery({ queryKey: ["company"], queryFn: () => api.get<Company>("/api/v1/companies/current") });
-  const members = useQuery({ queryKey: ["members"], queryFn: () => api.get<Member[]>("/api/v1/companies/current/members") });
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<{ user: { id: string }; activeCompanyId: string | null; memberships: Array<{ companyId: string; role: string }> }>("/api/v1/auth/me") });
   const myRole = me.data?.memberships.find((m) => m.companyId === me.data?.activeCompanyId)?.role ?? "";
+  // policy.manage in packages/core/src/permissions.ts: owners and admins change the rules; everyone else reads them.
+  const canManagePolicy = ["owner", "admin"].includes(myRole);
   const policies = useQuery({ queryKey: ["policies"], queryFn: () => api.get<PolicyRow[]>("/api/v1/policies") });
-  const [invite, setInvite] = useState({ email: "", role: "hiring_manager" });
-  const [inviteLink, setInviteLink] = useState<string | null>(null);
-  const sendInvite = useMutation({
-    mutationFn: () => api.post<{ ok: boolean; devLink?: string }>("/api/v1/companies/current/invites", invite),
-    onSuccess: (r) => { toast("Invitation sent."); setInviteLink(r.devLink ?? null); setInvite({ email: "", role: "hiring_manager" }); qc.invalidateQueries({ queryKey: ["members"] }); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not invite."),
-  });
   const setPolicy = useMutation({
     mutationFn: (p: { actionType: string; level: string; approverRoles: string[] }) => api.put("/api/v1/policies", p),
     onSuccess: () => { toast("Saved."); qc.invalidateQueries({ queryKey: ["policies"] }); },
@@ -59,20 +53,7 @@ export function Setup() {
             {c.usage ? <><dt>Usage</dt><dd className="small">{Object.entries(c.usage).map(([k, v]) => `${k.replace(/_/g, " ")}: ${v.used}${v.limit === null ? "" : ` of ${v.limit}`}`).join(" · ")}</dd></> : null}
           </dl>
         </Card>
-        <Card title="Team">
-          {members.data ? (
-            <div className="stack" style={{ gap: 6 }}>
-              {members.data.map((m) => <div key={m.userId} className="row" style={{ justifyContent: "space-between" }}><span>{m.name ?? m.email} <span className="muted small">{m.email}</span></span><span className="row"><Chip tone={m.schedulable ? "good" : "caution"}>{m.calendar?.status === "live" ? `${m.calendar.provider} calendar` : m.availability ? "hours declared" : "no availability"}</Chip><Chip>{m.role.replace("_", " ")}</Chip></span></div>)}
-            </div>
-          ) : <Skeleton lines={2} />}
-          <form className="row" style={{ marginTop: 12, alignItems: "flex-end" }} onSubmit={(e) => { e.preventDefault(); sendInvite.mutate(); }}>
-            <Field label="Invite by email" htmlFor="inv"><input id="inv" className="input" type="email" required value={invite.email} onChange={(e) => setInvite({ ...invite, email: e.target.value })} /></Field>
-            <Field label="Role" htmlFor="invrole"><select id="invrole" className="select" value={invite.role} onChange={(e) => setInvite({ ...invite, role: e.target.value })}>{["admin", "hiring_manager", "interviewer", "hr", "recruiter"].map((r) => <option key={r} value={r}>{r.replace("_", " ")}</option>)}</select></Field>
-            <Button type="submit" variant="primary" loading={sendInvite.isPending}>Invite</Button>
-          </form>
-          {inviteLink ? <p className="small muted" style={{ marginTop: 8 }}>Development mode: <a href={inviteLink}>invitation link</a></p> : null}
-          <p className="small muted" style={{ marginTop: 8 }}>Interviewers never see pay. Hiring managers can approve roles and decide on candidates. Admins can change these rules.</p>
-        </Card>
+        <TeamCard myRole={myRole} myUserId={me.data?.user.id ?? ""} />
       </div>
 
       <RecruiterAccess canRevoke={["owner", "admin"].includes(myRole)} />
@@ -95,6 +76,7 @@ export function Setup() {
 
       <Card title="What the AI may do on its own">
         <p className="small muted" style={{ marginBottom: 10 }}>Four levels for every action. Some decisions always stay with a person and cannot be changed. Changes are recorded.</p>
+        {!canManagePolicy && myRole ? <Alert tone="info">Only owners and admins change these rules. You can see what applies; ask one of them if something should work differently.</Alert> : null}
         {policies.isLoading ? <Skeleton lines={6} /> : groups.map((g) => (
           <div key={g} style={{ marginBottom: 14 }}>
             <h3 style={{ marginBottom: 6 }}>{g}</h3>
@@ -102,7 +84,9 @@ export function Setup() {
               {policies.data!.filter((p) => p.group === g).map((p) => (
                 <div key={p.actionType} className="row" style={{ justifyContent: "space-between", padding: "6px 0", borderTop: "1px solid var(--line)" }}>
                   <div><span>{actionLabel(p.actionType)}</span>{p.locked ? <Chip>always a person</Chip> : p.source !== "default" ? <Chip tone="accent">customized</Chip> : null}</div>
-                  <Segmented value={p.level} onChange={(v) => setPolicy.mutate({ actionType: p.actionType, level: v, approverRoles: p.approverRoles })} options={p.locked ? [{ value: "human_only", label: "Only a person" }] : [...LEVELS]} ariaLabel={p.actionType} />
+                  {canManagePolicy ? (
+                    <Segmented value={p.level} onChange={(v) => setPolicy.mutate({ actionType: p.actionType, level: v, approverRoles: p.approverRoles })} options={p.locked ? [{ value: "human_only", label: "Only a person" }] : [...LEVELS]} ariaLabel={p.actionType} />
+                  ) : <Chip tone="neutral">{LEVELS.find((l) => l.value === p.level)?.label ?? p.level}</Chip>}
                 </div>
               ))}
             </div>

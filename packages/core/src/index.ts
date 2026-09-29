@@ -31,6 +31,7 @@ export * from "./rate-limit";
 export * from "./csp";
 export * from "./mfa-transaction";
 export * from "./sealed";
+export * from "./invitations";
 export * from "./html";
 export * from "./postings";
 export * from "./application-links";

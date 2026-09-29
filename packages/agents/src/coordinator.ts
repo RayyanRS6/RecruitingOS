@@ -21,17 +21,18 @@ function signature(packet: RolePacket, company: Company): string {
 }
 
 /** The acknowledgment every applicant gets within a minute. Templated, disclosed, idempotent. */
-export async function sendAcknowledgment(q: Queryable, integrations: Integrations, input: MessageInput & { appBaseUrl: string }): Promise<SendResult> {
+export async function sendAcknowledgment(q: Queryable, integrations: Integrations, input: MessageInput & { appBaseUrl: string; /** Texting is off by default (decision M2); the email then promises an online conversation only. */ smsEnabled?: boolean }): Promise<SendResult> {
   const { application, candidate, company, packet } = input;
   const statusUrl = `${input.appBaseUrl}/c/status/${application.statusToken}`;
   const disclosure = packet.communication.disclosureText || disclosureLine(company.name);
   const steps = packet.interviews.plan.map((r, i) => `${i + 2}. ${r.title} (${r.durationMinutes} min)`).join("\n");
+  const screenHow = input.smsEnabled ? "by text or online" : "online";
   const text = `Hi ${candidate.firstName},
 
 Thank you for applying for the ${packet.identity.title} position at ${company.name}. We received your application and it is being reviewed.
 
 What happens next:
-1. A short screening conversation (by text or online, about ${packet.screening.maxMinutes} minutes) if your background looks like a fit.
+1. A short screening conversation (${screenHow}, about ${packet.screening.maxMinutes} minutes) if your background looks like a fit.
 ${steps}
 
 You can check where things stand any time: ${statusUrl}

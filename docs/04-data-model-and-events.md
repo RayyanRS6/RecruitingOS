@@ -49,7 +49,7 @@ Postgres 16+, pgvector. Every tenant table carries `company_id` and is protected
 | `takeovers` | Human-operated periods | `company_id`, `role_id`, `recruiter_user_id`, `started_at`, `ended_at`, `policy_snapshot`, `status` |
 | `interventions` | Customer-success nudges | `company_id`, `role_id`, `detector`, `ladder_level` (brief, message, offer_recruiter, escalated), `status`, `sent_at`, `responded_at`, `response` |
 | `notifications` | In-app and outbound notices to users | `company_id`, `user_id`, `kind`, `title`, `body`, `action` [NotificationAction], `channel` (in_app, email, sms), `read_at` |
-| `inbound_emails` | Raw inbound mail | `company_id`, `to_address`, `from_address`, `subject`, `raw_storage_key`, `parsed` [ParsedInbound], `status` (received, matched, unmatched, spam, error), `application_id`, `communication_id` |
+| `inbound_emails` | Raw inbound mail | `company_id`, `to_address`, `from_address`, `subject`, `raw_storage_key`, `parsed` [ParsedInbound], `status` (received, held, matched, unmatched, spam, error), `application_id`, `communication_id` |
 | `integrations` | Connected services | `company_id` (nullable for platform-level), `provider`, `kind`, `status` (live, pending_credentials, pending_partner_approval, disabled, error), `config`, `credentials_ciphertext`, `external_account_id`, `connected_by`, `last_health_at`, `last_error` |
 | `audit_records` | Access and privileged actions | `company_id`, `actor` [Actor], `action` (candidate.viewed, export.created, policy.changed, membership.changed, data.deleted, admin.bypass, credentials.updated, ...), `target` [Subject], `reason`, `ip` |
 | `plans`, `entitlements`, `usage_events` | Billing | doc 03 |
@@ -92,7 +92,7 @@ Role: `draft → pending_approval → open ⇄ paused → filled | closed`. Role
 
 Naming: `subject.past_tense_verb`. Every event has `actor`, `subject`, `correlation_id`, and a typed payload (`packages/contracts/src/events.ts`).
 
-**Company and users:** `company.created`, `company.updated`, `user.invited`, `user.joined`, `membership.changed`, `integration.connected`, `integration.failed`, `policy.changed`, `plan.changed`, `entitlement.exceeded`.
+**Company and users:** `company.created`, `company.updated`, `user.invited`, `user.joined`, `membership.changed`, `member.joined` (an invitation accepted at sign-in), `member.removed`, `invitation.revoked`, `integration.connected`, `integration.failed`, `policy.changed`, `plan.changed`, `entitlement.exceeded`. Invitations are rows of their own (`invitations`, migration 0022): company, lower-cased address, role, who sent it, the token's hash, status pending / accepted / revoked / expired, seven-day expiry.
 
 **Intake and role:** `intake.started`, `intake.turn_completed`, `intake.compiled`, `role.created`, `role_packet.proposed`, `role_packet.approved`, `role_packet.edited`, `role.approved`, `role.opened`, `role.paused`, `role.resumed`, `role.filled`, `role.closed`.
 

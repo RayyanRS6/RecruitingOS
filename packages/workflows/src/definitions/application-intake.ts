@@ -37,6 +37,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
           packet,
           // The status link a candidate receives lives on the job-page host (docs/spec/20), like the page they applied on.
           appBaseUrl: ctx.services.env.jobsBaseUrl,
+          smsEnabled: ctx.services.env.smsEnabled,
           actor: ctx.actor,
           correlationId: ctx.run.id,
         });

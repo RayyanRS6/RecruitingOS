@@ -97,7 +97,10 @@ export type Env = {
   raw: Record<string, string | undefined>;
 };
 
-export function loadEnv(source: Record<string, string | undefined> = process.env): Env {
+/** Which process is loading the environment: the app (API and pages) or the queue worker. Each needs its own database role in production. */
+export type EnvRole = "app" | "worker";
+
+export function loadEnv(source: Record<string, string | undefined> = process.env, opts: { role?: EnvRole } = {}): Env {
   const get = (k: string, d: string) => source[k] ?? d;
   const env: Env = {
     NODE_ENV: get("NODE_ENV", "development"),
@@ -155,7 +158,11 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     if (env.AI_PROVIDER === "fake") throw new Error("AI_PROVIDER=fake is not allowed in production");
     if (env.AUTH_PROVIDER !== "supabase") throw new Error("AUTH_PROVIDER must be \"supabase\" in production: sign-in is delegated to the managed identity service (D19)");
     if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) throw new Error("SUPABASE_URL and SUPABASE_ANON_KEY must be set in production for sign-in");
-    if (!env.DATABASE_URL && !env.WORKER_DATABASE_URL) throw new Error("DATABASE_URL (the API) or WORKER_DATABASE_URL (the worker) must be set in production");
+    // H7: each process names its own database role, and nothing in production may fall back to PGlite, the in-process
+    // development database (no durability, a superuser role, a directory on a function's disk).
+    const role = opts.role ?? "app";
+    if (role === "app" && !env.DATABASE_URL) throw new Error("DATABASE_URL must be set in production for the app (the ros_app connection string). Without it the process would open PGlite, the in-process development database, which production refuses.");
+    if (role === "worker" && !env.WORKER_DATABASE_URL) throw new Error("WORKER_DATABASE_URL must be set in production for the worker (the ros_worker connection string, a separate non-privileged role). Without it the process would open PGlite, the in-process development database, which production refuses.");
     if (env.WORKER_INLINE) throw new Error("WORKER_INLINE must be false in production: run the worker as its own process with WORKER_DATABASE_URL");
     if (env.STORAGE_PROVIDER !== "supabase") throw new Error("STORAGE_PROVIDER must be \"supabase\" in production: résumés live in private object storage, never on a function's disk or in memory (decision 2)");
     if (env.RATE_LIMIT_STORE === "fake") throw new Error("RATE_LIMIT_STORE=fake is a test stand-in; production uses \"upstash\" (shared) or, until it is connected, \"memory\"");

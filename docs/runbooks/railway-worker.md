@@ -2,8 +2,9 @@
 
 Status: written 23 September 2026 from Railway's documentation (docs.railway.com, read that day) for founder decision 1
 (Railway hosts the worker; Trigger.dev deferred). The worker is the existing `apps/api/src/worker.ts`; Railway reads
-`railway.json` at the repository root (build `pnpm worker:check`, start `pnpm worker:start`, restart on failure up to
-ten times). Nothing here is a secret; secret values go from 1Password into Railway's Variables tab and are sealed.
+`railway.json` at the repository root (build `pnpm worker:check`, start `pnpm worker:start`, health check `GET /healthz`
+with a 120-second timeout, restart on failure up to ten times). Nothing here is a secret; secret values go from
+1Password into Railway's Variables tab and are sealed.
 
 Note for the register: Railway calls the `railway.json` mechanism "Config as Code" and says it is deprecated in favour
 of its Infrastructure as Code, with legacy support ending 1 December 2026. It works today; a follow-up before then.
@@ -33,6 +34,9 @@ Select the service, **Settings** tab:
   `pnpm-lock.yaml`, `pnpm-workspace.yaml`.
 - **Region**: US West Metal (California, `us-west2`), the region nearest the Oregon database.
 - **Config as Code**: leave the default path so `railway.json` at the root is read.
+- **Health check**: comes from `railway.json` (`/healthz`, 120 seconds). The worker listens on `PORT`, which Railway
+  provides; the probe runs inside Railway, so no public domain or networking is needed. If the Settings tab shows a
+  health-check path already, leave it as `/healthz`.
 
 ## Screen 3: variables
 
@@ -75,7 +79,11 @@ CSP_MODE=report-only
 DATABASE_POOL_MAX=5
 ```
 
-(`WEB_BASE_URL`, `RATE_LIMIT_SHARED_PROVIDER` and `LOG_LEVEL` are no longer read; remove them if an older setup has them.)
+(`WEB_BASE_URL`, `RATE_LIMIT_SHARED_PROVIDER` and `LOG_LEVEL` are no longer read; remove them if an older setup has them.
+`SCAN_PROVIDER` stays `fake` until the ClamAV service exists, and the worker says so with a standing `scanner.fake`
+alert in the console; then `SCAN_PROVIDER=clamav` and `CLAMAV_HOST=<the ClamAV service's private hostname>`, see
+"Running ClamAV on Railway" in `docs/runbooks/resume-storage.md`. Do not set `PORT`: Railway provides it, and the
+worker's health check listens on it.)
 
 Secrets, one **New Variable** each, then **Seal**:
 
@@ -100,8 +108,21 @@ Click **Deploy** on the staged changes. In the service's **Deployments** tab ope
 Success looks like:
 
 - build: `pnpm worker:check` passes (a typecheck);
-- start: `[worker] started (db: postgres as worker, ai: anthropic)` and no `refusing to start`;
+- start: `[worker] started (db: postgres as worker, ai: anthropic, health: http://0.0.0.0:<PORT>/healthz, id: worker-…)`
+  and no `refusing to start`;
+- health: the deployment shows its health check as passing within two minutes of the start line. The check is
+  `GET /healthz` on the worker itself, answering `{"ok":true,"workerId":"worker-…","lastPollAt":"…","queueDepth":0,"oldestQueuedAgeSeconds":null}`
+  (the deployed commit is on the heartbeat row and in the console's alert details, never in this body: the endpoint
+  needs no session).
+  It answers 503 with `"ok":false` once the last successful poll is older than three poll intervals plus thirty
+  seconds (about 33 seconds at `WORKER_POLL_MS=1000`), and Railway then restarts the worker on its own. A worker that
+  cannot reach the database fails its poll, so a lost database connection also ends in a restart rather than a
+  process that looks alive and does nothing;
 - no repeated restarts.
+
+The app's `/healthz` on Vercel shows the same heartbeat from the other side: `"worker":{"lastSeenAt":"…","queueDepth":0,"healthy":true}`;
+`healthy` turns false after ten minutes without a heartbeat, and the daily maintenance check raises a `worker.stale`
+alert in the console (at most once an hour). A due job waiting more than thirty minutes raises `queue.stale`.
 
 If the logs show `password authentication failed for user "ros_worker"` (28P01), see "When a host refuses an
 application string" in `docs/runbooks/staging-database-setup.md`: test the 1Password value with
@@ -123,6 +144,8 @@ résumé quarantine check, screen, stuck-role detection, interview scheduling wi
 the outbox (every email and text the product queues inside a transaction is sent here, after that transaction
 committed, once), credential revocation and deletion, interview calendar-event cancellation, the daily privacy-deadline
 check, the daily maintenance sweep (expired sessions and sign-in links, finished jobs, old webhook receipts and policy
-reports, interrupted sends), email retry and the SMS fallback. Every step is idempotent and leased; a failed step
-retries with backoff up to the workflow's maximum, then the run is marked failed and escalated. Until the worker runs,
-no email or text leaves staging: the messages wait in the queue as `queued` rows in `communications`.
+reports, old heartbeats, interrupted sends, then the stale-worker and stale-queue checks), email retry and the SMS
+fallback. Every step is idempotent and leased; a failed step retries with backoff up to the workflow's maximum, then
+the run is marked failed and escalated, and a job that uses up its attempts raises a `job.failed` alert; both reach
+Sentry with kinds and ids only. Every poll also writes the worker's heartbeat. Until the worker runs, no email or text
+leaves staging: the messages wait in the queue as `queued` rows in `communications`.

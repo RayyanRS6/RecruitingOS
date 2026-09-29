@@ -9,6 +9,7 @@ import { LocalStorageAdapter, MemoryStorageAdapter } from "./storage/local";
 import { GrantSigner } from "./storage/grants";
 import { SupabaseStorageAdapter } from "./storage/supabase";
 import { FakeMalwareScanner } from "./scanning/fake";
+import { CLAMAV_DEFAULT_PORT, CLAMAV_DEFAULT_TIMEOUT_MS, ClamAvScanner } from "./scanning/clamav";
 import type { MalwareScanner } from "./scanning/types";
 import { MemorySecretStore } from "./secrets/memory";
 import { SupabaseVaultSecretStore } from "./secrets/vault";
@@ -137,8 +138,21 @@ function createStorage(env: Record<string, string | undefined>, opts: { memorySt
   throw new Error(`STORAGE_PROVIDER=${provider} is not a known storage provider (memory, local, supabase)`);
 }
 
+/**
+ * Malware scanning by SCAN_PROVIDER: `fake` (development, tests, and staging until the engine exists) or `clamav`
+ * (a clamd service reached over private networking; docs/runbooks/resume-storage.md). The fake is never reported as
+ * anything but `fake`, and production raises an alert while it is the one in use (the real-data gate).
+ */
 function createScanner(env: Record<string, string | undefined>): MalwareScanner {
   const provider = env.SCAN_PROVIDER ?? "fake";
   if (provider === "fake") return new FakeMalwareScanner();
-  throw new Error(`SCAN_PROVIDER=${provider} is not a known scanner (fake); a real engine is a real-data gate, not yet authorized`);
+  if (provider === "clamav") {
+    if (!env.CLAMAV_HOST) throw new Error("SCAN_PROVIDER=clamav needs CLAMAV_HOST (the clamd service's private hostname)");
+    const port = Number(env.CLAMAV_PORT ?? String(CLAMAV_DEFAULT_PORT));
+    const timeoutMs = Number(env.CLAMAV_TIMEOUT_MS ?? String(CLAMAV_DEFAULT_TIMEOUT_MS));
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error("CLAMAV_PORT must be a port number (the official image listens on 3310)");
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("CLAMAV_TIMEOUT_MS must be a positive number of milliseconds");
+    return new ClamAvScanner({ host: env.CLAMAV_HOST, port, timeoutMs });
+  }
+  throw new Error(`SCAN_PROVIDER=${provider} is not a known scanner (fake, clamav)`);
 }

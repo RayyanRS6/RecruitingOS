@@ -1,11 +1,11 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { CreateCompany, InviteMember, UpdateCompany } from "@ros/contracts";
-import { assertCan, audit, createMagicLink, emit, raiseAlert, setActiveCompany, membersWithCalendarStatus, revokeStaffGrant } from "@ros/core";
-import { auditRecords, companies, entitlements as entitlementRows, memberships, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
+import { CreateCompany, InviteMember, UpdateCompany, UpdateMember } from "@ros/contracts";
+import { assertCan, audit, emit, raiseAlert, setActiveCompany, revokeStaffGrant } from "@ros/core";
+import { auditRecords, companies, entitlements as entitlementRows, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
 import { actorOf, requireTenant, requireUser, type Vars } from "../middleware/session";
 import { createCompany } from "../services/companies";
-import { consumeLink } from "./auth";
+import { inviteMember, listInvitations, listTeam, resendMemberInvitation, revokeMemberInvitation, updateMember } from "../services/team";
 import { HttpError } from "../middleware/errors";
 
 export const companyRoutes = new Hono<Vars>();
@@ -56,52 +56,61 @@ companyRoutes.patch("/current", requireTenant, async (c) => {
   return c.json(row);
 });
 
+/** The team (docs/spec/21, area A): active members with their scheduling readiness; never a credential or its reference. */
 companyRoutes.get("/current/members", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "company.read");
-  const container = c.get("container");
-  // Each member's scheduling readiness (calendar connected, or hours declared); never a credential or its reference.
-  const rows = await withTenant(container.db, t.companyId, (tx) => membersWithCalendarStatus(tx, t.companyId));
-  return c.json(rows);
+  return c.json(await listTeam({ tenant: t, container: c.get("container") }));
 });
 
-companyRoutes.post("/current/invites", requireTenant, async (c) => {
+/** Open invitations: who was asked, as what, by whom, and until when. Everyone on the team may see them. */
+companyRoutes.get("/current/invitations", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  assertCan(t.role, "company.read");
+  return c.json(await listInvitations({ tenant: t, container: c.get("container") }));
+});
+
+const teamOf = (c: Context<Vars>) => ({ tenant: c.get("tenant")!, actor: actorOf(c), container: c.get("container") });
+const inviterNameOf = (c: Context<Vars>) => c.get("session")!.user.name ?? c.get("session")!.user.email;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** A path id that is not even a uuid names nothing: a 404 in the route's own words, never a database error. */
+function idParam(c: Context<Vars>, name: string, message: string): string {
+  const value = c.req.param(name) ?? "";
+  if (!UUID.test(value)) throw new HttpError(404, "not_found", message);
+  return value;
+}
+
+/**
+ * Invites someone by email: one message through the outbox with a link to the invitation page, where they sign in with
+ * Google or Microsoft using the invited address. Mounted on both spellings of the path.
+ */
+async function invite(c: Context<Vars>) {
   const t = c.get("tenant")!;
   assertCan(t.role, "members.manage");
   const body = InviteMember.parse(await c.req.json());
-  const container = c.get("container");
-  const { token } = await createMagicLink(container.db, { email: body.email, inviteCompanyId: t.companyId, inviteRole: body.role });
-  const [company] = await container.db.select().from(companies).where(eq(companies.id, t.companyId)).limit(1);
-  const link = consumeLink(container, token);
-  await container.integrations.email.send({
-    to: body.email,
-    from: `${company.name} via ${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`,
-    subject: `You're invited to help ${company.name} hire`,
-    text: `${c.get("session")!.user.name ?? c.get("session")!.user.email} invited you to ${company.name}'s hiring workspace as ${body.role.replace("_", " ")}.\n\nAccept (the link works once and stays valid for seven days; ask for a new one any time):\n${link}`,
-    idempotencyKey: `invite:${token.slice(0, 12)}`,
-    tags: { template: "invite" },
-  });
-  await withTenant(container.db, t.companyId, async (tx) => {
-    await emit(tx, { type: "user.invited", companyId: t.companyId, actor: actorOf(c), subject: { type: "company", id: t.companyId }, payload: { email: body.email, role: body.role } });
-    await audit(tx, { companyId: t.companyId, actor: actorOf(c), action: "membership.changed", reason: `invited ${body.email} as ${body.role}` });
-  });
-  const dev = container.env.NODE_ENV !== "production" && container.integrations.email.id === "fake-email" ? { devLink: link } : {};
-  return c.json({ ok: true, ...dev }, 201);
+  return c.json(await inviteMember(teamOf(c), { body, inviterName: inviterNameOf(c) }), 201);
+}
+companyRoutes.post("/current/members/invite", requireTenant, invite);
+companyRoutes.post("/current/invites", requireTenant, invite);
+
+companyRoutes.post("/current/invitations/:id/resend", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  assertCan(t.role, "members.manage");
+  return c.json(await resendMemberInvitation(teamOf(c), { invitationId: idParam(c, "id", "No open invitation with that id."), inviterName: inviterNameOf(c) }));
 });
 
+companyRoutes.post("/current/invitations/:id/revoke", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  assertCan(t.role, "members.manage");
+  return c.json(await revokeMemberInvitation(teamOf(c), { invitationId: idParam(c, "id", "No open invitation with that id.") }));
+});
+
+/** A role change or a removal; the rules live in services/team.ts. Either ends the person's sessions so it applies at once. */
 companyRoutes.patch("/current/members/:userId", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "members.manage");
-  const { role, status } = (await c.req.json()) as { role?: string; status?: string };
-  if (c.req.param("userId") === t.userId && status === "removed") throw new HttpError(400, "invalid", "You cannot remove yourself.");
-  const container = c.get("container");
-  const row = await withTenant(container.db, t.companyId, async (tx) => {
-    const [updated] = await tx.update(memberships).set({ ...(role ? { role } : {}), ...(status ? { status } : {}) }).where(eq(memberships.userId, c.req.param("userId"))).returning();
-    await emit(tx, { type: "membership.changed", companyId: t.companyId, actor: actorOf(c), subject: { type: "user", id: c.req.param("userId") }, payload: { role, status } });
-    await audit(tx, { companyId: t.companyId, actor: actorOf(c), action: "membership.changed", target: { type: "user", id: c.req.param("userId") }, reason: `role=${role ?? "-"} status=${status ?? "-"}` });
-    return updated;
-  });
-  return c.json(row);
+  const body = UpdateMember.parse(await c.req.json());
+  return c.json(await updateMember(teamOf(c), { userId: idParam(c, "userId", "That person is not an active member of your team."), body }));
 });
 
 /** ITS recruiter access to this company: who, why, what it covers, when it ends. Everyone on the team can see it. */

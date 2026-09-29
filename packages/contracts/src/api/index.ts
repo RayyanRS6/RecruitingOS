@@ -45,7 +45,16 @@ export const UpdateCompany = CreateCompany.partial().extend({
   settings: z.record(z.string(), z.unknown()).optional(),
 });
 
-export const InviteMember = z.object({ email: z.email(), role: MembershipRole, name: z.string().optional() });
+/** The roles a team member can hold. `recruiter` is ITS staff under a scoped grant, never invited or assigned. */
+export const TeamRole = z.enum(["owner", "admin", "hiring_manager", "interviewer", "hr"]);
+export type TeamRole = z.infer<typeof TeamRole>;
+
+export const InviteMember = z.object({ email: z.email(), role: TeamRole, name: z.string().trim().min(1).max(120).optional() });
+export type InviteMember = z.infer<typeof InviteMember>;
+
+/** PATCH /companies/current/members/:userId: a new role, or removal. The route adds the last-owner and owner-only rules. */
+export const UpdateMember = z.object({ role: TeamRole.optional(), status: z.enum(["active", "removed"]).optional() });
+export type UpdateMember = z.infer<typeof UpdateMember>;
 
 // Intake
 export const StartIntake = z.object({ initialMessage: z.string().min(1).max(4000).optional() });
@@ -102,6 +111,8 @@ export const ApplyRequest = z.object({
   /** Honeypot: must be empty. */
   website: z.string().max(0).optional(),
   noticeVersionsShown: z.array(z.string()).default([]),
+  /** The affirmative acknowledgment (docs/readiness/20 section D item 10): an unchecked box the candidate must tick; never pre-checked, never optional. */
+  acknowledged: z.literal(true, { message: "Please confirm you have read the notice." }),
 });
 export type ApplyRequest = z.infer<typeof ApplyRequest>;
 
@@ -188,3 +199,22 @@ export const DataRequestFulfil = z.object({
   confirmAnonymize: z.boolean().optional(),
 });
 export const DataRequestDecline = z.object({ resolution: z.string().min(1).max(4000) });
+
+// Postings (docs/spec/20 section 2, items 9 to 17): what a person may do to a posting, a tracked link and the accepting switch.
+function isHttpsUrl(value: string): boolean {
+  try {
+    const u = new URL(value);
+    return u.protocol === "https:" && !!u.hostname;
+  } catch {
+    return false;
+  }
+}
+/** The public address of a board posting. Only https; the worker fetches it to decide "live". */
+export const RecordPostingUrl = z.object({ url: z.string().trim().max(2048).refine(isHttpsUrl, { message: "Enter the full address of the posting, starting with https://." }) });
+/** "I checked it myself": the note says what was checked and when; it is recorded with the person's name. */
+export const VerifyPosting = z.object({ note: z.string().trim().min(3, "Say what you checked, in a few words.").max(1000) });
+export const PostingReason = z.object({ reason: z.string().trim().max(500).optional() });
+/** A person's own tracked link; boards get theirs from the publish workflow. */
+export const CreateApplicationLink = z.object({ source: z.enum(["referral", "direct", "other"]), label: z.string().trim().min(1, "Give the link a name.").max(80), sourceDetail: z.string().trim().max(200).optional() });
+/** The accepting-applications switch (item 16): distinct from pausing; nobody is turned away. */
+export const SetAcceptingApplications = z.object({ accepting: z.boolean(), reason: z.string().trim().max(500).optional() });

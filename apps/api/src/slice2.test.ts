@@ -37,6 +37,7 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     if (p.noResume) fd.set("noResume", p.noResume);
     for (const r of elig) fd.set(`elig_${r.key}`, p.answers?.[r.key] ?? "yes");
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
+    fd.set("acknowledged", "yes");
     const res = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
     expect(res.status).toBe(302);
     await container.drain();
@@ -50,7 +51,8 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
   const MARIA_RESUME = `Maria Reyes, RDH\nmaria.reyes@example.com | (949) 555-0100\n\nRegistered Dental Hygienist at Smile Bright Dental 2019 - present\nDental Hygienist at Coastal Family Dentistry 2015 - 2019\n\nLicenses: RDH license CA #RDH12345, active\nCertifications: BLS/CPR current\nSkills: Dentrix, periodontal charting, digital radiography, perio maintenance`;
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    // Texting on: this file covers the SMS screening path (decision M2 keeps texting off by default).
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SMS_ENABLED: "true" } });
     app = createApp(container);
     setClock(0);
     const { devLink } = (await (await json("POST", "/api/v1/auth/magic-link", { email: "dana@brightline.test" })).json()) as { devLink: string };

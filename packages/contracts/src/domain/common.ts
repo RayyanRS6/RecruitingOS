@@ -41,6 +41,7 @@ export const SubjectType = z.enum([
   "business_calendar",
   "document",
   "application_link",
+  "invitation",
 ]);
 export type SubjectType = z.infer<typeof SubjectType>;
 

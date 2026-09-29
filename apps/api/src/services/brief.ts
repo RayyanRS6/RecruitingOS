@@ -1,5 +1,5 @@
-import { and, desc, eq, gte, inArray } from "drizzle-orm";
-import { STAGE_LABEL, isBoardChannel, ownerGroup } from "@ros/core";
+import { and, desc, eq, gte, inArray, isNull } from "drizzle-orm";
+import { POSTING_CHANNELS, STAGE_LABEL, isBoardChannel, ownerGroup } from "@ros/core";
 import { detectStuckRoles } from "@ros/agents";
 import { applications, approvalRequests, assessments, candidates, events, postings, recruiterEscalations, roles, screens, type Tx } from "@ros/db";
 
@@ -65,6 +65,21 @@ export async function composeBrief(tx: Tx, companyId: string): Promise<{ generat
     if (invited + talking + doneToday > 0) {
       const parts = [invited ? `${invited} invited` : "", talking ? `${talking} answering now` : "", doneToday ? `${doneToday} completed since yesterday` : ""].filter(Boolean);
       cards.push({ kind: "screening", title: `Screening for ${role.title}: ${parts.join(", ")}`, body: doneToday ? "Completed screens are in \"Waiting on you\" with the scorecard." : "Candidates answer in their own time; you will see the scorecard when they finish.", roleId: role.id, actions: [{ label: "See people", method: "GET", path: `/roles/${role.id}/talent` }] });
+    }
+  }
+  // Boards still up after a posting closed (docs/spec/20 item 15): the checklist lives on the role's Posting tab. The
+  // whole role may be closed, or a person closed one board's posting while the role stays open; the card says which.
+  const channelOrder = (channel: string) => (POSTING_CHANNELS as readonly string[]).indexOf(channel);
+  const stillUp = (await tx.select({ roleId: postings.roleId, channel: postings.channel }).from(postings).where(and(eq(postings.companyId, companyId), eq(postings.closureRequired, true), isNull(postings.closureConfirmedAt)))).filter((p) => isBoardChannel(p.channel)).sort((a, b) => channelOrder(a.channel) - channelOrder(b.channel));
+  if (stillUp.length) {
+    const affectedRoles = await tx.select({ id: roles.id, title: roles.title, status: roles.status }).from(roles).where(inArray(roles.id, [...new Set(stillUp.map((p) => p.roleId))]));
+    for (const role of affectedRoles) {
+      const boards = stillUp.filter((p) => p.roleId === role.id).map((p) => CHANNEL_NAME[p.channel] ?? p.channel);
+      const one = boards.length === 1;
+      const body = role.status === "closed"
+        ? `${role.title} is closed, but ${one ? "this board still shows" : "these boards still show"} it. Take the posting down from your own account, then tick it off on the Posting tab so nobody keeps applying to a closed role.`
+        : `The ${role.title} posting on ${boards.join(", ")} was closed here, but ${one ? "the board still shows" : "the boards still show"} the job. Take it down from your own account, then tick it off on the Posting tab.`;
+      cards.push({ kind: "posting_action", title: `Still posted on ${boards.join(", ")}`, body, roleId: role.id, actions: [{ label: "Open the Posting tab", method: "GET", path: `/roles/${role.id}?tab=posting` }] });
     }
   }
   for (const d of await detectStuckRoles(tx, companyId, new Date())) {

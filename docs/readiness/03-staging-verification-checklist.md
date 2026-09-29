@@ -55,7 +55,7 @@ Run on the staging deployment after the accounts in `docs/spec/13` exist and `do
 ## 6. Secrets and observability
 
 - [ ] Vault holds the calendar credential; `secret.read` audits show purpose and integration; `SUPABASE_SERVICE_ROLE_KEY` is absent from every environment.
-- [ ] Sentry DSN set; a forced error arrives scrubbed (no cookie, no token, no email); `sendDefaultPii` false.
+- [ ] Sentry DSN set and `SENTRY_ENVIRONMENT=staging`; a platform administrator posts to `/api/v1/admin/observability/test-error` (the deliberate, audited error; it carries a token-shaped value and an address) and the event arrives scrubbed (no cookie, no token, no email; `[redacted]` in their place); `sendDefaultPii` false. The route answers 404 in every production build except the one whose `SENTRY_ENVIRONMENT` is exactly `staging`.
 - [ ] PostHog receives only the allow-listed events with keyed references; the candidate pages load no analytics script (network tab).
 - [ ] The rate-limit provider the founder chose is connected; the console shows no "Rate limits are not shared between processes" alert; a burst of sign-in attempts from one address is refused with a plain 429.
 - [ ] The browser-protection policy is in report-only; after the review period, every report in the console carries a disposition; the founder switches staging to enforce and the journeys are repeated.

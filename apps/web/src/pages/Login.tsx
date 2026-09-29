@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useSearchParams } from "../nav";
+import { useNavigate, useSearchParams } from "../nav";
 import { Alert, Button, Card, Field } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 
 const ERRORS: Record<string, string> = {
+  invite_email_mismatch: "That invitation was sent to a different email address. Sign in with the address the invitation was sent to, or continue without it.",
+  invite_expired: "That invitation has expired or was withdrawn. Ask the person who invited you for a new one, then sign in as usual.",
   mfa_expired: "The second-factor step timed out. Sign in again.",
   mfa_failed: "The code was wrong too many times. Sign in again.",
   mfa_unavailable: "The second-factor service is not available right now. Try again in a few minutes.",
@@ -25,11 +27,17 @@ const ERRORS: Record<string, string> = {
  */
 export function Login() {
   const [params] = useSearchParams();
+  const navigate = useNavigate();
   const config = useQuery({ queryKey: ["auth", "config"], queryFn: () => api.get<{ mode: string; providers: Array<{ key: string; label: string }>; magicLink: boolean }>("/api/v1/auth/config") });
   const [email, setEmail] = useState("");
   const errParam = params.get("error");
   const send = useMutation({
     mutationFn: () => api.post<{ ok: boolean; devLink?: string }>("/api/v1/auth/magic-link", { email }),
+  });
+  // The invitation the browser still carries after "sent to a different address": dropped on request, so the person can sign in as themselves.
+  const forgetInvite = useMutation({
+    mutationFn: () => api.post("/api/v1/auth/invite/forget"),
+    onSuccess: () => navigate("/login", { replace: true }),
   });
   const error = send.error ? (send.error instanceof ApiError ? send.error.message : "Could not send the link.") : errParam ? ERRORS[errParam] ?? "Sign-in failed. Try again." : null;
   return (
@@ -39,6 +47,7 @@ export function Login() {
       <Card>
         <div className="stack">
           {error ? <Alert tone="critical">{error}</Alert> : null}
+          {errParam === "invite_email_mismatch" ? <div><Button variant="quiet" size="sm" loading={forgetInvite.isPending} onClick={() => forgetInvite.mutate()}>Continue without the invitation</Button></div> : null}
           {config.data?.providers.length ? (
             <div className="stack" style={{ gap: 8 }}>
               {config.data.providers.map((p) => (

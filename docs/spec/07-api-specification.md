@@ -15,9 +15,12 @@ Conventions added in release 1: `Idempotency-Key` header honored on every mutati
 | GET/POST | /auth/fake/authorize | development consent page of the fake issuer; never mounted in production | new (dev only) |
 | POST | /auth/magic-link | `MagicLinkRequest` → `{ok}` (dev: `devLink`); 403 for staff domains; 410 when `MAGIC_LINK_ENABLED=false` | changed |
 | GET | /auth/consume?token= | → 302 to the app | existing |
+| GET | /auth/invite?token= | the team invitation page: names the company and role, offers Google and Microsoft (and the email link only when `MAGIC_LINK_ENABLED`), parks the token hash in the sealed `ros_invite` cookie (30 min). Every sign-in path (callback, /auth/session, the staff second-factor step, the email-link consume) accepts the invitation for the invited address, opens the session in that company, emits `member.joined`, audits `invitation.accepted`; a different address → `/login?error=invite_email_mismatch` (cookie kept), expired or withdrawn → `invite_expired`. Any sign-in with the invited address accepts its open invitations even without the cookie (never ITS staff) | new (spec 21, area A) |
+| POST | /auth/invite/email | form `{token}` → HTML; emails a sign-in link to the invited address only; 410 when email links are off | new |
+| POST | /auth/invite/forget | → `{ok}`; drops the carried invitation | new |
 | POST | /auth/magic-link/consume | `MagicLinkConsume` → `{ok, userId, activeCompanyId}` | existing |
 | POST | /auth/logout | → `{ok}` | existing |
-| GET | /auth/me | → `MeResponse` (+ `ai.provider`, `auth {provider, aal, mfaVerifiedAt}`) | changed |
+| GET | /auth/me | → `MeResponse` (+ `ai.provider`, `auth {provider, aal, mfaVerifiedAt}`); active memberships only | changed |
 | POST | /auth/switch | `{companyId}` → `{ok}` | existing; ITS staff only for companies with an open escalation (D11) |
 | GET | /auth/sessions | → `Session[]` (id, createdAt, lastSeenAt, ip, userAgent, current) | new |
 | POST | /auth/sessions/:id/revoke and /auth/sessions/revoke-all | → `{ok}` | new |
@@ -29,9 +32,11 @@ Conventions added in release 1: `Idempotency-Key` header honored on every mutati
 |---|---|---|---|
 | POST | /companies | `CreateCompany` → `Company` | existing |
 | GET / PATCH | /companies/current | `UpdateCompany` → `Company` (+ integrations statuses, plan, usage) | changed: plan and usage |
-| GET | /companies/current/members | → `Member[]` (+ calendar status per member) | changed |
-| POST | /companies/current/invites | `InviteMember` → `{ok}` | existing |
-| PATCH | /companies/current/members/:userId | `{role?, status?}` → `Member` (revokes that user's sessions on role change) | changed |
+| GET | /companies/current/members | → `Member[]`: active members only, each with calendar and availability status | changed |
+| GET | /companies/current/invitations | → open invitations `{id, email, role, name, expiresAt, invitedBy: {name}}` (never the token) | new (spec 21, area A) |
+| POST | /companies/current/members/invite (also /companies/current/invites) | `InviteMember` `{email, role: owner\|admin\|hiring_manager\|interviewer\|hr, name?}` → `{ok, invitation, replaced}`; one email through the outbox with the invitation link; 400 `staff_domain`, 409 `already_member`; an older open invitation for the address is replaced; audited `invitation.sent` | changed |
+| POST | /companies/current/invitations/:id/resend, /revoke | → `{ok, invitation}`; `members.manage`; audited `invitation.resent` / `invitation.revoked` | new |
+| PATCH | /companies/current/members/:userId | `UpdateMember` `{role?, status?: active\|removed}` → `{userId, role, status, sessionsEnded, calendarDeletionQueued, interviewsFlagged}`; 404 unless an active member, 409 `self_change`, 409 `last_owner`, 403 `owner_only`; either change ends the person's sessions; removal disconnects their calendar (credential deletion queued), flags interviews still ahead and notifies the owners, emits `member.removed` | changed |
 | PUT | /companies/current/notices | `{key, text, jurisdictions}` → `Notice` (human-only, audited, reauth) | new |
 
 ## Intake, roles, packets, postings
@@ -51,9 +56,31 @@ Conventions added in release 1: `Idempotency-Key` header honored on every mutati
 | POST | /roles/:id/packets | `CreatePacketVersion` → version | existing |
 | POST | /roles/:id/approve | `ApproveRole` → `{ok, approvalRequestId}` | existing |
 | POST | /roles/:id/pause, /resume, /close | `RoleStatusChange` → role | existing |
-| GET | /roles/:id/postings; POST /roles/:id/postings/:channel/retry | | existing; external channels 404 when the flag is off |
 | GET | /roles/:id/applications | `OwnerGroupQuery` → `ApplicationSummary[]` | existing |
 | GET | /roles/:id/interviews | → `InterviewSummary[]` | new |
+
+### Postings, tracked links, volume (docs/spec/20 section 2; `apps/api/src/routes/postings.ts`)
+
+Reading needs `role.read`; every POST needs `role.manage` (interviewers get 403), is audited (`posting.changed`, `application_link.changed`, `role.applications_toggled`) and moves the posting through the nine-state table in `packages/core/src/postings.ts`; a move the table refuses answers 409 `posting_transition` with both states named. `channel` is one of `careers_page`, `google_jobs`, `email_in`, `linkedin_basic`, `indeed`, `ziprecruiter`. `GET /roles/:id` also carries `boardsStillUp` and the accepting-applications fields.
+
+| Method | Path | Body → Response | Status |
+|---|---|---|---|
+| GET | /roles/:id/postings | → `{role: {id, title, status, acceptingApplications, applicationsClosedAt, applicationsClosedReason, volumeAlertPerDay}, urls: {careers, job, apply}, emailIn: {address, connected, status, error}, postings: PostingView[], links: ApplicationLink[], boardsStillUp: channel[]}`; a `PostingView` is the row (nine-state fields, `steps`, `closureRequired`, `closureConfirmedAt`) plus `name`, `stateLabel`, `isBoard`, `link` (the board's active tracked link, with `url`), `package` (`{text, fields}`, boards only) and `stillUp` | new |
+| GET | /roles/:id/postings/:channel/package | → `{text, fields}` (title, employer, location, employment type, pay, description, screening questions, the board's tracked apply link, the intake address while email-in is connected, the job page URL); 409 for `email_in` | new |
+| POST | /roles/:id/postings/:channel/url | `RecordPostingUrl` = `{url}` (https only; boards only) → `PostingView` at `posted_manually`; queues `posting.verify` (the worker fetches the page, checks the title, marks `live_verified` or, after three checks, `failed`); a corrected address while a check is pending keeps the state and restarts the checks; any earlier verification (`verifiedAt/By`, the note) is cleared, since it was of a different address | new |
+| POST | /roles/:id/postings/:channel/verify | `VerifyPosting` = `{note}` (required) → `PostingView` at `live_verified`, `verifiedBy` = the person; a `failed` posting passes through `posted_manually` (or `submitted_integration` for Google) first; 409 `url_required` for a board with no recorded address; Google for Jobs is marked verified here ("checked in Search Console"). A check still queued when the person confirms leaves their word alone; only `retry` re-checks a person-verified posting | new |
+| POST | /roles/:id/postings/:channel/pause | `PostingReason` = `{reason?}` → `PostingView` at `paused` | new |
+| POST | /roles/:id/postings/:channel/resume | `{reason?}` → `PostingView` back where it was: `live_verified` when it had been verified, `posted_manually` with a fresh check when an address was recorded, `submitted_integration` for Google, otherwise `ready_to_post`; 409 `not_paused` | new |
+| POST | /roles/:id/postings/:channel/close | `{reason?}` → `PostingView` at `closed`; a board that was up gets `closureRequired` and `posting.closure_required` | new |
+| POST | /roles/:id/postings/:channel/closure-confirm | → `PostingView` with `closureConfirmedAt/By`; emits `posting.closure_confirmed`; ticking twice changes nothing; 409 `not_required` when nothing was up | new |
+| POST | /roles/:id/postings/:channel/retry | → `{ok, action: "check_again" \| "ready_to_post" \| "republish", posting}`: a board or the careers page with a recorded address is checked again (a requested check, so it also re-checks a posting a person verified by hand; a failed board starts from nothing); a failed board without an address goes back to `ready_to_post`; a failed native channel (email-in, Google) is prepared again by `publish_role` (role must be open); 409 `nothing_to_retry` otherwise | moved from roles.ts; changed |
+| GET | /roles/:id/links | → `ApplicationLink[]` (`{id, url, source, sourceLabel, sourceDetail, label, postingId, visits, lastVisitedAt, createdAt, disabledAt}`; `url` is `JOBS_BASE_URL/a/<token>`) | new |
+| POST | /roles/:id/links | `CreateApplicationLink` = `{source: referral \| direct \| other, label, sourceDetail?}` → 201 `ApplicationLink`; 409 when the role is closed | new |
+| POST | /roles/:id/links/:linkId/disable | → `ApplicationLink` with `disabledAt` (the public redirect refuses it from then on); 409 `already_disabled`; 409 `link_in_use` for a board's own link while that posting is up | new |
+| POST | /roles/:id/applications/accepting | `SetAcceptingApplications` = `{accepting, reason?}` → `{ok, changed, role: {id, acceptingApplications, applicationsClosedAt, applicationsClosedReason}}`; emits `role.applications_closed` / `role.applications_reopened`, notifies the team (`applications.closed` / `applications.reopened`); 409 `role_closed`; the job page stays up and says applications are closed, nobody is rejected | new |
+| GET | /roles/:id/volume | → `{from, to, timeZone, days: [{day, total, bySource}] (14, oldest first), totals: {total, bySource}, sources: [{source, label, total}], threshold, yesterday: {day, total}, today: {day, total}, acceptingApplications, applicationsClosedAt, applicationsClosedReason}`; days are calendar days in `companies.timezone` (`timeZone` says which) | new |
+
+The daily `stuck_role_detector` run counts yesterday's applications per open role, "yesterday" being a calendar day in the company's time zone (the same cut as `/volume`, through `localDays` in `@ros/workflows`); above `roles.volume_alert_per_day` (null = 100) it notifies owners and admins once for that day (`volume.high`, linking to `/roles/:id?tab=posting`) and emits `role.volume_high` `{day, count, threshold}`. It never touches an application. The brief's "Still posted on ..." card names boards in channel order and says whether the role is closed or only that board's posting was.
 
 ## Applications
 

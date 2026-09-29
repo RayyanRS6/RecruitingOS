@@ -25,7 +25,8 @@ describe("Slice 1 API", () => {
   const setClock = (offsetMs: number) => { (container.engine as unknown as { now: () => Date }).now = () => new Date(BASE + offsetMs); };
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    // Texting on: this file exercises the SMS screen path a consenting applicant gets (decision M2 keeps it off by default).
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SMS_ENABLED: "true" } });
     app = createApp(container);
     setClock(0);
   });
@@ -188,6 +189,7 @@ describe("Slice 1 API", () => {
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string; type: string }> } } } };
     for (const rule of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${rule.key}`, "yes");
     form.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
+    form.set("acknowledged", "yes");
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     expect(r.status).toBe(302);
     const location = r.headers.get("location")!;
@@ -239,6 +241,7 @@ describe("Slice 1 API", () => {
       form.set("lastName", "Nolicense");
       form.set("email", email);
       form.set("noResume", "I worked as a dental assistant for three years and am studying for my hygiene license.");
+      form.set("acknowledged", "yes");
       for (const rule of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${rule.key}`, rule.key === license.key ? "no" : "yes");
       const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });
       expect(r.status).toBe(302);
@@ -310,6 +313,7 @@ describe("Slice 1 API", () => {
     form.set("lastName", "Reyes");
     form.set("email", "Maria.Reyes@example.com");
     form.set("noResume", "Applying again");
+    form.set("acknowledged", "yes");
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     expect(r.status).toBe(302);
     const apps = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
@@ -325,6 +329,7 @@ describe("Slice 1 API", () => {
     form.set("lastName", "Shah");
     form.set("email", "priya@example.com");
     form.set("noResume", "Hygienist, 6 years.");
+    form.set("acknowledged", "yes");
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
     for (const rule of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${rule.key}`, "yes");
     await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });

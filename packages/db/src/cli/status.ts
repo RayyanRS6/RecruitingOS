@@ -10,10 +10,17 @@ import { describeCertificate, fingerprintOfDer, smallPool, withSsl } from "./pro
  * present and granted. Changes nothing. Prints no connection string, password or row data, so the output can be
  * pasted back in full. Exits 0 when everything is in place and non-zero otherwise (3 while setup still has work to
  * do, 2 when it could not connect; pnpm may flatten the code it shows).
+ *
+ * Two flags for the release workflow (H4), where a pending migration is the expected state before the apply step:
+ *   --report-only                  print the report and exit 0 whatever it says (a failed connection is still 2)
+ *   --fail-on-pending-migrations   exit 3 only when a migration is pending; the other to-do items are reported, not failed
  */
+const flags = new Set(process.argv.slice(2));
+const reportOnly = flags.has("--report-only");
+const failOnPendingMigrations = flags.has("--fail-on-pending-migrations");
 const owner = process.env.MIGRATE_DATABASE_URL;
 if (!owner) {
-  console.error("status: MIGRATE_DATABASE_URL must be set by scripts/staging-db-status.sh.");
+  console.error("status: MIGRATE_DATABASE_URL must be set by scripts/staging-db-status.sh (or the migrate workflow's environment secrets).");
   process.exit(2);
 }
 const ownerUrl = withSsl(owner);
@@ -57,6 +64,7 @@ let probe: ReturnType<typeof smallPool> | null = null;
 const handle = await createDb({ databaseUrl: ownerUrl.toString() });
 const q = async <T extends Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> => (await handle.query(text, params)) as T[];
 const todo: string[] = [];
+let pendingMigrations = 0;
 try {
   let who: { u: string; su: string; v: string };
   try {
@@ -76,7 +84,8 @@ try {
   if (m.partial?.existing.length) {
     console.log(`status: ${m.partial.file} was interrupted halfway: ${m.partial.existing.length} of ${m.partial.total} objects it creates already exist (${m.partial.existing.join(", ")}). The setup completes it safely when run again.`);
   }
-  if (m.pending.length) todo.push("apply the pending migrations (run scripts/staging-db-setup.sh again)");
+  pendingMigrations = m.pending.length;
+  if (m.pending.length) todo.push("apply the pending migrations (the migrate workflow, or pnpm db:migrate with MIGRATE_DATABASE_URL; docs/runbooks/release-migrations.md)");
 
   const roles = await q<{ rolname: string; rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean; tenant: boolean }>("select rolname, rolcanlogin, rolsuper, rolbypassrls, pg_has_role(rolname, 'app_tenant', 'MEMBER') as tenant from pg_roles where rolname in ('ros_app','ros_worker','app_tenant') and exists (select 1 from pg_roles where rolname = 'app_tenant') order by rolname");
   for (const r of ["app_tenant", "ros_app", "ros_worker"]) {
@@ -124,6 +133,8 @@ try {
 }
 if (todo.length) {
   console.log(`\nstatus: still to do:\n${todo.map((t) => `  - ${t}`).join("\n")}`);
+  if (reportOnly) process.exit(0);
+  if (failOnPendingMigrations) process.exit(pendingMigrations ? 3 : 0);
   process.exit(3);
 }
 console.log("\nstatus: everything is in place. If DATABASE_URL and WORKER_DATABASE_URL are not stored in 1Password yet, run scripts/staging-db-setup.sh again: it sets fresh passwords and delivers the two strings to the clipboard for 1Password (or shows them once with --print).");

@@ -75,6 +75,7 @@ describe("recruiter queue preview carries no candidate-sensitive data before acc
     form.set("resume", new File(["Maria Reyes, RDH\nRegistered Dental Hygienist at Coastal Family Dentistry 2019 - present\nSkills: Dentrix, periodontal charting"], "maria-reyes.txt", { type: "text/plain" }));
     for (const rule of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${rule.key}`, "yes");
     form.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
+    form.set("acknowledged", "yes");
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     expect(r.status).toBe(302);
     await container.drain();

@@ -1,8 +1,10 @@
 # Résumé storage: private bucket, direct uploads, quarantine, audited reads
 
 Status: built and tested against the in-memory store and the fake scanner on 22 September 2026 under founder decision 2
-(`docs/spec/19` §G). Not yet exercised against the staging bucket. Malware scanning is a fake until a real engine is
-authorized: that is a real-data blocker (`docs/readiness/20` blocker 8), not a staging blocker.
+(`docs/spec/19` §G). Not yet exercised against the staging bucket. A ClamAV adapter exists since 30 September
+(`SCAN_PROVIDER=clamav`, tested against a stand-in clamd); the engine itself is a service the founder starts on Railway
+("Running ClamAV on Railway" below). Until it runs, the fake stands in and a production worker raises a standing
+`scanner.fake` alert: that is a real-data blocker (`docs/readiness/20` blocker 8), not a staging blocker.
 
 ## How it works
 
@@ -62,6 +64,50 @@ bucket-scoped at the provider, so the project holds exactly one bucket for this 
    must be `supabase`; the application will not boot on disk or memory storage there.
 6. Revoke or rotate: **S3 Configuration**, **Access keys**, delete the key pair and create a new one; enter the new
    values; redeploy. A presigned URL already issued dies with the key.
+
+## Running ClamAV on Railway
+
+The scanner speaks clamd's own TCP protocol (`INSTREAM`, `PING`), so the engine is the official image and nothing
+else: no API in between, no file leaves Railway's private network. The worker is the only process that scans; the
+Vercel app keeps `SCAN_PROVIDER=fake` because it never opens a quarantined file.
+
+1. Railway, project `recruiting-os-staging`, **New**, **Docker Image**, image `clamav/clamav:stable` (the official
+   image on Docker Hub, maintained by Cisco Talos). Name the service `clamav`.
+2. Service **Settings**: no public networking (leave **Generate Domain** unclicked); **Private Networking** on (it is
+   on by default; the service is then reachable from the worker as `clamav.railway.internal`). The image listens on
+   port `3310` and refreshes its signatures itself (`freshclam` runs inside the container); it needs about 1.5 GB of
+   memory once the signatures are loaded, so keep the workspace's memory limit above that. Optional variables on the
+   `clamav` service: `CLAMAV_NO_MILTER=true` (nothing uses the mail filter) and `CLAMD_STARTUP_TIMEOUT=1800` (the
+   first start downloads the signatures, which can take a few minutes).
+3. Worker service, **Variables**: `SCAN_PROVIDER=clamav`, `CLAMAV_HOST=clamav.railway.internal`, `CLAMAV_PORT=3310`
+   (the default), `CLAMAV_TIMEOUT_MS=20000` (the default; an 8 MB file over private networking scans in well under
+   that). None is a secret. Redeploy the worker.
+4. Verify in the worker's deploy log: no `[scanner] clamav did not answer the boot check` line (that line means the
+   host or port is wrong, or clamd is still loading signatures; the worker runs anyway and quarantined files wait,
+   retried by the intake workflow, until the engine answers). Then apply on staging with the EICAR test file: the
+   document is refused with `infected`, and the `document.rejected` event names the engine `clamav` and the signature.
+5. Spend: about $15 to $25 a month of compute for the always-on engine (`docs/spec/21`); raise the workspace hard
+   limit accordingly, or the whole workspace goes offline at the limit.
+
+What a scan outage looks like: the scanner returns `error` (a refused connection, a closed socket, or no reply within
+`CLAMAV_TIMEOUT_MS`), the file stays in quarantine, the step retries with backoff, and the adapter reports
+`not_connected` on the console's integrations page until the next successful scan or PING. Nothing is ever released
+from quarantine without a `clean` verdict.
+
+## Known limitation: attachments that arrive by email (H9)
+
+The inbound webhook runs on Vercel, whose request body limit is 4.5 MB. Postmark posts each attachment base64-encoded
+(about a third larger than the file) together with the message text, so an application forwarded by email with an
+attachment over about 3 MB is refused by the platform before the application code runs: Postmark sees a 413, retries
+for a while, then records the delivery as failed in its inbound activity page. Nothing reaches `inbound_emails`, and
+the candidate is not told, because nobody in the path knows who they are. Files uploaded on the apply page are not
+affected: the direct-to-storage upload takes up to 8 MB.
+
+Mitigation for the recruiter or owner who notices a missing application (Postmark's activity page names the sender):
+ask the candidate for the direct apply link so they upload the file on the page, or to send a smaller file. Postmark's
+inbound stream can also be told to drop attachments over a size, which turns the refusal into an application with no
+résumé and the message text kept; that setting is the founder's call once the intake domain exists. Lifted only by
+moving the inbound webhook off the platform's function limits, recorded as a follow-up in the register.
 
 ## Staging verification (`docs/readiness/03` §1a)
 
