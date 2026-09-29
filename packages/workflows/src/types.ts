@@ -9,7 +9,8 @@ export type RunRow = typeof workflowRuns.$inferSelect;
 export type Services = {
   ai: AiRuntime;
   integrations: Integrations;
-  env: { appBaseUrl: string; itsQueueEmail: string };
+  /** `jobsBaseUrl` is the public job-page host (JOBS_BASE_URL): every candidate-facing job link and tracked link is built from it. */
+  env: { appBaseUrl: string; jobsBaseUrl: string; itsQueueEmail: string };
   engine: WorkflowEngine;
 };
 

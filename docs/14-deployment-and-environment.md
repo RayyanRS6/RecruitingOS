@@ -44,6 +44,7 @@ Defaults are the local development values. "prod" in the Required column means t
 |---|---|---|---|
 | `NODE_ENV` | | `development` | `production` turns on every boot check below |
 | `APP_BASE_URL` | prod (https, no path) | `http://localhost:3000` | The one public address of the deployment: links in email, OAuth redirects, candidate pages, webhooks |
+| `JOBS_BASE_URL` | (https, no path, when set) | `APP_BASE_URL` | The public job-page host (docs/spec/20): careers and job pages, apply pages, the sitemap, the feeds, posting packages and tracked application links are built from it. Set to `https://jobs.identifiedtalent.com` once that domain is attached to the same deployment (founder gate 2.5) |
 | `SESSION_SECRET` | prod | dev value | Seals session, PKCE, second-factor and calendar-consent cookies; keys rate-limit hashes |
 | `COOKIE_DOMAIN` | | unset | Cookie `Domain` when the app is served under several hostnames of one site |
 | `ANALYTICS_SALT` | prod | dev value | Salt for the keyed analytics identifiers; different per environment |
@@ -109,6 +110,7 @@ Defaults are the local development values. "prod" in the Required column means t
 | `CALENDAR_PROVIDER` | | `fake` | `google` uses the ITS Google Cloud OAuth client and revokes at Google on disconnect; anything else is the fake |
 | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` | when google | | |
 | (job-board credentials) | none yet | | Indeed, ZipRecruiter and LinkedIn are manual in release 1: the customer posts from their own account and points the board at the apply link. No credential is read until a partner integration is verified |
+| `LINK_VERIFIER` | | `fake` outside production | The public-URL check behind "Live and verified" (docs/spec/20 item 12): production always fetches the page; `real` turns the fetch on elsewhere, otherwise a scripted fake answers |
 | `BLS_API_KEY` | | | OEWS v2 (higher limits) |
 | `COMP_BLS_ENABLED` | | `true` | `false` skips the live wage lookup (tests, offline work) |
 

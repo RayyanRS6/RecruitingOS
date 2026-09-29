@@ -90,7 +90,7 @@ async function handleDeliveryEvent(c: Context<Vars>) {
   if (!event) return c.json({ error: { code: "invalid_request", message: "not a Postmark event" } }, 400);
   const first = await recordWebhookReceipt(container.db, { provider: "postmark", kind: event.recordType, externalId: event.externalId });
   if (!first) return c.json({ ok: true, duplicate: true });
-  const outcome = await withPlatform(container.db, (tx) => handleEmailEvent(tx, container.integrations, { event, appBaseUrl: container.env.APP_BASE_URL, now: container.engine.clock() }));
+  const outcome = await withPlatform(container.db, (tx) => handleEmailEvent(tx, container.integrations, { event, appBaseUrl: container.env.JOBS_BASE_URL, now: container.engine.clock() }));
   await container.kick();
   return c.json({ ok: true, duplicate: false, ...outcome });
 }

@@ -143,17 +143,23 @@ describe("Slice 1 API", () => {
   it("approval opens the role and publishes to every channel", async () => {
     const r = await json("POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "Looks right." });
     expect(r.status).toBe(200);
-    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { status: string; currentPacketVersion: number; postings: Array<{ channel: string; status: string; intakeToken: string | null; instructions: string | null }> };
+    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { status: string; currentPacketVersion: number; postings: Array<{ channel: string; status: string; intakeToken: string | null; instructions: string | null; steps: string[]; externalUrl: string | null; verifiedBy: { kind: string } | null }> };
     expect(role.status).toBe("open");
     expect(role.currentPacketVersion).toBe(1);
     const byChannel = Object.fromEntries(role.postings.map((p) => [p.channel, p]));
-    // Founder decision F4: only verified states. Email-in is not connected in development (no inbound domain).
+    // docs/spec/20: nothing is live until its public URL was checked. The careers page passed the (fake) check during
+    // the inline drain; Google is submitted through the page's structured data; email-in is failed (no inbound domain);
+    // the three boards wait at "ready to post" with their steps until a person records the public URL.
     expect(byChannel.careers_page.status).toBe("live_verified");
-    expect(byChannel.google_jobs.status).toBe("awaiting_verification");
-    expect(byChannel.email_in.status).toBe("not_connected");
-    expect(byChannel.linkedin_basic.status).toBe("manual_action_required");
-    expect(byChannel.indeed.status).toBe("manual_action_required");
+    expect(byChannel.careers_page.verifiedBy).toMatchObject({ kind: "system" });
+    expect(byChannel.careers_page.externalUrl).toBe(`${container.env.JOBS_BASE_URL}/careers/${companySlug}/jobs/${roleId}`);
+    expect(byChannel.google_jobs.status).toBe("submitted_integration");
+    expect(byChannel.email_in.status).toBe("failed");
+    expect(byChannel.linkedin_basic.status).toBe("ready_to_post");
+    expect(byChannel.indeed.status).toBe("ready_to_post");
     expect(byChannel.indeed.instructions).toMatch(/apply/);
+    expect(byChannel.indeed.steps.length).toBeGreaterThanOrEqual(5);
+    expect(byChannel.indeed.steps.join("\n")).toMatch(new RegExp(`${container.env.JOBS_BASE_URL}/a/[a-z0-9]{12}`));
     expect(byChannel.email_in.intakeToken).toBeTruthy();
     const runs = await container.db.select().from(workflowRuns);
     expect(runs.map((x) => `${x.workflowKey}:${x.status}`).sort()).toEqual(["publish_role:completed", "role_approval:completed", "stuck_role_detector:waiting"]);

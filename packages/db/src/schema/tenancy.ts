@@ -4,6 +4,8 @@ import { createdAt, id, ts, updatedAt } from "./columns";
 
 export type CompanySettings = {
   website?: string;
+  /** A public logo URL for the JobPosting structured data (docs/spec/20 item 4); optional. */
+  logoUrl?: string;
   benefitsSummary?: string;
   notices?: Record<string, { version: string; text: string; jurisdictions: string[] }>;
   retention?: Record<string, number>;

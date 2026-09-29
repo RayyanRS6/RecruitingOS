@@ -1,7 +1,8 @@
 import { createRuntime, type AiRuntime, type FakeProvider } from "@ros/ai";
 import { cancelInterviewEvents } from "@ros/agents";
-import { createDb, inspectConnectionRole, migrate, migrationStatus, problemsWithConnectionRole, seedPlatform, withPlatform, withTenant, type Db, type DbHandle, type DbRole } from "@ros/db";
-import { countActiveAdmins, createRateLimitStore, raiseAlert, type RateLimitStore } from "@ros/core";
+import { eq } from "drizzle-orm";
+import { createDb, inspectConnectionRole, migrate, migrationStatus, postings, problemsWithConnectionRole, roles, seedPlatform, withPlatform, withTenant, type Db, type DbHandle, type DbRole } from "@ros/db";
+import { POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, countActiveAdmins, createRateLimitStore, emit, raiseAlert, transitionPosting, type RateLimitStore } from "@ros/core";
 import { createIntegrations, type Integrations } from "@ros/integrations";
 import { createEngine, type WorkflowEngine } from "@ros/workflows";
 import { REVOKE_JOB_KIND, checkPrivacyRequestDeadlines, listSuppressions, onSuppressionChange, revokeAndDeleteCredentials, setEventSink } from "@ros/core";
@@ -110,7 +111,7 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     if (pe) void integrations.analytics.capture(pe);
   });
   const engine = createEngine(
-    { db: handle.db, services: { ai, integrations, env: { appBaseUrl: env.APP_BASE_URL, itsQueueEmail: env.ITS_QUEUE_EMAIL } } },
+    { db: handle.db, services: { ai, integrations, env: { appBaseUrl: env.APP_BASE_URL, jobsBaseUrl: env.JOBS_BASE_URL, itsQueueEmail: env.ITS_QUEUE_EMAIL } } },
     { now: opts.now },
   );
   // The outbox stamps its send jobs on the engine's clock, so a message queued "now" is due on the clock that runs the queue.
@@ -164,7 +165,49 @@ export async function createContainer(opts: { env?: Record<string, string | unde
   engine.registerJob("email.fallback_sms", async (payload) => {
     const applicationId = String(payload.applicationId ?? "");
     if (!applicationId) return;
-    await withPlatform(handle.db, (tx) => sendFallbackSms(tx, integrations, { applicationId, communicationId: (payload.communicationId as string | null) ?? null, appBaseUrl: env.APP_BASE_URL }));
+    // The status link a candidate receives lives on the job-page host, like the acknowledgment's.
+    await withPlatform(handle.db, (tx) => sendFallbackSms(tx, integrations, { applicationId, communicationId: (payload.communicationId as string | null) ?? null, appBaseUrl: env.JOBS_BASE_URL }));
+  });
+
+  /**
+   * Public URL verification (docs/spec/20 item 12): fetches the posting's recorded URL through the verifier adapter
+   * and moves the posting to live_verified when the page answers with the job title. A failed fetch is recorded on
+   * the row and retried by the queue with backoff; the third failure marks the posting failed for a person to look at.
+   * Never posts anything, never touches a candidate.
+   */
+  engine.registerJob(POSTING_VERIFY_JOB_KIND, async (payload, ctx) => {
+    const postingId = String(payload.postingId ?? "");
+    const companyId = String(payload.companyId ?? "");
+    if (!postingId || !companyId) return;
+    const actor: Actor = { kind: "system", id: "link_check" };
+    const target = await withTenant(handle.db, companyId, async (tx) => {
+      const [p] = await tx.select().from(postings).where(eq(postings.id, postingId)).limit(1);
+      if (!p || !["posted_manually", "submitted_integration", "live_verified"].includes(p.status) || !p.externalUrl) return null;
+      const [role] = await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, p.roleId)).limit(1);
+      return role ? { url: p.externalUrl, title: role.title } : null;
+    });
+    if (!target) return; // nothing to check: no URL yet, or the posting moved on
+    const result = await integrations.verifier.verify(target.url, { expectedTitle: target.title });
+    const retry = await withTenant(handle.db, companyId, async (tx) => {
+      const [p] = await tx.select().from(postings).where(eq(postings.id, postingId)).limit(1);
+      if (!p || !["posted_manually", "submitted_integration", "live_verified"].includes(p.status)) return false;
+      if (result.ok) {
+        if (p.status === "live_verified") await tx.update(postings).set({ verifiedAt: ctx.now.toISOString(), verifiedBy: actor, verificationError: null, verificationAttempts: 0 }).where(eq(postings.id, p.id));
+        else await transitionPosting(tx, { postingId: p.id, to: "live_verified", actor, now: ctx.now, patch: { verifiedAt: ctx.now.toISOString(), verifiedBy: actor, verificationError: null, verificationAttempts: 0 }, payload: { check: "fetched" } });
+        return false;
+      }
+      const attempts = p.verificationAttempts + 1;
+      const detail = `${result.reason}: ${result.detail}`;
+      const last = attempts >= POSTING_VERIFY_MAX_ATTEMPTS || ctx.attempt >= ctx.maxAttempts;
+      await tx.update(postings).set({ verificationAttempts: attempts, verificationError: detail }).where(eq(postings.id, p.id));
+      await emit(tx, { type: "posting.verification_failed", companyId, actor, subject: { type: "posting", id: p.id }, payload: { channel: p.channel, roleId: p.roleId, url: p.externalUrl, reason: result.reason, detail: result.detail, attempt: attempts, final: last } });
+      if (last) {
+        await transitionPosting(tx, { postingId: p.id, to: "failed", actor, now: ctx.now, patch: { error: `The public URL could not be verified after ${attempts} ${attempts === 1 ? "check" : "checks"} (${detail}). Check the link, then record it again or confirm it yourself.` }, payload: { reason: result.reason } });
+        return false;
+      }
+      return true;
+    });
+    if (retry) throw new Error(`verification of posting ${postingId} failed (${result.ok ? "" : result.reason}); retrying`);
   });
 
   // The recurring jobs exist from the first boot of any process; tests arm them explicitly so a moved clock never runs a sweep by surprise.

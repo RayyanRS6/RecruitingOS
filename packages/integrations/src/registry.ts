@@ -2,6 +2,7 @@ import { FakeEmailAdapter, FakeSmsAdapter } from "./email/fake";
 import { PostmarkEmailAdapter } from "./email/postmark";
 import { CareersPageAdapter, EmailInAdapter, GoogleJobsAdapter } from "./jobboards/native";
 import { IndeedAdapter, LinkedInBasicJobsAdapter, ZipRecruiterAdapter } from "./jobboards/external";
+import { FakeUrlVerifier, RealUrlVerifier, type UrlVerifier } from "./jobboards/verify";
 import { BlsOewsAdapter } from "./comp/bls";
 import { TwilioSmsAdapter } from "./sms/twilio";
 import { LocalStorageAdapter, MemoryStorageAdapter } from "./storage/local";
@@ -27,6 +28,8 @@ export type Integrations = {
   email: EmailAdapter;
   sms: SmsAdapter;
   jobBoards: Record<string, JobBoardAdapter>;
+  /** Fetches a posting's public URL and checks it names the job (docs/spec/20 item 12): real in production, scripted elsewhere. */
+  verifier: UrlVerifier;
   comp: CompAdapter;
   storage: StorageAdapter;
   /** Malware scanning of quarantined uploads; a fake until a real engine is authorized (real-data blocker). */
@@ -65,6 +68,8 @@ export function createIntegrations(env: Record<string, string | undefined> = pro
     new ZipRecruiterAdapter(),
   ];
   const jobBoards = Object.fromEntries(boards.map((b) => [b.channel, b]));
+  // The link check really fetches in production (or when asked with LINK_VERIFIER=real); development and tests script it.
+  const verifier: UrlVerifier = env.NODE_ENV === "production" || env.LINK_VERIFIER === "real" ? new RealUrlVerifier() : new FakeUrlVerifier();
   const comp = new BlsOewsAdapter(env.BLS_API_KEY, fetch, env.COMP_BLS_ENABLED !== "false");
   const storage = createStorage(env, opts, appBaseUrl);
   const scanner: MalwareScanner = createScanner(env);
@@ -86,6 +91,7 @@ export function createIntegrations(env: Record<string, string | undefined> = pro
     email,
     sms,
     jobBoards,
+    verifier,
     comp,
     storage,
     scanner,
@@ -101,6 +107,7 @@ export function createIntegrations(env: Record<string, string | undefined> = pro
       { kind: "email", provider: email.id, status: email.status },
       { kind: "sms", provider: sms.id, status: sms.status },
       ...boards.map((b) => ({ kind: "jobboard", provider: b.channel, status: b.status })),
+      { kind: "link_verifier", provider: verifier.id, status: verifier.status },
       { kind: "comp", provider: comp.id, status: comp.status },
       { kind: "storage", provider: storage.id, status: storage.status },
       { kind: "scanner", provider: scanner.id, status: scanner.status },

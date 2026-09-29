@@ -3,8 +3,13 @@ import type { RolePacket } from "@ros/contracts";
 /** Founder decision F4: only verified states. `live` means connected and working; boards use the posting states below. */
 export type AdapterStatus = "live" | "not_connected" | "manual_action_required" | "awaiting_verification" | "fake" | "disabled";
 
-/** The five channel states shown to customers. */
-export type PostingState = "live_verified" | "awaiting_verification" | "manual_action_required" | "not_connected" | "failed";
+/**
+ * The nine posting states (docs/spec/20 item 11; the table and the transitions live in packages/core/src/postings.ts).
+ * An adapter's publish result names the state its channel reaches on publish: `ready_to_post` (a package and a link
+ * exist; nothing is on the board yet), `submitted_integration` (sent through a native integration and awaiting the
+ * provider) or `live_verified` (only when the channel is verified by construction, such as a configured intake address).
+ */
+export type PostingState = "draft" | "approved" | "ready_to_post" | "posted_manually" | "submitted_integration" | "live_verified" | "paused" | "failed" | "closed";
 
 export type OutboundEmail = {
   to: string;
@@ -62,13 +67,13 @@ export type PostingInput = {
   companySlug: string;
   packet: RolePacket;
   jobUrl: string;
+  /** For a board, its own tracked apply link; otherwise the plain apply page. */
   applyUrl: string;
   intakeAddress?: string;
 };
 
 export type PublishResult =
-  | { status: "live_verified" | "awaiting_verification"; externalId?: string; externalUrl?: string; instructions?: string }
-  | { status: "manual_action_required" | "not_connected"; instructions: string; externalUrl?: string }
+  | { status: "ready_to_post" | "submitted_integration" | "live_verified"; externalId?: string; externalUrl?: string; instructions?: string; steps?: string[] }
   | { status: "failed"; error: string; retryable: boolean };
 
 export interface JobBoardAdapter {

@@ -36,6 +36,12 @@ export type Env = {
   PGLITE_DIR: string;
   /** The one public address of a deployment. The app, the API, the candidate pages and the webhooks are all served from it (the Next.js shell mounts the API in-process). */
   APP_BASE_URL: string;
+  /**
+   * The public job-page host (docs/spec/20 item 1; jobs.identifiedtalent.com once its domain exists): every
+   * candidate-facing job URL, feed, sitemap entry, posting package and tracked link is built from it. Defaults to
+   * APP_BASE_URL, so one host serves everything until the second domain is attached.
+   */
+  JOBS_BASE_URL: string;
   SESSION_SECRET: string;
   /** "supabase" (production) or "fake" (an in-process issuer for development and tests). */
   AUTH_PROVIDER: string;
@@ -99,6 +105,7 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     WORKER_DATABASE_URL: source.WORKER_DATABASE_URL ?? null,
     PGLITE_DIR: fromRoot(get("PGLITE_DIR", "./.data/pglite")),
     APP_BASE_URL: get("APP_BASE_URL", "http://localhost:3000").replace(/\/+$/, ""),
+    JOBS_BASE_URL: get("JOBS_BASE_URL", get("APP_BASE_URL", "http://localhost:3000")).replace(/\/+$/, ""),
     SESSION_SECRET: get("SESSION_SECRET", "dev-only-change-me-32-bytes-minimum-please"),
     SECRET_STORE: get("SECRET_STORE", "memory"),
     AUTH_PROVIDER: get("AUTH_PROVIDER", "fake"),
@@ -142,6 +149,7 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
   if (env.NODE_ENV === "production") {
     if (env.SESSION_SECRET.startsWith("dev-only")) throw new Error("SESSION_SECRET must be set in production");
     if (!/^https:\/\/[^/]+$/.test(env.APP_BASE_URL)) throw new Error("APP_BASE_URL must be the deployment's https origin in production (for example https://app.example.com), with no path");
+    if (source.JOBS_BASE_URL && !/^https:\/\/[^/]+$/.test(env.JOBS_BASE_URL)) throw new Error("JOBS_BASE_URL must be the public job-page https origin in production (for example https://jobs.example.com), with no path");
     if (!source.ANALYTICS_SALT) throw new Error("ANALYTICS_SALT must be set in production: analytics identifiers are keyed hashes and must never use the development salt");
     if (env.SECRET_STORE !== "vault") throw new Error("SECRET_STORE must be \"vault\" in production: secrets live in the managed key-management service, never in application-side cryptography");
     if (env.AI_PROVIDER === "fake") throw new Error("AI_PROVIDER=fake is not allowed in production");

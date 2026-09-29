@@ -74,7 +74,7 @@ export const screen: WorkflowDefinition<State> = {
           opening = o.message;
         }
         if (!(await ctx.alreadyDone("invite"))) {
-          const sent = await sendScreenInvite(ctx.q, ctx.services.integrations, { application: app, candidate, role, company, packet, actor: ctx.actor, correlationId: ctx.run.id, appBaseUrl: ctx.services.env.appBaseUrl, screen: { id: scr.id, token: scr.token, channel }, opening });
+          const sent = await sendScreenInvite(ctx.q, ctx.services.integrations, { application: app, candidate, role, company, packet, actor: ctx.actor, correlationId: ctx.run.id, appBaseUrl: ctx.services.env.jobsBaseUrl, screen: { id: scr.id, token: scr.token, channel }, opening });
           if (sent.email.status === "failed" && !candidate.email && channel !== "sms") return { kind: "fail", error: "candidate has no email and no SMS consent; nobody can be reached", retryable: false };
           await entitlements.record(ctx.q, ctx.companyId, "text_screens", 1, "screen", { screenId: scr.id });
         }
@@ -106,7 +106,7 @@ export const screen: WorkflowDefinition<State> = {
         const allowed = nextContactWindow(ctx.now, b.company.timezone);
         if (allowed.getTime() > ctx.now.getTime()) return { kind: "wait", wait: { kind: "timer", until: allowed.toISOString(), reason: "quiet hours" }, resumeStep: "remind" };
       }
-      await sendScreenReminder(ctx.q, ctx.services.integrations, { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet: b.packet, actor: ctx.actor, correlationId: ctx.run.id, appBaseUrl: ctx.services.env.appBaseUrl, screen: { id: scr.id, token: scr.token, channel: scr.channel as "web" | "sms" } });
+      await sendScreenReminder(ctx.q, ctx.services.integrations, { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet: b.packet, actor: ctx.actor, correlationId: ctx.run.id, appBaseUrl: ctx.services.env.jobsBaseUrl, screen: { id: scr.id, token: scr.token, channel: scr.channel as "web" | "sms" } });
       await ctx.q.update(screens).set({ status: "reminded", remindedAt: ctx.now.toISOString() }).where(eq(screens.id, scr.id));
       const until = new Date(ctx.now.getTime() + REMIND_WAIT_HOURS * 3600_000).toISOString();
       // Wait for the candidate or the expiry timer, whichever first.

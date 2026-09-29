@@ -46,6 +46,15 @@ export const roles = pgTable(
     pausedAt: ts("paused_at"),
     closedAt: ts("closed_at"),
     closeReason: text("close_reason"),
+    /**
+     * The "accepting applications" switch (docs/spec/20 item 16), distinct from pausing: the job page stays up and says
+     * applications are closed, new submissions are refused, nobody already in the process is touched.
+     */
+    acceptingApplications: boolean("accepting_applications").notNull().default(true),
+    applicationsClosedAt: ts("applications_closed_at"),
+    applicationsClosedReason: text("applications_closed_reason"),
+    /** Applications per day above which the owner is told once a day; null means the default of 100. */
+    volumeAlertPerDay: integer("volume_alert_per_day"),
     createdBy: jsonb("created_by").$type<Actor>().notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -91,6 +100,11 @@ export const intakeSessions = pgTable(
   (t) => [index("intake_sessions_company_idx").on(t.companyId, t.status)],
 );
 
+/**
+ * One row per role and channel (docs/spec/20). `status` holds the nine posting states of packages/core/src/postings.ts;
+ * `external_url` is the board's public URL; a posting is `live_verified` only after that URL was fetched and matched
+ * (or a person recorded that they checked it, with a note).
+ */
 export const postings = pgTable(
   "postings",
   {
@@ -98,20 +112,65 @@ export const postings = pgTable(
     companyId: uuid("company_id").notNull().references(() => companies.id),
     roleId: uuid("role_id").notNull().references(() => roles.id),
     channel: text("channel").notNull(),
-    status: text("status").notNull().default("pending"),
+    status: text("status").notNull().default("draft"),
     externalId: text("external_id"),
     externalUrl: text("external_url"),
     intakeToken: text("intake_token"),
     instructions: text("instructions"),
+    /** The numbered manual steps for a board, as plain sentences. */
+    steps: jsonb("steps").$type<string[]>().notNull().default([]),
     budget: jsonb("budget").$type<{ dailyUsd?: number; totalUsd?: number }>().notNull().default({}),
     publishedAt: ts("published_at"),
     expiresAt: ts("expires_at"),
     lastSyncedAt: ts("last_synced_at"),
     error: text("error"),
+    /** When a person (or, for the careers page, the system) recorded the public URL. */
+    publicUrlRecordedAt: ts("public_url_recorded_at"),
+    verifiedAt: ts("verified_at"),
+    /** The system after a successful fetch, or the person who said they checked it themselves. */
+    verifiedBy: jsonb("verified_by").$type<Actor | null>(),
+    verificationNote: text("verification_note"),
+    verificationError: text("verification_error"),
+    verificationAttempts: integer("verification_attempts").notNull().default(0),
+    pausedAt: ts("paused_at"),
+    closedAt: ts("closed_at"),
+    /** True for a board that was up when the role closed: a person must take it down and confirm. */
+    closureRequired: boolean("closure_required").notNull().default(false),
+    closureConfirmedAt: ts("closure_confirmed_at"),
+    closureConfirmedBy: jsonb("closure_confirmed_by").$type<Actor | null>(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [uniqueIndex("postings_role_channel_idx").on(t.roleId, t.channel), index("postings_intake_token_idx").on(t.intakeToken)],
+  (t) => [uniqueIndex("postings_role_channel_idx").on(t.roleId, t.channel), index("postings_intake_token_idx").on(t.intakeToken), index("postings_company_status_idx").on(t.companyId, t.status)],
+);
+
+/**
+ * Tracked application links (docs/spec/20 items 7 and 19): a short random token per board, referral, direct or other
+ * link. The public redirect resolves it through the platform role, counts the visit and sets a sealed cookie; the
+ * token is never written to an application, a candidate, a message or the status page. Disabled, never deleted.
+ */
+export const applicationLinks = pgTable(
+  "application_links",
+  {
+    id: id(),
+    companyId: uuid("company_id").notNull().references(() => companies.id),
+    roleId: uuid("role_id").notNull().references(() => roles.id),
+    /** Null for referral, direct and other links. */
+    postingId: uuid("posting_id"),
+    token: text("token").notNull(),
+    /** careers_page | email_in | linkedin | indeed | ziprecruiter | referral | direct | other */
+    source: text("source").notNull(),
+    sourceDetail: text("source_detail"),
+    /** What the owner sees: "LinkedIn", "Referral: Dr. Patel". */
+    label: text("label").notNull(),
+    visits: integer("visits").notNull().default(0),
+    lastVisitedAt: ts("last_visited_at"),
+    createdBy: jsonb("created_by").$type<Actor>().notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    disabledAt: ts("disabled_at"),
+  },
+  (t) => [uniqueIndex("application_links_token_idx").on(t.token), index("application_links_company_role_idx").on(t.companyId, t.roleId), index("application_links_posting_idx").on(t.postingId)],
 );
 
 export type ConsentRecord = Record<string, { granted: boolean; at: string; source: string; noticeVersion?: string; ip?: string }>;
@@ -185,7 +244,12 @@ export const applications = pgTable(
     roleId: uuid("role_id").notNull().references(() => roles.id),
     candidateId: uuid("candidate_id").notNull().references(() => candidates.id),
     packetVersion: integer("packet_version").notNull(),
+    /** The source vocabulary of application_links.source; `candidates.first_source` uses the same words. */
     source: text("source").notNull(),
+    /** A referrer's name, a campaign label; never a tracking token. */
+    sourceDetail: text("source_detail"),
+    /** The tracked link the candidate came through, when there was one. */
+    linkId: uuid("link_id"),
     stage: text("stage").$type<ApplicationStage>().notNull().default("applied"),
     stageChangedAt: ts("stage_changed_at").notNull().defaultNow(),
     resumeDocumentId: uuid("resume_document_id"),

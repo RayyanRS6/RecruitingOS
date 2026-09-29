@@ -9,7 +9,12 @@ import { quarantineKey } from "../uploads";
 export type NewApplication = {
   companyId: string;
   roleId: string;
+  /** The source vocabulary of packages/core/src/application-links.ts; also the candidate's first source when new. */
   source: string;
+  /** A referrer's name, a campaign label; never a tracking token (docs/spec/20 item 19). */
+  sourceDetail?: string | null;
+  /** The tracked link the candidate came through, resolved from the sealed cookie; never the token. */
+  linkId?: string | null;
   firstName: string;
   lastName: string;
   email: string | null;
@@ -84,6 +89,8 @@ export async function createApplication(tx: Tx, container: Container, input: New
         candidateId: candidate.id,
         packetVersion: role.currentPacketVersion,
         source: input.source,
+        sourceDetail: input.sourceDetail ?? null,
+        linkId: input.linkId ?? null,
         stage: "applied",
         answers: { eligibility: input.eligibilityAnswers, noResume: input.noResumeAnswers, noticeVersionsShown: input.noticeVersionsShown },
         statusToken: randomToken(24),
@@ -123,7 +130,7 @@ export async function createApplication(tx: Tx, container: Container, input: New
   }
 
   if (!duplicate) {
-    await emit(tx, { type: "application.received", companyId: input.companyId, actor, subject: { type: "application", id: application.id }, payload: { roleId: role.id, source: input.source, hasResume: !!application.resumeDocumentId, note: input.note ?? null } });
+    await emit(tx, { type: "application.received", companyId: input.companyId, actor, subject: { type: "application", id: application.id }, payload: { roleId: role.id, source: input.source, linkId: input.linkId ?? null, hasResume: !!application.resumeDocumentId, note: input.note ?? null } });
     await container.engine.start(tx, {
       workflowKey: "application_intake",
       companyId: input.companyId,

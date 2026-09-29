@@ -1,5 +1,5 @@
 import { and, desc, eq, gte, inArray } from "drizzle-orm";
-import { STAGE_LABEL, ownerGroup } from "@ros/core";
+import { STAGE_LABEL, isBoardChannel, ownerGroup } from "@ros/core";
 import { detectStuckRoles } from "@ros/agents";
 import { applications, approvalRequests, assessments, candidates, events, postings, recruiterEscalations, roles, screens, type Tx } from "@ros/db";
 
@@ -53,9 +53,10 @@ export async function composeBrief(tx: Tx, companyId: string): Promise<{ generat
     if (ineligible.length) {
       cards.push({ kind: "needs_review", title: `${ineligible.length} ${ineligible.length === 1 ? "applicant" : "applicants"} for ${role.title} did not meet an eligibility rule`, body: "Held for your decision. Nothing is sent to them unless you decline; override if the answer was a mistake.", roleId: role.id, actions: [{ label: "Review", method: "GET", path: `/roles/${role.id}/talent?stage=ineligible` }] });
     }
-    const manualPostings = await tx.select().from(postings).where(and(eq(postings.roleId, role.id), eq(postings.status, "manual_action_required")));
+    // Boards waiting to be posted by hand (docs/spec/20): ready to post means the package and the tracked link exist and nothing is on the board yet.
+    const manualPostings = (await tx.select().from(postings).where(and(eq(postings.roleId, role.id), eq(postings.status, "ready_to_post")))).filter((p) => isBoardChannel(p.channel));
     if (manualPostings.length) {
-      cards.push({ kind: "posting_action", title: `${role.title}: post it on ${manualPostings.map((p) => CHANNEL_NAME[p.channel] ?? p.channel).join(", ")} from your own account`, body: "These boards are not connected to the product. The role page has the copy, the apply link, and the address to forward applications to.", roleId: role.id, actions: [{ label: "See instructions", method: "GET", path: `/roles/${role.id}` }] });
+      cards.push({ kind: "posting_action", title: `${role.title}: post it on ${manualPostings.map((p) => CHANNEL_NAME[p.channel] ?? p.channel).join(", ")} from your own account`, body: "These boards are not connected to the product. The role's Posting tab has the posting package, each board's own apply link and the steps; record the public URL there once it is up.", roleId: role.id, actions: [{ label: "See instructions", method: "GET", path: `/roles/${role.id}` }] });
     }
     const scr = apps.length ? await tx.select().from(screens).where(and(eq(screens.companyId, companyId), inArray(screens.applicationId, apps.map((a) => a.id)))) : [];
     const invited = scr.filter((s) => s.status === "invited" || s.status === "reminded").length;

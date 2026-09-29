@@ -114,15 +114,20 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     expect(pv.status).toBe("approved");
   });
 
-  it("Step 4, Posting: the careers page is live and verified; Google for Jobs awaits verification; email-in is not connected in development; Indeed, LinkedIn and ZipRecruiter need manual posting; policy role.publish = auto", async () => {
-    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { postings: Array<{ channel: string; status: string; instructions: string | null }> };
+  it("Step 4, Posting: the careers page is live only after its URL was checked; Google for Jobs is submitted; email-in is failed in development (no inbound domain); Indeed, LinkedIn and ZipRecruiter wait at ready to post with their own tracked links; policy role.publish = auto", async () => {
+    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { postings: Array<{ channel: string; status: string; instructions: string | null; steps: string[]; error: string | null }> };
     const s = Object.fromEntries(role.postings.map((p) => [p.channel, p.status]));
-    expect(s).toMatchObject({ careers_page: "live_verified", google_jobs: "awaiting_verification", email_in: "not_connected", linkedin_basic: "manual_action_required", indeed: "manual_action_required", ziprecruiter: "manual_action_required" });
-    expect(role.postings.find((p) => p.channel === "indeed")!.instructions).toMatch(/from your own account/i);
-    expect((await eventsOf("posting.published")).length).toBe(1);
-    expect((await eventsOf("posting.awaiting_verification")).length).toBe(1);
-    expect((await eventsOf("posting.manual_action_required")).length).toBe(3);
-    expect((await eventsOf("posting.not_connected")).length).toBe(1);
+    expect(s).toMatchObject({ careers_page: "live_verified", google_jobs: "submitted_integration", email_in: "failed", linkedin_basic: "ready_to_post", indeed: "ready_to_post", ziprecruiter: "ready_to_post" });
+    expect(role.postings.find((p) => p.channel === "indeed")!.instructions).toMatch(/own account/i);
+    expect(role.postings.find((p) => p.channel === "indeed")!.steps.join(" ")).toMatch(/\/a\/[a-z0-9]{12}/);
+    expect(role.postings.find((p) => p.channel === "email_in")!.error).toMatch(/inbound mail domain/i);
+    // the careers page went ready to post, then posted (its URL is known), then live once the check answered with the title
+    expect((await eventsOf("posting.ready_to_post")).length).toBe(4);
+    expect((await eventsOf("posting.posted_manually")).length).toBe(1);
+    expect((await eventsOf("posting.live_verified")).length).toBe(1);
+    expect((await eventsOf("posting.submitted_integration")).length).toBe(1);
+    expect((await eventsOf("posting.failed")).length).toBe(1);
+    expect((await eventsOf("application_link.created")).length).toBe(3);
     const page = await app.request(`/careers/${slug}/jobs/${roleId}`);
     expect(page.status).toBe(200);
     expect(await page.text()).toContain("JobPosting");
