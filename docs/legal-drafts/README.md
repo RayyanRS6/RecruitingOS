@@ -16,3 +16,4 @@
 | 08 | Candidate privacy-request runbook (summary) | 6 | `docs/runbooks/privacy-requests.md` |
 | 09 | Subprocessor list | 19 (and exhibit to 14; input to 16) | pilot agreement exhibit; privacy notice |
 | 10 | Proposed retention schedule | 9 | `docs/readiness/09` |
+| 11 | Founding Partner Agreement additions (fees, term, support, limitations, security, data processing, subprocessors, job boards) | 14 (paid conversion; R-LEGAL-1 stop point) | drafted 30 September 2026 for counsel or the founder's separate acceptance before the first invoice; exhibits reference `docs/customer/01` to `03` |

@@ -1,0 +1,235 @@
+# Hiring manager guide
+
+**ITS AI Recruiting Department, Founding Partner Program. Release 1.**
+
+Draft of 30 September 2026, for review by ITS before it is given to a customer. This guide is for the person who runs a hire: describes the role, approves it, reads the candidates, and decides. Owners and admins can do everything in this guide too.
+
+Screen names and button labels in **bold** are the ones you will see in the product. Two words we use: **ITS** is Identified Talent Solutions. **The assistant** is the software's AI helper. It organizes and drafts. You decide.
+
+## 1. Your job in one paragraph
+
+You describe who you need in a conversation. The assistant drafts a role packet. You read it, fix it and approve it. ITS posts the job. Candidates apply. The assistant reads each application and shows you the evidence. You decide who to screen, interview and decline, and you record what happened. Nothing is sent to a candidate that says no until you say so. Whenever you want a human recruiter's opinion, press **Bring in a recruiter**.
+
+## 2. The intake conversation
+
+Go to **Today**. At the bottom is **Your recruiting chief of staff**. Type who you need in the box (it says "Who do you need to hire?") and press **Send**. One or two sentences is enough to start, for example: "I need a dental hygienist for our Pasadena office, four days a week, $48 to $56 an hour, starting in November."
+
+The assistant asks for what it is missing. It always needs six things before it can draft:
+
+- the job title
+- where the job is
+- the pay range
+- why you are hiring
+- who will interview
+- who makes the final decision
+
+It may also ask about the schedule, the start date, must-haves and what you would like but do not require. Answer in plain words. If it asks something you have not decided, say so; it will note an assumption and you can fix it in the packet.
+
+When it has enough it says "I have enough to draft the role packet". Press **Draft the role packet**. You are taken to the role page. If you leave and come back, the conversation is where you left it. **Start over** abandons the draft.
+
+If you ask for something the law does not allow as a hiring criterion, the assistant declines it and suggests a lawful alternative.
+
+## 3. Reviewing and editing the role packet
+
+The role page shows the title, location, type and pay at the top, then five tabs.
+
+**Overview.** The public job description, the pay (range, ceiling, whether it is shown to candidates, and where the numbers came from), why and when you are hiring, and where candidates will come from.
+
+**Requirements.** The must-haves with the reason for each (at most six), nice-to-haves, and **Eligibility questions (the only automatic holds)**. Candidates answer these when they apply. A "no" on a question marked **required** holds the application for your decision. Nothing is ever declined automatically. Below that, **Notices candidates see** lists the notices shown for the states involved.
+
+**How we'll evaluate.** **What we look for** (the competencies, with a weight and where each is assessed), **Screening questions** with the time they take, the **Interview plan** (one to five rounds, each with a purpose, length and format), and **How candidates are messaged**, the disclosure every message carries.
+
+**Posting.** Where the job will appear once approved (section 5).
+
+**History.** Every version of the packet, who made it and why. Nothing is overwritten.
+
+**To edit**, press **Edit** (or **Edit first** on the approval card). **The usual edits** lets you change:
+
+- **Public description**
+- **Pay minimum** and **Pay maximum**
+- **Ceiling (the most you would pay)**: offers never go above this without a new approval
+- **Must-haves, one per line (max six)**
+
+Write a line under **What changed and why** and press **Save as a new version**. The old version stays in History. **Everything (advanced)** exposes the whole packet for someone technical; you will not normally need it. If the editor refuses a save, tell ITS and we make the change with you.
+
+Things to check before you approve:
+
+- Is the pay range one you would actually pay, and is the ceiling right?
+- Are the must-haves really must-haves? Each one becomes something the assistant looks for evidence of. Six is the maximum; three or four is often better.
+- Are the eligibility questions lawful and necessary? They are the only questions that can hold an application.
+- Do the interview rounds match how you actually interview, and are the right people named?
+- Read the public description as a candidate would.
+
+## 4. Approval
+
+The card **Approve this role packet** lists any assumptions the assistant made. Press **Approve and post**. The role becomes **Open**, the careers page and job page go live, and the Posting tab fills in. Owners, admins and hiring managers can approve. Where your team has two people, the person who did not run the intake should be the one who approves.
+
+Editing after approval creates a new version. Candidates who already applied are assessed against the version they applied to.
+
+## 5. The Posting tab and the manual posting steps
+
+One card per place the job appears, each with a status chip.
+
+- **Your careers page**: live as soon as the role is open. The address is on the card.
+- **Google for Jobs**: the job page carries the data Google reads. It shows **Submitted, awaiting verification** until Google has indexed it.
+- **Applications by email**: an address for forwarded applications, used only once ITS has switched it on for your workspace.
+- **LinkedIn basic listing**, **Indeed**, **ZipRecruiter**: these are posted by ITS by hand under your company's accounts. Here is what happens:
+  1. The card shows **Manual action required** with the step.
+  2. ITS posts the job on the board using the copy from the packet and that board's own application link. Each board has a different link, so the product knows where each applicant came from.
+  3. ITS records the public address of the posting on the board.
+  4. The product checks that the address is up and shows your job.
+  5. The card changes to **Live and verified**. Nothing is called live before this.
+
+You do not have to do anything on the boards yourself. If a board asks your account holder to confirm something, ITS tells you. Paid promotion on a board is bought by you, from the board.
+
+**Pause** at the top of the role page stops new applications without declining anyone: the job page says the position is not accepting applications and the role disappears from your careers page. **Resume** puts it back. If you have enough applicants and want the job to stay listed but closed, use the accepting-applications control on the role; the page then says applications are closed, and nobody is declined. Either way, tell your ITS contact so the board postings are paused or removed by hand.
+
+## 6. The Talent view
+
+**Talent** shows the candidates for one role. If you have more than one role, pick it at the top right. The line under the title says what the page is for: who applied, what the evidence says, and what needs you. Nobody is declined automatically on judgment.
+
+**Groups.** Five tabs across the top: **All**, **Waiting on you**, **In process**, **Not moving forward**, **Hired**. Start with **Waiting on you**.
+
+**The card.** Each candidate shows their name, where they applied from, their stage in plain words ("Just applied", "Ready for your review", "Invited to a screen", "Interviewing", "Finalist", "Not moving forward" and so on), their most recent positions, years of experience, licenses, where they are based, and any flags on the resume. If an eligibility answer did not match, it says **Did not meet** and the question. If the assistant has written an assessment, the card shows the overall reading, the confidence and a one-line summary.
+
+**The overall readings** are **Strong match**, **Potential match**, **Weak match** and **Insufficient evidence**. They are not scores. They summarize what the evidence shows against your must-haves and what you look for.
+
+Press **Review** (or the name) to open the candidate.
+
+**Inside the candidate page**, from top to bottom:
+
+- A card for anything the assistant proposed and is waiting on you for, such as **The assistant suggests a screen** with **Yes, invite to a screen**.
+- **Interviews**: each round, its status and the decision.
+- **How did the interview go?** when an interview is over and no decision is recorded (section 12).
+- **What would you like to do?** with the buttons **Invite to a screen**, **Interview**, **Hold**, **Decline** and **Bring in a recruiter**. Buttons that do not apply at this stage are greyed out; hover to see why.
+- **Record what happened** (section 14).
+- **Held on an eligibility answer** or **Declined on an eligibility answer**, when that applies (section 7).
+- **Contact and consent**: email, phone, location, text-message consent (off in release 1) and when the AI notice was shown.
+- **Screening conversation**: the status and, when there is one, **Read the conversation**.
+- **Resume assessment** and, after a screen, **Screen scorecard** (section 9).
+- **What the resume says**: the positions with dates and a quoted line from the resume for each, licenses, skills, and any flags. Below, **Open (file name)** opens the actual resume; the opening is recorded. A file that is still being checked says so; a refused file says why.
+- **Eligibility answers**: which required answers were met.
+- **Messages**: everything sent to the candidate and whether it arrived, and anything they wrote back through the product.
+- **What happened**: the full timeline with who did what.
+
+**What the assistant recommends, and what it never does.** The assistant recommends: it may say a candidate is worth a screen, worth an interview, worth a hold, or that it has a concern. It never declines anyone. It never ranks candidates against each other. It never sends a decline message. If it cannot produce an assessment, you see the application without one. If an assessment looks wrong, use **Something wrong?** on it (section 9).
+
+## 7. Held on an eligibility answer
+
+When a candidate answers no to a required eligibility question, the card reads **Held on an eligibility answer** with the question and the answer. Nothing is sent to the candidate. You are reminded daily, and an ITS recruiter is brought in after three days if nobody decides.
+
+- If the answer was a mistake or you want to keep them anyway, type why under **Why keep them in?** and press **Keep them in**. Your reason is recorded.
+- If you agree they do not meet the requirement, press **Decline now**. The candidate gets a respectful message.
+
+A candidate declined this way shows **Declined on an eligibility answer** with a **Review anyway** button in case you change your mind.
+
+## 8. Inviting to a screen
+
+Under your default settings, the assistant invites candidates whose applications look like a fit and tells you under **What the assistant did**. You can also invite anyone yourself: open the candidate and press **Invite to a screen**. If your owner set that action to "Ask me first", you see **The assistant suggests a screen** and press **Yes, invite to a screen**.
+
+What the candidate gets: an email with a link to a web page headed "A few questions, (first name)". The assistant asks your screening questions one at a time. They see how many are answered, can stop and come back, and can press **Talk to a person instead** at any time. The page says an AI assistant is asking the questions and that people make the decisions.
+
+Timing: if they have not started after two days they get one reminder. If they have not started three days after that, the invitation lapses, the candidate shows "No response", and you are told. You can then decline with a reason, keep them, or ask a recruiter to call.
+
+If the candidate asks for a person, the conversation goes to an ITS recruiter with a four-business-hour response time, the candidate is told a true expectation, and you see it on Today.
+
+## 9. Reading a scorecard
+
+When the screen is complete, the candidate's page gets a **Screen scorecard** and the candidate moves to **Waiting on you**. It has:
+
+- three chips: the overall reading, the recommendation (**Worth a screen**, **Hold**, **Needs a human look**, **Strong: interview**, **Interview** or **Concern raised**), and the confidence
+- a summary
+- **Pay expectation** and **Availability** if the candidate stated them, with whether they fit your range and schedule
+- **Must-haves**: each one with yes, partially, no or unknown, and the quoted evidence
+- **Answers**: what each screening answer showed
+- **Competencies**: what was evidenced, partially evidenced, not evidenced or contradicted
+- **Strengths** and **Concerns**, each with its source and a quote
+- **Unknown**: what could not be established and why it matters
+- flags, which are never used to decline, and the assistant's reasoning
+
+The **Resume assessment**, written when the application arrived, has the same shape without the answers.
+
+Read the evidence, not just the chips. Unknowns are questions to ask at interview. If something is wrong, use **Something wrong?** on the card and pick the reason: **Cited the wrong evidence**, **Made something up**, **Broke a rule we set**, **Bias concern**, **Poorly worded**, **Took the wrong next step**, **Missed a good candidate**, **Overrated this candidate** or **Missed context we gave**. A person at ITS reviews every flag. Flagging changes nothing about the candidate.
+
+## 10. Approving an interview and picking interviewers
+
+Nothing schedules until a person approves it. Open the candidate and press **Interview**. If the assistant proposed it, you see **The assistant suggests an interview** and press **Yes, interview** first.
+
+Under **Approve an interview**:
+
+1. **Round**: the next round from the interview plan is selected. Change it if needed. A round must be in the approved plan.
+2. **Interviewers**: tick the people. Each shows **availability known** or **no calendar or hours yet**. Someone with no availability cannot be offered times; they will be asked to set it in Setup, and scheduling waits for them.
+3. **Meeting link**: **Create it with the calendar event**, or **I'll paste a link** and paste your own video or phone details.
+4. Press **Approve and offer times**.
+
+Times are worked out from each interviewer's connected calendar or declared hours, within a scheduling window, on business days, respecting the buffer and daily maximum. If the interviewers have no common free time, you are told and can widen the window, change interviewers or free some time.
+
+## 11. The candidate picking a time
+
+The candidate gets an email with a link to "Pick a time for your (round)". They see the times in their own time zone (they can change it), pick one, can add a note under "Anything that would make the interview easier for you?", and press **Confirm this time**. If none work they press **Ask for other times** with a note; you are told and new times go out when the window or availability changes.
+
+When they confirm, the product books the time on every connected calendar, sends the candidate a confirmation with a calendar file, tells the interviewers by email and on Today, and moves the candidate to "Interviewing". If a chosen time was taken in the meantime, new times go out on their own; after three collisions an ITS recruiter arranges it directly.
+
+The candidate can **Ask for a different time** twice on their own and can **Cancel the interview**. Either way you are told and nothing happens automatically after a cancellation.
+
+If the candidate does not pick a time: a reminder after two days, and after four days the times expire and you are told to offer new times, decide, or bring in a recruiter.
+
+Reminders go to the candidate and the interviewers one day before and two hours before.
+
+**On the Interviews page** you see every interview **In motion** (Preparing times, Waiting on the candidate, Scheduled) and **Past**, with the interviewer load. Open one to see details, the times offered, an accommodation request if any, and to change it:
+
+- **Book this for them**, next to an offered time, if you agreed a time by phone. It is recorded as your action.
+- **Offer new times** to reschedule from your side.
+- **Cancel interview** with a reason the candidate sees, then **Confirm cancel**. The candidate and interviewers are told.
+
+Interviewers receive the booking, the reminders and the link. They do not see the candidate's assessment or resume in the product; if they should, share what you think is appropriate before the interview.
+
+## 12. Recording the decision after an interview
+
+An hour after the interview ends, the interviewers are asked **Did it take place?** on the interview page: **Yes**, **Candidate did not show**, or **We did not show**. Answer it; it keeps the record straight.
+
+At the same time you see **How did the interview go?** on the candidate's page. The decision is yours and is recorded with your name; nothing here is scored by software.
+
+- **Next round**: the candidate moves on. Press **Interview** to pick the interviewers for the next round; times go out from there.
+- **Finalist**: write what stood out under **What stood out (kept internally)** and press **Confirm finalist**.
+- **Not moving forward**: pick a reason, add a note if you like, and press **Confirm decline**. The candidate gets a respectful message after you confirm, never before.
+
+Release 1 has no interviewer scorecards. Record what matters in the note.
+
+## 13. Declining with a reason
+
+At any stage, open the candidate and press **Decline**. A caution reminds you that declining is your decision and is recorded with your reason. Pick a **Reason**:
+
+- **Experience isn't the right fit**
+- **Missing skills we need**
+- **Pay expectations don't match**
+- **Location or schedule**
+- **Position filled**
+- **Other**
+
+Add a **Note (kept internally)** if you like and press **Confirm decline**. The candidate receives a courteous message. Declined candidates appear under **Not moving forward**, and the reason is on their timeline. A candidate is never declined by software, and no decline message is ever sent before you confirm.
+
+**Hold** keeps a candidate where they are while you think. It sends nothing.
+
+## 14. Recording the outcome
+
+The product never makes or sends an offer, and it asks for no pay, tax, identity or banking details. When you have made an offer your own way, record what happened. On the candidate's page under **Record what happened**, press **Record an outcome** and choose:
+
+- **Hired (offer accepted outside the platform)**: add the hire date, and the date the offer was accepted if you know it
+- **Declined an offer made outside the platform**
+- **The candidate withdrew**
+- **We declined the candidate (they receive a respectful message)**: add a reason
+- **No hire for this candidate**
+
+Press **Continue**, then **Yes, record it**. The record carries your name and can only be corrected by an ITS administrator, with the original kept. After a hire, the product asks **Close the role too?**. Closing the role is a separate decision, made from the role page, and candidates who were still active stay in your talent pool.
+
+## 15. When to bring in a recruiter
+
+Press **Bring in a recruiter** whenever you want a human opinion. Good moments:
+
+- You have several plausible candidates and want a recruiter to review them before you decide.
+- You are unsure whether to interview someone.
+- You do not have time to run the role and want ITS to take it over.
+- A candidate cannot be reached, or something about a candidate needs a person.
+
+Choose **Review these candidates**, **Help me decide** or **Take this role over**, add anything specific, and press **Send to a recruiter**. You see the expected response time at once. The recruiter gets the role, the candidates, every message and every decision so far. Their answer appears under **What the assistant did** on Today and on the candidate's timeline. Their access is limited to that request and every page they open is recorded; your owner can end it at any time.

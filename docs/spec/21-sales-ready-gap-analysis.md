@@ -109,6 +109,7 @@ The rows below are the specific shortfalls on top of that.
 | I | Security overview | A plain-language annex from `docs/readiness/10`, `docs/spec/09`, `docs/readiness/08`; becomes Exhibit B. |
 | I | Support expectations | Hours, channels, response times, what support does not cover; the enforcing code exists. |
 | I | Onboarding checklist, customer administrator guide, hiring-manager guide | Not written. |
+| I | Customer documents | **Drafted 30 September 2026, awaiting founder review**: `docs/customer/01` (feature and limitation sheet, Exhibit A), `02` (security overview, Exhibit B), `03` (support expectations), `04` (onboarding checklist), `05` (administrator guide), `06` (hiring-manager guide), and `docs/legal-drafts/11` (paid-agreement additions for counsel). Each claim was checked against the screens and code; the sheet corrects section 12 where the product differs. |
 
 ## 4. What is manual for release 1
 

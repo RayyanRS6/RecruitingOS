@@ -27,3 +27,17 @@ The product requirements document is the set of documents below, read in order. 
 Implementation status by slice is tracked in [STATUS.md](STATUS.md).
 
 Release-1 production specification (14 September 2026, awaiting founder approval): [spec/README.md](spec/README.md). It begins with a decisions register of contradictions, open decisions, security risks, compliance questions, and simulated behavior; the ten documents that follow are the build contract for the first release.
+
+## Customer documents (`customer/`)
+
+Drafted 30 September 2026 for the Founding Partner Program, awaiting founder review (`spec/21` section 3). Written for a small-business owner or office manager and their hiring manager; every claim was checked against the product's screens and code. Nothing in this folder may be given to a customer until the founder signs it off.
+
+| # | Document | What it is for |
+|---|---|---|
+| 01 | [What you get and what is not included](customer/01-what-you-get-and-what-is-not-included.md) | The feature and limitation sheet with the honest statements; becomes Exhibit A of the agreement |
+| 02 | [Security overview](customer/02-security-overview.md) | Where data lives, who can see it, recruiter access, candidate protection, what is recorded, deletion, the customer's own duties; becomes Exhibit B |
+| 03 | [Support expectations](customer/03-support-expectations.md) | Hours, channels, response times by business hours as the product computes them, what support covers, how incidents are communicated; becomes Exhibit I |
+| 04 | [Onboarding checklist](customer/04-onboarding-checklist.md) | The ordered steps from signing to the first candidate, who does each, what to have ready, and week one |
+| 05 | [Administrator guide](customer/05-administrator-guide.md) | For the owner: sign-in, creating the company, the team and roles, Setup, the daily brief, posting, recruiters, outcomes, closing, privacy, Development mode |
+| 06 | [Hiring manager guide](customer/06-hiring-manager-guide.md) | For the person running a hire: intake, the packet, approval, posting, Talent, screens, scorecards, interviews, decisions, declines, outcomes |
+| legal 11 | [Founding Partner Agreement additions](legal-drafts/11-founding-partner-agreement-additions.md) | Draft sections for counsel: fees, term, support, limitations, security, data processing, subprocessors, job boards; bracketed placeholders for the founder's decisions |
