@@ -22,6 +22,8 @@ Rules:
 - The first message discloses that this is an AI-assisted conversation for the hiring team, names the role and company, says how long it takes, and says the candidate can reply HUMAN at any time to reach a person. Then ask the first question.
 - One question per message. Never bundle questions. Keep messages short (SMS: under 300 characters; web: under 600).
 - Ask the questions in the packet's order, skipping any already answered in the conversation. At most two follow-ups per question, and only when the answer is missing the substance the model answer describes; otherwise record the answer and move on.
+- The packet lists the must-haves this screen should confirm. Make sure each is covered by the time you finish: through the question that maps to it, or one short plain follow-up when no question does. Never add a question about anything else.
+- Questions whose key starts with "unknown_" come from the resume review: things the application did not show, which the hiring team asked to hear about first. They are listed first; ask them first, one at a time, and record the answers like any other question. When the list has them, the first message also says the conversation starts with a few quick questions about the candidate's background before the usual screening questions.
 - Record the candidate's latest message as the answer to the current question in answerRecorded (questionKey, answer verbatim, complete true/false). Do not paraphrase.
 - Compensation is asked as "what range are you looking for". Never state what the company will pay beyond the packet's posted range.
 - If the candidate asks about pay, schedule, or process, answer ONLY from "What candidates may be told" and the posted range and schedule; if the answer is not there, say a person will follow up, and continue.
@@ -40,6 +42,8 @@ function packetBlock(p: RolePacket, company: string): string {
     `Posted pay: ${comp.discloseRange ? `${comp.basis} ${comp.min} to ${comp.max} ${comp.currency}` : "not disclosed; say a person can discuss pay"}.`,
     `Screening questions in order (about ${p.screening.maxMinutes} minutes): ${p.screening.questions.map((q, i) => `${i + 1}. [${q.key}] (${q.kind}${q.competencyKey ? `, competency ${q.competencyKey}` : ""}) ${q.question}${q.modelAnswer ? ` Model answer: ${q.modelAnswer}` : ""}${q.followUpIf ? ` Follow up if: ${q.followUpIf}` : ""}`).join(" ")}`,
     `Competencies: ${p.competencies.map((c) => `[${c.key}] ${c.name}: ${c.definition}`).join(" | ")}`,
+    // Must-haves the packet marks as evidenced in the screen: the conversation confirms each one in plain words, inside the questions above or as a short follow-up.
+    `Must-haves this screen should confirm (evidencedBy includes screen): ${p.requirements.mustHaves.filter((m) => m.evidencedBy.includes("screen")).map((m) => `[${m.key}] ${m.text}`).join(" | ") || "none; the questions above are enough"}.`,
     `What candidates may be told: ${p.communication.candidateMayBeTold.join("; ") || "the posted range, the schedule, and the process"}.`,
     `Process after the screen: ${p.interviews.plan.map((r) => `${r.title} (${r.durationMinutes} min)`).join(", ")}.`,
     `Tone: ${p.communication.tone}. Human alternative wording: ${p.communication.humanAlternativeText}`,
@@ -55,7 +59,8 @@ export const screenTurnPrompt: PromptDef<ScreenContext, ScreenTurn> = {
   system: (ctx) => [
     { text: SCREEN_SYSTEM, cache: true },
     { text: packetBlock(ctx.packet, ctx.company.name), cache: true },
-    { text: `Channel: ${ctx.channel}. Candidate first name: ${ctx.candidate.firstName}. Progress (JSON): ${JSON.stringify(ctx.progress)}. Focus follow-ups on: ${ctx.focusUnknowns.join("; ") || "nothing specific"}.` },
+    // The focus questions themselves are already in the packet block (as the leading questions); the progress here is where the conversation stands.
+    { text: `Channel: ${ctx.channel}. Candidate first name: ${ctx.candidate.firstName}. Progress (JSON): ${JSON.stringify({ ...ctx.progress, focusQuestions: undefined })}. Focus follow-ups on: ${ctx.focusUnknowns.join("; ") || "nothing specific"}.` },
   ],
   messages: (ctx) => [
     {

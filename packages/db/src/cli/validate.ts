@@ -106,7 +106,7 @@ function rows<T>(result: unknown): T[] {
 main().then(() => {
   for (const n of notes) console.log(`migration validation: ${n}`);
   if (problems.length) {
-    console.error(`migration validation: ${problems.length} problem(s)\n` + problems.join("\n"));
+    console.error(`migration validation: ${problems.length} problem(s)\n${problems.join("\n")}`);
     process.exit(1);
   }
   console.log("migration validation: ok");

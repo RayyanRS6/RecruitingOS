@@ -29,7 +29,7 @@ describe("inbound email", () => {
 });
 
 describe("fake email adapter", () => {
-  it("is idempotent and can simulate outages", async () => {
+  it("sends every message it is asked to, like the real provider, and can simulate outages", async () => {
     const e = new FakeEmailAdapter();
     e.failNext(1);
     const first = await e.send({ to: "a@b.c", from: "x@y.z", subject: "s", text: "t", idempotencyKey: "k1" });
@@ -37,8 +37,9 @@ describe("fake email adapter", () => {
     const second = await e.send({ to: "a@b.c", from: "x@y.z", subject: "s", text: "t", idempotencyKey: "k1" });
     const third = await e.send({ to: "a@b.c", from: "x@y.z", subject: "s", text: "t", idempotencyKey: "k1" });
     expect(second.status).toBe("sent");
-    expect(third).toEqual(second);
-    expect(e.sent).toHaveLength(1);
+    expect(third.status).toBe("sent");
+    // the adapter does not hide a repeated send behind the key; the outbox is what prevents duplicates
+    expect(e.sent).toHaveLength(2);
   });
 });
 

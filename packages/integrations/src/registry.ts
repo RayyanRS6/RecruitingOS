@@ -2,18 +2,20 @@ import { FakeEmailAdapter, FakeSmsAdapter } from "./email/fake";
 import { PostmarkEmailAdapter } from "./email/postmark";
 import { CareersPageAdapter, EmailInAdapter, GoogleJobsAdapter } from "./jobboards/native";
 import { IndeedAdapter, LinkedInBasicJobsAdapter, ZipRecruiterAdapter } from "./jobboards/external";
+import { FakeUrlVerifier, RealUrlVerifier, type UrlVerifier } from "./jobboards/verify";
 import { BlsOewsAdapter } from "./comp/bls";
 import { TwilioSmsAdapter } from "./sms/twilio";
 import { LocalStorageAdapter, MemoryStorageAdapter } from "./storage/local";
 import { GrantSigner } from "./storage/grants";
 import { SupabaseStorageAdapter } from "./storage/supabase";
 import { FakeMalwareScanner } from "./scanning/fake";
+import { CLAMAV_DEFAULT_PORT, CLAMAV_DEFAULT_TIMEOUT_MS, ClamAvScanner } from "./scanning/clamav";
 import type { MalwareScanner } from "./scanning/types";
 import { MemorySecretStore } from "./secrets/memory";
 import { SupabaseVaultSecretStore } from "./secrets/vault";
 import type { SecretStore, SqlExecutor } from "./secrets/types";
 import { FakeAnalyticsAdapter, PostHogServerAdapter } from "./analytics/adapters";
-import { FakeCredentialRevoker, type CredentialRevoker } from "./secrets/revoke";
+import { CalendarCredentialRevoker, FakeCredentialRevoker, type CredentialRevoker } from "./secrets/revoke";
 import { FakeIdentityProvider } from "./identity/fake";
 import { SupabaseIdentityProvider } from "./identity/supabase";
 import type { IdentityProvider } from "./identity/types";
@@ -27,12 +29,14 @@ export type Integrations = {
   email: EmailAdapter;
   sms: SmsAdapter;
   jobBoards: Record<string, JobBoardAdapter>;
+  /** Fetches a posting's public URL and checks it names the job (docs/spec/20 item 12): real in production, scripted elsewhere. */
+  verifier: UrlVerifier;
   comp: CompAdapter;
   storage: StorageAdapter;
   /** Malware scanning of quarantined uploads; a fake until a real engine is authorized (real-data blocker). */
   scanner: MalwareScanner;
   secrets: SecretStore;
-  /** Provider-side revocation by provider key (google, microsoft, ...). Fakes in development; real ones arrive with each adapter. */
+  /** Provider-side revocation by provider key (google, ...): the real provider's revocation endpoint when that provider is configured, a fake otherwise. */
   revokers: Record<string, CredentialRevoker>;
   /** Managed sign-in (D19): Supabase Auth in production, an in-process fake issuer elsewhere. */
   identity: IdentityProvider;
@@ -41,13 +45,16 @@ export type Integrations = {
   analytics: AnalyticsAdapter;
   /** Salt for the keyed analytics identifiers; never the same across environments. */
   analyticsSalt: string;
-  env: { fromDomain: string; fromAddress: string; replyTo: string; intakeDomain: string; appBaseUrl: string; productName: string };
+  /** `emailInConfigured`: the inbound mail domain is real and Postmark delivers to it, so intake addresses and per-application reply addresses work (docs/runbooks/candidate-replies.md). */
+  env: { fromDomain: string; fromAddress: string; replyTo: string; intakeDomain: string; emailInConfigured: boolean; appBaseUrl: string; productName: string };
+  /** The clock the outbox stamps its jobs with. The app points it at the workflow engine's clock, so a message queued now is due now on the clock that runs the queue (tests move that clock). */
+  clock: () => Date;
   statuses(): Array<{ kind: string; provider: string; status: AdapterStatus }>;
 };
 
 /** Every adapter reports its real state (founder decision F4): nothing is labeled live without a verified connection. */
 export function createIntegrations(env: Record<string, string | undefined> = process.env, opts: { memoryStorage?: boolean; secretsExecutor?: SqlExecutor } = {}): Integrations {
-  const appBaseUrl = env.APP_BASE_URL ?? "http://localhost:3001";
+  const appBaseUrl = env.APP_BASE_URL ?? "http://localhost:3000";
   const fromDomain = env.EMAIL_FROM_DOMAIN ?? "mail.localhost";
   const intakeDomain = env.EMAIL_INTAKE_DOMAIN ?? "intake.localhost";
   const email: EmailAdapter = env.EMAIL_PROVIDER === "postmark" ? new PostmarkEmailAdapter(env.POSTMARK_SERVER_TOKEN) : new FakeEmailAdapter();
@@ -57,27 +64,36 @@ export function createIntegrations(env: Record<string, string | undefined> = pro
     new CareersPageAdapter(),
     new GoogleJobsAdapter(),
     new EmailInAdapter(emailInConfigured),
-    new LinkedInBasicJobsAdapter(`${appBaseUrl}/feeds/linkedin.xml`),
-    new IndeedAdapter({ clientId: env.INDEED_CLIENT_ID, clientSecret: env.INDEED_CLIENT_SECRET }),
-    new ZipRecruiterAdapter(env.ZIPRECRUITER_API_KEY),
+    // Manual boards until a partner integration is verified (F4): no credential is read for them yet.
+    new LinkedInBasicJobsAdapter(),
+    new IndeedAdapter(),
+    new ZipRecruiterAdapter(),
   ];
   const jobBoards = Object.fromEntries(boards.map((b) => [b.channel, b]));
+  // The link check really fetches in production (or when asked with LINK_VERIFIER=real); development and tests script it.
+  const verifier: UrlVerifier = env.NODE_ENV === "production" || env.LINK_VERIFIER === "real" ? new RealUrlVerifier() : new FakeUrlVerifier();
   const comp = new BlsOewsAdapter(env.BLS_API_KEY, fetch, env.COMP_BLS_ENABLED !== "false");
   const storage = createStorage(env, opts, appBaseUrl);
   const scanner: MalwareScanner = createScanner(env);
   const secrets: SecretStore = env.SECRET_STORE === "vault" && opts.secretsExecutor ? new SupabaseVaultSecretStore(opts.secretsExecutor) : new MemorySecretStore();
-  const revokers: Record<string, CredentialRevoker> = Object.fromEntries(["google", "microsoft", "fake"].map((p) => [p, new FakeCredentialRevoker(p)]));
   const identity: IdentityProvider = env.AUTH_PROVIDER === "supabase"
     ? new SupabaseIdentityProvider({ url: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY, jwtSecret: env.SUPABASE_JWT_SECRET, providers: (env.AUTH_SIGNIN_PROVIDERS ?? "azure,google").split(",").map((s) => s.trim()).filter(Boolean) })
     : new FakeIdentityProvider({ apiBaseUrl: appBaseUrl });
-  const calendars: Record<string, CalendarProvider> = env.CALENDAR_PROVIDER === "google"
+  const realCalendars = env.CALENDAR_PROVIDER === "google";
+  const calendars: Record<string, CalendarProvider> = realCalendars
     ? { google: new GoogleCalendarProvider({ clientId: env.GOOGLE_OAUTH_CLIENT_ID, clientSecret: env.GOOGLE_OAUTH_CLIENT_SECRET }) }
     : { google: new FakeGoogleCalendarProvider({ apiBaseUrl: appBaseUrl }) };
+  // With a real calendar provider, disconnecting revokes the grant at the provider (Google's revocation endpoint), so
+  // "revoked" is only ever recorded when the provider confirmed it. The fake revoker exists for development and tests.
+  const revokers: Record<string, CredentialRevoker> = realCalendars
+    ? { google: new CalendarCredentialRevoker(calendars.google) }
+    : Object.fromEntries(["google", "fake"].map((p) => [p, new FakeCredentialRevoker(p)]));
   const analytics: AnalyticsAdapter = env.ANALYTICS_PROVIDER === "posthog" ? new PostHogServerAdapter(env.POSTHOG_PROJECT_API_KEY, env.POSTHOG_HOST) : new FakeAnalyticsAdapter();
   return {
     email,
     sms,
     jobBoards,
+    verifier,
     comp,
     storage,
     scanner,
@@ -87,11 +103,13 @@ export function createIntegrations(env: Record<string, string | undefined> = pro
     calendars,
     analytics,
     analyticsSalt: env.ANALYTICS_SALT ?? "dev-only-analytics-salt",
-    env: { fromDomain, fromAddress: env.EMAIL_FROM_ADDRESS ?? `updates@${fromDomain}`, replyTo: env.EMAIL_REPLY_TO ?? env.ITS_QUEUE_EMAIL ?? `updates@${fromDomain}`, intakeDomain, appBaseUrl, productName: env.PRODUCT_NAME ?? "Recruiting OS" },
+    env: { fromDomain, fromAddress: env.EMAIL_FROM_ADDRESS ?? `updates@${fromDomain}`, replyTo: env.EMAIL_REPLY_TO ?? env.ITS_QUEUE_EMAIL ?? `updates@${fromDomain}`, intakeDomain, emailInConfigured, appBaseUrl, productName: env.PRODUCT_NAME ?? "Recruiting OS" },
+    clock: () => new Date(),
     statuses: () => [
       { kind: "email", provider: email.id, status: email.status },
       { kind: "sms", provider: sms.id, status: sms.status },
       ...boards.map((b) => ({ kind: "jobboard", provider: b.channel, status: b.status })),
+      { kind: "link_verifier", provider: verifier.id, status: verifier.status },
       { kind: "comp", provider: comp.id, status: comp.status },
       { kind: "storage", provider: storage.id, status: storage.status },
       { kind: "scanner", provider: scanner.id, status: scanner.status },
@@ -121,8 +139,21 @@ function createStorage(env: Record<string, string | undefined>, opts: { memorySt
   throw new Error(`STORAGE_PROVIDER=${provider} is not a known storage provider (memory, local, supabase)`);
 }
 
+/**
+ * Malware scanning by SCAN_PROVIDER: `fake` (development, tests, and staging until the engine exists) or `clamav`
+ * (a clamd service reached over private networking; docs/runbooks/resume-storage.md). The fake is never reported as
+ * anything but `fake`, and production raises an alert while it is the one in use (the real-data gate).
+ */
 function createScanner(env: Record<string, string | undefined>): MalwareScanner {
   const provider = env.SCAN_PROVIDER ?? "fake";
   if (provider === "fake") return new FakeMalwareScanner();
-  throw new Error(`SCAN_PROVIDER=${provider} is not a known scanner (fake); a real engine is a real-data gate, not yet authorized`);
+  if (provider === "clamav") {
+    if (!env.CLAMAV_HOST) throw new Error("SCAN_PROVIDER=clamav needs CLAMAV_HOST (the clamd service's private hostname)");
+    const port = Number(env.CLAMAV_PORT ?? String(CLAMAV_DEFAULT_PORT));
+    const timeoutMs = Number(env.CLAMAV_TIMEOUT_MS ?? String(CLAMAV_DEFAULT_TIMEOUT_MS));
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error("CLAMAV_PORT must be a port number (the official image listens on 3310)");
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("CLAMAV_TIMEOUT_MS must be a positive number of milliseconds");
+    return new ClamAvScanner({ host: env.CLAMAV_HOST, port, timeoutMs });
+  }
+  throw new Error(`SCAN_PROVIDER=${provider} is not a known scanner (fake, clamav)`);
 }

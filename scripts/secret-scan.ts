@@ -21,8 +21,12 @@ const EXTRA: Array<{ name: string; re: RegExp }> = [
   { name: "GitHub token", re: /\bgh[pousr]_[A-Za-z0-9]{30,}\b/ },
   { name: "Supabase service-role JWT reference", re: /SUPABASE_SERVICE_ROLE_KEY\s*=\s*["']?ey/ },
 ];
-/** `[YOUR-PASSWORD]` is the Supabase dashboard's own placeholder: a connection string still holding it carries no secret. */
-const ALLOW = [/dev-only-[a-z-]+/, /fake-issuer-development-secret-not-for-prod/, /whsec-test/, /example\.(com|test|invalid)/, /:(?:pass|password|CHANGE_ME|<[^>]+>|\[YOUR-PASSWORD\])@/];
+/**
+ * `[YOUR-PASSWORD]` is the Supabase dashboard's own placeholder: a connection string still holding it carries no secret.
+ * `DELIBERATE-TEST-VALUE` is the fake key the observability test error carries on purpose (apps/api/src/routes/observability.ts)
+ * so staging can prove the error reporter scrubs key-shaped values.
+ */
+const ALLOW = [/dev-only-[a-z-]+/, /fake-issuer-development-secret-not-for-prod/, /whsec-test/, /DELIBERATE-TEST-VALUE/, /example\.(com|test|invalid)/, /:(?:pass|password|CHANGE_ME|<[^>]+>|\[YOUR-PASSWORD\])@/];
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -42,14 +46,14 @@ for (const file of walk(ROOT)) {
   lines.forEach((line, i) => {
     const matches: Array<{ name: string; value: string }> = [];
     for (const e of EXTRA) { const m = line.match(e.re); if (m) matches.push({ name: e.name, value: m[0] }); }
-    if (!isTest(file)) for (const re of VALUE_PATTERNS) { re.lastIndex = 0; for (const m of line.matchAll(new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g"))) matches.push({ name: "credential-shaped value", value: m[0] }); }
+    if (!isTest(file)) for (const re of VALUE_PATTERNS) { re.lastIndex = 0; for (const m of line.matchAll(new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`))) matches.push({ name: "credential-shaped value", value: m[0] }); }
     // the allowance applies to the matched value itself, never to the whole line
     const real = matches.filter((m) => !ALLOW.some((re) => re.test(m.value)) && !ALLOW.some((re) => re.test(line.slice(Math.max(0, line.indexOf(m.value) - 40), line.indexOf(m.value) + m.value.length + 40))));
     for (const r of real) findings.push(`${relative(ROOT, file)}:${i + 1}: ${r.name}`);
   });
 }
 if (findings.length) {
-  console.error(`secret scan: ${findings.length} finding(s)\n` + findings.join("\n"));
+  console.error(`secret scan: ${findings.length} finding(s)\n${findings.join("\n")}`);
   process.exit(1);
 }
 console.log("secret scan: clean");

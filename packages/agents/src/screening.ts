@@ -1,15 +1,19 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Actor, RolePacket, ScreenChannel, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
-import { runPrompt, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type RunOutcome, type ScreenContext } from "@ros/ai";
+import { runPromptDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type RunOutcome, type ScreenContext } from "@ros/ai";
 import { createEscalation, emit, humanResponseExpectation, loadBusinessCalendar, notify, transition } from "@ros/core";
-import { applications, assessments, candidates, companies, randomToken, rolePackets, roles, screens, type Queryable } from "@ros/db";
+import { applications, assessments, candidates, companies, randomToken, rolePackets, roles, screens, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { deliverSms, recordInbound } from "./coordinator";
+import { answersOf, focusedPacket, isFocusKey, withFocusAnswer, type FocusQuestion } from "./screen-focus";
 
 /**
- * The Screening agent (docs/05). Conversation turns run synchronously when the candidate writes (web chat or SMS);
- * the durable `screen` workflow owns the invite, reminders, expiry, the scorecard, and the recommendation.
+ * The Screening agent (docs/05). Conversation turns run when the candidate writes (web chat or SMS); the durable
+ * `screen` workflow owns the invite, reminders, expiry, the scorecard, and the recommendation.
  * Progress lives in code (`screens.progress`), so a restart, a channel switch, or a model failure never loses the thread.
+ *
+ * Every model call happens with no database transaction open: a turn is a short transaction that records what the
+ * candidate said, the model call, and a second short transaction that records the reply.
  */
 
 export type ScreenDeps = {
@@ -24,21 +28,23 @@ export type ScreenRow = typeof screens.$inferSelect;
 
 const ACTIVE_STATUSES = new Set(["invited", "reminded", "in_progress"]);
 const MAX_FOLLOW_UPS = 2;
+export const EMPTY_SCREEN_PROGRESS: ScreenProgress = { askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0 };
 
-export async function createScreen(q: Queryable, input: { companyId: string; applicationId: string; channel: ScreenChannel; workflowRunId?: string | null; expiresAt: string; now: Date }): Promise<ScreenRow> {
+/** `focusQuestions` ("Ask about this in a screen"): asked before the packet's own questions; fixed on the row at creation. */
+export async function createScreen(q: Queryable, input: { companyId: string; applicationId: string; channel: ScreenChannel; workflowRunId?: string | null; expiresAt: string; now: Date; focusQuestions?: FocusQuestion[] | null }): Promise<ScreenRow> {
   const existing = await q.select().from(screens).where(and(eq(screens.applicationId, input.applicationId), inArray(screens.status, ["invited", "reminded", "in_progress"]))).limit(1);
   if (existing[0]) return existing[0];
+  const progress: ScreenProgress = input.focusQuestions?.length ? { ...EMPTY_SCREEN_PROGRESS, focusQuestions: input.focusQuestions } : EMPTY_SCREEN_PROGRESS;
   const [row] = await q
     .insert(screens)
-    .values({ companyId: input.companyId, applicationId: input.applicationId, channel: input.channel, status: "invited", token: randomToken(24), invitedAt: input.now.toISOString(), expiresAt: input.expiresAt, workflowRunId: input.workflowRunId ?? null })
+    .values({ companyId: input.companyId, applicationId: input.applicationId, channel: input.channel, status: "invited", token: randomToken(24), invitedAt: input.now.toISOString(), expiresAt: input.expiresAt, workflowRunId: input.workflowRunId ?? null, progress })
     .returning();
   return row;
 }
 
-export async function loadScreenBundle(q: Queryable, screenId: string) {
-  const [screen] = await q.select().from(screens).where(eq(screens.id, screenId)).limit(1);
-  if (!screen) return null;
-  const [app] = await q.select().from(applications).where(eq(applications.id, screen.applicationId)).limit(1);
+/** Everything the prompts need about the application, whether or not a screen row exists yet. */
+export async function loadApplicationBundle(q: Queryable, applicationId: string) {
+  const [app] = await q.select().from(applications).where(eq(applications.id, applicationId)).limit(1);
   if (!app) return null;
   const [candidate] = await q.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
   const [role] = await q.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
@@ -46,18 +52,30 @@ export async function loadScreenBundle(q: Queryable, screenId: string) {
   const [pv] = await q.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
   if (!candidate || !role || !company || !pv) return null;
   const triage = app.latestAssessmentId ? (await q.select().from(assessments).where(eq(assessments.id, app.latestAssessmentId)).limit(1))[0] : undefined;
-  return { screen, app, candidate, role, company, packet: pv.packet, triageUnknowns: triage?.result.unknowns.map((u) => u.question) ?? [] };
+  return { app, candidate, role, company, packet: pv.packet, triageUnknowns: triage?.result.unknowns.map((u) => u.question) ?? [] };
 }
+type ApplicationBundle = NonNullable<Awaited<ReturnType<typeof loadApplicationBundle>>>;
 
-function contextOf(b: NonNullable<Awaited<ReturnType<typeof loadScreenBundle>>>, latest: string | null): ScreenContext {
+export async function loadScreenBundle(q: Queryable, screenId: string) {
+  const [screen] = await q.select().from(screens).where(eq(screens.id, screenId)).limit(1);
+  if (!screen) return null;
+  const b = await loadApplicationBundle(q, screen.applicationId);
+  // A screen that opens with the assessment's open questions sees them as its first questions everywhere the packet is read.
+  return b ? { ...b, packet: focusedPacket(b.packet, screen.progress), screen } : null;
+}
+type ScreenBundle = NonNullable<Awaited<ReturnType<typeof loadScreenBundle>>>;
+
+type ConversationState = Pick<ScreenRow, "channel" | "progress" | "answers" | "transcript">;
+
+function contextOf(b: ApplicationBundle, screen: ConversationState, latest: string | null): ScreenContext {
   return {
     company: { name: b.company.name },
     packet: b.packet,
     candidate: { firstName: b.candidate.firstName },
-    channel: b.screen.channel as ScreenChannel,
-    progress: b.screen.progress,
-    answers: b.screen.answers,
-    transcript: b.screen.transcript,
+    channel: screen.channel as ScreenChannel,
+    progress: screen.progress,
+    answers: answersOf(screen),
+    transcript: screen.transcript,
     focusUnknowns: b.triageUnknowns,
     latestCandidateMessage: latest,
   };
@@ -71,38 +89,76 @@ export function redactProtected(text: string): string {
   return kept.length ? kept.join(" ") : "(answer recorded; personal details omitted)";
 }
 
-/** The first assistant message (disclosure and the first question). Idempotent: generated once per screen. */
-export async function openScreen(q: Queryable, deps: ScreenDeps, input: { screenId: string; actor: Actor }): Promise<{ message: string; aiRunId: string | null } | { error: string }> {
-  const b = await loadScreenBundle(q, input.screenId);
+/* ------------------------------------------------------------------------------------------------------------ */
+/* The opening message                                                                                          */
+/* ------------------------------------------------------------------------------------------------------------ */
+
+export type ScreenOpening = { message: string; aiRunId: string | null } | { error: string };
+
+/**
+ * Phase one of the opening: the model call, made with no transaction open. Works before the screen row exists (the
+ * workflow calls it while deciding to invite) and after (the web page opens an invited screen). Null when the
+ * application is gone or the screen already has its opening, in which case nothing needs the model.
+ */
+export async function prepareScreenOpening(db: Db, ai: AiRuntime, input: { companyId: string; applicationId: string; channel: ScreenChannel; workflowRunId?: string | null; screen?: ConversationState | null; /** Before the row exists: the open questions the screen will start with. */ focusQuestions?: FocusQuestion[] | null }): Promise<RunOutcome<ScreenTurn> | null> {
+  if (input.screen?.transcript.some((t) => t.role === "assistant")) return null;
+  const b = await withTenant(db, input.companyId, (q) => loadApplicationBundle(q, input.applicationId));
+  if (!b) return null;
+  const state: ConversationState = input.screen ?? { channel: input.channel, progress: input.focusQuestions?.length ? { ...EMPTY_SCREEN_PROGRESS, focusQuestions: input.focusQuestions } : EMPTY_SCREEN_PROGRESS, answers: {}, transcript: [] };
+  const focused = { ...b, packet: focusedPacket(b.packet, state.progress) };
+  return runPromptDetached(db, ai, screenTurnPrompt, contextOf(focused, state, null), { companyId: input.companyId, workflowRunId: input.workflowRunId ?? null, inputRef: { applicationId: input.applicationId, turn: 0 } });
+}
+
+/** Phase two of the opening: writes the first assistant message onto the screen, unless one is already there. */
+export async function applyScreenOpening(q: Queryable, input: { companyId: string; screenId: string; packet: RolePacket; out: RunOutcome<ScreenTurn> | null }): Promise<ScreenOpening> {
+  const [fresh] = await q.select().from(screens).where(eq(screens.id, input.screenId)).limit(1);
+  if (!fresh) return { error: "screen not found" };
+  const first = fresh.transcript.find((t) => t.role === "assistant");
+  if (first) return { message: first.content, aiRunId: first.aiRunId ?? null };
+  if (!input.out) return { error: "no opening was prepared" };
+  const out = input.out;
+  if (!out.ok) {
+    await emit(q, { type: "ai.run_failed", companyId: input.companyId, actor: { kind: "agent", id: "screening", runId: out.runId }, subject: { type: "screen", id: fresh.id }, payload: { reason: out.reason, error: out.error, turn: 0 } });
+    return { error: out.error };
+  }
+  const turn = enforceTurnRules(out.output, focusedPacket(input.packet, fresh.progress), fresh.progress, answersOf(fresh));
+  const entry: ScreenTranscriptEntry = { role: "assistant", content: turn.messageToCandidate, at: new Date().toISOString(), questionKey: turn.questionKey ?? undefined, channel: fresh.channel as ScreenChannel, aiRunId: out.runId };
+  const progress = advanceProgress(fresh.progress, turn);
+  await q.update(screens).set({ transcript: [...fresh.transcript, entry], progress }).where(eq(screens.id, fresh.id));
+  return { message: turn.messageToCandidate, aiRunId: out.runId };
+}
+
+/** The first assistant message (disclosure and the first question) for an existing screen. Idempotent: generated once per screen. */
+export async function openScreen(db: Db, companyId: string, deps: ScreenDeps, input: { screenId: string; actor: Actor }): Promise<ScreenOpening> {
+  const b = await withTenant(db, companyId, (q) => loadScreenBundle(q, input.screenId));
   if (!b) return { error: "screen not found" };
   const first = b.screen.transcript.find((t) => t.role === "assistant");
   if (first) return { message: first.content, aiRunId: first.aiRunId ?? null };
-  const out = await runPrompt(q, deps.ai, screenTurnPrompt, contextOf(b, null), { companyId: b.company.id, workflowRunId: b.screen.workflowRunId, inputRef: { screenId: b.screen.id, turn: 0 } });
-  if (!out.ok) {
-    await emit(q, { type: "ai.run_failed", companyId: b.company.id, actor: { kind: "agent", id: "screening", runId: out.runId }, subject: { type: "screen", id: b.screen.id }, payload: { reason: out.reason, error: out.error, turn: 0 } });
-    return { error: out.error };
-  }
-  const turn = enforceTurnRules(out.output, b.packet, b.screen.progress, b.screen.answers);
-  const entry: ScreenTranscriptEntry = { role: "assistant", content: turn.messageToCandidate, at: new Date().toISOString(), questionKey: turn.questionKey ?? undefined, channel: b.screen.channel as ScreenChannel, aiRunId: out.runId };
-  const progress = advanceProgress(b.screen.progress, turn);
-  await q.update(screens).set({ transcript: [...b.screen.transcript, entry], progress }).where(eq(screens.id, b.screen.id));
-  return { message: turn.messageToCandidate, aiRunId: out.runId };
+  const out = await prepareScreenOpening(db, deps.ai, { companyId, applicationId: b.app.id, channel: b.screen.channel as ScreenChannel, workflowRunId: b.screen.workflowRunId, screen: b.screen });
+  return withTenant(db, companyId, (q) => applyScreenOpening(q, { companyId, screenId: b.screen.id, packet: b.packet, out }));
 }
+
+/* ------------------------------------------------------------------------------------------------------------ */
+/* Conversation turns                                                                                            */
+/* ------------------------------------------------------------------------------------------------------------ */
 
 export type TurnResult =
   | { kind: "reply"; message: string; done: boolean; humanRequested: boolean; withdrawn?: boolean }
   | { kind: "closed"; message: string }
   | { kind: "error"; message: string };
 
+export type TurnInput = { screenId: string; message: string; channel: ScreenChannel; actor: Actor; providerMessageId?: string | null };
+
+/** What the first transaction of a turn leaves for the model call and the second transaction. */
+export type BegunTurn = { kind: "done"; result: TurnResult } | { kind: "pending"; b: ScreenBundle; transcript: ScreenTranscriptEntry[]; ctx: ScreenContext };
+
 /**
- * One candidate message in, one assistant message out. Keyword commands (HUMAN, WITHDRAW) are handled in code before
- * any model call; the model's turn is checked against the packet's rules; the transcript, answers, and progress are
- * persisted together. On a model failure the candidate gets an honest holding message; two failures in a row hand the
- * conversation to a person.
+ * The first transaction of a turn: records what the candidate said, marks the conversation started, and answers the
+ * keyword commands (HUMAN, WITHDRAW) that never go through the model. Everything else is left for the model.
  */
-export async function runScreenTurn(q: Queryable, deps: ScreenDeps, input: { screenId: string; message: string; channel: ScreenChannel; actor: Actor; providerMessageId?: string | null }): Promise<TurnResult> {
+export async function beginScreenTurn(q: Queryable, deps: ScreenDeps, input: TurnInput): Promise<BegunTurn> {
   const b = await loadScreenBundle(q, input.screenId);
-  if (!b) return { kind: "error", message: "This conversation is no longer available." };
+  if (!b) return { kind: "done", result: { kind: "error", message: "This conversation is no longer available." } };
   const { screen, app, candidate, company, packet } = b;
   const now = new Date().toISOString();
   const candidateActor: Actor = { kind: "candidate", id: candidate.id };
@@ -111,10 +167,10 @@ export async function runScreenTurn(q: Queryable, deps: ScreenDeps, input: { scr
   if (!ACTIVE_STATUSES.has(screen.status)) {
     const msg = screen.status === "completed" ? "Thanks, this screening is complete. The hiring team is reviewing and you will hear back within a few days. Reply HUMAN to reach a person." : screen.status === "human_requested" ? "A person from the hiring team will follow up with you shortly." : "This screening has closed. Reply HUMAN if you would like a person to follow up.";
     if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: msg, idempotencyKey: `screen_closed:${screen.id}:${now}`, templateKey: "screen_closed", disclosureIncluded: false });
-    return { kind: "closed", message: msg };
+    return { kind: "done", result: { kind: "closed", message: msg } };
   }
 
-  let transcript: ScreenTranscriptEntry[] = [...screen.transcript, { role: "candidate", content: input.message, at: now, channel: input.channel }];
+  const transcript: ScreenTranscriptEntry[] = [...screen.transcript, { role: "candidate", content: input.message, at: now, channel: input.channel }];
   const started = screen.status !== "in_progress";
   if (started) {
     await q.update(screens).set({ status: "in_progress", startedAt: screen.startedAt ?? now, transcript, lastCandidateMessageAt: now }).where(eq(screens.id, screen.id));
@@ -129,7 +185,7 @@ export async function runScreenTurn(q: Queryable, deps: ScreenDeps, input: { scr
   if (/^\s*(human|person|agent|representative)\b/i.test(input.message) || /\b(talk|speak) to a (real )?(person|human)\b/i.test(input.message)) {
     const msg = `Understood. A person from ${company.name} will follow up with you ${humanResponseExpectation(new Date(), await loadBusinessCalendar(q))}. Thank you for your patience.`;
     await requestHuman(q, deps, { screenId: screen.id, reason: "candidate asked for a person", actor: input.actor, reply: msg, replyChannel: input.channel });
-    return { kind: "reply", message: msg, done: false, humanRequested: true };
+    return { kind: "done", result: { kind: "reply", message: msg, done: false, humanRequested: true } };
   }
   if (/^\s*withdraw\b/i.test(input.message)) {
     const msg = `Understood, we have withdrawn your application for ${packet.identity.title}. Thank you for your time, and reply to any of our emails if you change your mind.`;
@@ -137,15 +193,27 @@ export async function runScreenTurn(q: Queryable, deps: ScreenDeps, input: { scr
     await emit(q, { type: "screen.abandoned", companyId: company.id, actor: candidateActor, subject: { type: "screen", id: screen.id }, payload: { reason: "withdrawn" }, correlationId: screen.workflowRunId });
     await transition(q, { applicationId: app.id, companyId: company.id, to: "withdrawn", by: "candidate", actor: candidateActor, reason: "candidate withdrew during screening", correlationId: screen.workflowRunId });
     await emit(q, { type: "application.withdrawn", companyId: company.id, actor: candidateActor, subject: { type: "application", id: app.id }, payload: { during: "screen" }, correlationId: screen.workflowRunId });
-    await notify(q, { companyId: company.id, kind: "candidate.withdrawn", title: `${candidate.firstName} ${candidate.lastName} withdrew`, body: `They withdrew from ${packet.identity.title} during the screening conversation.`, action: { label: "See people", href: `/roles/${app.roleId}/people` } });
+    await notify(q, { companyId: company.id, kind: "candidate.withdrawn", title: `${candidate.firstName} ${candidate.lastName} withdrew`, body: `They withdrew from ${packet.identity.title} during the screening conversation.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
     if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: msg, idempotencyKey: `screen_withdrawn:${screen.id}`, templateKey: "screen_withdrawn", disclosureIncluded: false });
     await deps.signal?.(q, { companyId: company.id, key: `screen:${screen.id}:completed`, payload: { withdrawn: true } });
-    return { kind: "reply", message: msg, done: true, humanRequested: false, withdrawn: true };
+    return { kind: "done", result: { kind: "reply", message: msg, done: true, humanRequested: false, withdrawn: true } };
   }
 
   const fresh = (await q.select().from(screens).where(eq(screens.id, screen.id)).limit(1))[0];
-  const ctx = contextOf({ ...b, screen: { ...fresh, transcript } }, input.message);
-  const out = await runPrompt(q, deps.ai, screenTurnPrompt, ctx, { companyId: company.id, workflowRunId: screen.workflowRunId, inputRef: { screenId: screen.id, turn: transcript.length } });
+  return { kind: "pending", b: { ...b, screen: fresh }, transcript, ctx: contextOf(b, { ...fresh, transcript }, input.message) };
+}
+
+/**
+ * The second transaction of a turn: checks the model's turn against the packet's rules, records the answer, sends the
+ * reply, and hands over to a person or closes the conversation when the turn says so. On a model failure the candidate
+ * gets an honest holding message; two failures in a row hand the conversation to a person.
+ */
+export async function finishScreenTurn(q: Queryable, deps: ScreenDeps, input: TurnInput, pending: Extract<BegunTurn, { kind: "pending" }>, out: RunOutcome<ScreenTurn>): Promise<TurnResult> {
+  const { app, candidate, company, packet } = pending.b;
+  const screen = pending.b.screen;
+  const candidateActor: Actor = { kind: "candidate", id: candidate.id };
+  const [fresh] = await q.select().from(screens).where(eq(screens.id, screen.id)).limit(1);
+  if (!fresh) return { kind: "error", message: "This conversation is no longer available." };
   if (!out.ok) {
     const failures = (fresh.progress.failures ?? 0) + 1;
     await q.update(screens).set({ progress: { ...fresh.progress, failures } }).where(eq(screens.id, screen.id));
@@ -156,22 +224,27 @@ export async function runScreenTurn(q: Queryable, deps: ScreenDeps, input: { scr
       return { kind: "reply", message: msg, done: false, humanRequested: true };
     }
     const holding = "Sorry, something went wrong on our end. Please send that again in a minute.";
-    if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: holding, idempotencyKey: `screen_holding:${screen.id}:${transcript.length}`, templateKey: "screen_holding", disclosureIncluded: false });
+    if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: pending.b.role, company, packet, actor: input.actor, text: holding, idempotencyKey: `screen_holding:${screen.id}:${pending.transcript.length}`, templateKey: "screen_holding", disclosureIncluded: false });
     return { kind: "error", message: holding };
   }
 
-  let turn = enforceTurnRules(out.output, packet, fresh.progress, fresh.answers);
+  let turn = enforceTurnRules(out.output, packet, fresh.progress, answersOf(fresh));
   // The model never states a response time; the accurate business-hours expectation is appended in code (founder decision F12).
   if (turn.humanRequested && !/business/i.test(turn.messageToCandidate)) turn = { ...turn, messageToCandidate: `${turn.messageToCandidate} You can expect to hear from a person ${humanResponseExpectation(new Date(), await loadBusinessCalendar(q))}.` };
   const answers = { ...fresh.answers };
-  if (turn.answerRecorded) answers[turn.answerRecorded.questionKey] = redactProtected(turn.answerRecorded.answer);
-  const progress = advanceProgress(fresh.progress, turn);
+  let progress = advanceProgress(fresh.progress, turn);
+  if (turn.answerRecorded) {
+    const recorded = redactProtected(turn.answerRecorded.answer);
+    // An answer to one of the open questions the screen started with is kept beside that question; the packet's own answers stay in `answers`.
+    if (isFocusKey(turn.answerRecorded.questionKey)) progress = withFocusAnswer(progress, turn.answerRecorded.questionKey, recorded);
+    else answers[turn.answerRecorded.questionKey] = recorded;
+  }
   const reply: ScreenTranscriptEntry = { role: "assistant", content: turn.messageToCandidate, at: new Date().toISOString(), questionKey: turn.questionKey ?? undefined, channel: input.channel, aiRunId: out.runId };
-  transcript = [...transcript, reply];
+  const transcript = [...fresh.transcript, reply];
   await q.update(screens).set({ transcript, answers, progress }).where(eq(screens.id, screen.id));
 
   if (input.channel === "sms") {
-    await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: { kind: "agent", id: "screening", runId: out.runId }, text: turn.messageToCandidate, idempotencyKey: `screen_turn:${screen.id}:${transcript.length}`, templateKey: "screen_turn", disclosureIncluded: false, aiRunId: out.runId, correlationId: screen.workflowRunId });
+    await deliverSms(q, deps.integrations, { application: app, candidate, role: pending.b.role, company, packet, actor: { kind: "agent", id: "screening", runId: out.runId }, text: turn.messageToCandidate, idempotencyKey: `screen_turn:${screen.id}:${transcript.length}`, templateKey: "screen_turn", disclosureIncluded: false, aiRunId: out.runId, correlationId: screen.workflowRunId });
   }
 
   if (turn.humanRequested) {
@@ -180,11 +253,19 @@ export async function runScreenTurn(q: Queryable, deps: ScreenDeps, input: { scr
   }
   if (turn.done) {
     await q.update(screens).set({ status: "completed", completedAt: new Date().toISOString() }).where(eq(screens.id, screen.id));
-    await emit(q, { type: "screen.completed", companyId: company.id, actor: candidateActor, subject: { type: "screen", id: screen.id }, payload: { questionsAnswered: Object.keys(answers).length, questions: packet.screening.questions.length, channel: input.channel }, correlationId: screen.workflowRunId });
+    await emit(q, { type: "screen.completed", companyId: company.id, actor: candidateActor, subject: { type: "screen", id: screen.id }, payload: { questionsAnswered: Object.keys(answersOf({ answers, progress })).length, questions: packet.screening.questions.length, channel: input.channel }, correlationId: screen.workflowRunId });
     await transition(q, { applicationId: app.id, companyId: company.id, to: "screen_complete", by: "system", actor: input.actor, correlationId: screen.workflowRunId });
     await deps.signal?.(q, { companyId: company.id, key: `screen:${screen.id}:completed` });
   }
   return { kind: "reply", message: turn.messageToCandidate, done: turn.done, humanRequested: false };
+}
+
+/** One candidate message in, one assistant message out, with the model called between two short transactions. */
+export async function runScreenTurn(db: Db, companyId: string, deps: ScreenDeps, input: TurnInput): Promise<TurnResult> {
+  const begun = await withTenant(db, companyId, (q) => beginScreenTurn(q, deps, input));
+  if (begun.kind === "done") return begun.result;
+  const out = await runPromptDetached(db, deps.ai, screenTurnPrompt, begun.ctx, { companyId, workflowRunId: begun.b.screen.workflowRunId, inputRef: { screenId: input.screenId, turn: begun.transcript.length } });
+  return withTenant(db, companyId, (q) => finishScreenTurn(q, deps, input, begun, out));
 }
 
 /** The candidate asked for a person (or the assistant could not continue): a recruiter gets the whole context with a 4-hour SLA. */
@@ -197,7 +278,7 @@ export async function requestHuman(q: Queryable, deps: ScreenDeps, input: { scre
   await q.update(screens).set({ status: "human_requested", humanRequestedAt: now, transcript }).where(eq(screens.id, screen.id));
   await emit(q, { type: "screen.human_requested", companyId: company.id, actor: { kind: "candidate", id: candidate.id }, subject: { type: "screen", id: screen.id }, payload: { reason: input.reason }, correlationId: screen.workflowRunId });
   await createEscalation(q, { companyId: company.id, roleId: app.roleId, applicationId: app.id, kind: "candidate_issue", summaryOrigin: /failed|error/i.test(input.reason) ? "system" : "candidate", question: `${candidate.firstName} ${candidate.lastName} needs a person during the ${packet.identity.title} screening (${input.reason}). Please reach out by ${candidate.phone ? "phone or " : ""}email and finish the screen.`, requestedBy: input.actor, workflowRunId: screen.workflowRunId });
-  await notify(q, { companyId: company.id, kind: "screen.human_requested", title: `${candidate.firstName} asked for a person`, body: `During the ${packet.identity.title} screening. A recruiter has the conversation; you can also reply directly.`, action: { label: "Open", href: `/roles/${app.roleId}/people` } });
+  await notify(q, { companyId: company.id, kind: "screen.human_requested", title: `${candidate.firstName} asked for a person`, body: `During the ${packet.identity.title} screening. A recruiter has the conversation; you can also reply directly.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
   if (input.reply && input.replyChannel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: input.reply, idempotencyKey: `screen_human:${screen.id}`, templateKey: "screen_human", disclosureIncluded: false });
   await deps.signal?.(q, { companyId: company.id, key: `screen:${screen.id}:human` });
 }
@@ -241,29 +322,36 @@ export function advanceProgress(progress: ScreenProgress, turn: ScreenTurn): Scr
     followUps,
     confusedTurns: turn.sentiment === "confused" ? progress.confusedTurns + 1 : 0,
     failures: 0,
+    ...(progress.focusQuestions ? { focusQuestions: progress.focusQuestions } : {}),
   };
 }
 
-/** The scorecard for a completed screen. Quotes are verified against the transcript in code. */
-export async function assessScreen(q: Queryable, ai: AiRuntime, input: { screenId: string; workflowRunId?: string | null }): Promise<RunOutcome<import("@ros/contracts").ScreenAssessment>> {
-  const b = await loadScreenBundle(q, input.screenId);
+/** The scorecard for a completed screen, called with no transaction open. Quotes are verified against the transcript in code. */
+export async function assessScreen(db: Db, ai: AiRuntime, input: { companyId: string; screenId: string; workflowRunId?: string | null }): Promise<RunOutcome<import("@ros/contracts").ScreenAssessment>> {
+  const b = await withTenant(db, input.companyId, (q) => loadScreenBundle(q, input.screenId));
   if (!b) throw new Error("screen not found");
-  const ctx = contextOf(b, null);
-  const out = await runPrompt(q, ai, screenAssessPrompt, ctx, { companyId: b.company.id, workflowRunId: input.workflowRunId ?? b.screen.workflowRunId, inputRef: { screenId: b.screen.id, turns: b.screen.transcript.length } });
+  const ctx = contextOf(b, b.screen, null);
+  const out = await runPromptDetached(db, ai, screenAssessPrompt, ctx, { companyId: b.company.id, workflowRunId: input.workflowRunId ?? b.screen.workflowRunId, inputRef: { screenId: b.screen.id, turns: b.screen.transcript.length } });
   if (!out.ok) return out;
-  const candidateText = b.screen.transcript.filter((t) => t.role === "candidate").map((t) => t.content).join("\n") + "\n" + Object.values(b.screen.answers).join("\n");
+  const candidateText = `${b.screen.transcript.filter((t) => t.role === "candidate").map((t) => t.content).join("\n")}\n${Object.values(answersOf(b.screen)).join("\n")}`;
   const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
   const src = norm(candidateText);
   const ok = (quote?: string) => !quote || src.includes(norm(quote));
   let dropped = 0;
   const a = out.output;
+  /** Keeps a finding whose quote is in the transcript; otherwise counts it and returns the stripped version. */
+  const keepOrStrip = <T,>(grounded: boolean, item: T, stripped: () => T): T => {
+    if (grounded) return item;
+    dropped += 1;
+    return stripped();
+  };
   const verified = {
     ...a,
     strengths: a.strengths.filter((f) => { const g = ok(f.evidence.quote); if (!g) dropped += 1; return g; }),
     concerns: a.concerns.filter((f) => { const g = ok(f.evidence.quote); if (!g) dropped += 1; return g; }),
-    questionFindings: a.questionFindings.map((f) => (ok(f.evidence?.quote) ? f : (dropped += 1, { ...f, evidence: undefined }))),
-    competencyFindings: a.competencyFindings.map((f) => (ok(f.evidence?.quote) ? f : (dropped += 1, { ...f, evidence: undefined, finding: f.finding === "evidenced" ? ("partially_evidenced" as const) : f.finding }))),
-    eligibilityConfirmations: a.eligibilityConfirmations.map((e) => (ok(e.quote) ? e : (dropped += 1, { ...e, quote: undefined }))),
+    questionFindings: a.questionFindings.map((f) => keepOrStrip(ok(f.evidence?.quote), f, () => ({ ...f, evidence: undefined }))),
+    competencyFindings: a.competencyFindings.map((f) => keepOrStrip(ok(f.evidence?.quote), f, () => ({ ...f, evidence: undefined, finding: f.finding === "evidenced" ? ("partially_evidenced" as const) : f.finding }))),
+    eligibilityConfirmations: a.eligibilityConfirmations.map((e) => keepOrStrip(ok(e.quote), e, () => ({ ...e, quote: undefined }))),
     anomalies: dropped ? [...a.anomalies, { kind: "unverified_quote", detail: `${dropped} quote${dropped === 1 ? "" : "s"} not found in the transcript; discarded` }] : a.anomalies,
   };
   return { ...out, output: verified };

@@ -144,7 +144,7 @@ describe("delegated sign-in with the Microsoft-for-staff policy", () => {
     expect(noCookie.headers.get("location")).toContain("/login?error=signin_incomplete");
     const done = await app.request(`${cb.pathname}?${cb.searchParams.toString()}`, { headers: { cookie: pkce } });
     expect(done.status).toBe(302);
-    expect(done.headers.get("location")).toBe(`${container.env.WEB_BASE_URL}/`);
+    expect(done.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/`);
     const cookies = done.headers.get("set-cookie") ?? "";
     expect(cookies).toContain("ros_session=");
     const replay = await app.request(`${cb.pathname}?${cb.searchParams.toString()}`, { headers: { cookie: pkce } });
@@ -168,7 +168,12 @@ describe("delegated sign-in with the Microsoft-for-staff policy", () => {
 
   it("production refuses the fake issuer and demands the managed service", async () => {
     const { loadEnv } = await import("./env");
-    expect(() => loadEnv({ NODE_ENV: "production", SESSION_SECRET: "x".repeat(40), SECRET_STORE: "vault", AI_PROVIDER: "anthropic", DATABASE_URL: "postgres://x", WORKER_INLINE: "false", AUTH_PROVIDER: "fake" })).toThrow(/AUTH_PROVIDER/);
-    expect(() => loadEnv({ NODE_ENV: "production", SESSION_SECRET: "x".repeat(40), SECRET_STORE: "vault", AI_PROVIDER: "anthropic", DATABASE_URL: "postgres://x", WORKER_INLINE: "false", AUTH_PROVIDER: "supabase" })).toThrow(/SUPABASE_URL/);
+    const base = { NODE_ENV: "production", APP_BASE_URL: "https://app.example.test", ANALYTICS_SALT: "salt-for-this-test-only", SESSION_SECRET: "x".repeat(40), SECRET_STORE: "vault", AI_PROVIDER: "anthropic", DATABASE_URL: "postgres://x", WORKER_INLINE: "false" };
+    expect(() => loadEnv({ ...base, AUTH_PROVIDER: "fake" })).toThrow(/AUTH_PROVIDER/);
+    expect(() => loadEnv({ ...base, AUTH_PROVIDER: "supabase" })).toThrow(/SUPABASE_URL/);
+    // the public address must be an https origin, and the analytics salt must not be the development one
+    expect(() => loadEnv({ ...base, APP_BASE_URL: "http://app.example.test" })).toThrow(/APP_BASE_URL/);
+    expect(() => loadEnv({ ...base, APP_BASE_URL: "https://app.example.test/app" })).toThrow(/APP_BASE_URL/);
+    expect(() => loadEnv({ ...base, ANALYTICS_SALT: undefined })).toThrow(/ANALYTICS_SALT/);
   });
 });

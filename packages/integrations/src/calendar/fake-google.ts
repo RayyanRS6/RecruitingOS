@@ -81,7 +81,7 @@ export class FakeGoogleCalendarProvider implements CalendarProvider {
   async updateEvent(cred: CalendarCredential, ref: CalendarEventRef, patch: Partial<Pick<CalendarEventInput, "start" | "end" | "timeZone" | "title" | "description" | "attendees">>): Promise<CalendarEventRef> {
     this.account(cred);
     const e = this.events.get(ref.eventId);
-    if (!e || e.status !== "confirmed") throw new CalendarError("not_found", "The calendar event no longer exists.", false);
+    if (e?.status !== "confirmed") throw new CalendarError("not_found", "The calendar event no longer exists.", false);
     e.input = { ...e.input, ...patch };
     e.sequence += 1;
     return refOf(e);

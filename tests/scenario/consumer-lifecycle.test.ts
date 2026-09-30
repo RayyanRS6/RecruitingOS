@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { applications, assessments, rolePackets, roles, screens } from "@ros/db";
-import { FakeEmailAdapter } from "@ros/integrations";
+import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "../../apps/api/src/app";
 import { createContainer, type Container } from "../../apps/api/src/container";
 
@@ -77,6 +77,7 @@ describe("End-to-end hiring scenario: Glow Theory (beauty brand, 60 people) hire
     ], "dev.txt", { type: "text/plain" }));
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> }; screening: { questions: Array<{ key: string; kind: string }> } } } };
     for (const r of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${r.key}`, "yes");
+    form.set("acknowledged", "yes");
     expect((await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: form })).status).toBe(302);
     await container.drain();
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
@@ -119,6 +120,7 @@ describe("End-to-end hiring scenario: Glow Theory (beauty brand, 60 people) hire
     form.set("noResume", "I moved into performance marketing from finance three years ago. At a DTC candle brand I ran $60k a month on Meta and Google, built the creative testing calendar, and set up Shopify and GA4 reporting.");
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
     for (const r of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${r.key}`, "yes");
+    form.set("acknowledged", "yes");
     await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     await container.drain();
     const rosa = (await container.db.select().from(applications).where(eq(applications.roleId, roleId))).find((x) => x.stage !== "interview_recommended")!;

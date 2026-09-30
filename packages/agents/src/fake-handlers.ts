@@ -1,7 +1,7 @@
 import type { EvidenceAssessment, IntakeFacts, IntakeTurn, ResumeExtraction, RolePacket, ScreenAssessment, ScreenProgress, ScreenTurn } from "@ros/contracts";
 import type { FakeProvider, IntakeContext, StructuredRequest } from "@ros/ai";
-import type { ResumeInput } from "@ros/ai";
 import { redactProtected } from "./screening";
+import { FOCUS_INTRO, isFocusKey } from "./screen-focus";
 
 /**
  * Deterministic handlers for the fake AI provider. They exist so tests, evals, and local development run
@@ -75,6 +75,12 @@ function fakeIntakeTurn(c: ReturnType<typeof contextFrom>): IntakeTurn {
     else if (/part[\s-]?time/i.test(all)) facts.employmentType = "part_time";
     else if (/per diem|temp/i.test(all)) facts.employmentType = "per_diem";
   }
+  // The work model, only when the owner states it ("hybrid, three days in the office", "fully remote", "on-site only"); on-site is the packet's default.
+  if (!facts.remotePolicy) {
+    if (/\bhybrid\b/i.test(all)) facts.remotePolicy = "hybrid";
+    else if (/\bremote\b/i.test(all) && !/\b(no|not|never|isn't|is not)\s+(fully\s+)?remote\b/i.test(all)) facts.remotePolicy = "remote";
+    else if (/\b(on[\s-]?site|in[\s-]?office|in[\s-]?person)\b/i.test(all)) facts.remotePolicy = "onsite";
+  }
   const pay = all.match(/\$\s?(\d{2,3}(?:,\d{3})?(?:\.\d+)?)\s*(?:k)?\s*(?:to|-|–)\s*\$?\s?(\d{2,3}(?:,\d{3})?(?:\.\d+)?)\s*(k)?\s*(?:an hour|\/hr|per hour|hourly|a year|\/yr|per year|annually|k)?/i);
   if (pay && facts.compensationMin === undefined) {
     let min = Number(pay[1].replace(/,/g, ""));
@@ -113,15 +119,15 @@ function fakeIntakeTurn(c: ReturnType<typeof contextFrom>): IntakeTurn {
       .filter((s) => s && !/^(i|me|myself)$/i.test(s) && !/^(our|the|my|a|an|who)\b/.test(s) || /^me$/i.test(s));
   }
   if (!facts.whatFailureLooksLike) {
-    const f = all.match(/fail(?:ure)? (?:would look like|looks like|means)\s*[:\-]?\s*([^.\n]+)/i)
+    const f = all.match(/fail(?:ure)? (?:would look like|looks like|means)\s*[:-]?\s*([^.\n]+)/i)
       ?? all.match(/(?:did not|didn't|does not|doesn't|hasn't|has not) work(?:ed)? out (?:if|when|would be)\s+([^.\n]+)/i);
     if (f) facts.whatFailureLooksLike = f[1].trim();
   }
-  const mh = last.match(/must[\s-]?haves?\s*[:\-]\s*([^\n]+)/i) ?? last.match(/\bmust have\s+(?:an?\s+)?([^.\n]+)/i);
+  const mh = last.match(/must[\s-]?haves?\s*[:-]\s*([^\n]+)/i) ?? last.match(/\bmust have\s+(?:an?\s+)?([^.\n]+)/i);
   if (mh) facts.mustHaves = [...facts.mustHaves, ...mh[1].split(/;|,| and (?:be |have )?/).map((s) => s.trim()).filter(Boolean)];
-  const nh = last.match(/nice[\s-]?to[\s-]?haves?\s*[:\-]\s*([^\n]+)/i);
+  const nh = last.match(/nice[\s-]?to[\s-]?haves?\s*[:-]\s*([^\n]+)/i);
   if (nh) facts.niceToHaves = [...facts.niceToHaves, ...nh[1].split(/;|,/).map((s) => s.trim()).filter(Boolean)];
-  const db = last.match(/deal[\s-]?breakers?\s*[:\-]\s*([^\n]+)/i);
+  const db = last.match(/deal[\s-]?breakers?\s*[:-]\s*([^\n]+)/i);
   if (db) facts.dealBreakers = [...facts.dealBreakers, ...db[1].split(/;|,/).map((s) => s.trim()).filter(Boolean)];
 
   const declinedNow: IntakeFacts["declinedCriteria"] = [];
@@ -252,7 +258,7 @@ function fakeCompile(c: ReturnType<typeof contextFrom>): RolePacket {
   const description = `${c.companyName} is hiring a ${title}${locCity ? ` in ${locCity}${locRegion ? `, ${locRegion}` : ""}` : ""}. ${f.reason === "replacement" ? "We are filling an open chair on a team that values consistency and kindness." : "Our team is growing and we need someone who takes pride in careful, friendly work."} You will ${rdh ? "provide preventive care, periodontal therapy, and patient education for a loyal patient base, working alongside a dentist who respects your judgment" : `own ${title.toLowerCase()} outcomes end to end, work directly with the founder and a small team that moves quickly, and see the results of your decisions in the numbers`}. The schedule is ${f.employmentType === "part_time" ? "part time" : "full time"}${f.schedule ? ` (${f.schedule})` : ""}. Pay is ${basis === "hourly" ? `$${min}–$${max} an hour` : `$${min.toLocaleString()}–$${max.toLocaleString()} a year`} depending on experience${f.benefits ? `, plus ${f.benefits}` : ""}. We respond to every applicant within a day, keep the process short, and tell you where you stand at each step.`;
   return {
     schemaVersion: 1,
-    identity: { title, department: undefined, locations: [{ city: locCity || undefined, region: locRegion || undefined, country: "US" }], employmentType: (f.employmentType as RolePacket["identity"]["employmentType"]) ?? "full_time", schedule: f.schedule, remotePolicy: "onsite" },
+    identity: { title, department: undefined, locations: [{ city: locCity || undefined, region: locRegion || undefined, country: "US" }], employmentType: (f.employmentType as RolePacket["identity"]["employmentType"]) ?? "full_time", schedule: f.schedule, remotePolicy: f.remotePolicy === "hybrid" || f.remotePolicy === "remote" ? f.remotePolicy : "onsite" },
     business: { reason: (f.reason as RolePacket["business"]["reason"]) ?? "growth", reasonDetail: f.reasonDetail, timeline: { targetStartDate: f.targetStartDate, urgency: f.targetStartDate ? "high" : "normal", inactivityDays: 10 } },
     compensation: { basis, currency: "USD", min, mid: Math.round((min + max) / 2), max, ceiling: f.compensationCeiling ?? max, bonus: undefined, benefitsSummary: f.benefits, discloseRange: true, sources: [...(c.benchmark ? [{ name: c.benchmark.source, detail: `${c.benchmark.metro}: p25 ${c.benchmark.p25}, p50 ${c.benchmark.p50}, p75 ${c.benchmark.p75}` }] : []), { name: "owner-stated", detail: `${min}–${max} ${basis}` }], ownerStated: f.compensationMin !== undefined },
     description: { publicJobDescription: description, internalNotes: f.whatFailureLooksLike ? `What failure looks like: ${f.whatFailureLooksLike}` : undefined },
@@ -287,7 +293,7 @@ function fakeCompile(c: ReturnType<typeof contextFrom>): RolePacket {
     approvals: { packetApproverRoles: ["owner", "admin", "hiring_manager"], interviewApproverRoles: ["owner", "hiring_manager", "recruiter"], offerApproverRoles: ["owner", "admin"] },
     compliance: { jurisdictions: [], notices: ["ai_use", "privacy"], retentionClass: "decision_data_4y", recordingPolicy: "consent_required", smsRequiresConsent: true },
     sourcing: { summary: "Careers page and Google for Jobs immediately; Indeed from the owner's account with applications forwarded to the intake address; referrals from the team.", channels: ["careers_page", "google_jobs", "indeed", "referrals", "rediscovery"], targetSources: isDental ? ["Local dental hygiene programs", "State dental hygienists' association job board"] : [], sponsoredDailyBudget: 0, referralPrompt: `Know a great ${title}? Send them our link.`, rediscovery: true },
-    preferences: { decisionMakerUserId: undefined, dealBreakersInTheirWords: f.dealBreakers, whatFailureLooksLike: f.whatFailureLooksLike, schedulingWindows: [], interviewStyle: undefined },
+    preferences: { decisionMakerUserId: undefined, decisionMakerName: f.decisionMaker, dealBreakersInTheirWords: f.dealBreakers, whatFailureLooksLike: f.whatFailureLooksLike, schedulingWindows: [], interviewStyle: undefined },
     provenance: { playbookId: undefined, playbookVersion: undefined, intakeSessionId: undefined, aiRunIds: [], assumptions, sources: ["fake provider (deterministic draft)"] },
   };
 }
@@ -349,17 +355,25 @@ function fakeTriageAssess(req: StructuredRequest<unknown>): EvidenceAssessment {
   let extraction: { anomalies?: Array<{ kind: string; detail: string }>; licenses?: Array<{ name: string }>; positions?: Array<{ title: string }> } = {};
   try { if (extractionJson) extraction = JSON.parse(extractionJson); } catch { /* ignore */ }
 
+  const noText = !text.trim();
   const lineFor = (tks: string[]) => lines.find((l) => tks.some((t) => l.toLowerCase().includes(t)));
+  const where = noResume ? "written summary" : "résumé";
   const strengths: EvidenceAssessment["strengths"] = [];
+  const concerns: EvidenceAssessment["concerns"] = [];
   const unknowns: EvidenceAssessment["unknowns"] = [];
   const requirementFindings: EvidenceAssessment["requirementFindings"] = mustHaves.map((m) => {
-    const tks = tokens(m.text.replace(/\(.*\)$/, ""));
+    const what = m.text.replace(/\(.*\)$/, "").trim().replace(/[.!]+$/, "");
+    const tks = tokens(what);
     const hits = tks.filter((t) => lower.includes(t));
     const license = /licen/i.test(m.text) && (extraction.licenses?.length || /\b(rdh|rda|license|licensed)\b/i.test(text));
     const met = hits.length >= 2 || license ? "yes" : hits.length === 1 ? "partially" : "unknown";
     const quote = lineFor(hits.length ? hits : tks);
-    if (met === "yes" && quote) strengths.push({ claim: `Shows ${m.text.replace(/\(.*\)$/, "").trim()}`, evidence: { source, quote } });
-    if (met === "unknown") unknowns.push({ question: `Can you tell me about your experience with ${m.text.replace(/\(.*\)$/, "").trim().toLowerCase()}?`, whyItMatters: "It is a must-have for this role and the application does not show it." });
+    if (met === "yes" && quote) strengths.push({ claim: `Shows ${what}`, evidence: { source, quote } });
+    if (met === "unknown" && !noText) {
+      // A must-have the text says nothing about: a concern for the owner (no quote: there is nothing to quote) and a question for the screen.
+      unknowns.push({ question: `Can you tell me about your ${plainPhrase(what)}?`, whyItMatters: `It is a must-have for this role and the ${where} does not show it.` });
+      concerns.push({ claim: `No evidence of ${plainPhrase(what)} in the ${where}`, evidence: { source } });
+    }
     return { requirementKey: m.key, met, evidence: quote && met !== "unknown" ? { source, quote } : undefined };
   });
   const competencyFindings: EvidenceAssessment["competencyFindings"] = competencies.map((c) => {
@@ -371,17 +385,28 @@ function fakeTriageAssess(req: StructuredRequest<unknown>): EvidenceAssessment {
   const anomalies = (extraction.anomalies ?? []).map((a) => ({ kind: a.kind, detail: a.detail }));
   const yes = requirementFindings.filter((r) => r.met === "yes").length;
   const partial = requirementFindings.filter((r) => r.met === "partially").length;
-  const noText = !text.trim();
-  const overall: EvidenceAssessment["overall"] = noText ? "unknown" : mustHaves.length && yes === mustHaves.length ? "strong" : yes + partial > 0 ? "potential" : "unknown";
-  const recommendation: EvidenceAssessment["recommendation"] = noText ? "review_manually" : eligibilityFailed ? "review_manually" : "screen";
-  const concerns: EvidenceAssessment["concerns"] = [];
-  if (!noText && yes + partial === 0 && lines[0]) concerns.push({ claim: "No must-have is evidenced in the resume or application text", evidence: { source, quote: lines[0] } });
+  const missing = requirementFindings.filter((r) => r.met === "unknown").length;
+  // "Thin but relevant" (the prompt's rule for "potential"): the text shows this kind of work even when no must-have is spelled out.
+  const roleTitle = sys.match(/^Role: ([^(\n]+?) \(/m)?.[1] ?? "";
+  const relevant = !noText && tokens(roleTitle).some((t) => lower.includes(t));
+  const overall: EvidenceAssessment["overall"] = noText ? "unknown" : mustHaves.length && yes === mustHaves.length ? "strong" : yes + partial > 0 || relevant ? "potential" : "unknown";
+  // The prompt's rule: "review_manually" when overall is unknown or the resume could not be read; the eligibility hold is reviewed by a person too.
+  const recommendation: EvidenceAssessment["recommendation"] = overall === "unknown" ? "review_manually" : eligibilityFailed ? "review_manually" : "screen";
   const summary = noText
     ? "No resume text or description was available, so nothing can be said yet; a person should open the file or ask the candidate."
     : `${yes} of ${mustHaves.length} must-haves evidenced${partial ? `, ${partial} partially` : ""}; ${competencyFindings.filter((c) => c.finding === "evidenced").length} of ${competencies.length} competencies evidenced. ${extraction.positions?.length ? `Most recent work: ${extraction.positions[0].title}.` : ""}`.trim();
+  // What drives the confidence, in an owner's words: what the fake could see and what it could not.
+  const confidenceReasons: string[] = [];
+  if (noText) confidenceReasons.push("no résumé text and no written summary to assess");
+  else if (noResume) confidenceReasons.push("no résumé, only the written summary");
+  if (missing) confidenceReasons.push(`${missing === 1 ? "one must-have has" : `${missing} must-haves have`} no evidence`);
+  if (partial) confidenceReasons.push(`${partial === 1 ? "one must-have is" : `${partial} must-haves are`} only partly shown`);
+  if (eligibilityFailed) confidenceReasons.push("an eligibility answer did not match");
+  if (anomalies.length) confidenceReasons.push("the résumé has flags to check");
   return {
     overall,
     confidence: noText ? "low" : yes >= 1 ? "medium" : "low",
+    confidenceReasons,
     summary,
     strengths,
     concerns,
@@ -391,8 +416,13 @@ function fakeTriageAssess(req: StructuredRequest<unknown>): EvidenceAssessment {
     anomalies,
     secondaryScore: mustHaves.length ? Math.round(((yes + partial * 0.5) / mustHaves.length) * 100) : undefined,
     recommendation,
-    rationale: recommendation === "screen" ? "Eligible, with relevant evidence for the must-haves; a screen will settle the unknowns." : noText ? "There is nothing to assess against; a human should look." : "Eligibility was not met; the owner reviews before anything else happens.",
+    rationale: recommendation === "screen" ? "Eligible, with relevant evidence for the must-haves; a screen will settle the unknowns." : noText ? "There is nothing to assess against; a human should look." : overall === "unknown" ? `The ${where} shows none of the must-haves and nothing about this kind of work; a person should look or ask.` : "Eligibility was not met; the owner reviews before anything else happens.",
   };
+}
+
+/** "Active CA RDH license" reads as "active CA RDH license" after "your"; an acronym at the start ("RDH license") is left alone. */
+function plainPhrase(s: string): string {
+  return /^[A-Z][a-z]/.test(s) ? s[0].toLowerCase() + s.slice(1) : s;
 }
 
 type ScreenQ = { key: string; kind: string; competencyKey?: string; question: string };
@@ -422,7 +452,8 @@ function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
   const current = s.progress.currentQuestionKey;
   const remaining = s.questions.filter((q) => !asked.has(q.key));
   const base: ScreenTurn = { messageToCandidate: "", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
-  const disclosure = `Hi ${s.name}, this is the hiring team at ${s.company}, using an AI assistant for a short screening for the ${s.role} role (about ${s.minutes} minutes, one question at a time). Reply HUMAN at any time to reach a person.`;
+  // A screen that starts with the assessment's open questions says so in the opening, after the disclosure.
+  const disclosure = `Hi ${s.name}, this is the hiring team at ${s.company}, using an AI assistant for a short screening for the ${s.role} role (about ${s.minutes} minutes, one question at a time). Reply HUMAN at any time to reach a person.${s.questions.some((q) => isFocusKey(q.key)) ? ` ${FOCUS_INTRO}` : ""}`;
   if (latest === null) {
     const first = remaining[0];
     return { ...base, messageToCandidate: first ? `${disclosure}\n\nFirst question: ${first.question}` : `${disclosure}\n\nThere is nothing more to ask; the team will be in touch.`, questionKey: first?.key ?? null, done: !first };

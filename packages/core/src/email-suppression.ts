@@ -8,7 +8,8 @@ import { normalizeEmail } from "./auth";
  * The do-not-send list for email. Every send consults it (the container wraps the email adapter); the webhook processor
  * and administrators write it; every change is audited. Platform-wide by address.
  */
-export type SuppressionReason = "hard_bounce" | "spam_complaint" | "soft_bounce_repeated" | "manual";
+/** `subscription_change` is Postmark telling us the recipient (or someone at Postmark) unsubscribed the address (H10); it is honoured like a manual block, never retried. */
+export type SuppressionReason = "hard_bounce" | "spam_complaint" | "soft_bounce_repeated" | "manual" | "subscription_change";
 export type SuppressionRow = typeof emailSuppressions.$inferSelect;
 
 /**
@@ -73,6 +74,16 @@ export async function recordWebhookReceipt(q: Queryable, input: { provider: stri
     if (/unique|duplicate|23505/i.test(message)) return false;
     throw err;
   }
+}
+
+/**
+ * The same first-time check, made inside the caller's transaction together with the handling of the event: ON CONFLICT
+ * DO NOTHING never aborts the transaction (a caught unique violation would), and a handling that fails rolls the
+ * receipt back with it, so the provider's redelivery is processed instead of being answered as a duplicate.
+ */
+export async function claimWebhookReceipt(q: Queryable, input: { provider: string; kind: string; externalId: string }): Promise<boolean> {
+  const rows = await q.insert(webhookReceipts).values({ provider: input.provider, kind: input.kind, externalId: input.externalId }).onConflictDoNothing().returning({ id: webhookReceipts.id });
+  return rows.length > 0;
 }
 
 /** Soft-bounce policy: two soft bounces inside a week become a suppression. */

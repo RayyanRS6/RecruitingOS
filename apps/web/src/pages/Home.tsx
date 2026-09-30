@@ -4,9 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "../nav";
 import { Alert, Bubble, Button, Card, Chip, ErrorState, Skeleton } from "@ros/ui";
-import { api, ApiError, type Brief, type BriefCard, type IntakeSession, type Notification } from "../api/client";
+import { api, ApiError, type Brief, type BriefCard, type IntakeSession, type Me, type Notification } from "../api/client";
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
+import { canStartHire } from "../roles";
 
 type Turn = { role: "assistant" | "user" | "system"; content: string };
 
@@ -21,11 +22,15 @@ export function Home() {
   const qc = useQueryClient();
   const nav = useNavigate();
   const brief = useQuery({ queryKey: ["brief"], queryFn: () => api.get<Brief>("/api/v1/brief") });
+  // The intake is gated by role.create on the server; the button only appears for the roles that hold it.
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
+  const myRole = me.data?.memberships.find((m) => m.companyId === me.data?.activeCompanyId)?.role ?? null;
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // A reload resumes the conversation the owner was in the middle of; the session lives on the server.
   const current = useQuery({ queryKey: ["intake", "current"], queryFn: () => api.get<{ session: IntakeSession | null }>("/api/v1/intake/sessions/current") });
@@ -49,6 +54,23 @@ export function Home() {
       await qc.invalidateQueries({ queryKey: ["intake", "current"] });
     },
   });
+
+  // "Start a hire": an intake session begins before the first message, and the conversation box takes focus.
+  const startHire = useMutation({
+    mutationFn: () => api.post<{ session: IntakeSession }>("/api/v1/intake/sessions", {}),
+    onSuccess: async (r) => {
+      setSessionId(r.session.id);
+      setReady(false);
+      setTurns([{ role: "assistant", content: "Tell me who you need to hire. The title, where they will work, the pay range and why the role is open is a good start; I will ask about the rest." }]);
+      await qc.invalidateQueries({ queryKey: ["intake", "current"] });
+      inputRef.current?.focus();
+    },
+    onError: (err) => toast(err instanceof ApiError ? err.message : "Could not start a hire. Try again."),
+  });
+  const beginHire = () => {
+    if (sessionId) { inputRef.current?.focus(); inputRef.current?.scrollIntoView({ block: "center" }); return; }
+    startHire.mutate();
+  };
 
   const send = useMutation({
     mutationFn: async (message: string) => {
@@ -80,7 +102,9 @@ export function Home() {
     onError: (err) => setTurns((t) => [...t, { role: "system", content: err instanceof ApiError ? err.message : "Could not draft the packet." }]),
   });
 
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [turns.length]);
+  // Scroll to the newest message whenever one is added.
+  const turnCount = turns.length;
+  useEffect(() => { if (turnCount) endRef.current?.scrollIntoView({ block: "end" }); }, [turnCount]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -97,7 +121,10 @@ export function Home() {
           <h1>Good {greeting()}.</h1>
           <p>{brief.data?.summary ?? "What needs you, who is worth a look, what is at risk, and what was handled for you."}</p>
         </div>
-        <AskRecruiter />
+        <div className="row">
+          {canStartHire(myRole) ? <Button variant="primary" loading={startHire.isPending} onClick={beginHire}>Start a hire</Button> : null}
+          <AskRecruiter />
+        </div>
       </div>
 
       {brief.isLoading ? <Skeleton lines={3} /> : brief.error ? <ErrorState message="Could not load your brief." onRetry={() => brief.refetch()} /> : (
@@ -110,9 +137,9 @@ export function Home() {
 
       <Card title="Your recruiting chief of staff">
         <div className="stack" style={{ gap: 10 }}>
-          {turns.length === 0 ? <Bubble role="assistant">Tell me who you need. For example: "I need a performance marketing manager in Los Angeles. $95,000 to $115,000. Hybrid, three days in the office. Someone who can start within 45 days."</Bubble> : null}
-          {turns.map((t, i) => <Bubble key={i} role={t.role}>{t.content}</Bubble>)}
-          {send.isPending ? <Bubble role="system">Thinking…</Bubble> : null}
+          {turns.length === 0 ? <Bubble from="assistant">Tell me who you need. For example: "I need a performance marketing manager in Los Angeles. $95,000 to $115,000. Hybrid, three days in the office. Someone who can start within 45 days."</Bubble> : null}
+          {turns.map((t, i) => <Bubble key={i} from={t.role}>{t.content}</Bubble>)}
+          {send.isPending ? <Bubble from="system">Thinking…</Bubble> : null}
           {/* Screen readers hear each new assistant reply without leaving the message box (accessibility checklist, known gap closed 21 Sep). */}
           <div className="sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="intake-announcer">{send.isPending ? "The assistant is thinking." : (turns.filter((t) => t.role !== "user").at(-1)?.content ?? "")}</div>
           {ready && sessionId ? (
@@ -125,7 +152,7 @@ export function Home() {
           ) : null}
           <div ref={endRef} />
           <form onSubmit={submit} className="row" style={{ alignItems: "stretch" }}>
-            <input className="input" style={{ flex: 1 }} placeholder={sessionId ? "Answer, or say 'draft it'" : "Who do you need to hire?"} value={draft} onChange={(e) => setDraft(e.target.value)} aria-label="Message" />
+            <input ref={inputRef} className="input" style={{ flex: 1 }} placeholder={sessionId ? "Answer, or say 'draft it'" : "Who do you need to hire?"} value={draft} onChange={(e) => setDraft(e.target.value)} aria-label="Message" />
             <Button type="submit" variant="primary" loading={send.isPending}>Send</Button>
           </form>
           {sessionId ? <p className="small muted">This conversation is drafting a role. <Button variant="quiet" size="sm" loading={startOver.isPending} onClick={() => startOver.mutate()}>Start over</Button></p> : null}
@@ -171,7 +198,7 @@ function BriefCardView({ card }: { card: BriefCard }) {
 }
 
 function label(kind: string): string {
-  return { new_applicants: "New applicants", needs_review: "Needs you", decision: "Decision", posting_action: "One step", escalation: "Recruiter", stuck: "Stuck", screening: "Screening", empty: "All clear" }[kind] ?? kind;
+  return { new_applicants: "New applicants", needs_review: "Needs you", decision: "Decision", posting_action: "One step", escalation: "Recruiter", stuck: "Stuck", screening: "Screening", interviews: "Your interviews", empty: "All clear" }[kind] ?? kind;
 }
 
 /** "Do it and tell me": what the assistant did on its own since you last looked. */

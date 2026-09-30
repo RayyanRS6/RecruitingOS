@@ -1,4 +1,4 @@
-# Developer onboarding: Recruiting OS, as of 24 September 2026
+# Developer onboarding: Recruiting OS, as of 24 September 2026 (tooling, tests and scripts updated 30 September 2026)
 
 For the developer joining Nadine (founder, Identified Talent Solutions). Everything the team has built lives in this
 private repository: the code, every decision, every runbook, and the current state. This page is the map; it points
@@ -13,7 +13,8 @@ recommends, the customer decides, and an ITS recruiter is one click away. Read, 
 1. `README.md`: run it locally in five minutes (Node 24, pnpm; no Postgres, no Docker).
 2. `docs/FOUNDER-CONTEXT.md` and `docs/17-founder-context-reconciliation.md`: the governing product context.
 3. `docs/README.md`: the product requirements as sixteen documents, from thesis to admin console.
-4. `docs/STATUS.md`: implementation status by slice.
+4. `docs/STATUS.md`: the current state (what is built, what is proven by tests, what needs a CI run, what only the
+   founder can do before a deploy), then the history by slice.
 5. `docs/spec/README.md` and `docs/spec/00-decisions-and-risks.md`: the release-1 production specification and the
    **decisions register**. Section Q of the register is the diary of everything decided and built since 21 September,
    newest at the bottom. If you read one thing beyond the README, read the register.
@@ -57,9 +58,42 @@ recommends, the customer decides, and an ITS recruiter is one click away. Read, 
 - `tests/scenario`, `tests/e2e`, `tests/policy`: the end-to-end hiring scenario on PGlite, Playwright journeys with
   accessibility checks, and policy tests (for example the service-role guard).
 - `scripts/`: the founder-run database scripts (`staging-db-setup.sh`, `staging-db-status.sh`,
-  `staging-db-check-role.sh`) and the repository secret scanner.
+  `staging-db-check-role.sh`), the repository secret scanner, and the application load run for staging
+  (`load-apply.ts`, `docs/readiness/03` section 7a). `load-apply.ts` posts synthetic applications to one job's apply
+  address exactly as the form does (the acknowledgment, every eligibility answer, a small text résumé, unique
+  addresses), honours each 429's `Retry-After` (capped by `--max-wait`), and prints accepted, rate-limited, refused and
+  server-error counts with latency percentiles: `tsx scripts/load-apply.ts --url <apply address> --count 200
+  --per-minute 5` (also `--email-domain`, `--timeout-ms`, `--json`). A host other than localhost must be named again
+  with `--confirm-host <host>`; never point it at production. `apps/api/src/load-apply.test.ts` proves it against a
+  local app.
 
-Locally everything runs on PGlite (Postgres in WebAssembly) with fake providers: `pnpm dev`, `pnpm test`.
+Locally everything runs on PGlite (Postgres in WebAssembly) with fake providers: `pnpm dev`, `pnpm test`. Two
+variables point the tests at a deployment instead: `TEST_DATABASE_URL` runs the isolation suites (row-level
+security, tenancy, security coverage, outcomes, privacy requests) on a real Postgres test database, connected as
+that database's owner role (the string that applied its migrations; the helpers refuse `ros_app` and `ros_worker`,
+which cannot read the migration ledger, and the proof of isolation is what happens inside `withTenant`, not the
+session role), and `E2E_BASE_URL` runs the Playwright specs against a deployed address, skipping the ones that
+need the fake sign-in page (`docs/readiness/03`, sections 2 and 8). In a test, `container.fake.scriptNext(task, output)` makes the fake
+model say one specific thing on its next call (`packages/ai/src/providers/fake.ts`); the résumé fixtures in
+`packages/agents/src/fixtures` are rebuilt with `tsx packages/agents/src/fixtures/build.ts`.
+
+Tests added with the release-1 completion work (30 September 2026), one file per area, so a change to an area has an
+obvious place to prove itself:
+
+| Area | Test files |
+|---|---|
+| Job distribution | `packages/core/src/postings.test.ts` (the nine states, tracked-link tokens, the posting package), `packages/integrations/src/jobboards/jobboards.test.ts` (adapters, JobPosting data, feeds, the URL check), `apps/api/src/job-distribution.test.ts`, `apps/api/src/postings-routes.test.ts` (the Posting tab's routes, the accepting switch, volume), `apps/api/src/public-job-surfaces.test.ts` (tracked links, the apply form's transparency block, feeds, sitemap), `apps/api/src/load-apply.test.ts` |
+| Team and company | `apps/api/src/team.test.ts` (invitations, member changes, every role over HTTP; `signInAs` in `apps/api/src/test-helpers.ts`), `apps/api/src/company-settings.test.ts` (company card, audit history, sessions, re-authentication, the public privacy-request form) |
+| Role packet and approval | `apps/api/src/packet.test.ts` |
+| After the interview | `apps/api/src/interview-loop.test.ts`, `apps/api/src/candidate-cancel.test.ts` |
+| Evidence and screening | `apps/api/src/intelligence.test.ts` ("Needs a closer look", "Ask about this in a screen"), `apps/api/src/screening-rules.test.ts` and `packages/agents/src/screening.test.ts` (the follow-up cap, "Talk to a person"), `packages/agents/src/documents.test.ts` (PDF and Word extraction from the fixtures) |
+| Messages and replies | `apps/api/src/messages.test.ts` (free-form messages, replies, the interviewer brief, the comparison view), `apps/api/src/postmark-subscription.test.ts`, `packages/integrations/src/email/postmark.test.ts` |
+| Report | `apps/api/src/role-report.test.ts` |
+| Operations | `apps/api/src/worker-health.test.ts`, `apps/api/src/job-failures.test.ts`, `apps/api/src/observability-route.test.ts`, `apps/api/src/env.test.ts`, `packages/integrations/src/scanning/clamav.test.ts` (against a stand-in clamd), `packages/integrations/src/comp/bls.test.ts` |
+| Browser (CI only) | `tests/e2e/specs/candidate-phone.spec.ts` (the candidate's journey on the phone project), `tests/e2e/specs/decision.spec.ts` (the decision after an interview) |
+
+Every test or script that posts the apply form must send `acknowledged=yes` (the form's required box); `SMS_ENABLED`
+is off in tests unless a test turns it on in its container environment.
 
 ## 4. Where staging stands today
 
@@ -88,6 +122,17 @@ their evidence. `docs/readiness/03-staging-verification-checklist.md` is the sta
 - The dev server used by Playwright runs with an explicit heap limit; Next restarts itself at 80 percent of the heap,
   which would wipe the in-memory database mid-run.
 - pnpm 12 refuses packages younger than 24 hours; pin the newest older release instead of adding an exclusion.
+- **The pnpm scripts are what CI runs** (`pnpm test`, `pnpm typecheck`, `pnpm lint`, `pnpm db:validate`, `pnpm eval`,
+  `pnpm e2e`; `.github/workflows/ci.yml`, and `pnpm ci:local` on a machine that allows it). On a machine where an
+  application-control policy blocks the pnpm executable (the team's Windows machine is one), call the shims in
+  `node_modules\.bin` directly from the repository root instead. In PowerShell 5.1 there is no `&&`; chain with `;`.
+  Tests: `$env:NODE_ENV='test'; $env:AI_PROVIDER='fake'; $env:EMAIL_PROVIDER='fake'; $env:SMS_PROVIDER='fake';
+  $env:AUTH_PROVIDER='fake'; $env:CALENDAR_PROVIDER='fake'; $env:STORAGE_PROVIDER='memory'; $env:PGLITE_DIR='memory://';
+  $env:WORKER_INLINE='true'; $env:COMP_BLS_ENABLED='false'; $env:RATE_LIMIT_STORE='fake'; & node_modules\.bin\vitest.cmd run <files>`.
+  Typecheck: `& node_modules\.bin\tsc.cmd -p <package>\tsconfig.json` for each package under `apps`, `packages` and
+  `tests`. Migration validator: `Set-Location packages\db; & ..\..\node_modules\.bin\tsx.cmd src/cli/validate.ts;
+  Set-Location ..\..`. Two steps cannot run there at all and need a CI run: Biome lint (its native binary is blocked
+  too) and the Playwright browser specs.
 - Trigger.dev was deferred by decision 1; Railway hosts the worker. Do not add a task runner.
 
 ## 6. Provider research the team relied on

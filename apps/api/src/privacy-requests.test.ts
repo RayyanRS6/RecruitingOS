@@ -5,7 +5,7 @@ import { adminAlerts, applications, auditRecords, candidates, communications, da
 import type { FakeEmailAdapter, MemoryStorageAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAdmin } from "./test-helpers";
+import { signInAdmin, testContainerOptions } from "./test-helpers";
 
 /**
  * Correction 7 (docs/runbooks/privacy-requests.md), built with synthetic data: a candidate can ask for a copy, a
@@ -37,7 +37,8 @@ describe("candidate privacy requests", () => {
   let candidateId = "";
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    // Texting on: the text-message choices on the status page need an applicant who consented on the form.
+    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SMS_ENABLED: "true" }));
     app = createApp(container);
     owner = await signIn("owner@harbor.test");
     admin = await signInAdmin(app, container, "admin@its.test", "admin");
@@ -55,6 +56,7 @@ describe("candidate privacy requests", () => {
     fd.set("resume", new File(["Maria Reyes, RDH\nRegistered Dental Hygienist at Coastal Family Dentistry 2019 - present\nSkills: Dentrix"], "maria.txt", { type: "text/plain" }));
     for (const rule of role.currentPacket.packet.requirements.eligibility) fd.set(`elig_${rule.key}`, "yes");
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
+    fd.set("acknowledged", "yes");
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
     statusToken = r.headers.get("location")!.split("/c/status/")[1].split("?")[0];
     await container.drain();
@@ -215,6 +217,7 @@ describe("candidate privacy requests", () => {
     fd.set("resume", new File(["Noor Haddad, RDH"], "noor.txt", { type: "text/plain" }));
     for (const rule of role.currentPacket.packet.requirements.eligibility) fd.set(`elig_${rule.key}`, "yes");
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
+    fd.set("acknowledged", "yes");
     const applied = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
     const token = applied.headers.get("location")!.split("/c/status/")[1].split("?")[0];
     await container.drain();
@@ -222,7 +225,7 @@ describe("candidate privacy requests", () => {
     const before = (await container.db.select().from(dr)).length;
     const auditsBefore = (await container.db.select().from(auditRecords)).length;
     // a forged or truncated token is a 404 and writes nothing
-    expect((await form("/c/status/" + token.slice(0, -2) + "zz/privacy", { kind: "access" })).status).toBe(404);
+    expect((await form(`/c/status/${token.slice(0, -2)}zz/privacy`, { kind: "access" })).status).toBe(404);
     expect((await form("/c/status/not-a-token/privacy", { kind: "access" })).status).toBe(404);
     expect((await form("/c/status/not-a-token/withdraw", { confirm: "yes" })).status).toBe(404);
     expect((await form("/c/status/not-a-token/sms", { pref: "off" })).status).toBe(404);
@@ -264,7 +267,8 @@ describe("candidate privacy requests", () => {
     expect(redactString(`POST /c/status/${token}/privacy 302`)).toContain("/c/status/");
     expect(redactString(`GET /api/v1/auth/consume?token=${token}`)).not.toContain(token);
     expect(redactString("GET /api/v1/admin/data-requests/lookup/candidate?email=noor.haddad@example.com 200")).not.toContain("noor.haddad");
-    // text-message choice: opting out is idempotent, opting in is not offered while texting is off
+    // text-message choice: opting out is idempotent, opting in is not offered while texting is off (switched off from here; the consent above was given while it was on)
+    container.env.SMS_ENABLED = false;
     await form(`/c/status/${token}/sms`, { pref: "off" });
     await form(`/c/status/${token}/sms`, { pref: "off" });
     expect((await container.db.select().from(dr).where(and(eq(dr.applicationId, appRow0.id), eq(dr.kind, "sms_opt_out")))).length).toBe(1);

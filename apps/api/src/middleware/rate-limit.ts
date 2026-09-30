@@ -9,7 +9,7 @@ import { clientIp, type Vars } from "./session";
  * trips raises an alert for the ITS console. Webhooks are limited generously and never refuse a provider's valid retry.
  */
 export type SubjectKind = "ip" | "user" | "tenant" | "token" | "email" | "role" | "provider" | "auth_failure";
-export type Rule = { by: SubjectKind; windowMs: number; limit: number; /** route param holding the token or role id */ param?: string; /** JSON body field holding the email */ field?: string };
+export type Rule = { by: SubjectKind; windowMs: number; limit: number; /** route param holding the token or role id */ param?: string; /** body field holding the email (a JSON body or a posted form) or the token (a posted form) */ field?: string };
 export type Policy = { name: string; rules: Rule[] };
 
 const MIN = 60_000;
@@ -21,10 +21,16 @@ export const POLICIES = {
   /** Code entry for the staff second factor: the transaction itself allows five tries; this bounds the address. */
   authMfa: { name: "auth.mfa", rules: [{ by: "ip", windowMs: 15 * MIN, limit: 40 }] },
   authMagicLink: { name: "auth.magic_link", rules: [{ by: "ip", windowMs: 15 * MIN, limit: 10 }, { by: "email", windowMs: 15 * MIN, limit: 5, field: "email" }] },
+  /** "Email me a sign-in link" on the team invitation page: the link goes to the invited address only, so the second rule is per invitation (the form's token), whoever holds the link and from wherever they post it. */
+  authInviteEmail: { name: "auth.invite_email", rules: [{ by: "ip", windowMs: 15 * MIN, limit: 10 }, { by: "token", windowMs: 15 * MIN, limit: 3, field: "token" }] },
   apply: { name: "apply", rules: [{ by: "ip", windowMs: HOUR, limit: 30 }, { by: "role", windowMs: HOUR, limit: 600, param: "roleId" }] },
   screen: { name: "candidate.screen", rules: [{ by: "token", windowMs: HOUR, limit: 120, param: "token" }, { by: "ip", windowMs: HOUR, limit: 240 }] },
   screenHuman: { name: "candidate.screen_human", rules: [{ by: "token", windowMs: HOUR, limit: 30, param: "token" }, { by: "ip", windowMs: HOUR, limit: 60 }] },
   privacy: { name: "candidate.privacy_request", rules: [{ by: "token", windowMs: HOUR, limit: 5, param: "token" }, { by: "ip", windowMs: HOUR, limit: 10 }] },
+  /** The public privacy-request form (no link to bind to): per address, and per mailbox typed into the form (the email is normalized, so a change of case is the same mailbox). */
+  privacyForm: { name: "candidate.privacy_form", rules: [{ by: "ip", windowMs: HOUR, limit: 10 }, { by: "email", windowMs: HOUR, limit: 5, field: "email" }] },
+  /** Pressing the confirmation button on the emailed privacy-request link: per link (the posted token) and per address. */
+  privacyVerify: { name: "candidate.privacy_verify", rules: [{ by: "token", windowMs: HOUR, limit: 10, field: "token" }, { by: "ip", windowMs: HOUR, limit: 30 }] },
   withdraw: { name: "candidate.withdraw", rules: [{ by: "token", windowMs: HOUR, limit: 5, param: "token" }, { by: "ip", windowMs: HOUR, limit: 20 }] },
   smsPref: { name: "candidate.sms_pref", rules: [{ by: "token", windowMs: HOUR, limit: 10, param: "token" }, { by: "ip", windowMs: HOUR, limit: 30 }] },
   schedule: { name: "candidate.schedule", rules: [{ by: "token", windowMs: HOUR, limit: 30, param: "token" }, { by: "ip", windowMs: HOUR, limit: 60 }] },
@@ -41,17 +47,28 @@ export const POLICIES = {
   candidatePages: { name: "candidate.pages", rules: [{ by: "ip", windowMs: MIN, limit: 240 }] },
 } satisfies Record<string, Policy>;
 
+/** A field of a posted form (the invitation page's token, for instance). Hono caches the parsed body, so the handler reads it again for free. */
+async function formField(c: Context<Vars>, field: string): Promise<string | undefined> {
+  try {
+    const v = (await c.req.parseBody())[field];
+    return typeof v === "string" && v ? v : undefined;
+  } catch { return undefined; }
+}
+
 async function subjectOf(c: Context<Vars>, rule: Rule): Promise<string | undefined> {
   switch (rule.by) {
     case "ip": case "auth_failure": return clientIp(c) ?? "unknown";
     case "user": return c.get("session")?.user.id;
     case "tenant": return c.get("tenant")?.companyId;
-    case "token": case "role": return c.req.param(rule.param ?? "token");
+    case "token": case "role": return rule.field ? formField(c, rule.field) : c.req.param(rule.param ?? "token");
     case "provider": return c.req.path.split("/")[2] ?? "unknown";
     case "email": {
+      // the same mailbox however it is typed: trimmed and lower-cased, from a JSON body or a posted form
+      const field = rule.field ?? "email";
+      if (!(c.req.header("content-type") ?? "").includes("json")) return (await formField(c, field))?.trim().toLowerCase() || undefined;
       try {
         const body = (await c.req.json()) as Record<string, unknown>;
-        const v = body[rule.field ?? "email"];
+        const v = body[field];
         return typeof v === "string" ? v.trim().toLowerCase() : undefined;
       } catch { return undefined; }
     }
@@ -87,12 +104,12 @@ async function recordTrip(c: Context<Vars>, policy: string, rule: Rule, key: str
   if (trips.count !== 1 && trips.count !== ALERT_AFTER_TRIPS) return;
   const companyId = c.get("tenant")?.companyId ?? null;
   const keyHash = key.slice(0, 16);
-  await audit(container.db, { companyId, actor: { kind: "system", id: "rate_limit" }, action: "security.rate_limited", reason: policy, ip: clientIp(c), details: { policy, subject: rule.by, keyHash, path: maskTokenPath(c.req.path), count: d.count, limit: d.limit, trips: trips.count } }).catch(() => undefined);
+  await audit(container.db, { companyId, actor: { kind: "system", id: "rate_limit" }, action: "security.rate_limited", reason: policy, ip: clientIp(c), details: { policy, subject: rule.by, keyHash, path: maskTokenPath(c.req.path), count: d.count, limit: d.limit, trips: trips.count } }).catch((err) => console.warn(`[rate-limit] could not record the security event: ${err instanceof Error ? err.message : String(err)}`));
   const mark = `${key}:${trips.resetAt}`;
   if (trips.count >= ALERT_AFTER_TRIPS && !alerted.has(mark)) {
     alerted.add(mark);
     if (alerted.size > 5000) alerted.clear();
-    await raiseAlert(container.db, { kind: "security.suspicious_activity", severity: "high", title: `Repeated rate-limit trips: ${policy}`, body: `The same ${rule.by} tripped the ${policy} limit ${trips.count} times in one window. Key hash ${keyHash}. Check the security audit records for the path and address.`, companyId, details: { policy, subject: rule.by, keyHash, trips: trips.count } }).catch(() => undefined);
+    await raiseAlert(container.db, { kind: "security.suspicious_activity", severity: "high", title: `Repeated rate-limit trips: ${policy}`, body: `The same ${rule.by} tripped the ${policy} limit ${trips.count} times in one window. Key hash ${keyHash}. Check the security audit records for the path and address.`, companyId, details: { policy, subject: rule.by, keyHash, trips: trips.count } }).catch((err) => console.warn(`[rate-limit] could not raise the suspicious-activity alert: ${err instanceof Error ? err.message : String(err)}`));
   }
 }
 

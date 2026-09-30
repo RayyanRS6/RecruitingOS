@@ -2,35 +2,62 @@
 /** @jsxImportSource hono/jsx */
 import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { ApplyRequest, CandidateSmsPreference, MAX_RESUME_BYTES, inspectResumeFile, type RolePacket } from "@ros/contracts";
-import { openScreen, requestHuman, runScreenTurn } from "@ros/agents";
-import { STAGE_LABEL, audit, createDataRequest, emit, fulfilSmsOptOut, fulfilWithdrawal, humanResponseExpectation, loadBusinessCalendar, noticesFor, notify, openHumanReview, resolveJurisdictions, transition } from "@ros/core";
+import { ApplyRequest, CandidateSmsPreference, MAX_RESUME_BYTES, formatPayRange, inspectResumeFile, type RolePacket } from "@ros/contracts";
+import { answersOf, focusedPacket, openScreen, requestHuman, runScreenTurn } from "@ros/agents";
+import { STAGE_LABEL, audit, candidateNotices, createDataRequest, emit, fulfilSmsOptOut, fulfilWithdrawal, humanResponseExpectation, loadBusinessCalendar, noticesFor, notify, openHumanReview, resolveJurisdictions, transition, type Notice } from "@ros/core";
 import { CandidatePrivacyRequest } from "@ros/contracts";
 import { sendPrivacyAcknowledgment, sendPrivacyCompletion } from "@ros/agents";
 import { applications, candidates, communications, companies, dataRequests, interviews, rolePackets, roles, screens, uuidv7, withPlatform, withTenant } from "@ros/db";
 import { jobPostingJsonLd, refFor } from "@ros/integrations";
 import { randomToken } from "@ros/db";
 import { UPLOAD_GRANT_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS, checkUploadIntent, quarantineKey } from "../uploads";
-import type { Vars } from "../middleware/session";
+import { clientIp, type Vars } from "../middleware/session";
 import type { Container } from "../container";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { createApplication, type ResumeInput } from "../services/applications";
+import { jobUrls } from "../services/job-urls";
 import { screenDeps } from "../services/screens";
 import { Layout, currentNonce } from "./layout";
+import { clearApplicationSource, resolveApplicationSource } from "./links";
 
 export const candidatePages = new Hono<Vars>();
 
 function money(p: RolePacket): string {
-  const c = p.compensation;
-  if (!c.discloseRange) return "";
-  return c.basis === "hourly" ? `$${c.min}–$${c.max} an hour` : `$${c.min.toLocaleString()}–$${c.max.toLocaleString()} a year`;
+  return formatPayRange(p.compensation, { onlyIfDisclosed: true });
 }
+
+/**
+ * The "accepting applications" switch and a pause (docs/spec/20 item 16) both keep the job page up and close the form:
+ * the page says so, the apply routes answer 404, and nobody already in the process is touched.
+ */
+function acceptingApplications(role: { status: string; acceptingApplications: boolean }): boolean {
+  return role.status === "open" && role.acceptingApplications;
+}
+
+/** What the job page says instead of the Apply button. */
+function closedMessage(role: { status: string }): string {
+  return role.status === "closed" ? "This position is closed and no longer taking applications." : "This position is not taking new applications right now.";
+}
+
+/**
+ * The notice versions recorded as shown (docs/readiness/20 section D): the notices the page renders as text, plus the
+ * SMS consent text only when the checkbox was on the page. Computed by the server on every render and again on the
+ * submission, never taken from the browser.
+ */
+function noticeVersionsFor(notices: Notice[], smsEnabled: boolean): string[] {
+  const shown = candidateNotices(notices);
+  const sms = smsEnabled ? notices.find((n) => n.key === "sms_consent") : undefined;
+  return [...shown, ...(sms ? [sms] : [])].map((n) => `${n.key}@${n.version}`);
+}
+
+/** Without JavaScript the résumé travels inside the form itself, which the platform refuses above a few megabytes; this cap gives that case a plain answer (D14). */
+export const NO_SCRIPT_MAX_RESUME_BYTES = 4 * 1024 * 1024;
 
 async function loadJob(db: Vars["Variables"]["container"]["db"], slug: string, roleId: string) {
   const [company] = await db.select().from(companies).where(eq(companies.slug, slug)).limit(1);
   if (!company) return null;
   const [role] = await db.select().from(roles).where(and(eq(roles.id, roleId), eq(roles.companyId, company.id))).limit(1);
-  if (!role || !role.currentPacketVersion) return null;
+  if (!role?.currentPacketVersion) return null;
   const [pv] = await db.select().from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, role.currentPacketVersion))).limit(1);
   if (!pv) return null;
   return { company, role, packet: pv.packet };
@@ -49,7 +76,8 @@ candidatePages.get("/careers/:slug", async (c) => {
       {open.map((r) => (
         <div class="card">
           <h2 style="margin-top:0">{r.title}</h2>
-          <a class="btn" href={`/careers/${company.slug}/jobs/${r.id}`}>View and apply</a>
+          {r.acceptingApplications ? null : <p class="meta">Not taking new applications right now.</p>}
+          <a class="btn" href={`/careers/${company.slug}/jobs/${r.id}`}>{r.acceptingApplications ? "View and apply" : "View details"}</a>
         </div>
       ))}
       <p class="notice"><a href="/privacy">How we handle your information</a></p>
@@ -62,12 +90,26 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
   const job = await loadJob(container.db, c.req.param("slug"), c.req.param("roleId"));
   if (!job) return c.notFound();
   const { company, role, packet } = job;
-  const isOpen = role.status === "open";
-  const jobUrl = `${container.env.APP_BASE_URL}/careers/${company.slug}/jobs/${role.id}`;
-  const jsonLd = isOpen ? jobPostingJsonLd({ roleId: role.id, companyName: company.name, companySlug: company.slug, packet, jobUrl, applyUrl: `${jobUrl}/apply`, datePosted: (role.openedAt ?? role.createdAt).slice(0, 10) }) : undefined;
+  const accepting = acceptingApplications(role);
+  const smsEnabled = container.env.SMS_ENABLED;
+  const urls = jobUrls(container.env, { slug: company.slug, roleId: role.id });
+  // The JobPosting block stays on paused and closed pages (docs/spec/20 item 4): validThrough renews itself while the
+  // role is open and becomes the closing day once it is closed, so search engines drop the listing on their own.
+  const jsonLd = jobPostingJsonLd({
+    roleId: role.id,
+    companyName: company.name,
+    companySlug: company.slug,
+    packet,
+    jobUrl: urls.job,
+    applyUrl: urls.apply,
+    datePosted: (role.openedAt ?? role.createdAt).slice(0, 10),
+    closedAt: role.status === "closed" ? (role.closedAt ?? role.updatedAt) : null,
+    companyWebsite: company.settings.website ?? null,
+    companyLogoUrl: company.settings.logoUrl ?? null,
+  });
   const loc = packet.identity.locations[0];
   const jurisdictions = resolveJurisdictions([...packet.identity.locations, ...company.locations]);
-  const notices = noticesFor(jurisdictions, company.settings.notices);
+  const notices = candidateNotices(noticesFor(jurisdictions, company.settings.notices));
   return c.html(
     <Layout title={`${packet.identity.title} at ${company.name}`} jsonLd={jsonLd}>
       <p class="meta"><a href={`/careers/${company.slug}`}>{company.name}</a></p>
@@ -78,48 +120,106 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
         {money(packet) ? <span class="chip">{money(packet)}</span> : null}
         {packet.identity.schedule ? <span class="chip">{packet.identity.schedule}</span> : null}
       </div>
-      {!isOpen ? <div class="err">This position is not accepting applications right now.</div> : null}
+      {!accepting ? <div class="err" role="status">{closedMessage(role)}</div> : null}
       <p style="white-space:pre-wrap">{packet.description.publicJobDescription}</p>
       <h2>What to expect</h2>
       <ol class="steps">
         <li>Apply in about three minutes. We confirm by email.</li>
-        <li>A short screening conversation by text or online (about {packet.screening.maxMinutes} minutes) if your background looks like a fit.</li>
+        <li>A short screening conversation {smsEnabled ? "by text or online" : "online"} (about {packet.screening.maxMinutes} minutes) if your background looks like a fit.</li>
         {packet.interviews.plan.map((r) => <li>{r.title} ({r.durationMinutes} minutes)</li>)}
         <li>A decision, and a real answer either way.</li>
       </ol>
       {notices.filter((n) => n.key === "ai_use" || n.key === "pay_transparency").map((n) => <p class="notice">{n.text}</p>)}
-      {isOpen ? <a class="btn" href={`/careers/${company.slug}/jobs/${role.id}/apply`}>Apply now</a> : null}
+      {accepting ? <a class="btn" href={`/careers/${company.slug}/jobs/${role.id}/apply`}>Apply now</a> : null}
       <p class="notice" style="margin-top:22px"><a href="/privacy">How we handle your information</a></p>
     </Layout>,
   );
 });
 
-function ApplyForm(props: { company: { slug: string; name: string }; role: { id: string }; packet: RolePacket; notices: ReturnType<typeof noticesFor>; error?: string; values?: Record<string, string> }) {
-  const v = props.values ?? {};
+/**
+ * What a re-rendered form keeps (D12): every typed value, every eligibility answer, both checkboxes, which fields were
+ * missing, and a resume the browser already uploaded directly (its sealed grant goes back into the form, so the file
+ * stays attached). A file posted inside the form itself cannot be put back by any browser: `resumeLost` makes the page
+ * say so instead of claiming everything is still there.
+ */
+type ApplyFormState = { values: Record<string, string>; answers: Record<string, string | string[]>; acknowledged: boolean; smsConsent: boolean; missing: string[]; resume: { grant: string; filename: string } | null; resumeLost: boolean };
+
+/** The sentence a re-shown form ends its error with: true about what is still on the page. */
+function keptSentence(resumeLost: boolean): string {
+  return resumeLost ? "Everything you typed is still here, but please attach your resume again." : "Everything you entered is still here.";
+}
+
+type ApplyFormProps = {
+  company: { slug: string; name: string };
+  role: { id: string };
+  packet: RolePacket;
+  /** Every notice for the jurisdictions; the form itself decides what is rendered (candidateNotices) and what is a checkbox. */
+  notices: Notice[];
+  smsEnabled: boolean;
+  privacyEmail: string;
+  error?: string;
+  state?: Partial<ApplyFormState>;
+};
+
+/**
+ * The transparency block (docs/readiness/20 section D, items 1 to 10) sits above the submit button: who runs the
+ * process, what is collected and why, who may see it, how to exercise the candidate's rights, the privacy address, the
+ * link to the notice, and the affirmative acknowledgment. Plain words, short sentences, nothing pre-checked.
+ */
+function TransparencyBlock(props: { company: { name: string }; notices: Notice[]; privacyEmail: string; acknowledged: boolean; missing: boolean; resumeLost: boolean }) {
+  return (
+    <section class="card" aria-labelledby="before-you-send">
+      <h2 id="before-you-send" style="margin-top:0">Before you send</h2>
+      <p><strong>{props.company.name}</strong> runs this hiring process and is the employer. People at {props.company.name} make every hiring decision; software only helps organize and summarize.</p>
+      <p><strong>What we collect:</strong> your name, your email, your phone number if you give one, where you are based, your resume or the summary you write, and your answers to the questions above.</p>
+      <p><strong>Why:</strong> to consider you for this position and to contact you about it. Nothing else.</p>
+      <p><strong>Who can see it:</strong> the hiring team at {props.company.name}; an Identified Talent Solutions recruiter only if {props.company.name} brings one in to help; and the companies that run this service for us: hosting, file storage, email delivery, and the AI service that helps organize applications. Each does only its own job; the privacy page linked below says what each one does.</p>
+      <p><strong>Your choices:</strong> after you apply, your status page lets you ask for a copy of your information, correct it, withdraw your application, or delete your information. You can also email <a href={`mailto:${props.privacyEmail}`}>{props.privacyEmail}</a> at any time. A person handles every request.</p>
+      <p><a href="/privacy">Read how we handle your information</a></p>
+      {props.notices.map((n) => <p class="notice">{n.text}</p>)}
+      <label class="check" for="acknowledged">
+        <input id="acknowledged" type="checkbox" name="acknowledged" value="yes" required checked={props.acknowledged} aria-invalid={props.missing ? "true" : undefined} aria-describedby={props.missing ? "acknowledged-error" : undefined} />
+        <span>I have read the notice above and I understand that people, not software, make the hiring decisions.</span>
+      </label>
+      {props.missing ? <p class="err" id="acknowledged-error">Please tick this box to send your application. {keptSentence(props.resumeLost)}</p> : null}
+    </section>
+  );
+}
+
+function ApplyForm(props: ApplyFormProps) {
+  const v = props.state?.values ?? {};
+  const answers = props.state?.answers ?? {};
+  const missing = new Set(props.state?.missing ?? []);
+  const shown = candidateNotices(props.notices);
+  const smsNotice = props.smsEnabled ? props.notices.find((n) => n.key === "sms_consent") : undefined;
   const eligibility = props.packet.requirements.eligibility;
+  const invalid = (field: string) => (missing.has(field) ? "true" : undefined);
+  const chosen = (key: string) => (typeof answers[key] === "string" ? (answers[key] as string) : "");
+  const chosenDays = (key: string) => (Array.isArray(answers[key]) ? (answers[key] as string[]) : []);
+  const kept = props.state?.resume ?? null;
   return (
     <Layout title={`Apply: ${props.packet.identity.title} at ${props.company.name}`}>
       <p class="meta"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>← {props.packet.identity.title}</a></p>
       <h1>Apply</h1>
       <p>Three minutes. Upload a resume, or answer four short questions instead.</p>
-      {props.error ? <div class="err">{props.error}</div> : null}
+      {props.error ? <div class="err" role="alert">{props.error}</div> : null}
       <form method="post" enctype="multipart/form-data" data-upload-intent={`/careers/${props.company.slug}/jobs/${props.role.id}/upload-intent`}>
-        <input type="text" name="website" tabindex={-1} autocomplete="off" style="position:absolute;left:-10000px" aria-hidden="true" />
-        <input type="hidden" name="uploadGrant" value="" />
+        <input type="text" name="website" tabindex={-1} autocomplete="off" style="position:absolute;left:-10000px" aria-label="Leave this field empty" />
+        <input type="hidden" name="uploadGrant" value={kept?.grant ?? ""} />
         <label for="firstName">First name</label>
-        <input id="firstName" type="text" name="firstName" required value={v.firstName ?? ""} />
+        <input id="firstName" type="text" name="firstName" required value={v.firstName ?? ""} aria-invalid={invalid("firstName")} />
         <label for="lastName">Last name</label>
-        <input id="lastName" type="text" name="lastName" required value={v.lastName ?? ""} />
+        <input id="lastName" type="text" name="lastName" required value={v.lastName ?? ""} aria-invalid={invalid("lastName")} />
         <label for="email">Email</label>
-        <input id="email" type="email" name="email" required value={v.email ?? ""} />
+        <input id="email" type="email" name="email" required value={v.email ?? ""} aria-invalid={invalid("email")} />
         <label for="phone">Mobile phone (optional)</label>
-        <input id="phone" type="tel" name="phone" value={v.phone ?? ""} />
-        <label class="check"><input type="checkbox" name="smsConsent" value="yes" /> <span>{props.notices.find((n) => n.key === "sms_consent")?.text}</span></label>
+        <input id="phone" type="tel" name="phone" value={v.phone ?? ""} aria-invalid={invalid("phone")} />
+        {smsNotice ? <label class="check"><input type="checkbox" name="smsConsent" value="yes" checked={!!props.state?.smsConsent} /> <span>{smsNotice.text}</span></label> : null}
         <label for="locationText">Where are you based? (city, state)</label>
-        <input id="locationText" type="text" name="locationText" value={v.locationText ?? ""} />
-        <label for="resume">Resume (PDF, Word, or text; up to 8 MB)</label>
+        <input id="locationText" type="text" name="locationText" value={v.locationText ?? ""} aria-invalid={invalid("locationText")} />
+        <label for="resume">Resume (PDF, Word, or text; up to 8 MB, or up to 4 MB without JavaScript)</label>
         <input id="resume" type="file" name="resume" accept=".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" />
-        <small id="upload-note" aria-live="polite"></small>
+        <small id="upload-note" aria-live="polite">{kept ? `Your resume ${kept.filename} is still attached. Choose a file only if you want to replace it.` : props.state?.resumeLost ? "Your resume is not attached any more. Please choose the file again." : ""}</small>
         <label for="noResume">No resume? Tell us about your most recent work and what you are looking for.</label>
         <textarea id="noResume" name="noResume" rows={4}>{v.noResume ?? ""}</textarea>
         {eligibility.length ? <h2>A few quick questions</h2> : null}
@@ -129,21 +229,21 @@ function ApplyForm(props: { company: { slug: string; name: string }; role: { id:
             {rule.type === "schedule_availability" && Array.isArray((rule.expectation as { days?: string[] }).days) && ((rule.expectation as { days?: string[] }).days ?? []).length > 0 ? (
               <div>
                 {(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const).map((d) => (
-                  <label class="check"><input type="checkbox" name={`elig_${rule.key}`} value={d} /> {d}</label>
+                  <label class="check"><input type="checkbox" name={`elig_${rule.key}`} value={d} checked={chosenDays(rule.key).includes(d)} /> {d}</label>
                 ))}
               </div>
             ) : (
               <select id={`elig_${rule.key}`} name={`elig_${rule.key}`} required>
-                <option value="">Choose…</option>
-                <option value="yes">Yes</option>
-                <option value="no">No</option>
+                <option value="" selected={chosen(rule.key) === ""}>Choose…</option>
+                <option value="yes" selected={chosen(rule.key) === "yes"}>Yes</option>
+                <option value="no" selected={chosen(rule.key) === "no"}>No</option>
               </select>
             )}
             <small>{rule.rationale}</small>
           </div>
         ))}
-        {props.notices.filter((n) => n.key !== "sms_consent").map((n) => <p class="notice">{n.text}</p>)}
-        <input type="hidden" name="noticeVersionsShown" value={props.notices.map((n) => `${n.key}@${n.version}`).join(",")} />
+        <TransparencyBlock company={props.company} notices={shown} privacyEmail={props.privacyEmail} acknowledged={!!props.state?.acknowledged} missing={missing.has("acknowledged")} resumeLost={!!props.state?.resumeLost} />
+        <input type="hidden" name="noticeVersionsShown" value={noticeVersionsFor(props.notices, props.smsEnabled).join(",")} />
         <button class="btn" type="submit">Send my application</button>
       </form>
       <script nonce={currentNonce()} dangerouslySetInnerHTML={{ __html: APPLY_UPLOAD_JS }} />
@@ -163,7 +263,8 @@ var input=form.querySelector('input[type=file][name=resume]');var grant=form.que
 if(!input||!grant){return;}
 var busy=false;
 function say(t){if(note){note.textContent=t;}}
-function fallback(file){form.removeAttribute('data-upload-intent');if(file.size>4*1024*1024){say('The direct upload did not work and files over 4 MB cannot be sent another way. Please try again in a moment.');busy=false;if(submit){submit.disabled=false;}return;}form.submit();}
+input.addEventListener('change',function(){if(input.files&&input.files.length&&grant.value){grant.value='';say('');}});
+function fallback(file){form.removeAttribute('data-upload-intent');if(file.size>4*1024*1024){say('The direct upload did not work. Files over 4 MB can only be sent by the direct upload: please try again in a moment, or choose a smaller file.');busy=false;if(submit){submit.disabled=false;}return;}form.submit();}
 form.addEventListener('submit',function(ev){
 if(busy){ev.preventDefault();return;}
 var file=input.files&&input.files[0];if(!file||grant.value){return;}
@@ -179,11 +280,11 @@ fetch(form.getAttribute('data-upload-intent'),{method:'POST',headers:{'content-t
 candidatePages.get("/careers/:slug/jobs/:roleId/apply", async (c) => {
   const container = c.get("container");
   const job = await loadJob(container.db, c.req.param("slug"), c.req.param("roleId"));
-  if (!job || job.role.status !== "open") return c.notFound();
+  if (!job || !acceptingApplications(job.role)) return c.notFound();
   const notices = noticesFor(resolveJurisdictions([...job.packet.identity.locations, ...job.company.locations]), job.company.settings.notices);
-  // Funnel measurement without identity (correction 14): a random per-visit reference, no cookie, no candidate data, no client script.
-  void container.integrations.analytics.capture({ name: "application_started", subjectRef: randomToken(12), companyRef: refFor(job.company.id, container.integrations.analyticsSalt), at: new Date().toISOString(), properties: { source: "careers_page" } }).catch(() => undefined);
-  return c.html(<ApplyForm company={job.company} role={job.role} packet={job.packet} notices={notices} />);
+  // Funnel measurement without identity (correction 14): a random per-visit reference, no candidate data, no client script; the source comes from the tracked-link cookie when there is one.
+  void container.integrations.analytics.capture({ name: "application_started", subjectRef: randomToken(12), companyRef: refFor(job.company.id, container.integrations.analyticsSalt), at: new Date().toISOString(), properties: { source: resolveApplicationSource(c, job.role.id).source } }).catch(() => undefined);
+  return c.html(<ApplyForm company={job.company} role={job.role} packet={job.packet} notices={notices} smsEnabled={container.env.SMS_ENABLED} privacyEmail={container.env.PRIVACY_EMAIL} />);
 });
 
 /**
@@ -193,7 +294,7 @@ candidatePages.get("/careers/:slug/jobs/:roleId/apply", async (c) => {
 candidatePages.post("/careers/:slug/jobs/:roleId/upload-intent", rateLimit(POLICIES.apply), async (c) => {
   const container = c.get("container");
   const job = await loadJob(container.db, c.req.param("slug") ?? "", c.req.param("roleId") ?? "");
-  if (!job || job.role.status !== "open") return c.json({ error: { code: "not_found", message: "This role is not accepting applications." } }, 404);
+  if (!job || !acceptingApplications(job.role)) return c.json({ error: { code: "not_found", message: "This position is not taking new applications right now." } }, 404);
   let raw: unknown = null;
   try { raw = await c.req.json(); } catch { raw = null; }
   const intent = checkUploadIntent(raw);
@@ -210,46 +311,67 @@ candidatePages.post("/careers/:slug/jobs/:roleId/upload-intent", rateLimit(POLIC
 candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.apply), async (c) => {
   const container = c.get("container");
   const job = await loadJob(container.db, c.req.param("slug") ?? "", c.req.param("roleId") ?? "");
-  if (!job || job.role.status !== "open") return c.notFound();
+  if (!job || !acceptingApplications(job.role)) return c.notFound();
   const { company, role, packet } = job;
+  const smsEnabled = container.env.SMS_ENABLED;
   const notices = noticesFor(resolveJurisdictions([...packet.identity.locations, ...company.locations]), company.settings.notices);
+  // The versions recorded as shown are the server's own, computed from the same inputs as the render; a browser cannot claim a different set.
+  const noticeVersionsShown = noticeVersionsFor(notices, smsEnabled);
   const body = await c.req.parseBody({ all: true });
   const str = (k: string) => (typeof body[k] === "string" ? (body[k] as string) : Array.isArray(body[k]) ? String((body[k] as string[])[0]) : "");
   const eligibilityAnswers: Record<string, unknown> = {};
+  const answers: Record<string, string | string[]> = {};
   for (const rule of packet.requirements.eligibility) {
     const raw = body[`elig_${rule.key}`];
-    if (Array.isArray(raw)) eligibilityAnswers[rule.key] = raw.filter((x): x is string => typeof x === "string");
-    else if (typeof raw === "string" && raw !== "") eligibilityAnswers[rule.key] = raw;
+    if (Array.isArray(raw)) eligibilityAnswers[rule.key] = answers[rule.key] = raw.filter((x): x is string => typeof x === "string");
+    else if (typeof raw === "string" && raw !== "") eligibilityAnswers[rule.key] = answers[rule.key] = raw;
   }
+  const acknowledged = str("acknowledged") === "yes";
+  // While texting is off (decision M2) the checkbox is not on the page, and a posted value is ignored: no consent is recorded and no event is emitted.
+  const smsConsent = smsEnabled && str("smsConsent") === "yes";
+  const values = { firstName: str("firstName"), lastName: str("lastName"), email: str("email"), phone: str("phone"), locationText: str("locationText"), noResume: str("noResume") };
+  const state = (missing: string[] = [], resume: Pick<ApplyFormState, "resume" | "resumeLost"> = { resume: null, resumeLost: false }): Partial<ApplyFormState> => ({ values, answers, acknowledged, smsConsent, missing, ...resume });
+  const again = (error: string, missing: string[] = [], resume?: Pick<ApplyFormState, "resume" | "resumeLost">) => c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} smsEnabled={smsEnabled} privacyEmail={container.env.PRIVACY_EMAIL} error={error} state={state(missing, resume)} />, 400);
   const parsed = ApplyRequest.safeParse({
-    firstName: str("firstName"),
-    lastName: str("lastName"),
-    email: str("email"),
-    phone: str("phone") || undefined,
-    locationText: str("locationText") || undefined,
-    smsConsent: str("smsConsent") === "yes",
+    firstName: values.firstName,
+    lastName: values.lastName,
+    email: values.email,
+    phone: values.phone || undefined,
+    locationText: values.locationText || undefined,
+    smsConsent,
     answers: eligibilityAnswers,
-    noResumeAnswers: str("noResume") ? { summary: str("noResume") } : undefined,
+    noResumeAnswers: values.noResume ? { summary: values.noResume } : undefined,
     website: str("website") || undefined,
-    noticeVersionsShown: str("noticeVersionsShown").split(",").filter(Boolean),
+    noticeVersionsShown,
+    acknowledged,
   });
   if (!parsed.success) {
-    return c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} error="Please check the highlighted fields: a first name, last name, and a valid email are required." values={{ firstName: str("firstName"), lastName: str("lastName"), email: str("email"), phone: str("phone"), locationText: str("locationText"), noResume: str("noResume") }} />, 400);
+    const missing = [...new Set(parsed.error.issues.map((i) => String(i.path[0] ?? "")).filter(Boolean))];
+    const onlyAcknowledgment = missing.length === 1 && missing[0] === "acknowledged";
+    // A resume the browser already uploaded stays attached: its grant, still valid for this company and role, goes back into
+    // the form. A file posted inside the form (or a grant that no longer opens) cannot be put back, and the page says so.
+    const grantBack = str("uploadGrant");
+    const opened = grantBack ? container.uploadGrants.open(grantBack, container.engine.clock()) : null;
+    const keptResume = opened && opened.companyId === company.id && opened.roleId === role.id ? { grant: grantBack, filename: opened.filename } : null;
+    const posted = body.resume;
+    const postedFile = !!posted && typeof posted === "object" && "size" in posted && (posted as File).size > 0;
+    const resumeLost = !keptResume && (postedFile || !!grantBack);
+    const still = keptSentence(resumeLost);
+    return again(onlyAcknowledgment ? `One more step: please confirm you have read the notice at the bottom of the form. ${still}` : `Please check the highlighted fields: a first name, last name, a valid email, and the confirmation at the bottom of the form are required. ${still}`, missing, { resume: keptResume, resumeLost });
   }
   if (parsed.data.website) return c.html(<Layout title="Thanks"><h1>Thanks</h1><p>Your application was received.</p></Layout>); // honeypot: pretend success
 
   let resume: ResumeInput | null = null;
-  const values = { firstName: parsed.data.firstName, lastName: parsed.data.lastName, email: parsed.data.email, phone: parsed.data.phone ?? "", locationText: parsed.data.locationText ?? "" };
   const grantToken = str("uploadGrant");
   if (grantToken) {
     // The browser uploaded straight to storage; the grant names the object. It must be for this company and role.
     const grant = container.uploadGrants.open(grantToken, container.engine.clock());
-    if (!grant || grant.companyId !== company.id || grant.roleId !== role.id) return c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} error="Your uploaded resume could not be attached (the upload expired). Please attach the file again." values={values} />, 400);
+    if (!grant || grant.companyId !== company.id || grant.roleId !== role.id) return again("Your uploaded resume could not be attached (the upload expired). Please attach the file again.");
     const head = await container.integrations.storage.head(grant.key);
-    if (!head || head.size === 0) return c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} error="Your uploaded resume did not arrive. Please attach the file again." values={values} />, 400);
+    if (!head || head.size === 0) return again("Your uploaded resume did not arrive. Please attach the file again.");
     if (head.size > MAX_RESUME_BYTES) {
       await container.integrations.storage.delete(grant.key);
-      return c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} error="Resume files must be under 8 MB." values={values} />, 400);
+      return again("Resume files must be under 8 MB.");
     }
     resume = { kind: "stored", filename: grant.filename, mime: grant.mime, storageKey: grant.key, sizeBytes: head.size, via: "direct" };
   } else {
@@ -257,24 +379,28 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
     if (file && typeof file === "object" && "arrayBuffer" in file) {
       const f = file as File;
       if (f.size > 0) {
-        if (f.size > MAX_RESUME_BYTES) return c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} error="Resume files must be under 8 MB." values={values} />, 400);
+        // The form carried the file itself (no JavaScript, or the direct upload failed): the platform refuses large bodies before this code runs, so the friendly limit is lower (D14).
+        if (f.size > NO_SCRIPT_MAX_RESUME_BYTES) return again(f.size > MAX_RESUME_BYTES ? "Resume files must be under 8 MB." : "Files over 4 MB can only be sent by the direct upload, which needs JavaScript. Please choose a smaller file, or try again with JavaScript turned on.");
         const bytes = new Uint8Array(await f.arrayBuffer());
         const look = inspectResumeFile(bytes, { mime: f.type, filename: f.name });
-        if (!look.ok) return c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} error={look.reason === "unsupported_type" || look.reason === "type_mismatch" ? "Please upload a PDF, Word (.docx), or text file." : `That file cannot be used: ${look.detail}.`} values={values} />, 400);
+        if (!look.ok) return again(look.reason === "unsupported_type" || look.reason === "type_mismatch" ? "Please upload a PDF, Word (.docx), or text file." : `That file cannot be used: ${look.detail}.`);
         resume = { kind: "bytes", filename: f.name, mime: look.mime, bytes, via: "server" };
       }
     }
   }
-  if (!resume && !parsed.data.noResumeAnswers) {
-    return c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} error="Upload a resume or tell us about your recent work in the box provided." values={{ firstName: parsed.data.firstName, lastName: parsed.data.lastName, email: parsed.data.email, phone: parsed.data.phone ?? "", locationText: parsed.data.locationText ?? "" }} />, 400);
-  }
+  if (!resume && !parsed.data.noResumeAnswers) return again("Upload a resume or tell us about your recent work in the box provided.", ["noResume"]);
 
-  const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim();
+  // The consent record carries the address the trusted proxy reports, never one the client wrote into the header.
+  const ip = clientIp(c);
+  // The source comes from the tracked-link cookie when it names this role (docs/spec/20 items 8 and 19); the token itself is never stored.
+  const origin = resolveApplicationSource(c, role.id);
   const result = await withTenant(container.db, company.id, (tx) =>
     createApplication(tx, container, {
       companyId: company.id,
       roleId: role.id,
-      source: "careers_page",
+      source: origin.source,
+      sourceDetail: origin.sourceDetail,
+      linkId: origin.linkId,
       firstName: parsed.data.firstName,
       lastName: parsed.data.lastName,
       email: parsed.data.email,
@@ -282,7 +408,8 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
       locationText: parsed.data.locationText ?? null,
       smsConsent: parsed.data.smsConsent,
       consentSource: "careers_page_apply",
-      noticeVersionsShown: parsed.data.noticeVersionsShown,
+      noticeVersionsShown,
+      acknowledgment: { at: container.engine.clock().toISOString(), noticeVersions: noticeVersionsShown, ...(ip ? { ip } : {}) },
       eligibilityAnswers,
       noResumeAnswers: parsed.data.noResumeAnswers,
       resume,
@@ -290,6 +417,7 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
     }, { kind: "candidate", id: "applicant" }),
   );
   await container.kick();
+  clearApplicationSource(c);
   return c.redirect(`/c/status/${result.application.statusToken}?new=1`);
 });
 
@@ -305,6 +433,10 @@ candidatePages.get("/c/status/:token", async (c) => {
   const openScreen_ = (await db.select().from(screens).where(eq(screens.applicationId, app.id)).orderBy(desc(screens.createdAt)).limit(1)).find((s) => ["invited", "reminded", "in_progress"].includes(s.status));
   const [iv] = await db.select().from(interviews).where(eq(interviews.applicationId, app.id)).orderBy(desc(interviews.createdAt)).limit(1);
   const ivTz = iv?.schedulingWindow.candidateTimezone ?? cand?.location?.timezone ?? company?.timezone ?? "America/Los_Angeles";
+  // What to prepare (D15): the purpose of the booked round, from the packet version this application runs on.
+  const prepare = iv && iv.status === "scheduled" ? await withTenant(c.get("container").db, app.companyId, async (tx) => (await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1))[0]?.packet.interviews.plan.find((r) => r.key === iv.roundKey)?.purpose ?? null) : null;
+  const smsEnabled = c.get("container").env.SMS_ENABLED;
+  const smsOn = !!cand?.consent.sms?.granted && !cand?.preferences.smsOptOut;
   const isNew = c.req.query("new") === "1";
   const next: Record<string, string> = {
     applied: "We are confirming your application now.",
@@ -341,20 +473,22 @@ candidatePages.get("/c/status/:token", async (c) => {
       <p>{next[app.stage] ?? "We will keep you posted."}</p>
       {openScreen_ ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue the screening conversation" : "Start the screening conversation"}</a> : null}
       {iv && iv.status === "scheduling" && iv.scheduleToken && iv.offeredSlots.length ? <div class="card"><strong>Pick a time for your {iv.title.toLowerCase()}.</strong><p style="margin:6px 0 10px">{company?.name} would like to interview you.</p><a class="btn" href={`/c/schedule/${iv.scheduleToken}`}>Choose a time</a></div> : null}
-      {iv && iv.status === "scheduled" && iv.startsAt && iv.scheduleToken ? <div class="card"><strong>Your interview: {iv.title}</strong><p style="margin:6px 0 0">{new Intl.DateTimeFormat("en-US", { timeZone: ivTz, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(iv.startsAt))}{iv.meetingUrl ? <span> · <a href={iv.meetingUrl}>Join link</a></span> : null}</p><p style="margin:8px 0 0"><a href={`/c/schedule/${iv.scheduleToken}/confirmed`}>Details, calendar file, reschedule or cancel</a></p></div> : null}
+      {iv && iv.status === "scheduled" && iv.startsAt && iv.scheduleToken ? <div class="card"><strong>Your interview: {iv.title}</strong><p style="margin:6px 0 0">{new Intl.DateTimeFormat("en-US", { timeZone: ivTz, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(iv.startsAt))}{iv.meetingUrl ? <span> · <a href={iv.meetingUrl}>Join link</a></span> : null}</p>{prepare ? <p style="margin:8px 0 0"><strong>What to prepare:</strong> {prepare} Bring examples from your own work, and any questions you have for the team.</p> : null}<p style="margin:8px 0 0"><a href={`/c/schedule/${iv.scheduleToken}/confirmed`}>Details, calendar file, reschedule or cancel</a></p></div> : null}
       {msgs.length ? <h2>Messages we sent you</h2> : null}
       {msgs.map((m) => <div class="card"><strong>{m.subject}</strong><p style="white-space:pre-wrap;margin-top:8px">{m.bodyText}</p></div>)}
       {c.req.query("withdrawn") === "1" ? <div class="card"><strong>Your application is withdrawn.</strong><p style="margin:6px 0 0">Thank you for your time. Reply to any of our emails if you change your mind.</p></div> : null}
       <h2>Your choices</h2>
-      <div class="card">
-        <p><strong>Text messages:</strong> {cand?.consent.sms?.granted && !cand?.preferences.smsOptOut ? "on" : "off"}. {cand?.phone ? "" : "Add a mobile number by replying to our email to receive texts."}</p>
-        {cand?.phone && ((cand?.consent.sms?.granted && !cand?.preferences.smsOptOut) || c.get("container").env.SMS_ENABLED) ? (
-          <form method="post" action={`/c/status/${app.statusToken}/sms`} style="margin-top:8px">
-            <input type="hidden" name="pref" value={cand?.consent.sms?.granted && !cand?.preferences.smsOptOut ? "off" : "on"} />
-            <button class="btn secondary" type="submit" style="width:auto">{cand?.consent.sms?.granted && !cand?.preferences.smsOptOut ? "Stop text messages" : "Allow text messages"}</button>
-          </form>
-        ) : null}
-      </div>
+      {smsEnabled || smsOn ? (
+        <div class="card">
+          <p><strong>Text messages:</strong> {smsOn ? "on" : "off"}. {cand?.phone || !smsEnabled ? "" : "Add a mobile number by replying to our email to receive texts."}</p>
+          {cand?.phone && (smsOn || smsEnabled) ? (
+            <form method="post" action={`/c/status/${app.statusToken}/sms`} style="margin-top:8px">
+              <input type="hidden" name="pref" value={smsOn ? "off" : "on"} />
+              <button class="btn secondary" type="submit" style="width:auto">{smsOn ? "Stop text messages" : "Allow text messages"}</button>
+            </form>
+          ) : null}
+        </div>
+      ) : null}
       {!["hired", "withdrawn", "rejected", "talent_pool", "declined"].includes(app.stage) ? (
         <form method="post" action={`/c/status/${app.statusToken}/withdraw`} class="card">
           <p><strong>No longer interested?</strong> One click withdraws your application; we will confirm by email and keep your information only as long as the law requires.</p>
@@ -386,18 +520,37 @@ candidatePages.get("/c/status/:token", async (c) => {
 candidatePages.get("/privacy", async (c) => {
   const n = noticesFor(["*"]).find((x) => x.key === "privacy");
   const privacyEmail = c.get("container").env.PRIVACY_EMAIL;
+  const smsEnabled = c.get("container").env.SMS_ENABLED;
   return c.html(
     <Layout title="How we handle your information">
       <h1>How we handle your information</h1>
       <p>{n?.text}</p>
+      {/* The apply form's "Who can see it" points here (docs/readiness/20 section D, item 6): every kind of service provider that touches an application, and what each one does. */}
+      <h2 id="who-can-see">Who can see your information</h2>
+      <ul class="steps">
+        <li>The hiring team at the company you applied to. People there make every hiring decision.</li>
+        <li>An Identified Talent Solutions recruiter, only if the company brings one in to help. Their access is limited to what they were brought in for, and every access is recorded.</li>
+        <li>The companies that run this service for us, each only for its own job:
+          <ul>
+            <li>Hosting: runs this website and the work behind it.</li>
+            <li>Database and file storage: keeps your application and your resume, privately.</li>
+            <li>Email delivery: sends the emails about your application and receives your replies.</li>
+            <li>An AI service: reads applications and screening answers to help organize and summarize them for the hiring team. It does not decide anything.</li>
+            {smsEnabled ? <li>Text messages: sends and receives texts, only if you agreed to them.</li> : null}
+            <li>Calendars (Google or Microsoft): only the interviewers' own calendars, to book an interview time with you.</li>
+          </ul>
+        </li>
+      </ul>
+      <p>These companies may use your information only to provide that service to us. We do not sell your information.</p>
       <h2>Your choices</h2>
       <ul class="steps">
-        <li>Ask what we hold about you, correct it, or delete it: email <a href={`mailto:${privacyEmail}`}>{privacyEmail}</a> from the address you applied with (we verify it is you). A person records the request, confirms receipt within one business day, and completes it within the legal deadline.</li>
+        <li>Ask what we hold about you, correct it, or delete it: <a href="/c/privacy-request">use the request form</a> with the address you applied with (we confirm it is you by email), or write to <a href={`mailto:${privacyEmail}`}>{privacyEmail}</a> from that address. A person records the request, confirms receipt within one business day, and completes it within the legal deadline.</li>
         <li>Stop text messages any time by replying STOP.</li>
         <li>Ask to talk to a person instead of an automated conversation by replying HUMAN.</li>
       </ul>
       <h2>Automated tools</h2>
       <p>{noticesFor(["*"]).find((x) => x.key === "ai_use")?.text}</p>
+      <a class="btn" href="/c/privacy-request" style="margin-top:8px">Request, correct or delete my information</a>
     </Layout>,
   );
 });
@@ -437,11 +590,12 @@ candidatePages.get("/c/screen/:token", async (c) => {
   let screen = b.screen;
   const active = ["invited", "reminded", "in_progress"].includes(screen.status);
   if (active && !screen.transcript.some((t) => t.role === "assistant")) {
-    await withTenant(container.db, company.id, (tx) => openScreen(tx, screenDeps(container), { screenId: screen.id, actor: { kind: "system", id: "screen_web" } }));
+    await openScreen(container.db, company.id, screenDeps(container), { screenId: screen.id, actor: { kind: "system", id: "screen_web" } });
     screen = (await container.db.select().from(screens).where(eq(screens.id, screen.id)).limit(1))[0];
   }
-  const total = packet.screening.questions.length;
-  const answered = Object.keys(screen.answers).length;
+  // A screen that opened with the open questions counts them too, so "x of N" matches the "N questions" the invitation promised.
+  const total = focusedPacket(packet, screen.progress).screening.questions.length;
+  const answered = Object.keys(answersOf(screen)).length;
   const err = c.req.query("error");
   const notice = noticesFor(["*"]).find((n) => n.key === "ai_use");
   const calendar = await loadBusinessCalendar(container.db);
@@ -487,7 +641,7 @@ candidatePages.post("/c/screen/:token", rateLimit(POLICIES.screen), async (c) =>
   const body = await c.req.parseBody();
   const message = typeof body.message === "string" ? body.message.trim().slice(0, 2000) : "";
   if (!message) return c.redirect(`/c/screen/${b.screen.token}?error=empty`);
-  const result = await withTenant(container.db, b.company.id, (tx) => runScreenTurn(tx, screenDeps(container), { screenId: b.screen.id, message, channel: "web", actor: { kind: "system", id: "screen_web" } }));
+  const result = await runScreenTurn(container.db, b.company.id, screenDeps(container), { screenId: b.screen.id, message, channel: "web", actor: { kind: "system", id: "screen_web" } });
   await container.kick();
   return c.redirect(`/c/screen/${b.screen.token}${result.kind === "error" ? "?error=trouble" : ""}`);
 });
@@ -570,7 +724,7 @@ candidatePages.post("/c/status/:token/withdraw", rateLimit(POLICIES.withdraw), a
       }
       const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
       const [role] = await tx.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
-      await notify(tx, { companyId: app.companyId, kind: "candidate.withdrawn", title: `${cand.firstName} ${cand.lastName} withdrew`, body: `They withdrew from ${role.title} using the link on their status page.`, action: { label: "See talent", href: `/roles/${app.roleId}/people` } });
+      await notify(tx, { companyId: app.companyId, kind: "candidate.withdrawn", title: `${cand.firstName} ${cand.lastName} withdrew`, body: `They withdrew from ${role.title} using the link on their status page.`, action: { label: "See talent", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
     });
     // the withdrawal is also a recorded request, fulfilled at once, so the audit trail and the confirmation are the same as for any other request (platform role: the tenant role cannot write that table)
     await withPlatform(container.db, async (tx) => {

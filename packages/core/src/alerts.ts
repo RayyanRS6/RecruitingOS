@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import type { Actor, Subject } from "@ros/contracts";
 import { adminAlerts, type Queryable } from "@ros/db";
 import { audit } from "./audit";
@@ -7,6 +7,26 @@ import { audit } from "./audit";
 export async function raiseAlert(q: Queryable, input: { kind: string; severity?: "info" | "high" | "critical"; title: string; body: string; companyId?: string | null; target?: Subject | null; details?: Record<string, unknown> }): Promise<{ id: string }> {
   const [row] = await q.insert(adminAlerts).values({ kind: input.kind, severity: input.severity ?? "high", title: input.title, body: input.body, companyId: input.companyId ?? null, target: input.target ?? null, details: input.details ?? {} }).returning({ id: adminAlerts.id });
   return row;
+}
+
+/**
+ * Raises an alert unless a person already has one of this kind (and target) in front of them, or one was raised less
+ * than `withinMs` ago. This is how a condition that is checked often (a stale worker, a stale queue, a fake scanner
+ * in production) becomes one alert, not one per check. Returns the alert that stands, with `created` saying whether
+ * this call made it.
+ */
+export async function raiseAlertOnce(q: Queryable, input: Parameters<typeof raiseAlert>[1], opts: { withinMs?: number; now?: Date } = {}): Promise<{ id: string; created: boolean }> {
+  const now = opts.now ?? new Date();
+  const sameTarget = (t: Subject | null) => !input.target || t?.id === input.target.id;
+  const standing = (await q.select({ id: adminAlerts.id, target: adminAlerts.target }).from(adminAlerts).where(and(eq(adminAlerts.kind, input.kind), inArray(adminAlerts.status, ["open", "acknowledged"]))).orderBy(desc(adminAlerts.createdAt)).limit(50)).find((a) => sameTarget(a.target));
+  if (standing) return { id: standing.id, created: false };
+  if (opts.withinMs) {
+    const since = new Date(now.getTime() - opts.withinMs).toISOString();
+    const recent = (await q.select({ id: adminAlerts.id, target: adminAlerts.target }).from(adminAlerts).where(and(eq(adminAlerts.kind, input.kind), gte(adminAlerts.createdAt, since))).orderBy(desc(adminAlerts.createdAt)).limit(50)).find((a) => sameTarget(a.target));
+    if (recent) return { id: recent.id, created: false };
+  }
+  const row = await raiseAlert(q, input);
+  return { id: row.id, created: true };
 }
 
 export async function openAlerts(q: Queryable, limit = 200) {

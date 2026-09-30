@@ -11,8 +11,8 @@ Status: built and tested locally on 21 September 2026 (founder instruction, item
 - Two implementations: in-process memory (local development, single process) and a shared store on a Redis-shaped
   counter (`INCR` with expiry, `GET`). The shared store ships with a **fake counter** so tests and local rehearsals run
   several API processes against one table; a real adapter is a few lines against the same `SharedCounter` interface.
-- Configuration: `RATE_LIMIT_STORE=memory|shared`, `RATE_LIMIT_SHARED_PROVIDER=fake` (the only value implemented),
-  `RATE_LIMIT_SHARED_URL`. In production without a real shared store the API starts, warns, and raises a console alert.
+- Configuration: one setting, `RATE_LIMIT_STORE=memory|upstash|fake` (`fake` is the in-process stand-in for tests and
+  is refused in production). In production without the shared store the API starts, warns, and raises a console alert.
 - Policies (`apps/api/src/middleware/rate-limit.ts`): sign-in per address and per email; application submission per
   address and per role; each candidate link action per token and per address (screening, privacy request, withdrawal,
   text preference, scheduling, reschedule, cancel); every candidate-facing page and feed per address; authenticated API
@@ -43,7 +43,7 @@ Options, with the pricing the team last saw; **verify at sign-up, prices change*
 
 Recommendation for staging: **Upstash Redis through the Vercel Marketplace**, region matching the Vercel functions,
 created by the ITS-owned Vercel account (governing-account rule). The adapter is `incr` and `get` over the REST API.
-Until the founder decides, staging runs `RATE_LIMIT_SHARED_PROVIDER=fake`, which is honest about being per process.
+Until the founder decides, staging runs `RATE_LIMIT_STORE=memory`, which is honest about being per process.
 
 ## Not done on purpose
 
@@ -65,5 +65,6 @@ Until the founder decides, staging runs `RATE_LIMIT_SHARED_PROVIDER=fake`, which
   the affected keys in its own memory for the rest of the window and raises the alert `rate_limit.shared_unavailable`
   once an hour; limits then apply per process, nothing is refused because the store is down, and nothing passes
   uncounted. Webhook retries stay safe: only accepted deliveries are counted (unchanged). Proof on staging is Phase 3.
-- Variables (Vercel Preview and Railway, both): `RATE_LIMIT_STORE=shared`, `RATE_LIMIT_SHARED_PROVIDER=upstash`,
-  `UPSTASH_REDIS_REST_URL` (the endpoint above), `UPSTASH_REDIS_REST_TOKEN` (sensitive; sealed on Railway).
+- Variables (Vercel Preview and Railway, both): `RATE_LIMIT_STORE=upstash`, `UPSTASH_REDIS_REST_URL` (the endpoint
+  above), `UPSTASH_REDIS_REST_TOKEN` (sensitive; sealed on Railway). The earlier spelling (`RATE_LIMIT_STORE=shared`
+  with `RATE_LIMIT_SHARED_PROVIDER=upstash`) is still understood, with a warning at boot, until the variables are updated.

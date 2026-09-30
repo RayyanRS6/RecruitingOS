@@ -1,0 +1,364 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { and, desc, eq, like } from "drizzle-orm";
+import type { MembershipRole } from "@ros/contracts";
+import { STAGE_LABEL, can, canTransition, entitlements, ownerGroup, type Permission } from "@ros/core";
+import { detectStuckRoles } from "@ros/agents";
+import { applications, communications, events, interviewParticipants, interviews, notifications, users } from "@ros/db";
+import type { FakeEmailAdapter } from "@ros/integrations";
+import { createApp } from "./app";
+import { createContainer, type Container } from "./container";
+import { signInAs } from "./test-helpers";
+
+/**
+ * Closing the loop after an interview (audit findings F1 to F6, F9, F14 to F16, J13): the interviewers are told when
+ * they are put on an interview; when it is over the candidate waits on a person, in the brief and on the Talent page,
+ * with a link straight to their sheet; the decision lands on the right interview; "not moving forward" sends the
+ * respectful message through the outbox; roles without the interview permissions never see the card and are refused.
+ */
+describe("the loop after an interview", () => {
+  let container: Container;
+  let app: ReturnType<typeof createApp>;
+  const BASE = (() => { const d = new Date(); d.setUTCHours(18, 0, 0, 0); return d.getTime(); })(); // 11:00 Pacific today
+  const setClock = (offsetMs: number) => { (container.engine as unknown as { now: () => Date }).now = () => new Date(BASE + offsetMs); };
+  const signIn = async (email: string) => {
+    const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
+    const { devLink } = (await r1.json()) as { devLink: string };
+    const token = new URL(devLink).searchParams.get("token")!;
+    const r2 = await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) });
+    return r2.headers.get("set-cookie")!.split(";")[0];
+  };
+  const json = (cookie: string, method: string, path: string, body?: unknown) =>
+    app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
+  const outbox = () => (container.integrations.email as FakeEmailAdapter).sent;
+  const H = 3600_000;
+  const DAY = 24 * H;
+
+  type Brief = { summary: string; cards: Array<{ kind: string; title: string; body: string; applicationId?: string; actions: Array<{ label: string; method: string; path: string }> }> };
+  type Detail = { stage: string; group: string; allowedActions: string[]; interviews: Array<{ id: string; roundKey: string; status: string; decision: string | null }>; interviewPlan: Array<{ key: string; title: string; interviewerUserIds: string[] }> };
+
+  let owner = "";
+  let ownerId = "";
+  let companyId = "";
+  let companySlug = "";
+  let roleId = "";
+  let plan: Array<{ key: string; title: string }> = [];
+  let n = 0;
+
+  const apply = async (first: string, last: string) => {
+    n += 1;
+    const email = `${first.toLowerCase()}.${last.toLowerCase()}${n}@example.com`;
+    const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
+    const form = new FormData();
+    form.set("firstName", first);
+    form.set("lastName", last);
+    form.set("email", email);
+    form.set("locationText", "Tustin, CA");
+    form.set("resume", new File([`${first} ${last}, RDH\nRegistered Dental Hygienist at Coastal Family Dentistry 2019 - present\nSkills: periodontal charting`], "resume.txt", { type: "text/plain" }));
+    for (const rule of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${rule.key}`, "yes");
+    form.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
+    form.set("acknowledged", "yes");
+    const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });
+    expect(r.status).toBe(302);
+    await container.drain();
+    const [a] = await container.db.select().from(applications).where(and(eq(applications.roleId, roleId))).orderBy(desc(applications.createdAt)).limit(1);
+    return { id: a.id, email, name: `${first} ${last}` };
+  };
+  const requestInterview = async (applicationId: string, extra: Record<string, unknown> = {}, cookie = owner) => {
+    const r = await json(cookie, "POST", `/api/v1/applications/${applicationId}/interviews`, { roundKey: plan[0].key, interviewerUserIds: [ownerId], linkSource: "calendar", ...extra });
+    expect(r.status, await r.clone().text()).toBe(201);
+    return (await r.json()) as { id: string; status: string };
+  };
+  const interview = async (id: string) => (await container.db.select().from(interviews).where(eq(interviews.id, id)))[0];
+  const application = async (id: string) => (await container.db.select().from(applications).where(eq(applications.id, id)))[0];
+  const participants = async (id: string) => container.db.select().from(interviewParticipants).where(eq(interviewParticipants.interviewId, id));
+  const told = (kind: string, userId?: string) => container.db.select().from(notifications).where(userId ? and(eq(notifications.companyId, companyId), eq(notifications.kind, kind), eq(notifications.userId, userId)) : and(eq(notifications.companyId, companyId), eq(notifications.kind, kind)));
+  /** The candidate picks the first offered time; the workflow books it. */
+  const book = async (interviewId: string) => {
+    const row = await interview(interviewId);
+    expect(row.status, "times must be on offer before the candidate can pick").toBe("scheduling");
+    const r = await app.request(`/c/schedule/${row.scheduleToken}`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ slotId: row.offeredSlots[0].id, timezone: "America/New_York" }).toString() });
+    expect(r.status).toBe(302);
+    await container.drain();
+    expect((await interview(interviewId)).status).toBe("scheduled");
+  };
+  /** The clock passes the end of the interview; the workflow closes it and the candidate is at "Interview done". */
+  const finish = async (interviewId: string) => {
+    const row = await interview(interviewId);
+    setClock(Date.parse(row.endsAt!) + 2 * H - BASE);
+    await container.drain();
+    expect((await interview(interviewId)).status).toBe("completed");
+  };
+  const detail = async (applicationId: string, cookie = owner) => {
+    const r = await json(cookie, "GET", `/api/v1/applications/${applicationId}`);
+    expect(r.status).toBe(200);
+    return (await r.json()) as Detail;
+  };
+  const brief = async (cookie: string) => (await (await json(cookie, "GET", "/api/v1/brief")).json()) as Brief;
+
+  beforeAll(async () => {
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake" } });
+    app = createApp(container);
+    setClock(0);
+    owner = await signIn("owner@loop.test");
+    const [u] = await container.db.select({ id: users.id }).from(users).where(eq(users.email, "owner@loop.test"));
+    ownerId = u.id;
+    await container.db.update(users).set({ name: "Dana Whitfield" }).where(eq(users.id, ownerId));
+    const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Smile Bright Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Tustin", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
+    companyId = co.id;
+    companySlug = co.slug;
+    await entitlements.applyPlan(container.db, companyId, "growth");
+    const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Tustin, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." })).json()) as { session: { id: string } };
+    roleId = (await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json() as { roleId: string }).roleId;
+    expect((await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "Looks right." })).status).toBe(200);
+    const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { interviews: { plan: Array<{ key: string; title: string }> } } } };
+    plan = role.currentPacket.packet.interviews.plan;
+    expect(plan.length, "the next-round tests need a plan with two rounds").toBeGreaterThanOrEqual(2);
+    // the owner interviews, so declared hours make times available
+    expect((await json(owner, "PUT", "/api/v1/me/availability", { timezone: "America/Los_Angeles", windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 6 })).status).toBe(200);
+    await container.drain();
+  });
+  afterAll(async () => {
+    await container.close();
+  });
+
+  it("interviewers are told when they are put on an interview, confirmed by the booking, and invited again by a reschedule", async () => {
+    const cand = await apply("Maria", "Reyes");
+    const iv = await requestInterview(cand.id);
+    const assigned = await told("interview.assigned", ownerId);
+    expect(assigned.length).toBeGreaterThanOrEqual(1);
+    expect(assigned.at(-1)).toMatchObject({ title: "You are interviewing Maria Reyes", action: { href: `/interviews/${iv.id}` } });
+    expect(assigned.at(-1)!.body).toContain(plan[0].title);
+    expect((await participants(iv.id)).map((p) => p.status)).toEqual(["invited"]);
+    await book(iv.id);
+    expect((await participants(iv.id)).map((p) => p.status)).toEqual(["confirmed"]);
+    expect((await json(owner, "POST", `/api/v1/interviews/${iv.id}/reschedule`, { reason: "conflict" })).status).toBe(200);
+    await container.drain();
+    expect((await participants(iv.id)).map((p) => p.status)).toEqual(["invited"]);
+    await book(iv.id);
+    expect((await participants(iv.id)).map((p) => p.status)).toEqual(["confirmed"]);
+  });
+
+  it("when the interview is over the candidate waits on you: the group, the label, the deep link, the brief card and the stuck-role rule all say so", async () => {
+    const cand = await apply("Luis", "Ortega");
+    const iv = await requestInterview(cand.id);
+    await book(iv.id);
+    await finish(iv.id);
+    expect((await application(cand.id)).stage).toBe("interview_complete");
+    expect(ownerGroup("interview_complete")).toBe("waiting_on_you");
+    expect(STAGE_LABEL.interview_complete).toBe("Interview done: decision needed");
+    const decide = (await told("interview.decision")).filter((x) => x.action?.href.includes(cand.id));
+    expect(decide.length).toBeGreaterThanOrEqual(1);
+    expect(decide[0].action).toEqual({ label: "Decide", href: `/roles/${roleId}/talent?open=${cand.id}` });
+    const list = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; group: string; stageLabel: string }>;
+    expect(list.find((a) => a.id === cand.id)).toMatchObject({ group: "waiting_on_you", stageLabel: "Interview done: decision needed" });
+    const d = await detail(cand.id);
+    expect(d.allowedActions).toContain("record_decision");
+    const card = (await brief(owner)).cards.find((c) => c.applicationId === cand.id);
+    expect(card).toMatchObject({ kind: "decision", title: "Decide after the interview: Luis Ortega" });
+    expect(card!.body).toContain(plan[0].title);
+    expect(card!.actions[0]).toEqual({ label: "Decide", method: "GET", path: `/roles/${roleId}/talent?open=${cand.id}` });
+    // the generic review card does not list them a second time
+    expect((await brief(owner)).cards.filter((c) => c.kind === "needs_review").every((c) => !c.body.includes("Luis Ortega"))).toBe(true);
+    // the stuck-role detector counts a candidate waiting after an interview among the decisions pending
+    const stuck = await detectStuckRoles(container.db, companyId, new Date(Date.parse((await application(cand.id)).stageChangedAt) + 4 * DAY));
+    const waiting = stuck.find((s) => s.detector === "candidates_waiting" && s.roleId === roleId);
+    expect(waiting).toBeTruthy();
+    expect(waiting!.body).toContain("decide after an interview");
+  });
+
+  it("next round returns the round key, the sheet lists that round, and the interview can be approved from there", async () => {
+    const cand = await apply("Ana", "Silva");
+    const iv = await requestInterview(cand.id);
+    await book(iv.id);
+    await finish(iv.id);
+    const r = await json(owner, "POST", `/api/v1/applications/${cand.id}/decision`, { decision: "next_round", note: "Strong on the phone." });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { ok: boolean; stage: string; nextRoundKey: string | null; dispositionSent?: boolean };
+    expect(body).toMatchObject({ ok: true, stage: "interview_complete", nextRoundKey: plan[1].key });
+    expect(body.dispositionSent).toBeUndefined();
+    expect((await interview(iv.id))).toMatchObject({ decision: "next_round", decisionNote: "Strong on the phone." });
+    const d = await detail(cand.id);
+    expect(d.allowedActions).not.toContain("record_decision");
+    expect(d.allowedActions).toContain("interview");
+    expect(d.interviews.find((i) => i.id === iv.id)?.decision).toBe("next_round");
+    expect(d.interviewPlan.find((p) => p.key === body.nextRoundKey)).toBeTruthy();
+    const nudge = (await brief(owner)).cards.find((c) => c.applicationId === cand.id);
+    expect(nudge).toMatchObject({ kind: "decision", title: "Set up the next round: Ana Silva" });
+    const next = await requestInterview(cand.id, { roundKey: body.nextRoundKey });
+    expect((await interview(next.id)).roundKey).toBe(plan[1].key);
+    expect((await brief(owner)).cards.find((c) => c.applicationId === cand.id)).toBeUndefined();
+  });
+
+  it("declining after an interview sends the respectful message through the outbox and says so", async () => {
+    const cand = await apply("Ben", "Okafor");
+    const iv = await requestInterview(cand.id);
+    await book(iv.id);
+    await finish(iv.id);
+    const before = outbox().filter((m) => m.to === cand.email).length;
+    const r = await json(owner, "POST", `/api/v1/applications/${cand.id}/decision`, { decision: "not_moving_forward", reason: "not_a_match_experience", note: "Needs more perio experience." });
+    expect(r.status, await r.clone().text()).toBe(200);
+    expect(await r.json()).toMatchObject({ ok: true, stage: "rejected", dispositionSent: true });
+    expect(await application(cand.id)).toMatchObject({ stage: "rejected", rejectReason: "not_a_match_experience", rejectNote: "Needs more perio experience." });
+    const queued = await container.db.select().from(communications).where(and(eq(communications.applicationId, cand.id), like(communications.templateKey, "disposition:%")));
+    expect(queued).toHaveLength(1);
+    expect(queued[0].templateKey).toBe("disposition:human");
+    await container.drain();
+    const mail = outbox().filter((m) => m.to === cand.email).slice(before);
+    expect(mail.some((m) => m.subject === "Your application to Smile Bright Dental" && /decided not to move forward/.test(m.text))).toBe(true);
+    expect((await interview(iv.id)).decision).toBe("not_moving_forward");
+    const rejected = await container.db.select().from(events).where(and(eq(events.type, "application.rejected"), eq(events.subjectId, cand.id)));
+    expect(rejected[0].payload).toMatchObject({ byHuman: true, afterInterview: true });
+  });
+
+  it("the decision is recorded on the undecided interview, not on the newest finished one", async () => {
+    const cand = await apply("Chloe", "Nguyen");
+    const first = await requestInterview(cand.id);
+    await container.db.update(interviews).set({ status: "completed", outcome: "happened" }).where(eq(interviews.id, first.id));
+    await container.drain();
+    const second = await requestInterview(cand.id, { roundKey: plan[1].key });
+    await container.db.update(interviews).set({ status: "completed", outcome: "happened", decision: "next_round" }).where(eq(interviews.id, second.id));
+    await container.db.update(applications).set({ stage: "interview_complete" }).where(eq(applications.id, cand.id));
+    await container.drain();
+    expect((await detail(cand.id)).allowedActions).toContain("record_decision");
+    const r = await json(owner, "POST", `/api/v1/applications/${cand.id}/decision`, { decision: "finalist", note: "Great with patients." });
+    expect(r.status, await r.clone().text()).toBe(200);
+    expect(await r.json()).toMatchObject({ stage: "finalist" });
+    expect((await interview(first.id)).decision).toBe("finalist");
+    expect((await interview(second.id)).decision).toBe("next_round");
+    const recorded = await container.db.select().from(events).where(and(eq(events.type, "interview.decision_recorded"), eq(events.subjectId, cand.id)));
+    expect(recorded.at(-1)!.payload).toMatchObject({ decision: "finalist", interviewId: first.id });
+    expect((await detail(cand.id)).allowedActions).not.toContain("record_decision");
+  });
+
+  it("recording that the interview took place moves the candidate on without waiting for the closing timer", async () => {
+    const cand = await apply("Priya", "Raman");
+    const iv = await requestInterview(cand.id);
+    await book(iv.id);
+    expect((await application(cand.id)).stage).toBe("interview_scheduled");
+    expect((await json(owner, "POST", `/api/v1/interviews/${iv.id}/outcome`, { outcome: "happened" })).status).toBe(200);
+    expect((await application(cand.id)).stage).toBe("interview_complete");
+    // the hiring team is asked for their decision now, exactly as the closing timer would have asked, once
+    const asked = (await told("interview.decision", ownerId)).filter((x) => x.action?.href === `/roles/${roleId}/talent?open=${cand.id}`);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({ title: "How did it go with Priya Raman?", action: { label: "Decide" } });
+    const completed = await container.db.select().from(events).where(and(eq(events.type, "interview.completed"), eq(events.subjectId, iv.id)));
+    expect(completed).toHaveLength(1);
+    expect(completed[0].payload).toMatchObject({ via: "outcome" });
+    const r = await json(owner, "POST", `/api/v1/applications/${cand.id}/decision`, { decision: "finalist" });
+    expect(r.status, await r.clone().text()).toBe(200);
+    expect((await application(cand.id)).stage).toBe("finalist");
+    // the closing timer later finds the interview already over and does not ask a second time
+    await finish(iv.id);
+    expect((await told("interview.decision", ownerId)).filter((x) => x.action?.href === `/roles/${roleId}/talent?open=${cand.id}`)).toHaveLength(1);
+    expect(await container.db.select().from(events).where(and(eq(events.type, "interview.completed"), eq(events.subjectId, iv.id)))).toHaveLength(1);
+  });
+
+  it("HR never sees the decision card and is refused, and so is an interviewer", async () => {
+    const hr = await signInAs(container, app, { companyId, role: "hr", email: "holly.hr@loop.test", name: "Holly" });
+    const interviewer = await signInAs(container, app, { companyId, role: "interviewer", email: "ivan.interviewer@loop.test", name: "Ivan" });
+    const cand = await apply("Omar", "Haddad");
+    const iv = await requestInterview(cand.id);
+    await book(iv.id);
+    await finish(iv.id);
+    expect((await detail(cand.id)).allowedActions).toEqual(expect.arrayContaining(["record_decision", "interview"]));
+    const mine = await detail(cand.id, hr);
+    expect(mine.allowedActions).not.toContain("record_decision");
+    expect(mine.allowedActions).not.toContain("interview");
+    expect((await json(hr, "POST", `/api/v1/applications/${cand.id}/decision`, { decision: "finalist" })).status).toBe(403);
+    expect((await json(hr, "POST", `/api/v1/applications/${cand.id}/interviews`, { roundKey: plan[1].key, interviewerUserIds: [ownerId] })).status).toBe(403);
+    expect((await json(hr, "POST", `/api/v1/interviews/${iv.id}/reschedule`, {})).status).toBe(403);
+    expect((await json(hr, "POST", `/api/v1/interviews/${iv.id}/cancel`, { reason: "no" })).status).toBe(403);
+    expect((await json(hr, "POST", `/api/v1/interviews/${iv.id}/outcome`, { outcome: "happened" })).status).toBe(403);
+    // HR's Today never asks them for a decision they cannot give; the owner's does
+    expect((await brief(hr)).cards.some((c) => c.applicationId === cand.id)).toBe(false);
+    expect((await brief(owner)).cards.find((c) => c.applicationId === cand.id)).toMatchObject({ kind: "decision", title: "Decide after the interview: Omar Haddad" });
+    // an interviewer who is not on this interview is refused (or, under the application scope guard, does not see it at all)
+    expect([403, 404]).toContain((await json(interviewer, "POST", `/api/v1/applications/${cand.id}/decision`, { decision: "finalist" })).status);
+    expect((await interview(iv.id)).decision).toBeNull();
+    expect((await application(cand.id)).stage).toBe("interview_complete");
+  });
+
+  it("an interviewer's Today shows their own interviews and nothing else", async () => {
+    const interviewer = await signInAs(container, app, { companyId, role: "interviewer", email: "ivan.interviewer@loop.test" });
+    const [ivan] = await container.db.select({ id: users.id }).from(users).where(eq(users.email, "ivan.interviewer@loop.test"));
+    const cand = await apply("Sofia", "Marin");
+    const iv = await requestInterview(cand.id, { interviewerUserIds: [ownerId, ivan.id] });
+    expect((await told("interview.assigned", ivan.id)).at(-1)).toMatchObject({ title: "You are interviewing Sofia Marin", action: { label: "Open the interview", href: `/interviews/${iv.id}` } });
+    const othersNames = ["Maria Reyes", "Luis Ortega", "Ana Silva", "Ben Okafor", "Chloe Nguyen", "Priya Raman", "Omar Haddad"];
+    let b = await brief(interviewer);
+    expect(b.cards.every((c) => c.kind === "interviews" || c.kind === "empty")).toBe(true);
+    expect(b.cards.some((c) => c.kind === "interviews" && c.body.includes("Sofia Marin") && /being offered/.test(c.body))).toBe(true);
+    for (const c of b.cards) for (const name of othersNames) { expect(c.title).not.toContain(name); expect(c.body).not.toContain(name); }
+    expect(b.summary).toContain("1 being scheduled");
+    // the owner's brief is the company's day, with candidate names and decisions
+    const o = await brief(owner);
+    expect(o.cards.some((c) => c.kind === "decision" || c.kind === "needs_review")).toBe(true);
+    // the interviews list is theirs only
+    const list = (await (await json(interviewer, "GET", "/api/v1/interviews")).json()) as Array<{ id: string; participants: Array<{ userId: string }> }>;
+    expect(list.length).toBeGreaterThanOrEqual(1);
+    expect(list.every((i) => i.participants.some((p) => p.userId === ivan.id))).toBe(true);
+    await book(iv.id);
+    expect((await participants(iv.id)).every((p) => p.status === "confirmed")).toBe(true);
+    b = await brief(interviewer);
+    expect(b.cards.find((c) => c.kind === "interviews")).toMatchObject({ title: "1 interview coming up" });
+    expect(b.cards.find((c) => c.kind === "interviews")!.actions[0]).toEqual({ label: "Open interviews", method: "GET", path: "/interviews" });
+    await finish(iv.id);
+    b = await brief(interviewer);
+    const ask = b.cards.find((c) => c.title === "Did the interview with Sofia Marin take place?");
+    expect(ask).toBeTruthy();
+    expect(ask!.actions[0]).toEqual({ label: "Record what happened", method: "GET", path: `/interviews/${iv.id}` });
+    // a participant records the outcome of their own interview; the decision stays with the hiring team
+    expect((await json(interviewer, "POST", `/api/v1/interviews/${iv.id}/outcome`, { outcome: "happened" })).status).toBe(200);
+    expect((await brief(interviewer)).cards.some((c) => c.title.startsWith("Did the interview"))).toBe(false);
+    expect((await brief(interviewer)).cards.some((c) => c.title.startsWith("Decide after"))).toBe(false);
+    expect((await brief(owner)).cards.find((c) => c.applicationId === cand.id)).toMatchObject({ kind: "decision", title: "Decide after the interview: Sofia Marin" });
+  });
+
+  it("an HR member who sat on the interview records whether it took place; the decision still is not theirs", async () => {
+    const hr = await signInAs(container, app, { companyId, role: "hr", email: "holly.hr@loop.test" });
+    const [holly] = await container.db.select({ id: users.id }).from(users).where(eq(users.email, "holly.hr@loop.test"));
+    const cand = await apply("Nadia", "Petrov");
+    const iv = await requestInterview(cand.id, { interviewerUserIds: [ownerId, holly.id] });
+    await book(iv.id);
+    expect((await application(cand.id)).stage).toBe("interview_scheduled");
+    const r = await json(hr, "POST", `/api/v1/interviews/${iv.id}/outcome`, { outcome: "happened" });
+    expect(r.status, await r.clone().text()).toBe(200);
+    expect(await interview(iv.id)).toMatchObject({ status: "completed", outcome: "happened" });
+    expect((await application(cand.id)).stage).toBe("interview_complete");
+    expect((await told("interview.decision", ownerId)).some((x) => x.action?.href === `/roles/${roleId}/talent?open=${cand.id}`)).toBe(true);
+    expect((await json(hr, "POST", `/api/v1/applications/${cand.id}/decision`, { decision: "finalist" })).status).toBe(403);
+    expect((await brief(hr)).cards.some((c) => c.applicationId === cand.id)).toBe(false);
+    expect((await application(cand.id)).stage).toBe("interview_complete");
+  });
+
+  it("a recruiter holds the decision and may mark a finalist", async () => {
+    const recruiter = await signInAs(container, app, { companyId, role: "recruiter", email: "rita.recruiter@loop.test", name: "Rita" });
+    const cand = await apply("Elena", "Costa");
+    const iv = await requestInterview(cand.id, {}, recruiter);
+    await book(iv.id);
+    await finish(iv.id);
+    expect((await detail(cand.id, recruiter)).allowedActions).toContain("record_decision");
+    expect((await brief(recruiter)).cards.find((c) => c.applicationId === cand.id)).toMatchObject({ kind: "decision", title: "Decide after the interview: Elena Costa" });
+    const r = await json(recruiter, "POST", `/api/v1/applications/${cand.id}/decision`, { decision: "finalist", note: "Calm and thorough." });
+    expect(r.status, await r.clone().text()).toBe(200);
+    expect(await r.json()).toMatchObject({ ok: true, stage: "finalist" });
+    expect((await application(cand.id)).stage).toBe("finalist");
+    expect(await interview(iv.id)).toMatchObject({ decision: "finalist", decisionNote: "Calm and thorough." });
+  });
+
+  it("the permission matrix: owner, admin, hiring manager and recruiter hold the three interview permissions; HR and interviewers do not", () => {
+    const table: Record<MembershipRole, boolean> = { owner: true, admin: true, hiring_manager: true, recruiter: true, hr: false, interviewer: false };
+    for (const permission of ["interview.request", "interview.manage", "interview.decide"] as Permission[]) {
+      for (const [role, allowed] of Object.entries(table) as Array<[MembershipRole, boolean]>) expect(can(role, permission), `${role} ${permission}`).toBe(allowed);
+    }
+    // the pre-existing permissions are untouched by the new ones
+    expect(can("hr", "application.act")).toBe(true);
+    expect(can("interviewer", "role.read")).toBe(true);
+    expect(can("interviewer", "application.read")).toBe(false);
+    // the state machine agrees with the matrix: every role that holds interview.decide may mark a finalist, and every
+    // member who can sit on an interview may record that it ended
+    for (const role of ["owner", "admin", "hiring_manager", "recruiter"] as MembershipRole[]) expect(canTransition("interview_complete", "finalist", role), `${role} finalist`).toBe(true);
+    for (const role of ["hr", "interviewer"] as MembershipRole[]) expect(canTransition("interview_complete", "finalist", role), `${role} finalist`).toBe(false);
+    for (const role of ["owner", "admin", "hiring_manager", "hr", "recruiter", "interviewer"] as MembershipRole[]) expect(canTransition("interview_scheduled", "interview_complete", role), `${role} ends an interview`).toBe(true);
+  });
+});

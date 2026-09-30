@@ -2,6 +2,8 @@ import { honoHandler } from "../../lib/hono";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+/** Seconds a request may run on Vercel; kept in step with the other mounted routes. */
+export const maxDuration = 60;
 
 export const GET = honoHandler;
 export const POST = honoHandler;

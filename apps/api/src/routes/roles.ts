@@ -1,28 +1,19 @@
 import { Hono } from "hono";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome } from "@ros/contracts";
-import { OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, assertCan, audit, emit, gate, listOutcomes, openEscalationsFor, ownerGroup, recordApplicationOutcome, recordRoleOutcome, transition } from "@ros/core";
+import { CLOSER_LOOK_LABEL, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, assertCan, audit, can, emit, evidenceView, listOutcomes, openEscalationsFor, ownerGroup, recordApplicationOutcome, recordRoleOutcome, scopeAllows } from "@ros/core";
+import { withEmptyPay, withoutPay } from "../services/pay-redaction";
 import { users } from "@ros/db";
-import { sendDisposition } from "@ros/agents";
+import { assertMayApprovePacket, packetApprovalView } from "../services/packet-approval";
+import { createPacketVersion, currentVersionOf } from "../services/packet-versions";
 import { aiRuns, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviews, postings, rolePackets, roles, screens, withTenant } from "@ros/db";
 import { actorOf, applicationScopeGuard, clientIp, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { DOWNLOAD_URL_TTL_SECONDS, safeFilename } from "../uploads";
 import type { Container } from "../container";
-
-/** Founder decision (correction 6): candidate-facing decline communication only after the human decision is recorded. */
-async function sendDeclineAfterHumanDecision(tx: Parameters<Parameters<typeof withTenant>[2]>[0], container: Container, input: { companyId: string; app: typeof applications.$inferSelect; actor: ReturnType<typeof actorOf>; reason: string }): Promise<boolean> {
-  const { companyId, app, actor, reason } = input;
-  const d = await gate(tx, { companyId, roleId: app.roleId, applicationId: app.id, actionType: "disposition.send", subject: { type: "application", id: app.id }, proposal: { reason }, requestedBy: actor });
-  if (d.outcome !== "execute") return false;
-  const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
-  const [role] = await tx.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
-  const [company] = await tx.select().from(companies).where(eq(companies.id, companyId)).limit(1);
-  const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
-  if (!cand || !role || !company || !pv) return false;
-  const res = await sendDisposition(tx, container.integrations, { application: app, candidate: cand, role, company, packet: pv.packet, actor, reason: reason === "eligibility" ? "eligibility" : "human" });
-  return res.status === "sent" || res.status === "pending";
-}
+import { allowedApplicationActions, applicationFactsFrom, performApplicationAction, sendDeclineAfterHumanDecision } from "../services/application-actions";
+import { replayHeldEmails, settleHeldEmailsOnClose } from "../webhooks/postmark";
+import { interviewerApplicationView } from "../services/interviewer-view";
 
 export const roleRoutes = new Hono<Vars>();
 roleRoutes.use("/:id", roleScopeGuard);
@@ -34,15 +25,24 @@ roleRoutes.get("/", requireTenant, async (c) => {
   const status = c.req.query("status");
   const rows = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const list = await tx.select().from(roles).where(status ? and(eq(roles.companyId, t.companyId), eq(roles.status, status)) : eq(roles.companyId, t.companyId)).orderBy(desc(roles.createdAt));
-    const out = [];
-    for (const r of t.staff?.scope.roleId ? list.filter((x) => x.id === t.staff!.scope.roleId) : list) {
-      const apps = await tx.select({ stage: applications.stage }).from(applications).where(eq(applications.roleId, r.id));
+    const visible = t.staff?.scope.roleId ? list.filter((x) => x.id === t.staff!.scope.roleId) : list;
+    if (!visible.length) return [];
+    // Three queries for the whole list, whatever its length: the roles, their applicants by stage, their open decisions.
+    const roleIds = visible.map((r) => r.id);
+    const stageCounts = await tx.select({ roleId: applications.roleId, stage: applications.stage, n: count() }).from(applications).where(inArray(applications.roleId, roleIds)).groupBy(applications.roleId, applications.stage);
+    const pendingCounts = await tx.select({ roleId: approvalRequests.roleId, n: count() }).from(approvalRequests).where(and(inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending"))).groupBy(approvalRequests.roleId);
+    return visible.map((r) => {
       const counts: Record<string, number> = {};
-      for (const a of apps) counts[ownerGroup(a.stage)] = (counts[ownerGroup(a.stage)] ?? 0) + 1;
-      const pending = await tx.select({ id: approvalRequests.id }).from(approvalRequests).where(and(eq(approvalRequests.roleId, r.id), eq(approvalRequests.status, "pending")));
-      out.push({ ...r, counts: { total: apps.length, ...counts }, needsYou: pending.length, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null });
-    }
-    return out;
+      let total = 0;
+      for (const row of stageCounts) {
+        if (row.roleId !== r.id) continue;
+        const n = Number(row.n);
+        total += n;
+        counts[ownerGroup(row.stage)] = (counts[ownerGroup(row.stage)] ?? 0) + n;
+      }
+      const needsYou = Number(pendingCounts.find((p) => p.roleId === r.id)?.n ?? 0);
+      return { ...r, counts: { total, ...counts }, needsYou, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null };
+    });
   });
   return c.json(rows);
 });
@@ -50,19 +50,27 @@ roleRoutes.get("/", requireTenant, async (c) => {
 roleRoutes.get("/:id", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.read");
-  const canSeeComp = ["owner", "admin", "hiring_manager", "hr", "recruiter"].includes(t.role);
+  const canSeeComp = can(t.role, "compensation.read");
   const row = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
     if (!role) return null;
     const packets = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
-    const current = packets.find((p) => p.version === (role.currentPacketVersion ?? packets[0]?.version)) ?? packets[0] ?? null;
+    const current = currentVersionOf(role, packets);
     const posts = await tx.select().from(postings).where(eq(postings.roleId, role.id));
     const apps = await tx.select({ stage: applications.stage }).from(applications).where(eq(applications.roleId, role.id));
     const pending = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.status, "pending")));
     const counts: Record<string, number> = {};
     for (const a of apps) counts[a.stage] = (counts[a.stage] ?? 0) + 1;
-    const redact = (p: typeof current) => (p && !canSeeComp ? { ...p, packet: { ...p.packet, compensation: { ...p.packet.compensation, min: 0, max: 0, mid: 0, ceiling: 0 } } } : p);
-    return { ...role, currentPacket: redact(current), packetVersions: packets.map((p) => ({ id: p.id, version: p.version, status: p.status, source: p.source, changeSummary: p.changeSummary, createdAt: p.createdAt, createdBy: p.createdBy })), postings: posts, counts, pendingApprovals: pending };
+    // Without compensation.read the pay section keeps its shape but carries no figure anywhere (services/pay-redaction.ts).
+    const redact = (p: typeof current) => (p && !canSeeComp ? withEmptyPay(p) : p);
+    // Waiting requests can carry a candidate's name and a message written to them (F11): only for those who read
+    // applications, and for ITS staff only the requests their grant covers. The approval card below reads them all.
+    const scope = t.staff ? { roleId: t.staff.scope.roleId, applicationId: t.staff.scope.applicationId } : null;
+    const visiblePending = !can(t.role, "application.read") ? [] : scope ? pending.filter((p) => scopeAllows(scope, { roleId: p.roleId, applicationId: p.applicationId })) : pending;
+    // A version proposed while the role runs (an edit waiting for approval): shown beside the current one, never in its place.
+    const proposed = current && ["open", "paused"].includes(role.status) ? packets.find((p) => p.status === "proposed" && p.version > current.version) ?? null : null;
+    const approval = await packetApprovalView(tx, { tenant: t, role, packets, pending });
+    return { ...role, currentPacket: redact(current), proposedPacket: redact(proposed), packetVersions: packets.map((p) => ({ id: p.id, version: p.version, status: p.status, source: p.source, changeSummary: p.changeSummary, createdAt: p.createdAt, createdBy: p.createdBy })), postings: posts, boardsStillUp: posts.filter((p) => p.closureRequired && !p.closureConfirmedAt).map((p) => p.channel), counts, pendingApprovals: visiblePending, packetApproval: approval.packetApproval, decisionMaker: approval.decisionMaker };
   });
   if (!row) throw new HttpError(404, "not_found", "Role not found.");
   return c.json(row);
@@ -72,10 +80,17 @@ roleRoutes.get("/:id/packets", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.read");
   const rows = await withTenant(c.get("container").db, t.companyId, (tx) => tx.select().from(rolePackets).where(eq(rolePackets.roleId, c.req.param("id"))).orderBy(desc(rolePackets.version)));
-  return c.json(rows);
+  if (can(t.role, "compensation.read")) return c.json(rows);
+  // Interviewers never see pay (docs/spec/21, area A): only the basis, the currency and whether the range is shown to
+  // candidates; the figures, the bonus, the benefits and the sources that quote the figures are left out, never zeroed.
+  return c.json(rows.map((p) => withoutPay(p)));
 });
 
-/** A human edit creates a new version; nothing is overwritten. If the role is open, the new version becomes current and postings refresh. */
+/**
+ * A human edit creates a new version; nothing is overwritten. What happens next depends on the role and the editor
+ * (services/packet-versions.ts): an approver's edit to an open role is current at once; anyone else's waits for
+ * approval while the role keeps running on the approved version; an edit to a pending role replaces its approval request.
+ */
 roleRoutes.post("/:id/packets", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "packet.edit");
@@ -84,28 +99,18 @@ roleRoutes.post("/:id/packets", requireTenant, async (c) => {
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
     if (!role) throw new HttpError(404, "not_found", "Role not found.");
-    const versions = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
-    const next = (versions[0]?.version ?? 0) + 1;
-    const [pv] = await tx.insert(rolePackets).values({ companyId: t.companyId, roleId: role.id, version: next, packet: body.packet, status: role.status === "open" ? "approved" : "proposed", source: "human_edit", changeSummary: body.changeSummary, createdBy: actorOf(c), approvedBy: role.status === "open" ? t.userId : null, approvedAt: role.status === "open" ? new Date().toISOString() : null }).returning();
-    await emit(tx, { type: "role_packet.edited", companyId: t.companyId, actor: actorOf(c), subject: { type: "role_packet", id: `${role.id}:${next}` }, payload: { version: next, changeSummary: body.changeSummary } });
-    if (role.status === "open") {
-      for (const v of versions) if (v.status === "approved") await tx.update(rolePackets).set({ status: "superseded" }).where(eq(rolePackets.id, v.id));
-      await tx.update(roles).set({ currentPacketVersion: next, title: body.packet.identity.title }).where(eq(roles.id, role.id));
-      await emit(tx, { type: "role_packet.approved", companyId: t.companyId, actor: actorOf(c), subject: { type: "role_packet", id: `${role.id}:${next}` }, payload: { version: next, via: "edit_while_open" } });
-    } else if (role.status === "pending_approval") {
-      // Cancel the pending approval for the older version and request approval for the new one.
-      const pend = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.status, "pending")));
-      for (const p of pend) await tx.update(approvalRequests).set({ status: "cancelled", decisionNote: `superseded by version ${next}` }).where(eq(approvalRequests.id, p.id));
-      await tx.update(roles).set({ title: body.packet.identity.title }).where(eq(roles.id, role.id));
-      await container.engine.start(tx, { workflowKey: "role_approval", companyId: t.companyId, subject: { type: "role", id: role.id }, state: { roleId: role.id, packetVersion: next }, idempotencyKey: `role_approval:${role.id}:${next}`, actor: actorOf(c) });
-    }
-    return pv;
+    const made = await createPacketVersion(tx, container, { tenant: t, actor: actorOf(c), role, packet: body.packet, changeSummary: body.changeSummary });
+    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId };
   });
   await container.kick();
   return c.json(result, 201);
 });
 
-/** Approving resolves the pending approval request; the role_approval workflow opens and publishes the role. */
+/**
+ * Approving resolves the pending approval request; the role_approval workflow opens and publishes the role (or, for a
+ * version proposed while the role was open, makes it current). Refused for the person who started the role or wrote
+ * the version unless they are the company's only owner, and reserved for the named decision maker when there is one.
+ */
 roleRoutes.post("/:id/approve", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.approve");
@@ -118,10 +123,13 @@ roleRoutes.post("/:id/approve", requireTenant, async (c) => {
     if (!req) throw new HttpError(409, "nothing_pending", "There is no pending approval for this role.");
     const proposedVersion = Number((req.proposal as { version?: number }).version);
     if (proposedVersion !== body.version) throw new HttpError(409, "version_mismatch", `The pending approval is for version ${proposedVersion}.`);
-    if (!req.requiredRoles.includes(t.role)) throw new HttpError(403, "forbidden", `This approval needs one of: ${req.requiredRoles.join(", ")}.`);
-    await tx.update(approvalRequests).set({ status: "approved", decidedBy: t.userId, decidedAt: new Date().toISOString(), decisionNote: body.note ?? null }).where(eq(approvalRequests.id, req.id));
-    await tx.update(rolePackets).set({ approvedBy: t.userId, approvedAt: new Date().toISOString() }).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, body.version)));
-    await emit(tx, { type: "approval.granted", companyId: t.companyId, actor: actorOf(c), subject: { type: "approval_request", id: req.id }, payload: { actionType: req.actionType, note: body.note ?? null }, correlationId: req.workflowRunId });
+    const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, body.version))).limit(1);
+    await assertMayApprovePacket(tx, { tenant: t, req, role, version: pv ?? null });
+    // On the engine's clock, like POST /approvals/:id/decide: the waiting workflow judges expiry on that clock.
+    const decidedAt = container.engine.clock().toISOString();
+    await tx.update(approvalRequests).set({ status: "approved", decidedBy: t.userId, decidedAt, decisionNote: body.note ?? null }).where(eq(approvalRequests.id, req.id));
+    await tx.update(rolePackets).set({ approvedBy: t.userId, approvedAt: decidedAt }).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, body.version)));
+    await emit(tx, { type: "approval.granted", companyId: t.companyId, actor: actorOf(c), subject: { type: "approval_request", id: req.id }, payload: { actionType: req.actionType, roleId: role.id, version: body.version, note: body.note ?? null }, correlationId: req.workflowRunId });
     await emit(tx, { type: "role.approved", companyId: t.companyId, actor: actorOf(c), subject: { type: "role", id: role.id }, payload: { version: body.version } });
     await container.engine.signal(tx, { companyId: t.companyId, key: `approval:${req.id}`, payload: { decision: "approved" } });
     return { ok: true, approvalRequestId: req.id };
@@ -148,30 +156,13 @@ for (const action of ["pause", "resume"] as const) {
       return updated;
     });
     await container.kick();
+    // Applications that arrived by email while the role was paused were held (C19); resuming adds them to the role.
+    if (action === "resume") await replayHeldEmails(container, { companyId: t.companyId, roleId: row.id });
     return c.json(row);
   });
 }
 
-roleRoutes.get("/:id/postings", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "role.read");
-  const rows = await withTenant(c.get("container").db, t.companyId, (tx) => tx.select().from(postings).where(eq(postings.roleId, c.req.param("id"))));
-  return c.json(rows);
-});
-
-roleRoutes.post("/:id/postings/:channel/retry", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "role.manage");
-  const container = c.get("container");
-  await withTenant(container.db, t.companyId, async (tx) => {
-    const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
-    if (!role || role.status !== "open") throw new HttpError(409, "not_open", "The role must be open to post.");
-    await tx.update(postings).set({ status: "pending", error: null }).where(and(eq(postings.roleId, role.id), eq(postings.channel, c.req.param("channel"))));
-    await container.engine.start(tx, { workflowKey: "publish_role", companyId: t.companyId, subject: { type: "role", id: role.id }, state: { roleId: role.id, packetVersion: role.currentPacketVersion }, actor: actorOf(c) });
-  });
-  await container.kick();
-  return c.json({ ok: true });
-});
+// The posting routes (GET /:id/postings, the per-channel actions, links, volume, the accepting switch) live in routes/postings.ts.
 
 roleRoutes.get("/:id/applications", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -183,15 +174,21 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
     const cands = ids.length ? await tx.select().from(candidates).where(inArray(candidates.id, ids)) : [];
     const latest = apps.filter((a) => a.latestAssessmentId).map((a) => a.latestAssessmentId!);
     const asmts = latest.length ? await tx.select().from(assessments).where(inArray(assessments.id, latest)) : [];
+    // Whether each résumé file had text to read (a clean scan without a text layer has none): one query, no text pulled.
+    const docIds = apps.filter((a) => a.resumeDocumentId).map((a) => a.resumeDocumentId!);
+    const docs = docIds.length ? await tx.select({ id: documents.id, status: documents.status, hasText: sql<boolean>`${documents.textExtracted} is not null` }).from(documents).where(inArray(documents.id, docIds)) : [];
     return apps
       .filter((a) => (!q.group || ownerGroup(a.stage) === q.group) && (!q.stage || a.stage === q.stage))
       .map((a) => {
         const cand = cands.find((x) => x.id === a.candidateId);
         const asmt = asmts.find((x) => x.id === a.latestAssessmentId);
+        const doc = docs.find((d) => d.id === a.resumeDocumentId);
+        // Insufficient evidence as a state the owner can see: derived here and on the candidate page from the same assessment, never stored.
+        const evidence = evidenceView({ stage: a.stage, latest: asmt ?? null, resumeUnreadable: !!doc && doc.status === "clean" && !doc.hasText && !a.extraction });
         return {
           id: a.id,
           stage: a.stage,
-          stageLabel: STAGE_LABEL[a.stage],
+          stageLabel: evidence.needsCloserLook ? CLOSER_LOOK_LABEL : STAGE_LABEL[a.stage],
           group: ownerGroup(a.stage),
           source: a.source,
           createdAt: a.createdAt,
@@ -199,6 +196,7 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
           eligibility: a.eligibility,
           extractionSummary: a.extraction ? { positions: a.extraction.positions.slice(0, 3).map((p) => `${p.title}${p.employer ? ` at ${p.employer}` : ""}`), licenses: a.extraction.licenses.map((l) => l.name), years: a.extraction.yearsOfExperienceEstimate ?? null, anomalies: a.extraction.anomalies } : null,
           assessment: asmt ? { overall: asmt.overall, confidence: asmt.confidence, summary: asmt.result.summary, strengths: asmt.result.strengths.slice(0, 2), concerns: asmt.result.concerns.slice(0, 1) } : null,
+          evidence,
         };
       });
   });
@@ -212,10 +210,14 @@ applicationRoutes.use("/:id/*", applicationScopeGuard);
 
 applicationRoutes.get("/:id", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  assertCan(t.role, "application.read");
+  // An interviewer holds no application.read but may open the candidates they are interviewing (F8): they get the
+  // brief with pay and internal rationale left out (services/interviewer-view.ts), and a 403 for anyone else.
+  const interviewerOnly = t.role === "interviewer";
+  if (!interviewerOnly) assertCan(t.role, "application.read");
   const row = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const [app] = await tx.select().from(applications).where(eq(applications.id, c.req.param("id"))).limit(1);
     if (!app) return null;
+    if (interviewerOnly) return interviewerApplicationView(tx, { app, tenant: t, actor: actorOf(c) });
     const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
     const docs = await tx.select({ id: documents.id, kind: documents.kind, filename: documents.filename, mime: documents.mime, sizeBytes: documents.sizeBytes, hasText: documents.textExtracted, status: documents.status, uploadedVia: documents.uploadedVia, rejectedReason: documents.rejectedReason, validatedAt: documents.validatedAt }).from(documents).where(eq(documents.applicationId, app.id));
     const asmts = await tx.select().from(assessments).where(eq(assessments.applicationId, app.id)).orderBy(desc(assessments.createdAt));
@@ -225,9 +227,14 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const ivs = await tx.select({ id: interviews.id, roundKey: interviews.roundKey, title: interviews.title, status: interviews.status, startsAt: interviews.startsAt, endsAt: interviews.endsAt, timezone: interviews.timezone, meetingUrl: interviews.meetingUrl, attempt: interviews.attempt, outcome: interviews.outcome, decision: interviews.decision, offeredSlots: interviews.offeredSlots, createdAt: interviews.createdAt }).from(interviews).where(eq(interviews.applicationId, app.id)).orderBy(desc(interviews.createdAt));
     const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
     const packetLabels = pv ? { mustHaves: pv.packet.requirements.mustHaves.map((m) => ({ key: m.key, text: m.text })), competencies: pv.packet.competencies.map((c) => ({ key: c.key, name: c.name })), questions: pv.packet.screening.questions.map((q) => ({ key: q.key, question: q.question })) } : { mustHaves: [], competencies: [], questions: [] };
-    const pendingApprovals = await tx.select({ id: approvalRequests.id, actionType: approvalRequests.actionType, rationale: approvalRequests.rationale, createdAt: approvalRequests.createdAt }).from(approvalRequests).where(and(eq(approvalRequests.applicationId, app.id), eq(approvalRequests.status, "pending")));
+    // `proposal` carries a waiting message's text (F11), so the sheet can show it to the approver; `requiredRoles` says who may decide.
+    const pendingApprovals = await tx.select({ id: approvalRequests.id, actionType: approvalRequests.actionType, rationale: approvalRequests.rationale, createdAt: approvalRequests.createdAt, proposal: approvalRequests.proposal, requiredRoles: approvalRequests.requiredRoles }).from(approvalRequests).where(and(eq(approvalRequests.applicationId, app.id), eq(approvalRequests.status, "pending")));
     await audit(tx, { companyId: t.companyId, actor: actorOf(c), action: "candidate.viewed", target: { type: "application", id: app.id } });
-    return { ...app, stageLabel: STAGE_LABEL[app.stage], group: ownerGroup(app.stage), candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: comms, timeline, screens: scr.map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, assessmentId: s.assessmentId })), pendingApprovals, packetLabels };
+    // The latest résumé assessment (rows are newest first) is what offers "ask about this in a screen", the same rule the action route applies.
+    const allowedActions = allowedApplicationActions(applicationFactsFrom(app, scr.map((s) => s.status), ivs, t.role, asmts.find((x) => x.kind === "triage") ?? null));
+    // The status token opens the candidate's status page and the reply token is all that authenticates a reply, so neither leaves the server.
+    const { statusToken: _statusToken, replyToken: _replyToken, ...appOut } = app;
+    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: ownerGroup(app.stage), allowedActions, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: comms, timeline, screens: scr.map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, assessmentId: s.assessmentId })), pendingApprovals, packetLabels };
   });
   if (!row) throw new HttpError(404, "not_found", "Application not found.");
   return c.json(row);
@@ -258,80 +265,10 @@ applicationRoutes.post("/:id/actions", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   const body = ApplicationAction.parse(await c.req.json());
   const container = c.get("container");
-  const by = t.role;
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     const [app] = await tx.select().from(applications).where(eq(applications.id, c.req.param("id"))).limit(1);
     if (!app) throw new HttpError(404, "not_found", "Application not found.");
-    switch (body.action) {
-      case "reject": {
-        assertCan(t.role, "application.reject");
-        if (!body.reason) throw new HttpError(400, "reason_required", "A reason is required to decline a candidate.");
-        await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "rejected", by, actor: actorOf(c), reason: body.reason, payload: { note: body.note ?? null } });
-        await tx.update(applications).set({ rejectNote: body.note ?? null }).where(eq(applications.id, app.id));
-        await emit(tx, { type: "application.rejected", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { reason: body.reason, byHuman: true } });
-        await emit(tx, { type: "human.override", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { action: "reject", reason: body.reason } });
-        const dispositionSent = await sendDeclineAfterHumanDecision(tx, container, { companyId: t.companyId, app, actor: actorOf(c), reason: body.reason });
-        return { ok: true, stage: "rejected", dispositionSent };
-      }
-      case "override_eligibility": {
-        assertCan(t.role, "application.act");
-        if (app.stage !== "ineligible") throw new HttpError(409, "invalid", "Only ineligible applications can be overridden.");
-        if (!body.note?.trim()) throw new HttpError(400, "reason_required", "Say why you are keeping them in; it is recorded so the system can learn.");
-        await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "eligible", by, actor: actorOf(c), reason: body.note });
-        await emit(tx, { type: "human.override", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { action: "override_eligibility", note: body.note } });
-        return { ok: true, stage: "eligible" };
-      }
-      case "review_anyway": {
-        // The exclusion view's "review anyway" (docs/FOUNDER-CONTEXT.md §10): reopen an application that an owner-authored eligibility rule declined.
-        assertCan(t.role, "application.act");
-        if (app.stage !== "rejected" || app.rejectReason !== "eligibility") throw new HttpError(409, "invalid", "Only applications declined on an eligibility answer can be reopened here.");
-        await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "eligible", by, actor: actorOf(c), reason: body.note ?? "review anyway" });
-        await tx.update(applications).set({ rejectedAt: null, rejectReason: null, rejectNote: null }).where(eq(applications.id, app.id));
-        await emit(tx, { type: "human.override", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { action: "review_anyway", note: body.note ?? null } });
-        const { runId } = await container.engine.start(tx, { workflowKey: "application_intake", companyId: t.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: app.roleId }, idempotencyKey: `application_intake:${app.id}:reopen:${Date.now()}`, actor: actorOf(c) });
-        return { ok: true, stage: "eligible", workflowRunId: runId };
-      }
-      case "move_to_talent_pool": {
-        assertCan(t.role, "application.act");
-        await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "talent_pool", by, actor: actorOf(c), reason: body.note });
-        await tx.update(candidates).set({ inTalentPool: true }).where(eq(candidates.id, app.candidateId));
-        await emit(tx, { type: "application.moved_to_talent_pool", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: {} });
-        return { ok: true, stage: "talent_pool" };
-      }
-      case "hold": {
-        assertCan(t.role, "application.act");
-        await emit(tx, { type: "human.override", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { action: "hold", note: body.note ?? null } });
-        return { ok: true, stage: app.stage };
-      }
-      case "invite_screen": {
-        assertCan(t.role, "application.act");
-        if (!["triaged", "eligible", "received", "screen_invited", "screening"].includes(app.stage)) throw new HttpError(409, "invalid", `Cannot invite someone who is ${STAGE_LABEL[app.stage].toLowerCase()}.`);
-        const open = await tx.select({ id: screens.id }).from(screens).where(and(eq(screens.applicationId, app.id), inArray(screens.status, ["invited", "reminded", "in_progress"]))).limit(1);
-        if (open[0]) throw new HttpError(409, "already_invited", "They already have an open screening invitation.");
-        // The owner's click is the approval when a policy asked for one.
-        const pend = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.applicationId, app.id), eq(approvalRequests.actionType, "application.invite_screen"), eq(approvalRequests.status, "pending")));
-        for (const p of pend) {
-          await tx.update(approvalRequests).set({ status: "approved", decidedBy: t.userId, decidedAt: new Date().toISOString(), decisionNote: body.note ?? "invited from the candidate page" }).where(eq(approvalRequests.id, p.id));
-          await emit(tx, { type: "approval.granted", companyId: t.companyId, actor: actorOf(c), subject: { type: "approval_request", id: p.id }, payload: { actionType: p.actionType }, correlationId: p.workflowRunId });
-          await container.engine.signal(tx, { companyId: t.companyId, key: `approval:${p.id}`, payload: { decision: "approved" } });
-        }
-        const { runId } = await container.engine.start(tx, { workflowKey: "screen", companyId: t.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: app.roleId, channel: body.channel, invitedBy: t.userId }, idempotencyKey: `screen:${app.id}:${Date.now()}`, actor: actorOf(c) });
-        await emit(tx, { type: "human.override", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { action: "invite_screen", channel: body.channel ?? "auto", note: body.note ?? null, workflowRunId: runId } });
-        return { ok: true, stage: app.stage, workflowRunId: runId };
-      }
-      case "advance_to_interview": {
-        assertCan(t.role, "application.act");
-        await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "interview_recommended", by, actor: actorOf(c), reason: body.note ?? "owner decision" });
-        const pend = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.applicationId, app.id), eq(approvalRequests.actionType, "application.recommend_interview"), eq(approvalRequests.status, "pending")));
-        for (const p of pend) {
-          await tx.update(approvalRequests).set({ status: "approved", decidedBy: t.userId, decidedAt: new Date().toISOString(), decisionNote: body.note ?? "advanced from the candidate page" }).where(eq(approvalRequests.id, p.id));
-          await container.engine.signal(tx, { companyId: t.companyId, key: `approval:${p.id}`, payload: { decision: "approved" } });
-        }
-        await emit(tx, { type: "candidate.recommended", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { by: "human" } });
-        await emit(tx, { type: "human.override", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { action: "advance_to_interview", note: body.note ?? null } });
-        return { ok: true, stage: "interview_recommended", next: "Marked as recommended for interview. Open the candidate and choose \"Interview\" to pick the round and interviewers; times go out to the candidate from there." };
-      }
-    }
+    return performApplicationAction(tx, container, { app, body, tenant: t, actor: actorOf(c) });
   });
   await container.kick();
   return c.json(result);
@@ -375,7 +312,7 @@ async function tellRecruiterAboutOutcome(container: Container, companyId: string
     const to = e.assignedToUserId ? (await container.db.select({ email: users.email }).from(users).where(eq(users.id, e.assignedToUserId)).limit(1))[0]?.email : container.env.ITS_QUEUE_EMAIL;
     if (!to || told.has(to)) continue;
     told.add(to);
-    await container.integrations.email.send({ to, from, subject: `${company?.name ?? "A customer"} recorded an outcome for ${role?.title ?? "a role"}`, text: `${what}\n\nThe customer recorded this themselves; the decision was made outside Recruiting OS. Your open request: ${container.env.WEB_BASE_URL}/recruiter/queue/${e.id}`, idempotencyKey: `${key}:${to}`, tags: { template: "outcome_recorded" } });
+    await container.integrations.email.send({ to, from, subject: `${company?.name ?? "A customer"} recorded an outcome for ${role?.title ?? "a role"}`, text: `${what}\n\nThe customer recorded this themselves; the decision was made outside Recruiting OS. Your open request: ${container.env.APP_BASE_URL}/recruiter/queue/${e.id}`, idempotencyKey: `${key}:${to}`, tags: { template: "outcome_recorded" } });
   }
 }
 
@@ -420,6 +357,8 @@ roleRoutes.post("/:id/outcome", requireTenant, async (c) => {
   });
   const label: Record<string, string> = { filled: "closed the role as filled", filled_outside_platform: "closed the role: filled outside the platform", role_cancelled: "cancelled the role", no_hire: "closed the role without a hire" };
   await tellRecruiterAboutOutcome(container, t.companyId, result.role.id, null, `${actor.name ?? "The customer"} ${label[body.outcome]}.`, `role_outcome:${result.row.id}`);
+  // Applications emailed while the role was paused or closed to applications were held with a promise to add them (C19); a close keeps it by putting them in the talent pool.
+  const held = await settleHeldEmailsOnClose(container, { companyId: t.companyId, roleId: result.role.id });
   await container.kick();
-  return c.json({ ok: true, outcomeId: result.row.id, role: result.role, movedToTalentPool: result.movedToTalentPool, statement: OUTCOME_STATEMENT });
+  return c.json({ ok: true, outcomeId: result.row.id, role: result.role, movedToTalentPool: result.movedToTalentPool + held.addedToTalentPool, heldEmailsAddedToTalentPool: held.addedToTalentPool, statement: OUTCOME_STATEMENT });
 });

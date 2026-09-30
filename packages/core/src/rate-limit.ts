@@ -154,18 +154,21 @@ export class UpstashSharedCounter implements SharedCounter {
   }
 }
 
-export type RateLimitConfig = { RATE_LIMIT_STORE: string; RATE_LIMIT_SHARED_PROVIDER: string; RATE_LIMIT_SHARED_URL: string | null; UPSTASH_REDIS_REST_URL?: string | null; UPSTASH_REDIS_REST_TOKEN?: string | null };
+export type RateLimitConfig = { RATE_LIMIT_STORE: string; UPSTASH_REDIS_REST_URL?: string | null; UPSTASH_REDIS_REST_TOKEN?: string | null };
 
-/** Chooses the store from configuration: memory, the fake shared counter for rehearsal, or Upstash (decision 4). */
+/**
+ * Chooses the store from one setting: `memory` (one process), `upstash` (shared between processes; decision 4), or
+ * `fake` (the in-process stand-in for a shared store, so tests and rehearsals exercise the shared path; every instance
+ * in a process shares one table, as separate API processes would share one Redis).
+ */
 export function createRateLimitStore(cfg: RateLimitConfig, opts: { fetch?: typeof fetch; onDegraded?: (reason: string) => void } = {}): RateLimitStore {
   if (cfg.RATE_LIMIT_STORE === "memory") return new MemoryRateLimitStore();
-  if (cfg.RATE_LIMIT_STORE !== "shared") throw new Error(`RATE_LIMIT_STORE must be "memory" or "shared", got "${cfg.RATE_LIMIT_STORE}"`);
-  if (cfg.RATE_LIMIT_SHARED_PROVIDER === "fake") return new SharedRateLimitStore(new FakeSharedCounter(cfg.RATE_LIMIT_SHARED_URL ?? "fake://default"));
-  if (cfg.RATE_LIMIT_SHARED_PROVIDER === "upstash") {
-    if (!cfg.UPSTASH_REDIS_REST_URL || !cfg.UPSTASH_REDIS_REST_TOKEN) throw new Error("RATE_LIMIT_SHARED_PROVIDER=upstash needs UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN");
+  if (cfg.RATE_LIMIT_STORE === "fake") return new SharedRateLimitStore(new FakeSharedCounter("fake://default"));
+  if (cfg.RATE_LIMIT_STORE === "upstash") {
+    if (!cfg.UPSTASH_REDIS_REST_URL || !cfg.UPSTASH_REDIS_REST_TOKEN) throw new Error("RATE_LIMIT_STORE=upstash needs UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN");
     return new SharedRateLimitStore(new UpstashSharedCounter({ url: cfg.UPSTASH_REDIS_REST_URL, token: cfg.UPSTASH_REDIS_REST_TOKEN, fetch: opts.fetch, onDegraded: opts.onDegraded }));
   }
-  throw new Error(`No shared rate-limit adapter is implemented for provider "${cfg.RATE_LIMIT_SHARED_PROVIDER}". Use "upstash" (docs/readiness/15-rate-limiting-provider.md) or "fake" for rehearsal.`);
+  throw new Error(`RATE_LIMIT_STORE must be "memory", "upstash" or "fake", got "${cfg.RATE_LIMIT_STORE}" (docs/readiness/15-rate-limiting-provider.md)`);
 }
 
 /** Keyed hash (HMAC with a deployment secret) of policy and subject; the limiter never sees the subject, and nobody without the secret can guess a key. */

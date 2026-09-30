@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, ErrorState, Field, Segmented, Sheet, Skeleton, Table } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 import { toast } from "../toast";
+import { CustomerReportSheet } from "./AdminCustomerReport";
 
 type Tab = "customers" | "runs" | "ai" | "failures" | "costs" | "queue" | "calendar" | "privacy" | "admins" | "outcomes";
 const reason = { headers: { "x-admin-reason": "admin console" } };
@@ -23,21 +24,27 @@ export function Admin() {
 
 function Customers() {
   const q = useQuery({ queryKey: ["admin", "customers"], queryFn: () => api.get<Array<{ id: string; name: string; vertical: string; planKey: string; status: string; roles: number; applications: number; aiCostUsd: number; lastActivityAt: string | null; escalations: number; createdAt: string }>>("/api/v1/admin/customers", reason) });
+  // The customer's report (the ten role-report figures over every role) opens in a sheet; the read is audited like every other.
+  const [reportFor, setReportFor] = useState<{ id: string; name: string } | null>(null);
   if (q.isLoading) return <Skeleton lines={4} />;
   if (q.error) return <ErrorState message="Could not load customers." onRetry={() => q.refetch()} />;
   return (
-    <Table head={["Company", "Vertical", "Plan", "Roles", "Applicants", "AI cost", "Escalations", "Last activity", "Churn signal"]}>
-      {q.data!.map((c) => {
-        const idle = c.lastActivityAt ? (Date.now() - Date.parse(c.lastActivityAt)) / 86_400_000 : 999;
-        return (
-          <tr key={c.id}>
-            <td>{c.name}</td><td>{c.vertical}</td><td>{c.planKey} · {c.status}</td><td>{c.roles}</td><td>{c.applications}</td><td>${c.aiCostUsd.toFixed(4)}</td><td>{c.escalations}</td>
-            <td>{c.lastActivityAt ? new Date(c.lastActivityAt).toLocaleString() : "never"}</td>
-            <td>{idle > 14 ? <Chip tone="critical">no activity {Math.round(idle)}d</Chip> : idle > 7 ? <Chip tone="caution">quiet {Math.round(idle)}d</Chip> : <Chip tone="good">active</Chip>}</td>
-          </tr>
-        );
-      })}
-    </Table>
+    <>
+      <Table head={["Company", "Vertical", "Plan", "Roles", "Applicants", "AI cost", "Escalations", "Last activity", "Churn signal", ""]}>
+        {q.data!.map((c) => {
+          const idle = c.lastActivityAt ? (Date.now() - Date.parse(c.lastActivityAt)) / 86_400_000 : 999;
+          return (
+            <tr key={c.id}>
+              <td>{c.name}</td><td>{c.vertical}</td><td>{c.planKey} · {c.status}</td><td>{c.roles}</td><td>{c.applications}</td><td>${c.aiCostUsd.toFixed(4)}</td><td>{c.escalations}</td>
+              <td>{c.lastActivityAt ? new Date(c.lastActivityAt).toLocaleString() : "never"}</td>
+              <td>{idle > 14 ? <Chip tone="critical">no activity {Math.round(idle)}d</Chip> : idle > 7 ? <Chip tone="caution">quiet {Math.round(idle)}d</Chip> : <Chip tone="good">active</Chip>}</td>
+              <td><Button size="sm" variant="secondary" onClick={() => setReportFor({ id: c.id, name: c.name })}>Report</Button></td>
+            </tr>
+          );
+        })}
+      </Table>
+      {reportFor ? <CustomerReportSheet companyId={reportFor.id} companyName={reportFor.name} onClose={() => setReportFor(null)} /> : null}
+    </>
   );
 }
 
@@ -54,7 +61,7 @@ function Runs() {
         <Table head={["Workflow", "Subject", "Status", "Step", "Waiting on", "Attempts", "Error", "Updated", ""]}>
           {q.data!.map((r) => (
             <tr key={r.id}>
-              <td><button className="btn quiet sm" onClick={() => setOpenId(r.id)}>{r.workflowKey}</button></td>
+              <td><button type="button" className="btn quiet sm" onClick={() => setOpenId(r.id)}>{r.workflowKey}</button></td>
               <td className="small">{r.subject.type} {r.subject.id.slice(0, 8)}</td>
               <td><Chip tone={r.status === "failed" ? "critical" : r.status === "waiting" ? "caution" : r.status === "completed" ? "good" : "accent"}>{r.status}</Chip></td>
               <td>{r.currentStep}</td>
@@ -108,13 +115,13 @@ function AiRuns() {
   );
 }
 
-type Alert = { id: string; kind: string; severity: string; title: string; body: string; status: string; companyId: string | null; target: { type: string; id: string } | null; details: Record<string, unknown>; createdAt: string };
+type AlertRow = { id: string; kind: string; severity: string; title: string; body: string; status: string; companyId: string | null; target: { type: string; id: string } | null; details: Record<string, unknown>; createdAt: string };
 type Pending = { id: string; provider: string; kind: string; status: string; lastError: string | null; disconnectedAt: string | null };
 type Suppression = { id: string; address: string; reason: string; source: string; active: boolean; count: number; firstAt: string; lastAt: string; details: Record<string, unknown> };
 
 function Failures() {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["admin", "failures"], queryFn: () => api.get<{ failedRuns: Array<{ id: string; workflowKey: string; lastError: string | null; updatedAt: string }>; failedJobs: Array<{ id: number; kind: string; lastError: string | null }>; failedAi: Array<{ id: string; task: string; status: string; error: string | null; createdAt: string }>; alerts: Alert[]; pendingDeletions: Pending[] }>("/api/v1/admin/failures", reason), refetchInterval: 15000 });
+  const q = useQuery({ queryKey: ["admin", "failures"], queryFn: () => api.get<{ failedRuns: Array<{ id: string; workflowKey: string; lastError: string | null; updatedAt: string }>; failedJobs: Array<{ id: number; kind: string; lastError: string | null }>; failedAi: Array<{ id: string; task: string; status: string; error: string | null; createdAt: string }>; alerts: AlertRow[]; pendingDeletions: Pending[] }>("/api/v1/admin/failures", reason), refetchInterval: 15000 });
   const ack = useMutation({ mutationFn: (id: string) => api.post(`/api/v1/admin/alerts/${id}/acknowledge`, {}, reason), onSuccess: () => { toast("Acknowledged."); qc.invalidateQueries({ queryKey: ["admin", "failures"] }); } });
   const retry = useMutation({ mutationFn: (integrationId: string) => api.post(`/api/v1/admin/integrations/${integrationId}/retry-deletion`, {}, reason), onSuccess: () => { toast("Credential deleted."); qc.invalidateQueries({ queryKey: ["admin", "failures"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Retry failed.") });
   const suppressions = useQuery({ queryKey: ["admin", "suppressions"], queryFn: () => api.get<Suppression[]>("/api/v1/admin/email-suppressions", reason) });
@@ -311,6 +318,8 @@ function CalendarAdmin() {
 
 type DataRequest = { id: string; companyId: string; companyName?: string; candidateId: string | null; applicationId: string | null; kind: string; details: string | null; requesterEmail: string; channel: string; verificationStatus: string; verificationNote: string | null; status: string; slaDueAt: string; assignedTo: string | null; notes: Array<{ at: string; by: string; text: string }>; counselEscalatedAt: string | null; counselDecision: string | null; counselNote: string | null; resolution: string | null; resolvedAt: string | null; confirmationSentAt: string | null; escalationId: string | null; createdAt: string };
 const KIND_LABEL: Record<string, string> = { access: "Copy of their data", correct: "Correction", delete: "Deletion / anonymization", sms_opt_out: "Stop texts", human_review: "Human review", withdrawal: "Withdrawal" };
+/** Where a request came from: the candidate's own status link, the public form (confirmed by an emailed link), the privacy mailbox, or the console. */
+const SOURCE_LABEL: Record<string, string> = { status_page: "status page", email_form: "public form", email: "privacy mailbox", admin: "console" };
 const STATUS_TONE: Record<string, "neutral" | "accent" | "needs" | "good" | "caution" | "critical"> = { received: "needs", in_progress: "accent", awaiting_counsel: "caution", fulfilled: "good", declined: "neutral" };
 
 /**
@@ -343,8 +352,8 @@ function PrivacyRequests() {
       </Card>
       <Card title={`Open (${open.length})`}>
         {open.length === 0 ? <p className="muted small">None.</p> : (
-          <Table head={["Received", "Customer", "Kind", "Verified", "Status", "Due", "Assigned", ""]}>
-            {open.map((r) => <tr key={r.id}><td className="small">{new Date(r.createdAt).toLocaleDateString()}</td><td>{r.companyName}</td><td>{KIND_LABEL[r.kind] ?? r.kind}</td><td><Chip tone={r.verificationStatus.startsWith("verified") ? "good" : r.verificationStatus === "failed" ? "critical" : "caution"}>{r.verificationStatus.replace(/_/g, " ")}</Chip></td><td><Chip tone={STATUS_TONE[r.status] ?? "neutral"}>{r.status.replace(/_/g, " ")}</Chip></td><td className="small">{daysLeft(r) < 0 ? <Chip tone="critical">overdue</Chip> : `${daysLeft(r)} days`}</td><td className="small">{r.assignedTo ? "yes" : "nobody"}</td><td><Button size="sm" onClick={() => setOpenId(r.id)}>Open</Button></td></tr>)}
+          <Table head={["Received", "Customer", "Kind", "Source", "Verified", "Status", "Due", "Assigned", ""]}>
+            {open.map((r) => <tr key={r.id}><td className="small">{new Date(r.createdAt).toLocaleDateString()}</td><td>{r.companyName}</td><td>{KIND_LABEL[r.kind] ?? r.kind}</td><td><Chip tone="source">{SOURCE_LABEL[r.channel] ?? r.channel.replace(/_/g, " ")}</Chip></td><td><Chip tone={r.verificationStatus.startsWith("verified") ? "good" : r.verificationStatus === "failed" ? "critical" : "caution"}>{r.verificationStatus.replace(/_/g, " ")}</Chip></td><td><Chip tone={STATUS_TONE[r.status] ?? "neutral"}>{r.status.replace(/_/g, " ")}</Chip></td><td className="small">{daysLeft(r) < 0 ? <Chip tone="critical">overdue</Chip> : `${daysLeft(r)} days`}</td><td className="small">{r.assignedTo ? "yes" : "nobody"}</td><td><Button size="sm" onClick={() => setOpenId(r.id)}>Open</Button></td></tr>)}
           </Table>
         )}
       </Card>

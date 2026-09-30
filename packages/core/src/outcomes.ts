@@ -1,8 +1,9 @@
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Actor, ApplicationStage } from "@ros/contracts";
-import { applications, hiringOutcomes, recruiterEscalations, roles, type Queryable } from "@ros/db";
+import { applications, hiringOutcomes, postings, recruiterEscalations, roles, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { emit } from "./events";
+import { BOARD_UP_STATES, isBoardChannel, transitionPosting, type PostingState } from "./postings";
 import { transition } from "./stages";
 
 const ACTIVE_STAGES = new Set<ApplicationStage>(["applied", "received", "ineligible", "eligible", "triaged", "screen_invited", "screening", "screen_complete", "interview_recommended", "interview_scheduled", "interview_complete", "debrief", "finalist", "reference_check", "offer_draft", "offer_approval", "offer_sent", "negotiation", "accepted", "onboarding"]);
@@ -65,11 +66,19 @@ export async function recordApplicationOutcome(
   return { row, from: moved.from, to: moved.to, roleId: app.roleId, roleStillOpen: !!role && role.status !== "closed", app };
 }
 
-/** Closes the role with its outcome. Separate from the candidate outcome on purpose: the founder asked for a second, explicit confirmation. */
+/** A board that was up when the role closed and still needs taking down by hand (docs/spec/20 item 15). */
+export type ClosureRequired = { postingId: string; channel: string; externalUrl: string | null };
+
+/**
+ * Closes the role with its outcome. Separate from the candidate outcome on purpose: the founder asked for a second,
+ * explicit confirmation. Every posting closes with it; a board that was posted (or paused after being posted) is marked
+ * `closureRequired` and emitted as `posting.closure_required`, so the role page can say what is still up until a person
+ * confirms it was removed.
+ */
 export async function recordRoleOutcome(
   q: Queryable,
   input: { companyId: string; roleId: string; outcome: RoleOutcome; by: Mover; actor: Actor; reason?: string; now?: Date },
-): Promise<{ row: OutcomeRow; role: typeof roles.$inferSelect; movedToTalentPool: number }> {
+): Promise<{ row: OutcomeRow; role: typeof roles.$inferSelect; movedToTalentPool: number; closureRequired: ClosureRequired[] }> {
   const now = input.now ?? new Date();
   const [role] = await q.select().from(roles).where(and(eq(roles.id, input.roleId), eq(roles.companyId, input.companyId))).limit(1);
   if (!role) throw new OutcomeError("not_found", "Role not found.");
@@ -85,11 +94,23 @@ export async function recordRoleOutcome(
     await transition(q, { applicationId: a.id, companyId: input.companyId, to: "talent_pool", by: input.by, actor: input.actor, reason: `role closed: ${input.outcome}` });
     movedToTalentPool += 1;
   }
-  const [row] = await q.insert(hiringOutcomes).values({ companyId: input.companyId, applicationId: null, roleId: role.id, milestone: "role", outcome: input.outcome, notes: input.reason ?? null, details: { reason: input.reason ?? null, previousStatus: role.status, recordedOutsidePlatform: true }, recordedBy: input.actor, recordedAt: now.toISOString() }).returning();
-  await audit(q, { companyId: input.companyId, actor: input.actor, action: "role.outcome_recorded", target: { type: "role", id: role.id }, reason: input.reason ?? input.outcome, details: { outcomeId: row.id, outcome: input.outcome, previousStatus: role.status } });
-  await emit(q, { type: "role.closed", companyId: input.companyId, actor: input.actor, subject: { type: "role", id: role.id }, payload: { reason: input.outcome } });
+  // every posting closes with the role; a board that is up on the outside is named for manual removal
+  const closureRequired: ClosureRequired[] = [];
+  const posts = await q.select().from(postings).where(eq(postings.roleId, role.id));
+  for (const p of posts) {
+    if (p.status === "closed") continue;
+    const stillUp = isBoardChannel(p.channel) && BOARD_UP_STATES.includes(p.status as PostingState);
+    await transitionPosting(q, { postingId: p.id, to: "closed", actor: input.actor, now, reason: `role closed: ${input.outcome}`, patch: stillUp ? { closureRequired: true } : {} });
+    if (stillUp) {
+      closureRequired.push({ postingId: p.id, channel: p.channel, externalUrl: p.externalUrl });
+      await emit(q, { type: "posting.closure_required", companyId: input.companyId, actor: input.actor, subject: { type: "posting", id: p.id }, payload: { channel: p.channel, roleId: role.id, url: p.externalUrl } });
+    }
+  }
+  const [row] = await q.insert(hiringOutcomes).values({ companyId: input.companyId, applicationId: null, roleId: role.id, milestone: "role", outcome: input.outcome, notes: input.reason ?? null, details: { reason: input.reason ?? null, previousStatus: role.status, recordedOutsidePlatform: true, closureRequired: closureRequired.map((c) => c.channel) }, recordedBy: input.actor, recordedAt: now.toISOString() }).returning();
+  await audit(q, { companyId: input.companyId, actor: input.actor, action: "role.outcome_recorded", target: { type: "role", id: role.id }, reason: input.reason ?? input.outcome, details: { outcomeId: row.id, outcome: input.outcome, previousStatus: role.status, closureRequired: closureRequired.map((c) => c.channel) } });
+  await emit(q, { type: "role.closed", companyId: input.companyId, actor: input.actor, subject: { type: "role", id: role.id }, payload: { reason: input.outcome, closureRequired: closureRequired.map((c) => c.channel) } });
   await emit(q, { type: "outcome.recorded", companyId: input.companyId, actor: input.actor, subject: { type: "role", id: role.id }, payload: { outcome: input.outcome, level: "role", outcomeId: row.id, roleId: role.id, movedToTalentPool } });
-  return { row, role: updated, movedToTalentPool };
+  return { row, role: updated, movedToTalentPool, closureRequired };
 }
 
 /**

@@ -1,7 +1,8 @@
-import { and, eq } from "drizzle-orm";
-import { computeSlots, createEscalation, emit, notify, slotStillFree, transition } from "@ros/core";
-import { applications, candidates, companies, interviews, rolePackets, roles } from "@ros/db";
-import { constraintsFor, createInterviewEvents, participantsOf, sendInterviewConfirmation, sendInterviewReminder, sendSlotsOffered, sendSlotsReminder } from "@ros/agents";
+import { and, eq, inArray } from "drizzle-orm";
+import type { MembershipRole } from "@ros/contracts";
+import { can, computeSlots, createEscalation, emit, notify, slotStillFree, transition } from "@ros/core";
+import { applications, candidates, companies, interviewParticipants, interviews, memberships, rolePackets, roles } from "@ros/db";
+import { composeInterviewerBrief, constraintsFor, createInterviewEvents, participantsOf, queueCommunication, redactBriefPay, renderInterviewerBriefText, sendInterviewConfirmation, sendInterviewReminder, sendSlotsOffered, sendSlotsReminder } from "@ros/agents";
 import { randomToken } from "@ros/db";
 import type { StepContext, WorkflowDefinition } from "../types";
 
@@ -153,6 +154,8 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       if (!b || stale(b, ctx)) return { kind: "complete" };
       const slot = b.iv.selectedSlot;
       if (!slot) return { kind: "next", step: "offer_slots" };
+      // Never a booking nobody attends: with no interviewer left there is no constraint to check, so "free" would be meaningless.
+      if (!b.participants.length) return { kind: "fail", error: "no interviewers on the interview", retryable: false };
       const constraints = await gatherConstraints(b, ctx);
       if (!slotStillFree(slot, constraints)) {
         await emit(ctx.q, { type: "interview.slot_taken", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { slotId: slot.id, attempt: ctx.state.attempt }, correlationId: ctx.run.id });
@@ -167,8 +170,10 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       }
       await ctx.q.update(interviews).set({ startsAt: slot.startsAt, endsAt: slot.endsAt, timezone: b.company.timezone }).where(eq(interviews.id, b.iv.id));
       const fresh = (await load(ctx))!;
-      const { refs, meetingUrl } = await createInterviewEvents(ctx.q, ctx.services.integrations, { interview: fresh.iv, participants: fresh.participants, candidate: fresh.candidate, roleTitle: fresh.role.title, companyName: fresh.company.name, companyTimezone: fresh.company.timezone, actor: ctx.actor, appBaseUrl: ctx.services.env.webBaseUrl });
+      const { refs, meetingUrl } = await createInterviewEvents(ctx.q, ctx.services.integrations, { interview: fresh.iv, participants: fresh.participants, candidate: fresh.candidate, roleTitle: fresh.role.title, companyName: fresh.company.name, companyTimezone: fresh.company.timezone, actor: ctx.actor, appBaseUrl: ctx.services.env.appBaseUrl });
       await ctx.q.update(interviews).set({ status: "scheduled", calendarRefs: refs, meetingUrl: meetingUrl ?? fresh.iv.meetingUrl, scheduleTokenExpiresAt: new Date(Date.parse(slot.endsAt) + 86_400_000).toISOString() }).where(eq(interviews.id, b.iv.id));
+      // The interviewers were "invited" when the round was approved; a booked time confirms them (a reschedule invites them again).
+      await ctx.q.update(interviewParticipants).set({ status: "confirmed" }).where(eq(interviewParticipants.interviewId, b.iv.id));
       if (fresh.app.stage !== "interview_scheduled") await transition(ctx.q, { applicationId: b.app.id, companyId: ctx.companyId, to: "interview_scheduled", by: "system", actor: ctx.actor, reason: "interview booked", correlationId: ctx.run.id });
       await emit(ctx.q, { type: "interview.booked", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { slotId: slot.id, startsAt: slot.startsAt, endsAt: slot.endsAt, calendars: Object.keys(refs).length, attempt: ctx.state.attempt }, correlationId: ctx.run.id });
       return { kind: "next", step: "confirm" };
@@ -182,8 +187,13 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       if (!(await ctx.alreadyDone("confirm"))) {
         await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.confirmed", title: `Interview booked: ${b.candidate.firstName} ${b.candidate.lastName}, ${b.iv.title}`, body: `${new Date(b.iv.startsAt!).toLocaleString("en-US", { timeZone: b.company.timezone, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} (${b.company.timezone}).${b.iv.meetingUrl ? ` Join: ${b.iv.meetingUrl}` : ""}`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` }, userIds: b.participants.map((p) => p.userId) });
         await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.confirmed", title: `Interview booked: ${b.candidate.firstName} ${b.candidate.lastName}, ${b.iv.title}`, body: `${new Date(b.iv.startsAt!).toLocaleString("en-US", { timeZone: b.company.timezone, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} with ${b.participants.map((p) => p.firstName).join(", ")}.`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
+        // The interviewer's brief (F7, F8) rides with the confirmation: the round, what it covers, what the evidence says so far. Pay only for roles that may see it.
+        const brief = b.packet ? await composeInterviewerBrief(ctx.q, { applicationId: b.app.id, candidateFirstName: b.candidate.firstName, packet: b.packet, roundKey: b.iv.roundKey }) : null;
+        const memberRoles = new Map((await ctx.q.select({ userId: memberships.userId, role: memberships.role }).from(memberships).where(and(eq(memberships.companyId, ctx.companyId), inArray(memberships.userId, b.participants.map((p) => p.userId))))).map((m) => [m.userId, m.role as MembershipRole]));
         for (const p of b.participants) {
-          await ctx.services.integrations.email.send({ to: p.email, from: `${ctx.services.integrations.env.productName} <${ctx.services.integrations.env.fromAddress}>`, subject: `Interview booked: ${b.candidate.firstName} ${b.candidate.lastName} for ${b.role.title}`, text: `${b.iv.title} on ${new Date(b.iv.startsAt!).toLocaleString("en-US", { timeZone: b.company.timezone, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} (${b.company.timezone}).${b.iv.meetingUrl ? `\nJoin: ${b.iv.meetingUrl}` : ""}\n\nOpen: ${ctx.services.env.webBaseUrl}/interviews/${b.iv.id}`, idempotencyKey: `iv_confirm_int:${b.iv.id}:${b.iv.attempt}:${p.userId}`, tags: { template: "interview_confirmed_interviewer" } });
+          const mine = brief ? (can(memberRoles.get(p.userId) ?? null, "compensation.read") ? brief : redactBriefPay(brief)) : null;
+          // Team mail leaves through the outbox too: recorded here, sent after this step commits, never twice per attempt.
+          await queueCommunication(ctx.q, ctx.services.integrations, { channel: "email", companyId: ctx.companyId, to: p.email, from: `${ctx.services.integrations.env.productName} <${ctx.services.integrations.env.fromAddress}>`, subject: `Interview booked: ${b.candidate.firstName} ${b.candidate.lastName} for ${b.role.title}`, text: `${b.iv.title} on ${new Date(b.iv.startsAt!).toLocaleString("en-US", { timeZone: b.company.timezone, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} (${b.company.timezone}).${b.iv.meetingUrl ? `\nJoin: ${b.iv.meetingUrl}` : ""}\n\nOpen: ${ctx.services.env.appBaseUrl}/interviews/${b.iv.id}${mine ? `\n\n${renderInterviewerBriefText(mine)}` : ""}`, templateKey: "interview_confirmed_interviewer", idempotencyKey: `iv_confirm_int:${b.iv.id}:${b.iv.attempt}:${p.userId}`, tags: { template: "interview_confirmed_interviewer" }, actor: ctx.actor, correlationId: ctx.run.id }, ctx.now);
         }
       }
       await emit(ctx.q, { type: "interview.confirmed", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { startsAt: b.iv.startsAt, attempt: ctx.state.attempt }, correlationId: ctx.run.id });
@@ -221,7 +231,7 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       if (b.app.stage === "interview_scheduled") await transition(ctx.q, { applicationId: b.app.id, companyId: ctx.companyId, to: "interview_complete", by: "system", actor: ctx.actor, reason: "interview ended", correlationId: ctx.run.id });
       await emit(ctx.q, { type: "interview.completed", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { attempt: ctx.state.attempt }, correlationId: ctx.run.id });
       await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.outcome", title: `Did the interview with ${b.candidate.firstName} ${b.candidate.lastName} take place?`, body: "Tell us if it happened or someone did not show; it keeps the record straight.", action: { label: "Record what happened", href: `/interviews/${b.iv.id}` }, userIds: b.participants.map((p) => p.userId) });
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.decision", title: `How did it go with ${b.candidate.firstName} ${b.candidate.lastName}?`, body: `${b.iv.title} is over. Next round, finalist, or not moving forward: your call, recorded with your reason.`, action: { label: "Decide", href: `/roles/${b.role.id}/talent` } });
+      await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.decision", title: `How did it go with ${b.candidate.firstName} ${b.candidate.lastName}?`, body: `${b.iv.title} is over. Next round, finalist, or not moving forward: your call, recorded with your reason.`, action: { label: "Decide", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
       return { kind: "complete" };
     },
   },

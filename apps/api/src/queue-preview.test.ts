@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { ESCALATION_PREVIEW_FIELDS, ESCALATION_PREVIEW_FORBIDDEN_KEYS, defaultUrgency, entitlements, genericSummary } from "@ros/core";
-import { applications, auditRecords, staffAccessGrants, users } from "@ros/db";
+import { applications, auditRecords, staffAccessGrants } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -15,7 +15,7 @@ import { signInAdmin, signInStaff } from "./test-helpers";
 const SENSITIVE_STRINGS = ["Maria", "Reyes", "maria.reyes", "555-0100", "$60", "working interview", "Dentrix", "Coastal Family"];
 
 function allKeys(value: unknown, out = new Set<string>()): Set<string> {
-  if (Array.isArray(value)) value.forEach((v) => allKeys(v, out));
+  if (Array.isArray(value)) for (const v of value) allKeys(v, out);
   else if (value && typeof value === "object") for (const [k, v] of Object.entries(value as Record<string, unknown>)) { out.add(k); allKeys(v, out); }
   return out;
 }
@@ -75,6 +75,7 @@ describe("recruiter queue preview carries no candidate-sensitive data before acc
     form.set("resume", new File(["Maria Reyes, RDH\nRegistered Dental Hygienist at Coastal Family Dentistry 2019 - present\nSkills: Dentrix, periodontal charting"], "maria-reyes.txt", { type: "text/plain" }));
     for (const rule of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${rule.key}`, "yes");
     form.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
+    form.set("acknowledged", "yes");
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     expect(r.status).toBe(302);
     await container.drain();

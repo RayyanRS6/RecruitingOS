@@ -672,6 +672,63 @@ founder to create a Trigger.dev project and enter the staging worker variables t
 now names Railway everywhere and marks the Trigger.dev section deferred. No Trigger.dev code exists or is planned for
 release 1; moving the queue there would be an architectural change to the engine (a database-backed queue with
 leases, retries and timers) and needs a founder decision on its own.
+
+**Closing the loop after an interview (30 Sep, audit findings F1 to F6, F9, F14 to F16, J13):** when an interview is
+over the candidate now waits on a person everywhere the product says so: the stage `interview_complete` is in the
+"Waiting on you" group with the label "Interview done: decision needed", Today carries one "Decide after the
+interview" card per such candidate (and "Set up the next round" once next round was chosen), and the stuck-role
+detector counts them among the decisions pending. Every notification and brief action about one candidate links to
+`/roles/<roleId>/talent?open=<applicationId>`, which opens that candidate's sheet directly. The decision is recorded
+on the newest interview that is over and still undecided (not merely the newest finished one), "next round" opens the
+interview approval with that round and the plan's interviewers preselected, and "not moving forward" sends the
+respectful message through the same gate and outbox as a decline from the actions route, with the response and the
+toast saying whether it went. Recording "it took place" or a no-show from the interview sheet moves a candidate still
+at "Interviewing" to "Interview done" at once instead of waiting for the closing timer. Interviewers are told when
+they are put on an interview (`interview.assigned`, participant status `invited`; a booking makes it `confirmed`, a
+reschedule invites them again), their Today shows only their own interviews, the Talent link is not shown to them,
+and the interview sheet hides reschedule and cancel from roles that cannot use them. Three permissions replace the
+hard-coded manager list in the interview routes: `interview.request`, `interview.manage`, `interview.decide` (owner,
+admin, hiring manager, recruiter; HR and interviewer none, so HR can no longer re-offer, cancel or book on behalf,
+which `application.act` used to allow; the draft matrix in `02` had ticked HR and the interviewer for
+`interview.manage` and is corrected to what was built). Two wording choices to confirm: the stage label reads
+"decision needed" rather than "your decision" because the candidate's status page prints the same label; and the
+candidate status page and the candidate-cancelled notification (files owned by other work of the same day) still link
+to the plain Talent page, to be pointed at the sheet next. Review fixes the same day: (a) an HR member who sits on
+an interview may again record whether it took place (the state machine lets every role record that an interview
+ended; the route still checks they were on it); (b) when the outcome is recorded before the closing timer, the route
+itself emits `interview.completed` and asks the hiring team "How did it go?" with the link to the candidate's sheet,
+so nobody waits an hour for a prompt the timer would then skip; (c) the recruiter, who holds `interview.decide`, may
+mark a finalist (added to that state-machine row; before, the button showed and the request failed); (d) Today's
+"Decide after the interview" and "Set up the next round" cards go only to roles that hold `interview.decide` and
+`interview.request`, so HR is never asked for a decision the product refuses them. Tests:
+`apps/api/src/interview-loop.test.ts`; browser journey `tests/e2e/specs/decision.spec.ts` (written to mirror
+`journey.spec.ts`; runs in CI, not on the authoring machine).
+
+**Packet editor, approval rules and the role page (30 Sep, audit findings B1 to B6, B8 to B13, J7, J14):** the owner's
+packet editor now carries every field a must-have or nice-to-have needs (the text, why it matters, and where it is
+evidenced: résumé, application, screen, interview), so adding a must-have saves; the work model (on site, hybrid,
+remote) is editable and shown on the role page, and the intake takes it and the named decision maker from the
+conversation. Approval follows two object-level rules beside the role check: nobody approves the role they started or
+the version they wrote unless they are the company's only owner (a one-person company must be able to move on its
+own, and the refusal says so), and a named decision maker who is an active owner, admin or hiring manager is stored on
+the request (`proposal.requiredUserIds` and `proposal.decisionMaker`, read by `requiredUserIdsOf`; no schema change
+while migrations 0023 and 0024 are reserved) and only they or an owner may decide. An edit to an open role by someone
+who may edit but not approve is a proposed version that waits for approval while the role keeps running on its
+current one; Today shows "Approve packet v3 of ...". A rejection or a 14-day expiry (the timer runs on the engine
+clock, the same one that wakes the run) sends the role back to draft with the note on the role page and a "Request
+approval again" button; editing a pending packet cancels the older request and marks its run cancelled before the new
+run starts, so no run is left waiting on a request that can no longer be decided. The role page shows what the owner
+said matters (deal-breakers, what failure looks like, who decides), an Interview plan tab with interviewers by name
+and their scheduling readiness and a way to assign people per round (a packet version "Interviewers assigned"), and an
+Activity tab in plain words; Home has an explicit "Start a hire" button (shown to the roles that hold `role.create`).
+One wording choice: HR does not hold `packet.edit`, so the "edit while open without approval" path is exercised by a
+recruiter member. Review fixes the same day: the expiry is decided by the clock alone, since the engine's retry after
+a failed step is a timer wake too and must not expire a request on day one; sending back is reserved the same way as
+approving (the named decision maker or an owner); an edit also cancels a role_approval run that has not reached its
+gate yet, found by its subject because its request row does not exist until the worker ticks it; a decision maker
+named with several words is matched in full or not at all (a single first or last name still matches when it fits one
+person). Tests: `apps/api/src/packet.test.ts`.
+
 **Staging web application reachable (23 Sep):** the founder created the Vercel project (root `apps/shell`, Next.js,
 Corepack for pnpm 12.3.4), set Production tracking to the protected `production` branch, switched Preview
 protection off, chose region `pdx1`, entered the Preview variables for `main`, and the health check answered
@@ -681,3 +738,30 @@ no Trigger.dev integration, no change to the database-backed worker). Next: the 
 (`docs/runbooks/railway-worker.md`, one screen at a time), then the Supabase Auth redirect allow list for that
 address. Follow-up recorded: Railway's `railway.json` mechanism is deprecated in favour of its Infrastructure as Code
 with legacy support ending 1 December 2026; migrate before then.
+
+**Insufficient evidence as a state, and the one-click follow-up (30 Sep, docs/spec/21 P1, audit findings E1 to E8 and
+J15):** nothing new is stored. "Needs a closer look" is read off the latest résumé assessment wherever the owner meets
+the application (`evidenceView` in packages/core, used by the Talent list payload; the candidate page derives the same
+from the detail it holds in `apps/web/src/evidence.ts`): the application waits for the owner ("triaged") and the
+assistant could not say enough (recommendation `review_manually`, overall "unknown", or no assessment at all because
+the model's answer was unusable twice). The list row carries `evidence` (needs a closer look, the reason in plain words,
+the open questions, the top strength and concern, the confidence reasons, whether the résumé had no text, whether the
+assessment is missing) and the label "Needs a closer look" in place of "Ready for your review"; the Talent page has a
+filter for those rows; the notification names the open questions instead of "not enough to assess". The assessment
+contract gained an optional `confidenceReasons` list (the prompt asks for it; the fake fills it from what it could see;
+code adds a reason when it drops an unverifiable quote). The fake triage handler now follows the prompt's own rule
+(overall "unknown" recommends `review_manually`) and treats a résumé that shows the kind of work but none of the
+must-haves as "potential", so a hygienist's résumé with no licence line still goes to a screen while a résumé about
+other work goes to the owner; a must-have with no evidence yields a concern (no quote, since there is nothing to quote)
+and an open question. "Ask about this in a screen" is the existing `invite_screen` with `focus: "unknowns"` (action
+`ask_in_screen`, capability offered only when the résumé assessment left questions open): the screen workflow fixes the
+open questions on the screen row (`progress.focusQuestions`, keys `unknown_n`) and every reader of the packet sees them
+as the first screening questions; their answers are kept beside the questions, not in `answers`, and every reader (the
+candidate page's "x of N answered" included) merges the two places through `screenAnswersOf` in @ros/core; the
+invitation and the opening say the conversation
+starts with a few quick questions about the candidate's background. The message template stays in coordinator.ts (one
+template): the focused invitation passes a packet whose human-alternative line carries the sentence. Two failure
+branches are now said on the card and in a notification, not only in the timeline: a clean résumé with no text
+("The résumé could not be read; the written answers were used") and no usable assessment after two tries ("We could
+not assess <name> automatically; please review", kind `application.assessment_unavailable`). Tests:
+`apps/api/src/intelligence.test.ts`.

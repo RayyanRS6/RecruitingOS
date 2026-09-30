@@ -24,6 +24,35 @@ The product requirements document is the set of documents below, read in order. 
 | 15 | [Integrations](15-integrations.md) | Every adapter and its status |
 | 16 | [Admin](16-admin.md) | The internal console and the six questions |
 
-Implementation status by slice is tracked in [STATUS.md](STATUS.md).
+The current state of the product (what is built, what tests prove, what needs a CI run, what only the founder can do before a deploy, and the decisions still open) is in [STATUS.md](STATUS.md), updated 30 September 2026, followed by the history by slice. A developer joining the team starts with [handoff/developer-onboarding.md](handoff/developer-onboarding.md).
 
 Release-1 production specification (14 September 2026, awaiting founder approval): [spec/README.md](spec/README.md). It begins with a decisions register of contradictions, open decisions, security risks, compliance questions, and simulated behavior; the ten documents that follow are the build contract for the first release.
+
+## Runbooks (`runbooks/`)
+
+Step-by-step procedures for the team and the founder. The two marked new were written with the release-1 completion work on 30 September 2026.
+
+| Runbook | What it is for |
+|---|---|
+| [release-migrations.md](runbooks/release-migrations.md) (new) | Release day with a pending migration: migrate first, deploy second; the `migrate` GitHub workflow or `pnpm db:migrate`; reading the status output; what the boot refusal looks like |
+| [candidate-replies.md](runbooks/candidate-replies.md) (new) | Where candidate email replies land with and without the inbound mail domain, the per-application reply address, the HUMAN reply, and the checks |
+| [railway-worker.md](runbooks/railway-worker.md) | The worker on Railway: variables, the health check, first deployment |
+| [resume-storage.md](runbooks/resume-storage.md) | The private résumé bucket, direct uploads, quarantine, scanning, and running ClamAV on Railway |
+| [staging-environment-variables.md](runbooks/staging-environment-variables.md) | The variables entered in Vercel for the staging Preview of `main` |
+| [staging-database-setup.md](runbooks/staging-database-setup.md) | First-time setup of the staging database roles and grants, and how to resume an interrupted run |
+| [staff-second-factor.md](runbooks/staff-second-factor.md) | ITS staff sign-in with an authenticator: enrolment, backup, reset |
+| [privacy-requests.md](runbooks/privacy-requests.md) | Handling candidates' privacy requests with deadlines |
+
+## Customer documents (`customer/`)
+
+Drafted 30 September 2026 for the Founding Partner Program and checked again the same day against the finished release-1 work (the posting flow, the report, the team screens, the audit history, the privacy-request form), awaiting founder review (`spec/21` section 3). Written for a small-business owner or office manager and their hiring manager; every claim was checked against the product's screens and code. Nothing in this folder may be given to a customer until the founder signs it off.
+
+| # | Document | What it is for |
+|---|---|---|
+| 01 | [What you get and what is not included](customer/01-what-you-get-and-what-is-not-included.md) | The feature and limitation sheet with the honest statements; becomes Exhibit A of the agreement |
+| 02 | [Security overview](customer/02-security-overview.md) | Where data lives, who can see it, recruiter access, candidate protection, what is recorded, deletion, the customer's own duties; becomes Exhibit B |
+| 03 | [Support expectations](customer/03-support-expectations.md) | Hours, channels, response times by business hours as the product computes them, what support covers, how incidents are communicated; becomes Exhibit I |
+| 04 | [Onboarding checklist](customer/04-onboarding-checklist.md) | The ordered steps from signing to the first candidate, who does each, what to have ready, and week one |
+| 05 | [Administrator guide](customer/05-administrator-guide.md) | For the owner: sign-in, creating the company, invitations, roles and removal, Setup (the company card, sessions, "confirm it's you", the audit history), the daily brief, posting, the report, recruiters, outcomes, closing, privacy, Development mode |
+| 06 | [Hiring manager guide](customer/06-hiring-manager-guide.md) | For the person running a hire: intake, the packet, approval, the Posting tab and the accepting switch, Talent and "Needs a closer look", comparing candidates, screens, scorecards, interviews, the decision after an interview, declines, outcomes, writing to candidates, the report |
+| legal 11 | [Founding Partner Agreement additions](legal-drafts/11-founding-partner-agreement-additions.md) | Draft sections for counsel: fees, term, support, limitations, security, data processing, subprocessors, job boards; bracketed placeholders for the founder's decisions |

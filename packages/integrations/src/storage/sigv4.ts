@@ -107,7 +107,7 @@ export function presignUrl(creds: SigV4Credentials, input: { method: "GET" | "PU
   const canonicalRequest = [input.method, canonicalPath(url.pathname), canonicalQuery(params), canonicalHeaders, signedHeaders, "UNSIGNED-PAYLOAD"].join("\n");
   const stringToSign = ["AWS4-HMAC-SHA256", amz, scope, sha256Hex(canonicalRequest)].join("\n");
   const signature = hmac(signingKey(creds.secretAccessKey, day, creds.region, service), stringToSign).toString("hex");
-  const query = canonicalQuery(params) + `&X-Amz-Signature=${signature}`;
+  const query = `${canonicalQuery(params)}&X-Amz-Signature=${signature}`;
   return `${url.origin}${canonicalPath(url.pathname)}?${query}`;
 }
 

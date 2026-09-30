@@ -80,7 +80,7 @@ describe("iCalendar files", () => {
     expect(ics).toContain("METHOD:REQUEST");
     expect(ics).toContain("DTSTART:20260921T170000Z");
     expect(ics).toContain("DTEND:20260921T174500Z");
-    expect(ics).toContain("SUMMARY:Working session: Hygienist\; at Smile\\, Bright");
+    expect(ics).toContain("SUMMARY:Working session: Hygienist; at Smile\\, Bright");
     expect(ics).toContain("Line one\\nLine two\\, with a comma");
     expect(ics.replace(/\r\n /g, "")).toContain("ATTENDEE;ROLE=REQ-PARTICIPANT;RSVP=FALSE;CN=Maria Reyes:mailto:maria@example.com");
     for (const line of ics.split("\r\n")) expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(76);

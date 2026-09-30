@@ -15,8 +15,8 @@ process.env.ROS_MIGRATIONS_DIR ??= join(repoRoot, "packages", "db", "migrations"
  */
 const config: NextConfig = {
   reactStrictMode: true,
-  transpilePackages: ["@ros/api", "@ros/web", "@ros/ui", "@ros/core", "@ros/db", "@ros/contracts", "@ros/integrations", "@ros/workflows", "@ros/agents", "@ros/ai", "@ros/playbooks", "@ros/evals"],
-  serverExternalPackages: ["@electric-sql/pglite", "pg", "postgres", "@anthropic-ai/sdk"],
+  transpilePackages: ["@ros/api", "@ros/web", "@ros/ui", "@ros/core", "@ros/db", "@ros/contracts", "@ros/integrations", "@ros/workflows", "@ros/agents", "@ros/ai", "@ros/playbooks"],
+  serverExternalPackages: ["@electric-sql/pglite", "pg", "@anthropic-ai/sdk"],
   poweredByHeader: false,
   // Candidate pages set their own headers inside Hono; the shell adds nothing that could leak.
   headers: async () => [{ source: "/(.*)", headers: [{ key: "X-Content-Type-Options", value: "nosniff" }, { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" }] }],

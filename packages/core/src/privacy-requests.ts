@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { and, desc, eq, inArray, lte } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { applications, candidates, communications, dataRequests, documents, events, screens, type Queryable } from "@ros/db";
@@ -6,6 +7,7 @@ import { emit } from "./events";
 import { raiseAlert, resolveAlertsFor } from "./alerts";
 import { createEscalation } from "./escalations";
 import { normalizeEmail } from "./auth";
+import { openingQuestionsOf, screenAnswersOf, withoutFocusAnswers } from "./screen-answers";
 
 /**
  * Candidate privacy requests (correction 7, docs/runbooks/privacy-requests.md). Everything here is the recorded,
@@ -19,10 +21,11 @@ export type DataRequestRow = typeof dataRequests.$inferSelect;
 
 export async function createDataRequest(
   q: Queryable,
-  input: { companyId: string; kind: string; requesterEmail: string; details?: string | null; candidateId?: string | null; applicationId?: string | null; channel: "status_page" | "email" | "admin"; verified: boolean; verificationNote?: string; actor: Actor; now?: Date },
+  input: { /** a caller that promised a reference before the row existed (the public form's confirmation link) supplies it */ id?: string; companyId: string; kind: string; requesterEmail: string; details?: string | null; candidateId?: string | null; applicationId?: string | null; channel: "status_page" | "email" | "admin" | "email_form"; verified: boolean; verificationNote?: string; actor: Actor; now?: Date },
 ): Promise<DataRequestRow> {
   const now = input.now ?? new Date();
   const [row] = await q.insert(dataRequests).values({
+    ...(input.id ? { id: input.id } : {}),
     companyId: input.companyId, candidateId: input.candidateId ?? null, applicationId: input.applicationId ?? null, kind: input.kind, details: input.details ?? null,
     requesterEmail: normalizeEmail(input.requesterEmail), channel: input.channel,
     verificationStatus: input.verified ? "verified_by_link" : "pending", verificationNote: input.verificationNote ?? (input.verified ? "the request came through the candidate's own status link" : null), verifiedAt: input.verified ? now.toISOString() : null,
@@ -71,7 +74,9 @@ export async function exportCandidateData(q: Queryable, companyId: string, candi
   if (!cand) throw new Error("candidate not found");
   const apps = await q.select().from(applications).where(eq(applications.candidateId, cand.id));
   const docs = await q.select({ id: documents.id, kind: documents.kind, filename: documents.filename, mime: documents.mime, sizeBytes: documents.sizeBytes, textExtracted: documents.textExtracted, createdAt: documents.createdAt }).from(documents).where(eq(documents.candidateId, cand.id));
-  const scr = await q.select({ applicationId: screens.applicationId, channel: screens.channel, status: screens.status, transcript: screens.transcript, answers: screens.answers, createdAt: screens.createdAt }).from(screens).where(inArray(screens.applicationId, apps.map((a) => a.id).concat(["00000000-0000-0000-0000-000000000000"])));
+  // A screen's answers live in two places (screen-answers.ts): the export carries every one of them, with the opening questions in the words they were asked.
+  const scrRows = await q.select({ applicationId: screens.applicationId, channel: screens.channel, status: screens.status, transcript: screens.transcript, answers: screens.answers, progress: screens.progress, createdAt: screens.createdAt }).from(screens).where(inArray(screens.applicationId, apps.map((a) => a.id).concat(["00000000-0000-0000-0000-000000000000"])));
+  const scr = scrRows.map((s) => ({ applicationId: s.applicationId, channel: s.channel, status: s.status, transcript: s.transcript, answers: screenAnswersOf(s), openingQuestions: openingQuestionsOf(s.progress), createdAt: s.createdAt }));
   const comms = await q.select({ direction: communications.direction, channel: communications.channel, subject: communications.subject, bodyText: communications.bodyText, createdAt: communications.createdAt }).from(communications).where(eq(communications.candidateId, cand.id)).orderBy(desc(communications.createdAt));
   const history = await q.select({ type: events.type, occurredAt: events.occurredAt, subjectId: events.subjectId }).from(events).where(and(eq(events.companyId, companyId), inArray(events.subjectId, apps.map((a) => a.id).concat([cand.id]))));
   return {
@@ -105,7 +110,8 @@ export async function fulfilCorrectionRequest(q: Queryable, row: DataRequestRow,
 
 /**
  * Anonymization in place of deletion (runbook step 5): identity fields become tokens; resumes and their text, screening
- * transcripts and answers, and message bodies are removed; stage history, audit records and aggregate counts stay.
+ * transcripts and answers (the answers to a screen's opening questions included), and message bodies are removed; stage
+ * history, audit records and aggregate counts stay.
  * Refused unless counsel recorded an approval on this request and the administrator confirmed.
  */
 export async function anonymizeCandidate(
@@ -127,10 +133,13 @@ export async function anonymizeCandidate(
   const appIds = apps.map((a) => a.id);
   let scrCount = 0;
   if (appIds.length) {
-    const scr = await q.select({ id: screens.id }).from(screens).where(inArray(screens.applicationId, appIds));
+    const scr = await q.select({ id: screens.id, progress: screens.progress }).from(screens).where(inArray(screens.applicationId, appIds));
     scrCount = scr.length;
-    for (const s of scr) await q.update(screens).set({ transcript: [], answers: {} }).where(eq(screens.id, s.id));
-    for (const a of appIds) await q.update(applications).set({ answers: { noticeVersionsShown: [] }, extraction: null, rejectNote: null }).where(eq(applications.id, a));
+    for (const s of scr) await q.update(screens).set({ transcript: [], answers: {}, progress: withoutFocusAnswers(s.progress) }).where(eq(screens.id, s.id));
+    // The reply address of every old email is retired with a fresh random token: a reply to one of them no longer names
+    // this application, so it cannot write an address or a message back onto the removed record (the webhook also refuses
+    // a reply to an anonymized candidate). The status link keeps its token: its page already says the record is gone.
+    for (const a of appIds) await q.update(applications).set({ answers: { noticeVersionsShown: [] }, extraction: null, rejectNote: null, replyToken: randomBytes(8).toString("hex") }).where(eq(applications.id, a));
   }
   const comms = await q.select({ id: communications.id }).from(communications).where(eq(communications.candidateId, cand.id));
   for (const c of comms) await q.update(communications).set({ bodyText: "[removed at the candidate's request]", bodyHtml: null, subject: "[removed]", toAddress: null }).where(eq(communications.id, c.id));

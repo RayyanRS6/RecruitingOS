@@ -11,8 +11,6 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "generate": "drizzle-kit generate",
-    "generate:custom": "drizzle-kit generate --custom",
     "migrate": "tsx src/cli/migrate.ts",
     "seed": "tsx src/cli/seed.ts",
     "validate": "tsx src/cli/validate.ts",
@@ -28,7 +26,6 @@
   },
   "devDependencies": {
     "@types/pg": "^8.15.0",
-    "drizzle-kit": "latest",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"
   }

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn } from "./helpers";
+import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn, skipWithoutFakeSignIn } from "./helpers";
 
 /**
  * Founder instruction of 21 September 2026, item 1: the customer ends a recruiter's access from Setup. The button is
@@ -7,6 +7,7 @@ import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, si
  * customer's own history records it. Driven through the real page, not the API.
  */
 const run = Date.now().toString(36);
+skipWithoutFakeSignIn();
 
 test("the owner sees who has access, must confirm with a reason, and the access ends at once", async ({ page, browser, baseURL }) => {
   await signIn(page, { email: `owner+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });

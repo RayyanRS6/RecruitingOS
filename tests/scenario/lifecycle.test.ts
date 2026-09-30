@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { addBusinessHours } from "../../packages/core/src/business-hours";
 import { eq, and } from "drizzle-orm";
 import { aiRuns, applications, approvalRequests, assessments, auditRecords, communications, events, interventions, interviews, notifications, recruiterEscalations, rolePackets, roles, screens, workflowRuns } from "@ros/db";
-import { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
+import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "../../apps/api/src/app";
 import { createContainer, type Container } from "../../apps/api/src/container";
 
@@ -28,14 +28,22 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
   const setClock = (offsetMs: number) => { clockOffset = offsetMs; (container.engine as unknown as { now: () => Date }).now = () => new Date(BASE + clockOffset); };
   const advance = async (ms: number) => { setClock(clockOffset + ms); await container.drain(); };
 
+  // Dana signs in with an email link. A rule change (PUT /policies) is refused from a session older than thirty minutes
+  // (audit finding A12), so once the steps have moved the clock by days she signs in again before changing one.
+  const signIn = async () => {
+    const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "dana@brightline.test" }) });
+    const { devLink } = (await r1.json()) as { devLink: string };
+    const consume = await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: new URL(devLink).searchParams.get("token") }) });
+    cookie = consume.headers.get("set-cookie")!.split(";")[0];
+  };
+
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", STORAGE_PROVIDER: "memory" } });
+    // Texting on for the scenario: step 5 consents to texts and step 7 runs the screen by SMS (decision M2 keeps texting off by default).
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", STORAGE_PROVIDER: "memory", SMS_ENABLED: "true" } });
     app = createApp(container);
     setClock(0);
-    const { devLink } = (await (await json("POST", "/api/v1/auth/magic-link", { email: "dana@brightline.test" })).json()) as { devLink: string };
-    const consume = await json("POST", "/api/v1/auth/magic-link/consume", { token: new URL(devLink).searchParams.get("token") });
-    cookie = consume.headers.get("set-cookie")!.split(";")[0];
-    const co = (await (await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "100-199", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }] })).json()) as { slug: string };
+    await signIn();
+    const co =(await (await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "100-199", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }] })).json()) as { slug: string };
     slug = co.slug;
   });
   afterAll(async () => { await container.close(); });
@@ -114,15 +122,20 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     expect(pv.status).toBe("approved");
   });
 
-  it("Step 4, Posting: the careers page is live and verified; Google for Jobs awaits verification; email-in is not connected in development; Indeed, LinkedIn and ZipRecruiter need manual posting; policy role.publish = auto", async () => {
-    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { postings: Array<{ channel: string; status: string; instructions: string | null }> };
+  it("Step 4, Posting: the careers page is live only after its URL was checked; Google for Jobs is submitted; email-in is failed in development (no inbound domain); Indeed, LinkedIn and ZipRecruiter wait at ready to post with their own tracked links; policy role.publish = auto", async () => {
+    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { postings: Array<{ channel: string; status: string; instructions: string | null; steps: string[]; error: string | null }> };
     const s = Object.fromEntries(role.postings.map((p) => [p.channel, p.status]));
-    expect(s).toMatchObject({ careers_page: "live_verified", google_jobs: "awaiting_verification", email_in: "not_connected", linkedin_basic: "manual_action_required", indeed: "manual_action_required", ziprecruiter: "manual_action_required" });
-    expect(role.postings.find((p) => p.channel === "indeed")!.instructions).toMatch(/from your own account/i);
-    expect((await eventsOf("posting.published")).length).toBe(1);
-    expect((await eventsOf("posting.awaiting_verification")).length).toBe(1);
-    expect((await eventsOf("posting.manual_action_required")).length).toBe(3);
-    expect((await eventsOf("posting.not_connected")).length).toBe(1);
+    expect(s).toMatchObject({ careers_page: "live_verified", google_jobs: "submitted_integration", email_in: "failed", linkedin_basic: "ready_to_post", indeed: "ready_to_post", ziprecruiter: "ready_to_post" });
+    expect(role.postings.find((p) => p.channel === "indeed")!.instructions).toMatch(/own account/i);
+    expect(role.postings.find((p) => p.channel === "indeed")!.steps.join(" ")).toMatch(/\/a\/[a-z0-9]{12}/);
+    expect(role.postings.find((p) => p.channel === "email_in")!.error).toMatch(/inbound mail domain/i);
+    // the careers page went ready to post, then posted (its URL is known), then live once the check answered with the title
+    expect((await eventsOf("posting.ready_to_post")).length).toBe(4);
+    expect((await eventsOf("posting.posted_manually")).length).toBe(1);
+    expect((await eventsOf("posting.live_verified")).length).toBe(1);
+    expect((await eventsOf("posting.submitted_integration")).length).toBe(1);
+    expect((await eventsOf("posting.failed")).length).toBe(1);
+    expect((await eventsOf("application_link.created")).length).toBe(3);
     const page = await app.request(`/careers/${slug}/jobs/${roleId}`);
     expect(page.status).toBe(200);
     expect(await page.text()).toContain("JobPosting");
@@ -134,6 +147,7 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     form.set("firstName", "Maria"); form.set("lastName", "Reyes"); form.set("email", "maria.reyes@example.com"); form.set("phone", "949-555-0100"); form.set("smsConsent", "yes");
     form.set("resume", new File(["Maria Reyes, RDH\nRegistered Dental Hygienist at Smile Bright Dental 2019 - present\nRDH license CA active\nBLS current\nDentrix, periodontal charting"], "maria.txt", { type: "text/plain" }));
     for (const r of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${r.key}`, "yes");
+    form.set("acknowledged", "yes");
     const res = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     expect(res.status).toBe(302);
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
@@ -167,6 +181,7 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     form.set("resume", new File(["Luis Ortega\nDental Hygienist at Harbor Dental 2020 - present"], "luis.txt", { type: "text/plain" }));
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
     for (const r of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${r.key}`, "yes");
+    form.set("acknowledged", "yes");
     await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     const retried = await eventsOf("workflow.retried");
     expect(retried.length).toBeGreaterThanOrEqual(1);
@@ -275,6 +290,7 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     form.set("firstName", "Sam"); form.set("lastName", "Nguyen"); form.set("email", "sam@example.com"); form.set("phone", "949-555-0177"); form.set("smsConsent", "yes");
     form.set("resume", new File(["Sam Nguyen\nRegistered Dental Hygienist at Bright Smiles 2017 - present\nRDH license CA active\nPerio therapy, Dentrix"], "sam.txt", { type: "text/plain" }));
     for (const r of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${r.key}`, "yes");
+    form.set("acknowledged", "yes");
     await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     await container.drain();
     const sam = (await container.db.select().from(applications).where(eq(applications.roleId, roleId))).find((x) => x.source === "careers_page" && x.stage === "screen_invited")!;
@@ -346,7 +362,9 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     expect((await json("PUT", "/api/v1/me/availability", { timezone: "America/Los_Angeles", windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 3 })).status).toBe(200);
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { interviews: { plan: Array<{ key: string; title: string }> } } } };
     const round = role.currentPacket.packet.interviews.plan[0];
-    // human approval: the click is the approval; policy interview.request never drops below approval
+    // human approval: the click is the approval; policy interview.request never drops below approval. Steps 10b and 10c
+    // moved the clock by days, so Dana signs in again first: a rule change needs a fresh sign-in (A12).
+    await signIn();
     expect((await json("PUT", "/api/v1/policies", { actionType: "interview.request", level: "auto", approverRoles: [] })).status).toBe(400);
     const r = await json("POST", `/api/v1/applications/${a.id}/interviews`, { roundKey: round.key, interviewerUserIds: [ownerUserId], linkSource: "pasted", meetingUrl: "https://meet.example.com/brightline-rdh" });
     expect(r.status, await r.clone().text()).toBe(201);

@@ -33,7 +33,8 @@ export const DEFAULT_POLICIES: Record<ActionType, { level: PolicyLevel; approver
   "role.publish": { level: "auto", approverRoles: [] },
   "posting.sponsor_spend": { level: "auto", approverRoles: ["owner", "admin"], params: { dailyBudgetUsdRequiresApprovalAbove: 50 } },
   "message.send_templated": { level: "auto", approverRoles: [] },
-  "message.send_freeform": { level: "auto_notify", approverRoles: [] },
+  /** A message a team member wrote to a candidate (F11). Under "approval" and "human_only", owners and admins decide; their own messages go at once, since their click is the approval. */
+  "message.send_freeform": { level: "auto_notify", approverRoles: ["owner", "admin"] },
   "application.triage": { level: "auto", approverRoles: [] },
   /** The hold is operational, never permission for adverse action: notify, review timer, reminders, escalation of an overdue review. */
   "application.hold_ineligible": { level: "auto_notify", approverRoles: [], params: { reviewWindowHours: 24, remindEveryHours: 24, escalateAfterHours: 72 } },
@@ -157,7 +158,7 @@ export async function gate(
     companyId: input.companyId,
     actor: input.requestedBy,
     subject: { type: "approval_request", id: req.id },
-    payload: { actionType: input.actionType, subject: input.subject, requiredRoles: decision.approverRoles },
+    payload: { actionType: input.actionType, subject: input.subject, requiredRoles: decision.approverRoles, roleId: input.roleId, applicationId: input.applicationId ?? null },
     correlationId: input.workflowRunId ?? null,
   });
   return { outcome: "wait_for_approval", decision, approvalRequestId: req.id };

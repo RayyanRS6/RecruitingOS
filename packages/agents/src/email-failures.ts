@@ -1,9 +1,10 @@
 import { and, desc, eq, gte } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { RETRY_DELAYS_MS, SOFT_BOUNCE_LIMIT, SOFT_BOUNCE_WINDOW_MS, emit, nextContactWindow, notify, raiseAlert, suppressAddress } from "@ros/core";
-import { applications, candidates, communications, companies, jobs, memberships, rolePackets, roles, users, type Queryable } from "@ros/db";
+import { applications, candidates, communications, companies, jobs, rolePackets, roles, users, type Queryable } from "@ros/db";
 import type { EmailEvent, Integrations } from "@ros/integrations";
 import { deliverSms } from "./coordinator";
+import { queueCommunication } from "./outbox";
 
 /**
  * What happens when an email fails after we sent it (founder instruction of 18 September 2026, item 5).
@@ -85,7 +86,7 @@ async function smsFallback(q: Queryable, integrations: Integrations, input: { ca
   const [app] = appId ? await q.select().from(applications).where(eq(applications.id, appId)).limit(1) : await q.select().from(applications).where(eq(applications.candidateId, cand.id)).orderBy(desc(applications.createdAt)).limit(1);
   if (!app) return "not_possible";
   const [company] = await q.select().from(companies).where(eq(companies.id, input.companyId)).limit(1);
-  const allowed = nextContactWindow(input.now, company.timezone);
+  const allowed = nextContactWindow(input.now, company.timezone, company.settings.businessHours);
   if (allowed.getTime() > input.now.getTime()) {
     await q.insert(jobs).values({ kind: "email.fallback_sms", payload: { applicationId: app.id, communicationId: input.communication?.id ?? null }, runAt: allowed.toISOString(), maxAttempts: 3 });
     return "scheduled";
@@ -105,20 +106,36 @@ export async function sendFallbackSms(q: Queryable, integrations: Integrations, 
   await deliverSms(q, integrations, { application: app, candidate: cand, role, company, packet: pv.packet, actor: { kind: "system", id: "email_webhook" }, text: `${company.name} hiring team (AI-assisted): we could not reach you by email. Your application status and next steps: ${input.appBaseUrl}/c/status/${app.statusToken} Reply HUMAN for a person, STOP to opt out.`, idempotencyKey: `email_fallback_sms:${input.communicationId ?? app.id}`, templateKey: "email_fallback", disclosureIncluded: true });
 }
 
-/** Re-sends a soft-bounced message once or twice; a further failure comes back through the webhook and follows the same rules. */
-export async function retryCommunication(q: Queryable, integrations: Integrations, input: { communicationId: string; attempt: number; now: Date }): Promise<{ sent: boolean; reason?: string }> {
+/**
+ * Re-sends a soft-bounced message once or twice as a new outbox row that links to the original; a further failure comes
+ * back through the webhook and follows the same rules. A permanent failure of the retry (an address suppressed in the
+ * meantime) is reported by the outbox when it sends.
+ */
+export async function retryCommunication(q: Queryable, integrations: Integrations, input: { communicationId: string; attempt: number; now: Date }): Promise<{ queued: boolean; reason?: string }> {
   const [orig] = await q.select().from(communications).where(eq(communications.id, input.communicationId)).limit(1);
-  if (!orig || !orig.toAddress || orig.channel !== "email") return { sent: false, reason: "nothing to retry" };
-  const result = await integrations.email.send({ to: orig.toAddress, from: orig.fromAddress ?? `${integrations.env.productName} <${integrations.env.fromAddress}>`, replyTo: integrations.env.replyTo, subject: orig.subject ?? "(no subject)", text: orig.bodyText, html: orig.bodyHtml ?? undefined, idempotencyKey: `${orig.id}:retry:${input.attempt}`, tags: { template: orig.templateKey ?? "retry", retryOf: orig.id } });
-  const [row] = await q.insert(communications).values({ companyId: orig.companyId, candidateId: orig.candidateId, applicationId: orig.applicationId, direction: "outbound", channel: "email", fromAddress: orig.fromAddress, toAddress: orig.toAddress, subject: orig.subject, bodyText: orig.bodyText, bodyHtml: orig.bodyHtml, templateKey: orig.templateKey, provider: integrations.email.id, providerMessageId: result.status === "sent" ? result.providerMessageId : null, status: result.status === "sent" ? "sent" : result.status === "pending" ? "queued" : "failed", disclosureIncluded: orig.disclosureIncluded, sentBy: { kind: "system", id: "email_retry" }, error: result.status === "failed" ? result.error : null, retryOf: orig.id, retryAttempt: input.attempt }).returning({ id: communications.id });
+  if (!orig?.toAddress || orig.channel !== "email") return { queued: false, reason: "nothing to retry" };
+  const actor: Actor = { kind: "system", id: "email_retry" };
+  const queued = await queueCommunication(q, integrations, {
+    channel: "email",
+    companyId: orig.companyId,
+    candidateId: orig.candidateId,
+    applicationId: orig.applicationId,
+    to: orig.toAddress,
+    from: orig.fromAddress ?? `${integrations.env.productName} <${integrations.env.fromAddress}>`,
+    replyTo: orig.replyTo ?? integrations.env.replyTo,
+    subject: orig.subject ?? "(no subject)",
+    text: orig.bodyText,
+    html: orig.bodyHtml,
+    templateKey: orig.templateKey ?? "retry",
+    idempotencyKey: `${orig.id}:retry:${input.attempt}`,
+    tags: { template: orig.templateKey ?? "retry", retryOf: orig.id },
+    attachments: orig.attachments,
+    actor,
+    disclosureIncluded: orig.disclosureIncluded,
+    retryOf: orig.id,
+    retryAttempt: input.attempt,
+  }, input.now);
   await q.update(communications).set({ retryAttempt: input.attempt }).where(eq(communications.id, orig.id));
-  await emit(q, { type: "message.retried", companyId: orig.companyId, actor: { kind: "system", id: "email_retry" }, subject: { type: "communication", id: row.id }, payload: { retryOf: orig.id, attempt: input.attempt, status: result.status } });
-  if (result.status === "failed" && !result.retryable && orig.companyId) {
-    // suppressed in the meantime, or another permanent failure: tell the people who need to act
-    const [cand] = orig.candidateId ? await q.select().from(candidates).where(eq(candidates.id, orig.candidateId)).limit(1) : [];
-    if (cand) await notify(q, { companyId: orig.companyId, kind: "candidate.unreachable", title: `${cand.firstName} ${cand.lastName} still cannot be reached by email`, body: result.error, action: { label: "Open talent", href: "/talent" } });
-    const [member] = await q.select({ userId: memberships.userId }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(memberships.companyId, orig.companyId), eq(users.email, orig.toAddress))).limit(1);
-    if (member) await raiseAlert(q, { kind: "email.person_unreachable", severity: "high", title: `Retry failed for a team member's address: ${orig.toAddress}`, body: result.error, companyId: orig.companyId });
-  }
-  return { sent: result.status === "sent", reason: result.status === "failed" ? result.error : undefined };
+  await emit(q, { type: "message.retried", companyId: orig.companyId, actor, subject: { type: "communication", id: queued.communicationId }, payload: { retryOf: orig.id, attempt: input.attempt, status: queued.status } });
+  return { queued: queued.status !== "failed", reason: queued.status === "failed" ? queued.error : undefined };
 }

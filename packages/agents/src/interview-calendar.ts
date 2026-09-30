@@ -1,10 +1,8 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { availabilitySourceFor, emit, markCalendarHealthy, markCalendarNeedsAttention, notify, readConnectionSecret, type ParticipantConstraints, type TimeRange } from "@ros/core";
-import { interviewParticipants, interviews, users, type Queryable, type integrations as integrationsTable } from "@ros/db";
+import { interviewParticipants, interviews, users, type Queryable } from "@ros/db";
 import { CalendarError, type CalendarEventRef, type Integrations } from "@ros/integrations";
-
-type ConnectionRow = typeof integrationsTable.$inferSelect;
 
 /**
  * The bridge between scheduling and calendars (slice 5 step 9). Runs in the worker: it is the only role allowed to read
@@ -144,10 +142,4 @@ export async function cancelInterviewEvents(q: Queryable, integrations: Integrat
   }
   await q.update(interviews).set({ calendarRefs: remaining }).where(eq(interviews.id, iv.id));
   return { cancelled, failures };
-}
-
-export async function connectionsForUsers(q: Queryable, companyId: string, userIds: string[]): Promise<Record<string, ConnectionRow | null>> {
-  const out: Record<string, ConnectionRow | null> = {};
-  for (const id of userIds) out[id] = (await availabilitySourceFor(q, companyId, id)).connection;
-  return out;
 }

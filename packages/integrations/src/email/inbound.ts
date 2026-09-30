@@ -41,6 +41,23 @@ export function intakeAddress(token: string, intakeDomain: string): string {
 }
 
 /**
+ * Per-application reply addresses look like `reply-<token>@<intake domain>` (docs/runbooks/candidate-replies.md).
+ * The token is the application's reply token, never its status token. Returns the token, lowercased the way a mail
+ * server would deliver it, or null when the address is not one of ours.
+ */
+export function extractReplyToken(toAddress: string, intakeDomain: string): string | null {
+  const addr = toAddress.toLowerCase().replace(/^.*<([^>]+)>.*$/, "$1").trim();
+  const m = addr.match(/^reply-([a-z0-9]+)@(.+)$/i);
+  if (!m) return null;
+  if (m[2] !== intakeDomain.toLowerCase()) return null;
+  return m[1];
+}
+
+export function replyAddress(replyToken: string, intakeDomain: string): string {
+  return `reply-${replyToken.toLowerCase()}@${intakeDomain}`;
+}
+
+/**
  * Indeed-hosted applications arrive as emails with the candidate's name in the subject or body and the
  * resume attached. This extracts the best-effort name and email; the workflow asks the candidate for
  * anything missing rather than guessing.
@@ -53,7 +70,7 @@ export function extractApplicantFromInbound(mail: InboundEmail): { firstName: st
   const subj = mail.subject ?? "";
   const subjName = subj.match(/(?:application from|new applicant:?|applied:?)\s*([A-Za-z']+(?:\s[A-Za-z']+){0,3})/i);
   if (subjName) name = subjName[1].trim();
-  const bodyName = text.match(/(?:name|applicant)\s*[:\-]\s*([A-Za-z' -]{3,60})/i);
+  const bodyName = text.match(/(?:name|applicant)\s*[:-]\s*([A-Za-z' -]{3,60})/i);
   if (!name && bodyName) name = bodyName[1].trim();
   const parts = name.split(/\s+/).filter(Boolean);
   const firstName = parts[0] ?? "Applicant";

@@ -9,13 +9,17 @@ export class HttpError extends Error {
   }
 }
 
+/** What a person reads when their team role does not allow an action (a 403 from the permission matrix). */
+export const PERMISSION_MESSAGE = "Your role on this team cannot do that. Ask an owner or an admin.";
+
 export function errorHandler(err: unknown, c: Context) {
   if (err instanceof HttpError) return c.json({ error: { code: err.code, message: err.message, details: err.details } }, err.status as 400);
   if (err instanceof ZodError) return c.json({ error: { code: "invalid_request", message: "Some fields are missing or invalid.", details: err.issues } }, 400);
   if (err instanceof AuthError) return c.json({ error: { code: "unauthorized", message: err.message } }, 401);
   if (err instanceof SignInRefused) return c.json({ error: { code: err.code, message: err.message } }, 403);
   if (err instanceof StaffProviderRequired) return c.json({ error: { code: err.code, message: err.message } }, 403);
-  if (err instanceof PermissionError) return c.json({ error: { code: "forbidden", message: `Your role (${err.role}) cannot do this (${err.permission}).` } }, 403);
+  // The message is read by people (pages show it as is), so it is plain words; the permission stays in `details` for support.
+  if (err instanceof PermissionError) return c.json({ error: { code: "forbidden", message: PERMISSION_MESSAGE, details: { permission: err.permission } } }, 403);
   if (err instanceof TransitionError) return c.json({ error: { code: "invalid_transition", message: err.message } }, 409);
   // Correction 10: neither the response nor the log line may carry a credential.
   if (err instanceof SecretLeakError) {

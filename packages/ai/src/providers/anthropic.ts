@@ -1,10 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+import type { MessageCreateParamsNonStreaming, TextBlockParam } from "@anthropic-ai/sdk/resources/messages/messages";
 import type { AiProvider, StructuredRequest, StructuredResult, Usage } from "../types";
 
 /**
- * The only file that imports the Anthropic SDK. Uses structured outputs (JSON-schema constrained),
- * prompt caching on the stable system blocks, and adaptive thinking (the model default).
+ * The only file that imports the Anthropic SDK. Uses structured outputs (JSON-schema constrained), prompt caching on
+ * the stable system blocks, and adaptive thinking (the model default). The request is typed against the SDK, so a
+ * change in the SDK's request shape fails the typecheck instead of the first live call.
  */
 export class AnthropicProvider implements AiProvider {
   readonly id = "anthropic";
@@ -16,32 +18,31 @@ export class AnthropicProvider implements AiProvider {
 
   async structured<T>(req: StructuredRequest<T>, model: string): Promise<StructuredResult<T>> {
     const started = Date.now();
-    const system = req.system.map((b) =>
-      b.cache ? { type: "text" as const, text: b.text, cache_control: { type: "ephemeral" as const } } : { type: "text" as const, text: b.text },
-    );
+    const system: TextBlockParam[] = req.system.map((b) => (b.cache ? { type: "text", text: b.text, cache_control: { type: "ephemeral" } } : { type: "text", text: b.text }));
     const effort = req.effort ?? (model.includes("opus") ? "high" : "medium");
+    const params = {
+      model,
+      max_tokens: req.maxTokens ?? 16000,
+      system,
+      messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
+      output_config: { format: zodOutputFormat(req.schema), effort },
+    } satisfies MessageCreateParamsNonStreaming;
     try {
-      const response = await this.client.messages.parse({
-        model,
-        max_tokens: req.maxTokens ?? 16000,
-        system,
-        messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
-        output_config: { format: zodOutputFormat(req.schema as never), effort },
-      } as never);
+      const response = await this.client.messages.parse(params);
       const usage: Usage = {
-        inputTokens: response.usage?.input_tokens ?? 0,
-        outputTokens: response.usage?.output_tokens ?? 0,
-        cacheReadTokens: (response.usage as { cache_read_input_tokens?: number } | undefined)?.cache_read_input_tokens ?? 0,
+        inputTokens: response.usage.input_tokens,
+        outputTokens: response.usage.output_tokens,
+        cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
       };
       const latencyMs = Date.now() - started;
       if (response.stop_reason === "refusal") {
-        const details = (response as { stop_details?: { category?: string; explanation?: string } }).stop_details;
-        return { kind: "refused", reason: details?.explanation ?? details?.category ?? "refused", model, usage, latencyMs };
+        const details = response.stop_details;
+        return { kind: "refused", reason: details?.category ?? "refused", model, usage, latencyMs };
       }
-      const parsed = (response as { parsed_output?: unknown }).parsed_output;
+      const parsed = response.parsed_output;
       if (parsed === null || parsed === undefined) {
         const text = response.content.map((c) => (c.type === "text" ? c.text : "")).join("");
-        return { kind: "invalid", error: "no parsed output", model, usage, latencyMs, rawText: text };
+        return { kind: "invalid", error: response.stop_reason === "max_tokens" ? "no parsed output: the reply hit max_tokens" : "no parsed output", model, usage, latencyMs, rawText: text };
       }
       const check = req.schema.safeParse(parsed);
       if (!check.success) {

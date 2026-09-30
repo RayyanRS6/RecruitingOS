@@ -1,14 +1,15 @@
 import type { EligibilityResult, Evidence, EvidenceAssessment, EvidenceSource, ResumeExtraction, RolePacket } from "@ros/contracts";
-import { resumeExtractPrompt, runPrompt, triageAssessPrompt, type AiRuntime, type RunOutcome } from "@ros/ai";
-import type { Queryable } from "@ros/db";
+import { resumeExtractPrompt, runPromptDetached, triageAssessPrompt, type AiRuntime, type RunOutcome } from "@ros/ai";
+import type { Db } from "@ros/db";
 
 /**
  * Resume extraction (Triage agent, Slice 1). Quotes are verified against the source text in code:
  * any quote that is not a substring of the resume is dropped and the entry is marked as unquoted, so
- * nothing the model invented can be presented as evidence.
+ * nothing the model invented can be presented as evidence. The model is called with no transaction open;
+ * the run is recorded in its own short one.
  */
-export async function extractResume(q: Queryable, ai: AiRuntime, input: { companyId: string; workflowRunId?: string | null; text: string; filename?: string; documentId: string }): Promise<RunOutcome<ResumeExtraction>> {
-  const out = await runPrompt(q, ai, resumeExtractPrompt, { text: input.text, filename: input.filename }, { companyId: input.companyId, workflowRunId: input.workflowRunId ?? null, inputRef: { documentId: input.documentId, chars: input.text.length } });
+export async function extractResume(db: Db, ai: AiRuntime, input: { companyId: string; workflowRunId?: string | null; text: string; filename?: string; documentId: string }): Promise<RunOutcome<ResumeExtraction>> {
+  const out = await runPromptDetached(db, ai, resumeExtractPrompt, { text: input.text, filename: input.filename }, { companyId: input.companyId, workflowRunId: input.workflowRunId ?? null, inputRef: { documentId: input.documentId, chars: input.text.length } });
   if (!out.ok) return out;
   return { ...out, output: verifyQuotes(out.output, input.text) };
 }
@@ -43,9 +44,9 @@ export type AssessInput = {
  * Evidence-based assessment (Triage agent, Slice 2). The model reads; code verifies every quote against the
  * source text and discards any claim whose quote cannot be found, so nothing invented reaches the owner.
  */
-export async function assessApplication(q: Queryable, ai: AiRuntime, input: AssessInput): Promise<RunOutcome<EvidenceAssessment>> {
-  const out = await runPrompt(
-    q,
+export async function assessApplication(db: Db, ai: AiRuntime, input: AssessInput): Promise<RunOutcome<EvidenceAssessment>> {
+  const out = await runPromptDetached(
+    db,
     ai,
     triageAssessPrompt,
     { packet: input.packet, extraction: input.extraction, resumeText: input.resumeText, applicationAnswers: input.applicationAnswers, eligibility: input.eligibility, priorApplications: input.priorApplications },
@@ -90,5 +91,7 @@ export function verifyAssessmentQuotes(a: EvidenceAssessment, sources: Partial<R
     return { ...f, evidence: undefined, met: f.met === "yes" ? ("partially" as const) : f.met };
   });
   const anomalies = dropped ? [...a.anomalies, { kind: "unverified_quote", detail: `${dropped} claim${dropped === 1 ? "" : "s"} cited text that is not in the source and ${dropped === 1 ? "was" : "were"} discarded` }] : a.anomalies;
-  return { ...a, strengths, concerns, competencyFindings, requirementFindings, anomalies };
+  // Dropping a claim lowers what the owner can rely on; say so where the card explains the confidence.
+  const confidenceReasons = dropped ? [...(a.confidenceReasons ?? []), `${dropped === 1 ? "one claim" : `${dropped} claims`} quoted text that is not in the source and ${dropped === 1 ? "was" : "were"} dropped`] : a.confidenceReasons;
+  return { ...a, strengths, concerns, competencyFindings, requirementFindings, anomalies, ...(confidenceReasons ? { confidenceReasons } : {}) };
 }

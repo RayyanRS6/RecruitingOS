@@ -5,7 +5,7 @@ import { applications, auditRecords, events, hiringOutcomes, roles, users } from
 import type { FakeAnalyticsAdapter, FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAdmin, signInStaff } from "./test-helpers";
+import { signInAdmin, signInStaff, testContainerOptions } from "./test-helpers";
 
 /**
  * Founder instruction of 21 September 2026, item 4: people record hiring outcomes; the platform generates, approves and
@@ -41,6 +41,7 @@ describe("human-recorded hiring outcomes", () => {
     fd.set("resume", new File([`${first} ${last}\nBookkeeper at Coastal Books 2019 - present\nQuickBooks`], "resume.txt", { type: "text/plain" }));
     for (const rule of role.currentPacket.packet.requirements.eligibility) fd.set(`elig_${rule.key}`, "yes");
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
+    fd.set("acknowledged", "yes");
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
     expect(r.status).toBe(302);
     await container.drain();
@@ -49,7 +50,7 @@ describe("human-recorded hiring outcomes", () => {
   };
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", ITS_QUEUE_EMAIL: "queue@its.test" } });
+    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", ITS_QUEUE_EMAIL: "queue@its.test" }));
     app = createApp(container);
     owner = await signIn("owner@ledger.test");
     recruiter = await signInStaff(app, container, "sam@its.test", "its_recruiter", "Sam");

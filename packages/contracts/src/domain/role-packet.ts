@@ -148,6 +148,8 @@ export const HiringTimeline = z.object({
 
 export const HiringManagerPreferences = z.object({
   decisionMakerUserId: z.string().optional(),
+  /** The decision maker as the owner named them in the conversation ("Dr Chen"); matched to a team member when the approval is requested. */
+  decisionMakerName: z.string().optional(),
   dealBreakersInTheirWords: z.array(z.string()).default([]),
   whatFailureLooksLike: z.string().optional(),
   schedulingWindows: z.array(z.string()).default([]),

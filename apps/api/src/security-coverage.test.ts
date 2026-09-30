@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray } from "drizzle-orm";
 import { entitlements } from "@ros/core";
-import { applications, auditRecords, events, interviews, users, withTenant } from "@ros/db";
+import { applications, auditRecords, events, interviews, withTenant } from "@ros/db";
 import { PRODUCT_EVENT_NAMES, toProductEvent, type FakeAnalyticsAdapter, type FakeGoogleCalendarProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { testContainerOptions } from "./test-helpers";
 
 /**
  * Item 8 of the founder's instruction of 18 September 2026: the tests that must never be deferred. Tenant isolation,
@@ -49,6 +50,7 @@ describe("release-1 security coverage", () => {
     fd.set("resume", new File([`${first} Tester, RDH\nRegistered Dental Hygienist 2019 - present`], "r.txt", { type: "text/plain" }));
     for (const rule of role?.currentPacket.packet.requirements.eligibility ?? []) fd.set(`elig_${rule.key}`, "yes");
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
+    fd.set("acknowledged", "yes");
     const r = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
     expect(r.status).toBe(302);
     await container.drain();
@@ -56,7 +58,7 @@ describe("release-1 security coverage", () => {
   };
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" }));
     app = createApp(container);
     ownerA = await signIn("owner-a@brightline.test");
     ownerB = await signIn("owner-b@other.test");

@@ -1,18 +1,19 @@
 import { Hono } from "hono";
 import { createHash } from "node:crypto";
 import { desc, eq, sql } from "drizzle-orm";
-import { BREAK_GLASS_MAX_MINUTES, acknowledgeAlert, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, revokeAndDeleteCredentials, saveBusinessCalendarVersion, suppressAddress, describeHours } from "@ros/core";
+import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, suppressAddress, describeHours } from "@ros/core";
 import { BreakGlass, BusinessCalendarInput, PlanChange, RecalculateDeadlines } from "@ros/contracts";
-import { aiRuns, applications, companies, events, jobs, recruiterEscalations, roles, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
+import { aiRuns, applications, companies, events, integrations, jobs, recruiterEscalations, roles, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
 import { requirePlatformAdmin, type Vars } from "../middleware/session";
 import { OUTCOME_STATEMENT, OutcomeError, PlatformRoleError, raiseAlert, correctOutcome, countActiveAdmins, grantPlatformRole, listPlatformRoleGrants, revokeAllSessions, revokePlatformRole, type PlatformRole } from "@ros/core";
 import { CorrectOutcome } from "@ros/contracts";
 import { listCspReports, reviewCspReport } from "@ros/core";
 import { hiringOutcomes } from "@ros/db";
-import { adminAlerts, platformRoleGrants } from "@ros/db";
-import { and, isNull } from "drizzle-orm";
+import { adminAlerts } from "@ros/db";
+import { and } from "drizzle-orm";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
+import { customerReport } from "../services/role-report";
 
 /** Platform admin console API (docs/16). Every read is audited with the reason the admin supplies. */
 export const adminRoutes = new Hono<Vars>();
@@ -27,16 +28,40 @@ adminRoutes.use("*", requirePlatformAdmin, async (c, next) => {
 adminRoutes.get("/customers", async (c) => {
   const db = c.get("container").db;
   const rows = await db.select().from(companies).orderBy(desc(companies.createdAt));
-  const out = [];
-  for (const co of rows) {
-    const [r] = await db.select({ n: sql<number>`count(*)` }).from(roles).where(eq(roles.companyId, co.id));
-    const [a] = await db.select({ n: sql<number>`count(*)` }).from(applications).where(eq(applications.companyId, co.id));
-    const [cost] = await db.select({ usd: sql<string>`coalesce(sum(cost_usd), 0)` }).from(aiRuns).where(eq(aiRuns.companyId, co.id));
-    const [last] = await db.select({ at: events.occurredAt }).from(events).where(eq(events.companyId, co.id)).orderBy(desc(events.occurredAt)).limit(1);
-    const [esc] = await db.select({ n: sql<number>`count(*)` }).from(recruiterEscalations).where(eq(recruiterEscalations.companyId, co.id));
-    out.push({ ...co, roles: Number(r.n), applications: Number(a.n), aiCostUsd: Number(cost.usd), lastActivityAt: last?.at ?? null, escalations: Number(esc.n) });
-  }
-  return c.json(out);
+  // Five queries for the whole list, however many customers there are.
+  const byCompany = <T extends { companyId: string | null }>(list: T[]) => new Map(list.map((r) => [r.companyId, r]));
+  const roleCounts = byCompany(await db.select({ companyId: roles.companyId, n: sql<number>`count(*)` }).from(roles).groupBy(roles.companyId));
+  const appCounts = byCompany(await db.select({ companyId: applications.companyId, n: sql<number>`count(*)` }).from(applications).groupBy(applications.companyId));
+  const costs = byCompany(await db.select({ companyId: aiRuns.companyId, usd: sql<string>`coalesce(sum(cost_usd), 0)` }).from(aiRuns).groupBy(aiRuns.companyId));
+  const lastActivity = byCompany(await db.select({ companyId: events.companyId, at: sql<string>`max(occurred_at)` }).from(events).groupBy(events.companyId));
+  const escalationCounts = byCompany(await db.select({ companyId: recruiterEscalations.companyId, n: sql<number>`count(*)` }).from(recruiterEscalations).groupBy(recruiterEscalations.companyId));
+  return c.json(rows.map((co) => ({
+    ...co,
+    roles: Number(roleCounts.get(co.id)?.n ?? 0),
+    applications: Number(appCounts.get(co.id)?.n ?? 0),
+    aiCostUsd: Number(costs.get(co.id)?.usd ?? 0),
+    lastActivityAt: lastActivity.get(co.id)?.at ?? null,
+    escalations: Number(escalationCounts.get(co.id)?.n ?? 0),
+  })));
+});
+
+/**
+ * The customer's report (docs/spec/21 section 7, P1): the ten figures of the role report over every role of the
+ * company, plus one line per role. Counts only; never a candidate's name. The reason header is audited by the
+ * middleware above, like every other read here.
+ */
+adminRoutes.get("/customers/:id/report", async (c) => {
+  const container = c.get("container");
+  const companyId = c.req.param("id") ?? "";
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(companyId)) throw new HttpError(404, "not_found", "Company not found.");
+  const result = await withPlatform(container.db, async (tx) => {
+    const [co] = await tx.select({ id: companies.id, name: companies.name, status: companies.status, planKey: companies.planKey }).from(companies).where(eq(companies.id, companyId)).limit(1);
+    if (!co) return null;
+    const { report, roles: roleLines } = await customerReport(tx, { companyId, now: container.engine.clock() });
+    return { company: co, roles: roleLines, report };
+  });
+  if (!result) throw new HttpError(404, "not_found", "Company not found.");
+  return c.json(result);
 });
 
 adminRoutes.get("/runs", async (c) => {
@@ -115,23 +140,33 @@ adminRoutes.post("/alerts/:id/acknowledge", async (c) => {
   const s = c.get("session")!;
   // Two-person visibility (21 Sep, item 2): the administrator who changed a platform role cannot be the one who closes the alert about it.
   const [alert] = await c.get("container").db.select({ kind: adminAlerts.kind, details: adminAlerts.details, target: adminAlerts.target }).from(adminAlerts).where(eq(adminAlerts.id, c.req.param("id") ?? "")).limit(1);
-  if (alert && alert.kind.startsWith("platform_role.") && (alert.details?.actorId === s.user.id || alert.target?.id === s.user.id)) throw new HttpError(403, "second_person_required", "Another administrator must acknowledge a change to platform roles that you made or that concerns you.");
+  if (alert?.kind.startsWith("platform_role.") && (alert.details?.actorId === s.user.id || alert.target?.id === s.user.id)) throw new HttpError(403, "second_person_required", "Another administrator must acknowledge a change to platform roles that you made or that concerns you.");
   const ok = await acknowledgeAlert(c.get("container").db, { id: c.req.param("id"), actor: { kind: "user", id: s.user.id, name: s.user.name ?? s.user.email } });
   if (!ok) throw new HttpError(404, "not_found", "Alert not found or already acknowledged.");
   return c.json({ ok: true });
 });
 
-/** Retries a credential deletion by hand. Runs the same audited path as the worker. */
+/**
+ * Retries a credential deletion by hand. The retry is queued for the worker rather than run here: only the worker's
+ * database role may read a stored credential (packages/db/scripts/vault-grants.sql), so the API process could never
+ * revoke it at the provider itself. The queue runs within seconds when a worker is up; the alert stays open until the
+ * deletion is confirmed.
+ */
 adminRoutes.post("/integrations/:id/retry-deletion", async (c) => {
   const s = c.get("session")!;
   const container = c.get("container");
   const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
-  const result = await withPlatform(container.db, (tx) => revokeAndDeleteCredentials(tx, container.integrations.secrets, {
-    integrationId: c.req.param("id"), actor, attempt: 1, maxAttempts: 1,
-    revoker: (provider, value) => (container.integrations.revokers[provider] ? container.integrations.revokers[provider].revoke(value) : Promise.resolve({ ok: false, error: `no revoker for ${provider}` })),
-  }));
-  if (!result.deleted) throw new HttpError(502, "deletion_failed", "The secret store refused the deletion again. The alert stays open.", { message: result.error });
-  return c.json({ ok: true, ...result });
+  const integrationId = c.req.param("id") ?? "";
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(integrationId)) throw new HttpError(404, "not_found", "Connection not found.");
+  const [row] = await container.db.select().from(integrations).where(eq(integrations.id, integrationId)).limit(1);
+  if (!row) throw new HttpError(404, "not_found", "Connection not found.");
+  if (!row.secretRef) return c.json({ ok: true, queued: false, deleted: true, status: row.status });
+  const now = container.engine.clock();
+  await container.db.insert(jobs).values({ kind: REVOKE_JOB_KIND, payload: { integrationId: row.id, companyId: row.companyId, actor }, runAt: now.toISOString(), maxAttempts: 8 });
+  await audit(container.db, { companyId: row.companyId, actor, action: "admin.bypass", target: { type: "integration", id: row.id }, reason: "credential deletion retried from the console; queued for the worker" });
+  await container.kick();
+  const [after] = await container.db.select({ secretRef: integrations.secretRef, status: integrations.status, lastError: integrations.lastError }).from(integrations).where(eq(integrations.id, row.id)).limit(1);
+  return c.json({ ok: true, queued: true, deleted: !after?.secretRef, status: after?.status ?? row.status, lastError: after?.lastError ?? null });
 });
 
 adminRoutes.get("/costs", async (c) => {

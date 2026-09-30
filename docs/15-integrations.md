@@ -29,3 +29,41 @@ Every integration is an adapter behind an interface in `packages/integrations`, 
 | External sourcing | Licensed provider | `sourcing/*` | Slice 8 | Contract | Behind an abstraction; enrich after shortlist |
 
 Rules: no adapter pretends to succeed; a pending adapter records what it would have sent and returns a typed pending result; the product tells the customer what to do meanwhile; credentials are encrypted at rest and never logged.
+
+## Public job feed and sitemap
+
+The public job surfaces live on the job-page host, `JOBS_BASE_URL` (docs/spec/20 items 5 and 6; `apps/api/src/pages/public-feeds.ts`). They list only roles that are open and accepting applications, name the client company as the hiring employer, carry public job data only (never a candidate, never a tracking token), and are rebuilt at most once every five minutes per API process (`Cache-Control: public, max-age=300`). A role that is paused, closed, or switched to "not accepting applications" leaves every document within five minutes; its job page stays up and says so.
+
+| Address | What it is | Cadence |
+|---|---|---|
+| `GET /sitemap.xml` | The careers page of every company with at least one listed role, then every listed job page, each with `lastmod` (the role's last change). Standard sitemap schema (`http://www.sitemaps.org/schemas/sitemap/0.9`). | Rebuilt every 5 minutes; crawl daily |
+| `GET /robots.txt` | Allows `/careers/`; disallows `/c/`, `/api/`, `/a/`, `/files/`, `/dev/`, `/webhooks/`; names the sitemap. | Static |
+| `GET /feeds/jobs.xml` | The common job-board XML: one `<source>` with `<publisher>`, `<publisherurl>` and `<lastBuildDate>`, then one `<job>` per listing. Text is in CDATA. | Rebuilt every 5 minutes; poll every 1 to 4 hours |
+| `GET /feeds/jobs.json` | The same listings as JSON: `{ publisher, publisherUrl, lastBuildDate, jobs: [...] }`. | Same |
+| `GET /feeds/linkedin.xml` | LinkedIn Basic Jobs XML (`<source>` with `<lastBuildDate>` and `<publisherUrl>`; per job `partnerJobId`, `company`, `title`, `description`, `location`, `applyUrl` pointing at the job's canonical page, and `salaries` when the range is disclosed). Not advertised until LinkedIn confirms ingestion. | Same |
+
+Fields per job in `jobs.xml` (the JSON names are given in brackets where they differ):
+
+| Field | Meaning |
+|---|---|
+| `title` | The approved job title |
+| `date` (`datePosted`) | The day the role opened, `YYYY-MM-DD` |
+| `referencenumber` (`referenceNumber`) | The role id; stable for the life of the role |
+| `url` | The canonical public job page on the job host |
+| `applyurl` (`applyUrl`) | The application form on the job host; the form records the source as the careers page. Boards that were given a tracked link should keep using it, so their applications carry their source |
+| `company` (`company`, and `hiringOrganization.name`) | The client company, the hiring employer |
+| `city`, `state`, `country`, `postalcode` (`postalCode`) | The first location of the role; `country` defaults to `US` |
+| `description` | The public job description, plain text |
+| `salary` | Text such as `USD 45-55 per hour` when the range is disclosed, empty otherwise (JSON: an object with `minValue`, `maxValue`, `currency`, `unitText` `HOUR` or `YEAR`, and `text`, or `null`) |
+| `jobtype` (`jobType`) | `full-time`, `part-time`, `contract`, `temporary`, `internship`, `per-diem` or `other` (JSON also carries `employmentType` with the schema.org token: `FULL_TIME`, `PART_TIME`, `CONTRACTOR`, `TEMPORARY`, `INTERN`, `PER_DIEM`, `OTHER`) |
+| `category` | The company's vertical (for example `dental`) |
+| `expirationdate` (`validThrough`) | Sixty days after `date`, recomputed on every build, so an open role renews itself |
+| `remote` | `yes` or `no` (JSON: `true`/`false`) from the role's remote policy |
+
+Structured data: every job page carries a schema.org `JobPosting` block with the same `validThrough` rule (the closing day once the role is closed), the employer's website as `hiringOrganization.sameAs` and its logo when the company set them in Setup, and `employmentType` as the schema.org token. The block stays on paused and closed pages so search engines drop the listing on their own schedule.
+
+## Applications by email while a role is not taking applications
+
+The intake address (`apply-<token>@EMAIL_INTAKE_DOMAIN`) is public, so email keeps arriving while a role is paused or its "accepting applications" switch is off. Such an email is held, never rejected and never dropped (`apps/api/src/webhooks/postmark.ts`): the `inbound_emails` row gets status `held` with the company set, the résumé attachment (up to the resume size limit) is parked in storage under `inbound/<company>/<row>.<ext>` and referenced by `raw_storage_key`, and the team gets one in-app notice per role (`application.email_held`, "An application arrived by email while applications are closed"). A further email for the same role while that notice is unread updates the notice with the count instead of adding another row. The notice never carries the sender's address.
+
+When the role is open and taking applications again (the accepting switch turned back on, or the role resumed), the held emails are replayed in arrival order by `replayHeldEmails`: each becomes an application exactly as a live email would (source `email_in`, the parked résumé attached and then removed from storage), the row moves to `matched` with the application id (or `error` with the reason, for a person to look at), and the team's notice is rewritten to say the applications were added. Nobody has to send anything again, and nobody is rejected. The replay is a no-op while either gate is still shut, so a role that is both paused and switched off replays once both are undone.

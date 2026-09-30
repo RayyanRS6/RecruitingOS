@@ -8,6 +8,7 @@ export * from "./domain/stages";
 export * from "./domain/policy";
 export * from "./domain/events";
 export * from "./domain/interview";
+export * from "./domain/compensation";
 export * from "./api";
 export * from "./security/redact";
 export * from "./security/file-inspection";

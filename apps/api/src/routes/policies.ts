@@ -5,6 +5,7 @@ import { DEFAULT_POLICIES, HARD_HUMAN_ONLY, MIN_LEVELS, assertCan, audit, emit, 
 import { policies, withTenant } from "@ros/db";
 import { actorOf, requireTenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
+import { assertRecentAuth } from "../middleware/reauth";
 
 /** "What may the AI do on its own?" Company defaults and per-role overrides, resolved for display. */
 export const policyRoutes = new Hono<Vars>();
@@ -41,6 +42,8 @@ policyRoutes.get("/", requireTenant, async (c) => {
 policyRoutes.put("/", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "policy.manage");
+  // A rule change needs a fresh sign-in or a confirmation with the provider (audit finding A12).
+  assertRecentAuth(c);
   const body = UpsertPolicy.parse(await c.req.json());
   if (HARD_HUMAN_ONLY.has(body.actionType) && body.level !== "human_only") throw new HttpError(400, "locked", "That decision always stays with a person.");
   const min = MIN_LEVELS[body.actionType];
@@ -49,7 +52,7 @@ policyRoutes.put("/", requireTenant, async (c) => {
   const row = await withTenant(container.db, t.companyId, async (tx) => {
     const where = body.roleId ? and(eq(policies.companyId, t.companyId), eq(policies.roleId, body.roleId), eq(policies.actionType, body.actionType)) : and(eq(policies.companyId, t.companyId), isNull(policies.roleId), eq(policies.actionType, body.actionType));
     const [existing] = await tx.select().from(policies).where(where).limit(1);
-    let saved;
+    let saved: typeof policies.$inferSelect;
     if (existing) [saved] = await tx.update(policies).set({ level: body.level, approverRoles: body.approverRoles }).where(eq(policies.id, existing.id)).returning();
     else [saved] = await tx.insert(policies).values({ companyId: t.companyId, roleId: body.roleId ?? null, actionType: body.actionType, level: body.level, approverRoles: body.approverRoles, createdBy: actorOf(c) }).returning();
     await emit(tx, { type: "policy.changed", companyId: t.companyId, actor: actorOf(c), subject: { type: "policy", id: saved.id }, payload: { actionType: body.actionType, level: body.level, roleId: body.roleId ?? null, previous: existing?.level ?? null } });

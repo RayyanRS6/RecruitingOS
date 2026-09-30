@@ -31,8 +31,7 @@ env:
   WORKER_INLINE: "true"
   COMP_BLS_ENABLED: "false"
   MAGIC_LINK_ENABLED: "true"
-  RATE_LIMIT_STORE: shared
-  RATE_LIMIT_SHARED_PROVIDER: fake
+  RATE_LIMIT_STORE: fake
   CSP_MODE: report-only
 
 jobs:
@@ -72,6 +71,9 @@ jobs:
 
       - name: Typecheck
         run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
 
       - name: Migration validation (numbering, destructive statements, row-level security, tenant grants)
         run: pnpm db:validate

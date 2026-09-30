@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "../nav";
 import { Alert, Button, Card, Field } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 
-const API_BASE = (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_API_URL ?? "";
 const ERRORS: Record<string, string> = {
+  invite_email_mismatch: "That invitation was sent to a different email address. Sign in with the address the invitation was sent to, or continue without it.",
+  invite_expired: "That invitation has expired or was withdrawn. Ask the person who invited you for a new one, then sign in as usual.",
   mfa_expired: "The second-factor step timed out. Sign in again.",
   mfa_failed: "The code was wrong too many times. Sign in again.",
   mfa_unavailable: "The second-factor service is not available right now. Try again in a few minutes.",
@@ -21,28 +22,27 @@ const ERRORS: Record<string, string> = {
 
 /**
  * Sign-in is delegated to the managed identity service (D19): Google or Microsoft through a PKCE flow that starts and
- * ends on the API, so no token ever touches this page. The email link stays only where the deployment enables it.
+ * ends on the API, so no token ever touches this page. The email link stays only where the deployment enables it; the
+ * link itself opens a one-button page on the API, so this page has nothing to consume.
  */
 export function Login() {
   const [params] = useSearchParams();
+  const navigate = useNavigate();
   const config = useQuery({ queryKey: ["auth", "config"], queryFn: () => api.get<{ mode: string; providers: Array<{ key: string; label: string }>; magicLink: boolean }>("/api/v1/auth/config") });
   const [email, setEmail] = useState("");
-  const [sent, setSent] = useState<{ devLink?: string } | null>(null);
   const errParam = params.get("error");
-  const [error, setError] = useState<string | null>(errParam ? ERRORS[errParam] ?? "Sign-in failed. Try again." : null);
-  const [busy, setBusy] = useState(false);
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      setSent(await api.post<{ ok: boolean; devLink?: string }>("/api/v1/auth/magic-link", { email }));
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not send the link.");
-    } finally {
-      setBusy(false);
-    }
-  };
+  const send = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; devLink?: string }>("/api/v1/auth/magic-link", { email }),
+  });
+  // The invitation the browser still carries after "sent to a different address": dropped on request, so the person can sign in as themselves.
+  const forgetInvite = useMutation({
+    mutationFn: () => api.post("/api/v1/auth/invite/forget"),
+    onSuccess: () => navigate("/login", { replace: true }),
+  });
+  // A failed "Continue without the invitation" says so in the same alert, instead of leaving the person stuck with no answer.
+  const forgetError = forgetInvite.error ? (forgetInvite.error instanceof ApiError ? forgetInvite.error.message : "Could not clear the invitation. Try again.") : null;
+  const base = send.error ? (send.error instanceof ApiError ? send.error.message : "Could not send the link.") : errParam ? ERRORS[errParam] ?? "Sign-in failed. Try again." : null;
+  const error = forgetError ? (base ? `${base} ${forgetError}` : forgetError) : base;
   return (
     <main className="main" style={{ maxWidth: 480, margin: "8vh auto" }}>
       <h1 style={{ marginBottom: 6 }}>Recruiting OS</h1>
@@ -50,58 +50,33 @@ export function Login() {
       <Card>
         <div className="stack">
           {error ? <Alert tone="critical">{error}</Alert> : null}
+          {errParam === "invite_email_mismatch" ? <div><Button variant="quiet" size="sm" loading={forgetInvite.isPending} onClick={() => forgetInvite.mutate()}>Continue without the invitation</Button></div> : null}
           {config.data?.providers.length ? (
             <div className="stack" style={{ gap: 8 }}>
               {config.data.providers.map((p) => (
-                <a key={p.key} className="btn primary" href={`${API_BASE}/api/v1/auth/start/${p.key}`} style={{ textAlign: "center", textDecoration: "none" }}>Continue with {p.label}</a>
+                <a key={p.key} className="btn primary" href={`/api/v1/auth/start/${p.key}`} style={{ textAlign: "center", textDecoration: "none" }}>Continue with {p.label}</a>
               ))}
               {config.data.mode === "fake_identity" ? <p className="small muted">Development: the provider buttons open a fake sign-in page; nothing leaves this machine.</p> : null}
               <p className="small muted">ITS staff: use Microsoft with your second factor.</p>
             </div>
           ) : null}
           {config.data?.magicLink ? (
-            sent ? (
+            send.data ? (
               <div className="stack">
                 <Alert tone="info">Check your email for a sign-in link. It works for 15 minutes.</Alert>
-                {sent.devLink ? <p className="small">Development mode: <a href={sent.devLink}>open the sign-in link</a></p> : null}
+                {send.data.devLink ? <p className="small">Development mode: <a href={send.data.devLink}>open the sign-in link</a></p> : null}
               </div>
             ) : (
-              <form onSubmit={submit} className="stack">
+              <form onSubmit={(e) => { e.preventDefault(); send.mutate(); }} className="stack">
                 <Field label="Or use your work email" htmlFor="email" hint="No password. We email you a link.">
                   <input id="email" className="input" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
                 </Field>
-                <Button type="submit" variant="secondary" loading={busy}>Email me a sign-in link</Button>
+                <Button type="submit" variant="secondary" loading={send.isPending}>Email me a sign-in link</Button>
               </form>
             )
           ) : null}
         </div>
       </Card>
-    </main>
-  );
-}
-
-export function LoginConsume() {
-  const [params] = useSearchParams();
-  const nav = useNavigate();
-  const qc = useQueryClient();
-  const [error, setError] = useState<string | null>(null);
-  const consumed = useRef(false);
-  useEffect(() => {
-    const token = params.get("token");
-    if (!token) { setError("Missing token."); return; }
-    if (consumed.current) return; // React StrictMode runs effects twice in development; the link is single-use
-    consumed.current = true;
-    api.post<{ ok: boolean; activeCompanyId: string | null }>("/api/v1/auth/magic-link/consume", { token })
-      .then(async (r) => {
-        // Wait for the session to be re-read before leaving, or the app shell bounces back to /login.
-        await qc.refetchQueries({ queryKey: ["me"] });
-        nav(r.activeCompanyId ? "/" : "/setup/company", { replace: true });
-      })
-      .catch((err) => setError(err instanceof ApiError ? err.message : "This link is not valid."));
-  }, [params, nav, qc]);
-  return (
-    <main className="main" style={{ maxWidth: 480, margin: "8vh auto" }}>
-      <Card>{error ? <div className="stack"><Alert tone="critical">{error}</Alert><Button onClick={() => nav("/login")}>Request a new link</Button></div> : <p>Signing you in…</p>}</Card>
     </main>
   );
 }

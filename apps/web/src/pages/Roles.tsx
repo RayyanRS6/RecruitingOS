@@ -2,8 +2,9 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "../nav";
-import { Button, Card, Chip, EmptyState, ErrorState, PipelineBar, Skeleton } from "@ros/ui";
-import { api, type RoleSummary } from "../api/client";
+import { Card, Chip, EmptyState, ErrorState, PipelineBar, Skeleton } from "@ros/ui";
+import { api, type Me, type RoleSummary } from "../api/client";
+import { canSeeTalent } from "../roles";
 
 const STATUS: Record<string, { label: string; tone: "accent" | "needs" | "neutral" | "good" | "caution" }> = {
   draft: { label: "Draft", tone: "neutral" },
@@ -16,6 +17,9 @@ const STATUS: Record<string, { label: string; tone: "accent" | "needs" | "neutra
 
 export function Roles() {
   const roles = useQuery({ queryKey: ["roles"], queryFn: () => api.get<RoleSummary[]>("/api/v1/roles") });
+  // Interviewers hold no application.read: the Talent link would only lead to a refusal, so it is not offered to them.
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
+  const talent = canSeeTalent(me.data?.memberships.find((m) => m.companyId === me.data?.activeCompanyId)?.role ?? null);
   return (
     <div className="stack" style={{ gap: 18 }}>
       <div className="page-head">
@@ -49,7 +53,7 @@ export function Roles() {
                 <PipelineBar counts={r.counts} total={r.counts.total} />
                 <div className="row" style={{ marginTop: 12 }}>
                   <Link to={`/roles/${r.id}`} className="btn secondary sm">Open</Link>
-                  <Link to={`/roles/${r.id}/people`} className="btn secondary sm">People</Link>
+                  {talent ? <Link to={`/roles/${r.id}/talent`} className="btn secondary sm">Talent</Link> : null}
                 </div>
               </Card>
             );

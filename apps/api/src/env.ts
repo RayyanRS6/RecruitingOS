@@ -34,8 +34,14 @@ export type Env = {
   DATABASE_URL: string | null;
   WORKER_DATABASE_URL: string | null;
   PGLITE_DIR: string;
+  /** The one public address of a deployment. The app, the API, the candidate pages and the webhooks are all served from it (the Next.js shell mounts the API in-process). */
   APP_BASE_URL: string;
-  WEB_BASE_URL: string;
+  /**
+   * The public job-page host (docs/spec/20 item 1; jobs.identifiedtalent.com once its domain exists): every
+   * candidate-facing job URL, feed, sitemap entry, posting package and tracked link is built from it. Defaults to
+   * APP_BASE_URL, so one host serves everything until the second domain is attached.
+   */
+  JOBS_BASE_URL: string;
   SESSION_SECRET: string;
   /** "supabase" (production) or "fake" (an in-process issuer for development and tests). */
   AUTH_PROVIDER: string;
@@ -69,11 +75,12 @@ export type Env = {
   /** memory (tests), local (development), supabase (staging and production; decision 2). */
   STORAGE_PROVIDER: string;
   STORAGE_DIR: string;
-  /** "memory" (one process, local) or "shared" (several API processes share counters); see docs/readiness/15. */
+  /**
+   * Where rate-limit counters live: "memory" (one process; local development), "upstash" (shared between every API
+   * process; decision 4; staging and production), or "fake" (an in-process stand-in for the shared store; tests and
+   * rehearsals only, refused in production).
+   */
   RATE_LIMIT_STORE: string;
-  /** Which shared counter to use; only "fake" exists until the founder selects a provider. */
-  RATE_LIMIT_SHARED_PROVIDER: string;
-  RATE_LIMIT_SHARED_URL: string | null;
   /** Upstash Redis REST endpoint and token (decision 4); the token is a secret entered by the founder at the host. */
   UPSTASH_REDIS_REST_URL: string | null;
   UPSTASH_REDIS_REST_TOKEN: string | null;
@@ -87,19 +94,21 @@ export type Env = {
   CSP_MODE: "report-only" | "enforce";
   WORKER_INLINE: boolean;
   WORKER_POLL_MS: number;
-  PORT: number;
   raw: Record<string, string | undefined>;
 };
 
-export function loadEnv(source: Record<string, string | undefined> = process.env): Env {
+/** Which process is loading the environment: the app (API and pages) or the queue worker. Each needs its own database role in production. */
+export type EnvRole = "app" | "worker";
+
+export function loadEnv(source: Record<string, string | undefined> = process.env, opts: { role?: EnvRole } = {}): Env {
   const get = (k: string, d: string) => source[k] ?? d;
   const env: Env = {
     NODE_ENV: get("NODE_ENV", "development"),
     DATABASE_URL: source.DATABASE_URL ?? null,
     WORKER_DATABASE_URL: source.WORKER_DATABASE_URL ?? null,
     PGLITE_DIR: fromRoot(get("PGLITE_DIR", "./.data/pglite")),
-    APP_BASE_URL: get("APP_BASE_URL", "http://localhost:3001"),
-    WEB_BASE_URL: get("WEB_BASE_URL", "http://localhost:5173"),
+    APP_BASE_URL: get("APP_BASE_URL", "http://localhost:3000").replace(/\/+$/, ""),
+    JOBS_BASE_URL: get("JOBS_BASE_URL", get("APP_BASE_URL", "http://localhost:3000")).replace(/\/+$/, ""),
     SESSION_SECRET: get("SESSION_SECRET", "dev-only-change-me-32-bytes-minimum-please"),
     SECRET_STORE: get("SECRET_STORE", "memory"),
     AUTH_PROVIDER: get("AUTH_PROVIDER", "fake"),
@@ -118,9 +127,14 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     PRODUCT_NAME: get("PRODUCT_NAME", "Recruiting OS"),
     PRIVACY_EMAIL: get("PRIVACY_EMAIL", "privacy@identifiedtalent.com"),
     STORAGE_PROVIDER: get("STORAGE_PROVIDER", "local"),
-    RATE_LIMIT_STORE: get("RATE_LIMIT_STORE", "memory"),
-    RATE_LIMIT_SHARED_PROVIDER: get("RATE_LIMIT_SHARED_PROVIDER", "fake"),
-    RATE_LIMIT_SHARED_URL: source.RATE_LIMIT_SHARED_URL ?? null,
+    RATE_LIMIT_STORE: (() => {
+      const store = get("RATE_LIMIT_STORE", "memory");
+      if (store !== "shared") return store;
+      // The earlier spelling: RATE_LIMIT_STORE=shared plus RATE_LIMIT_SHARED_PROVIDER naming the counter. Honoured, with a nudge.
+      const provider = get("RATE_LIMIT_SHARED_PROVIDER", "fake");
+      console.warn(`[env] RATE_LIMIT_STORE=shared with RATE_LIMIT_SHARED_PROVIDER=${provider} is the old spelling; set RATE_LIMIT_STORE=${provider} and remove RATE_LIMIT_SHARED_PROVIDER and RATE_LIMIT_SHARED_URL.`);
+      return provider;
+    })(),
     UPSTASH_REDIS_REST_URL: source.UPSTASH_REDIS_REST_URL ?? null,
     UPSTASH_REDIS_REST_TOKEN: source.UPSTASH_REDIS_REST_TOKEN ?? null,
     RATE_LIMIT_OVERRIDES: (() => { try { const v = JSON.parse(get("RATE_LIMIT_OVERRIDES", "{}")) as Record<string, unknown>; return Object.fromEntries(Object.entries(v).filter(([, n]) => typeof n === "number")) as Record<string, number>; } catch { return {}; } })(),
@@ -130,18 +144,28 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     STORAGE_DIR: fromRoot(get("STORAGE_DIR", "./.data/files")),
     WORKER_INLINE: get("WORKER_INLINE", "true") !== "false",
     WORKER_POLL_MS: Number(get("WORKER_POLL_MS", "500")),
-    PORT: Number(get("PORT", "3001")),
     raw: source,
   };
+  if (source.WEB_BASE_URL && source.WEB_BASE_URL.replace(/\/+$/, "") !== env.APP_BASE_URL) {
+    console.warn("[env] WEB_BASE_URL is no longer read: the app and the API share one address, APP_BASE_URL. Remove WEB_BASE_URL.");
+  }
   if (env.NODE_ENV === "production") {
     if (env.SESSION_SECRET.startsWith("dev-only")) throw new Error("SESSION_SECRET must be set in production");
+    if (!/^https:\/\/[^/]+$/.test(env.APP_BASE_URL)) throw new Error("APP_BASE_URL must be the deployment's https origin in production (for example https://app.example.com), with no path");
+    if (source.JOBS_BASE_URL && !/^https:\/\/[^/]+$/.test(env.JOBS_BASE_URL)) throw new Error("JOBS_BASE_URL must be the public job-page https origin in production (for example https://jobs.example.com), with no path");
+    if (!source.ANALYTICS_SALT) throw new Error("ANALYTICS_SALT must be set in production: analytics identifiers are keyed hashes and must never use the development salt");
     if (env.SECRET_STORE !== "vault") throw new Error("SECRET_STORE must be \"vault\" in production: secrets live in the managed key-management service, never in application-side cryptography");
     if (env.AI_PROVIDER === "fake") throw new Error("AI_PROVIDER=fake is not allowed in production");
     if (env.AUTH_PROVIDER !== "supabase") throw new Error("AUTH_PROVIDER must be \"supabase\" in production: sign-in is delegated to the managed identity service (D19)");
     if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) throw new Error("SUPABASE_URL and SUPABASE_ANON_KEY must be set in production for sign-in");
-    if (!env.DATABASE_URL && !env.WORKER_DATABASE_URL) throw new Error("DATABASE_URL (the API) or WORKER_DATABASE_URL (the worker) must be set in production");
+    // H7: each process names its own database role, and nothing in production may fall back to PGlite, the in-process
+    // development database (no durability, a superuser role, a directory on a function's disk).
+    const role = opts.role ?? "app";
+    if (role === "app" && !env.DATABASE_URL) throw new Error("DATABASE_URL must be set in production for the app (the ros_app connection string). Without it the process would open PGlite, the in-process development database, which production refuses.");
+    if (role === "worker" && !env.WORKER_DATABASE_URL) throw new Error("WORKER_DATABASE_URL must be set in production for the worker (the ros_worker connection string, a separate non-privileged role). Without it the process would open PGlite, the in-process development database, which production refuses.");
     if (env.WORKER_INLINE) throw new Error("WORKER_INLINE must be false in production: run the worker as its own process with WORKER_DATABASE_URL");
     if (env.STORAGE_PROVIDER !== "supabase") throw new Error("STORAGE_PROVIDER must be \"supabase\" in production: résumés live in private object storage, never on a function's disk or in memory (decision 2)");
+    if (env.RATE_LIMIT_STORE === "fake") throw new Error("RATE_LIMIT_STORE=fake is a test stand-in; production uses \"upstash\" (shared) or, until it is connected, \"memory\"");
   }
   return env;
 }

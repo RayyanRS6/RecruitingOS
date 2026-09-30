@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { Alert, Button } from "@ros/ui";
 import { api } from "@ros/web/src/api/client";
 import { NavLink } from "@ros/web/src/nav";
+import { canSeeTalent } from "@ros/web/src/roles";
 import type { Me } from "../lib/session";
 
 /**
@@ -18,6 +19,8 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
   const isStaff = ["platform_admin", "its_recruiter"].includes(me.user.platformRole);
   const isAdmin = me.user.platformRole === "platform_admin";
   const active = me.memberships.find((m) => m.companyId === me.activeCompanyId);
+  // Links a role cannot use are not shown: an interviewer has no Talent page, only the interviews they are on.
+  const showTalent = !active || canSeeTalent(active.role);
   const logout = async () => {
     await api.post("/api/v1/auth/logout");
     qc.clear();
@@ -35,7 +38,7 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
           <>
             <NavLink to="/" end>Today</NavLink>
             <NavLink to="/roles">Roles</NavLink>
-            <NavLink to="/talent">Talent</NavLink>
+            {showTalent ? <NavLink to="/talent">Talent</NavLink> : null}
             <NavLink to="/interviews">Interviews</NavLink>
             <NavLink to="/setup">Setup</NavLink>
           </>

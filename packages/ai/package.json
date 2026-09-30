@@ -12,10 +12,9 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "latest",
+    "@anthropic-ai/sdk": "0.127.0",
     "@ros/contracts": "workspace:*",
     "@ros/db": "workspace:*",
-    "@ros/playbooks": "workspace:*",
     "zod": "^4.0.0"
   },
   "devDependencies": {

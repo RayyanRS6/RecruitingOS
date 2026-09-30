@@ -1,9 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
-import { users } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInStaff } from "./test-helpers";
+import { signInStaff, testContainerOptions } from "./test-helpers";
 
 /**
  * Founder decision F1 through the HTTP layer: no request header selects a tenant; tenancy comes from the
@@ -31,7 +29,7 @@ describe("tenant selection and isolation at the API", () => {
   let roleA = "";
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" }));
     app = createApp(container);
     cookieA = await signIn("owner-a@example.test");
     cookieB = await signIn("owner-b@example.test");

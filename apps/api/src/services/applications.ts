@@ -1,15 +1,20 @@
 import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { inspectResumeFile, type Actor } from "@ros/contracts";
-import { audit, dedupeKey, emit, normalizeEmailForDedupe, normalizePhone } from "@ros/core";
-import { applications, candidates, documents, randomToken, roles, uuidv7, type Tx } from "@ros/db";
+import { audit, dedupeKey, emit, normalizeEmailForDedupe, normalizePhone, transition } from "@ros/core";
+import { applications, candidates, documents, lowercaseToken, randomToken, roles, uuidv7, type ApplicationAcknowledgment, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import { quarantineKey } from "../uploads";
 
 export type NewApplication = {
   companyId: string;
   roleId: string;
+  /** The source vocabulary of packages/core/src/application-links.ts; also the candidate's first source when new. */
   source: string;
+  /** A referrer's name, a campaign label; never a tracking token (docs/spec/20 item 19). */
+  sourceDetail?: string | null;
+  /** The tracked link the candidate came through, resolved from the sealed cookie; never the token. */
+  linkId?: string | null;
   firstName: string;
   lastName: string;
   email: string | null;
@@ -18,6 +23,8 @@ export type NewApplication = {
   smsConsent: boolean;
   consentSource: string;
   noticeVersionsShown: string[];
+  /** The apply form's affirmative acknowledgment (docs/readiness/20 section D item 10); absent for email-in and manual adds, which have no form. */
+  acknowledgment?: ApplicationAcknowledgment | null;
   eligibilityAnswers: Record<string, unknown>;
   noResumeAnswers?: Record<string, string>;
   resume?: ResumeInput | null;
@@ -38,11 +45,18 @@ export type ResumeInput =
  * Creates (or updates) the candidate and application, stores the resume, records consent, emits the facts,
  * and starts the application_intake workflow. Shared by the apply page, the inbound-email webhook, and manual adds.
  * Must run inside a tenant transaction.
+ *
+ * `intoTalentPool` is for an application that arrived by email while the role was paused or closed to applications
+ * and was held (C19), when the role then closes instead of reopening: it is admitted to the closed role and moved at
+ * once to the talent pool, exactly where the role's other active candidates went when it closed. It is never
+ * acknowledged as if the role were still hiring (the intake workflow only acknowledges a fresh application); its
+ * résumé is still scanned and read so the person can be found for a later opening.
  */
-export async function createApplication(tx: Tx, container: Container, input: NewApplication, actor: Actor) {
+export async function createApplication(tx: Tx, container: Container, input: NewApplication, actor: Actor, opts: { intoTalentPool?: boolean } = {}) {
   const [role] = await tx.select().from(roles).where(eq(roles.id, input.roleId)).limit(1);
   if (!role) throw new Error("role not found");
-  if (!["open", "paused"].includes(role.status) || !role.currentPacketVersion) throw new Error("role is not accepting applications");
+  const admits = ["open", "paused"].includes(role.status) || (!!opts.intoTalentPool && role.status === "closed");
+  if (!admits || !role.currentPacketVersion) throw new Error("role is not accepting applications");
 
   const email = input.email ? input.email.trim().toLowerCase() : null;
   const phone = normalizePhone(input.phone);
@@ -52,7 +66,7 @@ export async function createApplication(tx: Tx, container: Container, input: New
   let candidate = key ? (await tx.select().from(candidates).where(and(eq(candidates.companyId, input.companyId), eq(candidates.dedupeKey, key))).limit(1))[0] : undefined;
   const consent = {
     ...(candidate?.consent ?? {}),
-    application_terms: { granted: true, at: now, source: input.consentSource, ip: input.ip },
+    application_terms: { granted: true, at: now, source: input.consentSource, ip: input.ip, ...(input.acknowledgment ? { acknowledged: true } : {}) },
     ai_notice: { granted: true, at: now, source: input.consentSource, noticeVersion: input.noticeVersionsShown.join(",") },
     ...(input.smsConsent ? { sms: { granted: true, at: now, source: input.consentSource, ip: input.ip } } : {}),
   };
@@ -84,9 +98,13 @@ export async function createApplication(tx: Tx, container: Container, input: New
         candidateId: candidate.id,
         packetVersion: role.currentPacketVersion,
         source: input.source,
+        sourceDetail: input.sourceDetail ?? null,
+        linkId: input.linkId ?? null,
         stage: "applied",
-        answers: { eligibility: input.eligibilityAnswers, noResume: input.noResumeAnswers, noticeVersionsShown: input.noticeVersionsShown },
+        answers: { eligibility: input.eligibilityAnswers, noResume: input.noResumeAnswers, noticeVersionsShown: input.noticeVersionsShown, ...(input.acknowledgment ? { acknowledgment: input.acknowledgment } : {}) },
         statusToken: randomToken(24),
+        // The reply address's token (F12): its own random value, never the status token, lowercase because it travels in an email address.
+        replyToken: lowercaseToken(16),
       })
       .returning();
   }
@@ -123,7 +141,11 @@ export async function createApplication(tx: Tx, container: Container, input: New
   }
 
   if (!duplicate) {
-    await emit(tx, { type: "application.received", companyId: input.companyId, actor, subject: { type: "application", id: application.id }, payload: { roleId: role.id, source: input.source, hasResume: !!application.resumeDocumentId, note: input.note ?? null } });
+    await emit(tx, { type: "application.received", companyId: input.companyId, actor, subject: { type: "application", id: application.id }, payload: { roleId: role.id, source: input.source, linkId: input.linkId ?? null, hasResume: !!application.resumeDocumentId, note: input.note ?? null } });
+    if (opts.intoTalentPool) {
+      await transition(tx, { applicationId: application.id, companyId: input.companyId, to: "talent_pool", by: "system", actor, reason: "the role closed while this emailed application was held" });
+      application = { ...application, stage: "talent_pool" };
+    }
     await container.engine.start(tx, {
       workflowKey: "application_intake",
       companyId: input.companyId,

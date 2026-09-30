@@ -84,30 +84,19 @@ export function ErrorState(props: { message: string; onRetry?: () => void }) {
 
 export function Segmented<T extends string>(props: { value: T; options: Array<{ value: T; label: string }>; onChange: (v: T) => void; ariaLabel?: string }) {
   return (
-    <div className="segmented" role="group" aria-label={props.ariaLabel}>
+    <fieldset className="segmented" aria-label={props.ariaLabel} style={{ border: 0, padding: 0, margin: 0 }}>
       {props.options.map((o) => (
-        <button key={o.value} className={o.value === props.value ? "on" : ""} onClick={() => props.onChange(o.value)} aria-pressed={o.value === props.value}>
+        <button key={o.value} type="button" className={o.value === props.value ? "on" : ""} onClick={() => props.onChange(o.value)} aria-pressed={o.value === props.value}>
           {o.label}
         </button>
       ))}
-    </div>
+    </fieldset>
   );
 }
 
-export function Sheet(props: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
-  if (!props.open) return null;
-  return (
-    <div className="sheet-backdrop" onClick={props.onClose}>
-      <div className="sheet" role="dialog" aria-modal="true" aria-label={props.title} onClick={(e) => e.stopPropagation()}>
-        <div className="row" style={{ justifyContent: "space-between", marginBottom: 14 }}>
-          <h2>{props.title}</h2>
-          <Button variant="quiet" onClick={props.onClose}>Close</Button>
-        </div>
-        {props.children}
-      </div>
-    </div>
-  );
-}
+// The sheet listens for Escape on the document, which needs a React hook, so it lives in its own client module: the
+// rest of this file stays usable from server components (the shell's loading screen imports it).
+export { Sheet } from "./sheet";
 
 export function Timeline(props: { items: Array<{ when: string; what: string; who?: string }> }) {
   return (
@@ -125,7 +114,7 @@ export function Timeline(props: { items: Array<{ when: string; what: string; who
 export function PipelineBar(props: { counts: Record<string, number>; total: number }) {
   const parts: Array<[string, string]> = [["in_process", "var(--accent)"], ["waiting_on_you", "var(--needs-you)"], ["hired", "var(--good)"], ["not_moving_forward", "var(--line)"]];
   return (
-    <div className="pipeline" aria-label="Pipeline">
+    <div className="pipeline" role="img" aria-label={`Pipeline: ${parts.map(([k]) => `${k.replace(/_/g, " ")} ${props.counts[k] ?? 0}`).join(", ")}`}>
       {parts.map(([k, color]) => {
         const n = props.counts[k] ?? 0;
         return n ? <span key={k} style={{ width: `${(n / Math.max(1, props.total)) * 100}%`, background: color }} title={`${k.replace(/_/g, " ")}: ${n}`} /> : null;
@@ -134,20 +123,21 @@ export function PipelineBar(props: { counts: Record<string, number>; total: numb
   );
 }
 
-export function Bubble(props: { role: "assistant" | "user" | "system"; children: ReactNode }) {
-  return <div className={`bubble ${props.role}`}>{props.children}</div>;
+/** One message in a conversation; `from` says who wrote it (the name avoids the `role` ARIA attribute). */
+export function Bubble(props: { from: "assistant" | "user" | "system"; children: ReactNode }) {
+  return <div className={`bubble ${props.from}`}>{props.children}</div>;
 }
 
 export function Table(props: { head: string[]; children: ReactNode; label?: string }) {
-  // A scrolling region must be reachable by keyboard (axe scrollable-region-focusable); the label names it for screen readers.
   return (
-    <div className="table-wrap" tabIndex={0} role="region" aria-label={props.label ?? `Table: ${props.head.filter(Boolean).join(", ")}`}>
+    // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrolling region must be reachable by keyboard (axe scrollable-region-focusable); the label names it for screen readers
+    <section className="table-wrap" tabIndex={0} aria-label={props.label ?? `Table: ${props.head.filter(Boolean).join(", ")}`}>
       <table className="table">
         <thead>
           <tr>{props.head.map((h, i) => <th key={`${i}-${h}`}>{h || <span className="sr-only">Actions</span>}</th>)}</tr>
         </thead>
         <tbody>{props.children}</tbody>
       </table>
-    </div>
+    </section>
   );
 }

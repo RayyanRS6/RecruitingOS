@@ -1,0 +1,56 @@
+# Applies the pending database migrations to one environment, on purpose, by a person: the release step (docs/14,
+# docs/runbooks/release-migrations.md). Production never migrates on boot and refuses to start while a migration is
+# pending, so this runs before a deploy that needs a schema change. The owner connection string lives only in the
+# GitHub environment's secrets. A pending migration is the expected state when this starts: the status report before
+# the apply step never fails the run (H4); the one after it fails only if a migration is still pending.
+name: migrate
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: The GitHub environment whose database to migrate (its secrets hold MIGRATE_DATABASE_URL)
+        type: environment
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migrate-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: apply pending migrations
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 15
+    env:
+      NODE_ENV: production
+      MIGRATE_DATABASE_URL: ${{ secrets.MIGRATE_DATABASE_URL }}
+      DATABASE_SSL_CA: ${{ secrets.DATABASE_SSL_CA }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install from the lockfile only
+        run: pnpm install --frozen-lockfile
+
+      - name: Migration validation (numbering, destructive statements, row-level security, tenant grants)
+        run: pnpm db:validate
+
+      - name: What is pending (a pending migration is expected here and never stops the run)
+        run: pnpm db:status --report-only
+
+      - name: Apply
+        run: pnpm db:migrate
+
+      - name: Confirm no migration is pending
+        run: pnpm db:status --fail-on-pending-migrations

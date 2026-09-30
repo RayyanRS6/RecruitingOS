@@ -42,6 +42,10 @@ resumes/
 *.pdf
 *.docx
 !docs/**/*.md
+# The one exception: the synthetic résumé fixtures the extraction tests read (made by
+# packages/agents/src/fixtures/build.ts from invented lines; no real person, no candidate data).
+!packages/agents/src/fixtures/*.pdf
+!packages/agents/src/fixtures/*.docx
 
 # --- Local tooling (machine-specific paths) ---
 .claude/

@@ -75,7 +75,7 @@ twilioWebhook.post("/inbound", async (c) => {
     return c.body(EMPTY_TWIML, 200, { "Content-Type": "text/xml" });
   }
   const t = target;
-  await withTenant(container.db, t.companyId, (tx) => runScreenTurn(tx, screenDeps(container), { screenId: t.screenId, message: sms.body, channel: "sms", actor: { kind: "system", id: "sms_inbound" }, providerMessageId: sms.messageSid ?? null }));
+  await runScreenTurn(container.db, t.companyId, screenDeps(container), { screenId: t.screenId, message: sms.body, channel: "sms", actor: { kind: "system", id: "sms_inbound" }, providerMessageId: sms.messageSid ?? null });
   await container.kick();
   return c.body(EMPTY_TWIML, 200, { "Content-Type": "text/xml" });
 });

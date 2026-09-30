@@ -18,12 +18,12 @@ Status: **Not started** as a practised process; written 18 September 2026. Becom
 
 ## Detection
 
-- Sentry alerts (scrubbed), Vercel and Supabase status, the admin console's Failures tab (operator alerts, credential deletions, suppressions), PostHog volume drop, a report from a design partner or candidate to `support@` or `privacy@`.
+- Sentry alerts (scrubbed), Vercel, Railway and Supabase status, the worker's health check on Railway (a worker that stops polling is restarted and the app's `/healthz` shows `worker.healthy: false`), the admin console's Failures tab (operator alerts including `worker.stale`, `queue.stale` and `job.failed`; credential deletions; suppressions), PostHog volume drop, a report from a design partner or candidate to `support@` or `privacy@`.
 
 ## Steps
 
 1. **Record** the incident in the `Recruiting OS Accounts` vault's incident log: time, reporter, what was seen.
-2. **Contain:** for S1, revoke affected credentials (`06-credential-rotation.md`), suspend the affected connection (disconnect in the product), and if needed pause the worker (Vercel: scale to zero; Supabase: pause the project). Break-glass access is used only under its own rule (MFA, reason, 60 minutes) and is audited.
+2. **Contain:** for S1, revoke affected credentials (`06-credential-rotation.md`), suspend the affected connection (disconnect in the product), and if needed pause the worker (Railway: remove the `worker` service's active deployment or set its replicas to zero, `docs/runbooks/railway-worker.md`; Supabase: pause the project). Break-glass access is used only under its own rule (MFA, reason, 60 minutes) and is audited.
 3. **Assess:** which tenants, which candidates, which data, which window. Use audit records (`audit_records`), events, and provider logs; export the evidence to the vault.
 4. **Notify:** the incident lead tells the affected design partner within one business day for S1 (the pilot agreement will set the contractual window; counsel advises and the incident lead decides on any regulator or candidate notice).
 5. **Recover:** restore from backup if data was altered (`05-backup-and-recovery.md`), rotate every credential that could have been exposed, re-run the staging verification for the affected area.

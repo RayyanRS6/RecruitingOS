@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { memberships, randomToken, sessions, users, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { STAFF_SESSION_MS, hashToken, normalizeEmail } from "./auth";
+import { acceptPendingInvitations } from "./invitations";
 import { applyBootstrapAdmin } from "./platform-roles";
 
 /**
@@ -33,13 +34,14 @@ export function evaluateSignIn(identity: IdentityLike, existing: { platformRole:
 
 /**
  * Opens the application's own session from a verified identity. Links the provider subject to the user record on first
- * delegated sign-in (by verified email), creates the user if new, and records how the session was opened. Never stores
- * the provider's token.
+ * delegated sign-in (by verified email), creates the user if new, accepts any open team invitation for the verified
+ * address (and the one the browser carried, by its token hash), and records how the session was opened. Never stores
+ * the provider's token. An invitation the sign-in cannot honour raises InvitationRefused and nothing is opened.
  */
 export async function openSessionFromIdentity(
   q: Queryable,
-  input: { identity: IdentityLike; policy?: SignInPolicy; ip?: string; userAgent?: string; now?: Date },
-): Promise<{ sessionToken: string; userId: string; activeCompanyId: string | null; staff: boolean; expiresAt: string }> {
+  input: { identity: IdentityLike; policy?: SignInPolicy; ip?: string; userAgent?: string; now?: Date; invitationTokenHash?: string | null; openedAt?: Date },
+): Promise<{ sessionToken: string; userId: string; activeCompanyId: string | null; staff: boolean; expiresAt: string; invitationsAccepted: number }> {
   const policy = input.policy ?? DEFAULT_SIGN_IN_POLICY;
   const now = input.now ?? new Date();
   const email = normalizeEmail(input.identity.email);
@@ -68,16 +70,20 @@ export async function openSessionFromIdentity(
   // bootstrap never applies without Microsoft and a second factor.
   const bootstrap = await applyBootstrapAdmin(q, { userId: user.id, email, listed: (policy.bootstrapAdmins ?? []).includes(email), now });
   if (bootstrap === "granted") user = { ...user, platformRole: "platform_admin" };
+  // Team invitations (docs/spec/21, area A): honoured for customers only; a staff account never joins a company this way.
+  const invited = await acceptPendingInvitations(q, { user: { id: user.id, email, name: user.name ?? input.identity.name }, tokenHash: input.invitationTokenHash ?? null, staff: decision.staff, now, ip: input.ip });
   const ms = await q.select().from(memberships).where(and(eq(memberships.userId, user.id), eq(memberships.status, "active"))).limit(1);
-  const activeCompanyId = ms[0]?.companyId ?? null;
+  const activeCompanyId = invited.activeCompanyId ?? ms[0]?.companyId ?? null;
   const sessionToken = randomToken(32);
   const expiresAt = new Date(now.getTime() + (decision.staff ? STAFF_SESSION_MS : SESSION_IDLE_MS)).toISOString();
   const [row] = await q.insert(sessions).values({
     userId: user.id, tokenHash: hashToken(sessionToken), activeCompanyId, expiresAt, lastSeenAt: now.toISOString(), ip: input.ip ?? null, userAgent: input.userAgent ?? null,
     identityProvider: input.identity.provider, aal: input.identity.aal, mfaVerifiedAt: input.identity.mfaVerifiedAt,
+    // When the session opened, on the caller's clock: the freshness rule for policy and notice changes (A12) reads it against the same clock.
+    createdAt: (input.openedAt ?? now).toISOString(),
   }).returning({ id: sessions.id });
   await audit(q, { companyId: null, actor: { kind: "user", id: user.id, name: user.name ?? user.email }, action: "session.opened", target: { type: "user", id: user.id }, reason: input.identity.provider, ip: input.ip, details: { sessionId: row.id, provider: input.identity.provider, aal: input.identity.aal, staff: decision.staff, mfaVerifiedAt: input.identity.mfaVerifiedAt } });
-  return { sessionToken, userId: user.id, activeCompanyId, staff: decision.staff, expiresAt };
+  return { sessionToken, userId: user.id, activeCompanyId, staff: decision.staff, expiresAt, invitationsAccepted: invited.accepted.length };
 }
 
 export class SignInRefused extends Error {

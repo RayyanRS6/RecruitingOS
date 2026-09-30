@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { expect, test } from "@playwright/test";
-import { expectAccessible, signInWithoutSecondFactor } from "./helpers";
+import { expectAccessible, signInWithoutSecondFactor, skipWithoutFakeSignIn } from "./helpers";
 
 /**
  * The staff second factor in a real browser (founder approval, 22 September 2026): Microsoft vouches for an ITS staff
@@ -33,6 +33,7 @@ function totp(secret: string, now = Date.now()): string {
 }
 
 test.describe("staff second factor", () => {
+  skipWithoutFakeSignIn();
   test("first sign-in enrols an authenticator, offers a backup, and the next sign-in asks for a code", async ({ page, baseURL }) => {
     const email = `staff-${Date.now().toString(36)}@identifiedtalent.com`;
     await signInWithoutSecondFactor(page, { email, name: "Sam Staff" });

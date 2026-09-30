@@ -10,15 +10,30 @@ The schemas are the source of truth; this document is the map.
 | POST | `/auth/magic-link` | `{email}` → `{ok}` | Rate-limited; always 200 |
 | POST | `/auth/magic-link/consume` | `{token}` → `{user, memberships}` | Sets session cookie |
 | GET | `/auth/consume?token=` | → 302 to the web app | The link in the email. Sets the cookie on a top-level navigation, then redirects to `/` or `/setup/company`; an invalid or used token redirects to `/login?error=expired` |
+| GET | `/auth/invite?token=` | → HTML | The team invitation link. Signs nobody in: names the company and role, offers "Continue with Google" / "Continue with Microsoft" (and an emailed link only when `MAGIC_LINK_ENABLED`), and parks the invitation's token hash in the sealed `ros_invite` cookie (30 minutes). Every sign-in path then accepts the invitation when the verified address is the invited one (membership with the invited role, session opened in that company, `member.joined`, audit `invitation.accepted`); a different address is refused with `/login?error=invite_email_mismatch` and the cookie kept; an expired or withdrawn invitation with `invite_expired`. Without the cookie, any sign-in with the invited address accepts its open invitations too (never for ITS staff accounts) |
+| POST | `/auth/invite/email` | form `{token}` → HTML | "Email me a sign-in link" from the invitation page; the link goes to the invited address only; 410 when email links are off |
+| POST | `/auth/invite/forget` | → `{ok}` | Drops the carried invitation so the person can sign in as themselves |
 | POST | `/auth/logout` | → `{ok}` | |
-| GET | `/auth/me` | → `{user, memberships, activeCompanyId}` | |
+| GET | `/auth/me` | → `{user, memberships, activeCompanyId}` | Active memberships only |
+| GET | `/auth/sessions` | → `SessionSummary[]` | Any signed-in person, their own sessions only: created, last seen, expiry, a short hash of the address (never the address), the provider, `reauthenticatedAt`, `current`; the current one first. `apps/api/src/routes/auth-sessions.ts` |
+| POST | `/auth/sessions/:id/revoke` | → `{ok, current}` | One of the person's own sessions (404 otherwise); ending the current one clears the cookie; audited `session.revoked` |
+| POST | `/auth/sessions/revoke-all` | → `{ok, sessionsEnded}` | "Sign out everywhere else": every other session of the person; audited `session.revoked` with the count |
+| POST | `/auth/reauth/start` | `{returnTo?, provider?}` → `{ok, url, provider}` (a posted form gets a 302) | "Confirm it's you": the same PKCE flow as sign-in with a marked state; the callback stamps `sessions.reauthenticated_at` on the open session (audited `session.reauthenticated`) and returns to `returnTo?reauth=ok` (`mismatch` for another account, `failed` otherwise); no new session. `PUT /policies` and a notice change through `PATCH /companies/current` need a session younger than 30 minutes or a confirmation in the last 10, else 403 `reauth_required` |
 
 ## Companies and users
 | POST | `/companies` | `CreateCompany` → `Company` | Creates the owner membership; seeds default policies and entitlements (trial) |
-| GET/PATCH | `/companies/current` | → `Company` | Settings include locations, notices, retention |
-| GET | `/companies/current/members` | → `Membership[]` | |
-| POST | `/companies/current/invites` | `{email, role}` → `Membership` | Sends magic link |
-| PATCH | `/companies/current/members/:userId` | `{role|status}` → `Membership` | Audited |
+| GET | `/companies/current` | → `Company` (+ integration statuses, plan, usage) | `company.read` |
+| PATCH | `/companies/current` | `UpdateCompany` (strict: `name`, `website`, `timezone`, `sizeBand`, `locations`, `settings` = `CompanySettingsInput` {website, logoUrl, benefitsSummary, careersPage.intro, businessHours, notices}) → `Company` + `changed[]` + `notices[]` | `company.update` (owner, admin). The plan, pilot term, allowances, status and vertical answer 400 `not_yours_to_change`. Audited `company.updated` (the changed keys) and `notice.changed` per notice (versioned); a notice change needs re-authentication. `apps/api/src/routes/company-settings.ts` |
+| GET | `/companies/current/notices` | → every notice with the text in force, `version`, `overridden`, `defaultText`, `defaultVersion` | `company.read` |
+| GET | `/companies/current/audit` | `?actions&prefix&exclude&from&to&before=<row id>&limit` → `CustomerAuditRow[]` | `events.read`. The customer-visible audit history in plain words (recruiter access, team, rules, company, candidate views, outcomes, exports), newest first; the cursor is a row id |
+| GET | `/companies/current/audit.csv` | same filters → `text/csv` (up to 5000 rows) | `events.read`; the download is audited `audit.exported` |
+| POST | `/companies/current/members/:userId/sign-out` | → `{ok, userId, sessionsEnded}` | `members.manage`. Ends every session of an active member; 400 `self_sign_out`; audited `session.revoked` |
+| GET | `/companies/current/members` | → `Member[]` | Active members only, each with calendar and availability status |
+| GET | `/companies/current/invitations` | → `Invitation[]` | `company.read`. Open invitations: `{id, email, role, name, expiresAt, invitedBy: {name}}`; never the token |
+| POST | `/companies/current/members/invite` (also `/companies/current/invites`) | `InviteMember` `{email, role, name?}` → `{ok, invitation, replaced}` (dev: `devLink`) | `members.manage`. Creates an `invitations` row and queues one email through the outbox with `/api/v1/auth/invite?token=`; 400 `staff_domain` for an ITS address; 409 `already_member`; an older open invitation for the address is replaced; audited `invitation.sent` |
+| POST | `/companies/current/invitations/:id/resend` | → `{ok, invitation}` (dev: `devLink`) | `members.manage`. New link, seven more days, email again; the old link stops working; audited `invitation.resent` |
+| POST | `/companies/current/invitations/:id/revoke` | → `{ok, invitation}` | `members.manage`. The link stops working; audited `invitation.revoked` |
+| PATCH | `/companies/current/members/:userId` | `UpdateMember` `{role?, status?: 'active'|'removed'}` → `{userId, role, status, sessionsEnded, calendarDeletionQueued, interviewsFlagged}` | `members.manage`. 404 unless the target is an active member; 409 `self_change`; 409 `last_owner`; 403 `owner_only` (only an owner grants or takes the owner role, including by removal). Either change ends the person's sessions. Removal also disconnects their calendar (credential deletion queued as `/integrations/calendar/:provider/disconnect` does), flags the interviews still ahead that counted on them and tells the owners; emits `member.removed`; audited |
 
 ## Intake and roles
 | POST | `/intake/sessions` | `{initialMessage?}` → `IntakeSession` | Starts `intake_to_packet` |
@@ -27,22 +42,51 @@ The schemas are the source of truth; this document is the map.
 | GET | `/intake/sessions/current` | → `{session: IntakeSession \| null}` | The open conversation, so a reload resumes it |
 | POST | `/intake/sessions/:id/abandon` | → `IntakeSession` | "Start over"; the record is kept, the session no longer resumes; emits `intake.abandoned` |
 | GET | `/roles` | `?status` → `RoleSummary[]` | Pipeline counts by stage |
-| GET | `/roles/:id` | → `RoleDetail` | Current packet, postings, counts, what needs you |
-| GET | `/roles/:id/packets` | → `RolePacketVersion[]` | All versions |
-| GET | `/roles/:id/packets/:version` | → `RolePacketVersion` | |
-| POST | `/roles/:id/packets` | `{packet, changeSummary}` → `RolePacketVersion` | Creates a new version (human edit) |
-| POST | `/roles/:id/approve` | `{version, note?}` → `RoleDetail` | Resolves the approval; opens the role |
-| POST | `/roles/:id/pause` / `resume` / `close` | `{reason?}` → `RoleDetail` | |
+| GET | `/roles/:id` | → `RoleDetail` | `role.read`. Current packet, postings, counts, what needs you; also `proposedPacket`, `packetApproval {pending, latest}`, `decisionMaker`, `boardsStillUp` and the accepting-applications fields |
+| GET | `/roles/:id/packets` | → `RolePacketVersion[]` | `role.read`. All versions; pay figures omitted for roles without `compensation.read` |
+| POST | `/roles/:id/packets` | `CreatePacketVersion` → version + `outcome` (`approved_current`, `proposed_pending_approval`, `proposed`) | `packet.edit`. A new version (human edit); an edit to an open role by someone without `role.approve` waits for approval while the role keeps its version |
+| POST | `/roles/:id/approve` | `ApproveRole` → `{ok, approvalRequestId}` | `role.approve`. 409 `self_approval` for the person who started the role or wrote the version (unless the only owner); 403 `named_decider` when the packet's named decision maker is on the team (an owner may still decide) |
+| POST | `/roles/:id/request-approval` | `RequestRoleApproval` `{version?}` → 201 `{ok, version, workflowRunId}` | `packet.edit`. A sent-back or expired draft asks again; 409 `not_a_draft`. `apps/api/src/routes/role-packets.ts` |
+| GET | `/roles/:id/interview-plan` | → rounds with interviewers by name and scheduling readiness, and the team | `role.read` |
+| PATCH | `/roles/:id/interview-plan` | `UpdateInterviewPlan` `{rounds: [{key, interviewerUserIds[]}]}` → the plan + `outcome` | `packet.edit`. A new packet version "Interviewers assigned" under the rules of `POST /roles/:id/packets` |
+| GET | `/roles/:id/timeline` | → the role's events, newest first (at most 200) | `events.read`. The Activity tab |
+| POST | `/roles/:id/pause` / `resume` | `{reason?}` → role | `role.manage`. Resume re-runs `publish_role` and adds email applications held while paused |
+| POST | `/roles/:id/outcome` | `{outcome, confirm: true, reason?}` → the outcome | `outcome.record`. Closing a role is recording its outcome; there is no separate close route. Every posting closes; a board that was up is marked for removal by hand |
 
-## Postings
-| GET | `/roles/:id/postings` | → `Posting[]` | Status per channel with instructions for pending channels |
-| POST | `/roles/:id/postings/:channel/retry` | → `Posting` | |
-| GET | `/feeds/linkedin.xml` (public, signed) | → XML | Basic Jobs feed |
+## Postings, tracked links, volume (`apps/api/src/routes/postings.ts`; docs/spec/20)
+Reading needs `role.read`; every POST needs `role.manage` (owner, admin, and an ITS recruiter under a grant; hiring managers, HR and interviewers get 403), is audited (`posting.changed`, `application_link.changed`, `role.applications_toggled`) and follows the nine-state table in `packages/core/src/postings.ts` (409 `posting_transition` otherwise). Full shapes in `docs/spec/07-api-specification.md`.
+
+| Method | Path | Body → Response | Notes |
+|---|---|---|---|
+| GET | `/roles/:id/postings` | → `PostingsResponse` `{role, urls, emailIn, postings: PostingView[], links, boardsStillUp}` | Each posting with its state label, steps, tracked link and package |
+| GET | `/roles/:id/postings/:channel/package` | → `{text, fields}` | The copyable posting package; 409 for `email_in` |
+| POST | `/roles/:id/postings/:channel/url` | `RecordPostingUrl` `{url}` (https) → `PostingView` | Boards only; `posted_manually`, then the worker's `posting.verify` check marks it `live_verified` or, after three checks, `failed` |
+| POST | `/roles/:id/postings/:channel/verify` | `VerifyPosting` `{note}` → `PostingView` | A person says they checked it; `live_verified` with their name and note |
+| POST | `/roles/:id/postings/:channel/pause`, `/resume`, `/close` | `PostingReason` `{reason?}` → `PostingView` | Close marks a board that was up for removal (`closureRequired`) |
+| POST | `/roles/:id/postings/:channel/closure-confirm` | → `PostingView` | "Removed from this board"; emits `posting.closure_confirmed` |
+| POST | `/roles/:id/postings/:channel/retry` | → `{ok, action, posting}` | Check again, back to ready to post, or re-prepare a failed native channel; replaces the old retry route on roles.ts |
+| GET/POST | `/roles/:id/links` | `CreateApplicationLink` `{source: referral\|direct\|other, label, sourceDetail?}` → `ApplicationLink` | Tracked links a person creates; the URL is `JOBS_BASE_URL/a/<token>` |
+| POST | `/roles/:id/links/:linkId/disable` | → `ApplicationLink` | 409 `link_in_use` for a board's own link while that board is up |
+| POST | `/roles/:id/applications/accepting` | `SetAcceptingApplications` `{accepting, reason?}` → `{ok, changed, role}` | The accepting switch; the job page stays up, nobody is rejected |
+| GET | `/roles/:id/volume` | → 14 days of applications by source, in the company's time zone | |
+
+Public, no session (rate-limited): `GET /a/:token` (counts the visit, seals the source in the `ros_src` cookie, redirects to the apply page, or to the job page when the role is not taking applications; 404 for an unknown or disabled token), `GET /sitemap.xml`, `GET /robots.txt`, `GET /feeds/jobs.xml`, `GET /feeds/jobs.json`, `GET /feeds/linkedin.xml` (open roles that accept applications, every URL from `JOBS_BASE_URL`, rebuilt at most every five minutes; fields in `docs/15-integrations.md`).
+
+## Reports and comparison
+| Method | Path | Body → Response | Notes |
+|---|---|---|---|
+| GET | `/roles/:id/report` | → `RoleReport` (the ten figures) | `role.read` and `application.read` (interviewers refused). `apps/api/src/routes/reports.ts` |
+| GET | `/roles/:id/report.csv`, `/roles/:id/report/summary.csv` | → `text/csv` | Same permissions; each download audited `report.exported` |
+| GET | `/roles/:id/compare?ids=a,b` | → must-haves and competencies side by side for up to five applications | `application.read`. Nothing is ranked. `apps/api/src/routes/compare.ts` |
+| GET | `/admin/customers/:id/report` | → the same figures over every role of one customer | platform administrators |
 
 ## Candidates and applications
-| GET | `/roles/:id/applications` | `?stage&group` → `ApplicationSummary[]` | Owner grouping: waiting_on_you, in_process, not_moving_forward |
-| GET | `/applications/:id` | → `ApplicationDetail` | Candidate, resume link, assessments, screens, interviews, communications, timeline |
-| POST | `/applications/:id/actions` | `{action: 'invite_screen'|'advance_to_interview'|'reject'|'hold'|'move_to_talent_pool'|'override_eligibility', reason?, note?}` → `ApplicationDetail` | Policy-checked; rejections require a reason code; audited |
+| GET | `/roles/:id/applications` | `?stage&group` → `ApplicationSummary[]` | `application.read`. Owner grouping: waiting_on_you, in_process, not_moving_forward. Each row carries the evidence view: `needsCloserLook` with its reason, the top strength and concern, the open questions, `assessmentUnavailable`, `resumeUnreadable` |
+| GET | `/applications/:id` | → `ApplicationDetail` | `application.read`, or an interviewer who is a participant on one of its interviews (who also gets the interviewer brief; pay redacted without `compensation.read`). Candidate, resume link, assessments, screens, interviews, communications (inbound replies included), timeline; never the status or reply token |
+| POST | `/applications/:id/actions` | `ApplicationAction` `{action: 'invite_screen'|'ask_in_screen'|'advance_to_interview'|'reject'|'hold'|'move_to_talent_pool'|'override_eligibility'|'review_anyway', reason?, note?, channel?, focus?}` → `{ok, stage, ...}` | `application.act` (a reject also `application.reject`). Policy-checked; rejections require a reason code; audited. `ask_in_screen` (= `invite_screen` with `focus: "unknowns"`) opens a screen with the assessment's open questions first |
+| POST | `/applications/:id/decision` | `RecordDecision` `{decision: 'next_round'|'finalist'|'hired'|'not_moving_forward', reason?, note?}` → `{ok, stage, nextRoundKey, dispositionSent?}` | `interview.decide` (a decline also `application.reject`). Human-only; recorded on the newest finished, undecided interview; the decline message goes out only after it |
+| GET | `/applications/:id/messages/preview` | → `{to, fromName, footer, needsApproval, repliesComeBack, ...}` | `application.act`. What a free-form message would look like and whether it would wait. `apps/api/src/routes/messages.ts` |
+| POST | `/applications/:id/messages` | `SendCandidateMessage` `{subject?, text}` → 201 queued, or 202 pending approval | `application.act`. The person's own words under the hiring team's name, with theirs in the footer; policy `message.send_freeform` (default "do it and tell me"; under "ask me first" or "only a person" a sender outside the approver roles, owner and admin, waits for one of them); audited `message.sent` / `message.approval_requested`, never the text |
 | POST | `/applications` | `CreateApplicationManual` → `ApplicationDetail` | Recruiter manual add or import |
 | GET | `/candidates` | `?q` → `CandidateSummary[]` | Recruiter search |
 | GET | `/candidates/:id` | → `CandidateDetail` | |
@@ -67,14 +111,15 @@ The schemas are the source of truth; this document is the map.
 | POST | `/notifications/read` | `{ids[]}` → `{ok, marked}` | |
 
 ## Interviews and scheduling
-| POST | `/applications/:id/interviews` | `{roundKeys[]}` → `Interview[]` | Starts scheduling |
-| GET | `/interviews?from&to` | → `Interview[]` | Calendar view |
-| GET | `/interviews/:id` | → `InterviewDetail` | Brief, participants, recording state |
-| POST | `/interviews/:id/reschedule` / `cancel` | | |
-| GET/PUT | `/interviews/:id/scorecards/mine` | `ScorecardInput` → `Scorecard` | Draft then submit |
-| GET | `/roles/:id/debrief` | → `DebriefSummary` | When ready |
-| POST | `/roles/:id/debrief/decision` | `{finalistApplicationIds[], note}` | Human decision |
-| POST | `/api/c/interviews/:token/select-slot` (candidate) | `{slotId}` | |
+| POST | `/applications/:id/interviews` | `RequestInterview` `{roundKey, interviewerUserIds[], linkSource, meetingUrl?, window?, note?}` → `InterviewSummary` | `interview.request`. The human approval that starts scheduling |
+| GET | `/interviews?from&to` | → `Interview[]` | `role.read`. Calendar view; an interviewer sees their own |
+| GET | `/interviews/:id` | → `InterviewDetail` | `role.read` (an interviewer only for an interview they are on). Participants, offered times, timeline, and the interviewer brief `brief` (the round's purpose, competencies, suggested questions, must-have findings, strengths, concerns, the screen's answers; pay only for roles with `compensation.read`) |
+| POST | `/interviews/:id/reschedule` / `cancel` / `book-on-behalf` | | `interview.manage` |
+| POST | `/interviews/:id/outcome` | `{outcome: 'happened'|'no_show_candidate'|'no_show_interviewer'}` → `InterviewSummary` | `interview.manage`, or a participant of that interview. Moves the candidate to "Interview done: decision needed", emits `interview.completed` and asks the deciders once |
+| GET/PUT | `/interviews/:id/scorecards/mine` | `ScorecardInput` → `Scorecard` | Release 2 (decision A1); not built |
+| GET | `/roles/:id/debrief` | → `DebriefSummary` | Release 2; not built |
+| POST | `/roles/:id/debrief/decision` | `{finalistApplicationIds[], note}` | Release 2; not built. The release-1 decision is `POST /applications/:id/decision` |
+| GET/POST | `/c/schedule/:token`, `/none-work`, `/reschedule`, `/cancel` (candidate, HTML forms) | `SelectSlot` `{slotId, timezone?, accessibilityNote?}`; cancel `CandidateCancel` `{confirm: 'yes', reason?}` | The candidate's pick-a-time pages; the optional cancel reason is recorded on the interview |
 
 ## Offers
 | POST | `/applications/:id/offers` | `OfferTermsInput` → `Offer` | Draft (agent-assisted) |
@@ -90,7 +135,7 @@ The schemas are the source of truth; this document is the map.
 | POST | `/onboardings/:id/checkin` | `{milestone, outcome, rating?, notes?}` | |
 
 ## Policies, approvals, escalations
-| GET/PUT | `/policies` | `?roleId` → `Policy[]` | Company defaults and role overrides |
+| GET/PUT | `/policies` | `?roleId` → `Policy[]` | Company defaults and role overrides; PUT needs `policy.manage` and a recent sign-in (403 `reauth_required`, see `/auth/reauth/start`) |
 | GET | `/approvals` | `?status` → `ApprovalRequest[]` | Decisions needed |
 | POST | `/approvals/:id/decide` | `{decision: 'approve'|'reject', note?, edits?}` | Resumes the workflow |
 | POST | `/escalations` | `{kind, roleId?, applicationId?, question}` → `RecruiterEscalation` | Ask a recruiter |
@@ -106,9 +151,22 @@ The schemas are the source of truth; this document is the map.
 | GET | `/ai-runs/:id` | → `AiRun` | Tenant-scoped, redacted |
 | GET | `/admin/customers`, `/admin/runs`, `/admin/ai-runs`, `/admin/failures`, `/admin/escalations`, `/admin/costs`, `/admin/activity` | | platform_admin; every read audited |
 | POST | `/admin/runs/:id/retry` / `cancel` | | |
+| POST | `/admin/observability/test-error` | → a deliberate, scrubbed error | Platform administrators; audited (`admin.bypass` with the reason); exists only outside production or in a build whose `SENTRY_ENVIRONMENT` is exactly `staging` (404 elsewhere). The scrubbing proof of `docs/readiness/03` section 6 |
+
+Health, no session: `GET /healthz` on the app (`{ok, db, ai, worker}`, where `worker` is `"inline"` in development or `{lastSeenAt, queueDepth, healthy}` from the newest heartbeat, plus `workerHealthy`; always 200, except `GET /healthz?strict=1`, which answers 503 while a separate worker is stale, for an uptime monitor that reads only the status code) and `GET /healthz` on the worker's own port (`PORT`, default 8080; 200 while it polls, 503 once stale; Railway's health check).
+
+## Candidate privacy requests (public HTML forms, rate-limited)
+| Method | Path | Body → Response | Notes |
+|---|---|---|---|
+| GET/POST | `/c/privacy-request` (`?company=<slug>` optional) | `PrivacyRequestForm` `{email, kind: access|correct|delete, details?, company?}` | Records nothing: a sealed single-use link (24 hours) goes to the address. `apps/api/src/pages/privacy-request.tsx`; linked from `/privacy` |
+| GET | `/c/privacy-request/verify/:token` | → a page with one confirm button | Changes nothing, so a mail scanner confirms nothing |
+| POST | `/c/privacy-request/verify` | `{token}` | Creates the data request (`channel: email_form`, verified by the link, in progress) and acknowledges it; 410 for a reused, forged or expired link |
 
 ## Integrations
 | GET | `/integrations` | → `Integration[]` with status | |
 | POST | `/integrations/:provider/connect` | provider-specific → `Integration` | OAuth start or key entry |
 | POST | `/integrations/:provider/disconnect` | | |
-| POST | `/webhooks/postmark/inbound`, `/webhooks/twilio/sms`, `/webhooks/esign`, `/webhooks/stripe` | | Signature-verified |
+| POST | `/webhooks/postmark/inbound` | Postmark inbound JSON | Basic auth or the `x-inbound-secret` header (never a query string). A `reply-<token>@` recipient is a candidate's reply: recorded on the application, `message.received`, the team told; a first line `HUMAN` opens a recruiter request. Anything else is an email-in application (held while the role is paused or not accepting) |
+| POST | `/webhooks/postmark/bounces`, `/spam`, `/events` | Postmark webhook JSON | Basic auth or the `x-webhook-secret` header; one receipt per event id; a `SubscriptionChange` is a suppression to honour (or a reactivation to acknowledge), never a bounce to retry |
+| POST | `/webhooks/twilio/inbound` | | Twilio signature |
+| POST | `/webhooks/esign`, `/webhooks/stripe` | | Not built: e-signature is release 2, and release 1 has no payment processor |

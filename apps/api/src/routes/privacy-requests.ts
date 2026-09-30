@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { AdminCreateDataRequest, DataRequestAssign, DataRequestCounsel, DataRequestDecline, DataRequestFulfil, DataRequestNote, DataRequestVerify } from "@ros/contracts";
-import { CounselDecisionRequired, addDataRequestNote, assignDataRequest, checkPrivacyRequestDeadlines, createDataRequest, declineDataRequest, escalateDataRequestToCounsel, exportCandidateData, fulfilAccessRequest, fulfilCorrectionRequest, fulfilDeletionRequest, fulfilSmsOptOut, openHumanReview, publicDataRequest, recordCounselDecision, verifyDataRequest } from "@ros/core";
+import { CounselDecisionRequired, addDataRequestNote, assignDataRequest, checkPrivacyRequestDeadlines, createDataRequest, declineDataRequest, escalateDataRequestToCounsel, exportCandidateData, fulfilAccessRequest, fulfilCorrectionRequest, fulfilDeletionRequest, fulfilSmsOptOut, publicDataRequest, recordCounselDecision, verifyDataRequest } from "@ros/core";
 import { sendPrivacyAcknowledgment, sendPrivacyCompletion } from "@ros/agents";
 import { applications, candidates, companies, dataRequests, withPlatform } from "@ros/db";
 import { requirePlatformAdmin, type Vars } from "../middleware/session";
@@ -59,6 +59,7 @@ privacyRequestRoutes.post("/", async (c) => {
     await sendPrivacyAcknowledgment(tx, container.integrations, { row: r, companyName: name, privacyEmail: container.env.PRIVACY_EMAIL, actor });
     return r;
   });
+  await container.kick();
   return c.json(publicDataRequest(row), 201);
 });
 
@@ -148,6 +149,7 @@ privacyRequestRoutes.post("/:id/fulfil", async (c) => {
       throw err;
     }
   });
+  await container.kick();
   return c.json(publicDataRequest(result));
 });
 
@@ -162,6 +164,7 @@ privacyRequestRoutes.post("/:id/decline", async (c) => {
     await sendPrivacyCompletion(tx, container.integrations, { row: d, companyName: name, privacyEmail: container.env.PRIVACY_EMAIL, actor });
     return d;
   });
+  await container.kick();
   return c.json(publicDataRequest(u));
 });
 

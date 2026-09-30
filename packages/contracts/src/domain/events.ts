@@ -4,11 +4,20 @@ import { Actor, Subject } from "./common";
 /** The event taxonomy (docs/04). Payloads are validated where they matter; others are open objects. */
 export const EventType = z.enum([
   "company.created", "company.updated", "user.invited", "user.joined", "membership.changed",
+  // Team membership through invitations (docs/spec/21, area A): someone joined on an invitation, was removed, or an invitation was withdrawn.
+  "member.joined", "member.removed", "invitation.revoked",
   "integration.connected", "integration.failed", "policy.changed", "plan.changed", "entitlement.exceeded",
   "intake.started", "intake.turn_completed", "intake.compiled", "intake.abandoned",
   "role.created", "role_packet.proposed", "role_packet.approved", "role_packet.edited",
   "role.approved", "role.opened", "role.paused", "role.resumed", "role.filled", "role.closed",
+  // A packet approval was rejected or ran out of time (the role goes back to draft), or was replaced by a newer version.
+  "role.sent_back", "approval.cancelled",
+  "role.applications_closed", "role.applications_reopened", "role.volume_high",
   "posting.requested", "posting.published", "posting.awaiting_verification", "posting.manual_action_required", "posting.not_connected", "posting.failed", "posting.expired", "posting.spend_recorded",
+  // Job distribution (docs/spec/20): one event per posting state, plus the closure checklist and a failed check.
+  "posting.draft", "posting.approved", "posting.ready_to_post", "posting.posted_manually", "posting.submitted_integration", "posting.live_verified", "posting.paused", "posting.closed",
+  "posting.verification_failed", "posting.closure_required", "posting.closure_confirmed",
+  "application_link.created", "application_link.disabled",
   "application.received", "application.acknowledged", "application.duplicate_detected", "candidate.created", "candidate.merged",
   "resume.ingested", "resume.extraction_failed", "document.upload_authorized", "document.uploaded", "document.validated", "document.rejected", "document.deleted", "eligibility.evaluated", "application.ineligible", "application.hold_reminded", "application.triaged",
   "assessment.created", "application.stage_changed", "application.inactive", "application.withdrawn", "application.rejected",

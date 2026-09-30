@@ -98,7 +98,8 @@ Conventions: owners = Nadine and Paul (named human accounts); billing = `billing
 - Where: https://railway.com. Project `recruiting-os-staging` (created 22 September in the founder's default
   workspace; the docs offer no rename, so the workspace name stays and the project name carries the meaning).
 - What runs there: `apps/api/src/worker.ts`, the always-on queue poller (workflows, reminders, timers, credential
-  revocations, privacy deadlines). It listens on no port, so no public networking, no domain, no health-check path.
+  revocations, privacy deadlines). It listens on `PORT` (Railway provides it) for its own health check only, `GET
+  /healthz`, named in `railway.json`; the probe runs inside Railway, so no public networking or domain is needed.
 - Service creation: in the project, `New`, then the GitHub repository `identified-talent-solutions/recruiting-os`
   (the Railway GitHub App must have access to that private repository), branch `main`. Railway reads `railway.json` at
   the repository root: builder Railpack, build command `pnpm worker:check` (a typecheck; the worker runs from source
@@ -114,12 +115,14 @@ Conventions: owners = Nadine and Paul (named human accounts); billing = `billing
 - Variables (service Variables tab; every secret sealed after entry): `NODE_ENV=production`, `WORKER_DATABASE_URL`
   (the pooler connection string as `ros_worker`; sealed), `SESSION_SECRET` (sealed; the same value as Vercel's),
   `SECRET_STORE=vault`, `AI_PROVIDER=anthropic`, `ANTHROPIC_API_KEY` (sealed), `AUTH_PROVIDER=supabase`,
-  `SUPABASE_URL`, `SUPABASE_ANON_KEY` (sealed), `APP_BASE_URL` and `WEB_BASE_URL` (the staging address, for links in
-  messages), `EMAIL_PROVIDER`, `SMS_PROVIDER`, `CALENDAR_PROVIDER`, `ANALYTICS_PROVIDER` = `fake` until each is
-  connected, `STORAGE_PROVIDER=supabase` with the `STORAGE_S3_*` values from the runbook (`docs/runbooks/resume-storage.md`;
-  adapter built 22 Sep: private bucket `resumes`, direct browser uploads, quarantine, worker-side checks), `PRODUCT_NAME`,
-  `ITS_QUEUE_EMAIL`, `EMAIL_REPLY_TO`, `PRIVACY_EMAIL`, `WORKER_POLL_MS=1000`, `LOG_LEVEL=info`. `DATABASE_URL` is not
-  needed on the worker: the production guard accepts `WORKER_DATABASE_URL` alone.
+  `SUPABASE_URL`, `SUPABASE_ANON_KEY` (sealed), `APP_BASE_URL` (the staging address, for links in messages;
+  `WEB_BASE_URL` is no longer read), `EMAIL_PROVIDER`, `SMS_PROVIDER`, `CALENDAR_PROVIDER`, `ANALYTICS_PROVIDER` = `fake`
+  until each is connected, `STORAGE_PROVIDER=supabase` with the `STORAGE_S3_*` values from the runbook
+  (`docs/runbooks/resume-storage.md`; adapter built 22 Sep: private bucket `resumes`, direct browser uploads, quarantine,
+  worker-side checks), `SCAN_PROVIDER` (`fake` until the ClamAV service runs, then `clamav` with `CLAMAV_HOST`),
+  `PRODUCT_NAME`, `ITS_QUEUE_EMAIL`, `EMAIL_REPLY_TO`, `PRIVACY_EMAIL`, `WORKER_POLL_MS=1000` (`LOG_LEVEL` is no longer
+  read). `DATABASE_URL` is not needed on the worker: the production guard requires `WORKER_DATABASE_URL` there and
+  `DATABASE_URL` on the app, and refuses PGlite in either.
 - Verify: the deploy log shows `[worker] started (db: postgres as ros_worker, ai: anthropic)` and no `refusing to
   start`; the queue tab in the console shows jobs being claimed by a worker id.
 - Revoke or rotate: reset the `ros_worker` password in Supabase and update the sealed variable; delete the service to
@@ -222,7 +225,7 @@ Status: existing = used by the code today; planned = introduced by the Next.js p
 | RUN_MIGRATIONS_ON_BOOT | Vercel (`false`) | no | existing |
 | PGLITE_DIR | local only | no | existing |
 | APP_BASE_URL | Vercel, Railway | no | existing |
-| WEB_BASE_URL | Vercel | no | existing (merges into APP_BASE_URL with the Next.js port) |
+| WEB_BASE_URL | none | no | retired: no longer read (the app and the API share APP_BASE_URL); remove it where an older setup has it |
 | JOBS_BASE_URL | Vercel | no | planned (`https://jobs.identifiedtalent.com`) |
 | COOKIE_DOMAIN | Vercel | no | existing; still read by the code (22 Sep); needed only if the API and web app are on different hosts |
 | SESSION_SECRET | Vercel, Railway | yes | existing; still required in production (rate-limit subjects); not involved in sign-in verification (22 Sep) |
@@ -242,7 +245,8 @@ Status: existing = used by the code today; planned = introduced by the Next.js p
 | SUPABASE_JWT_ISSUER | none | no | retired 22 Sep: not read by the code; the issuer is derived from `SUPABASE_URL` |
 | STORAGE_PROVIDER | Vercel, Railway | no | `supabase` required in production (built 22 Sep) |
 | STORAGE_BUCKET | Vercel, Railway | no | built 22 Sep (`resumes`) |
-| SCAN_PROVIDER | Vercel, Railway | no | `fake` only; a real engine is a real-data gate |
+| SCAN_PROVIDER | Railway (the worker scans; Vercel keeps `fake`, the app never opens a file) | no | `fake` until the ClamAV service runs, then `clamav` (adapter built 30 Sep; `docs/runbooks/resume-storage.md`, "Running ClamAV on Railway"); a real engine is a real-data gate |
+| CLAMAV_HOST, CLAMAV_PORT, CLAMAV_TIMEOUT_MS | Railway | no | built 30 Sep: the clamd service's private hostname (`clamav.railway.internal`), port 3310, timeout 20000 ms |
 | STORAGE_DIR | local only | no | existing |
 | SECRET_STORE | Vercel, Railway (`vault`) | no | existing |
 | AI_PROVIDER | Vercel, Railway | no | existing |
@@ -279,8 +283,9 @@ Status: existing = used by the code today; planned = introduced by the Next.js p
 | BLS_API_KEY | Vercel, Railway | yes (low value) | existing, optional |
 | COMP_BLS_ENABLED | Vercel, Railway | no | existing |
 | WORKER_INLINE | local only (`false` in production) | no | existing |
-| WORKER_POLL_MS | Railway | no | existing (the worker process polls the queue) |
-| LOG_LEVEL | Vercel, Railway | no | existing |
+| WORKER_POLL_MS | Railway | no | existing (the worker process polls the queue; its health check goes stale after three polls plus thirty seconds) |
+| PORT | Railway (set by the platform, not by hand) | no | built 30 Sep: the worker's health-check port (`GET /healthz`, named in `railway.json`) |
+| LOG_LEVEL | none | no | retired: not read by the code; remove it where an older setup has it |
 | INDEED_CLIENT_ID, INDEED_CLIENT_SECRET, ZIPRECRUITER_API_KEY | none | — | unused (manual channels); may be removed |
 
 Secrets are entered by Nadine or Paul directly in the Vercel dashboard (Sensitive) and the Railway dashboard (sealed), and in a local `.env` on a trusted machine only when a staging value is needed for verification. Staging and production values are never the same.

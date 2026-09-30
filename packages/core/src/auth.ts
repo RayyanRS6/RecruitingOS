@@ -1,9 +1,11 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { and, eq, gt, isNull, ne } from "drizzle-orm";
 import { magicLinks, memberships, randomToken, sessions, users, type Queryable } from "@ros/db";
+import { acceptPendingInvitations } from "./invitations";
 import { activeGrantFor } from "./platform-roles";
 
-const MAGIC_LINK_TTL_MS = 15 * 60_000;
+/** A sign-in link is short-lived. Team invitations are no longer links that sign a person in: see ./invitations. */
+export const MAGIC_LINK_TTL_MS = 15 * 60_000;
 const SESSION_IDLE_MS = 30 * 24 * 3600_000;
 /** Staff sessions are shorter (I8): eight hours, sliding, and never extended to the customer window. */
 export const STAFF_SESSION_MS = 8 * 3600_000;
@@ -16,21 +18,11 @@ export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
-/** Creates a single-use magic link. The caller sends it through the email adapter. */
-export async function createMagicLink(
-  q: Queryable,
-  input: { email: string; ip?: string; inviteCompanyId?: string; inviteRole?: string },
-): Promise<{ token: string; expiresAt: string }> {
+/** Creates a single-use link. The caller sends it through the email adapter. */
+export async function createMagicLink(q: Queryable, input: { email: string; ip?: string; ttlMs?: number }): Promise<{ token: string; expiresAt: string }> {
   const token = randomToken(32);
-  const expiresAt = new Date(Date.now() + MAGIC_LINK_TTL_MS).toISOString();
-  await q.insert(magicLinks).values({
-    email: normalizeEmail(input.email),
-    tokenHash: hashToken(token),
-    expiresAt,
-    ip: input.ip ?? null,
-    inviteCompanyId: input.inviteCompanyId ?? null,
-    inviteRole: input.inviteRole ?? null,
-  });
+  const expiresAt = new Date(Date.now() + (input.ttlMs ?? MAGIC_LINK_TTL_MS)).toISOString();
+  await q.insert(magicLinks).values({ email: normalizeEmail(input.email), tokenHash: hashToken(token), expiresAt, ip: input.ip ?? null });
   return { token, expiresAt };
 }
 
@@ -39,19 +31,26 @@ export class AuthError extends Error {
   code = "unauthorized";
 }
 
-/** Consumes a magic link: creates the user if needed, applies any invitation, and opens a session. */
+/**
+ * Consumes a magic link: creates the user if needed, accepts any open team invitation for the address (and the one the
+ * browser carried, when its hash is given), and opens a session. The link is claimed in one conditional UPDATE, so two
+ * requests carrying the same token (a double click, a mail scanner and the person) can never both open a session:
+ * exactly one wins the row.
+ */
 export async function consumeMagicLink(
   q: Queryable,
-  input: { token: string; ip?: string; userAgent?: string },
-): Promise<{ sessionToken: string; userId: string; activeCompanyId: string | null }> {
+  input: { token: string; ip?: string; userAgent?: string; invitationTokenHash?: string | null; openedAt?: Date },
+): Promise<{ sessionToken: string; userId: string; activeCompanyId: string | null; invitationsAccepted: number }> {
   const now = new Date().toISOString();
+  // When the session opened, on the caller's clock (the engine's): the freshness rule for policy and notice changes
+  // (audit finding A12) reads `createdAt` against that same clock, so the two are never measured on different ones.
+  const openedAt = (input.openedAt ?? new Date()).toISOString();
   const [link] = await q
-    .select()
-    .from(magicLinks)
+    .update(magicLinks)
+    .set({ usedAt: now })
     .where(and(eq(magicLinks.tokenHash, hashToken(input.token)), isNull(magicLinks.usedAt), gt(magicLinks.expiresAt, now)))
-    .limit(1);
+    .returning();
   if (!link) throw new AuthError("This sign-in link is invalid or has expired. Request a new one.");
-  await q.update(magicLinks).set({ usedAt: now }).where(eq(magicLinks.id, link.id));
 
   let [user] = await q.select().from(users).where(eq(users.email, link.email)).limit(1);
   if (!user) [user] = await q.insert(users).values({ email: link.email }).returning();
@@ -59,23 +58,11 @@ export async function consumeMagicLink(
   // holder needs Microsoft and a second factor. The invite path arrives here too.
   if (user.platformRole !== "none" || (await activeGrantFor(q, user.id))) throw new StaffProviderRequired();
 
-  let activeCompanyId: string | null = null;
-  if (link.inviteCompanyId && link.inviteRole) {
-    const existing = await q
-      .select()
-      .from(memberships)
-      .where(and(eq(memberships.companyId, link.inviteCompanyId), eq(memberships.userId, user.id)))
-      .limit(1);
-    if (existing[0]) {
-      await q.update(memberships).set({ status: "active", role: link.inviteRole }).where(eq(memberships.id, existing[0].id));
-    } else {
-      await q.insert(memberships).values({ companyId: link.inviteCompanyId, userId: user.id, role: link.inviteRole, status: "active" });
-    }
-    activeCompanyId = link.inviteCompanyId;
-  } else {
-    const ms = await q.select().from(memberships).where(and(eq(memberships.userId, user.id), eq(memberships.status, "active"))).limit(1);
-    activeCompanyId = ms[0]?.companyId ?? null;
-  }
+  // Team invitations (docs/spec/21, area A): the one this browser carried and any other open one for the address.
+  // Invitation expiry is judged on the caller's clock too, the same one the session's `openedAt` comes from.
+  const invited = await acceptPendingInvitations(q, { user: { id: user.id, email: user.email, name: user.name }, tokenHash: input.invitationTokenHash ?? null, staff: false, now: input.openedAt, ip: input.ip });
+  const ms = await q.select().from(memberships).where(and(eq(memberships.userId, user.id), eq(memberships.status, "active"))).limit(1);
+  const activeCompanyId = invited.activeCompanyId ?? ms[0]?.companyId ?? null;
 
   const sessionToken = randomToken(32);
   await q.insert(sessions).values({
@@ -88,8 +75,9 @@ export async function consumeMagicLink(
     userAgent: input.userAgent ?? null,
     identityProvider: "magic_link",
     aal: "aal1",
+    createdAt: openedAt,
   });
-  return { sessionToken, userId: user.id, activeCompanyId };
+  return { sessionToken, userId: user.id, activeCompanyId, invitationsAccepted: invited.accepted.length };
 }
 
 export type SessionContext = {
@@ -102,7 +90,23 @@ export type SessionContext = {
   /** How the session was opened: magic_link, azure, google, email. */
   identityProvider: string;
   aal: "aal1" | "aal2";
+  /** When the session was opened and when its holder last confirmed with the sign-in provider inside it (audit finding A12). */
+  createdAt: string;
+  reauthenticatedAt: string | null;
 };
+
+/** A sensitive change is accepted from a session this young, or one confirmed again this recently (audit finding A12). */
+export const FRESH_SESSION_MS = 30 * 60_000;
+export const REAUTH_WINDOW_MS = 10 * 60_000;
+
+/** True when the session may make a policy or notice change without confirming again. */
+export function isRecentlyAuthenticated(s: Pick<SessionContext, "createdAt" | "reauthenticatedAt">, now: Date): boolean {
+  const t = now.getTime();
+  const opened = Date.parse(s.createdAt);
+  if (Number.isFinite(opened) && t - opened < FRESH_SESSION_MS && t - opened >= -60_000) return true;
+  const again = s.reauthenticatedAt ? Date.parse(s.reauthenticatedAt) : Number.NaN;
+  return Number.isFinite(again) && t - again < REAUTH_WINDOW_MS && t - again >= -60_000;
+}
 
 export async function loadSession(q: Queryable, sessionToken: string): Promise<SessionContext | null> {
   const now = new Date().toISOString();
@@ -131,7 +135,34 @@ export async function loadSession(q: Queryable, sessionToken: string): Promise<S
     mfaVerifiedAt: s.mfaVerifiedAt ?? null,
     identityProvider: s.identityProvider ?? "magic_link",
     aal: s.aal === "aal2" ? "aal2" : "aal1",
+    createdAt: s.createdAt,
+    reauthenticatedAt: s.reauthenticatedAt ?? null,
   };
+}
+
+/** Records that the holder confirmed with the sign-in provider again inside this session. */
+export async function markReauthenticated(q: Queryable, sessionId: string, now: Date = new Date()): Promise<void> {
+  await q.update(sessions).set({ reauthenticatedAt: now.toISOString() }).where(eq(sessions.id, sessionId));
+}
+
+/** A person's own open sessions as the account page shows them: never the token, and the address only as a short hash. */
+export type SessionSummary = { id: string; createdAt: string; lastSeenAt: string | null; expiresAt: string; addressHash: string | null; userAgent: string | null; provider: string; reauthenticatedAt: string | null; current: boolean };
+
+export function addressHash(ip: string | null | undefined): string | null {
+  return ip ? createHash("sha256").update(ip).digest("hex").slice(0, 12) : null;
+}
+
+export async function listSessions(q: Queryable, userId: string, currentSessionId: string, now: Date = new Date()): Promise<SessionSummary[]> {
+  const rows = await q.select().from(sessions).where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt), gt(sessions.expiresAt, now.toISOString())));
+  return rows
+    .map((s) => ({ id: s.id, createdAt: s.createdAt, lastSeenAt: s.lastSeenAt ?? null, expiresAt: s.expiresAt, addressHash: addressHash(s.ip), userAgent: s.userAgent ? s.userAgent.slice(0, 160) : null, provider: s.identityProvider ?? "magic_link", reauthenticatedAt: s.reauthenticatedAt ?? null, current: s.id === currentSessionId }))
+    .sort((a, b) => (a.current === b.current ? Date.parse(b.lastSeenAt ?? b.createdAt) - Date.parse(a.lastSeenAt ?? a.createdAt) : a.current ? -1 : 1));
+}
+
+/** Ends one of a person's own sessions by id. False when the id is not one of theirs or is already closed. */
+export async function revokeSessionById(q: Queryable, userId: string, sessionId: string, now: Date = new Date()): Promise<boolean> {
+  const rows = await q.update(sessions).set({ revokedAt: now.toISOString() }).where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId), isNull(sessions.revokedAt))).returning({ id: sessions.id });
+  return rows.length > 0;
 }
 
 export async function setActiveCompany(q: Queryable, sessionId: string, companyId: string): Promise<void> {

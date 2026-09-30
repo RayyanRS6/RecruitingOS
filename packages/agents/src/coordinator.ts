@@ -1,7 +1,8 @@
 import type { Actor, RolePacket } from "@ros/contracts";
 import { emit, disclosureLine } from "@ros/core";
 import { communications, type Queryable, type applications, type candidates, type companies, type roles } from "@ros/db";
-import type { Integrations, SendResult } from "@ros/integrations";
+import { replyAddress, type Integrations, type SendResult } from "@ros/integrations";
+import { queueCommunication, type QueueResult } from "./outbox";
 
 type App = typeof applications.$inferSelect;
 type Cand = typeof candidates.$inferSelect;
@@ -11,26 +12,74 @@ type Company = typeof companies.$inferSelect;
 export type MessageInput = { application: App; candidate: Cand; role: Role; company: Company; packet: RolePacket; actor: Actor; correlationId?: string | null };
 
 /** Founder decision F6: a dedicated ITS sending address with the customer's hiring team as the display name; never the customer's domain. */
-function fromAddress(company: Company, integrations: Integrations): string {
+export function fromAddress(company: Company, integrations: Integrations): string {
   return `${company.name} hiring team <${integrations.env.fromAddress}>`;
+}
+
+/**
+ * Where a candidate's reply lands (F12). With the inbound mail domain configured, every candidate email carries a
+ * per-application address, reply-<token>@<intake domain>, and the reply comes back into the product: the Postmark
+ * inbound webhook records it on the application and tells the team. Without it, replies go to the monitored ITS
+ * mailbox, where a person reads them (docs/runbooks/candidate-replies.md).
+ */
+export function replyToFor(application: Pick<App, "replyToken">, integrations: Integrations): string {
+  if (integrations.env.emailInConfigured && application.replyToken) return replyAddress(application.replyToken, integrations.env.intakeDomain);
+  return integrations.env.replyTo;
 }
 
 function signature(packet: RolePacket, company: Company): string {
   return packet.communication.signature || `The hiring team at ${company.name}`;
 }
 
+/**
+ * What follows a message a person wrote (F11): who sent it and how to reach a person. No disclosure line, because no
+ * AI wrote it; the sheet shows this footer under the text box so the sender sees exactly what the candidate will.
+ */
+export function freeformFooter(input: { senderName: string; company: Company }): string {
+  return `${input.senderName}\n${input.company.name} hiring team\n\nThis message was written by ${input.senderName}. Reply to this email to reach a person on the team.`;
+}
+
+/**
+ * A message a team member wrote to the candidate, sent as themselves under the company's sending name. Goes through
+ * the outbox like every candidate email; the caller has already passed the policy gate and audits the send.
+ */
+export async function sendFreeformMessage(q: Queryable, integrations: Integrations, input: MessageInput & { subject: string | null; text: string; senderName: string; idempotencyKey: string }): Promise<QueueResult | SendResult> {
+  const { application, candidate, company, packet } = input;
+  if (!candidate.email) return { status: "failed", error: "candidate has no email address", retryable: false };
+  const subject = input.subject?.trim() || `A message from ${company.name} about ${packet.identity.title}`;
+  const text = `${input.text.trim()}\n\n${freeformFooter({ senderName: input.senderName, company })}`;
+  return queueCommunication(q, integrations, {
+    channel: "email",
+    companyId: company.id,
+    candidateId: candidate.id,
+    applicationId: application.id,
+    to: candidate.email,
+    from: fromAddress(company, integrations),
+    replyTo: replyToFor(application, integrations),
+    subject,
+    text,
+    templateKey: "freeform",
+    idempotencyKey: input.idempotencyKey,
+    tags: { template: "freeform", applicationId: application.id },
+    actor: input.actor,
+    correlationId: input.correlationId ?? null,
+    disclosureIncluded: false,
+  });
+}
+
 /** The acknowledgment every applicant gets within a minute. Templated, disclosed, idempotent. */
-export async function sendAcknowledgment(q: Queryable, integrations: Integrations, input: MessageInput & { appBaseUrl: string }): Promise<SendResult> {
-  const { application, candidate, role, company, packet } = input;
+export async function sendAcknowledgment(q: Queryable, integrations: Integrations, input: MessageInput & { appBaseUrl: string; /** Texting is off by default (decision M2); the email then promises an online conversation only. */ smsEnabled?: boolean }): Promise<SendResult> {
+  const { application, candidate, company, packet } = input;
   const statusUrl = `${input.appBaseUrl}/c/status/${application.statusToken}`;
   const disclosure = packet.communication.disclosureText || disclosureLine(company.name);
   const steps = packet.interviews.plan.map((r, i) => `${i + 2}. ${r.title} (${r.durationMinutes} min)`).join("\n");
+  const screenHow = input.smsEnabled ? "by text or online" : "online";
   const text = `Hi ${candidate.firstName},
 
 Thank you for applying for the ${packet.identity.title} position at ${company.name}. We received your application and it is being reviewed.
 
 What happens next:
-1. A short screening conversation (by text or online, about ${packet.screening.maxMinutes} minutes) if your background looks like a fit.
+1. A short screening conversation (${screenHow}, about ${packet.screening.maxMinutes} minutes) if your background looks like a fit.
 ${steps}
 
 You can check where things stand any time: ${statusUrl}
@@ -82,6 +131,10 @@ ${packet.communication.disclosureText || disclosureLine(company.name)}`;
   });
 }
 
+/**
+ * Every candidate email goes through the outbox: recorded as queued inside the caller's transaction, sent by the worker
+ * after commit, once per idempotency key. The result is therefore `pending` at this point; `message.sent` follows.
+ */
 export async function deliver(
   q: Queryable,
   integrations: Integrations,
@@ -94,47 +147,24 @@ export async function deliver(
     await emit(q, { type: "message.failed", companyId: company.id, actor: sentBy, subject: { type: "communication", id: row.id }, payload: { template: input.templateKey, error: "no email" }, correlationId: input.correlationId ?? null });
     return { status: "failed", error: "candidate has no email address", retryable: false };
   }
-  const result = await integrations.email.send({
+  return queueCommunication(q, integrations, {
+    channel: "email",
+    companyId: company.id,
+    candidateId: candidate.id,
+    applicationId: application.id,
     to: input.to,
     from: fromAddress(company, integrations),
-    replyTo: integrations.env.replyTo,
+    replyTo: replyToFor(application, integrations),
     subject: input.subject,
     text: input.text,
+    templateKey: input.templateKey,
     idempotencyKey: input.idempotencyKey,
     tags: { template: input.templateKey, applicationId: application.id },
-    attachments: input.attachments,
-  });
-  const status = result.status === "sent" ? "sent" : result.status === "pending" ? "queued" : "failed";
-  const [row] = await q
-    .insert(communications)
-    .values({
-      companyId: company.id,
-      candidateId: candidate.id,
-      applicationId: application.id,
-      direction: "outbound",
-      channel: input.channel,
-      fromAddress: fromAddress(company, integrations),
-      toAddress: input.to,
-      subject: input.subject,
-      bodyText: input.text,
-      templateKey: input.templateKey,
-      provider: integrations.email.id,
-      providerMessageId: result.status === "sent" ? result.providerMessageId : null,
-      status,
-      disclosureIncluded: true,
-      sentBy,
-      error: result.status === "failed" ? result.error : result.status === "pending" ? result.reason : null,
-    })
-    .returning({ id: communications.id });
-  await emit(q, {
-    type: result.status === "sent" ? "message.sent" : result.status === "pending" ? "message.queued" : "message.failed",
-    companyId: company.id,
+    attachments: input.attachments ?? null,
     actor: sentBy,
-    subject: { type: "communication", id: row.id },
-    payload: { template: input.templateKey, channel: input.channel, applicationId: application.id },
     correlationId: input.correlationId ?? null,
+    disclosureIncluded: true,
   });
-  return result;
 }
 
 /** Everything the screening messages need beyond MessageInput. */
@@ -146,7 +176,7 @@ function screenUrl(input: ScreenMessageInput): string {
 
 /** The screen invitation: always by email with the web link; by SMS as well when the candidate consented. Disclosed on both. */
 export async function sendScreenInvite(q: Queryable, integrations: Integrations, input: ScreenMessageInput): Promise<{ email: SendResult; sms: SendResult | null }> {
-  const { application, candidate, company, packet } = input;
+  const { candidate, company, packet } = input;
   const url = screenUrl(input);
   const disclosure = packet.communication.disclosureText || disclosureLine(company.name);
   const text = `Hi ${candidate.firstName},
@@ -201,8 +231,9 @@ ${packet.communication.disclosureText || disclosureLine(company.name)}`;
 }
 
 /**
- * Sends a text. Refuses without recorded consent or after an opt-out (TCPA, docs/08); the caller handles quiet hours.
- * Every attempt is a communications row, so the owner and the recruiter see what was said.
+ * Queues a text. Refuses without recorded consent or after an opt-out (TCPA, docs/08); the caller handles quiet hours.
+ * Every attempt is a communications row, so the owner and the recruiter see what was said. The text itself leaves
+ * through the outbox after the caller's transaction commits.
  */
 export async function deliverSms(
   q: Queryable,
@@ -219,11 +250,21 @@ export async function deliverSms(
   if (!candidate.phone) return refuse("candidate has no phone number");
   if (!candidate.consent.sms?.granted) return refuse("no SMS consent on record");
   if (candidate.preferences.smsOptOut) return refuse("candidate opted out of texts");
-  const result = await integrations.sms.send({ to: candidate.phone, body: input.text, idempotencyKey: input.idempotencyKey });
-  const status = result.status === "sent" ? "sent" : result.status === "pending" ? "queued" : "failed";
-  const [row] = await q.insert(communications).values({ ...base, providerMessageId: result.status === "sent" ? result.providerMessageId : null, status, error: result.status === "failed" ? result.error : result.status === "pending" ? result.reason : null }).returning({ id: communications.id });
-  await emit(q, { type: result.status === "sent" ? "message.sent" : result.status === "pending" ? "message.queued" : "message.failed", companyId: company.id, actor: input.actor, subject: { type: "communication", id: row.id }, payload: { template: input.templateKey, channel: "sms", applicationId: application.id }, correlationId: input.correlationId ?? null });
-  return result;
+  return queueCommunication(q, integrations, {
+    channel: "sms",
+    companyId: company.id,
+    candidateId: candidate.id,
+    applicationId: application.id,
+    to: candidate.phone,
+    from: integrations.sms.id,
+    text: input.text,
+    templateKey: input.templateKey,
+    idempotencyKey: input.idempotencyKey,
+    actor: input.actor,
+    correlationId: input.correlationId ?? null,
+    disclosureIncluded: input.disclosureIncluded,
+    aiRunId: input.aiRunId ?? null,
+  });
 }
 
 /** Records a message the candidate sent us (SMS reply, web chat turn) so the thread is complete. */

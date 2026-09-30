@@ -25,12 +25,13 @@ const T: Array<{ from: ApplicationStage[]; to: ApplicationStage; by: Mover[] }> 
   // a person may decide to interview before or during a screen; the screen stays open and is simply superseded
   { from: ["screen_complete", "triaged", "eligible", "screen_invited", "screening"], to: "interview_recommended", by: ["system", "owner", "admin", "hiring_manager", "recruiter"] },
   { from: ["triaged", "screen_complete", "interview_recommended", "screen_invited", "eligible"], to: "interview_scheduled", by: ["system", "owner", "admin", "hiring_manager", "recruiter"] },
-  { from: ["interview_scheduled"], to: "interview_complete", by: ["system", "owner", "admin", "hiring_manager", "recruiter", "interviewer"] },
+  // that an interview ended is a fact, not a hiring judgment: any member who sat on it may record it (the route checks they did)
+  { from: ["interview_scheduled"], to: "interview_complete", by: ["system", "owner", "admin", "hiring_manager", "hr", "recruiter", "interviewer"] },
   // a cancelled or expired interview returns the candidate to "recommended" so the team can re-offer or decide
   { from: ["interview_scheduled"], to: "interview_recommended", by: ["system", "owner", "admin", "hiring_manager", "recruiter"] },
   { from: ["interview_complete"], to: "interview_scheduled", by: ["system", "owner", "admin", "hiring_manager", "recruiter"] },
   { from: ["interview_complete"], to: "debrief", by: ["system", "owner", "admin", "hiring_manager", "recruiter"] },
-  { from: ["debrief", "interview_complete"], to: "finalist", by: ["owner", "admin", "hiring_manager"] },
+  { from: ["debrief", "interview_complete"], to: "finalist", by: ["owner", "admin", "hiring_manager", "recruiter"] }, // the roles that hold interview.decide
   { from: ["finalist"], to: "reference_check", by: ["owner", "admin", "hr", "recruiter"] },
   { from: ["finalist", "reference_check"], to: "offer_draft", by: ["system", "owner", "admin", "hr", "recruiter"] },
   { from: ["offer_draft"], to: "offer_approval", by: ["system"] },
@@ -101,7 +102,8 @@ export async function transition(
 export function ownerGroup(stage: ApplicationStage): OwnerGroup {
   if (["hired"].includes(stage)) return "hired";
   if (["rejected", "withdrawn", "declined", "talent_pool", "ineligible"].includes(stage)) return "not_moving_forward";
-  if (["triaged", "screen_complete", "interview_recommended", "debrief", "finalist", "offer_draft", "offer_approval", "negotiation"].includes(stage)) return "waiting_on_you";
+  // interview_complete waits on a person too: the interview is over and nobody has recorded next round, finalist or not moving forward.
+  if (["triaged", "screen_complete", "interview_recommended", "interview_complete", "debrief", "finalist", "offer_draft", "offer_approval", "negotiation"].includes(stage)) return "waiting_on_you";
   return "in_process";
 }
 
@@ -116,7 +118,7 @@ export const STAGE_LABEL: Record<ApplicationStage, string> = {
   screen_complete: "Screen complete",
   interview_recommended: "Recommended for interview",
   interview_scheduled: "Interviewing",
-  interview_complete: "Interview done",
+  interview_complete: "Interview done: decision needed",
   debrief: "Deciding",
   finalist: "Finalist",
   reference_check: "Checking references",
