@@ -5,7 +5,7 @@ import { adminAlerts, applications, auditRecords, candidates, communications, da
 import type { FakeEmailAdapter, MemoryStorageAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAdmin } from "./test-helpers";
+import { signInAdmin, testContainerOptions } from "./test-helpers";
 
 /**
  * Correction 7 (docs/runbooks/privacy-requests.md), built with synthetic data: a candidate can ask for a copy, a
@@ -38,7 +38,7 @@ describe("candidate privacy requests", () => {
 
   beforeAll(async () => {
     // Texting on: the text-message choices on the status page need an applicant who consented on the form.
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SMS_ENABLED: "true" } });
+    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SMS_ENABLED: "true" }));
     app = createApp(container);
     owner = await signIn("owner@harbor.test");
     admin = await signInAdmin(app, container, "admin@its.test", "admin");

@@ -131,7 +131,7 @@ export const screen: WorkflowDefinition<State> = {
       if (scr.status !== "invited" && scr.status !== "reminded") return { kind: "next", step: "after_invite" };
       await ctx.q.update(screens).set({ status: "expired" }).where(eq(screens.id, scr.id));
       await emit(ctx.q, { type: "screen.expired", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "screen", id: scr.id }, payload: { applicationId: b.app.id, remindedAt: scr.remindedAt }, correlationId: ctx.run.id });
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.expired", title: `${b.candidate.firstName} ${b.candidate.lastName} did not respond to the screen`, body: `Invited ${scr.invitedAt?.slice(0, 10)} and reminded once. You can decline with a reason, keep them in the talent pool, or ask a recruiter to call.`, action: { label: "Review", href: `/roles/${b.role.id}/talent?stage=screen_invited` } });
+      await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.expired", title: `${b.candidate.firstName} ${b.candidate.lastName} did not respond to the screen`, body: `Invited ${scr.invitedAt?.slice(0, 10)} and reminded once. You can decline with a reason, keep them in the talent pool, or ask a recruiter to call.`, action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
       return { kind: "complete" };
     },
 
@@ -182,14 +182,14 @@ export const screen: WorkflowDefinition<State> = {
         if (g.outcome === "execute") {
           if (app.stage === "screen_complete") await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "interview_recommended", by: "system", actor: ctx.actor, correlationId: ctx.run.id });
           await emit(ctx.q, { type: "candidate.recommended", companyId: ctx.companyId, actor: { kind: "agent", id: "screening", runId: asmt.aiRunId ?? undefined }, subject: { type: "application", id: app.id }, payload: { recommendation: rec, assessmentId: asmt.id }, correlationId: ctx.run.id });
-          if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, kind: "candidate.recommended", title: `${name} is ready to interview`, body: `${rec === "strong_interview" ? "Strong screen. " : ""}${asmt.result.summary}`, action: { label: "Review and decide", href: `/roles/${role.id}/talent` } });
+          if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, kind: "candidate.recommended", title: `${name} is ready to interview`, body: `${rec === "strong_interview" ? "Strong screen. " : ""}${asmt.result.summary}`, action: { label: "Review and decide", href: `/roles/${role.id}/talent?open=${app.id}` } });
         } else if (g.outcome === "wait_for_approval") {
           return { kind: "wait", wait: { kind: "human", approvalRequestId: g.approvalRequestId }, resumeStep: "on_decision" };
         }
         return { kind: "complete" };
       }
       // hold / decline_recommended: nothing moves; the owner sees the scorecard and decides.
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.completed", title: `${name} completed the screen`, body: `${rec === "hold" ? "Worth a look before deciding. " : "The screen raised a concern; your call. "}${asmt.result.summary}`, action: { label: "Review", href: `/roles/${role.id}/talent` } });
+      await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.completed", title: `${name} completed the screen`, body: `${rec === "hold" ? "Worth a look before deciding. " : "The screen raised a concern; your call. "}${asmt.result.summary}`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
       return { kind: "complete" };
     },
 

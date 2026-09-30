@@ -5,10 +5,17 @@ import { dirname, join, resolve } from "node:path";
 /**
  * Browser journeys and accessibility checks (slice 5 step 10) against the Next.js shell on an in-memory database with
  * every provider faked: sign-in, calendar, email, AI. Nothing leaves the machine.
+ *
+ * With E2E_BASE_URL set (docs/readiness/03 section 8) the same specs run against a deployed address, staging for
+ * instance: no server is started here, nothing is assumed about the providers behind it, and every spec that needs
+ * the fake sign-in page skips itself (tests/e2e/specs/helpers.ts, `skipWithoutFakeSignIn`). The public pages, the
+ * browser-protection headers and the signed-out redirects are what a deployment proves.
  */
 const repoRoot = (() => { let d = process.cwd(); for (let i = 0; i < 6; i++) { if (existsSync(join(d, "pnpm-workspace.yaml"))) return d; d = dirname(d); } return resolve(process.cwd(), "../.."); })();
 const port = Number(process.env.E2E_PORT ?? 3010);
-const base = `http://localhost:${port}`;
+const remote = process.env.E2E_BASE_URL?.trim().replace(/\/+$/, "");
+if (remote && !/^https?:\/\//.test(remote)) throw new Error(`E2E_BASE_URL must be a full address such as https://staging.example.com, not "${remote}"`);
+const base = remote ?? `http://localhost:${port}`;
 
 export default defineConfig({
   testDir: "./specs",
@@ -26,7 +33,8 @@ export default defineConfig({
     // The candidate journey (apply with the acknowledgment, the screen, the schedule page) runs on the phone only: that is where candidates are (docs/spec/20 item 3).
     { name: "phone", use: { ...devices["iPhone 13"], browserName: "chromium" }, testMatch: /routes\.spec\.ts|candidate-phone\.spec\.ts/ },
   ],
-  webServer: {
+  // A deployed address is already running; a local run starts the shell itself.
+  webServer: remote ? undefined : {
     command: `pnpm --filter @ros/shell exec next dev -p ${port} --disable-source-maps`,
     cwd: repoRoot,
     url: `${base}/healthz`,

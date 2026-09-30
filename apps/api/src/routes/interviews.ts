@@ -1,18 +1,21 @@
 import { Hono, type Context } from "hono";
-import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte } from "drizzle-orm";
 import { BookOnBehalf, CancelInterview, InterviewOutcome, InterviewerAvailabilityInput, RecordDecision, RequestInterview, RescheduleInterview } from "@ros/contracts";
-import { STAGE_LABEL, assertCan, audit, availabilityFor, calendarConnectionFor, defaultSchedulingWindow, emit, notify, publicConnection, transition, upsertAvailability } from "@ros/core";
+import { STAGE_LABEL, assertCan, audit, availabilityFor, calendarConnectionFor, can, defaultSchedulingWindow, emit, notify, publicConnection, transition, upsertAvailability } from "@ros/core";
 import { sendInterviewCancelled } from "@ros/agents";
 import { applications, approvalRequests, candidates, companies, events, interviewParticipants, interviews, jobs, memberships, rolePackets, roles, users, withTenant } from "@ros/db";
 import { actorOf, applicationScopeGuard, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
+import { sendDeclineAfterHumanDecision } from "../services/application-actions";
 
 /**
  * Interviews (docs/07 §Interviews and calendars; slice 5 step 9). A person approves every interview (policy
  * `interview.request` never drops below approval); the workflow does the scheduling; these routes let people see,
  * re-offer, cancel, record what happened, and book on a candidate's behalf. Nothing here returns a credential.
+ * Who may do what comes from the permission matrix (packages/core/src/permissions.ts): `interview.request` to approve a
+ * round, `interview.manage` to re-offer, cancel, book on behalf or record an outcome for any interview, and
+ * `interview.decide` to record the decision afterwards. An interviewer records the outcome of their own interview only.
  */
-const MANAGER_ROLES = ["owner", "admin", "hiring_manager", "recruiter"];
 
 async function summary(tx: Parameters<Parameters<typeof withTenant>[2]>[0], row: typeof interviews.$inferSelect) {
   const [app] = await tx.select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId, stage: applications.stage }).from(applications).where(eq(applications.id, row.applicationId)).limit(1);
@@ -59,6 +62,8 @@ async function supersede(c: Context<Vars>, input: { interviewId: string; mode: "
       const window = { ...iv.schedulingWindow, ...(input.window ?? {}) };
       if (!window.fromDate || !window.toDate) Object.assign(window, defaultSchedulingWindow(now, (await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, t.companyId)).limit(1))[0].timezone));
       await tx.update(interviews).set({ status: "scheduling", attempt: iv.attempt + 1, selectedSlot: null, offeredSlots: [], startsAt: null, endsAt: null, scheduleToken: null, scheduleTokenExpiresAt: null, schedulingWindow: window, rescheduleCountCandidate: input.byCandidate ? iv.rescheduleCountCandidate + 1 : iv.rescheduleCountCandidate, reminders: {}, meetingUrl: iv.linkSource === "pasted" ? iv.meetingUrl : null }).where(eq(interviews.id, iv.id));
+      // The booked time is gone, so the interviewers are back to invited until the workflow books the next one.
+      await tx.update(interviewParticipants).set({ status: "invited" }).where(eq(interviewParticipants.interviewId, iv.id));
       await emit(tx, { type: "interview.rescheduled", companyId: t.companyId, actor, subject: { type: "interview", id: iv.id }, payload: { reason: input.reason, byCandidate: !!input.byCandidate, attempt: iv.attempt + 1, hadEvents } });
       if (app.stage === "interview_scheduled") await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "interview_recommended", by: t.role, actor, reason: "interview being rescheduled" });
       await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: t.companyId, subject: { type: "interview", id: iv.id }, state: { interviewId: iv.id, applicationId: iv.applicationId, roleId: app.roleId, roundKey: iv.roundKey, attempt: iv.attempt + 1 }, idempotencyKey: `schedule:${iv.id}:${iv.attempt + 1}`, actor });
@@ -123,7 +128,7 @@ interviewRoutes.get("/:id", requireTenant, async (c) => {
 
 interviewRoutes.post("/:id/reschedule", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  assertCan(t.role, "application.act");
+  assertCan(t.role, "interview.manage");
   const body = RescheduleInterview.parse(await c.req.json().catch(() => ({})));
   const id = await supersede(c, { interviewId: c.req.param("id"), mode: "reschedule", reason: body.reason ?? null, window: body.window ?? null });
   const row = await withTenant(c.get("container").db, t.companyId, async (tx) => summary(tx, (await tx.select().from(interviews).where(eq(interviews.id, id)))[0]));
@@ -132,14 +137,19 @@ interviewRoutes.post("/:id/reschedule", requireTenant, async (c) => {
 
 interviewRoutes.post("/:id/cancel", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  assertCan(t.role, "application.act");
+  assertCan(t.role, "interview.manage");
   const body = CancelInterview.parse(await c.req.json());
   const id = await supersede(c, { interviewId: c.req.param("id"), mode: "cancel", reason: body.reason });
   const row = await withTenant(c.get("container").db, t.companyId, async (tx) => summary(tx, (await tx.select().from(interviews).where(eq(interviews.id, id)))[0]));
   return c.json(row);
 });
 
-/** "Did it take place?" from a participant or a manager; a no-show is recorded, never held against anyone automatically. */
+/**
+ * "Did it take place?" from a participant or someone who manages interviews; a no-show is recorded, never held against
+ * anyone automatically. Either answer ends the interview, so a candidate still at "Interviewing" moves to "Interview
+ * done: decision needed" right away instead of waiting for the workflow's closing timer, and the hiring team is asked
+ * "How did it go?" just as the timer would have asked; the decision stays a person's.
+ */
 interviewRoutes.post("/:id/outcome", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   const body = InterviewOutcome.parse(await c.req.json());
@@ -148,11 +158,22 @@ interviewRoutes.post("/:id/outcome", requireTenant, async (c) => {
     const [iv] = await tx.select().from(interviews).where(and(eq(interviews.id, c.req.param("id")), eq(interviews.companyId, t.companyId))).limit(1);
     if (!iv) throw new HttpError(404, "not_found", "Interview not found.");
     const parts = await tx.select({ userId: interviewParticipants.userId }).from(interviewParticipants).where(eq(interviewParticipants.interviewId, iv.id));
-    if (!MANAGER_ROLES.includes(t.role) && !parts.some((p) => p.userId === t.userId)) throw new HttpError(403, "forbidden", "Only a participant or a manager can record what happened.");
+    if (!can(t.role, "interview.manage") && !parts.some((p) => p.userId === t.userId)) throw new HttpError(403, "forbidden", "Only a participant or someone who manages interviews can record what happened.");
     if (!["scheduled", "completed"].includes(iv.status)) throw new HttpError(409, "interview_not_schedulable", `This interview is ${iv.status}.`);
     const status = body.outcome === "happened" ? "completed" : "no_show";
+    const actor = actorOf(c);
     const [u] = await tx.update(interviews).set({ outcome: body.outcome, status }).where(eq(interviews.id, iv.id)).returning();
-    await emit(tx, { type: "interview.outcome_recorded", companyId: t.companyId, actor: actorOf(c), subject: { type: "interview", id: iv.id }, payload: { outcome: body.outcome } });
+    await emit(tx, { type: "interview.outcome_recorded", companyId: t.companyId, actor, subject: { type: "interview", id: iv.id }, payload: { outcome: body.outcome } });
+    const [app] = await tx.select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId, stage: applications.stage }).from(applications).where(eq(applications.id, iv.applicationId)).limit(1);
+    if (app?.stage === "interview_scheduled") {
+      // The workflow's closing step (an hour after the end) would move the candidate, record that the interview is over
+      // and ask the hiring team for their decision; it finds the interview already ended and stops, so all three happen here.
+      await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "interview_complete", by: t.role, actor, reason: body.outcome === "happened" ? "interview took place" : `interview ${body.outcome.replace(/_/g, " ")}` });
+      await emit(tx, { type: "interview.completed", companyId: t.companyId, actor, subject: { type: "interview", id: iv.id }, payload: { attempt: iv.attempt, via: "outcome" } });
+      const [cand] = await tx.select({ firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
+      const name = `${cand?.firstName ?? ""} ${cand?.lastName ?? ""}`.trim() || "the candidate";
+      await notify(tx, { companyId: t.companyId, kind: "interview.decision", title: `How did it go with ${name}?`, body: `${iv.title} is over. Next round, finalist, or not moving forward: your call, recorded with your reason.`, action: { label: "Decide", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
+    }
     return summary(tx, u);
   });
   return c.json(row);
@@ -161,7 +182,7 @@ interviewRoutes.post("/:id/outcome", requireTenant, async (c) => {
 /** The owner picks a time for the candidate after a phone call; recorded as a human action. */
 interviewRoutes.post("/:id/book-on-behalf", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  assertCan(t.role, "application.act");
+  assertCan(t.role, "interview.manage");
   const body = BookOnBehalf.parse(await c.req.json());
   const container = c.get("container");
   const id = await withTenant(container.db, t.companyId, async (tx) => {
@@ -187,8 +208,7 @@ applicationInterviewRoutes.use("/:id/*", applicationScopeGuard);
 
 applicationInterviewRoutes.post("/:id/interviews", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  assertCan(t.role, "application.act");
-  if (!MANAGER_ROLES.includes(t.role)) throw new HttpError(403, "forbidden", "Approving an interview needs an owner, admin, hiring manager or recruiter.");
+  assertCan(t.role, "interview.request");
   const body = RequestInterview.parse(await c.req.json());
   const container = c.get("container");
   const now = container.engine.clock();
@@ -209,6 +229,10 @@ applicationInterviewRoutes.post("/:id/interviews", requireTenant, async (c) => {
     const actor = actorOf(c);
     const [iv] = await tx.insert(interviews).values({ companyId: t.companyId, applicationId: app.id, roundKey: round.key, title: round.title, format: round.format, durationMinutes: round.durationMinutes, status: "proposed", linkSource: body.linkSource, meetingUrl: body.linkSource === "pasted" ? body.meetingUrl ?? null : null, schedulingWindow: window, createdBy: actor, timezone: company.timezone }).returning();
     for (const uid of body.interviewerUserIds) await tx.insert(interviewParticipants).values({ companyId: t.companyId, interviewId: iv.id, userId: uid, role: "interviewer", status: "invited" });
+    // Each interviewer is told the moment they are put on the interview ("invited"); the booking confirms them later.
+    const [cand] = await tx.select({ firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
+    const [role] = await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
+    await notify(tx, { companyId: t.companyId, kind: "interview.assigned", title: `You are interviewing ${cand?.firstName ?? ""} ${cand?.lastName ?? ""}`.trim(), body: `${round.title} for ${role?.title ?? "a role"}, ${round.durationMinutes} minutes. Times are offered to the candidate from your calendar or declared hours; you will be told as soon as one is booked.`, action: { label: "Open the interview", href: `/interviews/${iv.id}` }, userIds: body.interviewerUserIds });
     // The human's click is the approval (policy interview.request, approval level, AC10.1). Any pending recommendation is resolved by it.
     const pending = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.applicationId, app.id), eq(approvalRequests.actionType, "application.recommend_interview"), eq(approvalRequests.status, "pending")));
     for (const p of pending) await tx.update(approvalRequests).set({ status: "approved", decidedBy: t.userId, decidedAt: now.toISOString(), decisionNote: body.note ?? "interview requested" }).where(eq(approvalRequests.id, p.id));
@@ -223,27 +247,33 @@ applicationInterviewRoutes.post("/:id/interviews", requireTenant, async (c) => {
   return c.json(row, 201);
 });
 
-/** The human decision after an interview (HARD human-only in spirit: there is no automated path to any of these). */
+/**
+ * The human decision after an interview (HARD human-only in spirit: there is no automated path to any of these). It is
+ * recorded on the newest interview that is over and still undecided, so a second decision never overwrites the first
+ * one's, and a "not moving forward" sends the respectful message through the same gate as the actions route
+ * (founder correction 6: candidate-facing decline only after the human decision). `dispositionSent` says whether it went.
+ */
 applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  assertCan(t.role, "application.act");
-  if (!MANAGER_ROLES.includes(t.role)) throw new HttpError(403, "forbidden", "Only an owner, admin, hiring manager or recruiter records a decision.");
+  assertCan(t.role, "interview.decide");
   const body = RecordDecision.parse(await c.req.json());
   const container = c.get("container");
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     const [app] = await tx.select().from(applications).where(and(eq(applications.id, c.req.param("id")), eq(applications.companyId, t.companyId))).limit(1);
     if (!app) throw new HttpError(404, "not_found", "Application not found.");
-    const [last] = await tx.select().from(interviews).where(and(eq(interviews.applicationId, app.id), inArray(interviews.status, ["completed", "no_show"]))).orderBy(desc(interviews.createdAt)).limit(1);
+    const [last] = await tx.select().from(interviews).where(and(eq(interviews.applicationId, app.id), inArray(interviews.status, ["completed", "no_show"]), isNull(interviews.decision))).orderBy(desc(interviews.createdAt)).limit(1);
     const actor = actorOf(c);
     if (last) await tx.update(interviews).set({ decision: body.decision, decisionNote: body.note ?? null }).where(eq(interviews.id, last.id));
     let stage = app.stage;
     let nextRoundKey: string | null = null;
+    let dispositionSent: boolean | undefined;
     if (body.decision === "not_moving_forward") {
       if (!body.reason) throw new HttpError(400, "reason_required", "A reason is required to decline a candidate.");
       assertCan(t.role, "application.reject");
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "rejected", by: t.role, actor, reason: body.reason, payload: { note: body.note ?? null } });
       await tx.update(applications).set({ rejectNote: body.note ?? null }).where(eq(applications.id, app.id));
       await emit(tx, { type: "application.rejected", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { reason: body.reason, byHuman: true, afterInterview: true } });
+      dispositionSent = await sendDeclineAfterHumanDecision(tx, container, { companyId: t.companyId, app, actor, reason: body.reason });
       stage = "rejected";
     } else if (body.decision === "finalist") {
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "finalist", by: t.role, actor, reason: body.note ?? "finalist after interview" });
@@ -259,7 +289,7 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
     }
     await emit(tx, { type: "interview.decision_recorded", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { decision: body.decision, interviewId: last?.id ?? null, note: body.note ?? null, nextRoundKey } });
     await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "interview.decision", decision: body.decision } });
-    return { ok: true, stage, nextRoundKey };
+    return { ok: true, stage, nextRoundKey, ...(dispositionSent === undefined ? {} : { dispositionSent }) };
   });
   await container.kick();
   return c.json(result);

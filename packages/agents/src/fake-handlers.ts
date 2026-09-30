@@ -74,6 +74,12 @@ function fakeIntakeTurn(c: ReturnType<typeof contextFrom>): IntakeTurn {
     else if (/part[\s-]?time/i.test(all)) facts.employmentType = "part_time";
     else if (/per diem|temp/i.test(all)) facts.employmentType = "per_diem";
   }
+  // The work model, only when the owner states it ("hybrid, three days in the office", "fully remote", "on-site only"); on-site is the packet's default.
+  if (!facts.remotePolicy) {
+    if (/\bhybrid\b/i.test(all)) facts.remotePolicy = "hybrid";
+    else if (/\bremote\b/i.test(all) && !/\b(no|not|never|isn't|is not)\s+(fully\s+)?remote\b/i.test(all)) facts.remotePolicy = "remote";
+    else if (/\b(on[\s-]?site|in[\s-]?office|in[\s-]?person)\b/i.test(all)) facts.remotePolicy = "onsite";
+  }
   const pay = all.match(/\$\s?(\d{2,3}(?:,\d{3})?(?:\.\d+)?)\s*(?:k)?\s*(?:to|-|–)\s*\$?\s?(\d{2,3}(?:,\d{3})?(?:\.\d+)?)\s*(k)?\s*(?:an hour|\/hr|per hour|hourly|a year|\/yr|per year|annually|k)?/i);
   if (pay && facts.compensationMin === undefined) {
     let min = Number(pay[1].replace(/,/g, ""));
@@ -251,7 +257,7 @@ function fakeCompile(c: ReturnType<typeof contextFrom>): RolePacket {
   const description = `${c.companyName} is hiring a ${title}${locCity ? ` in ${locCity}${locRegion ? `, ${locRegion}` : ""}` : ""}. ${f.reason === "replacement" ? "We are filling an open chair on a team that values consistency and kindness." : "Our team is growing and we need someone who takes pride in careful, friendly work."} You will ${rdh ? "provide preventive care, periodontal therapy, and patient education for a loyal patient base, working alongside a dentist who respects your judgment" : `own ${title.toLowerCase()} outcomes end to end, work directly with the founder and a small team that moves quickly, and see the results of your decisions in the numbers`}. The schedule is ${f.employmentType === "part_time" ? "part time" : "full time"}${f.schedule ? ` (${f.schedule})` : ""}. Pay is ${basis === "hourly" ? `$${min}–$${max} an hour` : `$${min.toLocaleString()}–$${max.toLocaleString()} a year`} depending on experience${f.benefits ? `, plus ${f.benefits}` : ""}. We respond to every applicant within a day, keep the process short, and tell you where you stand at each step.`;
   return {
     schemaVersion: 1,
-    identity: { title, department: undefined, locations: [{ city: locCity || undefined, region: locRegion || undefined, country: "US" }], employmentType: (f.employmentType as RolePacket["identity"]["employmentType"]) ?? "full_time", schedule: f.schedule, remotePolicy: "onsite" },
+    identity: { title, department: undefined, locations: [{ city: locCity || undefined, region: locRegion || undefined, country: "US" }], employmentType: (f.employmentType as RolePacket["identity"]["employmentType"]) ?? "full_time", schedule: f.schedule, remotePolicy: f.remotePolicy === "hybrid" || f.remotePolicy === "remote" ? f.remotePolicy : "onsite" },
     business: { reason: (f.reason as RolePacket["business"]["reason"]) ?? "growth", reasonDetail: f.reasonDetail, timeline: { targetStartDate: f.targetStartDate, urgency: f.targetStartDate ? "high" : "normal", inactivityDays: 10 } },
     compensation: { basis, currency: "USD", min, mid: Math.round((min + max) / 2), max, ceiling: f.compensationCeiling ?? max, bonus: undefined, benefitsSummary: f.benefits, discloseRange: true, sources: [...(c.benchmark ? [{ name: c.benchmark.source, detail: `${c.benchmark.metro}: p25 ${c.benchmark.p25}, p50 ${c.benchmark.p50}, p75 ${c.benchmark.p75}` }] : []), { name: "owner-stated", detail: `${min}–${max} ${basis}` }], ownerStated: f.compensationMin !== undefined },
     description: { publicJobDescription: description, internalNotes: f.whatFailureLooksLike ? `What failure looks like: ${f.whatFailureLooksLike}` : undefined },
@@ -286,7 +292,7 @@ function fakeCompile(c: ReturnType<typeof contextFrom>): RolePacket {
     approvals: { packetApproverRoles: ["owner", "admin", "hiring_manager"], interviewApproverRoles: ["owner", "hiring_manager", "recruiter"], offerApproverRoles: ["owner", "admin"] },
     compliance: { jurisdictions: [], notices: ["ai_use", "privacy"], retentionClass: "decision_data_4y", recordingPolicy: "consent_required", smsRequiresConsent: true },
     sourcing: { summary: "Careers page and Google for Jobs immediately; Indeed from the owner's account with applications forwarded to the intake address; referrals from the team.", channels: ["careers_page", "google_jobs", "indeed", "referrals", "rediscovery"], targetSources: isDental ? ["Local dental hygiene programs", "State dental hygienists' association job board"] : [], sponsoredDailyBudget: 0, referralPrompt: `Know a great ${title}? Send them our link.`, rediscovery: true },
-    preferences: { decisionMakerUserId: undefined, dealBreakersInTheirWords: f.dealBreakers, whatFailureLooksLike: f.whatFailureLooksLike, schedulingWindows: [], interviewStyle: undefined },
+    preferences: { decisionMakerUserId: undefined, decisionMakerName: f.decisionMaker, dealBreakersInTheirWords: f.dealBreakers, whatFailureLooksLike: f.whatFailureLooksLike, schedulingWindows: [], interviewStyle: undefined },
     provenance: { playbookId: undefined, playbookVersion: undefined, intakeSessionId: undefined, aiRunIds: [], assumptions, sources: ["fake provider (deterministic draft)"] },
   };
 }

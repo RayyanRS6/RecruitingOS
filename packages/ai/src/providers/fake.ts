@@ -12,6 +12,7 @@ export class FakeProvider implements AiProvider {
   readonly id = "fake";
   private handlers = new Map<string, FakeHandler>();
   private failures: Array<{ task: string; kind: "invalid" | "refused" | "throw" }> = [];
+  private scripted: Array<{ task: string; output: unknown }> = [];
   public calls: Array<{ task: string; model: string; promptKey: string; promptVersion: number }> = [];
 
   register(task: string, handler: FakeHandler): void {
@@ -21,6 +22,21 @@ export class FakeProvider implements AiProvider {
   /** Queue a one-time failure for the next call of `task` (used by failure-injection tests). */
   failNext(task: string, kind: "invalid" | "refused" | "throw" = "invalid"): void {
     this.failures.push({ task, kind });
+  }
+
+  /**
+   * Queue a one-time output for the next call of `task`, ahead of the registered handler. The output is still checked
+   * against the request's schema, so a test can only script what a real model could have said. Several calls queue
+   * in order; a queued failure for the same task wins over a queued output.
+   */
+  scriptNext(task: string, output: unknown): void {
+    this.scripted.push({ task, output });
+  }
+
+  /** Drops every queued output and failure (a test's cleanup between cases). */
+  clearScripts(): void {
+    this.scripted = [];
+    this.failures = [];
   }
 
   async structured<T>(req: StructuredRequest<T>, model: string): Promise<StructuredResult<T>> {
@@ -34,9 +50,10 @@ export class FakeProvider implements AiProvider {
       if (f.kind === "refused") return { kind: "refused", reason: "fake refusal", model, usage, latencyMs: 1 };
       return { kind: "invalid", error: "fake invalid output", model, usage, latencyMs: 1, rawText: "{" };
     }
+    const scriptedIdx = this.scripted.findIndex((s) => s.task === req.task);
     const handler = this.handlers.get(req.task);
-    if (!handler) return { kind: "invalid", error: `no fake handler for task ${req.task}`, model, usage, latencyMs: 1 };
-    const raw = await handler(req as StructuredRequest<unknown>);
+    if (scriptedIdx < 0 && !handler) return { kind: "invalid", error: `no fake handler for task ${req.task}`, model, usage, latencyMs: 1 };
+    const raw = scriptedIdx >= 0 ? this.scripted.splice(scriptedIdx, 1)[0].output : await handler!(req as StructuredRequest<unknown>);
     const parsed = req.schema.safeParse(raw);
     if (!parsed.success) return { kind: "invalid", error: parsed.error.message, model, usage, latencyMs: Date.now() - started, rawText: JSON.stringify(raw).slice(0, 2000) };
     return { kind: "ok", output: parsed.data, model, usage, latencyMs: Date.now() - started };

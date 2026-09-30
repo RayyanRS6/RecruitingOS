@@ -29,7 +29,17 @@ Fixtures are synthetic or derived from consented, de-identified records. Each fi
 
 - `pnpm eval` runs all suites against the configured provider (`fake` by default, which validates the harness and schemas; `anthropic` with a key runs the real models).
 - `pnpm eval --suite triage.edge_cases` for one suite. Suites implemented: `intake.golden`, `intake.illegal_criteria`, `resume.extraction`, `resume.hallucination`, `triage.edge_cases`, `triage.hallucination`, `screen.conversation` (personas: cooperative, asks for a person, asks about pay, volunteers protected information, confused).
+- The screen personas assert the two behaviours the real run must prove (docs/spec/21 section 6 item 15): the "confused" persona gets at least one follow-up (a rephrasing with no new question key, nothing recorded as an answer, the screen left open) and the "asks for a person" persona ends on the hand-off turn (`humanRequested` true exactly once, the screen not closed, a person named in the message). The two-follow-up cap itself is a code rule and is proven by `packages/agents/src/screening.test.ts` and `apps/api/src/screening-rules.test.ts`.
 - Results include per-case pass/fail, latency, tokens, and cost, so evals also measure unit economics.
+
+### The real-model run
+
+The fake provider proves the harness; only the real models prove the prompts. The run is made from a trusted machine with the key entered for the shell session and never written anywhere:
+
+1. `AI_PROVIDER=anthropic ANTHROPIC_API_KEY=<from 1Password> pnpm eval` from the repository root. The models are the ones `packages/ai/src/routing.ts` names for each task; nothing is sent but the synthetic fixtures in `packages/evals/src/suites.ts`. A full run is about forty model calls; keep the spend cap the founder sets for evaluation runs in mind (an open question in the decisions register) and use `--suite <name>` to repeat one suite.
+2. The runner prints `PASS` or `FAIL` per suite against `packages/evals/thresholds.json` and exits non-zero when any suite is below its threshold.
+3. The result file is written to `packages/evals/results/<date>-<time>-anthropic.json` (`provider`, the models used, and every case's failures). Commit that file on the branch that changes the prompt or the model, in the same pull request, with a line in the pull request naming who read it and on which date; that signature is what promotes the prompt version (docs/11 "What a release requires"). The fake run's file (`...-fake.json`) is the harness check and is not evidence.
+4. Staging verification (`docs/readiness/03` section 7) records the first real run of all seven suites; later runs are needed only when a prompt, a model or a fixture changes.
 
 ## What a release requires
 

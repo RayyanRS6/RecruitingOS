@@ -157,7 +157,7 @@ export async function gate(
     companyId: input.companyId,
     actor: input.requestedBy,
     subject: { type: "approval_request", id: req.id },
-    payload: { actionType: input.actionType, subject: input.subject, requiredRoles: decision.approverRoles },
+    payload: { actionType: input.actionType, subject: input.subject, requiredRoles: decision.approverRoles, roleId: input.roleId, applicationId: input.applicationId ?? null },
     correlationId: input.workflowRunId ?? null,
   });
   return { outcome: "wait_for_approval", decision, approvalRequestId: req.id };

@@ -1,7 +1,8 @@
 import { and, eq } from "drizzle-orm";
 import type { z } from "zod";
 import type { Actor, ApplicationAction } from "@ros/contracts";
-import { STAGE_LABEL, assertCan, emit, gate, transition } from "@ros/core";
+import { STAGE_LABEL, assertCan, can, emit, gate, transition } from "@ros/core";
+import type { MembershipRole } from "@ros/contracts";
 import { applications, approvalRequests, candidates, companies, interviews, rolePackets, roles, screens, type Tx } from "@ros/db";
 import { sendDisposition } from "@ros/agents";
 import { HttpError } from "../middleware/errors";
@@ -20,38 +21,42 @@ export const INTERVIEW_DONE_STATUSES: readonly string[] = ["completed", "no_show
 
 export type ApplicationCapability = "invite_screen" | "interview" | "advance_to_interview" | "hold" | "reject" | "move_to_talent_pool" | "override_eligibility" | "review_anyway" | "record_decision" | "record_outcome";
 
-export type ApplicationFacts = { stage: string; rejectReason: string | null; hasOpenScreen: boolean; hasActiveInterview: boolean; hasUndecidedInterview: boolean };
+/** `role` is the viewer's tenant role when known: the interview capabilities are then limited to roles that hold the matching permission, so a person never sees a card the route would refuse. */
+export type ApplicationFacts = { stage: string; rejectReason: string | null; hasOpenScreen: boolean; hasActiveInterview: boolean; hasUndecidedInterview: boolean; role?: MembershipRole | null };
 
 export function allowedApplicationActions(f: ApplicationFacts): ApplicationCapability[] {
   const out: ApplicationCapability[] = [];
   const terminal = TERMINAL_STAGES.includes(f.stage);
+  const mayRequestInterview = !f.role || can(f.role, "interview.request");
+  const mayDecide = !f.role || can(f.role, "interview.decide");
   if (["triaged", "eligible", "received", "screen_invited", "screening"].includes(f.stage) && !f.hasOpenScreen) out.push("invite_screen");
-  if (["triaged", "screen_complete", "interview_recommended", "interview_complete", "eligible", "screen_invited", "screening"].includes(f.stage) && !f.hasActiveInterview) out.push("interview");
+  if (["triaged", "screen_complete", "interview_recommended", "interview_complete", "eligible", "screen_invited", "screening"].includes(f.stage) && !f.hasActiveInterview && mayRequestInterview) out.push("interview");
   if (["screen_complete", "triaged", "eligible", "screen_invited", "screening"].includes(f.stage)) out.push("advance_to_interview");
   if (!terminal && f.stage !== "talent_pool") out.push("hold", "move_to_talent_pool");
   if (!terminal) out.push("reject");
   if (f.stage === "ineligible") out.push("override_eligibility");
   if (f.stage === "rejected" && f.rejectReason === "eligibility") out.push("review_anyway");
-  if (!terminal && f.hasUndecidedInterview) out.push("record_decision");
+  if (!terminal && f.hasUndecidedInterview && mayDecide) out.push("record_decision");
   if (!terminal) out.push("record_outcome");
   return out;
 }
 
 /** The facts the list depends on, from rows the caller may already hold. */
-export function applicationFactsFrom(app: Pick<typeof applications.$inferSelect, "stage" | "rejectReason">, screenStatuses: string[], interviewRows: Array<{ status: string; decision: string | null }>): ApplicationFacts {
+export function applicationFactsFrom(app: Pick<typeof applications.$inferSelect, "stage" | "rejectReason">, screenStatuses: string[], interviewRows: Array<{ status: string; decision: string | null }>, role?: MembershipRole | null): ApplicationFacts {
   return {
     stage: app.stage,
     rejectReason: app.rejectReason,
     hasOpenScreen: screenStatuses.some((s) => SCREEN_OPEN_STATUSES.includes(s)),
     hasActiveInterview: interviewRows.some((i) => INTERVIEW_ACTIVE_STATUSES.includes(i.status)),
     hasUndecidedInterview: interviewRows.some((i) => INTERVIEW_DONE_STATUSES.includes(i.status) && !i.decision),
+    role: role ?? null,
   };
 }
 
-export async function applicationFacts(tx: Tx, app: Pick<typeof applications.$inferSelect, "id" | "stage" | "rejectReason">): Promise<ApplicationFacts> {
+export async function applicationFacts(tx: Tx, app: Pick<typeof applications.$inferSelect, "id" | "stage" | "rejectReason">, role?: MembershipRole | null): Promise<ApplicationFacts> {
   const scr = await tx.select({ status: screens.status }).from(screens).where(eq(screens.applicationId, app.id));
   const ivs = await tx.select({ status: interviews.status, decision: interviews.decision }).from(interviews).where(eq(interviews.applicationId, app.id));
-  return applicationFactsFrom(app, scr.map((s) => s.status), ivs);
+  return applicationFactsFrom(app, scr.map((s) => s.status), ivs, role);
 }
 
 /** Founder decision (correction 6): candidate-facing decline communication only after the human decision is recorded. */
@@ -75,7 +80,7 @@ export type ActionResult = { ok: true; stage: string; dispositionSent?: boolean;
 export async function performApplicationAction(tx: Tx, container: Container, input: { app: typeof applications.$inferSelect; body: ActionBody; tenant: Tenant; actor: Actor }): Promise<ActionResult> {
   const { app, body, tenant: t, actor } = input;
   const by = t.role;
-  const facts = await applicationFacts(tx, app);
+  const facts = await applicationFacts(tx, app, t.role);
   if (!allowedApplicationActions(facts).includes(body.action)) {
     if (body.action === "invite_screen" && facts.hasOpenScreen) throw new HttpError(409, "already_invited", "They already have an open screening invitation.");
     if (body.action === "override_eligibility") throw new HttpError(409, "invalid", "Only ineligible applications can be overridden.");

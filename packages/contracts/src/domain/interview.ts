@@ -47,6 +47,9 @@ export const RecordDecision = z.object({ decision: z.enum(["next_round", "finali
 
 /** What the candidate sends from the pick-a-time page. */
 export const SelectSlot = z.object({ slotId: z.string().min(1), timezone: z.string().min(1).optional(), accessibilityNote: z.string().max(500).optional() });
+/** What the candidate sends from the confirmed page to cancel: the ticked confirmation and, if they like, a few words on why (docs/spec/04: "Optional reason; confirm"). */
+export const CandidateCancel = z.object({ confirm: z.literal("yes"), reason: z.string().trim().max(500).optional() });
+export type CandidateCancel = z.infer<typeof CandidateCancel>;
 export const CandidateAvailability = z.object({
   timezone: z.string().min(1).optional(),
   /** Free text such as "Mornings before 10, any day but Wednesday"; shown to the owner, never parsed by a model. */

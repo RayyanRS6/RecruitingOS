@@ -142,7 +142,7 @@ intakeRoutes.post("/conversation/messages", requireTenant, async (c) => {
   type Routed = { kind: "brief"; brief: Awaited<ReturnType<typeof composeBrief>> } | { kind: "intake"; sessionId: string };
   const routed = await withTenant(container.db, t.companyId, async (tx): Promise<Routed> => {
     const active = (await tx.select().from(intakeSessions).where(eq(intakeSessions.status, "active")).orderBy(desc(intakeSessions.updatedAt)).limit(1))[0];
-    if (!active && !HIRING_INTENT.test(body.message)) return { kind: "brief", brief: await composeBrief(tx, t.companyId) };
+    if (!active && !HIRING_INTENT.test(body.message)) return { kind: "brief", brief: await composeBrief(tx, t.companyId, { userId: t.userId, role: t.role }) };
     if (!canStartHire(t.role)) throw new HttpError(403, "forbidden", "Your role cannot start a hire.");
     return { kind: "intake", sessionId: active ? active.id : (await startSession(tx, t.companyId, actorOf(c), "conversation")).id };
   });

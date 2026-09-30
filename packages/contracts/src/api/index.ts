@@ -64,6 +64,12 @@ export const IntakeMessageRequest = z.object({ message: z.string().min(1).max(40
 export const CreatePacketVersion = z.object({ packet: RolePacket, changeSummary: z.string().min(1).max(500) });
 export const ApproveRole = z.object({ version: z.number().int().min(1), note: z.string().max(1000).optional() });
 export const RoleStatusChange = z.object({ reason: z.string().max(500).optional() });
+/** Interviewers per round, from the role page's Interview plan tab; every key must be a round of the current packet. */
+export const UpdateInterviewPlan = z.object({ rounds: z.array(z.object({ key: z.string().min(1), interviewerUserIds: z.array(z.string().min(1)).max(10) })).min(1).max(5) });
+export type UpdateInterviewPlan = z.infer<typeof UpdateInterviewPlan>;
+/** "Request approval again" on a role that was sent back: the latest version unless one is named. */
+export const RequestRoleApproval = z.object({ version: z.number().int().min(1).optional() });
+export type RequestRoleApproval = z.infer<typeof RequestRoleApproval>;
 
 // Applications
 export const ApplicationAction = z.object({

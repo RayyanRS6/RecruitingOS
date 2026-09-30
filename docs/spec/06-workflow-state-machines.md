@@ -25,9 +25,9 @@ stateDiagram-v2
   interview_recommended --> interview_scheduled: system, slot booked (after human interview.request)
   screen_complete --> interview_scheduled: system, slot booked
   triaged --> interview_scheduled: system, slot booked
-  interview_scheduled --> interview_complete: system, interview ended
+  interview_scheduled --> interview_complete: system, interview ended; or any member on the interview recording what happened
   interview_complete --> interview_scheduled: human next round → booked
-  interview_complete --> finalist: human (D10)
+  interview_complete --> finalist: human (D10): owner, admin, hiring manager, recruiter (the roles that hold interview.decide)
   finalist --> hired: human, recorded outside the product (D10)
   interview_complete --> rejected: human with reason
   finalist --> rejected: human with reason
@@ -36,7 +36,7 @@ stateDiagram-v2
   withdrawn --> talent_pool: human
 ```
 
-Rules that hold in code (`packages/core/src/stages.ts`): `rejected` from any active stage requires a human, including from `ineligible` (correction 6); `withdrawn` from any active stage by the candidate, a human, or the system on the candidate's behalf; `talent_pool` from rejected, declined, withdrawn, or any active stage. Release 1 adds: `interview_recommended` → `interview_scheduled` by system only after an `interviews` row exists with a human `created_by` (the approval); `interview_complete` → `finalist` and `finalist` → `hired` by human only (already true); `interview_complete` → `interview_scheduled` by system after a new booking.
+Rules that hold in code (`packages/core/src/stages.ts`): `rejected` from any active stage requires a human, including from `ineligible` (correction 6); `withdrawn` from any active stage by the candidate, a human, or the system on the candidate's behalf; `talent_pool` from rejected, declined, withdrawn, or any active stage. Release 1 adds: `interview_recommended` → `interview_scheduled` by system only after an `interviews` row exists with a human `created_by` (the approval); `interview_complete` → `finalist` and `finalist` → `hired` by human only (already true); `interview_complete` → `interview_scheduled` by system after a new booking. As built (30 Sep 2026, audit fixes): `interview_scheduled` → `interview_complete` is open to every membership role including HR, because recording that an interview ended is a fact any member who sat on it may state (the outcome route checks they did, or that they hold `interview.manage`); `interview_complete` → `finalist` lists exactly the roles that hold `interview.decide` (owner, admin, hiring manager, recruiter), so the permission and the state machine agree.
 
 ## 2. Role, packet, screen, interview, escalation, run
 
@@ -83,13 +83,13 @@ State: `{ interviewId, applicationId, roleId, roundKey, attempt, offerToken?, re
 | book | Re-checks free/busy for the chosen slot for every calendar participant (same second); on conflict → recompute and re-offer (attempt +1; at 3 → owner told, escalation); creates one calendar event per participant with the conference link (Meet for Google, Teams for Microsoft; pasted link otherwise), idempotency key `interview:<id>:<slotId>:<userId>`; writes `calendar_refs`, `meeting_url`, `starts_at`, `ends_at`, status `scheduled`; transitions the application to `interview_scheduled`; emits `interview.scheduled` | next: confirm |
 | confirm | Sends confirmation to the candidate (ICS attached, both timezones, prepare notes) and to interviewers (in-app + email); schedules reminder timers at −24 h and −2 h and the completion timer at end +1 h; `wait(timer)` | resume: on_timer |
 | on_timer | −24 h and −2 h: send reminders (idempotent by template + interview + kind), re-wait. End +1 h: if status still `scheduled` → close | |
-| close | Status `completed`; transition to `interview_complete`; emits `interview.completed`; notifies the interviewer "Did it take place?" (yes / candidate no-show / we no-showed) and the owner "How did it go?" with the decision actions (D10); complete | complete |
+| close | Status `completed`; transition to `interview_complete`; emits `interview.completed`; notifies the interviewer "Did it take place?" (yes / candidate no-show / we no-showed) and the owner "How did it go?" with the decision actions (D10); complete. If a participant recorded the outcome before this timer, the outcome route has already moved the candidate, emitted `interview.completed` (payload `via: "outcome"`) and asked "How did it go?"; close then finds the interview ended and completes without repeating any of it | complete |
 
 Reschedule (human or candidate): a route cancels the calendar events (idempotent), sets status `scheduling`, increments the candidate count when the candidate did it (limit 2), and signals `window.updated`; the run resumes at propose_slots (the run is `waiting` on the timer token, so the signal wakes it; if the run completed, a new run starts with the same interview id and `attempt` incremented). Cancel: route sets `cancelled`, deletes events, notifies, cancels the run. Interviewer no-show: outcome recorded; the owner is offered a reschedule.
 
 ### stuck_role_detector (existing, changed)
 
-Adds detectors: `slots_unanswered` (offer open ≥ 3 days), `decision_pending_after_interview` (interview_complete with no decision ≥ 2 days), `no_availability` (an approved interview waiting on availability ≥ 1 day). Same ladder and cooldown policy.
+Adds detectors: `slots_unanswered` (offer open ≥ 3 days), `decision_pending_after_interview` (interview_complete with no decision ≥ 2 days), `no_availability` (an approved interview waiting on availability ≥ 1 day). Same ladder and cooldown policy. As built (30 Sep 2026, audit F3): the existing `candidates_waiting` rule counts `interview_complete` among the decisions pending, at its 3-day threshold, and its message says "decide after an interview"; a separate 2-day `decision_pending_after_interview` detector is not built.
 
 ### calendar_health (new, platform-level per company)
 

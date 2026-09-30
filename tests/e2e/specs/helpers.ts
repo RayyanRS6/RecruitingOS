@@ -1,5 +1,16 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+
+/** True when the run targets a deployed address (E2E_BASE_URL) rather than the local shell with fake providers. */
+export const REMOTE_TARGET = !!process.env.E2E_BASE_URL?.trim();
+
+/**
+ * Call at the top of a file or a describe group whose specs sign in through the fake identity page: a deployment has
+ * the real identity provider, so those journeys cannot run there and are skipped with the reason on the report.
+ */
+export function skipWithoutFakeSignIn() {
+  test.skip(REMOTE_TARGET, "signs in through the fake identity page, which a deployed address does not have (E2E_BASE_URL is set)");
+}
 
 /** WCAG 2.1 A and AA plus best-practice rules; every violation fails the test with its nodes listed. */
 export async function expectAccessible(page: Page, name: string) {

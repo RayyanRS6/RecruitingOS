@@ -50,11 +50,15 @@ Conventions added in release 1: `Idempotency-Key` header honored on every mutati
 | POST | /intake/sessions/:id/compile | → `{roleId, version, packet, workflowRunId}` (402 when the plan limit is reached) | existing |
 | POST | /intake/conversation/messages | `ConversationMessage` → `{reply, proposedActions[]}` | existing |
 | GET | /roles | `?status` → `RoleSummary[]` | existing |
-| GET | /roles/:id | → `RoleDetail` (+ `interviewPlan` with interviewer availability status; `timeline`) | changed |
-| GET | /roles/:id/packets | → `RolePacketVersion[]` | existing |
+| GET | /roles/:id | → `RoleDetail` (+ `proposedPacket`: a version proposed while the role runs, beside `currentPacket`, never in its place; `packetApproval: {pending, latest}` where `pending` carries the version, the rationale, `requiredUserIds`, `decisionMaker`, `expiresAt`, `editWhileOpen` and `viewer: {mayDecide, reason}` (the self-approval and named-decider rules applied to the signed-in person) and `latest` is the most recent decided request with its `decisionNote`, `decidedBy` and status (`rejected`, `expired`, `approved`); `decisionMaker`: the packet's named decision maker matched to an active owner, admin or hiring manager) | changed (30 Sep 2026) |
+| GET | /roles/:id/packets | → `RolePacketVersion[]` (pay figures omitted for interviewers) | existing |
 | GET | /roles/:id/packets/:version/diff?against= | → `PacketDiff` (section-level changes) | new |
-| POST | /roles/:id/packets | `CreatePacketVersion` → version | existing |
-| POST | /roles/:id/approve | `ApproveRole` → `{ok, approvalRequestId}` | existing |
+| POST | /roles/:id/packets | `CreatePacketVersion` → 201 version + `outcome`: `approved_current` (an approver's edit to an open role: current at once, any waiting version withdrawn), `proposed_pending_approval` (an edit by a `packet.edit` holder without `role.approve` on an open role, or any edit to a pending role: a new approval request and `role_approval` run; the older request is cancelled and its run marked cancelled first; the open role keeps its current version), `proposed` (a draft, paused or closed role: kept with the role) + `approvalRunId` | changed (30 Sep 2026) |
+| POST | /roles/:id/approve | `ApproveRole` → `{ok, approvalRequestId}`; 409 `self_approval` for the person who started the role or wrote the version, unless they are the company's only owner; 403 `named_decider` when the request is reserved for the named decision maker (an owner may still decide); 403 `wrong_role` otherwise; a version proposed while the role was open becomes current without touching the role's status | changed (30 Sep 2026) |
+| POST | /roles/:id/request-approval | `RequestRoleApproval` = `{version?}` → 201 `{ok, version, workflowRunId}`: a sent-back or expired draft asks again for its latest version (or the named one); 409 `not_a_draft` | new (30 Sep 2026) |
+| GET | /roles/:id/interview-plan | → `{version, status, rounds: [{key, title, purpose, durationMinutes, format, interviewerRoles, interviewers: [{userId, name, email, role, schedulable}]}], team: [...]}` (names and scheduling readiness from the members list) | new (30 Sep 2026) |
+| PATCH | /roles/:id/interview-plan | `UpdateInterviewPlan` = `{rounds: [{key, interviewerUserIds[]}]}` → the same view + `outcome`: a new packet version (`human_edit`, "Interviewers assigned") under the rules of `POST /roles/:id/packets`; 400 `unknown_round`, `unknown_member`; permission `packet.edit` | new (30 Sep 2026) |
+| GET | /roles/:id/timeline | → the role's events newest first (subject role, subject `role_packet` of the role, or `payload.roleId`; at most 200); permission `events.read` | new (30 Sep 2026) |
 | POST | /roles/:id/pause, /resume, /close | `RoleStatusChange` → role | existing |
 | GET | /roles/:id/applications | `OwnerGroupQuery` → `ApplicationSummary[]` | existing |
 | GET | /roles/:id/interviews | → `InterviewSummary[]` | new |
@@ -90,7 +94,7 @@ The daily `stuck_role_detector` run counts yesterday's applications per open rol
 | POST | /applications/:id/actions | `ApplicationAction` with actions `invite_screen`, `advance_to_interview`, `reject`, `hold`, `move_to_talent_pool`, `override_eligibility`, `review_anyway` → `{ok, stage, ...}` | changed: `advance_to_interview` now only moves to `interview_recommended`; scheduling starts through `/interviews` |
 | POST | /applications/:id/assessments/:assessmentId/flag | `FlagAssessment` → `{ok}` | existing |
 | POST | /applications/:id/interviews | `RequestInterview` = `{roundKey, interviewerUserIds[], linkSource: "calendar" \| "pasted", meetingUrl?, window?: {fromDate, toDate}, note?}` → `InterviewSummary` (creates `proposed`, resolves any pending `interview.request` approval as the human's decision, starts `schedule_interview`) | new; permission `interview.request`; policy `interview.request` |
-| POST | /applications/:id/decision | `RecordDecision` = `{decision: "next_round" \| "finalist" \| "hired" \| "not_moving_forward", reason?: RejectReason, note?}` → `{ok, stage}` (human-only; `next_round` returns the next `roundKey` for the interview sheet) | new (D10); permission `interview.decide` |
+| POST | /applications/:id/decision | `RecordDecision` = `{decision: "next_round" \| "finalist" \| "hired" \| "not_moving_forward", reason?: RejectReason, note?}` → `{ok, stage, nextRoundKey, dispositionSent?}` (human-only; recorded on the newest interview that is over and still undecided; `next_round` returns the next `roundKey` and the candidate sheet opens the interview approval with it; `not_moving_forward` sends the respectful message through the `disposition.send` gate and the outbox, `dispositionSent` says whether it went) | new (D10); permission `interview.decide` |
 
 ## Interviews and calendars
 
@@ -99,9 +103,9 @@ The daily `stuck_role_detector` run counts yesterday's applications per open rol
 | GET | /interviews | `?from&to&status&mine=1` → `InterviewSummary[]` | new |
 | GET | /interviews/:id | → `InterviewDetail` (slots offered, participants with availability source, calendar refs without secrets, timeline; compensation omitted for interviewers) | new |
 | POST | /interviews/:id/reschedule | `{reason?, window?}` → `InterviewSummary` (cancels events, re-offers) | new; `interview.manage` |
-| POST | /interviews/:id/cancel | `{reason}` → `InterviewSummary` | new |
-| POST | /interviews/:id/outcome | `{outcome: "happened" \| "no_show_candidate" \| "no_show_interviewer"}` → `InterviewSummary` | new; participants and managers |
-| POST | /interviews/:id/book-on-behalf | `{slotId}` → `InterviewSummary` (owner picks for the candidate after a call; audited) | new |
+| POST | /interviews/:id/cancel | `{reason}` → `InterviewSummary` | new; `interview.manage` |
+| POST | /interviews/:id/outcome | `{outcome: "happened" \| "no_show_candidate" \| "no_show_interviewer"}` → `InterviewSummary` (either answer ends the interview: a candidate still at `interview_scheduled` moves to `interview_complete` at once, by the caller's role, which every membership role may do for this step; on that path the route also emits `interview.completed` and sends the "How did it go with <name>?" notification with the `?open=` link, so the closing timer has nothing left to do) | new; `interview.manage`, or a participant of that interview (any role, HR included) |
+| POST | /interviews/:id/book-on-behalf | `{slotId}` → `InterviewSummary` (owner picks for the candidate after a call; audited) | new; `interview.manage` |
 | GET | /me/calendar | → `{connection (public shape, no secrets) \| null, availability \| null, providers[{key,status}]}` | built 18 Sep |
 | GET | /integrations/calendar/:provider/connect | → 302 to the provider consent screen (state bound to the session) | new; `calendar.connect` |
 | GET | /integrations/calendar/:provider/callback | `?code&state` → 302 to `/setup?calendar=connected` (stores encrypted tokens; emits `integration.connected`) | new |
@@ -113,7 +117,7 @@ The daily `stuck_role_detector` run counts yesterday's applications per open rol
 
 | Method | Path | Body → Response | Status |
 |---|---|---|---|
-| GET | /approvals?status= ; POST /approvals/:id/decide | `DecideApproval` | existing (deciding `interview.request` from a card calls the same path as `/applications/:id/interviews` with the proposal's interviewers) |
+| GET | /approvals?status= ; POST /approvals/:id/decide | `DecideApproval` | existing (deciding `interview.request` from a card calls the same path as `/applications/:id/interviews` with the proposal's interviewers; a `role_packet.approve` request follows the same rules as `POST /roles/:id/approve`: `role.approve`, 409 `self_approval`, 403 `named_decider`; a request carrying `requiredUserIds` in its proposal may be decided only by those members or an owner; the brief's generic decision cards post `{decision: "approve"}` or `{decision: "reject"}`) |
 | POST | /escalations ; GET /escalations/mine | `CreateEscalation` (+ optional `urgency`) → `{id, slaDueAt, message}`; the message describes the hours from the calendar in force; `/mine` includes `urgency` and `summary` | changed (correction 11, 12) |
 | GET | /escalations | → `EscalationPreview[]`: exactly `id, status, kind, urgency, requiredExpertise, summary, companyName, roleTitle, slaDueAt, slaRemainingMinutes, businessMinutesRemaining, overdue, createdAt, claimedByMe, claimed`. No identifiers that lead to candidate data, no free text. Each view audited as `escalation.preview_viewed` for the customer. | changed (correction 11; `apps/api/src/queue-preview.test.ts`) |
 | GET | /escalations/:id | → the same preview plus `accessGranted:false, why` until claimed by the caller; under an active grant adds `companyId, roleId, applicationId, question, contextSnapshot, resolution, grant`; audited | changed (correction 11) |

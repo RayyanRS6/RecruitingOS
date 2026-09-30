@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "../nav";
 import { Alert, Button, Card, Chip, EmptyState, ErrorState, EvidenceChip, Field, Segmented, Sheet, Skeleton, StatusChip, Timeline } from "@ros/ui";
@@ -20,7 +20,18 @@ export function People() {
   const [group, setGroup] = useState<Group>("all");
   const stage = search.get("stage");
   const apps = useQuery({ queryKey: ["applications", roleId, stage], queryFn: () => api.get<ApplicationSummary[]>(`/api/v1/roles/${roleId}/applications${stage ? `?stage=${stage}` : ""}`), enabled: !!roleId });
-  const [openId, setOpenId] = useState<string | null>(null);
+  // A deep link (`?open=<applicationId>`, used by every notification and brief card about one candidate) opens that sheet.
+  const openParam = search.get("open");
+  const [openId, setOpenId] = useState<string | null>(openParam);
+  useEffect(() => { if (openParam) setOpenId(openParam); }, [openParam]);
+  const closeSheet = () => {
+    setOpenId(null);
+    if (!openParam) return;
+    const rest = new URLSearchParams(search);
+    rest.delete("open");
+    const qs = rest.toString();
+    nav(`${window.location.pathname}${qs ? `?${qs}` : ""}`, { replace: true });
+  };
   const role = roles.data?.find((r) => r.id === roleId);
   const list = (apps.data ?? []).filter((a) => group === "all" || a.group === group);
 
@@ -77,7 +88,7 @@ export function People() {
           )}
         </>
       )}
-      {openId ? <ApplicationSheet id={openId} roleId={roleId!} onClose={() => setOpenId(null)} /> : null}
+      {openId && roleId ? <ApplicationSheet id={openId} roleId={roleId} onClose={closeSheet} /> : null}
     </div>
   );
 }
@@ -167,7 +178,7 @@ function ApplicationSheet({ id, roleId, onClose }: { id: string; roleId: string;
               {a.interviews.map((i) => <p key={i.id} className="small"><Link to={`/interviews/${i.id}`}>{i.title}</Link> · {i.status.replace(/_/g, " ")}{i.startsAt ? ` · ${new Date(i.startsAt).toLocaleString("en-US", { timeZone: i.timezone ?? undefined, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : i.status === "scheduling" ? ` · ${i.offeredSlots.length} times offered` : ""}{i.decision ? ` · decision: ${i.decision.replace(/_/g, " ")}` : ""}</p>)}
             </Card>
           ) : null}
-          {can("record_decision") ? <DecisionCard a={a} roleId={roleId} onDone={refresh} /> : null}
+          {can("record_decision") ? <DecisionCard a={a} roleId={roleId} onDone={refresh} onNextRound={(key) => { setRoundKey(key); setInterviewers(null); setInterviewOpen(true); }} /> : null}
           {interviewOpen ? (
             <Card needsYou lift title="Approve an interview">
               <p className="small" style={{ color: "var(--ink-2)" }}>Your approval is what starts scheduling; the assistant never does this on its own. Times are offered to the candidate from the interviewers' calendars or declared hours.</p>
@@ -325,14 +336,23 @@ function ApplicationSheet({ id, roleId, onClose }: { id: string; roleId: string;
 /**
  * The decision after an interview is a person's (docs/06; release 1 records it, scorecards and debriefs come later).
  * Shown when the last interview is over and nobody has decided yet: next round, finalist, or not moving forward with a reason.
+ * "Next round" hands the round key to the sheet, which opens the interview approval with that round and its interviewers.
  */
-function DecisionCard({ a, roleId, onDone }: { a: ApplicationDetail; roleId: string; onDone: () => Promise<void> }) {
+function DecisionCard({ a, roleId, onDone, onNextRound }: { a: ApplicationDetail; roleId: string; onDone: () => Promise<void>; onNextRound: (roundKey: string) => void }) {
   const [decision, setDecision] = useState<"finalist" | "not_moving_forward" | null>(null);
   const [reason, setReason] = useState("not_a_match_experience");
   const [note, setNote] = useState("");
   const record = useMutation({
-    mutationFn: (body: { decision: "next_round" | "finalist" | "not_moving_forward"; reason?: string; note?: string }) => api.post<{ stage: string; nextRoundKey: string | null }>(`/api/v1/applications/${a.id}/decision`, body),
-    onSuccess: async (_r, body) => { toast(body.decision === "finalist" ? "Marked as a finalist." : body.decision === "next_round" ? "Next round. Choose \"Interview\" to pick the interviewers; times go out from there." : "Recorded. The candidate gets a respectful message."); setDecision(null); setNote(""); await onDone(); },
+    mutationFn: (body: { decision: "next_round" | "finalist" | "not_moving_forward"; reason?: string; note?: string }) => api.post<{ stage: string; nextRoundKey: string | null; dispositionSent?: boolean }>(`/api/v1/applications/${a.id}/decision`, body),
+    onSuccess: async (r, body) => {
+      if (body.decision === "finalist") toast("Marked as a finalist.");
+      else if (body.decision === "next_round") toast(r.nextRoundKey ? "Next round. Check the interviewers below and approve; times go out from there." : "Next round recorded.");
+      else toast(r.dispositionSent ? "Recorded. The candidate gets a respectful message." : "Recorded. No message has gone to the candidate yet; it is waiting on a review or a retry.");
+      setDecision(null);
+      setNote("");
+      if (body.decision === "next_round" && r.nextRoundKey) onNextRound(r.nextRoundKey);
+      await onDone();
+    },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record the decision."),
   });
   const last = a.interviews.find((i) => ["completed", "no_show"].includes(i.status) && !i.decision);
@@ -368,7 +388,7 @@ function DecisionCard({ a, roleId, onDone }: { a: ApplicationDetail; roleId: str
 }
 
 /** Owner Mode never shows raw stage names (docs/07); mirrors STAGE_LABEL in packages/core. */
-const STAGE_LABEL: Record<string, string> = { applied: "Just applied", received: "Received", ineligible: "Doesn't meet eligibility", eligible: "Eligible", triaged: "Ready for your review", screen_invited: "Invited to a screen", screening: "Being screened", screen_complete: "Screen complete", interview_recommended: "Recommended for interview", interview_scheduled: "Interviewing", interview_complete: "Interview done", debrief: "Deciding", finalist: "Finalist", reference_check: "Checking references", offer_draft: "Offer being prepared", offer_approval: "Offer needs your approval", offer_sent: "Offer out", negotiation: "Negotiating", accepted: "Accepted", declined: "Declined the offer", hired: "Hired", onboarding: "Starting soon", withdrawn: "Withdrew", rejected: "Not moving forward", talent_pool: "In your talent pool" };
+const STAGE_LABEL: Record<string, string> = { applied: "Just applied", received: "Received", ineligible: "Doesn't meet eligibility", eligible: "Eligible", triaged: "Ready for your review", screen_invited: "Invited to a screen", screening: "Being screened", screen_complete: "Screen complete", interview_recommended: "Recommended for interview", interview_scheduled: "Interviewing", interview_complete: "Interview done: decision needed", debrief: "Deciding", finalist: "Finalist", reference_check: "Checking references", offer_draft: "Offer being prepared", offer_approval: "Offer needs your approval", offer_sent: "Offer out", negotiation: "Negotiating", accepted: "Accepted", declined: "Declined the offer", hired: "Hired", onboarding: "Starting soon", withdrawn: "Withdrew", rejected: "Not moving forward", talent_pool: "In your talent pool" };
 
 const SCREEN_STATUS: Record<string, string> = { invited: "Invited", reminded: "Reminded", in_progress: "Answering", completed: "Completed", expired: "No response", abandoned: "Withdrawn", human_requested: "Asked for a person" };
 
@@ -476,7 +496,8 @@ function describeEvent(type: string, payload: Record<string, unknown>): string {
     "eligibility.evaluated": `Eligibility checked (${(payload.passed as boolean) ? "met" : "not met"})`,
     "application.ineligible": "Held on an eligibility answer",
     "application.stage_changed": `Now "${STAGE_LABEL[p.to ?? ""] ?? p.to}"${p.reason ? ` (${p.reason})` : ""}`,
-    "application.rejected": `Declined${p.reason ? `: ${p.reason.replace(/_/g, " ")}` : ""}`,
+    "application.rejected": `Declined${p.reason ? `: ${p.reason.replace(/_/g, " ")}` : ""}${payload.afterInterview ? " (after the interview)" : ""}`,
+    "interview.decision_recorded": `Decision after the interview: ${(p.decision ?? "").replace(/_/g, " ")}${p.note ? ` — ${p.note}` : ""}`,
     "application.duplicate_detected": "Applied again (kept the original)",
     "human.override": `Human decision: ${p.action}${p.note ? ` — ${p.note}` : ""}`,
     "recruiter.requested": "Sent to a recruiter",

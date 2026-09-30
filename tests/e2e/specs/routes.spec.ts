@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn } from "./helpers";
+import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn, skipWithoutFakeSignIn } from "./helpers";
 
 /**
  * Route inventory coverage (docs/spec/16): every final Next.js route is visited signed out (redirect), signed in with the
@@ -41,6 +41,7 @@ test.describe("route inventory", () => {
   });
 
   test("an owner sees every company route; recruiter and admin routes send them home", async ({ page, baseURL }) => {
+    skipWithoutFakeSignIn();
     test.setTimeout(300_000); // seven routes with accessibility scans, then the candidate pages: long on a loaded runner
     await signIn(page, { email: `owner+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
     await createCompanyThroughTheForm(page, `Brightline ${run}`);
@@ -83,6 +84,7 @@ test.describe("route inventory", () => {
   });
 
   test("a seeded platform administrator reaches the queue and the console; both pass accessibility", async ({ page }) => {
+    skipWithoutFakeSignIn();
     await signIn(page, { email: "admin-e2e@identifiedtalent.com", name: "Admin", provider: "azure", aal2: true });
     await page.goto("/recruiter/queue");
     await expect(page.getByRole("heading", { name: "Recruiter queue" })).toBeVisible({ timeout: 30_000 });

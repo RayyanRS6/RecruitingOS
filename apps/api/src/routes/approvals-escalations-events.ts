@@ -1,11 +1,12 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, isNull, like } from "drizzle-orm";
 import { CreateEscalation, DecideApproval, ResolveEscalation } from "@ros/contracts";
-import { ESCALATION_ACCESS_DAYS, activeStaffGrant, assertCan, audit, businessMinutesBetween, createEscalation, describeHours, emit, endStaffGrant, grantStaffAccess, limitGrantAfterResolution, loadBusinessCalendar, notify, recordStaffAccess, toEscalationPreview, transition, type EscalationPreview } from "@ros/core";
-import { applications, approvalRequests, companies, events, recruiterEscalations, roles, staffAccessGrants, withPlatform, withTenant } from "@ros/db";
+import { ESCALATION_ACCESS_DAYS, activeStaffGrant, assertCan, audit, businessMinutesBetween, createEscalation, describeHours, emit, endStaffGrant, grantStaffAccess, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, recordStaffAccess, toEscalationPreview, transition, type EscalationPreview } from "@ros/core";
+import { applications, approvalRequests, companies, events, recruiterEscalations, rolePackets, roles, staffAccessGrants, withPlatform, withTenant } from "@ros/db";
 import { actorOf, clientIp, requireRecruiterOrAdmin, requireTenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { composeBrief } from "../services/brief";
+import { assertMayApprovePacket } from "../services/packet-approval";
 
 export const approvalRoutes = new Hono<Vars>();
 
@@ -25,10 +26,24 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
     const [req] = await tx.select().from(approvalRequests).where(eq(approvalRequests.id, c.req.param("id"))).limit(1);
     if (!req) throw new HttpError(404, "not_found", "Approval request not found.");
     if (req.status !== "pending") throw new HttpError(409, "decided", `This request is already ${req.status}.`);
-    if (!req.requiredRoles.includes(t.role)) throw new HttpError(403, "forbidden", `This decision needs one of: ${req.requiredRoles.join(", ")}.`);
     const status = body.decision === "approve" ? "approved" : "rejected";
+    const proposedVersion = Number((req.proposal as { version?: number }).version);
+    if (req.actionType === "role_packet.approve") {
+      // The same rules as POST /roles/:id/approve: the approver roles, the named decision maker, and no self-approval (a rejection may come from anyone who could decide).
+      assertCan(t.role, "role.approve");
+      const [role] = req.roleId ? await tx.select().from(roles).where(eq(roles.id, req.roleId)).limit(1) : [];
+      if (!role) throw new HttpError(404, "not_found", "Role not found.");
+      const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, proposedVersion))).limit(1);
+      if (status === "approved") await assertMayApprovePacket(tx, { tenant: t, req, role, version: pv ?? null });
+      else {
+        // Sending back is reserved the same way as approving (the named decision maker, or an owner); only the self-approval rule is waived.
+        const decide = mayDecideApproval(req, { userId: t.userId, role: t.role });
+        if (!decide.ok) throw new HttpError(403, decide.code, decide.message);
+      }
+      if (status === "approved") await tx.update(rolePackets).set({ approvedBy: t.userId, approvedAt: new Date().toISOString() }).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, proposedVersion)));
+    } else if (!req.requiredRoles.includes(t.role)) throw new HttpError(403, "forbidden", `This decision needs one of: ${req.requiredRoles.join(", ")}.`);
     await tx.update(approvalRequests).set({ status, decidedBy: t.userId, decidedAt: new Date().toISOString(), decisionNote: body.note ?? null, decisionEdits: body.edits ?? null }).where(eq(approvalRequests.id, req.id));
-    await emit(tx, { type: body.decision === "approve" ? "approval.granted" : "approval.denied", companyId: t.companyId, actor: actorOf(c), subject: { type: "approval_request", id: req.id }, payload: { actionType: req.actionType, note: body.note ?? null }, correlationId: req.workflowRunId });
+    await emit(tx, { type: body.decision === "approve" ? "approval.granted" : "approval.denied", companyId: t.companyId, actor: actorOf(c), subject: { type: "approval_request", id: req.id }, payload: { actionType: req.actionType, roleId: req.roleId, version: Number.isFinite(proposedVersion) ? proposedVersion : null, note: body.note ?? null }, correlationId: req.workflowRunId });
     await container.engine.signal(tx, { companyId: t.companyId, key: `approval:${req.id}`, payload: { decision: status } });
     if (status === "approved" && req.applicationId) {
       const [app] = await tx.select().from(applications).where(eq(applications.id, req.applicationId)).limit(1);
@@ -242,6 +257,6 @@ export const briefRoutes = new Hono<Vars>();
 briefRoutes.get("/", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.read");
-  const brief = await withTenant(c.get("container").db, t.companyId, (tx) => composeBrief(tx, t.companyId));
+  const brief = await withTenant(c.get("container").db, t.companyId, (tx) => composeBrief(tx, t.companyId, { userId: t.userId, role: t.role }));
   return c.json(brief);
 });

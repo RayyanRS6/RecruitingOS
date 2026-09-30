@@ -1,10 +1,14 @@
+import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
+import { MAX_RESUME_BYTES } from "@ros/contracts";
 import { anonymizeCandidate, buildCandidateCsp, entitlements } from "@ros/core";
-import { applications, auditRecords, candidates, documents, events } from "@ros/db";
+import { applications, auditRecords, candidates, documents, events, withTenant } from "@ros/db";
 import { EICAR_TEST_STRING, type FakeMalwareScanner, type MemoryStorageAdapter } from "@ros/integrations";
+import { processQuarantinedDocument } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { NO_SCRIPT_MAX_RESUME_BYTES } from "./pages/candidate";
 
 /**
  * Founder decision 2 (22 September 2026): résumés go straight to private storage under short-lived single-object
@@ -31,9 +35,10 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
     return r2.headers.get("set-cookie")!.split(";")[0];
   };
   const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
-  const intent = (body: unknown) => app.request(`/careers/${slug}/jobs/${roleId}/upload-intent`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  /** The apply budget is thirty an hour per address; later cases post from their own address so the earlier ones do not spend it. */
+  const intent = (body: unknown, ip?: string) => app.request(`/careers/${slug}/jobs/${roleId}/upload-intent`, { method: "POST", headers: { "content-type": "application/json", ...(ip ? { "x-forwarded-for": ip } : {}) }, body: JSON.stringify(body) });
   let applicant = 0;
-  const apply = async (extra: (fd: FormData) => void) => {
+  const apply = async (extra: (fd: FormData) => void, ip?: string) => {
     applicant++;
     const fd = new FormData();
     fd.set("firstName", "Dana"); fd.set("lastName", `Example${applicant}`); fd.set("email", `dana${applicant}@example.com`); fd.set("smsConsent", "no"); fd.set("locationText", "Irvine, CA");
@@ -41,15 +46,15 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
     fd.set("acknowledged", "yes");
     extra(fd);
-    const r = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
+    const r = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd, headers: ip ? { "x-forwarded-for": ip } : undefined });
     const token = r.status === 302 ? r.headers.get("location")!.split("/c/status/")[1]!.split("?")[0]! : "";
     return { r, token };
   };
   const applicationOf = async (token: string) => (await container.db.select().from(applications).where(eq(applications.statusToken, token)))[0]!;
   const documentOf = async (id: string) => (await container.db.select().from(documents).where(eq(documents.id, id)))[0]!;
   /** Uploads a file the way the browser does: intent, PUT to the granted URL, then the form with the grant. */
-  const directUpload = async (file: { name: string; type: string; bytes: Uint8Array }) => {
-    const ir = await intent({ filename: file.name, size: file.bytes.byteLength, type: file.type });
+  const directUpload = async (file: { name: string; type: string; bytes: Uint8Array }, ip?: string) => {
+    const ir = await intent({ filename: file.name, size: file.bytes.byteLength, type: file.type }, ip);
     expect(ir.status).toBe(200);
     const j = (await ir.json()) as { uploadId: string; url: string; method: string; headers: Record<string, string>; grant: string; expiresAt: string; maxBytes: number };
     const put = await app.request(new URL(j.url).pathname, { method: j.method, headers: j.headers, body: asBody(file.bytes) });
@@ -253,6 +258,117 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
     expect((await app.request(`/api/v1/applications/${appRow.id}/documents/${before.id}/file`, { headers: { cookie: owner } })).status).toBe(409);
     const [cand] = await container.db.select().from(candidates).where(eq(candidates.id, appRow.candidateId));
     expect(cand!.anonymizedAt).toBeTruthy();
+  });
+
+  it("a PDF résumé posted by the form itself, and a Word résumé by the direct upload, are read: the text is on the document and the application understands it", async () => {
+    const ip = "203.0.113.31";
+    const fixtures = (name: string) => new Uint8Array(readFileSync(new URL(`../../../packages/agents/src/fixtures/${name}`, import.meta.url)));
+    const typesOf = async (applicationId: string) => (await container.db.select({ type: events.type }).from(events).where(and(eq(events.subjectType, "application"), eq(events.subjectId, applicationId))).orderBy(events.id)).map((e) => e.type);
+    // the PDF, through the no-script path (the form carries the file)
+    const pdf = await apply((fd) => fd.set("resume", new File([fixtures("resume.pdf")], "Jordan Rivera.pdf", { type: "application/pdf" })), ip);
+    expect(pdf.r.status).toBe(302);
+    await container.drain();
+    const pdfApp = await applicationOf(pdf.token);
+    const pdfDoc = await documentOf(pdfApp.resumeDocumentId!);
+    expect(pdfDoc).toMatchObject({ status: "clean", uploadedVia: "server", mime: "application/pdf", filename: "Jordan Rivera.pdf" });
+    expect(pdfDoc.storageKey).toMatch(/\.pdf$/);
+    expect(pdfDoc.textExtracted).toContain("Registered Dental Hygienist at Harbor Point Dental");
+    expect(pdfDoc.textExtracted!.split(/\s+/).length).toBeGreaterThanOrEqual(40);
+    const pdfTypes = await typesOf(pdfApp.id);
+    expect(pdfTypes).toEqual(expect.arrayContaining(["document.uploaded", "document.validated", "resume.ingested"]));
+    expect(pdfTypes).not.toContain("resume.extraction_failed");
+    expect((pdfApp.extraction as { positions: unknown[] } | null)?.positions.length).toBeGreaterThanOrEqual(1);
+    expect(pdfApp.stage).not.toBe("applied");
+    // the Word document, through the direct upload
+    const j = await directUpload({ name: "resume.docx", type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", bytes: fixtures("resume.docx") }, ip);
+    const docx = await apply((fd) => fd.set("uploadGrant", j.grant), ip);
+    expect(docx.r.status).toBe(302);
+    await container.drain();
+    const docxApp = await applicationOf(docx.token);
+    const docxDoc = await documentOf(docxApp.resumeDocumentId!);
+    expect(docxDoc).toMatchObject({ status: "clean", uploadedVia: "direct", mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+    expect(docxDoc.storageKey).toMatch(/\.docx$/);
+    expect(docxDoc.textExtracted).toContain("Registered Dental Hygienist at Harbor Point Dental");
+    expect(await typesOf(docxApp.id)).toEqual(expect.arrayContaining(["document.validated", "resume.ingested"]));
+    // a scanned PDF (no text layer) is kept as a clean file, but the application is told nothing could be read and goes on by its answers
+    const scan = await apply((fd) => fd.set("resume", new File([fixtures("scanned.pdf")], "scan.pdf", { type: "application/pdf" })), ip);
+    expect(scan.r.status).toBe(302);
+    await container.drain();
+    const scanApp = await applicationOf(scan.token);
+    const scanDoc = await documentOf(scanApp.resumeDocumentId!);
+    expect(scanDoc).toMatchObject({ status: "clean", textExtracted: null });
+    expect(storage().has(scanDoc.storageKey)).toBe(true);
+    const scanTypes = await typesOf(scanApp.id);
+    expect(scanTypes).toContain("resume.extraction_failed");
+    expect(scanTypes).not.toContain("resume.ingested");
+    expect(["eligible", "triaged", "received", "screen_invited"]).toContain(scanApp.stage);
+  });
+
+  it("the form itself refuses an oversized file and a wrong-type file with a plain message, keeps what was typed, and stores nothing", async () => {
+    const quarantinedBefore = (await storage().list(`quarantine/${companyId}/`)).length;
+    const keptBefore = (await storage().list(`${companyId}/`)).length;
+    const appsBefore = (await container.db.select({ id: applications.id }).from(applications).where(eq(applications.roleId, roleId))).length;
+    const refused = async (file: File) => {
+      const { r } = await apply((fd) => fd.set("resume", file), "203.0.113.32");
+      expect(r.status).toBe(400);
+      const html = await r.text();
+      expect(html).toContain('value="Dana"'); // everything typed is still there (D12)
+      return html;
+    };
+    // over the no-script limit but under the storage limit: the direct upload could have taken it
+    expect(await refused(new File([new Uint8Array(NO_SCRIPT_MAX_RESUME_BYTES + 1)], "cv.pdf", { type: "application/pdf" }))).toContain("Files over 4 MB can only be sent by the direct upload");
+    // over the storage limit altogether
+    expect(await refused(new File([new Uint8Array(MAX_RESUME_BYTES + 1)], "cv.pdf", { type: "application/pdf" }))).toContain("Resume files must be under 8 MB.");
+    // the wrong kind of file: an archive, an image, a Word document sent as a PDF, an old Word file
+    const friendly = "Please upload a PDF, Word (.docx), or text file.";
+    expect(await refused(new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04, ...new Array(200).fill(0)])], "cv.zip", { type: "application/zip" }))).toContain(friendly);
+    expect(await refused(new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...new Array(64).fill(0)])], "photo.png", { type: "image/png" }))).toContain(friendly);
+    const docxBytes = new Uint8Array(readFileSync(new URL("../../../packages/agents/src/fixtures/resume.docx", import.meta.url)));
+    expect(await refused(new File([docxBytes], "cv.pdf", { type: "application/pdf" }))).toContain(friendly);
+    expect(await refused(new File([new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, ...new Array(64).fill(0)])], "cv.doc", { type: "application/msword" }))).toContain("cannot be used");
+    expect((await storage().list(`quarantine/${companyId}/`)).length).toBe(quarantinedBefore);
+    expect((await storage().list(`${companyId}/`)).length).toBe(keptBefore);
+    expect((await container.db.select({ id: applications.id }).from(applications).where(eq(applications.roleId, roleId))).length).toBe(appsBefore);
+  });
+
+  it("a grant whose object is over the limit is refused and the object removed from quarantine", async () => {
+    const ip = "203.0.113.33";
+    const ir = await intent({ filename: "cv.pdf", size: 100, type: "application/pdf" }, ip);
+    expect(ir.status).toBe(200);
+    const j = (await ir.json()) as { grant: string };
+    const real = container.uploadGrants.open(j.grant)!;
+    // the object grew past the limit after the intent (a client that lied about the size and a store that did not enforce it)
+    await storage().put(real.key, new Uint8Array(MAX_RESUME_BYTES + 1), "application/pdf");
+    expect(storage().has(real.key)).toBe(true);
+    const { r } = await apply((fd) => fd.set("uploadGrant", j.grant), ip);
+    expect(r.status).toBe(400);
+    expect(await r.text()).toContain("Resume files must be under 8 MB.");
+    expect(storage().has(real.key)).toBe(false);
+  });
+
+  it("the worker refuses a quarantined file over the limit: removed, recorded without its contents, and the application goes on without it", async () => {
+    // a quarantined row the API could never have produced at this size (it caps before storing), as an inbound attachment might
+    const { r, token } = await apply((fd) => fd.set("resume", new File(["Dana Example, RDH"], "dana.txt", { type: "text/plain" })), "203.0.113.34");
+    expect(r.status).toBe(302);
+    await container.drain();
+    const appRow = await applicationOf(token);
+    const key = `quarantine/${companyId}/${roleId}/oversized-test.pdf`;
+    await storage().put(key, new Uint8Array(MAX_RESUME_BYTES + 1), "application/pdf");
+    const doc = await withTenant(container.db, companyId, async (tx) => (await tx.insert(documents).values({ companyId, candidateId: appRow.candidateId, applicationId: appRow.id, kind: "resume", filename: "oversized.pdf", mime: "application/pdf", sizeBytes: MAX_RESUME_BYTES + 1, storageKey: key, sha256: "pending", status: "quarantined", uploadedVia: "email" }).returning())[0]);
+    const outcome = await withTenant(container.db, companyId, (tx) => processQuarantinedDocument(tx, container.integrations, { documentId: doc.id, companyId, actor: { kind: "system", id: "test" } }));
+    expect(outcome).toEqual({ outcome: "rejected", documentId: doc.id, reason: "too_large" });
+    const after = await documentOf(doc.id);
+    expect(after).toMatchObject({ status: "rejected", rejectedReason: "too_large", textExtracted: null, sha256: "rejected" });
+    expect(storage().has(key)).toBe(false);
+    const rejected = await container.db.select().from(events).where(and(eq(events.subjectType, "application"), eq(events.subjectId, appRow.id), eq(events.type, "document.rejected")));
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].payload).toMatchObject({ documentId: doc.id, reason: "too_large", via: "email" });
+    const audits = await container.db.select().from(auditRecords).where(eq(auditRecords.action, "document.rejected"));
+    expect(audits.some((a) => (a.target as { id: string })?.id === doc.id && a.reason === "too_large")).toBe(true);
+    // a second pass changes nothing: the row is no longer quarantined
+    expect(await withTenant(container.db, companyId, (tx) => processQuarantinedDocument(tx, container.integrations, { documentId: doc.id, companyId, actor: { kind: "system", id: "test" } }))).toEqual({ outcome: "skipped", documentId: doc.id });
+    // the application itself is untouched by the stray document
+    expect((await applicationOf(token)).resumeDocumentId).not.toBe(doc.id);
   });
 
   it("the apply page carries the upload script under the request nonce, and the policy names the store only when it is another origin", async () => {

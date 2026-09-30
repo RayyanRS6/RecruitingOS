@@ -3,6 +3,8 @@ import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome } from "@ros/contracts";
 import { OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, assertCan, audit, can, emit, listOutcomes, openEscalationsFor, ownerGroup, recordApplicationOutcome, recordRoleOutcome } from "@ros/core";
 import { users } from "@ros/db";
+import { assertMayApprovePacket, packetApprovalView } from "../services/packet-approval";
+import { createPacketVersion, currentVersionOf } from "../services/packet-versions";
 import { aiRuns, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviews, postings, rolePackets, roles, screens, withTenant } from "@ros/db";
 import { actorOf, applicationScopeGuard, clientIp, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
@@ -51,14 +53,17 @@ roleRoutes.get("/:id", requireTenant, async (c) => {
     const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
     if (!role) return null;
     const packets = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
-    const current = packets.find((p) => p.version === (role.currentPacketVersion ?? packets[0]?.version)) ?? packets[0] ?? null;
+    const current = currentVersionOf(role, packets);
     const posts = await tx.select().from(postings).where(eq(postings.roleId, role.id));
     const apps = await tx.select({ stage: applications.stage }).from(applications).where(eq(applications.roleId, role.id));
     const pending = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.status, "pending")));
     const counts: Record<string, number> = {};
     for (const a of apps) counts[a.stage] = (counts[a.stage] ?? 0) + 1;
     const redact = (p: typeof current) => (p && !canSeeComp ? { ...p, packet: { ...p.packet, compensation: { ...p.packet.compensation, min: 0, max: 0, mid: 0, ceiling: 0 } } } : p);
-    return { ...role, currentPacket: redact(current), packetVersions: packets.map((p) => ({ id: p.id, version: p.version, status: p.status, source: p.source, changeSummary: p.changeSummary, createdAt: p.createdAt, createdBy: p.createdBy })), postings: posts, boardsStillUp: posts.filter((p) => p.closureRequired && !p.closureConfirmedAt).map((p) => p.channel), counts, pendingApprovals: pending };
+    // A version proposed while the role runs (an edit waiting for approval): shown beside the current one, never in its place.
+    const proposed = current && ["open", "paused"].includes(role.status) ? packets.find((p) => p.status === "proposed" && p.version > current.version) ?? null : null;
+    const approval = await packetApprovalView(tx, { tenant: t, role, packets, pending });
+    return { ...role, currentPacket: redact(current), proposedPacket: redact(proposed), packetVersions: packets.map((p) => ({ id: p.id, version: p.version, status: p.status, source: p.source, changeSummary: p.changeSummary, createdAt: p.createdAt, createdBy: p.createdBy })), postings: posts, boardsStillUp: posts.filter((p) => p.closureRequired && !p.closureConfirmedAt).map((p) => p.channel), counts, pendingApprovals: pending, packetApproval: approval.packetApproval, decisionMaker: approval.decisionMaker };
   });
   if (!row) throw new HttpError(404, "not_found", "Role not found.");
   return c.json(row);
@@ -76,7 +81,11 @@ roleRoutes.get("/:id/packets", requireTenant, async (c) => {
   }));
 });
 
-/** A human edit creates a new version; nothing is overwritten. If the role is open, the new version becomes current and postings refresh. */
+/**
+ * A human edit creates a new version; nothing is overwritten. What happens next depends on the role and the editor
+ * (services/packet-versions.ts): an approver's edit to an open role is current at once; anyone else's waits for
+ * approval while the role keeps running on the approved version; an edit to a pending role replaces its approval request.
+ */
 roleRoutes.post("/:id/packets", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "packet.edit");
@@ -85,28 +94,18 @@ roleRoutes.post("/:id/packets", requireTenant, async (c) => {
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
     if (!role) throw new HttpError(404, "not_found", "Role not found.");
-    const versions = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
-    const next = (versions[0]?.version ?? 0) + 1;
-    const [pv] = await tx.insert(rolePackets).values({ companyId: t.companyId, roleId: role.id, version: next, packet: body.packet, status: role.status === "open" ? "approved" : "proposed", source: "human_edit", changeSummary: body.changeSummary, createdBy: actorOf(c), approvedBy: role.status === "open" ? t.userId : null, approvedAt: role.status === "open" ? new Date().toISOString() : null }).returning();
-    await emit(tx, { type: "role_packet.edited", companyId: t.companyId, actor: actorOf(c), subject: { type: "role_packet", id: `${role.id}:${next}` }, payload: { version: next, changeSummary: body.changeSummary } });
-    if (role.status === "open") {
-      for (const v of versions) if (v.status === "approved") await tx.update(rolePackets).set({ status: "superseded" }).where(eq(rolePackets.id, v.id));
-      await tx.update(roles).set({ currentPacketVersion: next, title: body.packet.identity.title }).where(eq(roles.id, role.id));
-      await emit(tx, { type: "role_packet.approved", companyId: t.companyId, actor: actorOf(c), subject: { type: "role_packet", id: `${role.id}:${next}` }, payload: { version: next, via: "edit_while_open" } });
-    } else if (role.status === "pending_approval") {
-      // Cancel the pending approval for the older version and request approval for the new one.
-      const pend = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.status, "pending")));
-      for (const p of pend) await tx.update(approvalRequests).set({ status: "cancelled", decisionNote: `superseded by version ${next}` }).where(eq(approvalRequests.id, p.id));
-      await tx.update(roles).set({ title: body.packet.identity.title }).where(eq(roles.id, role.id));
-      await container.engine.start(tx, { workflowKey: "role_approval", companyId: t.companyId, subject: { type: "role", id: role.id }, state: { roleId: role.id, packetVersion: next }, idempotencyKey: `role_approval:${role.id}:${next}`, actor: actorOf(c) });
-    }
-    return pv;
+    const made = await createPacketVersion(tx, container, { tenant: t, actor: actorOf(c), role, packet: body.packet, changeSummary: body.changeSummary });
+    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId };
   });
   await container.kick();
   return c.json(result, 201);
 });
 
-/** Approving resolves the pending approval request; the role_approval workflow opens and publishes the role. */
+/**
+ * Approving resolves the pending approval request; the role_approval workflow opens and publishes the role (or, for a
+ * version proposed while the role was open, makes it current). Refused for the person who started the role or wrote
+ * the version unless they are the company's only owner, and reserved for the named decision maker when there is one.
+ */
 roleRoutes.post("/:id/approve", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.approve");
@@ -119,10 +118,11 @@ roleRoutes.post("/:id/approve", requireTenant, async (c) => {
     if (!req) throw new HttpError(409, "nothing_pending", "There is no pending approval for this role.");
     const proposedVersion = Number((req.proposal as { version?: number }).version);
     if (proposedVersion !== body.version) throw new HttpError(409, "version_mismatch", `The pending approval is for version ${proposedVersion}.`);
-    if (!req.requiredRoles.includes(t.role)) throw new HttpError(403, "forbidden", `This approval needs one of: ${req.requiredRoles.join(", ")}.`);
+    const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, body.version))).limit(1);
+    await assertMayApprovePacket(tx, { tenant: t, req, role, version: pv ?? null });
     await tx.update(approvalRequests).set({ status: "approved", decidedBy: t.userId, decidedAt: new Date().toISOString(), decisionNote: body.note ?? null }).where(eq(approvalRequests.id, req.id));
     await tx.update(rolePackets).set({ approvedBy: t.userId, approvedAt: new Date().toISOString() }).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, body.version)));
-    await emit(tx, { type: "approval.granted", companyId: t.companyId, actor: actorOf(c), subject: { type: "approval_request", id: req.id }, payload: { actionType: req.actionType, note: body.note ?? null }, correlationId: req.workflowRunId });
+    await emit(tx, { type: "approval.granted", companyId: t.companyId, actor: actorOf(c), subject: { type: "approval_request", id: req.id }, payload: { actionType: req.actionType, roleId: role.id, version: body.version, note: body.note ?? null }, correlationId: req.workflowRunId });
     await emit(tx, { type: "role.approved", companyId: t.companyId, actor: actorOf(c), subject: { type: "role", id: role.id }, payload: { version: body.version } });
     await container.engine.signal(tx, { companyId: t.companyId, key: `approval:${req.id}`, payload: { decision: "approved" } });
     return { ok: true, approvalRequestId: req.id };
@@ -211,7 +211,7 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const packetLabels = pv ? { mustHaves: pv.packet.requirements.mustHaves.map((m) => ({ key: m.key, text: m.text })), competencies: pv.packet.competencies.map((c) => ({ key: c.key, name: c.name })), questions: pv.packet.screening.questions.map((q) => ({ key: q.key, question: q.question })) } : { mustHaves: [], competencies: [], questions: [] };
     const pendingApprovals = await tx.select({ id: approvalRequests.id, actionType: approvalRequests.actionType, rationale: approvalRequests.rationale, createdAt: approvalRequests.createdAt }).from(approvalRequests).where(and(eq(approvalRequests.applicationId, app.id), eq(approvalRequests.status, "pending")));
     await audit(tx, { companyId: t.companyId, actor: actorOf(c), action: "candidate.viewed", target: { type: "application", id: app.id } });
-    const allowedActions = allowedApplicationActions(applicationFactsFrom(app, scr.map((s) => s.status), ivs));
+    const allowedActions = allowedApplicationActions(applicationFactsFrom(app, scr.map((s) => s.status), ivs, t.role));
     return { ...app, stageLabel: STAGE_LABEL[app.stage], group: ownerGroup(app.stage), allowedActions, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: comms, timeline, screens: scr.map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, assessmentId: s.assessmentId })), pendingApprovals, packetLabels };
   });
   if (!row) throw new HttpError(404, "not_found", "Application not found.");

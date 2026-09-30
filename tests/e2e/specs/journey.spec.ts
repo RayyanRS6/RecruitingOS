@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn, signInWithoutSecondFactor } from "./helpers";
+import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn, signInWithoutSecondFactor, skipWithoutFakeSignIn } from "./helpers";
 
 /**
  * The release-1 journey in a real browser: sign in, set up the company, publish a role, receive an applicant, declare
@@ -9,6 +9,7 @@ import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, si
 const run = Date.now().toString(36);
 
 test.describe("owner and candidate journey", () => {
+  skipWithoutFakeSignIn();
   test("from sign-in to a booked interview and a reschedule", async ({ page, baseURL }) => {
     await page.goto("/login");
     await expectAccessible(page, "login");
@@ -112,6 +113,7 @@ test.describe("owner and candidate journey", () => {
 });
 
 test.describe("staff sign-in policy in the browser", () => {
+  skipWithoutFakeSignIn();
   test("Google is refused for staff with plain guidance; Microsoft without a second factor continues on the authenticator page; with it, staff land on the queue", async ({ page }) => {
     await signIn(page, { email: `nadine+${run}@identifiedtalent.com`, name: "Nadine", provider: "google" });
     await expect(page.getByRole("alert").filter({ hasText: /Microsoft 365/ })).toBeVisible();

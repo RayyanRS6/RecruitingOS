@@ -28,11 +28,12 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
   const open = await q.select().from(roles).where(and(eq(roles.companyId, companyId), eq(roles.status, "open")));
   for (const role of open) {
     const apps = await q.select().from(applications).where(eq(applications.roleId, role.id));
-    const waiting = apps.filter((a) => ["triaged", "screen_complete", "interview_recommended"].includes(a.stage));
+    // Decisions pending: ready for review, screened, recommended, or interviewed with nobody's decision recorded yet.
+    const waiting = apps.filter((a) => ["triaged", "screen_complete", "interview_recommended", "interview_complete"].includes(a.stage));
     if (waiting.length) {
       const oldest = Math.min(...waiting.map((a) => Date.parse(a.stageChangedAt)));
       const days = Math.floor((now.getTime() - oldest) / DAYS);
-      if (days >= 3) out.push({ detector: "candidates_waiting", roleId: role.id, roleTitle: role.title, days, title: `${waiting.length} ${waiting.length === 1 ? "candidate has" : "candidates have"} been waiting on you for ${days} days (${role.title})`, body: "They are ready for a decision: invite to a screen, interview, or decline with a reason. Candidates who wait more than a week usually move on.", action: { label: "Review them", href: `/roles/${role.id}/talent` } });
+      if (days >= 3) out.push({ detector: "candidates_waiting", roleId: role.id, roleTitle: role.title, days, title: `${waiting.length} ${waiting.length === 1 ? "candidate has" : "candidates have"} been waiting on you for ${days} days (${role.title})`, body: "They are ready for a decision: invite to a screen, interview, decide after an interview, or decline with a reason. Candidates who wait more than a week usually move on.", action: { label: "Review them", href: `/roles/${role.id}/talent` } });
     }
     const invites = await q.select().from(screens).where(and(eq(screens.companyId, companyId), inArray(screens.status, ["invited", "reminded"]), inArray(screens.applicationId, apps.map((a) => a.id).length ? apps.map((a) => a.id) : ["00000000-0000-0000-0000-000000000000"])));
     const stale = invites.filter((s) => s.invitedAt && now.getTime() - Date.parse(s.invitedAt) >= 3 * DAYS);

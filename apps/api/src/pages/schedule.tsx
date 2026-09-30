@@ -2,7 +2,7 @@
 /** @jsxImportSource hono/jsx */
 import { Hono } from "hono";
 import { and, eq } from "drizzle-orm";
-import { CandidateAvailability, SelectSlot } from "@ros/contracts";
+import { CandidateAvailability, CandidateCancel, SelectSlot } from "@ros/contracts";
 import { emit, formatInZone, groupSlotsByDay, notify, transition } from "@ros/core";
 import { interviewIcs, participantsOf, sendInterviewCancelled } from "@ros/agents";
 import { applications, candidates, companies, interviews, jobs, rolePackets, roles, withTenant, type Db } from "@ros/db";
@@ -175,6 +175,8 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
       )}
       <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/cancel`} class="card">
         <p>No longer interested in this interview?</p>
+        <label for="cancel-reason">Tell us why, if you like (optional)</label>
+        <input type="text" id="cancel-reason" name="reason" maxlength={500} placeholder="For example: I accepted another offer" />
         <label class="check"><input type="checkbox" name="confirm" value="yes" required /> Yes, cancel this interview.</label>
         <button class="btn secondary" type="submit" style="width:auto">Cancel the interview</button>
       </form>
@@ -221,15 +223,18 @@ schedulePages.post("/c/schedule/:token/cancel", rateLimit(POLICIES.cancelIntervi
   if (!b?.packet) return c.notFound();
   if (["cancelled", "completed"].includes(b.iv.status)) return c.redirect(`/c/schedule/${b.iv.scheduleToken}/confirmed`);
   const confirmBody = await c.req.parseBody();
-  if (confirmBody.confirm !== "yes") return c.redirect(`/c/schedule/${b.iv.scheduleToken}?confirm=cancel`);
+  // The candidate's own words, if any, travel with the cancellation so the team sees why (docs/spec/04: "Optional reason; confirm"). A long note is cut, never refused.
+  const parsed = CandidateCancel.safeParse({ confirm: confirmBody.confirm, reason: typeof confirmBody.reason === "string" && confirmBody.reason.trim() ? confirmBody.reason.trim().slice(0, 500) : undefined });
+  if (!parsed.success) return c.redirect(`/c/schedule/${b.iv.scheduleToken}?confirm=cancel`);
+  const reason = parsed.data.reason || null;
   const actor = { kind: "candidate" as const, id: b.candidate.id };
   const now = container.engine.clock();
   const hadEvents = Object.keys((b.iv.calendarRefs ?? {}) as Record<string, unknown>).length > 0;
   await withTenant(container.db, b.company.id, async (tx) => {
-    await tx.update(interviews).set({ status: "cancelled", cancelReason: "cancelled by the candidate", attempt: b.iv.attempt + 1 }).where(eq(interviews.id, b.iv.id));
-    await emit(tx, { type: "interview.cancelled", companyId: b.company.id, actor, subject: { type: "interview", id: b.iv.id }, payload: { byCandidate: true, hadEvents } });
+    await tx.update(interviews).set({ status: "cancelled", cancelReason: reason ? `cancelled by the candidate: ${reason}` : "cancelled by the candidate", attempt: b.iv.attempt + 1 }).where(eq(interviews.id, b.iv.id));
+    await emit(tx, { type: "interview.cancelled", companyId: b.company.id, actor, subject: { type: "interview", id: b.iv.id }, payload: { byCandidate: true, hadEvents, hasReason: !!reason } });
     if (b.app.stage === "interview_scheduled") await transition(tx, { applicationId: b.app.id, companyId: b.company.id, to: "interview_recommended", by: "system", actor, reason: "candidate cancelled the interview" });
-    await notify(tx, { companyId: b.company.id, kind: "interview.cancelled", title: `${b.candidate.firstName} ${b.candidate.lastName} cancelled the interview`, body: "Decide whether to offer new times, hold, or move on; nothing happens automatically.", action: { label: "Open the candidate", href: `/roles/${b.app.roleId}/talent` } });
+    await notify(tx, { companyId: b.company.id, kind: "interview.cancelled", title: `${b.candidate.firstName} ${b.candidate.lastName} cancelled the interview`, body: `${reason ? `They said: "${reason}". ` : ""}Decide whether to offer new times, hold, or move on; nothing happens automatically.`, action: { label: "Open the candidate", href: `/roles/${b.app.roleId}/talent?open=${b.app.id}` } });
     if (hadEvents) await tx.insert(jobs).values({ kind: "interview.cancel_events", payload: { interviewId: b.iv.id, companyId: b.company.id, actor }, runAt: now.toISOString(), maxAttempts: 5 });
     await sendInterviewCancelled(tx, container.integrations, { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet: b.packet!, actor, appBaseUrl: container.env.APP_BASE_URL, interview: { ...b.iv, status: "cancelled" }, interviewerFirstNames: b.participants.map((p) => p.firstName), candidateTimezone: tzOf(b), companyTimezone: b.company.timezone, byCandidate: true });
   });

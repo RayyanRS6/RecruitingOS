@@ -65,6 +65,8 @@ Global states: signed out → /login; signed in without a company → /setup/com
 
 Existing: application.needs_review, application.ready, screen.invited, screen.completed, screen.expired, screen.human_requested, candidate.recommended, candidate.withdrawn, entitlement.text_screens, stuck.*. New: interview.slots_offered, interview.scheduled, interview.rescheduled, interview.cancelled, interview.no_slot_chosen, interview.completed_decide, calendar.needs_attention, escalation.resolved, data_request.received (owner/admin/hr).
 
+Built 30 Sep 2026 (audit F4, F14): `interview.assigned` goes to each interviewer the moment a round is approved ("You are interviewing {name}", link to the interview; their participant row is `invited` until the booking makes it `confirmed`); what the draft called `interview.completed_decide` is two kinds, `interview.outcome` to the participants ("Did the interview with {name} take place?", link to the interview) and `interview.decision` to the hiring team ("How did it go with {name}?"). Every notification and Today card about one candidate links to `/roles/{roleId}/talent?open={applicationId}`, which opens that candidate's sheet directly; a link about a list stays `/roles/{roleId}/talent`.
+
 ## 5. Accessibility and content rules
 
 Keyboard operability for every action; visible focus; labels on every input; error text tied to fields; live region for conversation and chat threads; color never the sole carrier of meaning (category chips carry text); reduced-motion respected; candidate pages work without JavaScript. Copy follows `docs/07`: no banned words; every automated candidate message carries the disclosure; nothing says "done" for an action that needs approval.

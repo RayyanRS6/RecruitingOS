@@ -291,7 +291,8 @@ export class WorkflowEngine {
       const token = randomToken(8);
       const wait = { ...withKeys(res.wait), token };
       await q.update(workflowRuns).set({ status: "waiting", currentStep: res.resumeStep ?? stepKey, state, wait, attempts: 0, lastError: null }).where(eq(workflowRuns.id, run.id));
-      const until = wait.kind === "timer" ? wait.until : wait.kind === "event" ? wait.until : undefined;
+      // A timer wait is due at `until`; an event or human wait with `until` is woken then too (an approval that ran out of time).
+      const until = wait.until;
       if (until) {
         await q.insert(jobs).values({ kind: "workflow.tick", payload: { runId: run.id, wake: { kind: "timer", key: token } }, runAt: until });
       }

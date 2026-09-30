@@ -57,9 +57,18 @@ recommends, the customer decides, and an ITS recruiter is one click away. Read, 
 - `tests/scenario`, `tests/e2e`, `tests/policy`: the end-to-end hiring scenario on PGlite, Playwright journeys with
   accessibility checks, and policy tests (for example the service-role guard).
 - `scripts/`: the founder-run database scripts (`staging-db-setup.sh`, `staging-db-status.sh`,
-  `staging-db-check-role.sh`) and the repository secret scanner.
+  `staging-db-check-role.sh`), the repository secret scanner, and the application load run for staging
+  (`load-apply.ts`, `docs/readiness/03` section 7a).
 
-Locally everything runs on PGlite (Postgres in WebAssembly) with fake providers: `pnpm dev`, `pnpm test`.
+Locally everything runs on PGlite (Postgres in WebAssembly) with fake providers: `pnpm dev`, `pnpm test`. Two
+variables point the tests at a deployment instead: `TEST_DATABASE_URL` runs the isolation suites (row-level
+security, tenancy, security coverage, outcomes, privacy requests) on a real Postgres test database, connected as
+that database's owner role (the string that applied its migrations; the helpers refuse `ros_app` and `ros_worker`,
+which cannot read the migration ledger, and the proof of isolation is what happens inside `withTenant`, not the
+session role), and `E2E_BASE_URL` runs the Playwright specs against a deployed address, skipping the ones that
+need the fake sign-in page (`docs/readiness/03`, sections 2 and 8). In a test, `container.fake.scriptNext(task, output)` makes the fake
+model say one specific thing on its next call (`packages/ai/src/providers/fake.ts`); the résumé fixtures in
+`packages/agents/src/fixtures` are rebuilt with `tsx packages/agents/src/fixtures/build.ts`.
 
 ## 4. Where staging stands today
 

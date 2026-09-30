@@ -1,12 +1,13 @@
 import { and, desc, eq, gte, inArray, isNull } from "drizzle-orm";
-import { POSTING_CHANNELS, STAGE_LABEL, isBoardChannel, ownerGroup } from "@ros/core";
+import { POSTING_CHANNELS, STAGE_LABEL, can, isBoardChannel, ownerGroup } from "@ros/core";
 import { detectStuckRoles } from "@ros/agents";
-import { applications, approvalRequests, assessments, candidates, events, postings, recruiterEscalations, roles, screens, type Tx } from "@ros/db";
+import type { MembershipRole } from "@ros/contracts";
+import { applications, approvalRequests, assessments, candidates, companies, events, interviewParticipants, interviews, postings, recruiterEscalations, roles, screens, type Tx } from "@ros/db";
 
 const CHANNEL_NAME: Record<string, string> = { careers_page: "your careers page", google_jobs: "Google for Jobs", email_in: "email-in capture", linkedin_basic: "LinkedIn", indeed: "Indeed", ziprecruiter: "ZipRecruiter" };
 
 export type BriefCard = {
-  kind: "new_applicants" | "needs_review" | "decision" | "posting_action" | "escalation" | "stuck" | "screening" | "empty";
+  kind: "new_applicants" | "needs_review" | "decision" | "posting_action" | "escalation" | "stuck" | "screening" | "interviews" | "empty";
   title: string;
   body: string;
   roleId?: string;
@@ -15,33 +16,48 @@ export type BriefCard = {
   actions: Array<{ label: string; method: "GET" | "POST"; path: string; body?: Record<string, unknown> }>;
 };
 
+export type Brief = { generatedAt: string; cards: BriefCard[]; summary: string };
+
+/** Who is reading the brief. An interviewer sees only their own interviews; every other role sees the company's day. */
+export type BriefViewer = { userId: string; role: MembershipRole };
+
 /**
  * The morning brief, Slice 1: deterministic, from the system of record. The orchestrator agent replaces the
  * prose in a later slice; the sections and actions stay the same.
  */
-export async function composeBrief(tx: Tx, companyId: string): Promise<{ generatedAt: string; cards: BriefCard[]; summary: string }> {
+export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefViewer): Promise<Brief> {
+  if (viewer?.role === "interviewer") return interviewerBrief(tx, companyId, viewer);
   const since = new Date(Date.now() - 24 * 3600_000).toISOString();
   const cards: BriefCard[] = [];
+  // The after-interview cards ask for a decision or an approval, so they go only to the roles that can give one (HR cannot). An unknown viewer is treated as the owner.
+  const afterInterview = { decides: !viewer || can(viewer.role, "interview.decide"), requests: !viewer || can(viewer.role, "interview.request") };
   const openRoles = await tx.select().from(roles).where(and(eq(roles.companyId, companyId), inArray(roles.status, ["open", "paused", "pending_approval"])));
 
   const pending = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, companyId), eq(approvalRequests.status, "pending"))).orderBy(desc(approvalRequests.createdAt));
   for (const p of pending) {
     const role = openRoles.find((r) => r.id === p.roleId);
     if (p.actionType === "role_packet.approve") {
-      cards.push({ kind: "decision", title: `Approve the role: ${role?.title ?? "new role"}`, body: p.rationale ?? "Review the role packet and approve it to start posting.", roleId: p.roleId ?? undefined, approvalRequestId: p.id, actions: [{ label: "Review and approve", method: "GET", path: `/roles/${p.roleId}` }] });
+      // A version proposed while the role runs is a different decision from opening a new role: the card says which.
+      const proposal = p.proposal as { version?: number; editWhileOpen?: boolean };
+      const editWhileOpen = !!proposal.editWhileOpen && role?.status !== "pending_approval";
+      cards.push({ kind: "decision", title: editWhileOpen ? `Approve packet v${proposal.version ?? "?"} of ${role?.title ?? "the role"}` : `Approve the role: ${role?.title ?? "new role"}`, body: p.rationale ?? (editWhileOpen ? "The role keeps running on its approved version until you decide." : "Review the role packet and approve it to start posting."), roleId: p.roleId ?? undefined, approvalRequestId: p.id, actions: [{ label: editWhileOpen ? "Review the change" : "Review and approve", method: "GET", path: `/roles/${p.roleId}` }] });
     } else if (p.actionType === "application.invite_screen" || p.actionType === "application.recommend_interview") {
       const verb = p.actionType === "application.invite_screen" ? "Invite to a screen" : "Interview";
-      cards.push({ kind: "decision", title: `${verb}? ${role?.title ?? ""}`.trim(), body: p.rationale ?? "", roleId: p.roleId ?? undefined, applicationId: p.applicationId ?? undefined, approvalRequestId: p.id, actions: [{ label: `Yes, ${verb.toLowerCase()}`, method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "approve" } }, { label: "Review first", method: "GET", path: `/roles/${p.roleId}/talent` }] });
+      cards.push({ kind: "decision", title: `${verb}? ${role?.title ?? ""}`.trim(), body: p.rationale ?? "", roleId: p.roleId ?? undefined, applicationId: p.applicationId ?? undefined, approvalRequestId: p.id, actions: [{ label: `Yes, ${verb.toLowerCase()}`, method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "approve" } }, { label: "Review first", method: "GET", path: p.applicationId ? `/roles/${p.roleId}/talent?open=${p.applicationId}` : `/roles/${p.roleId}/talent` }] });
     } else {
-      cards.push({ kind: "decision", title: `Decision needed: ${p.actionType.replace(/[._]/g, " ")}`, body: p.rationale ?? "", roleId: p.roleId ?? undefined, applicationId: p.applicationId ?? undefined, approvalRequestId: p.id, actions: [{ label: "Decide", method: "POST", path: `/api/v1/approvals/${p.id}/decide` }] });
+      // Any other approval: the decide route needs a decision in the body, so the card posts one, and links to the page the request is about.
+      const where = p.applicationId ? `/roles/${p.roleId}/talent?open=${p.applicationId}` : p.roleId ? `/roles/${p.roleId}` : null;
+      cards.push({ kind: "decision", title: `Decision needed: ${p.actionType.replace(/[._]/g, " ")}`, body: p.rationale ?? "", roleId: p.roleId ?? undefined, applicationId: p.applicationId ?? undefined, approvalRequestId: p.id, actions: [{ label: "Approve", method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "approve" } }, { label: "Decline", method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "reject" } }, ...(where ? [{ label: "Review first", method: "GET" as const, path: where }] : [])] });
     }
   }
 
   for (const role of openRoles.filter((r) => r.status === "open")) {
     const apps = await tx.select().from(applications).where(and(eq(applications.roleId, role.id)));
     const fresh = apps.filter((a) => a.createdAt >= since);
-    const waiting = apps.filter((a) => ownerGroup(a.stage) === "waiting_on_you" || a.stage === "eligible");
+    // Candidates whose interview is over get a card of their own below, so they are not counted here a second time.
+    const waiting = apps.filter((a) => (ownerGroup(a.stage) === "waiting_on_you" && a.stage !== "interview_complete") || a.stage === "eligible");
     const ineligible = apps.filter((a) => a.stage === "ineligible");
+    for (const card of await afterInterviewCards(tx, role, apps.filter((a) => a.stage === "interview_complete"), afterInterview)) cards.push(card);
     if (fresh.length) {
       cards.push({ kind: "new_applicants", title: `${fresh.length} ${fresh.length === 1 ? "person" : "people"} applied to ${role.title} since yesterday`, body: waiting.length ? `${waiting.length} ${waiting.length === 1 ? "is" : "are"} ready for your review.` : "They are being acknowledged and checked for eligibility.", roleId: role.id, actions: [{ label: "See applicants", method: "GET", path: `/roles/${role.id}/talent` }] });
     }
@@ -102,6 +118,77 @@ export async function composeBrief(tx: Tx, companyId: string): Promise<{ generat
   const recent = await tx.select({ type: events.type, actor: events.actor }).from(events).where(and(eq(events.companyId, companyId), gte(events.occurredAt, since)));
   const handled = recent.filter((e) => AUTOMATED.has(e.type) && (e.actor.kind === "system" || e.actor.kind === "agent")).length;
   const summary = `${needsMe} ${needsMe === 1 ? "thing needs" : "things need"} you · ${strongWaiting} strong ${strongWaiting === 1 ? "candidate" : "candidates"} ready · ${atRisk} at risk · ${handled} handled for you since yesterday.`;
+  return { generatedAt: new Date().toISOString(), cards, summary };
+}
+
+const whenIn = (iso: string, timeZone: string) => new Date(iso).toLocaleString("en-US", { timeZone, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+
+/**
+ * "Decide after the interview": one card per candidate whose interview is over and whose decision nobody has recorded
+ * (the newest finished, undecided interview names the round and when it happened). A candidate already sent to the
+ * next round, with no new interview in motion yet, is reminded to have that round approved instead. `who` says which of
+ * the two the viewer may act on; a card the viewer could not act on is not shown to them.
+ */
+async function afterInterviewCards(tx: Tx, role: { id: string; title: string }, apps: Array<{ id: string; candidateId: string; companyId: string }>, who: { decides: boolean; requests: boolean }): Promise<BriefCard[]> {
+  if (!apps.length || (!who.decides && !who.requests)) return [];
+  const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, apps[0].companyId)).limit(1);
+  const tz = company?.timezone ?? "UTC";
+  const ivs = await tx.select({ id: interviews.id, applicationId: interviews.applicationId, title: interviews.title, status: interviews.status, outcome: interviews.outcome, decision: interviews.decision, startsAt: interviews.startsAt, createdAt: interviews.createdAt }).from(interviews).where(inArray(interviews.applicationId, apps.map((a) => a.id))).orderBy(desc(interviews.createdAt));
+  const names = await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, apps.map((a) => a.candidateId)));
+  const out: BriefCard[] = [];
+  for (const app of apps) {
+    const n = names.find((x) => x.id === app.candidateId);
+    const name = `${n?.firstName ?? ""} ${n?.lastName ?? ""}`.trim() || "A candidate";
+    const mine = ivs.filter((i) => i.applicationId === app.id);
+    if (mine.some((i) => ["proposed", "scheduling", "scheduled"].includes(i.status))) continue; // the next interview is already in motion
+    const open = `/roles/${role.id}/talent?open=${app.id}`;
+    const undecided = mine.find((i) => ["completed", "no_show"].includes(i.status) && !i.decision);
+    if (undecided) {
+      if (!who.decides) continue;
+      const attendance = undecided.outcome === "no_show_candidate" ? " (the candidate did not attend)" : undecided.outcome === "no_show_interviewer" ? " (the interviewer did not attend)" : "";
+      out.push({ kind: "decision", title: `Decide after the interview: ${name}`, body: `${undecided.title} for ${role.title}${undecided.startsAt ? `, ${whenIn(undecided.startsAt, tz)}` : ""}${attendance}. Next round, finalist, or not moving forward: your call, recorded with your reason.`, roleId: role.id, applicationId: app.id, actions: [{ label: "Decide", method: "GET", path: open }] });
+      continue;
+    }
+    const latest = mine.find((i) => ["completed", "no_show"].includes(i.status));
+    if (who.requests && latest?.decision === "next_round") out.push({ kind: "decision", title: `Set up the next round: ${name}`, body: `You chose the next round after ${latest.title}. Approve it from the candidate's page and times go out to them.`, roleId: role.id, applicationId: app.id, actions: [{ label: "Open the candidate", method: "GET", path: open }] });
+  }
+  return out;
+}
+
+/**
+ * An interviewer's Today: their own interviews and nothing else, so no candidate they are not meeting is named. Booked
+ * times first, then rounds still being scheduled, then any interview of theirs that ended without a record of whether it
+ * took place.
+ */
+async function interviewerBrief(tx: Tx, companyId: string, viewer: BriefViewer): Promise<Brief> {
+  const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId)).limit(1);
+  const tz = company?.timezone ?? "UTC";
+  const rows = await tx
+    .select({ id: interviews.id, title: interviews.title, status: interviews.status, outcome: interviews.outcome, startsAt: interviews.startsAt, candidateId: applications.candidateId, roleId: applications.roleId })
+    .from(interviews)
+    .innerJoin(interviewParticipants, eq(interviewParticipants.interviewId, interviews.id))
+    .innerJoin(applications, eq(applications.id, interviews.applicationId))
+    .where(and(eq(interviews.companyId, companyId), eq(interviewParticipants.userId, viewer.userId), inArray(interviews.status, ["proposed", "scheduling", "scheduled", "completed"])));
+  const names = rows.length ? await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, [...new Set(rows.map((r) => r.candidateId))])) : [];
+  const titles = rows.length ? await tx.select({ id: roles.id, title: roles.title }).from(roles).where(inArray(roles.id, [...new Set(rows.map((r) => r.roleId))])) : [];
+  const nameOf = (candidateId: string) => { const n = names.find((x) => x.id === candidateId); return `${n?.firstName ?? ""} ${n?.lastName ?? ""}`.trim() || "A candidate"; };
+  const roleOf = (roleId: string) => titles.find((r) => r.id === roleId)?.title ?? "a role";
+  const upcoming = rows.filter((r) => r.status === "scheduled").sort((a, b) => (a.startsAt ?? "").localeCompare(b.startsAt ?? ""));
+  const offering = rows.filter((r) => r.status === "proposed" || r.status === "scheduling");
+  const toRecord = rows.filter((r) => r.status === "completed" && !r.outcome);
+  const cards: BriefCard[] = [];
+  if (upcoming.length || offering.length) {
+    const lines = [
+      ...upcoming.map((r) => `${nameOf(r.candidateId)}: ${r.title} for ${roleOf(r.roleId)}${r.startsAt ? `, ${whenIn(r.startsAt, tz)} (${tz})` : ""}`),
+      ...offering.map((r) => `${nameOf(r.candidateId)}: ${r.title} for ${roleOf(r.roleId)}, times being offered to the candidate`),
+    ];
+    cards.push({ kind: "interviews", title: upcoming.length ? `${upcoming.length} ${upcoming.length === 1 ? "interview" : "interviews"} coming up` : `${offering.length} ${offering.length === 1 ? "interview" : "interviews"} being scheduled`, body: lines.join("\n"), actions: [{ label: "Open interviews", method: "GET", path: "/interviews" }] });
+  }
+  for (const r of toRecord) {
+    cards.push({ kind: "interviews", title: `Did the interview with ${nameOf(r.candidateId)} take place?`, body: `${r.title} for ${roleOf(r.roleId)}${r.startsAt ? `, ${whenIn(r.startsAt, tz)}` : ""}. Tell us if it happened or someone did not show; it keeps the record straight.`, roleId: r.roleId, actions: [{ label: "Record what happened", method: "GET", path: `/interviews/${r.id}` }] });
+  }
+  if (!cards.length) cards.push({ kind: "empty", title: "Nothing needs you right now", body: "Your interviews appear here as soon as you are put on one. Keep your calendar or declared hours up to date in Setup so times can be offered.", actions: [{ label: "My availability", method: "GET", path: "/setup" }] });
+  const summary = `${upcoming.length} ${upcoming.length === 1 ? "interview" : "interviews"} coming up · ${offering.length} being scheduled · ${toRecord.length} to record.`;
   return { generatedAt: new Date().toISOString(), cards, summary };
 }
 

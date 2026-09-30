@@ -11,6 +11,8 @@ import { companyRoutes } from "./routes/companies";
 import { intakeRoutes } from "./routes/intake";
 import { applicationRoutes, roleRoutes } from "./routes/roles";
 import { postingRoutes } from "./routes/postings";
+import { rolePacketRoutes } from "./routes/role-packets";
+import { reportRoutes } from "./routes/reports";
 import { approvalRoutes, briefRoutes, escalationRoutes, eventRoutes } from "./routes/approvals-escalations-events";
 import { adminRoutes } from "./routes/admin";
 import { policyRoutes } from "./routes/policies";
@@ -89,6 +91,8 @@ export function createApp(container: Container) {
   app.route("/api/v1/intake", intakeRoutes);
   app.route("/api/v1/roles", roleRoutes);
   app.route("/api/v1/roles", postingRoutes);
+  app.route("/api/v1/roles", rolePacketRoutes);
+  app.route("/api/v1/roles", reportRoutes);
   app.route("/api/v1/applications", applicationRoutes);
   app.route("/api/v1/approvals", approvalRoutes);
   app.route("/api/v1/escalations", escalationRoutes);

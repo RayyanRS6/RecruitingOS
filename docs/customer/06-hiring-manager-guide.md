@@ -31,15 +31,19 @@ If you ask for something the law does not allow as a hiring criterion, the assis
 
 ## 3. Reviewing and editing the role packet
 
-The role page shows the title, location, type and pay at the top, then five tabs.
+The role page shows the title, location, type, work model and pay at the top, then these tabs.
 
-**Overview.** The public job description, the pay (range, ceiling, whether it is shown to candidates, and where the numbers came from), why and when you are hiring, and where candidates will come from.
+**Overview.** The public job description, the pay (range, ceiling, whether it is shown to candidates, and where the numbers came from), why and when you are hiring, the schedule and work model (on site, hybrid or remote), **What matters to you** (the deal-breakers and what failure looks like, in your words from the conversation, and who makes the final decision), and where candidates will come from.
 
-**Requirements.** The must-haves with the reason for each (at most six), nice-to-haves, and **Eligibility questions (the only automatic holds)**. Candidates answer these when they apply. A "no" on a question marked **required** holds the application for your decision. Nothing is ever declined automatically. Below that, **Notices candidates see** lists the notices shown for the states involved.
+**Requirements.** The must-haves with the reason for each (at most six) and **Evidenced in**: where each one is checked (résumé, application, screen, interview; a must-have marked "screen" is asked about in the screening conversation), nice-to-haves, and **Eligibility questions (the only automatic holds)**. Candidates answer these when they apply. A "no" on a question marked **required** holds the application for your decision. Nothing is ever declined automatically. Below that, **Notices candidates see** lists the notices shown for the states involved.
 
-**How we'll evaluate.** **What we look for** (the competencies, with a weight and where each is assessed), **Screening questions** with the time they take, the **Interview plan** (one to five rounds, each with a purpose, length and format), and **How candidates are messaged**, the disclosure every message carries.
+**How we'll evaluate.** **What we look for** (the competencies, with a weight and where each is assessed), **Screening questions** with the time they take, the **Interview rounds** by name, and **How candidates are messaged**, the disclosure every message carries.
+
+**Interview plan.** The rounds (one to five), each with its purpose, length and format, and who interviews in it. Next to each person: whether times can be offered to them yet (they have connected a calendar or declared their hours) or not. **Assign interviewers** (or **Change**) picks people from your team for that round; saving is a new packet version called "Interviewers assigned". Assign people before the first interview is approved, so times can go out at once.
 
 **Posting.** Where the job will appear once approved (section 5).
+
+**Activity.** Everything that happened on the role, newest first, in plain words: drafted, approved, opened, posted, applications arriving, decisions. Candidates are not named here; Talent has the people.
 
 **History.** Every version of the packet, who made it and why. Nothing is overwritten.
 
@@ -48,7 +52,9 @@ The role page shows the title, location, type and pay at the top, then five tabs
 - **Public description**
 - **Pay minimum** and **Pay maximum**
 - **Ceiling (the most you would pay)**: offers never go above this without a new approval
-- **Must-haves, one per line (max six)**
+- **Work model**: on site, hybrid or remote; shown on the role and the job page
+- **Must-haves (up to six)**: one box per must-have with **What they must bring**, **Why it matters**, and **Where we check it** (résumé, application, screen, interview; pick at least one). **Add a must-have** adds a box; **Remove** takes one away. Existing must-haves keep their identity, so earlier assessments still line up
+- **Nice-to-haves (up to ten)**: the same boxes; never a reason to hold anyone
 
 Write a line under **What changed and why** and press **Save as a new version**. The old version stays in History. **Everything (advanced)** exposes the whole packet for someone technical; you will not normally need it. If the editor refuses a save, tell ITS and we make the change with you.
 
@@ -62,9 +68,11 @@ Things to check before you approve:
 
 ## 4. Approval
 
-The card **Approve this role packet** lists any assumptions the assistant made. Press **Approve and post**. The role becomes **Open**, the careers page and job page go live, and the Posting tab fills in. Owners, admins and hiring managers can approve. Where your team has two people, the person who did not run the intake should be the one who approves.
+The card **Approve this role packet** lists any assumptions the assistant made and says who can decide. Press **Approve and post**. The role becomes **Open**, the careers page and job page go live, and the Posting tab fills in. Owners, admins and hiring managers can approve, with two rules: you cannot approve a role you started or a version you wrote yourself, unless you are the company's only owner (the card tells you so); and if the packet names a decision maker who is on your team, the approval is theirs, though an owner can also decide. Sending a packet back follows the same rule: the named decision maker, or an owner.
 
-Editing after approval creates a new version. Candidates who already applied are assessed against the version they applied to.
+If something should change first, press **Send back with a note** and say what. The role becomes a draft again and its page shows **Sent back** with your note. Whoever edits it presses **Request approval again** when it is ready; every edit is kept as a version. An approval nobody decides within 14 days goes back to a draft the same way.
+
+Editing after approval creates a new version. If you can approve, your edit takes effect at once; if you can edit but not approve (a recruiter, for instance), the edit waits on the approval card as "Approve packet v3 of ..." while the role keeps running on its current version. Candidates who already applied are assessed against the version they applied to.
 
 ## 5. The Posting tab and the manual posting steps
 

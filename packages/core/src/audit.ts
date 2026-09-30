@@ -78,7 +78,9 @@ export type AuditAction =
   | "invitation.sent"
   | "invitation.resent"
   | "invitation.revoked"
-  | "invitation.accepted";
+  | "invitation.accepted"
+  /** The role report's applicant list or figures left as a file (docs/spec/21 section 7, P1): who, which role, how many rows. */
+  | "report.exported";
 
 /** Privileged and access actions. Distinct from domain events: this answers "who looked at what, and why." */
 export async function audit(

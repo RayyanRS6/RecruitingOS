@@ -13,6 +13,7 @@ import { adminAlerts } from "@ros/db";
 import { and } from "drizzle-orm";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
+import { customerReport } from "../services/role-report";
 
 /** Platform admin console API (docs/16). Every read is audited with the reason the admin supplies. */
 export const adminRoutes = new Hono<Vars>();
@@ -42,6 +43,25 @@ adminRoutes.get("/customers", async (c) => {
     lastActivityAt: lastActivity.get(co.id)?.at ?? null,
     escalations: Number(escalationCounts.get(co.id)?.n ?? 0),
   })));
+});
+
+/**
+ * The customer's report (docs/spec/21 section 7, P1): the ten figures of the role report over every role of the
+ * company, plus one line per role. Counts only; never a candidate's name. The reason header is audited by the
+ * middleware above, like every other read here.
+ */
+adminRoutes.get("/customers/:id/report", async (c) => {
+  const container = c.get("container");
+  const companyId = c.req.param("id") ?? "";
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(companyId)) throw new HttpError(404, "not_found", "Company not found.");
+  const result = await withPlatform(container.db, async (tx) => {
+    const [co] = await tx.select({ id: companies.id, name: companies.name, status: companies.status, planKey: companies.planKey }).from(companies).where(eq(companies.id, companyId)).limit(1);
+    if (!co) return null;
+    const { report, roles: roleLines } = await customerReport(tx, { companyId, now: container.engine.clock() });
+    return { company: co, roles: roleLines, report };
+  });
+  if (!result) throw new HttpError(404, "not_found", "Company not found.");
+  return c.json(result);
 });
 
 adminRoutes.get("/runs", async (c) => {

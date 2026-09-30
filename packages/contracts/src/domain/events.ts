@@ -10,6 +10,8 @@ export const EventType = z.enum([
   "intake.started", "intake.turn_completed", "intake.compiled", "intake.abandoned",
   "role.created", "role_packet.proposed", "role_packet.approved", "role_packet.edited",
   "role.approved", "role.opened", "role.paused", "role.resumed", "role.filled", "role.closed",
+  // A packet approval was rejected or ran out of time (the role goes back to draft), or was replaced by a newer version.
+  "role.sent_back", "approval.cancelled",
   "role.applications_closed", "role.applications_reopened", "role.volume_high",
   "posting.requested", "posting.published", "posting.awaiting_verification", "posting.manual_action_required", "posting.not_connected", "posting.failed", "posting.expired", "posting.spend_recorded",
   // Job distribution (docs/spec/20): one event per posting state, plus the closure checklist and a failed check.

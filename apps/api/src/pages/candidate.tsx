@@ -683,7 +683,7 @@ candidatePages.post("/c/status/:token/withdraw", rateLimit(POLICIES.withdraw), a
       }
       const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
       const [role] = await tx.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
-      await notify(tx, { companyId: app.companyId, kind: "candidate.withdrawn", title: `${cand.firstName} ${cand.lastName} withdrew`, body: `They withdrew from ${role.title} using the link on their status page.`, action: { label: "See talent", href: `/roles/${app.roleId}/talent` } });
+      await notify(tx, { companyId: app.companyId, kind: "candidate.withdrawn", title: `${cand.firstName} ${cand.lastName} withdrew`, body: `They withdrew from ${role.title} using the link on their status page.`, action: { label: "See talent", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
     });
     // the withdrawal is also a recorded request, fulfilled at once, so the audit trail and the confirmation are the same as for any other request (platform role: the tenant role cannot write that table)
     await withPlatform(container.db, async (tx) => {

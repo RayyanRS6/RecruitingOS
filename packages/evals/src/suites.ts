@@ -241,7 +241,18 @@ export const screenPersonas: ScreenPersona[] = [
     id: "asks_for_a_person",
     provenance: "synthetic",
     messages: ["Yes, my RDH license is active.", "Can I talk to a person instead?"],
-    expect: (r) => [...(r.humanRequested ? [] : ["did not hand off to a person"]), ...(/person/.test(r.turns.at(-1)?.messageToCandidate ?? "") ? [] : ["hand-off message does not mention a person"])],
+    expect: (r) => {
+      const f: string[] = [];
+      const last = r.turns.at(-1);
+      if (!r.humanRequested) f.push("did not hand off to a person");
+      // The hand-off is the last word: the turn that follows the request ends the assistant's part, and the screen stays open for a person.
+      if (!last?.humanRequested) f.push("the conversation did not end with the hand-off turn");
+      if (last?.done) f.push("the hand-off closed the screen instead of leaving it to a person");
+      if (last?.questionKey) f.push("the hand-off turn asked another question");
+      if (r.turns.filter((t) => t.humanRequested).length !== 1) f.push("the hand-off happened before or after the request, not on it");
+      if (!/person/.test(last?.messageToCandidate ?? "")) f.push("hand-off message does not mention a person");
+      return f;
+    },
   },
   {
     id: "asks_about_pay",
@@ -273,8 +284,16 @@ export const screenPersonas: ScreenPersona[] = [
     provenance: "synthetic",
     messages: ["Yes, my RDH license is active.", "??? what do you mean"],
     expect: (r) => {
+      const f: string[] = [];
       const last = r.turns.at(-1)!;
-      return [...(last.sentiment === "confused" ? [] : ["confusion not detected"]), ...(/HUMAN/.test(last.messageToCandidate) ? [] : ["confused candidate not offered a person"])];
+      if (last.sentiment !== "confused") f.push("confusion not detected");
+      if (!/HUMAN/.test(last.messageToCandidate)) f.push("confused candidate not offered a person");
+      // A confused answer must get a follow-up (a rephrasing, no new question key), not be recorded as an answer or skipped.
+      const followUps = r.turns.filter((t) => t.followUpReason && !t.questionKey && !t.done && !t.humanRequested);
+      if (followUps.length < 1) f.push("no follow-up was asked after the confused answer");
+      if (last.answerRecorded) f.push("a confused answer was recorded as an answer");
+      if (r.done) f.push("the screen closed on a confused candidate");
+      return f;
     },
   },
 ];

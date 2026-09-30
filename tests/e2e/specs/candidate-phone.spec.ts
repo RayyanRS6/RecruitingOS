@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { createCompanyThroughTheForm, expectAccessible, signIn } from "./helpers";
+import { createCompanyThroughTheForm, expectAccessible, signIn, skipWithoutFakeSignIn } from "./helpers";
 
 /**
  * The candidate's own journey on a phone (docs/spec/20 items 2 and 3; docs/readiness/20 section D): the job page, the
@@ -28,6 +28,7 @@ async function seedOpenRole(request: APIRequestContext, base: string) {
 }
 
 test.describe("candidate journey on a phone", () => {
+  skipWithoutFakeSignIn();
   test("job page, application with the acknowledgment, screening conversation and scheduling, all accessible on a phone", async ({ page, baseURL }) => {
     test.setTimeout(300_000);
     await signIn(page, { email: `owner+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });

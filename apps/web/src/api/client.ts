@@ -35,21 +35,37 @@ export type Brief = { generatedAt: string; cards: BriefCard[]; summary: string }
 export type RoleSummary = { id: string; title: string; status: string; openedAt: string | null; counts: Record<string, number> & { total: number }; needsYou: number; daysOpen: number | null };
 /** One role on one channel, with the nine-state fields (docs/spec/20). `status` is one of the nine posting states; `stateLabel` on PostingView is the owner's word for it. */
 export type Posting = { id: string; channel: string; status: string; externalUrl: string | null; intakeToken: string | null; instructions: string | null; steps: string[]; error: string | null; publishedAt: string | null; publicUrlRecordedAt: string | null; verifiedAt: string | null; verifiedBy: { kind: string; id: string; name?: string } | null; verificationNote: string | null; verificationError: string | null; verificationAttempts: number; pausedAt: string | null; closedAt: string | null; closureRequired: boolean; closureConfirmedAt: string | null; closureConfirmedBy: { kind: string; id: string; name?: string } | null };
-export type RoleDetail = RoleSummary & { currentPacketVersion: number | null; currentPacket: { version: number; status: string; packet: RolePacket } | null; packetVersions: Array<{ version: number; status: string; source: string; changeSummary: string | null; createdAt: string; createdBy: { kind: string; name?: string } }>; postings: Posting[]; boardsStillUp: string[]; acceptingApplications: boolean; applicationsClosedAt: string | null; applicationsClosedReason: string | null; volumeAlertPerDay: number | null; pendingApprovals: Array<{ id: string; actionType: string; rationale: string | null }>; counts: Record<string, number> };
+/** A team member as the decision maker of a role packet (matched from the packet's preferences to an active approver). */
+export type DecisionMaker = { userId: string; name: string | null; email: string };
+/** The packet approval on a role: what waits, what the signed-in person may do about it, and how a sent-back role got there. */
+export type PacketApproval = {
+  pending: { id: string; version: number; rationale: string | null; requestedBy: { kind: string; id: string; name?: string }; requiredRoles: string[]; requiredUserIds: string[]; decisionMaker: DecisionMaker | null; createdAt: string; expiresAt: string | null; editWhileOpen: boolean; viewer: { mayDecide: boolean; reason: string | null } } | null;
+  latest: { id: string; status: string; version: number; decisionNote: string | null; decidedAt: string | null; decidedBy: { id: string; name: string } | null } | null;
+};
+export type RoleDetail = RoleSummary & { currentPacketVersion: number | null; currentPacket: { version: number; status: string; packet: RolePacket } | null; proposedPacket: { version: number; status: string; changeSummary: string | null; createdAt: string; createdBy: { kind: string; id: string; name?: string }; packet: RolePacket } | null; packetVersions: Array<{ version: number; status: string; source: string; changeSummary: string | null; createdAt: string; createdBy: { kind: string; name?: string } }>; postings: Posting[]; boardsStillUp: string[]; acceptingApplications: boolean; applicationsClosedAt: string | null; applicationsClosedReason: string | null; volumeAlertPerDay: number | null; pendingApprovals: Array<{ id: string; actionType: string; rationale: string | null; proposal?: Record<string, unknown> }>; counts: Record<string, number>; packetApproval: PacketApproval; decisionMaker: DecisionMaker | null };
+/** Where a requirement is checked; the contract's `evidencedBy` values. */
+export type EvidenceSource = "resume" | "application" | "screen" | "interview";
+export type Requirement = { key: string; text: string; rationale: string; evidencedBy: EvidenceSource[] };
 export type RolePacket = {
-  identity: { title: string; locations: Array<{ city?: string; region?: string }>; employmentType: string; schedule?: string; remotePolicy: string };
+  identity: { title: string; locations: Array<{ city?: string; region?: string }>; employmentType: string; schedule?: string; remotePolicy: "onsite" | "hybrid" | "remote" };
   business: { reason: string; reasonDetail?: string; timeline: { targetStartDate?: string; urgency: string } };
   compensation: { basis: string; min: number; mid?: number; max: number; ceiling: number; discloseRange: boolean; benefitsSummary?: string; sources: Array<{ name: string; detail?: string }>; ownerStated: boolean };
   description: { publicJobDescription: string; internalNotes?: string };
-  requirements: { mustHaves: Array<{ key: string; text: string; rationale: string }>; niceToHaves: Array<{ key: string; text: string; rationale: string }>; eligibility: Array<{ key: string; type: string; question: string; rationale: string; knockout: boolean }> };
+  requirements: { mustHaves: Requirement[]; niceToHaves: Requirement[]; eligibility: Array<{ key: string; type: string; question: string; rationale: string; knockout: boolean }> };
   competencies: Array<{ key: string; name: string; definition: string; weight: number; evaluatedIn: string }>;
   screening: { questions: Array<{ key: string; question: string; kind: string }>; maxMinutes: number };
-  interviews: { plan: Array<{ key: string; title: string; purpose: string; durationMinutes: number; format: string; interviewerRoles: string[]; competencyKeys: string[] }> };
+  interviews: { plan: Array<{ key: string; title: string; purpose: string; durationMinutes: number; format: string; interviewerUserIds: string[]; interviewerRoles: string[]; competencyKeys: string[] }> };
   communication: { disclosureText: string; humanAlternativeText: string; signature: string };
   sourcing: { summary: string; channels: string[]; referralPrompt?: string };
   compliance: { jurisdictions: string[]; notices: string[] };
+  preferences: { decisionMakerUserId?: string; decisionMakerName?: string; dealBreakersInTheirWords: string[]; whatFailureLooksLike?: string; schedulingWindows: string[]; interviewStyle?: string };
   provenance: { assumptions: string[]; sources: string[]; playbookId?: string };
 };
+/** GET and PATCH /roles/:id/interview-plan: the rounds with their interviewers by name, and the team they can be picked from. */
+export type InterviewerView = { userId: string; name: string; email: string; role: string; schedulable: boolean };
+export type InterviewPlanView = { version: number; status: string; rounds: Array<{ key: string; title: string; purpose: string; durationMinutes: number; format: string; interviewerRoles: string[]; interviewers: InterviewerView[] }>; team: InterviewerView[]; outcome?: "approved_current" | "proposed_pending_approval" | "proposed" };
+/** GET /roles/:id/timeline: one event about the role, newest first. */
+export type RoleEvent = { id: number; type: string; occurredAt: string; actor: { kind: string; id: string; name?: string }; subjectType: string; subjectId: string; payload: Record<string, unknown> };
 export type ApplicationSummary = { id: string; stage: string; stageLabel: string; group: string; source: string; createdAt: string; candidate: { id: string; name: string; email: string | null; phone: string | null; locationText: string | null } | null; eligibility: { passed: boolean; failedRules: Array<{ key: string; question: string; reason: string }>; unverifiable: Array<{ key: string; question: string }> } | null; extractionSummary: { positions: string[]; licenses: string[]; years: number | null; anomalies: Array<{ kind: string; detail: string }> } | null; assessment: { overall: string; confidence: string; summary: string; strengths: Array<{ claim: string; evidence: { source: string } }>; concerns: Array<{ claim: string; evidence: { source: string } }> } | null };
 export type Finding = { claim: string; evidence: { source: string; quote?: string } };
 export type AssessmentResult = {

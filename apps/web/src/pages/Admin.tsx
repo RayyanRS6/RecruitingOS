@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, ErrorState, Field, Segmented, Sheet, Skeleton, Table } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 import { toast } from "../toast";
+import { CustomerReportSheet } from "./AdminCustomerReport";
 
 type Tab = "customers" | "runs" | "ai" | "failures" | "costs" | "queue" | "calendar" | "privacy" | "admins" | "outcomes";
 const reason = { headers: { "x-admin-reason": "admin console" } };
@@ -23,21 +24,27 @@ export function Admin() {
 
 function Customers() {
   const q = useQuery({ queryKey: ["admin", "customers"], queryFn: () => api.get<Array<{ id: string; name: string; vertical: string; planKey: string; status: string; roles: number; applications: number; aiCostUsd: number; lastActivityAt: string | null; escalations: number; createdAt: string }>>("/api/v1/admin/customers", reason) });
+  // The customer's report (the ten role-report figures over every role) opens in a sheet; the read is audited like every other.
+  const [reportFor, setReportFor] = useState<{ id: string; name: string } | null>(null);
   if (q.isLoading) return <Skeleton lines={4} />;
   if (q.error) return <ErrorState message="Could not load customers." onRetry={() => q.refetch()} />;
   return (
-    <Table head={["Company", "Vertical", "Plan", "Roles", "Applicants", "AI cost", "Escalations", "Last activity", "Churn signal"]}>
-      {q.data!.map((c) => {
-        const idle = c.lastActivityAt ? (Date.now() - Date.parse(c.lastActivityAt)) / 86_400_000 : 999;
-        return (
-          <tr key={c.id}>
-            <td>{c.name}</td><td>{c.vertical}</td><td>{c.planKey} · {c.status}</td><td>{c.roles}</td><td>{c.applications}</td><td>${c.aiCostUsd.toFixed(4)}</td><td>{c.escalations}</td>
-            <td>{c.lastActivityAt ? new Date(c.lastActivityAt).toLocaleString() : "never"}</td>
-            <td>{idle > 14 ? <Chip tone="critical">no activity {Math.round(idle)}d</Chip> : idle > 7 ? <Chip tone="caution">quiet {Math.round(idle)}d</Chip> : <Chip tone="good">active</Chip>}</td>
-          </tr>
-        );
-      })}
-    </Table>
+    <>
+      <Table head={["Company", "Vertical", "Plan", "Roles", "Applicants", "AI cost", "Escalations", "Last activity", "Churn signal", ""]}>
+        {q.data!.map((c) => {
+          const idle = c.lastActivityAt ? (Date.now() - Date.parse(c.lastActivityAt)) / 86_400_000 : 999;
+          return (
+            <tr key={c.id}>
+              <td>{c.name}</td><td>{c.vertical}</td><td>{c.planKey} · {c.status}</td><td>{c.roles}</td><td>{c.applications}</td><td>${c.aiCostUsd.toFixed(4)}</td><td>{c.escalations}</td>
+              <td>{c.lastActivityAt ? new Date(c.lastActivityAt).toLocaleString() : "never"}</td>
+              <td>{idle > 14 ? <Chip tone="critical">no activity {Math.round(idle)}d</Chip> : idle > 7 ? <Chip tone="caution">quiet {Math.round(idle)}d</Chip> : <Chip tone="good">active</Chip>}</td>
+              <td><Button size="sm" variant="secondary" onClick={() => setReportFor({ id: c.id, name: c.name })}>Report</Button></td>
+            </tr>
+          );
+        })}
+      </Table>
+      {reportFor ? <CustomerReportSheet companyId={reportFor.id} companyName={reportFor.name} onClose={() => setReportFor(null)} /> : null}
+    </>
   );
 }
 

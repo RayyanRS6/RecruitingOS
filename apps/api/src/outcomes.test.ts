@@ -5,7 +5,7 @@ import { applications, auditRecords, events, hiringOutcomes, roles, users } from
 import type { FakeAnalyticsAdapter, FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAdmin, signInStaff } from "./test-helpers";
+import { signInAdmin, signInStaff, testContainerOptions } from "./test-helpers";
 
 /**
  * Founder instruction of 21 September 2026, item 4: people record hiring outcomes; the platform generates, approves and
@@ -50,7 +50,7 @@ describe("human-recorded hiring outcomes", () => {
   };
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", ITS_QUEUE_EMAIL: "queue@its.test" } });
+    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", ITS_QUEUE_EMAIL: "queue@its.test" }));
     app = createApp(container);
     owner = await signIn("owner@ledger.test");
     recruiter = await signInStaff(app, container, "sam@its.test", "its_recruiter", "Sam");

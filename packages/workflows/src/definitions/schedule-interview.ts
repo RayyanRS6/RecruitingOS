@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { computeSlots, createEscalation, emit, notify, slotStillFree, transition } from "@ros/core";
-import { applications, candidates, companies, interviews, rolePackets, roles } from "@ros/db";
+import { applications, candidates, companies, interviewParticipants, interviews, rolePackets, roles } from "@ros/db";
 import { constraintsFor, createInterviewEvents, participantsOf, queueCommunication, sendInterviewConfirmation, sendInterviewReminder, sendSlotsOffered, sendSlotsReminder } from "@ros/agents";
 import { randomToken } from "@ros/db";
 import type { StepContext, WorkflowDefinition } from "../types";
@@ -169,6 +169,8 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       const fresh = (await load(ctx))!;
       const { refs, meetingUrl } = await createInterviewEvents(ctx.q, ctx.services.integrations, { interview: fresh.iv, participants: fresh.participants, candidate: fresh.candidate, roleTitle: fresh.role.title, companyName: fresh.company.name, companyTimezone: fresh.company.timezone, actor: ctx.actor, appBaseUrl: ctx.services.env.appBaseUrl });
       await ctx.q.update(interviews).set({ status: "scheduled", calendarRefs: refs, meetingUrl: meetingUrl ?? fresh.iv.meetingUrl, scheduleTokenExpiresAt: new Date(Date.parse(slot.endsAt) + 86_400_000).toISOString() }).where(eq(interviews.id, b.iv.id));
+      // The interviewers were "invited" when the round was approved; a booked time confirms them (a reschedule invites them again).
+      await ctx.q.update(interviewParticipants).set({ status: "confirmed" }).where(eq(interviewParticipants.interviewId, b.iv.id));
       if (fresh.app.stage !== "interview_scheduled") await transition(ctx.q, { applicationId: b.app.id, companyId: ctx.companyId, to: "interview_scheduled", by: "system", actor: ctx.actor, reason: "interview booked", correlationId: ctx.run.id });
       await emit(ctx.q, { type: "interview.booked", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { slotId: slot.id, startsAt: slot.startsAt, endsAt: slot.endsAt, calendars: Object.keys(refs).length, attempt: ctx.state.attempt }, correlationId: ctx.run.id });
       return { kind: "next", step: "confirm" };
@@ -222,7 +224,7 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       if (b.app.stage === "interview_scheduled") await transition(ctx.q, { applicationId: b.app.id, companyId: ctx.companyId, to: "interview_complete", by: "system", actor: ctx.actor, reason: "interview ended", correlationId: ctx.run.id });
       await emit(ctx.q, { type: "interview.completed", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { attempt: ctx.state.attempt }, correlationId: ctx.run.id });
       await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.outcome", title: `Did the interview with ${b.candidate.firstName} ${b.candidate.lastName} take place?`, body: "Tell us if it happened or someone did not show; it keeps the record straight.", action: { label: "Record what happened", href: `/interviews/${b.iv.id}` }, userIds: b.participants.map((p) => p.userId) });
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.decision", title: `How did it go with ${b.candidate.firstName} ${b.candidate.lastName}?`, body: `${b.iv.title} is over. Next round, finalist, or not moving forward: your call, recorded with your reason.`, action: { label: "Decide", href: `/roles/${b.role.id}/talent` } });
+      await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.decision", title: `How did it go with ${b.candidate.firstName} ${b.candidate.lastName}?`, body: `${b.iv.title} is over. Next round, finalist, or not moving forward: your call, recorded with your reason.`, action: { label: "Decide", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
       return { kind: "complete" };
     },
   },

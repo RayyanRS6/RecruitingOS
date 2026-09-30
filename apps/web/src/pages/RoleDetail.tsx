@@ -3,15 +3,18 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "../nav";
-import { Alert, Button, Card, Chip, ErrorState, Field, Segmented, Sheet, Skeleton } from "@ros/ui";
+import { Button, Card, Chip, ErrorState, Field, Segmented, Skeleton } from "@ros/ui";
 import { formatPayRange } from "@ros/contracts";
 import { api, ApiError, type RoleDetail as RoleDetailT, type RolePacket } from "../api/client";
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
 import { AcceptingSwitch, ClosedBanner, PostingTab, StillUpAlert } from "./RolePosting";
+import { ActivityTab, InterviewPlanTab, PacketApprovalCard, PreferencesCard, RequirementList, workModelLabel } from "./RolePlan";
+import { EditPacket } from "./RoleEditor";
+import { ReportTab } from "./RoleReport";
 
-type Tab = "overview" | "requirements" | "evaluation" | "posting" | "history";
-const TABS: readonly Tab[] = ["overview", "requirements", "evaluation", "posting", "history"];
+type Tab = "overview" | "requirements" | "evaluation" | "plan" | "posting" | "activity" | "history" | "report";
+const TABS: readonly Tab[] = ["overview", "requirements", "evaluation", "plan", "posting", "activity", "history", "report"];
 /** `?tab=posting` opens the Posting tab straight from a notification or a brief card. */
 function tabFrom(value: string | null): Tab {
   return value && (TABS as readonly string[]).includes(value) ? (value as Tab) : "overview";
@@ -32,11 +35,6 @@ export function RoleDetail() {
   const pickTab = (next: Tab) => { setTab(next); if (wantedTab && wantedTab !== next) navigate(`/roles/${id}?tab=${next}`, { replace: true }); };
   const [editing, setEditing] = useState(false);
 
-  const approve = useMutation({
-    mutationFn: () => api.post(`/api/v1/roles/${id}/approve`, { version: role.data!.currentPacket!.version }),
-    onSuccess: async () => { toast("Approved. Posting now."); await qc.invalidateQueries({ queryKey: ["role", id] }); await qc.invalidateQueries({ queryKey: ["brief"] }); await qc.invalidateQueries({ queryKey: ["roles"] }); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not approve."),
-  });
   const status = useMutation({
     mutationFn: (action: "pause" | "resume") => api.post(`/api/v1/roles/${id}/${action}`, {}),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["role", id] }),
@@ -51,7 +49,6 @@ export function RoleDetail() {
   if (role.error || !role.data) return <ErrorState message="Could not load this role." onRetry={() => role.refetch()} />;
   const r = role.data;
   const p = r.currentPacket?.packet;
-  const pending = r.pendingApprovals.find((a) => a.actionType === "role_packet.approve");
 
   return (
     <div className="stack" style={{ gap: 18 }}>
@@ -59,7 +56,7 @@ export function RoleDetail() {
         <div>
           <p className="small muted"><Link to="/roles">Roles</Link> / {r.title}</p>
           <h1>{r.title}</h1>
-          <p>{p ? `${[p.identity.locations[0]?.city, p.identity.locations[0]?.region].filter(Boolean).join(", ")} · ${p.identity.employmentType.replace("_", " ")} · ${money(p)}` : "No packet yet."}</p>
+          <p>{p ? `${[p.identity.locations[0]?.city, p.identity.locations[0]?.region].filter(Boolean).join(", ")} · ${p.identity.employmentType.replace("_", " ")} · ${workModelLabel(p.identity.remotePolicy)} · ${money(p)}` : "No packet yet."}</p>
         </div>
         <div className="row">
           <AskRecruiter roleId={r.id} />
@@ -89,26 +86,12 @@ export function RoleDetail() {
         </Card>
       ) : null}
 
-      {pending && p ? (
-        <Card needsYou lift title="Approve this role packet">
-          <p style={{ color: "var(--ink-2)" }}>{pending.rationale ?? "Review the packet, edit anything, then approve. Approval opens the role and posts it."}</p>
-          {p.provenance.assumptions.length ? (
-            <div className="alert caution" style={{ marginTop: 10 }}>
-              <strong>Assumptions the assistant made:</strong>
-              <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>{p.provenance.assumptions.map((a, i) => <li key={i}>{a}</li>)}</ul>
-            </div>
-          ) : null}
-          <div className="row" style={{ marginTop: 12 }}>
-            <Button variant="primary" loading={approve.isPending} onClick={() => approve.mutate()}>Approve and post</Button>
-            <Button onClick={() => setEditing(true)}>Edit first</Button>
-          </div>
-        </Card>
-      ) : null}
+      {p ? <PacketApprovalCard role={r} onEdit={() => setEditing(true)} /> : null}
 
       {p ? (
         <>
           <div className="row" style={{ justifyContent: "space-between" }}>
-            <Segmented value={tab} onChange={pickTab} ariaLabel="Role packet sections" options={[{ value: "overview", label: "Overview" }, { value: "requirements", label: "Requirements" }, { value: "evaluation", label: "How we'll evaluate" }, { value: "posting", label: "Posting" }, { value: "history", label: "History" }]} />
+            <Segmented value={tab} onChange={pickTab} ariaLabel="Role packet sections" options={[{ value: "overview", label: "Overview" }, { value: "requirements", label: "Requirements" }, { value: "evaluation", label: "How we'll evaluate" }, { value: "plan", label: "Interview plan" }, { value: "posting", label: "Posting" }, { value: "activity", label: "Activity" }, { value: "history", label: "History" }, { value: "report", label: "Report" }]} />
             <div className="row">
               <Chip>Packet v{r.currentPacket!.version}</Chip>
               <Button size="sm" onClick={() => setEditing(true)}>Edit</Button>
@@ -134,8 +117,10 @@ export function RoleDetail() {
                     <dt>Target start</dt><dd>{p.business.timeline.targetStartDate ?? "Flexible"}</dd>
                     <dt>Urgency</dt><dd>{p.business.timeline.urgency}</dd>
                     <dt>Schedule</dt><dd>{p.identity.schedule ?? "As posted"}</dd>
+                    <dt>Work model</dt><dd>{workModelLabel(p.identity.remotePolicy)}</dd>
                   </dl>
                 </Card>
+                <PreferencesCard packet={p} decisionMaker={r.decisionMaker ?? null} />
                 <Card title="Where candidates will come from"><p className="small" style={{ color: "var(--ink-2)" }}>{p.sourcing.summary}</p><div className="row" style={{ marginTop: 8 }}>{p.sourcing.channels.map((c) => <Chip key={c}>{c.replace("_", " ")}</Chip>)}</div></Card>
               </div>
             </div>
@@ -143,8 +128,8 @@ export function RoleDetail() {
 
           {tab === "requirements" ? (
             <div className="grid-2">
-              <Card title="Must-haves"><ul style={{ paddingLeft: 18, margin: 0 }}>{p.requirements.mustHaves.map((m) => <li key={m.key}><strong>{m.text}</strong><br /><span className="small muted">{m.rationale}</span></li>)}</ul></Card>
-              <Card title="Nice-to-haves">{p.requirements.niceToHaves.length ? <ul style={{ paddingLeft: 18, margin: 0 }}>{p.requirements.niceToHaves.map((m) => <li key={m.key}>{m.text}</li>)}</ul> : <p className="muted">None listed.</p>}</Card>
+              <Card title="Must-haves"><RequirementList items={p.requirements.mustHaves} empty="None listed." /><p className="small muted" style={{ marginTop: 8 }}>"Evidenced in" says where each one is checked; a must-have marked "screen" is asked about in the screening conversation.</p></Card>
+              <Card title="Nice-to-haves"><RequirementList items={p.requirements.niceToHaves} empty="None listed." /></Card>
               <Card title="Eligibility questions (the only automatic holds)">
                 <p className="small muted" style={{ marginBottom: 8 }}>Candidates answer these when they apply. A "no" on a required one holds the application for your decision: you are reminded, and nothing is sent to the candidate unless you decline. Nothing is ever declined automatically.</p>
                 <ul style={{ paddingLeft: 18, margin: 0 }}>{p.requirements.eligibility.map((e) => <li key={e.key}>{e.question} <Chip tone={e.knockout ? "needs" : "neutral"}>{e.knockout ? "required" : "asked"}</Chip><br /><span className="small muted">{e.rationale}</span></li>)}</ul>
@@ -161,14 +146,18 @@ export function RoleDetail() {
               <Card title={`Screening questions (about ${p.screening.maxMinutes} minutes)`}>
                 <ol style={{ paddingLeft: 18, margin: 0 }}>{p.screening.questions.map((q) => <li key={q.key}>{q.question} <Chip>{q.kind}</Chip></li>)}</ol>
               </Card>
-              <Card title="Interview plan">
-                <ol style={{ paddingLeft: 18, margin: 0 }}>{p.interviews.plan.map((s) => <li key={s.key}><strong>{s.title}</strong> · {s.durationMinutes} min · {s.format}<br /><span className="small muted">{s.purpose} With: {s.interviewerRoles.join(", ") || "owner"}.</span></li>)}</ol>
-              </Card>
+              <Card title="Interview rounds"><p className="small" style={{ color: "var(--ink-2)" }}>{p.interviews.plan.map((s) => s.title).join(", ")}.</p><p className="small muted" style={{ marginTop: 6 }}>Who interviews in each round, and whether times can be offered to them, is on the Interview plan tab.</p><div className="row" style={{ marginTop: 8 }}><Button size="sm" onClick={() => pickTab("plan")}>Open the interview plan</Button></div></Card>
               <Card title="How candidates are messaged"><p className="small" style={{ color: "var(--ink-2)" }}>{p.communication.disclosureText}</p><p className="small muted" style={{ marginTop: 6 }}>{p.communication.humanAlternativeText}</p></Card>
             </div>
           ) : null}
 
+          {tab === "plan" ? <InterviewPlanTab roleId={r.id} /> : null}
+
           {tab === "posting" ? <PostingTab roleId={r.id} roleStatus={r.status} /> : null}
+
+          {tab === "activity" ? <ActivityTab roleId={r.id} /> : null}
+
+          {tab === "report" ? <ReportTab roleId={r.id} /> : null}
 
           {tab === "history" ? (
             <Card title="Packet versions">
@@ -190,54 +179,4 @@ function money(p: RolePacket): string {
   return formatPayRange(p.compensation);
 }
 
-/** Owner-friendly edit of the most-changed fields; recruiters can edit the whole packet as JSON. Every save is a new version. */
-function EditPacket({ open, onClose, roleId, packet }: { open: boolean; onClose: () => void; roleId: string; packet: RolePacket }) {
-  const qc = useQueryClient();
-  const [mode, setMode] = useState<"simple" | "json">("simple");
-  const [description, setDescription] = useState(packet.description.publicJobDescription);
-  const [min, setMin] = useState(String(packet.compensation.min));
-  const [max, setMax] = useState(String(packet.compensation.max));
-  const [ceiling, setCeiling] = useState(String(packet.compensation.ceiling));
-  const [mustHaves, setMustHaves] = useState(packet.requirements.mustHaves.map((m) => m.text).join("\n"));
-  const [json, setJson] = useState(JSON.stringify(packet, null, 2));
-  const [summary, setSummary] = useState("");
-  const save = useMutation({
-    mutationFn: () => {
-      let next: RolePacket;
-      if (mode === "json") next = JSON.parse(json) as RolePacket;
-      else {
-        next = structuredClone(packet);
-        next.description.publicJobDescription = description;
-        next.compensation.min = Number(min);
-        next.compensation.max = Number(max);
-        next.compensation.ceiling = Math.max(Number(ceiling), Number(max));
-        next.requirements.mustHaves = mustHaves.split("\n").map((s) => s.trim()).filter(Boolean).slice(0, 6).map((text, i) => packet.requirements.mustHaves.find((m) => m.text === text) ?? { key: `mh_${i + 1}_${text.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 30)}`, text, rationale: "Added by the owner" });
-      }
-      return api.post(`/api/v1/roles/${roleId}/packets`, { packet: next, changeSummary: summary || "Edited by the owner" });
-    },
-    onSuccess: async () => { toast("Saved as a new version."); await qc.invalidateQueries({ queryKey: ["role", roleId] }); await qc.invalidateQueries({ queryKey: ["brief"] }); onClose(); },
-  });
-  return (
-    <Sheet open={open} onClose={onClose} title="Edit the role">
-      <div className="stack">
-        <Segmented value={mode} onChange={setMode} options={[{ value: "simple", label: "The usual edits" }, { value: "json", label: "Everything (advanced)" }]} />
-        {mode === "simple" ? (
-          <>
-            <Field label="Public description" htmlFor="desc"><textarea id="desc" className="textarea" style={{ minHeight: 180 }} value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
-            <div className="grid-2">
-              <Field label="Pay minimum" htmlFor="min"><input id="min" className="input" value={min} onChange={(e) => setMin(e.target.value)} /></Field>
-              <Field label="Pay maximum" htmlFor="max"><input id="max" className="input" value={max} onChange={(e) => setMax(e.target.value)} /></Field>
-            </div>
-            <Field label="Ceiling (the most you would pay)" htmlFor="ceil" hint="Offers never go above this without a new approval."><input id="ceil" className="input" value={ceiling} onChange={(e) => setCeiling(e.target.value)} /></Field>
-            <Field label="Must-haves, one per line (max six)" htmlFor="mh"><textarea id="mh" className="textarea" value={mustHaves} onChange={(e) => setMustHaves(e.target.value)} /></Field>
-          </>
-        ) : (
-          <Field label="Role packet JSON" hint="Validated on save. Eligibility rules must use the allowed types."><textarea className="textarea" style={{ minHeight: 360, fontFamily: "var(--mono)", fontSize: 12 }} value={json} onChange={(e) => setJson(e.target.value)} /></Field>
-        )}
-        <Field label="What changed and why" htmlFor="sum"><input id="sum" className="input" value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="e.g. Raised the range after seeing the market number" /></Field>
-        {save.error ? <Alert tone="critical">{save.error instanceof ApiError ? save.error.message : "Could not save."}</Alert> : null}
-        <Button variant="primary" loading={save.isPending} onClick={() => save.mutate()}>Save as a new version</Button>
-      </div>
-    </Sheet>
-  );
-}
+// The packet editor lives in RoleEditor.tsx; the approval card, the preferences card and the Interview plan and Activity tabs in RolePlan.tsx.

@@ -126,7 +126,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
       });
       const { candidate, role } = loaded;
       const name = `${candidate.firstName} ${candidate.lastName}`;
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "application.ineligible_hold", title: `${name} answered no to an eligibility question`, body: `Held for your decision (${result.failedRules.map((f) => f.reason).join("; ")}). Nothing is sent to them unless you decline. Override if the answer was a mistake.`, action: { label: "Review", href: `/roles/${role.id}/talent?stage=ineligible` } });
+      await notify(ctx.q, { companyId: ctx.companyId, kind: "application.ineligible_hold", title: `${name} answered no to an eligibility question`, body: `Held for your decision (${result.failedRules.map((f) => f.reason).join("; ")}). Nothing is sent to them unless you decline. Override if the answer was a mistake.`, action: { label: "Review", href: `/roles/${role.id}/talent?stage=ineligible&open=${app.id}` } });
       if (g.outcome === "human_only") return { kind: "next", step: "ready" }; // reminders disabled by policy; the hold stays visible in Today
       if (g.outcome === "wait_for_approval") return { kind: "wait", wait: { kind: "human", approvalRequestId: g.approvalRequestId }, resumeStep: "ineligible_review" };
       const hours = Number(g.decision.params.reviewWindowHours ?? 24);
@@ -147,7 +147,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
       const hoursHeld = Math.round((ctx.now.getTime() - Date.parse(heldAt)) / 3600_000);
       const remindersSent = (ctx.state.remindersSent ?? 0) + 1;
       const name = `${candidate.firstName} ${candidate.lastName}`;
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "application.ineligible_review_due", title: `${name} has waited ${hoursHeld} hours for your decision`, body: "They answered no to an eligibility question. Decline with a reason, or override if the answer was a mistake. Nothing is sent to them until you decide.", action: { label: "Decide", href: `/roles/${role.id}/talent?stage=ineligible` } });
+      await notify(ctx.q, { companyId: ctx.companyId, kind: "application.ineligible_review_due", title: `${name} has waited ${hoursHeld} hours for your decision`, body: "They answered no to an eligibility question. Decline with a reason, or override if the answer was a mistake. Nothing is sent to them until you decide.", action: { label: "Decide", href: `/roles/${role.id}/talent?stage=ineligible&open=${app.id}` } });
       await emit(ctx.q, { type: "application.hold_reminded", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { hoursHeld, remindersSent }, correlationId: ctx.run.id });
       if (hoursHeld >= escalateAfter) {
         await createEscalation(ctx.q, { companyId: ctx.companyId, roleId: role.id, applicationId: app.id, kind: "review", question: `${name} answered no to an eligibility question for ${role.title} and has waited ${hoursHeld} hours for a decision. Please review it with the customer; only they can decline.`, requestedBy: ctx.actor, workflowRunId: ctx.run.id, now: ctx.now });
@@ -219,17 +219,17 @@ export const applicationIntake: WorkflowDefinition<State> = {
       const rec = (asmt?.result as { recommendation?: string } | undefined)?.recommendation;
       const name = `${candidate.firstName} ${candidate.lastName}`;
       if (rec !== "screen") {
-        await notify(ctx.q, { companyId: ctx.companyId, kind: "application.needs_review", title: `${name} needs your review`, body: rec === "hold" ? `The assessment found weak evidence for ${role.title}: ${asmt?.result.summary ?? ""}` : `Not enough to assess automatically: ${asmt?.result.summary ?? "no resume text"}`, action: { label: "Review", href: `/roles/${role.id}/talent` } });
+        await notify(ctx.q, { companyId: ctx.companyId, kind: "application.needs_review", title: `${name} needs your review`, body: rec === "hold" ? `The assessment found weak evidence for ${role.title}: ${asmt?.result.summary ?? ""}` : `Not enough to assess automatically: ${asmt?.result.summary ?? "no resume text"}`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
         return { kind: "complete" };
       }
       const g = await gate(ctx.q, { companyId: ctx.companyId, roleId: role.id, applicationId: app.id, actionType: "application.invite_screen", subject: { type: "application", id: app.id }, proposal: { assessmentId: asmt.id, recommendation: rec }, rationale: `${name} looks like a fit for ${role.title}: ${asmt.result.summary}`, requestedBy: { kind: "agent", id: "triage", runId: asmt.aiRunId ?? undefined }, workflowRunId: ctx.run.id, expiresInHours: 24 * 7 });
       if (g.outcome === "human_only") {
-        await notify(ctx.q, { companyId: ctx.companyId, kind: "application.ready", title: `${name} is ready for a screen`, body: asmt.result.summary, action: { label: "Invite to a screen", href: `/roles/${role.id}/talent` } });
+        await notify(ctx.q, { companyId: ctx.companyId, kind: "application.ready", title: `${name} is ready for a screen`, body: asmt.result.summary, action: { label: "Invite to a screen", href: `/roles/${role.id}/talent?open=${app.id}` } });
         return { kind: "complete" };
       }
       if (g.outcome === "wait_for_approval") return { kind: "wait", wait: { kind: "human", approvalRequestId: g.approvalRequestId }, resumeStep: "after_triage_decision" };
       await ctx.services.engine.start(ctx.q, { workflowKey: "screen", companyId: ctx.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: role.id, invitedBy: "triage" }, idempotencyKey: `screen:${app.id}`, actor: ctx.actor });
-      if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.invited", title: `Inviting ${name} to a screen`, body: `${asmt.result.summary} You can stop this from the candidate's page.`, action: { label: "See candidate", href: `/roles/${role.id}/talent` } });
+      if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.invited", title: `Inviting ${name} to a screen`, body: `${asmt.result.summary} You can stop this from the candidate's page.`, action: { label: "See candidate", href: `/roles/${role.id}/talent?open=${app.id}` } });
       return { kind: "complete" };
     },
 

@@ -29,15 +29,15 @@ Permissions are capabilities checked by `assertCan(role, permission)` in every r
 | members.manage | ✓ | ✓ | | ✓ | | | Cannot remove self |
 | role.create | ✓ | ✓ | ✓ | | | ✓ | Starts intake |
 | role.read | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Interviewers: only roles with an interview assigned to them (new predicate) |
-| role.approve | ✓ | ✓ | ✓ | | | | Subject to the approval request's required roles |
+| role.approve | ✓ | ✓ | ✓ | | | | Subject to the approval request's required roles. Two object-level rules on top (30 Sep 2026, `packages/core/src/approval-deciders.ts`): nobody approves the role they started from the intake or the packet version they wrote, unless they are the company's only owner (409 `self_approval`); when the packet names a decision maker who is an active owner, admin or hiring manager, the request is reserved for them, and only they or an owner may decide it (403 `named_decider`) |
 | role.manage | ✓ | ✓ | | | | ✓ | Pause, resume, close, retry postings |
-| packet.edit | ✓ | ✓ | ✓ | | | ✓ | Creates a new version |
+| packet.edit | ✓ | ✓ | ✓ | | | ✓ | Creates a new version. On an open role, a version by someone who also holds `role.approve` is current at once; a recruiter's (no `role.approve`) waits for approval while the role keeps its current version; the Interview plan tab's assignments go through the same rule |
 | application.read | ✓ | ✓ | ✓ | ✓ | ✓* | ✓ | *Interviewer: only applications with an interview they participate in; compensation redacted |
 | application.act | ✓ | ✓ | ✓ | ✓ | | ✓ | Invite, hold, talent pool, override eligibility, review anyway, flag |
 | application.reject | ✓ | ✓ | ✓ | | | ✓ | Reason required |
-| interview.request (new) | ✓ | ✓ | ✓ | | | ✓ | The human interview approval (also gated by the `interview.request` policy) |
-| interview.manage (new) | ✓ | ✓ | ✓ | ✓ | ✓* | ✓ | Reschedule or cancel; *interviewer only their own |
-| interview.decide (new) | ✓ | ✓ | ✓ | | | ✓ | Record the decision after an interview (D10) |
+| interview.request | ✓ | ✓ | ✓ | | | ✓ | The human interview approval (also gated by the `interview.request` policy); the `interview` capability on the application detail follows it |
+| interview.manage | ✓ | ✓ | ✓ | | | ✓ | Re-offer times, cancel, book on the candidate's behalf, record whether any interview took place. Any member who is on an interview, whatever their role (an interviewer, or HR sitting in), records its outcome without it (object-level rule in the route, and the state machine lets every role record that an interview ended); the interview sheet hides reschedule and cancel from roles without it. Built 30 Sep 2026 with HR and interviewer unticked (the earlier draft ticked both); a founder decision reopens that |
+| interview.decide | ✓ | ✓ | ✓ | | | ✓ | Record the decision after an interview (D10); the `record_decision` capability on the application detail follows it, so HR never sees the card, and Today's "Decide after the interview" card goes only to these roles. The state machine's `interview_complete → finalist` row lists exactly these roles (the recruiter was added 30 Sep 2026 so the permission means what it says) |
 | calendar.connect (new) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Each user connects their own calendar or declares availability |
 | candidate.search | ✓ | ✓ | | ✓ | | ✓ | Talent across roles |
 | compensation.read | ✓ | ✓ | ✓ | ✓ | | ✓ | Interviewers never see pay |
