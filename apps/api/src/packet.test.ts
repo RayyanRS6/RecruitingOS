@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { screenTurnPrompt, type ScreenContext } from "@ros/ai";
 import type { RolePacket } from "@ros/contracts";
-import { approvalRequests, entitlements, notifications, rolePackets, roles, withTenant, workflowRuns } from "@ros/db";
+import { approvalRequests, entitlements, events, notifications, rolePackets, roles, withTenant, workflowRuns } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { signInAs, signInWithIdentity } from "./test-helpers";
@@ -134,6 +134,47 @@ describe("role packets: editor, approval rules, sent back, interview plan, timel
     await container.drain();
     expect((await detail(owner, again.roleId)).status).toBe("open");
     expect((await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, again.roleId), eq(rolePackets.version, 1))))[0].approvedBy).toBe((await me(olive)).user.id);
+    // the decide route records the same domain fact as POST /roles/:id/approve, so the Activity tab reads the same either way
+    const approvedVia = async (roleId: string) => (await container.db.select().from(events).where(and(eq(events.type, "role.approved"), eq(events.subjectId, roleId))));
+    expect((await approvedVia(again.roleId)).map((e) => e.payload)).toEqual([{ version: 1 }]);
+    expect((await approvedVia(drafted.roleId)).map((e) => e.payload)).toEqual([{ version: 1 }]);
+  });
+
+  it("the person who wrote a version may not approve it: a hiring manager's edit is refused to them on both routes (409 self_approval, 'You wrote this version') and another owner approves it", async () => {
+    const olive = await signInAs(container, app, { companyId, role: "owner", email: "olive@packet.test", name: "Olive Owner" });
+    const hana = await signInAs(container, app, { companyId, role: "hiring_manager", email: "hana@packet.test", name: "Hana Editor" });
+    // the owner starts the role; the hiring manager, who did not start it, writes version 2 while it waits for approval
+    const compiled = await compileRole(owner);
+    const next = structuredClone(compiled.packet);
+    next.requirements.mustHaves.push({ key: "mh_9_dentrix", text: "Uses Dentrix every day", rationale: "Added by the hiring manager", evidencedBy: ["resume", "screen"] });
+    const edited = await json(hana, "POST", `/api/v1/roles/${compiled.roleId}/packets`, { packet: next, changeSummary: "Added Dentrix" });
+    expect(edited.status).toBe(201);
+    expect(await edited.json()).toMatchObject({ version: 2, outcome: "proposed_pending_approval" });
+    await container.drain();
+    const pend = await pendingRequest(compiled.roleId);
+    expect((pend!.proposal as { version: number }).version).toBe(2);
+    // she holds role.approve and is in the request's approver roles, so only the authorship rule stands in her way
+    expect(pend!.requiredRoles).toContain("hiring_manager");
+    const view = (await detail(hana, compiled.roleId)).packetApproval.pending;
+    expect(view?.viewer.mayDecide).toBe(false);
+    expect(view?.viewer.reason).toMatch(/You wrote this version/);
+    const refused = await json(hana, "POST", `/api/v1/roles/${compiled.roleId}/approve`, { version: 2 });
+    expect(refused.status).toBe(409);
+    const err = await errorOf(refused);
+    expect(err.code).toBe("self_approval");
+    expect(err.message).toMatch(/You wrote this version/);
+    const viaDecide = await json(hana, "POST", `/api/v1/approvals/${pend!.id}/decide`, { decision: "approve" });
+    expect(viaDecide.status).toBe(409);
+    expect((await errorOf(viaDecide)).message).toMatch(/You wrote this version/);
+    expect((await pendingRequest(compiled.roleId))?.id).toBe(pend!.id);
+    // another owner, who neither started the role nor wrote the version, approves it
+    expect((await detail(olive, compiled.roleId)).packetApproval.pending?.viewer.mayDecide).toBe(true);
+    expect((await json(olive, "POST", `/api/v1/approvals/${pend!.id}/decide`, { decision: "approve" })).status).toBe(200);
+    await container.drain();
+    const opened = await detail(owner, compiled.roleId);
+    expect(opened.status).toBe("open");
+    expect(opened.currentPacket?.version).toBe(2);
+    expect((await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, compiled.roleId), eq(rolePackets.version, 2))))[0].approvedBy).toBe((await me(olive)).user.id);
   });
 
   it("a named decision maker who is on the team is required: a hiring manager who is not named is refused (approving and sending back), the named one approves, an owner may decide too; a several-word name that is nobody on the team reserves nothing", async () => {

@@ -136,8 +136,18 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
   );
 });
 
-/** What a re-rendered form keeps (D12): every typed value, every eligibility answer, both checkboxes, and which fields were missing. */
-type ApplyFormState = { values: Record<string, string>; answers: Record<string, string | string[]>; acknowledged: boolean; smsConsent: boolean; missing: string[] };
+/**
+ * What a re-rendered form keeps (D12): every typed value, every eligibility answer, both checkboxes, which fields were
+ * missing, and a resume the browser already uploaded directly (its sealed grant goes back into the form, so the file
+ * stays attached). A file posted inside the form itself cannot be put back by any browser: `resumeLost` makes the page
+ * say so instead of claiming everything is still there.
+ */
+type ApplyFormState = { values: Record<string, string>; answers: Record<string, string | string[]>; acknowledged: boolean; smsConsent: boolean; missing: string[]; resume: { grant: string; filename: string } | null; resumeLost: boolean };
+
+/** The sentence a re-shown form ends its error with: true about what is still on the page. */
+function keptSentence(resumeLost: boolean): string {
+  return resumeLost ? "Everything you typed is still here, but please attach your resume again." : "Everything you entered is still here.";
+}
 
 type ApplyFormProps = {
   company: { slug: string; name: string };
@@ -156,14 +166,14 @@ type ApplyFormProps = {
  * process, what is collected and why, who may see it, how to exercise the candidate's rights, the privacy address, the
  * link to the notice, and the affirmative acknowledgment. Plain words, short sentences, nothing pre-checked.
  */
-function TransparencyBlock(props: { company: { name: string }; notices: Notice[]; privacyEmail: string; acknowledged: boolean; missing: boolean }) {
+function TransparencyBlock(props: { company: { name: string }; notices: Notice[]; privacyEmail: string; acknowledged: boolean; missing: boolean; resumeLost: boolean }) {
   return (
     <section class="card" aria-labelledby="before-you-send">
       <h2 id="before-you-send" style="margin-top:0">Before you send</h2>
       <p><strong>{props.company.name}</strong> runs this hiring process and is the employer. People at {props.company.name} make every hiring decision; software only helps organize and summarize.</p>
       <p><strong>What we collect:</strong> your name, your email, your phone number if you give one, where you are based, your resume or the summary you write, and your answers to the questions above.</p>
       <p><strong>Why:</strong> to consider you for this position and to contact you about it. Nothing else.</p>
-      <p><strong>Who can see it:</strong> the hiring team at {props.company.name}; an Identified Talent Solutions recruiter only if {props.company.name} brings one in to help; and the service providers listed in the privacy notice, which store files and deliver email on our behalf.</p>
+      <p><strong>Who can see it:</strong> the hiring team at {props.company.name}; an Identified Talent Solutions recruiter only if {props.company.name} brings one in to help; and the companies that run this service for us: hosting, file storage, email delivery, and the AI service that helps organize applications. Each does only its own job; the privacy page linked below says what each one does.</p>
       <p><strong>Your choices:</strong> after you apply, your status page lets you ask for a copy of your information, correct it, withdraw your application, or delete your information. You can also email <a href={`mailto:${props.privacyEmail}`}>{props.privacyEmail}</a> at any time. A person handles every request.</p>
       <p><a href="/privacy">Read how we handle your information</a></p>
       {props.notices.map((n) => <p class="notice">{n.text}</p>)}
@@ -171,7 +181,7 @@ function TransparencyBlock(props: { company: { name: string }; notices: Notice[]
         <input id="acknowledged" type="checkbox" name="acknowledged" value="yes" required checked={props.acknowledged} aria-invalid={props.missing ? "true" : undefined} aria-describedby={props.missing ? "acknowledged-error" : undefined} />
         <span>I have read the notice above and I understand that people, not software, make the hiring decisions.</span>
       </label>
-      {props.missing ? <p class="err" id="acknowledged-error">Please tick this box to send your application. Everything you entered is still here.</p> : null}
+      {props.missing ? <p class="err" id="acknowledged-error">Please tick this box to send your application. {keptSentence(props.resumeLost)}</p> : null}
     </section>
   );
 }
@@ -186,6 +196,7 @@ function ApplyForm(props: ApplyFormProps) {
   const invalid = (field: string) => (missing.has(field) ? "true" : undefined);
   const chosen = (key: string) => (typeof answers[key] === "string" ? (answers[key] as string) : "");
   const chosenDays = (key: string) => (Array.isArray(answers[key]) ? (answers[key] as string[]) : []);
+  const kept = props.state?.resume ?? null;
   return (
     <Layout title={`Apply: ${props.packet.identity.title} at ${props.company.name}`}>
       <p class="meta"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>← {props.packet.identity.title}</a></p>
@@ -194,7 +205,7 @@ function ApplyForm(props: ApplyFormProps) {
       {props.error ? <div class="err" role="alert">{props.error}</div> : null}
       <form method="post" enctype="multipart/form-data" data-upload-intent={`/careers/${props.company.slug}/jobs/${props.role.id}/upload-intent`}>
         <input type="text" name="website" tabindex={-1} autocomplete="off" style="position:absolute;left:-10000px" aria-label="Leave this field empty" />
-        <input type="hidden" name="uploadGrant" value="" />
+        <input type="hidden" name="uploadGrant" value={kept?.grant ?? ""} />
         <label for="firstName">First name</label>
         <input id="firstName" type="text" name="firstName" required value={v.firstName ?? ""} aria-invalid={invalid("firstName")} />
         <label for="lastName">Last name</label>
@@ -208,7 +219,7 @@ function ApplyForm(props: ApplyFormProps) {
         <input id="locationText" type="text" name="locationText" value={v.locationText ?? ""} aria-invalid={invalid("locationText")} />
         <label for="resume">Resume (PDF, Word, or text; up to 8 MB, or up to 4 MB without JavaScript)</label>
         <input id="resume" type="file" name="resume" accept=".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" />
-        <small id="upload-note" aria-live="polite"></small>
+        <small id="upload-note" aria-live="polite">{kept ? `Your resume ${kept.filename} is still attached. Choose a file only if you want to replace it.` : props.state?.resumeLost ? "Your resume is not attached any more. Please choose the file again." : ""}</small>
         <label for="noResume">No resume? Tell us about your most recent work and what you are looking for.</label>
         <textarea id="noResume" name="noResume" rows={4}>{v.noResume ?? ""}</textarea>
         {eligibility.length ? <h2>A few quick questions</h2> : null}
@@ -231,7 +242,7 @@ function ApplyForm(props: ApplyFormProps) {
             <small>{rule.rationale}</small>
           </div>
         ))}
-        <TransparencyBlock company={props.company} notices={shown} privacyEmail={props.privacyEmail} acknowledged={!!props.state?.acknowledged} missing={missing.has("acknowledged")} />
+        <TransparencyBlock company={props.company} notices={shown} privacyEmail={props.privacyEmail} acknowledged={!!props.state?.acknowledged} missing={missing.has("acknowledged")} resumeLost={!!props.state?.resumeLost} />
         <input type="hidden" name="noticeVersionsShown" value={noticeVersionsFor(props.notices, props.smsEnabled).join(",")} />
         <button class="btn" type="submit">Send my application</button>
       </form>
@@ -252,6 +263,7 @@ var input=form.querySelector('input[type=file][name=resume]');var grant=form.que
 if(!input||!grant){return;}
 var busy=false;
 function say(t){if(note){note.textContent=t;}}
+input.addEventListener('change',function(){if(input.files&&input.files.length&&grant.value){grant.value='';say('');}});
 function fallback(file){form.removeAttribute('data-upload-intent');if(file.size>4*1024*1024){say('The direct upload did not work. Files over 4 MB can only be sent by the direct upload: please try again in a moment, or choose a smaller file.');busy=false;if(submit){submit.disabled=false;}return;}form.submit();}
 form.addEventListener('submit',function(ev){
 if(busy){ev.preventDefault();return;}
@@ -318,8 +330,8 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
   // While texting is off (decision M2) the checkbox is not on the page, and a posted value is ignored: no consent is recorded and no event is emitted.
   const smsConsent = smsEnabled && str("smsConsent") === "yes";
   const values = { firstName: str("firstName"), lastName: str("lastName"), email: str("email"), phone: str("phone"), locationText: str("locationText"), noResume: str("noResume") };
-  const state = (missing: string[] = []): Partial<ApplyFormState> => ({ values, answers, acknowledged, smsConsent, missing });
-  const again = (error: string, missing: string[] = []) => c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} smsEnabled={smsEnabled} privacyEmail={container.env.PRIVACY_EMAIL} error={error} state={state(missing)} />, 400);
+  const state = (missing: string[] = [], resume: Pick<ApplyFormState, "resume" | "resumeLost"> = { resume: null, resumeLost: false }): Partial<ApplyFormState> => ({ values, answers, acknowledged, smsConsent, missing, ...resume });
+  const again = (error: string, missing: string[] = [], resume?: Pick<ApplyFormState, "resume" | "resumeLost">) => c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} smsEnabled={smsEnabled} privacyEmail={container.env.PRIVACY_EMAIL} error={error} state={state(missing, resume)} />, 400);
   const parsed = ApplyRequest.safeParse({
     firstName: values.firstName,
     lastName: values.lastName,
@@ -336,7 +348,16 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
   if (!parsed.success) {
     const missing = [...new Set(parsed.error.issues.map((i) => String(i.path[0] ?? "")).filter(Boolean))];
     const onlyAcknowledgment = missing.length === 1 && missing[0] === "acknowledged";
-    return again(onlyAcknowledgment ? "One more step: please confirm you have read the notice at the bottom of the form. Everything you entered is still here." : "Please check the highlighted fields: a first name, last name, a valid email, and the confirmation at the bottom of the form are required. Everything you entered is still here.", missing);
+    // A resume the browser already uploaded stays attached: its grant, still valid for this company and role, goes back into
+    // the form. A file posted inside the form (or a grant that no longer opens) cannot be put back, and the page says so.
+    const grantBack = str("uploadGrant");
+    const opened = grantBack ? container.uploadGrants.open(grantBack, container.engine.clock()) : null;
+    const keptResume = opened && opened.companyId === company.id && opened.roleId === role.id ? { grant: grantBack, filename: opened.filename } : null;
+    const posted = body.resume;
+    const postedFile = !!posted && typeof posted === "object" && "size" in posted && (posted as File).size > 0;
+    const resumeLost = !keptResume && (postedFile || !!grantBack);
+    const still = keptSentence(resumeLost);
+    return again(onlyAcknowledgment ? `One more step: please confirm you have read the notice at the bottom of the form. ${still}` : `Please check the highlighted fields: a first name, last name, a valid email, and the confirmation at the bottom of the form are required. ${still}`, missing, { resume: keptResume, resumeLost });
   }
   if (parsed.data.website) return c.html(<Layout title="Thanks"><h1>Thanks</h1><p>Your application was received.</p></Layout>); // honeypot: pretend success
 
@@ -499,10 +520,28 @@ candidatePages.get("/c/status/:token", async (c) => {
 candidatePages.get("/privacy", async (c) => {
   const n = noticesFor(["*"]).find((x) => x.key === "privacy");
   const privacyEmail = c.get("container").env.PRIVACY_EMAIL;
+  const smsEnabled = c.get("container").env.SMS_ENABLED;
   return c.html(
     <Layout title="How we handle your information">
       <h1>How we handle your information</h1>
       <p>{n?.text}</p>
+      {/* The apply form's "Who can see it" points here (docs/readiness/20 section D, item 6): every kind of service provider that touches an application, and what each one does. */}
+      <h2 id="who-can-see">Who can see your information</h2>
+      <ul class="steps">
+        <li>The hiring team at the company you applied to. People there make every hiring decision.</li>
+        <li>An Identified Talent Solutions recruiter, only if the company brings one in to help. Their access is limited to what they were brought in for, and every access is recorded.</li>
+        <li>The companies that run this service for us, each only for its own job:
+          <ul>
+            <li>Hosting: runs this website and the work behind it.</li>
+            <li>Database and file storage: keeps your application and your resume, privately.</li>
+            <li>Email delivery: sends the emails about your application and receives your replies.</li>
+            <li>An AI service: reads applications and screening answers to help organize and summarize them for the hiring team. It does not decide anything.</li>
+            {smsEnabled ? <li>Text messages: sends and receives texts, only if you agreed to them.</li> : null}
+            <li>Calendars (Google or Microsoft): only the interviewers' own calendars, to book an interview time with you.</li>
+          </ul>
+        </li>
+      </ul>
+      <p>These companies may use your information only to provide that service to us. We do not sell your information.</p>
       <h2>Your choices</h2>
       <ul class="steps">
         <li>Ask what we hold about you, correct it, or delete it: <a href="/c/privacy-request">use the request form</a> with the address you applied with (we confirm it is you by email), or write to <a href={`mailto:${privacyEmail}`}>{privacyEmail}</a> from that address. A person records the request, confirms receipt within one business day, and completes it within the legal deadline.</li>

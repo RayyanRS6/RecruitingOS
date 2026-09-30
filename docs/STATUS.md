@@ -1,6 +1,106 @@
 # Implementation status
 
-Updated 14 September 2026. "Done" means the definition of done in docs/13 (UI, backend, database, permissions, error handling, audit events, tests, edge cases, failure states, human escalation, documentation) unless a gap is listed.
+Updated 30 September 2026, on branch `audit-remediation` at commit `ed9147e`. "Done" means the definition of done in docs/13 (UI, backend, database, permissions, error handling, audit events, tests, edge cases, failure states, human escalation, documentation) unless a gap is listed. The first section is the current state; the sections from "Slices" down are the history written on 10 and 14 September, kept as written except where a later change is marked.
+
+## State on 30 September 2026
+
+Release 1 (the Founding Partner Program scope of `docs/spec/21`, with job distribution from `docs/spec/20`) is **built on mocks**: every capability below has code and a test against fake providers. **Nothing is production-verified.** The tests run against fakes (AI, email, sign-in, storage, scanning, error reporting, rate limiting); the staging accounts are only partly set up (`docs/handoff/developer-onboarding.md` section 4) and none of this work has been exercised on staging; nothing is deployed to production; and no real candidate data may enter until every blocker in `docs/readiness/20` section B carries staging evidence. The completion work is five commits on top of `1400a34`: `2ed2e0a` (customer documents), `3c99f67` (job distribution), `b098a8b` (candidate job surfaces, the Posting tab, team invitations, worker health), `1895457` (packet editor and approval rules, the decision after an interview, the role report, the missing proofs) and `ed9147e` (assessment evidence, messages and replies, company settings and audit history).
+
+### What is built
+
+| Area | What the customer gets | Where it lives |
+|---|---|---|
+| Job distribution (`docs/spec/20`, all twenty items) | Job pages and feeds built from `JOBS_BASE_URL`; a tracked application link per board plus referral, direct and other links; source and source detail on every application; the posting package; the nine posting states; no posting called live until its public URL is fetched and shows the job (or a person confirms with a note); per-board pause, resume and close; the "still up" checklist when a role or posting closes; the accepting-applications switch; applications by source per day and the daily volume alert; sitemap, robots, the XML and JSON job feeds and the LinkedIn feed; JobPosting data with `validThrough`, schema.org employment types, website and logo | `packages/core/src/postings.ts`, `application-links.ts`; `packages/integrations/src/jobboards/`; `apps/api/src/routes/postings.ts`, `pages/links.tsx`, `pages/public-feeds.ts`; migration 0020; `apps/web/src/pages/RolePosting.tsx` |
+| Candidate transparency | The apply form's "Before you send" block and a required, unchecked acknowledgment recorded with the notice versions; no SMS box while texting is off; the status page says what to prepare once an interview is booked | `apps/api/src/pages/candidate.tsx`; `docs/readiness/20` section D |
+| Team | Invitations as rows of their own, accepted only by a Google or Microsoft sign-in with the invited address (never a link alone); resend and withdraw; validated role changes with the last-owner, self-change and owner-only rules; removal that signs the person out, deletes their calendar credential and flags their interviews; the Team card | migration 0022; `packages/core/src/invitations.ts`; `apps/api/src/services/team.ts`, `routes/companies.ts`, `pages/invite.tsx`; `apps/web/src/pages/TeamCard.tsx` |
+| Role packet and approval | The owner's editor with every must-have field and the work model; no self-approval (unless the only owner); the named decision maker decides; a 14-day expiry and "Send back with a note" returning the role to draft; an edit to an open role waits for approval; the Interview plan and Activity tabs; "Start a hire" | `apps/api/src/routes/role-packets.ts`, `services/packet-versions.ts`, `packet-approval.ts`; `packages/core/src/approval-deciders.ts`; `apps/web/src/pages/RoleEditor.tsx`, `RolePlan.tsx` |
+| Evidence | "Needs a closer look" as an explicit state with a filter and a notification that names what is missing; "Ask about this in a screen" (a person's click, never automatic); the top strength, top concern and open questions on the Talent card; why the confidence is what it is; an unreadable résumé and a failed assessment said on the card | `packages/core/src/evidence.ts`; `packages/agents/src/screen-focus.ts`; `apps/web/src/pages/People.tsx` |
+| After the interview | "Did it take place?" moves the candidate to waiting on you at once; the decision card (next round, finalist, not moving forward, the respectful message only after it); the Interviews page shows the decision; the interviewer's brief in the confirmation and on the interview page, pay redacted; the comparison view of up to five candidates, nothing ranked | `apps/api/src/routes/interviews.ts`, `routes/compare.ts`, `services/interviewer-view.ts`; `packages/agents/src/interviewer-brief.ts` |
+| Messages and replies | A person's own message to a candidate under the policy `message.send_freeform` (default "do it and tell me"; under approval an owner or admin reads it first); per-application reply addresses so candidate replies come back into the product once the inbound domain is live, HUMAN on the first line opening a recruiter request | `apps/api/src/routes/messages.ts`, `services/messages.ts`, `services/replies.ts`; migration 0023; `docs/runbooks/candidate-replies.md` |
+| Report | The Report tab with the ten figures and their definitions, two CSV downloads (audited), the same figures per customer in the administrator console | `apps/api/src/services/role-report.ts`, `routes/reports.ts`; `apps/web/src/pages/RoleReport.tsx`; definitions in `docs/16-admin.md` |
+| Company, audit, sessions | The Company card (typed, versioned notices, contact hours; plan and allowances refused); the customer's audit history in plain words with a CSV export; "Your sessions" with sign-out; "Confirm it's you" before a rule or notice change (a session younger than 30 minutes or a confirmation in the last 10) | `apps/api/src/routes/company-settings.ts`, `routes/auth-sessions.ts`, `services/audit-history.ts`, `middleware/reauth.ts`; migration 0024; `apps/web/src/pages/Setup.tsx` |
+| Privacy requests | The public request form for people without a status link: a 24-hour confirmation link, nothing recorded before the button, linked from `/privacy` | `apps/api/src/pages/privacy-request.tsx` |
+| Operations | The worker's heartbeat and its own `/healthz` (Railway's health check), the app's `/healthz` reporting the worker; `job.failed`, `worker.stale`, `queue.stale` and `scanner.fake` alerts; scrubbed failure reports to Sentry; the staging test-error route; the ClamAV adapter; the `migrate` workflow and its runbook; the synthetic load script | migration 0021; `apps/api/src/worker-health.ts`, `maintenance.ts`, `failure-reports.ts`, `routes/observability.ts`; `packages/integrations/src/scanning/clamav.ts`; `.github/workflows/migrate.yml`; `docs/runbooks/release-migrations.md`; `scripts/load-apply.ts` |
+| Customer and legal documents | The feature and limitation sheet, security overview, support statement, onboarding checklist, administrator and hiring-manager guides; the paid-agreement additions for counsel | `docs/customer/01` to `06`; `docs/legal-drafts/11` (all awaiting the founder's review) |
+
+Every route added is in `docs/spec/07-api-specification.md` and `docs/12-api-contracts.md` with its permission; the new tables, columns, events and audit actions are in `docs/04-data-model-and-events.md`; every variable is in `docs/14-deployment-and-environment.md`. Row-by-row status against the founder's lists: `docs/spec/21` sections 2, 3 and 7, `docs/spec/20` section 2, `docs/readiness/20`.
+
+### What is verified by tests
+
+- The full suite at the last complete run on 30 September (commit `ed9147e` plus its fix): 70 test files, 560 tests. 549 passed, 5 skipped by decision (placeholders in `tests/scenario/lifecycle.test.ts` for steps deferred to releases 2 and 3: recording and draft scorecards, debrief, offers, onboarding, takeover), and 6 failed with one cause (a session's age measured on the wrong clock); that cause was fixed and the 13 affected files were re-run green (150 passed, 5 skipped). A full run after the fix is part of the next CI run.
+- Typecheck clean in all 15 packages; the migration validator passes on 25 files, `0000` to `0024`.
+- The tests added by this work are listed by area in `docs/handoff/developer-onboarding.md` section 3. Among what they prove: every posting state and refused move; a board is live only after its URL check; the token never reaches a candidate record; invitations cannot be accepted by another address or by the link alone; each role's allowed and refused routes over HTTP; no self-approval; the decision after an interview and its respectful message; the report's numbers match the roles list, the role page and the brief; the follow-up cap and "Talk to a person"; PDF and Word extraction; the worker's health check and the failure alerts.
+- The evaluation suites run on the fake provider only (`pnpm eval` in CI). No prompt has run on the real model.
+
+### What needs a CI run
+
+These cannot run on the team's Windows machine (the pnpm executable, Biome's native binary and the browsers are blocked by an application-control policy), so the next push to a pull request is their proof:
+
+- The Playwright browser specs, including the two new ones: `tests/e2e/specs/candidate-phone.spec.ts` (the candidate's journey on the phone project, with the acknowledgment) and `tests/e2e/specs/decision.spec.ts` (the decision after an interview).
+- Biome lint (`pnpm lint`).
+- The Next.js production build and the full `verify` job (`.github/workflows/ci.yml`), including one complete test run.
+- A deploy check for the team before the founder deploys: at `ed9147e` the Next.js shell (`apps/shell/app`) had no route handlers for `/a/:token`, `/sitemap.xml` and `/robots.txt`, so tracked links, the sitemap and robots would not reach the API on Vercel. Handlers for them were being added in the working tree on 30 September; they must be in the build that is deployed.
+
+### What only the founder can do before a deploy
+
+Each is one action at a time, entered by the founder at the provider. No value is written in the repository or in chat.
+
+1. **Apply migrations 0020 to 0024 before deploying.** Run the `migrate` GitHub workflow (Actions, **migrate**, **Run workflow**, pick the environment) or `pnpm db:migrate` from her machine, then deploy. The app and the worker refuse to start while a migration is pending. Procedure and what the output means: `docs/runbooks/release-migrations.md`. The five are additive: 0020 job distribution, 0021 worker heartbeats, 0022 invitations, 0023 reply tokens, 0024 session re-authentication.
+2. **The jobs address.** Attach `jobs.identifiedtalent.com` to the Vercel project as a second domain and approve its DNS record when it is shown (gate 2.5). Only then set `JOBS_BASE_URL=https://jobs.identifiedtalent.com` in Vercel and on the Railway worker; until then leave it unset and every job page is served from `APP_BASE_URL`.
+3. **The ClamAV service.** Start the `clamav/clamav` service on Railway in the same project as the worker (`docs/runbooks/resume-storage.md`, "Running ClamAV on Railway"), then set `SCAN_PROVIDER=clamav` and `CLAMAV_HOST=<the service's private hostname>` on the worker only. Until then a production worker raises the standing `scanner.fake` alert, and no real résumé may be accepted (`docs/readiness/20` blocker 8).
+4. **The Postmark inbound domain.** With the Postmark account and the sending domain in place, add the inbound domain's MX record (shown first), point Postmark's inbound webhook at `/webhooks/postmark/inbound` with the inbound secret, and set `POSTMARK_INBOUND_SECRET` and `EMAIL_INTAKE_DOMAIN` (the real inbound domain) in Vercel and on the worker. This turns on email-in applications and candidate replies (`docs/runbooks/candidate-replies.md`); until then replies reach `EMAIL_REPLY_TO`.
+5. **Sentry DSNs.** `SENTRY_DSN` in Vercel and on the worker, `NEXT_PUBLIC_SENTRY_DSN` in Vercel if the staff app should report too, `SENTRY_ENVIRONMENT=staging` on the staging Preview; then the scrubbing proof with the test-error route (`docs/readiness/03` section 6).
+6. **The Upstash rate-limit store.** Create the Upstash database, then set `RATE_LIMIT_STORE=upstash`, `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` in Vercel (`docs/readiness/15`). Without it production counts per process and raises an alert.
+7. **`ANALYTICS_SALT`.** A different random value per environment, in Vercel and on the worker; production refuses to start without it.
+8. **The Railway worker health check.** On the first deploy after the migrations, confirm the worker's deploy passes its `/healthz` check (`railway.json`), its log says `[worker] started`, and the app's `/healthz` shows `worker` with `healthy: true` (`docs/runbooks/railway-worker.md`).
+9. **One CI run for the browser specs.** Open or update the pull request so CI runs; Playwright cannot run on the founder's laptop. The run is also the proof for lint, the build and the full suite (previous section).
+10. **Optional: the isolation suites against a real test database.** On an empty test database in the staging project, once, as the owner: `GRANT app_tenant, ros_app, ros_worker TO <owner role>`; apply the migrations to it; then run the five suites with `TEST_DATABASE_URL` set to that database's owner string (`docs/readiness/03` section 2 has the exact command and what to record).
+
+Beyond the deploy, the founder's lane is unchanged (`docs/spec/21` section 10): the R-LEGAL-1 paid-customer stop point, reviewing and signing off the customer documents, the Anthropic key and a spend for one real-model eval run, and the staging verification of `docs/readiness/03` with evidence.
+
+### Decisions still open
+
+The team took a default for each so nothing waits; each is a small change if the founder wants it the other way.
+
+From the audit report:
+
+1. Unused future tables and pgvector are left in place (nothing reads them). Drop them in a later cleanup?
+2. Old documents are left in place with their indexes updated rather than archived. Archive them?
+3. Retention periods are unchanged: status links do not expire, tracked links never expire, worker heartbeats are kept seven days. What should the retention periods be (this also decides candidate-link expiry, `docs/readiness/20` blocker 5)?
+4. The decision screen wording is kept as built (plain language). Any wording to change?
+5. `pnpm dev:api` was removed; the Next.js shell serves everything. Agreed?
+6. `pdf-parse` is kept; a test fixture now proves PDF and Word extraction. Replace it later?
+7. No live-model evaluation run was made (fake provider only). What spend cap for the first real run?
+8. `apps/web` was not merged into `apps/shell`. Merge later?
+
+Job distribution and team (wave 2 defaults):
+
+9. Email applications that arrive while a role is paused or not accepting are added automatically, oldest first, when it reopens, and the owner is told. Or should the owner confirm each one?
+10. The daily "many applications" alert (100 a day per role) goes to owners and admins, not hiring managers. Include hiring managers?
+11. Changing a teammate's role signs them out everywhere; the new role applies at their next sign-in. Or apply it quietly?
+12. The error scrubber removes email- and phone-shaped text from job-failure reports only; the shared scrubber elsewhere was not widened. Widen it?
+13. A tracked link for a role that is paused or not accepting sends the candidate to the job page, which explains, rather than a not-found page. Agreed?
+14. The careers index keeps a role whose accepting switch is off ("Not taking new applications right now"); a paused role leaves the index but its job page stays up. Agreed?
+15. Volume days are cut in the company's time zone (default Pacific). Agreed?
+
+Packet, interviews and report (wave 3 defaults):
+
+16. An approval nobody decides expires after two weeks and the role returns to draft with a note. Is two weeks right?
+17. Only the packet's named decision maker (or an owner) can approve or send back that role; a single first name matches one teammate, a full name must match exactly. Agreed?
+18. HR cannot edit a role's packet. Should HR be allowed to?
+19. HR can record that an interview took place but cannot decide the outcome, reschedule or cancel. Should HR reschedule or cancel?
+20. An ITS recruiter brought in can move a candidate to finalist, like a hiring manager. Agreed?
+21. The candidate status link still does not expire (waits on item 3).
+22. The report's applicant list, for an ITS recruiter whose grant names one candidate, shows that candidate only. Agreed?
+
+Evidence, messages and company (wave 4 defaults):
+
+23. "Ask about this in a screen" waits for a person's click and never starts on its own. Should it start on its own?
+24. A hiring manager's message to a candidate goes at once and the owners are told afterwards; "approval" or "only a person" in Setup makes an owner or admin read it first. Is "send and tell" the right default?
+25. Candidate replies come back only once the inbound mail domain is connected (founder item 4 above); until then the reply address stays the monitored ITS mailbox. Agreed?
+26. A rule or notice change needs a session younger than 30 minutes or a "confirm it's you" in the last 10. Are those windows right?
+27. The public privacy-request form emails a 24-hour confirmation link and records nothing until the button. Is 24 hours right? Should ITS be alerted when someone asks about an address the product holds nothing for? Should the form also offer "ask for a human review of my application"?
+28. The audit history keeps every customer-visible record, and its export is itself audited. Agreed?
 
 ## Slices
 
@@ -8,17 +108,19 @@ Updated 14 September 2026. "Done" means the definition of done in docs/13 (UI, b
 |---|---|---|---|
 | **1** | Company and user creation, conversational intake, Role Packet (versioned), approval, posting to channels, applicant capture (web and email-in), acknowledgment, eligibility, resume extraction, Ask a recruiter, brief, admin console, policy engine, workflow engine, RLS | **Done, with gaps below** | `pnpm test` (71 tests across RLS, core, agents, integrations, API lifecycle, Slice 2 API, the dental scenario steps 1 to 10c, and the consumer scenario in `tests/scenario/consumer-lifecycle.test.ts`), `pnpm eval` (7 suites at threshold), and a browser walkthrough of the whole flow (below) |
 | **2** | Evidence-based assessment (Triage agent), text screening (web chat and SMS) with scorecards, recommendations under policy, "do it and tell me" notifications, stuck-role detector with an intervention ladder, Twilio adapter and inbound webhook | **Done, with gaps below** | `apps/api/src/slice2.test.ts` (10 tests), scenario steps 10, 10b, 10c, eval suites `triage.edge_cases`, `triage.hallucination`, `screen.conversation` |
-| 3 | Calendar OAuth, scheduling, interview briefs, recording with consent, draft scorecards, debrief | Not started | steps 11 to 13 `todo` |
-| 4 | Offer agent, approvals, e-signature, acceptance, negotiation support | Not started | step 14 `todo` |
-| 5 | Onboarding, handoff packet, BambooHR, 30/60/90 outcomes | Not started | step 15 `todo` |
-| 6 | Recruiter takeover mode | Not started (escalation, claim, resolve exist) | step 16 `todo` |
+| 3 | Calendar OAuth, scheduling, interview briefs, recording with consent, draft scorecards, debrief | 30 Sep: Google Calendar, manual availability, scheduling, the decision after an interview and the interviewer brief **built on mocks**; recording, draft scorecards and the debrief **deferred to release 2** | lifecycle steps 11 to 13, `scheduling.test.ts`, `interview-loop.test.ts`, `messages.test.ts`; steps 12b and 13b skipped by decision |
+| 4 | Offer agent, approvals, e-signature, acceptance, negotiation support | Deferred to release 2 (outcomes are recorded by a person) | step 14 skipped by decision |
+| 5 | Onboarding, handoff packet, BambooHR, 30/60/90 outcomes | Deferred to release 3 | step 15 skipped by decision |
+| 6 | Recruiter takeover mode | Deferred to release 3 (escalation, claim, resolve and scoped access exist) | step 16 skipped by decision |
 | 7 to 10 | Rediscovery, external sourcing, analytics, vertical intelligence | Not started | |
 
 ## Founder context applied (14 September 2026)
 
 The consultant-completed founder intake (`docs/FOUNDER-CONTEXT.md`) was adopted as the governing context and reconciled decision by decision in `docs/17-founder-context-reconciliation.md`. Applied in code: the consumer/beauty/e-commerce/creative playbook as the default vertical (six roles), company setup leading with the wedge, plans at Core $499 / Growth $899 / Company $1,499, navigation Today / Roles / Talent / Setup, "Bring in a recruiter", "recruiting chief of staff", "Insufficient evidence", Today's four-question summary, an electric accent, evidence items with confidence and context, a one-click assessment flag with the learning-loop taxonomy, "Review anyway" for eligibility declines, a required reason to override an eligibility hold, candidate withdrawal and text-message preference on the status page, and a second end-to-end scenario (a beauty brand hiring a performance marketing manager). Sequenced for later slices: calibration memory and close plans, Interviews/Offers/Insights navigation, rediscovery and sourcing, recruiter time metering, jurisdiction policy overrides, deletion workflows.
 
-## What works today (Slice 1)
+## What worked on 14 September (Slice 1)
+
+Kept as written; the current state is the first section. Changed since: sign-in is Google or Microsoft through Supabase Auth (the email link is a development aid, off in production); invitations are accepted by that sign-in, not by a link; posting follows the nine states of `docs/spec/20`, so "live and verified" now means a checked public URL.
 
 - Sign up with a magic link; create a company; invite teammates with roles; sessions with revocation.
 - Home: the brief (deterministic, from the system of record) and the conversation. A hiring sentence starts intake; the assistant asks recruiter questions, declines unlawful criteria with a lawful alternative, and compiles a Role Packet with the dental playbook and a compensation benchmark (BLS OEWS live when reachable, playbook ranges otherwise).
@@ -70,13 +172,14 @@ Same local database: a new applicant (Jordan Lee) applied through the public for
 - The Anthropic adapter has not been exercised against the live API in this environment (no key present); it follows the current SDK shape (`messages.parse` with `zodOutputFormat`) and needs one live smoke test.
 - Outbound email uses the fake adapter until Postmark credentials and a sending domain exist; SMS is fake until the A2P 10DLC campaign is approved.
 - Integration credentials are not yet stored per company (the `integrations` table and encryption key exist; the Setup flow to enter keys arrives with BambooHR in Slice 5).
-- The web app has no automated UI tests yet (the API is covered end to end).
+- The web app has no automated UI tests yet (the API is covered end to end). Closed: Playwright journeys with accessibility checks run in CI (`tests/e2e/specs`), including the candidate's phone journey and the decision after an interview since 30 September.
 - PGlite is pinned to 0.3.16 because 0.5 moved the pgvector extension; upgrade when the new path is confirmed.
 - Reference checking and voice screening are intentionally absent (docs/00 §E and §A.2).
 - The fake intake handler extracts facts with patterns; phrasing it does not recognise (for example a decision maker named mid-sentence) shows up as a repeated question. The real provider does not have this limitation; the eval suites gate the real prompts.
 - The BLS metro lookup is a small built-in table (about 35 metros); other locations use the national figure and say so.
-- The role page does not yet show the owner's deal-breakers and named decision maker from the packet's preferences (they are stored and versioned).
+- The role page does not yet show the owner's deal-breakers and named decision maker from the packet's preferences (they are stored and versioned). Closed 30 September: "What matters to you" on the Overview tab, and the named decision maker decides the approval.
+- The fake intake handler's phrase matching (above) now also picks up the work model and a named decision maker (30 September).
 
 ## How to run
 
-See docs/14. In short: `pnpm install`, `pnpm test`, `pnpm dev` (API on 3001 with an inline worker on PGlite, web on 5173), sign in with the dev magic link shown on screen.
+See docs/14. In short: `pnpm install`, `pnpm test`, `pnpm dev` (the Next.js app on http://localhost:3000 serving the app, the API, the candidate pages and an inline worker on PGlite), sign in with the fake identity provider's page or the development email link shown on screen. On a machine where pnpm is blocked, `docs/handoff/developer-onboarding.md` section 5 has the direct commands.

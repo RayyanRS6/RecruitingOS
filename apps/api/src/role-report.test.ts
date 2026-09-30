@@ -151,7 +151,8 @@ describe("role report", () => {
     const iv = (applicationId: string, status: string, extra: Partial<typeof interviews.$inferInsert> = {}) => ({ companyId, applicationId, roundKey: round.key, title: round.title, format: round.format, durationMinutes: round.durationMinutes, status, timezone: "America/Los_Angeles", createdBy: ownerActor, ...extra });
     await withTenant(container.db, companyId, (tx) => tx.insert(interviews).values([
       iv(ids.ana, "completed", { decision: "next_round", createdAt: at(0) }),
-      iv(ids.ben, "no_show", { createdAt: at(HOUR) }),
+      // the owner's own interviewer missed this one (POST /interviews/:id/outcome stores status no_show for either side)
+      iv(ids.ben, "no_show", { outcome: "no_show_interviewer", createdAt: at(HOUR) }),
       iv(ids.cara, "cancelled", { rescheduleCountCandidate: 1, cancelReason: "cancelled by the candidate", createdAt: at(2 * HOUR) }),
       iv(ids.dev, "proposed", { createdAt: at(3 * HOUR) }),
       iv(ids.ana, "scheduled", { roundKey: "final", title: "Final conversation", startsAt: at(2 * DAY), endsAt: at(2 * DAY + HOUR), createdAt: at(4 * HOUR) }),
@@ -239,9 +240,10 @@ describe("role report", () => {
   });
 
   it("counts interviews by state and by round", () => {
-    expect(report.interviews).toMatchObject({ total: 5, requested: 1, scheduled: 1, completed: 1, noShow: 1, cancelled: 1, offerExpired: 0, rescheduledByCandidate: 1, awaitingDecision: 1 });
+    // the one no-show was the company's interviewer, never put down to the candidate
+    expect(report.interviews).toMatchObject({ total: 5, requested: 1, scheduled: 1, completed: 1, noShow: 1, noShowCandidate: 0, noShowInterviewer: 1, cancelled: 1, offerExpired: 0, rescheduledByCandidate: 1, awaitingDecision: 1 });
     expect(report.interviews.byRound).toHaveLength(2);
-    expect(report.interviews.byRound[0]).toMatchObject({ total: 4, scheduled: 0, completed: 1, noShow: 1, cancelled: 1 });
+    expect(report.interviews.byRound[0]).toMatchObject({ total: 4, scheduled: 0, completed: 1, noShow: 1, noShowCandidate: 0, noShowInterviewer: 1, cancelled: 1 });
     expect(report.interviews.byRound[0].roundKey).not.toBe("final");
     expect(report.interviews.byRound[1]).toMatchObject({ roundKey: "final", title: "Final conversation", total: 1, scheduled: 1, completed: 0, noShow: 0, cancelled: 0 });
   });
@@ -379,7 +381,10 @@ describe("role report", () => {
     expect(lines[0]).toBe("Figure,Item,Value");
     expect(lines).toContain("Applicants,Total,8");
     expect(lines).toContain("Applicants by source,Referral: Dr. Patel,1");
-    expect(lines).toContain("Interviews,No-shows,1");
+    // who missed it, never a bare "no-show" the reader would put down to the candidate
+    expect(lines).toContain("Interviews,Candidate did not show,0");
+    expect(lines).toContain("Interviews,Interviewer did not show,1");
+    expect(lines.some((l) => l.startsWith("Interviews,No-shows"))).toBe(false);
     expect(lines).toContain("Recruiter help,Typical first response (hours),3");
     expect(lines).toContain("Outcomes,Hired,1");
     expect(lines).toContain("Decline reasons,Experience not a match,1");
@@ -538,6 +543,19 @@ describe("role report arithmetic on hand-made rows", () => {
     expect(r.pendingDecisions.list.map((p) => p.label)).toEqual(["Ready for your review", "Decide on an eligibility hold", "Want a recruiter to take a look?"]);
     for (const p of r.pendingDecisions.list) expect(p.label).not.toMatch(/[._]/);
     expect(summaryRows(r)).toContainEqual(["Role", "Status", "waiting for approval"]);
+  });
+
+  it("says who missed an interview from the recorded outcome, on the figures, by round and in the CSV", () => {
+    const missed = (applicationId: string, outcome: string | null) => ({ applicationId, status: "no_show", outcome, roundKey: "r1", title: "Working interview", rescheduleCountCandidate: 0, decision: null });
+    const r = composeRoleReport({ ...data, interviews: [missed("a1", "no_show_candidate"), missed("a2", "no_show_interviewer"), missed("a3", "no_show_interviewer"), missed("a3", null)] }, new Date(BASE));
+    expect(r.interviews).toMatchObject({ noShow: 4, noShowCandidate: 1, noShowInterviewer: 2 });
+    expect(r.interviews.byRound[0]).toMatchObject({ noShow: 4, noShowCandidate: 1, noShowInterviewer: 2 });
+    const rows = summaryRows(r);
+    expect(rows).toContainEqual(["Interviews", "Candidate did not show", 1]);
+    expect(rows).toContainEqual(["Interviews", "Interviewer did not show", 2]);
+    expect(rows).toContainEqual(["Interviews", "Did not take place, who was missing not recorded", 1]);
+    expect(rows).toContainEqual(["Interviews by round", "Working interview: interviewer did not show", 2]);
+    expect(rows.some((x) => x[1] === "No-shows")).toBe(false);
   });
 
   it("writes CSV that a spreadsheet opens safely: quoted commas and quotes, formulas neutralised, a byte-order mark", () => {

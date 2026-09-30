@@ -4,10 +4,11 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "../nav";
 import { Alert, Button, Card, Chip, EmptyState, ErrorState, EvidenceChip, Field, Segmented, Sheet, Skeleton, StatusChip, Table, Timeline } from "@ros/ui";
-import { api, ApiError, type ApplicationCapability, type ApplicationDetail, type ApplicationSummary, type AssessmentResult, type CompareResponse, type Me, type MessagePreview, type RoleSummary, type Screen, type SendMessageResult } from "../api/client";
+import { api, ApiError, type ApplicationCapability, type ApplicationDetail, type ApplicationSummary, type AssessmentResult, type CompareResponse, type InterviewPlanView, type Me, type MessagePreview, type RoleSummary, type Screen, type SendMessageResult } from "../api/client";
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
 import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, RESUME_UNREADABLE_TEXT, closerLook, openScreenOf, resumeUnreadable, screenQuestionText } from "../evidence";
+import { defaultInterviewers } from "../interview-defaults";
 
 type Group = "all" | "waiting_on_you" | "in_process" | "not_moving_forward" | "hired";
 type EvidenceFilter = "everyone" | "closer_look";
@@ -174,13 +175,22 @@ function ApplicationSheet({ id, roleId, onClose, openMessage = false }: { id: st
   const [interviewers, setInterviewers] = useState<string[] | null>(null);
   const [linkSource, setLinkSource] = useState<"calendar" | "pasted">("calendar");
   const [meetingUrl, setMeetingUrl] = useState("");
+  // The role's current plan names who interviews in each round now, so assignments made on the Interview plan tab reach candidates who applied before them.
+  const currentPlan = useQuery({ queryKey: ["interview-plan", roleId], queryFn: () => api.get<InterviewPlanView>(`/api/v1/roles/${roleId}/interview-plan`), enabled: interviewOpen });
+  const activeMembers = (members.data ?? []).filter((m) => m.status === "active");
+  const chosenRoundKey = roundKey ?? nextRound?.key;
+  const chosenInterviewers = defaultInterviewers({
+    roundKey: chosenRoundKey,
+    applicationPlan: a?.interviewPlan ?? [],
+    currentPlan: currentPlan.data?.rounds.map((r) => ({ key: r.key, interviewerUserIds: r.interviewers.map((i) => i.userId) })) ?? null,
+    picked: interviewers,
+    activeMemberIds: members.data && !currentPlan.isLoading ? new Set(activeMembers.map((m) => m.userId)) : null,
+  });
   const requestInterview = useMutation({
-    mutationFn: () => api.post(`/api/v1/applications/${id}/interviews`, { roundKey: roundKey ?? nextRound?.key, interviewerUserIds: interviewers ?? nextRound?.interviewerUserIds ?? [], linkSource, meetingUrl: linkSource === "pasted" ? meetingUrl : undefined }),
+    mutationFn: () => api.post(`/api/v1/applications/${id}/interviews`, { roundKey: chosenRoundKey, interviewerUserIds: chosenInterviewers, linkSource, meetingUrl: linkSource === "pasted" ? meetingUrl : undefined }),
     onSuccess: async () => { toast("Interview approved. Times go out to the candidate as soon as they exist."); setInterviewOpen(false); await qc.invalidateQueries({ queryKey: ["application", id] }); await qc.invalidateQueries({ queryKey: ["applications", roleId] }); await qc.invalidateQueries({ queryKey: ["interviews"] }); },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not start the interview."),
   });
-  const chosenRound = a?.interviewPlan.find((r) => r.key === (roundKey ?? nextRound?.key));
-  const chosenInterviewers = interviewers ?? chosenRound?.interviewerUserIds ?? [];
   return (
     <Sheet open onClose={onClose} title={a ? `${a.candidate.firstName} ${a.candidate.lastName}` : "Candidate"}>
       {q.isLoading || !a ? <Skeleton lines={6} /> : (
@@ -208,7 +218,7 @@ function ApplicationSheet({ id, roleId, onClose, openMessage = false }: { id: st
               <Field label="Round" htmlFor="iv-round"><select id="iv-round" className="select" value={roundKey ?? nextRound?.key ?? ""} onChange={(e) => { setRoundKey(e.target.value); setInterviewers(null); }}>{a.interviewPlan.map((r) => <option key={r.key} value={r.key}>{r.title} · {r.durationMinutes} min · {r.format.replace("_", " ")}</option>)}</select></Field>
               <fieldset style={{ border: 0, padding: 0, margin: "10px 0" }}>
                 <legend className="small muted">Interviewers</legend>
-                {members.isLoading ? <Skeleton lines={2} /> : (members.data ?? []).filter((m) => m.status === "active").map((m) => (
+                {members.isLoading || currentPlan.isLoading ? <Skeleton lines={2} /> : members.error ? <ErrorState message="Could not load your team, so nobody can be picked yet." onRetry={() => members.refetch()} /> : activeMembers.map((m) => (
                   <label key={m.userId} className="row small" style={{ gap: 8 }}>
                     <input type="checkbox" checked={chosenInterviewers.includes(m.userId)} onChange={(e) => setInterviewers(e.target.checked ? [...chosenInterviewers, m.userId] : chosenInterviewers.filter((x) => x !== m.userId))} />
                     {m.name ?? m.email} <Chip tone={m.schedulable ? "good" : "caution"}>{m.schedulable ? "availability known" : "no calendar or hours yet"}</Chip>
@@ -706,14 +716,14 @@ function CompareTable({ data }: { data: CompareResponse }) {
   const cands = data.candidates;
   return (
     <div style={{ marginTop: 12 }}>
-      <Table head={["", ...cands.map((c) => c.name)]} label="Candidates compared">
+      <Table head={["What we checked", ...cands.map((c) => c.name)]} label="Candidates compared">
         <tr><td className="small muted">Where they are</td>{cands.map((c) => <td key={c.applicationId}><StatusChip stage={c.stage} label={c.stageLabel} group={c.group} /></td>)}</tr>
         {data.mustHaves.map((m) => <tr key={m.key}><td className="small"><strong>Must-have:</strong> {m.text}</td>{cands.map((c) => <td key={c.applicationId}>{chip(c.mustHaves[m.key]?.met)}</td>)}</tr>)}
         {data.competencies.map((x) => <tr key={x.key}><td className="small" title={x.definition}>{x.name}</td>{cands.map((c) => <td key={c.applicationId}>{chip(c.competencies[x.key]?.finding)}</td>)}</tr>)}
         <tr><td className="small muted">Screen</td>{cands.map((c) => <td key={c.applicationId} className="small">{c.screen ? REC_LABEL[c.screen.recommendation] ?? c.screen.recommendation.replace(/_/g, " ") : <span className="muted">no screen yet</span>}</td>)}</tr>
         <tr><td className="small muted">Resume</td>{cands.map((c) => <td key={c.applicationId} className="small">{c.resume ? overallLabel(c.resume.overall) : <span className="muted">not assessed yet</span>}</td>)}</tr>
         <tr><td className="small muted">Still unknown</td>{cands.map((c) => <td key={c.applicationId} className="small">{c.unknownCount}</td>)}</tr>
-        <tr><td /> {cands.map((c) => <td key={c.applicationId}><Link to={c.open} className="btn quiet sm">Open</Link></td>)}</tr>
+        <tr><td className="small muted">Their page</td>{cands.map((c) => <td key={c.applicationId}><Link to={c.open} className="btn quiet sm">Open</Link></td>)}</tr>
       </Table>
       <p className="small muted" style={{ marginTop: 8 }}>{data.reminder}</p>
     </div>

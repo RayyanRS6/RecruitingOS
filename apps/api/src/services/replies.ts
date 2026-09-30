@@ -2,7 +2,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { createEscalation, humanResponseExpectation, loadBusinessCalendar, notify } from "@ros/core";
 import { fromAddress, queueCommunication, recordInbound, replyToFor, requestHuman } from "@ros/agents";
-import { applications, candidates, companies, inboundEmails, rolePackets, roles, screens, withPlatform, withTenant, type Tx } from "@ros/db";
+import { applications, candidates, communications, companies, inboundEmails, rolePackets, roles, screens, withPlatform, withTenant, type Tx } from "@ros/db";
 import type { InboundEmail } from "@ros/integrations";
 import type { Container } from "../container";
 import { screenDeps } from "./screens";
@@ -30,8 +30,14 @@ export function humanRequested(text: string): boolean {
   return /^human[.!]?$/i.test(firstLine(text));
 }
 
-export async function handleCandidateReply(tx: Tx, container: Container, input: { app: App; mail: InboundEmail }): Promise<{ communicationId: string; humanRequested: boolean }> {
+export async function handleCandidateReply(tx: Tx, container: Container, input: { app: App; mail: InboundEmail }): Promise<{ communicationId: string; humanRequested: boolean; duplicate?: boolean }> {
   const { app, mail } = input;
+  // Postmark redelivers a message it thinks was not taken (a timeout after this transaction committed, for instance):
+  // the same MessageID on this application is the same reply, recorded once, acted on once.
+  if (mail.messageId) {
+    const [seen] = await tx.select({ id: communications.id }).from(communications).where(and(eq(communications.applicationId, app.id), eq(communications.direction, "inbound"), eq(communications.providerMessageId, mail.messageId))).limit(1);
+    if (seen) return { communicationId: seen.id, humanRequested: false, duplicate: true };
+  }
   const [candidate] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
   const [role] = await tx.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
   const [company] = await tx.select().from(companies).where(eq(companies.id, app.companyId)).limit(1);
@@ -67,7 +73,7 @@ export async function handleCandidateReply(tx: Tx, container: Container, input: 
   if (candidate.email) {
     // The response-time sentence goes back the same way every candidate email does: through the outbox, after this transaction commits.
     const subject = mail.subject?.trim() ? (/^re:/i.test(mail.subject.trim()) ? mail.subject.trim() : `Re: ${mail.subject.trim()}`) : `A person will follow up: ${role.title} at ${company.name}`;
-    await queueCommunication(tx, container.integrations, { channel: "email", companyId: app.companyId, candidateId: candidate.id, applicationId: app.id, to: candidate.email, from: fromAddress(company, container.integrations), replyTo: replyToFor(app, container.integrations), subject, text: reply, templateKey: "human_requested_reply", idempotencyKey: `human_reply:${communicationId}`, tags: { template: "human_requested_reply", applicationId: app.id }, actor: EMAIL_REPLY_ACTOR, disclosureIncluded: false });
+    await queueCommunication(tx, container.integrations, { channel: "email", companyId: app.companyId, candidateId: candidate.id, applicationId: app.id, to: candidate.email, from: fromAddress(company, container.integrations), replyTo: replyToFor(app, container.integrations), subject, text: reply, templateKey: "human_requested_reply", idempotencyKey: mail.messageId ? `human_reply:${app.id}:${mail.messageId}` : `human_reply:${communicationId}`, tags: { template: "human_requested_reply", applicationId: app.id }, actor: EMAIL_REPLY_ACTOR, disclosureIncluded: false });
   }
   return { communicationId, humanRequested: true };
 }
@@ -78,14 +84,27 @@ export async function handleCandidateReply(tx: Tx, container: Container, input: 
  * recorded as unmatched and nothing else happens: no application, no message, no error to the sender.
  */
 export async function receiveCandidateReply(container: Container, input: { inbound: InboundRow; mail: InboundEmail; replyToken: string }): Promise<{ status: number; body: Record<string, unknown> }> {
-  const [app] = await withPlatform(container.db, (tx) => tx.select().from(applications).where(eq(applications.replyToken, input.replyToken)).limit(1));
-  if (!app) {
+  const found = await withPlatform(container.db, async (tx) => {
+    const [app] = await tx.select().from(applications).where(eq(applications.replyToken, input.replyToken)).limit(1);
+    if (!app) return null;
+    const [cand] = await tx.select({ anonymizedAt: candidates.anonymizedAt }).from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
+    return { app, anonymized: !!cand?.anonymizedAt };
+  });
+  if (!found) {
     await withPlatform(container.db, (tx) => tx.update(inboundEmails).set({ status: "unmatched", error: "unknown reply token" }).where(eq(inboundEmails.id, input.inbound.id)));
+    return { status: 200, body: { ok: true, matched: false } };
+  }
+  const { app } = found;
+  if (found.anonymized) {
+    // A deletion request was fulfilled for this person: a reply to an old email must not write their address or words
+    // back. The inbound row keeps nothing personal, nothing is recorded on the application, and nobody is notified.
+    await withPlatform(container.db, (tx) => tx.update(inboundEmails).set({ status: "unmatched", error: "reply to a record removed at the person's request", fromAddress: "(removed)", subject: null, parsed: {} }).where(eq(inboundEmails.id, input.inbound.id)));
     return { status: 200, body: { ok: true, matched: false } };
   }
   try {
     const r = await withTenant(container.db, app.companyId, (tx) => handleCandidateReply(tx, container, { app, mail: input.mail }));
-    await withPlatform(container.db, (tx) => tx.update(inboundEmails).set({ status: "matched", companyId: app.companyId, applicationId: app.id }).where(eq(inboundEmails.id, input.inbound.id)));
+    await withPlatform(container.db, (tx) => tx.update(inboundEmails).set({ status: r.duplicate ? "duplicate" : "matched", companyId: app.companyId, applicationId: app.id }).where(eq(inboundEmails.id, input.inbound.id)));
+    if (r.duplicate) return { status: 200, body: { ok: true, matched: true, reply: true, duplicate: true, applicationId: app.id } };
     await container.kick();
     return { status: 200, body: { ok: true, matched: true, reply: true, applicationId: app.id, humanRequested: r.humanRequested } };
   } catch (err) {

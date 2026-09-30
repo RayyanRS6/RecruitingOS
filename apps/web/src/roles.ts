@@ -23,3 +23,22 @@ export const canSeeTalent = (role: string | null | undefined): boolean => !!role
 /** role.create: who may start a hire (an intake session). HR and interviewers do not. */
 const HIRE_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin", "hiring_manager", "recruiter"]);
 export const canStartHire = (role: string | null | undefined): boolean => !!role && HIRE_ROLES.has(role);
+
+/**
+ * role.manage: pause and resume the role, every posting change (record a board's address, check, pause, resume, close,
+ * tick a board off as taken down), tracked links and the accepting-applications switch. Hiring managers, HR and
+ * interviewers do not hold it (docs/12-api-contracts.md), so the role page shows them postings read-only.
+ */
+const MANAGE_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin", "recruiter"]);
+export const canManageRole = (role: string | null | undefined): boolean => !!role && MANAGE_ROLES.has(role);
+
+/** packet.edit: edit the role packet, assign interviewers on the Interview plan tab, ask for approval again. */
+const PACKET_EDIT_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin", "hiring_manager", "recruiter"]);
+export const canEditPacket = (role: string | null | undefined): boolean => !!role && PACKET_EDIT_ROLES.has(role);
+
+/** outcome.record: close a role with its outcome (the decision-makers and HR; not a recruiter, not an interviewer). */
+const OUTCOME_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin", "hiring_manager", "hr"]);
+export const canRecordOutcome = (role: string | null | undefined): boolean => !!role && OUTCOME_ROLES.has(role);
+
+/** events.read: the role's Activity tab. Everyone but an interviewer. */
+export const canSeeActivity = (role: string | null | undefined): boolean => !!role && role !== "interviewer";

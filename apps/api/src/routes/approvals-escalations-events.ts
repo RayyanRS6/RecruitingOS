@@ -1,28 +1,38 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, isNull, like } from "drizzle-orm";
 import { CreateEscalation, DecideApproval, ResolveEscalation } from "@ros/contracts";
-import { ESCALATION_ACCESS_DAYS, activeStaffGrant, assertCan, audit, businessMinutesBetween, createEscalation, describeHours, emit, endStaffGrant, grantStaffAccess, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, recordStaffAccess, toEscalationPreview, transition, type EscalationPreview } from "@ros/core";
+import { ESCALATION_ACCESS_DAYS, activeStaffGrant, assertCan, audit, businessMinutesBetween, createEscalation, describeHours, emit, endStaffGrant, grantStaffAccess, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, recordStaffAccess, scopeAllows, toEscalationPreview, transition, type EscalationPreview } from "@ros/core";
 import { applications, approvalRequests, companies, events, recruiterEscalations, rolePackets, roles, staffAccessGrants, withPlatform, withTenant } from "@ros/db";
 import { actorOf, clientIp, requireRecruiterOrAdmin, requireTenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { composeBrief } from "../services/brief";
 import { assertMayApprovePacket } from "../services/packet-approval";
 import { settleMessageApproval } from "../services/messages";
+import { sendApprovedDecline } from "../services/application-actions";
+import { approverRolesOf, mayDecideByRole } from "../services/approvers";
 
 export const approvalRoutes = new Hono<Vars>();
 
+/**
+ * The approval requests themselves. A request's proposal can carry a candidate's name and a message written to them
+ * (F11), so the list needs application.read (an interviewer sees only their own interviews, F9), and ITS staff under a
+ * scoped grant see only the requests of the role or candidate the grant names.
+ */
 approvalRoutes.get("/", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  assertCan(t.role, "role.read");
+  assertCan(t.role, "application.read");
   const status = c.req.query("status") ?? "pending";
   const rows = await withTenant(c.get("container").db, t.companyId, (tx) => tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, t.companyId), eq(approvalRequests.status, status))).orderBy(desc(approvalRequests.createdAt)));
-  return c.json(rows);
+  const scope = t.staff ? { roleId: t.staff.scope.roleId, applicationId: t.staff.scope.applicationId } : null;
+  return c.json(scope ? rows.filter((r) => scopeAllows(scope, { roleId: r.roleId, applicationId: r.applicationId })) : rows);
 });
 
 approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   const body = DecideApproval.parse(await c.req.json());
   const container = c.get("container");
+  // Stamped on the engine's clock, the one the waiting workflow compares against (expiry, the decision after the request).
+  const decidedAt = container.engine.clock().toISOString();
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     const [req] = await tx.select().from(approvalRequests).where(eq(approvalRequests.id, c.req.param("id"))).limit(1);
     if (!req) throw new HttpError(404, "not_found", "Approval request not found.");
@@ -41,13 +51,22 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
         const decide = mayDecideApproval(req, { userId: t.userId, role: t.role });
         if (!decide.ok) throw new HttpError(403, decide.code, decide.message);
       }
-      if (status === "approved") await tx.update(rolePackets).set({ approvedBy: t.userId, approvedAt: new Date().toISOString() }).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, proposedVersion)));
-    } else if (!req.requiredRoles.includes(t.role)) throw new HttpError(403, "forbidden", `This decision needs one of: ${req.requiredRoles.join(", ")}.`);
-    await tx.update(approvalRequests).set({ status, decidedBy: t.userId, decidedAt: new Date().toISOString(), decisionNote: body.note ?? null, decisionEdits: body.edits ?? null }).where(eq(approvalRequests.id, req.id));
+      if (status === "approved") {
+        await tx.update(rolePackets).set({ approvedBy: t.userId, approvedAt: decidedAt }).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, proposedVersion)));
+        // The same domain fact as POST /roles/:id/approve, so the role's history reads the same whichever button approved it.
+        await emit(tx, { type: "role.approved", companyId: t.companyId, actor: actorOf(c), subject: { type: "role", id: role.id }, payload: { version: proposedVersion } });
+      }
+    } else if (!mayDecideByRole(req.requiredRoles, t.role)) throw new HttpError(403, "forbidden", `This decision needs one of: ${approverRolesOf(req.requiredRoles).join(", ")}.`);
+    await tx.update(approvalRequests).set({ status, decidedBy: t.userId, decidedAt, decisionNote: body.note ?? null, decisionEdits: body.edits ?? null }).where(eq(approvalRequests.id, req.id));
     await emit(tx, { type: body.decision === "approve" ? "approval.granted" : "approval.denied", companyId: t.companyId, actor: actorOf(c), subject: { type: "approval_request", id: req.id }, payload: { actionType: req.actionType, roleId: req.roleId, version: Number.isFinite(proposedVersion) ? proposedVersion : null, note: body.note ?? null }, correlationId: req.workflowRunId });
     await container.engine.signal(tx, { companyId: t.companyId, key: `approval:${req.id}`, payload: { decision: status } });
     // A message a team member wrote to a candidate (F11): approved, it goes out under their name; declined, they are told.
     if (req.actionType === "message.send_freeform") await settleMessageApproval(tx, container, { req, status, actor: actorOf(c), tenant: t, note: body.note ?? null });
+    // A decline message held for approval (disposition.send under "approval"): no workflow waits on it, so approving it sends it here.
+    let dispositionSent: boolean | undefined;
+    if (req.actionType === "disposition.send" && status === "approved" && req.applicationId) {
+      dispositionSent = await sendApprovedDecline(tx, container, { companyId: t.companyId, applicationId: req.applicationId, actor: actorOf(c), reason: String((req.proposal as { reason?: string }).reason ?? "") });
+    }
     if (status === "approved" && req.applicationId) {
       const [app] = await tx.select().from(applications).where(eq(applications.id, req.applicationId)).limit(1);
       if (app && req.actionType === "application.invite_screen") {
@@ -58,7 +77,7 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
         await emit(tx, { type: "candidate.recommended", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { by: "approval", approvalRequestId: req.id } });
       }
     }
-    return { ok: true, status };
+    return { ok: true, status, ...(dispositionSent === undefined ? {} : { dispositionSent }) };
   });
   await container.kick();
   return c.json(result);

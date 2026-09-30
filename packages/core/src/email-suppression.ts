@@ -76,6 +76,16 @@ export async function recordWebhookReceipt(q: Queryable, input: { provider: stri
   }
 }
 
+/**
+ * The same first-time check, made inside the caller's transaction together with the handling of the event: ON CONFLICT
+ * DO NOTHING never aborts the transaction (a caught unique violation would), and a handling that fails rolls the
+ * receipt back with it, so the provider's redelivery is processed instead of being answered as a duplicate.
+ */
+export async function claimWebhookReceipt(q: Queryable, input: { provider: string; kind: string; externalId: string }): Promise<boolean> {
+  const rows = await q.insert(webhookReceipts).values({ provider: input.provider, kind: input.kind, externalId: input.externalId }).onConflictDoNothing().returning({ id: webhookReceipts.id });
+  return rows.length > 0;
+}
+
 /** Soft-bounce policy: two soft bounces inside a week become a suppression. */
 export const SOFT_BOUNCE_LIMIT = 2;
 export const SOFT_BOUNCE_WINDOW_MS = 7 * 86_400_000;

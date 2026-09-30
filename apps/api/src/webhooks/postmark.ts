@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { MAX_RESUME_BYTES, type Actor } from "@ros/contracts";
-import { notify, recordWebhookReceipt } from "@ros/core";
+import { claimWebhookReceipt, notify } from "@ros/core";
 import { handleEmailEvent } from "@ros/agents";
 import { inboundEmails, notifications, postings, roles, withPlatform, withTenant, type Tx } from "@ros/db";
 import { extractApplicantFromInbound, extractIntakeToken, extractReplyToken, parsePostmarkEvent, parsePostmarkInbound, verifyPostmarkWebhookAuth, type InboundEmail } from "@ros/integrations";
@@ -181,25 +181,7 @@ export async function replayHeldEmails(container: Container, input: { companyId:
     return { role, held: await heldEmailsFor(tx, container, companyId, roleId) };
   });
   if (!found || !found.held.length) return { replayed: 0, failed: 0 };
-  let replayed = 0;
-  let failed = 0;
-  for (const row of found.held) {
-    const parsed = row.parsed as HeldParsed;
-    const mail: InboundEmail = { to: row.toAddress, from: row.fromAddress, fromName: parsed.fromName ?? undefined, subject: row.subject ?? "", text: parsed.text ?? "", attachments: [], receivedAt: row.createdAt };
-    const bytes = row.rawStorageKey ? await container.integrations.storage.get(row.rawStorageKey) : null;
-    const resume: ResumeInput | null = bytes && parsed.resume ? { kind: "bytes", filename: parsed.resume.filename, mime: parsed.resume.contentType, bytes, via: "email" } : null;
-    try {
-      await withTenant(container.db, companyId, async (tx) => {
-        const result = await createApplication(tx, container, applicationFromEmail({ companyId, roleId, mail, resume }), EMAIL_IN_ACTOR);
-        await tx.update(inboundEmails).set({ status: "matched", applicationId: result.application.id, rawStorageKey: null }).where(eq(inboundEmails.id, row.id));
-      });
-      if (row.rawStorageKey) await container.integrations.storage.delete(row.rawStorageKey);
-      replayed += 1;
-    } catch (err) {
-      await withTenant(container.db, companyId, (tx) => tx.update(inboundEmails).set({ status: "error", error: err instanceof Error ? err.message : String(err) }).where(eq(inboundEmails.id, row.id)));
-      failed += 1;
-    }
-  }
+  const { replayed, failed } = await admitHeldEmails(container, { companyId, roleId, held: found.held });
   await withTenant(container.db, companyId, async (tx) => {
     const unread = await unreadHeldNotices(tx, companyId, roleId);
     if (!unread.length) return;
@@ -210,6 +192,65 @@ export async function replayHeldEmails(container: Container, input: { companyId:
   });
   await container.kick();
   return { replayed, failed };
+}
+
+/**
+ * Each held email becomes an application on its own (one bad email does not stop the rest); the outcome lands on its
+ * inbound row exactly as a live email's would (matched with the application id, or error with the reason) and the
+ * parked résumé leaves storage once it travelled with its application.
+ */
+async function admitHeldEmails(container: Container, input: { companyId: string; roleId: string; held: InboundRow[]; intoTalentPool?: boolean }): Promise<{ replayed: number; failed: number }> {
+  const { companyId, roleId } = input;
+  let replayed = 0;
+  let failed = 0;
+  for (const row of input.held) {
+    const parsed = row.parsed as HeldParsed;
+    const mail: InboundEmail = { to: row.toAddress, from: row.fromAddress, fromName: parsed.fromName ?? undefined, subject: row.subject ?? "", text: parsed.text ?? "", attachments: [], receivedAt: row.createdAt };
+    const bytes = row.rawStorageKey ? await container.integrations.storage.get(row.rawStorageKey) : null;
+    const resume: ResumeInput | null = bytes && parsed.resume ? { kind: "bytes", filename: parsed.resume.filename, mime: parsed.resume.contentType, bytes, via: "email" } : null;
+    try {
+      await withTenant(container.db, companyId, async (tx) => {
+        const result = await createApplication(tx, container, applicationFromEmail({ companyId, roleId, mail, resume }), EMAIL_IN_ACTOR, { intoTalentPool: input.intoTalentPool });
+        await tx.update(inboundEmails).set({ status: "matched", applicationId: result.application.id, rawStorageKey: null }).where(eq(inboundEmails.id, row.id));
+      });
+      if (row.rawStorageKey) await container.integrations.storage.delete(row.rawStorageKey);
+      replayed += 1;
+    } catch (err) {
+      await withTenant(container.db, companyId, (tx) => tx.update(inboundEmails).set({ status: "error", error: err instanceof Error ? err.message : String(err) }).where(eq(inboundEmails.id, row.id)));
+      failed += 1;
+    }
+  }
+  return { replayed, failed };
+}
+
+/**
+ * A role closed while emailed applications were held for it (C19): paused, or its switch off, and then closed instead of
+ * reopened. The notice had promised the team they would be added on their own, so they are: each becomes an
+ * application and goes straight to the talent pool, where the role's other active candidates went when it closed, and
+ * nobody is told the role is still hiring. The team's held notice says what happened. Called after the close commits;
+ * a no-op for a role that is not closed or has nothing held.
+ */
+export async function settleHeldEmailsOnClose(container: Container, input: { companyId: string; roleId: string }): Promise<{ addedToTalentPool: number; failed: number }> {
+  const { companyId, roleId } = input;
+  const found = await withTenant(container.db, companyId, async (tx) => {
+    const [role] = await tx.select().from(roles).where(eq(roles.id, roleId)).limit(1);
+    if (!role || role.status !== "closed") return null;
+    return { role, held: await heldEmailsFor(tx, container, companyId, roleId) };
+  });
+  if (!found || !found.held.length) return { addedToTalentPool: 0, failed: 0 };
+  const { replayed, failed } = await admitHeldEmails(container, { companyId, roleId, held: found.held, intoTalentPool: true });
+  await withTenant(container.db, companyId, async (tx) => {
+    const one = replayed === 1;
+    const title = replayed ? `${one ? "A held email application" : `${replayed} held email applications`} for ${found.role.title} ${one ? "is" : "are"} in your talent pool` : `Held email applications for ${found.role.title} need a look`;
+    const added = replayed ? `${found.role.title} was closed while ${one ? "an application that arrived by email was" : `${replayed} applications that arrived by email were`} waiting for applications to reopen. ${one ? "It was" : "They were"} added to the role and moved to your talent pool, with the role's other candidates who were still in process, so you can consider ${one ? "them" : "those people"} for a later opening. Nobody was sent a message saying the role is still hiring.` : `${found.role.title} was closed while applications that arrived by email were waiting.`;
+    const trouble = failed ? ` ${failed === 1 ? "One email" : `${failed} emails`} could not be read as an application and ${failed === 1 ? "is" : "are"} kept for a person to look at.` : "";
+    const notice = { title, body: added + trouble };
+    const unread = await unreadHeldNotices(tx, companyId, roleId);
+    if (unread.length) await tx.update(notifications).set(notice).where(inArray(notifications.id, unread));
+    else await notify(tx, { companyId, kind: HELD_EMAIL_NOTIFICATION_KIND, ...notice, action: { label: "Open the talent pool", href: "/talent" } });
+  });
+  await container.kick();
+  return { addedToTalentPool: replayed, failed };
 }
 
 /**
@@ -227,12 +268,16 @@ async function handleDeliveryEvent(c: Context<Vars>) {
   const payload = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
   const event = payload ? parsePostmarkEvent(payload) : null;
   if (!event) return c.json({ error: { code: "invalid_request", message: "not a Postmark event" } }, 400);
-  const first = await recordWebhookReceipt(container.db, { provider: "postmark", kind: event.recordType, externalId: event.externalId });
-  if (!first) return c.json({ ok: true, duplicate: true });
-  // A subscription change (H10) is a suppression to honour or a reactivation to acknowledge, never a bounce to retry.
-  const outcome = event.recordType === "SubscriptionChange"
-    ? await withPlatform(container.db, (tx) => handleSubscriptionChange(tx, { event, now: container.engine.clock() }))
-    : await withPlatform(container.db, (tx) => handleEmailEvent(tx, container.integrations, { event, appBaseUrl: container.env.JOBS_BASE_URL, now: container.engine.clock() }));
+  // The receipt is claimed in the same transaction as the handling: if the handling fails, the claim rolls back with it,
+  // the answer is an error, and Postmark's redelivery is processed (an unsubscribe is never lost to a duplicate answer).
+  const outcome = await withPlatform(container.db, async (tx) => {
+    if (!(await claimWebhookReceipt(tx, { provider: "postmark", kind: event.recordType, externalId: event.externalId }))) return null;
+    // A subscription change (H10) is a suppression to honour or a reactivation to acknowledge, never a bounce to retry.
+    return event.recordType === "SubscriptionChange"
+      ? handleSubscriptionChange(tx, { event, now: container.engine.clock() })
+      : handleEmailEvent(tx, container.integrations, { event, appBaseUrl: container.env.JOBS_BASE_URL, now: container.engine.clock() });
+  });
+  if (!outcome) return c.json({ ok: true, duplicate: true });
   await container.kick();
   return c.json({ ok: true, duplicate: false, ...outcome });
 }

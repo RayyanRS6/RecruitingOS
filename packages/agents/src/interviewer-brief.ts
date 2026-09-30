@@ -13,6 +13,14 @@ import { answersOf } from "./screen-focus";
 export type MustHaveFinding = "yes" | "partially" | "no" | "unknown";
 export type CompetencyFinding = "evidenced" | "partially_evidenced" | "not_evidenced" | "contradicted";
 
+/**
+ * `aboutPay` marks what speaks to the candidate's pay: the answer to a compensation question, and any answer or finding
+ * that repeats what they said about pay or talks about pay. A reader whose role may not see pay never receives these
+ * (`redactBriefPay`); docs/spec/02: interviewers never see pay.
+ */
+export type BriefFinding = { claim: string; quote: string | null; source: string | null; aboutPay: boolean };
+export type BriefScreenAnswer = { question: string; answer: string; aboutPay: boolean };
+
 export type InterviewerBrief = {
   candidateFirstName: string;
   round: { key: string; title: string; purpose: string; durationMinutes: number; format: string };
@@ -20,9 +28,9 @@ export type InterviewerBrief = {
   /** The questions the interview plan suggests for this round, if the packet has any. */
   questions: string[];
   mustHaves: Array<{ key: string; text: string; met: MustHaveFinding; quote: string | null; source: string | null }>;
-  strengths: Array<{ claim: string; quote: string | null; source: string | null }>;
-  concerns: Array<{ claim: string; quote: string | null; source: string | null }>;
-  screen: { completedAt: string | null; answers: Array<{ question: string; answer: string }> } | null;
+  strengths: BriefFinding[];
+  concerns: BriefFinding[];
+  screen: { completedAt: string | null; answers: BriefScreenAnswer[] } | null;
   /** Present only when the reader may see pay; otherwise null, never zeroed. */
   pay: { expectation: string | null; withinRange: string } | null;
   includesPay: boolean;
@@ -31,22 +39,21 @@ export type InterviewerBrief = {
 type AssessmentRow = typeof assessments.$inferSelect;
 type Finding = { claim: string; evidence: { source: string; quote?: string } };
 
+/** A finding's claim that talks about pay in so many words. Only used to hide things from readers who may not see pay. */
+const PAY_WORDS = /\b(pay|salary|salaries|wage|wages|compensation|pay rate|hourly rate)\b/i;
+
 function isScreenAssessment(row: AssessmentRow): row is AssessmentRow & { result: ScreenAssessment } {
   return row.kind === "screen";
 }
 
-function quoteOf(f: Finding): { claim: string; quote: string | null; source: string | null } {
-  return { claim: f.claim, quote: f.evidence?.quote ?? null, source: f.evidence?.source ?? null };
-}
-
-function mergeFindings(first: Finding[], second: Finding[], cap: number): Array<{ claim: string; quote: string | null; source: string | null }> {
+function mergeFindings(first: Finding[], second: Finding[], cap: number, aboutPay: (f: Finding) => boolean): BriefFinding[] {
   const seen = new Set<string>();
-  const out: Array<{ claim: string; quote: string | null; source: string | null }> = [];
+  const out: BriefFinding[] = [];
   for (const f of [...first, ...second]) {
     const key = f.claim.trim().toLowerCase();
     if (!key || seen.has(key)) continue;
     seen.add(key);
-    out.push(quoteOf(f));
+    out.push({ claim: f.claim, quote: f.evidence?.quote ?? null, source: f.evidence?.source ?? null, aboutPay: aboutPay(f) });
     if (out.length >= cap) break;
   }
   return out;
@@ -71,6 +78,13 @@ export async function composeInterviewerBrief(q: Queryable, input: { application
   const requirementFinding = (key: string) => screenAsmt?.result.requirementFindings?.find((r) => r.requirementKey === key) ?? resumeAsmt?.result.requirementFindings?.find((r) => r.requirementKey === key) ?? null;
   const competencyFinding = (key: string) => screenAsmt?.result.competencyFindings?.find((c) => c.competencyKey === key) ?? resumeAsmt?.result.competencyFindings?.find((c) => c.competencyKey === key) ?? null;
 
+  // What the candidate said about pay: their answer to each compensation question, and the expectation the scorecard recorded.
+  const payKeys = new Set(input.packet.screening.questions.filter((x) => x.kind === "compensation").map((x) => x.key));
+  const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+  const paySaid = [...[...payKeys].map((k) => answered?.all[k]), screenAsmt?.result.compensationExpectation?.stated].filter((s): s is string => !!s?.trim()).map(norm);
+  const repeatsPay = (text: string | null | undefined) => !!text && paySaid.some((p) => norm(text).includes(p));
+  const findingAboutPay = (f: Finding) => PAY_WORDS.test(f.claim) || repeatsPay(f.claim) || repeatsPay(f.evidence?.quote);
+
   return {
     candidateFirstName: input.candidateFirstName,
     round: { key: round.key, title: round.title, purpose: round.purpose, durationMinutes: round.durationMinutes, format: round.format },
@@ -84,17 +98,28 @@ export async function composeInterviewerBrief(q: Queryable, input: { application
       const f = requirementFinding(m.key);
       return { key: m.key, text: m.text, met: f?.met ?? "unknown", quote: f?.evidence?.quote ?? null, source: f?.evidence?.source ?? null };
     }),
-    strengths: mergeFindings(screenAsmt?.result.strengths ?? [], resumeAsmt?.result.strengths ?? [], 6),
-    concerns: mergeFindings(screenAsmt?.result.concerns ?? [], resumeAsmt?.result.concerns ?? [], 6),
-    screen: answered ? { completedAt: answered.completedAt, answers: Object.entries(answered.all).map(([key, answer]) => ({ question: questionText(key), answer: String(answer) })) } : null,
+    strengths: mergeFindings(screenAsmt?.result.strengths ?? [], resumeAsmt?.result.strengths ?? [], 6, findingAboutPay),
+    concerns: mergeFindings(screenAsmt?.result.concerns ?? [], resumeAsmt?.result.concerns ?? [], 6, findingAboutPay),
+    screen: answered ? { completedAt: answered.completedAt, answers: Object.entries(answered.all).map(([key, answer]) => ({ question: questionText(key), answer: String(answer), aboutPay: payKeys.has(key) || repeatsPay(String(answer)) })) } : null,
     pay: screenAsmt ? { expectation: screenAsmt.result.compensationExpectation?.stated ?? null, withinRange: screenAsmt.result.compensationExpectation?.withinRange ?? "unknown" } : null,
     includesPay: true,
   };
 }
 
-/** The same brief for a reader whose role may not see pay: the pay line is removed, nothing is zeroed. */
+/**
+ * The same brief for a reader whose role may not see pay: the pay line is removed, and so is every screen answer and
+ * finding that speaks to pay (the answer to the compensation question first of all). Nothing is zeroed.
+ */
 export function redactBriefPay(brief: InterviewerBrief): InterviewerBrief {
-  return { ...brief, pay: null, includesPay: false };
+  const withoutPay = <T extends { aboutPay: boolean }>(items: T[]) => items.filter((x) => !x.aboutPay);
+  return {
+    ...brief,
+    strengths: withoutPay(brief.strengths),
+    concerns: withoutPay(brief.concerns),
+    screen: brief.screen ? { ...brief.screen, answers: withoutPay(brief.screen.answers) } : null,
+    pay: null,
+    includesPay: false,
+  };
 }
 
 const MET_WORDS: Record<MustHaveFinding, string> = { yes: "met", partially: "partly met", no: "not met", unknown: "unknown so far" };

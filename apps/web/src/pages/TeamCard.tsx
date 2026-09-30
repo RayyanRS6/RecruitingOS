@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, Field, Skeleton } from "@ros/ui";
+import { Alert, Button, Card, Chip, ErrorState, Field, Skeleton } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 import { toast } from "../toast";
 
@@ -13,7 +13,7 @@ type Invitation = { id: string; email: string; role: string; name: string | null
 const ROLES: Array<{ value: string; label: string; help: string }> = [
   { value: "owner", label: "Owner", help: "Everything, including making other owners." },
   { value: "admin", label: "Admin", help: "Everything except the owner role." },
-  { value: "hiring_manager", label: "Hiring manager", help: "Runs hires: approves roles, decides on candidates." },
+  { value: "hiring_manager", label: "Hiring manager", help: "Runs hires: approves roles, decides on candidates. Owners and admins handle the job-board postings." },
   { value: "interviewer", label: "Interviewer", help: "Sees roles and fills in scorecards. Never sees pay." },
   { value: "hr", label: "HR", help: "Talent pool, offers and the team list." },
 ];
@@ -71,9 +71,11 @@ export function TeamCard({ myRole, myUserId }: { myRole: string; myUserId: strin
     onError: (e) => setError(explain(e, "Could not withdraw the invitation.")),
   });
   const update = useMutation({
-    mutationFn: (input: { userId: string; body: { role?: string; status?: "removed" } }) => api.patch<{ sessionsEnded: number; calendarDeletionQueued: boolean; interviewsFlagged: number }>(`/api/v1/companies/current/members/${input.userId}`, input.body),
+    mutationFn: (input: { userId: string; body: { role?: string; status?: "removed" } }) => api.patch<{ sessionsEnded: number; calendarDeletionQueued: boolean; interviewsFlagged: number; interviewsCancelled?: number }>(`/api/v1/companies/current/members/${input.userId}`, input.body),
     onSuccess: async (r, input) => {
-      if (input.body.status === "removed") toast(`Removed. They are signed out everywhere${r.calendarDeletionQueued ? ", their calendar is disconnected" : ""}${r.interviewsFlagged ? `, and ${r.interviewsFlagged === 1 ? "one interview needs" : `${r.interviewsFlagged} interviews need`} another interviewer` : ""}.`);
+      // Interviews nobody else was on are cancelled by the removal (there is no way to add an interviewer to one); the others go ahead.
+      const cancelled = r.interviewsCancelled ?? 0;
+      if (input.body.status === "removed") toast(`Removed. They are signed out everywhere${r.calendarDeletionQueued ? ", their calendar is disconnected" : ""}${cancelled ? `, and ${cancelled === 1 ? "one interview they alone were running was" : `${cancelled} interviews they alone were running were`} cancelled: approve a new one from the candidate's page` : ""}.`);
       else toast("Role changed. They are signed out and get the new role when they sign in again.");
       setRoleChange(null); setRemoving(null); setError(null); await refresh();
     },
@@ -87,7 +89,7 @@ export function TeamCard({ myRole, myUserId }: { myRole: string; myUserId: strin
   return (
     <Card title="Team">
       {error ? <Alert tone="critical">{error}</Alert> : null}
-      {members.isLoading ? <Skeleton lines={2} /> : (
+      {members.isLoading ? <Skeleton lines={2} /> : members.error ? <ErrorState message="Could not load your team." onRetry={() => members.refetch()} /> : (
         <div className="stack" style={{ gap: 6 }}>
           {list.map((m) => {
             const self = m.userId === myUserId;
@@ -118,7 +120,7 @@ export function TeamCard({ myRole, myUserId }: { myRole: string; myUserId: strin
                 {removing === m.userId ? (
                   <Alert tone="critical">
                     <div className="stack" style={{ gap: 6 }}>
-                      <span>Remove {nameOf(m)} from the team? They lose access right away and are signed out everywhere. Their calendar connection is disconnected and its credential deleted. Any interview they were going to run will need another interviewer; you will be told which ones. What they did stays in the record.</span>
+                      <span>Remove {nameOf(m)} from the team? They lose access right away and are signed out everywhere. Their calendar connection is disconnected and its credential deleted. An interview they were going to run alone is cancelled (a candidate with a booked time is told) and you approve a new one with someone else; an interview others also run goes ahead with them. You will be told which ones. What they did stays in the record.</span>
                       <div className="row"><Button size="sm" variant="destructive" loading={update.isPending} onClick={() => update.mutate({ userId: m.userId, body: { status: "removed" } })}>Remove {nameOf(m)}</Button><Button size="sm" variant="quiet" onClick={() => setRemoving(null)}>Keep them</Button></div>
                     </div>
                   </Alert>
@@ -129,6 +131,8 @@ export function TeamCard({ myRole, myUserId }: { myRole: string; myUserId: strin
         </div>
       )}
 
+      {/* Only those who manage the team may list invitations; for anyone else the refusal is expected and says nothing. */}
+      {canManage && invitations.error ? <p className="small" style={{ marginTop: 12, color: "var(--ink-2)" }}>Could not load the pending invitations. <Button size="sm" variant="quiet" onClick={() => invitations.refetch()}>Try again</Button></p> : null}
       {pending.length ? (
         <div style={{ marginTop: 12 }}>
           <h3 style={{ marginBottom: 6 }}>Invited, not yet in</h3>

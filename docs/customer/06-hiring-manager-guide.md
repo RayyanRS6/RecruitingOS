@@ -2,7 +2,7 @@
 
 **ITS AI Recruiting Department, Founding Partner Program. Release 1.**
 
-Draft of 30 September 2026, for review by ITS before it is given to a customer. This guide is for the person who runs a hire: describes the role, approves it, reads the candidates, and decides. Owners and admins can do everything in this guide too.
+Draft of 30 September 2026 (checked again against the product the same day), for review by ITS before it is given to a customer. This guide is for the person who runs a hire: describes the role, approves it, reads the candidates, and decides. Owners and admins can do everything in this guide too.
 
 Screen names and button labels in **bold** are the ones you will see in the product. Two words we use: **ITS** is Identified Talent Solutions. **The assistant** is the software's AI helper. It organizes and drafts. You decide.
 
@@ -47,6 +47,8 @@ The role page shows the title, location, type, work model and pay at the top, th
 
 **History.** Every version of the packet, who made it and why. Nothing is overwritten.
 
+**Report.** The role's figures once people apply (section 16).
+
 **To edit**, press **Edit** (or **Edit first** on the approval card). **The usual edits** lets you change:
 
 - **Public description**
@@ -76,21 +78,29 @@ Editing after approval creates a new version. If you can approve, your edit take
 
 ## 5. The Posting tab and the manual posting steps
 
-One card per place the job appears, each with a status chip.
+One card per place the job appears, each with a status and a sentence saying what happens next. Everyone who works on the role can read this tab. The buttons that change a posting, pause the role or stop applications are for owners and admins (and ITS); if you are a hiring manager and something needs changing, ask your owner or your ITS contact.
 
-- **Your careers page**: live as soon as the role is open. The address is on the card.
-- **Google for Jobs**: the job page carries the data Google reads. It shows **Submitted, awaiting verification** until Google has indexed it.
-- **Applications by email**: an address for forwarded applications, used only once ITS has switched it on for your workspace.
-- **LinkedIn basic listing**, **Indeed**, **ZipRecruiter**: these are posted by ITS by hand under your company's accounts. Here is what happens:
-  1. The card shows **Manual action required** with the step.
-  2. ITS posts the job on the board using the copy from the packet and that board's own application link. Each board has a different link, so the product knows where each applicant came from.
-  3. ITS records the public address of the posting on the board.
-  4. The product checks that the address is up and shows your job.
-  5. The card changes to **Live and verified**. Nothing is called live before this.
+- **Careers page**: your job page, served by the product. The address is on the card with **Copy**. The product opens the page and checks it before calling it **Live and verified**.
+- **Google for Jobs**: the job page carries the data Google reads. It shows **Submitted** until someone sees the job in Google and marks it verified with a note.
+- **Applications by email**: an address for forwarded applications. It works once ITS has connected incoming mail for your workspace; until then the card says **Not connected** and the boards use their own application links.
+- **LinkedIn**, **Indeed**, **ZipRecruiter**: these are posted by ITS by hand under your company's accounts. Here is what happens:
+  1. The card shows **Ready to post**, with the steps, **Copy posting package** (everything the board asks for, ready to paste) and the board's own application link. Each board has a different link, so the product knows where each applicant came from.
+  2. ITS posts the job on the board with that package and that link.
+  3. ITS records the public address of the posting under **Record the public URL**. The card changes to **Posted**.
+  4. The product opens the address and checks that it shows your job. If it cannot, it tries twice more, then the card says **Failed** and why; **Check again** repeats it, and a person who can see the posting can press **I checked it myself** and say what they checked.
+  5. The card changes to **Live and verified**, with who or what verified it and when. Nothing is called live before this.
 
 You do not have to do anything on the boards yourself. If a board asks your account holder to confirm something, ITS tells you. Paid promotion on a board is bought by you, from the board.
 
-**Pause** at the top of the role page stops new applications without declining anyone: the job page says the position is not accepting applications and the role disappears from your careers page. **Resume** puts it back. If you have enough applicants and want the job to stay listed but closed, use the accepting-applications control on the role; the page then says applications are closed, and nobody is declined. Either way, tell your ITS contact so the board postings are paused or removed by hand.
+**Pausing or closing one board.** **Pause** on a card pauses that posting only, and **Resume** puts it back where it was. **Close** ends it. The job may still show on the board itself until someone takes it down there.
+
+**Still up.** When the role closes, or when one board's posting is closed, the role page shows a red alert naming the boards where the job is still showing, and owners and admins get a card on **Today**. Once the posting is gone from a board, an owner or admin (or ITS) ticks **Removed from this board** on its card. The alert stays until every board is ticked.
+
+**Other links.** Under **Other links** you can make an application link for a referral, a direct approach or anything else. Applications through it carry the name you gave it.
+
+**Applications by source (last 14 days).** How many people applied each day, and through which board or link, in your time zone. If more than 100 people apply in a day, owners and admins are told the next day. Nobody is ever turned away because of the number.
+
+**Pause** at the top of the role page stops new applications without declining anyone: the job page says the position is not accepting applications and the role disappears from your careers page. **Resume** puts it back. If you have enough applicants and want the job to stay listed but closed, use **Stop accepting applications** at the top of the role page instead: the page stays up and says applications are closed, a banner under the title says since when, nobody who applied is affected, and nobody is declined. **Accept applications again** reopens it. Either way, the board postings stay up until they are paused or removed there; tell your ITS contact.
 
 ## 6. The Talent view
 
@@ -106,6 +116,8 @@ You do not have to do anything on the boards yourself. If a board asks your acco
 
 Press **Review** (or the name) to open the candidate.
 
+**Comparing candidates.** When a role has more than one candidate, press **Compare** at the top of Talent. Tick up to five people and press **Compare selected**. A table puts them side by side: where each person is, then one row per must-have (met, partly met, not met, unknown) and per thing you look for (seen, partly seen, not seen yet, contradicted), then the screen's recommendation, the resume reading, and how much is still unknown. "No evidence yet" means nothing has spoken to that row. The columns are in the order you ticked them. Nothing is ranked or scored; the page says so. Press **Done comparing** to go back to the list.
+
 **Inside the candidate page**, from top to bottom:
 
 - A card for anything the assistant proposed and is waiting on you for, such as **The assistant suggests a screen** with **Yes, invite to a screen**.
@@ -114,12 +126,13 @@ Press **Review** (or the name) to open the candidate.
 - **What would you like to do?** with the buttons **Invite to a screen**, **Interview**, **Hold**, **Decline** and **Bring in a recruiter**. Buttons that do not apply at this stage are greyed out; hover to see why.
 - **Record what happened** (section 14).
 - **Held on an eligibility answer** or **Declined on an eligibility answer**, when that applies (section 7).
+- **Message (first name)**: write to the candidate in your own words (section 15).
 - **Contact and consent**: email, phone, location, text-message consent (off in release 1) and when the AI notice was shown.
 - **Screening conversation**: the status and, when there is one, **Read the conversation**.
 - **Resume assessment** and, after a screen, **Screen scorecard** (section 9).
 - **What the resume says**: the positions with dates and a quoted line from the resume for each, licenses, skills, and any flags. Below, **Open (file name)** opens the actual resume; the opening is recorded. A file that is still being checked says so; a refused file says why.
 - **Eligibility answers**: which required answers were met.
-- **Messages**: everything sent to the candidate and whether it arrived, and anything they wrote back through the product.
+- **Messages**: everything sent to the candidate and whether it arrived, and anything they wrote back, including email replies once ITS has connected incoming mail.
 - **What happened**: the full timeline with who did what.
 
 **What the assistant recommends, and what it never does.** The assistant recommends: it may say a candidate is worth a screen, worth an interview, worth a hold, or that it has a concern. It never declines anyone. It never ranks candidates against each other. It never sends a decline message. If it cannot produce an assessment, you see the application without one. If an assessment looks wrong, use **Something wrong?** on it (section 9).
@@ -191,20 +204,24 @@ Reminders go to the candidate and the interviewers one day before and two hours 
 - **Book this for them**, next to an offered time, if you agreed a time by phone. It is recorded as your action.
 - **Offer new times** to reschedule from your side.
 - **Cancel interview** with a reason the candidate sees, then **Confirm cancel**. The candidate and interviewers are told.
+- **Message the candidate** opens the candidate's page with the message box ready (section 15).
+- After the interview, **After the interview** shows the decision, or **Record the decision**, which takes you to the candidate's page (section 12).
 
-Interviewers receive the booking, the reminders and the link. They do not see the candidate's assessment or resume in the product; if they should, share what you think is appropriate before the interview.
+Interviewers receive the booking, the reminders and the link, and a brief: in the confirmation email and on the interview page under **Your brief**. It says what the round is for, what to look for, the questions the plan suggests, how the candidate stands on your must-haves, strengths so far, what is worth exploring, and what they said in the screen. Interviewers never see pay. They can open only the candidates they interview, and they do not see the Talent list.
 
 ## 12. Recording the decision after an interview
 
-An hour after the interview ends, the interviewers are asked **Did it take place?** on the interview page: **Yes**, **Candidate did not show**, or **We did not show**. Answer it; it keeps the record straight.
+After the interview, the interviewers (and anyone who manages interviews) see **Did it take place?** on the interview page: **Yes**, **Candidate did not show**, or **We did not show**. Answer it; it keeps the record straight. A no-show is never held against anyone automatically.
 
-At the same time you see **How did the interview go?** on the candidate's page. The decision is yours and is recorded with your name; nothing here is scored by software.
+Once the interview is over, the candidate waits on you: they appear under **Waiting on you** in Talent, the people who decide get a notification ("How did it go with ...?") that opens the candidate's page, and **Today** shows a card. On the candidate's page you see **How did the interview go?**. The decision is yours and is recorded with your name; nothing here is scored by software.
 
-- **Next round**: the candidate moves on. Press **Interview** to pick the interviewers for the next round; times go out from there.
+- **Next round**: the candidate moves on. The page opens the interview approval for the next round with its interviewers; check them and approve, and times go out from there.
 - **Finalist**: write what stood out under **What stood out (kept internally)** and press **Confirm finalist**.
 - **Not moving forward**: pick a reason, add a note if you like, and press **Confirm decline**. The candidate gets a respectful message after you confirm, never before.
 
-Release 1 has no interviewer scorecards. Record what matters in the note.
+Release 1 has no interviewer scorecards. Record what matters in the note. The decision shows on the interview page too.
+
+Owners, admins and hiring managers record these decisions (and an ITS recruiter you brought in). HR and interviewers can say whether an interview took place but cannot decide.
 
 ## 13. Declining with a reason
 
@@ -233,7 +250,30 @@ The product never makes or sends an offer, and it asks for no pay, tax, identity
 
 Press **Continue**, then **Yes, record it**. The record carries your name and can only be corrected by an ITS administrator, with the original kept. After a hire, the product asks **Close the role too?**. Closing the role is a separate decision, made from the role page, and candidates who were still active stay in your talent pool.
 
-## 15. When to bring in a recruiter
+## 15. Writing to a candidate
+
+On the candidate's page, the **Message (first name)** card has **Write to (first name)**. (From an interview, **Message the candidate** opens it for you.) Add a subject if you like, write your message, and press **Send**.
+
+- It goes out under your company's hiring-team name, with your name at the bottom. It is your own words, so it carries no AI notice. The card shows who it goes to and the footer before you send.
+- Under the default settings it goes at once and the owners are told. If your owner has set **Send a message a team member wrote to a candidate** to Ask me first or Only a person, the button says **Send for approval**: an owner or admin reads it first, on **Today** or on the candidate's page, and presses **Yes, send it** or **Do not send**. You are told either way. Messages from owners and admins always go at once.
+- A candidate with no email address on file cannot be written to; the card says so.
+- Replies: once ITS has connected incoming mail for your workspace, the candidate's reply appears under **Messages** on their page and you are told. Until then, replies reach an ITS mailbox that a person reads. The card tells you which.
+- The message itself is on the candidate's page. The audit history records who wrote it and who approved it, never the text.
+
+## 16. The report
+
+The **Report** tab on the role page shows the role's figures, each defined at the bottom of the tab:
+
+- **Who applied**: by source (careers page, each board's link, referral links, email) and by day.
+- **Where everyone is**: how many people are at each step, grouped as waiting on you, in process, not moving forward and hired.
+- **How long each step takes**: the typical and average days, and the longest anyone has waited.
+- **Interviews**: requested, on the calendar, held, missed, cancelled, rescheduled by the candidate, and waiting for your decision.
+- **Decisions waiting for you**, **What the assistant suggested, and what you decided**, **When you overruled the system**.
+- **Recruiter help**, **Messages to candidates** (including any that could not be delivered, so you can reach those people another way), and **Outcomes**.
+
+**Download the applicant list (CSV)** and **Download the summary (CSV)** give you spreadsheets. Every download is recorded. Interviewers cannot open the report.
+
+## 17. When to bring in a recruiter
 
 Press **Bring in a recruiter** whenever you want a human opinion. Good moments:
 

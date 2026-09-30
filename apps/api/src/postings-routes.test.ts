@@ -283,6 +283,19 @@ describe("posting routes: the owner's Posting tab API", () => {
     expect((await eventsOf("posting.closure_required")).filter((e) => e.subjectId === closed.id)).toHaveLength(1);
     expect((await body<PostingsResponse>(await get(owner, `/api/v1/roles/${roleId}/postings`))).boardsStillUp).toEqual(["indeed"]);
     expect((await body<{ boardsStillUp: string[] }>(await get(owner, `/api/v1/roles/${roleId}`))).boardsStillUp).toEqual(["indeed"]);
+    // pausing and resuming the role prepares its channels again, and a Retry elsewhere does too: the closed board stays closed, on the checklist and in the brief
+    const preparedBefore = (await eventsOf("posting.ready_to_post")).filter((e) => e.subjectId === closed.id).length;
+    expect((await post(owner, `/api/v1/roles/${roleId}/pause`)).status).toBe(200);
+    expect((await post(owner, `/api/v1/roles/${roleId}/resume`)).status).toBe(200);
+    await container.drain();
+    expect((await body<{ action: string }>(await post(owner, P("email_in", "retry")))).action).toBe("republish");
+    await container.drain();
+    expect(await posting("indeed")).toMatchObject({ status: "closed", closureRequired: true, closureConfirmedAt: null, closedAt: closed.closedAt });
+    expect((await eventsOf("posting.ready_to_post")).filter((e) => e.subjectId === closed.id)).toHaveLength(preparedBefore);
+    expect((await body<PostingsResponse>(await get(owner, `/api/v1/roles/${roleId}/postings`))).boardsStillUp).toEqual(["indeed"]);
+    expect((await body<{ boardsStillUp: string[] }>(await get(owner, `/api/v1/roles/${roleId}`))).boardsStillUp).toEqual(["indeed"]);
+    type StillUpBrief = { cards: Array<{ title: string }> };
+    expect((await body<StillUpBrief>(await get(owner, "/api/v1/brief"))).cards.map((c) => c.title)).toContain("Still posted on Indeed");
     // a board that was never marked for removal has nothing to confirm
     const nothing = await post(owner, P("linkedin_basic", "closure-confirm"));
     expect(nothing.status).toBe(409);

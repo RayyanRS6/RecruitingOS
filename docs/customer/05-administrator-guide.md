@@ -2,7 +2,7 @@
 
 **ITS AI Recruiting Department, Founding Partner Program. Release 1.**
 
-Draft of 30 September 2026, for review by ITS before it is given to a customer. This guide is for the account owner: the person who creates the workspace, invites the team, and is responsible for the settings. Admins have the same permissions as the owner and can use this guide too. If you also run hires yourself, read the hiring manager guide as well.
+Draft of 30 September 2026 (checked again against the product the same day), for review by ITS before it is given to a customer. This guide is for the account owner: the person who creates the workspace, invites the team, and is responsible for the settings. Admins can do everything in this guide except make someone an owner, and can use it too. If you also run hires yourself, read the hiring manager guide as well.
 
 Screen names and button labels in **bold** are the ones you will see in the product.
 
@@ -13,7 +13,7 @@ Screen names and button labels in **bold** are the ones you will see in the prod
 3. Your Google or Microsoft account handles the sign-in, including any two-step verification you have turned on there. ITS never sees or keeps a password.
 4. The first time, you land on **Tell us about your company** (section 2). After that you land on **Today**.
 
-Your session lasts up to thirty days of inactivity. Press **Sign out** at the bottom of the left rail to end it sooner.
+Your session lasts up to thirty days of inactivity. Press **Sign out** at the bottom of the left rail to end it sooner. **Your sessions** in **Setup** lists every place you are signed in (section 5).
 
 If you see "Email me a sign-in link" on the sign-in page, ignore it. It is only offered in some setups, and your workspace uses Google or Microsoft.
 
@@ -30,7 +30,7 @@ Only one person does this: the owner. Fill in **Tell us about your company**:
 
 Press **Create my hiring workspace**. You are now the owner. Everything you invite others into lives inside this workspace.
 
-To change any of these details later, email support@identifiedtalent.com. A screen for this is planned.
+To change these details later, and to add more, use the **Company** card in **Setup** (section 5).
 
 ## 3. The screens at a glance
 
@@ -40,36 +40,48 @@ The left rail has five entries:
 - **Roles**: every role, its status and its pipeline.
 - **Talent**: the candidates for a role, grouped by what needs you.
 - **Interviews**: every interview in motion or done, and each interviewer's load.
-- **Setup**: your company, your team, recruiter access, availability, connected services, and what the assistant may do on its own.
+- **Setup**: your company, your team, recruiter access, your sessions, availability, connected services, what the assistant may do on its own, and the audit history.
 
 **Bring in a recruiter** appears on Today, on every role and on every candidate.
 
 ## 4. Inviting your team and choosing roles
 
-In **Setup**, under **Team**, enter a work email under **Invite by email**, choose a **Role**, and press **Invite**. The person gets an email. The link works once and stays valid for seven days; you can send a new one at any time. They open the link and sign in with Google or Microsoft using the same work address.
+In **Setup**, under **Team**, enter a work email under **Invite by email**, add their name if you like, choose a **Role**, and press **Invite**. The person gets one email. The link works for seven days. They open it and sign in with Google or Microsoft using the same work address; opening the link alone signs nobody in, and it does not work for a different address.
+
+People who have not signed in yet are listed under **Invited, not yet in**, with who invited them and until when the link works. **Send again** sends a new link for another seven days (the old one stops working). **Withdraw** stops the link at once.
 
 | Role | Best for | Can | Cannot |
 |---|---|---|---|
-| **admin** | A second person who runs the account with you | Everything the owner can: company settings, team, roles, candidates, pay, policies, recruiter access, outcomes | |
-| **hiring manager** | The person who runs a hire | Start a role in the conversation, edit and approve the packet, see candidates and pay, invite to a screen, hold, interview, decline, record outcomes, bring in a recruiter, see the timeline | Change the team, change what the assistant may do, end a recruiter's access |
-| **interviewer** | Anyone who meets candidates but does not decide | See the roles; receive interview bookings, reminders and the meeting link; set their own availability | See candidate records, assessments or pay; act on candidates |
-| **hr** | Someone who keeps records and manages the team | See roles, candidates and pay; invite to a screen, hold, interview; record outcomes; bring in a recruiter; manage team members | Approve a role; decline a candidate |
-| **recruiter** | A recruiter on your own staff | Create and manage roles, edit packets, act on and decline candidates, see pay | Approve a role, manage the team, change policies |
+| **Owner** | You, and anyone else who should hold the account | Everything, including making other owners | Remove the last owner (there is always at least one) |
+| **Admin** | A second person who runs the account with you | Everything the owner can: company settings, team, roles, postings, candidates, pay, rules, recruiter access, outcomes, the audit history | Make someone an owner or change an owner's role |
+| **Hiring manager** | The person who runs a hire | Start a role in the conversation, edit and approve the packet, see candidates and pay, invite to a screen, hold, approve interviews, record the decision after an interview, decline, write to candidates, record outcomes and close a role, bring in a recruiter, see the timeline and the report | Change the team, change what the assistant may do, end a recruiter's access, pause a role, change postings, stop accepting applications |
+| **Interviewer** | Anyone who meets candidates but does not decide | See the roles and their own interviews, with a short brief on each candidate they interview; say whether an interview took place; set their own availability | See pay, the candidate list or other candidates; act on candidates; see the report |
+| **HR** | Someone who keeps records and manages the team | See roles, candidates and pay; invite to a screen, hold; write to candidates; record outcomes; say whether an interview they sat on took place; bring in a recruiter; invite, change and remove team members | Approve a role; edit a packet; decline a candidate; approve an interview or decide after one |
+
+**Changing a role.** Pick the new role from the list next to the person and press **Change role**. They are signed out everywhere and get the new role when they sign in again.
+
+**Removing someone.** Press **Remove** next to the person, then **Remove (name)**. They lose access at once and are signed out everywhere. Their calendar connection is disconnected and deleted. They are taken off every interview still ahead. An interview where they were the only interviewer is cancelled, and a candidate who had already booked a time is told. To go on with that candidate, approve a new interview with another interviewer from the candidate's page. You get one message listing which interviews were cancelled and which go ahead. What they did stays in the record.
 
 Notes:
 
-- ITS recruiters do not need an invitation. They get access only through **Bring in a recruiter** (section 9).
+- Owners, admins and HR can invite, change and remove people. Only an owner can make someone an owner or change an owner's role. Nobody can change their own role or remove themselves.
+- ITS recruiters do not need an invitation, and an ITS address cannot be invited. They get access only through **Bring in a recruiter** (section 8).
 - Interviewers never see pay. Hiring managers can approve roles and decide on candidates.
-- Every invitation and change of role is recorded.
-- There is no screen yet to remove someone or change their role. Email support@identifiedtalent.com the same day someone leaves, and ITS makes the change with you.
+- Every invitation, change of role and removal is recorded in the audit history.
 
 ## 5. The Setup screen
 
-**Company.** Your name, careers page address, kind of business, size, locations, plan and usage. **Plan** shows your program and, where it has an end date, that date; a role already in progress is never cut off on that date. **Usage** shows what your program includes and what you have used.
+**Company.** Your name, careers page address, website, kind of business, size, time zone, locations, contact hours, candidate notices, plan and usage. **Plan** shows your program and, where it has an end date, that date; a role already in progress is never cut off on that date. **Usage** shows what your program includes and what you have used.
 
-**Team.** The people in your workspace, each with their role and an availability chip: "google calendar", "hours declared" or "no availability". Someone with "no availability" cannot be offered as an interviewer until they set it. The invitation form is here.
+Owners and admins press **Edit** on the card to change the company name, website, logo address, time zone, size, locations, the careers-page introduction, the benefits summary, the contact hours and the wording of the candidate notices, then **Save changes**. The website and logo appear on your job pages and in search results. Contact hours can only narrow the legal window for texting candidates, never widen it. A reworded notice gets a new version, shows on the job page and the application form from then on, and is recorded; clear the box to go back to the standard wording. The plan, the program dates and the allowances are set by ITS and cannot be changed here. Every change is recorded in the audit history.
 
-**ITS recruiter access.** Who from ITS has access right now, to what, and until when. This is empty most of the time. See section 9 for how to end access.
+**Team.** The people in your workspace, each with their role and an availability chip: "google calendar", "hours declared" or "no availability". Someone with "no availability" cannot be offered as an interviewer until they set it. The invitation form, **Invited, not yet in**, and the role and removal controls are here (section 4).
+
+**ITS recruiter access.** Who from ITS has access right now, to what, and until when. This is empty most of the time. See section 8 for how to end access.
+
+**Your sessions.** Every place you are signed in: the device, how you signed in and when it was last used. **Sign out** ends one; **Sign out everywhere else** ends all but the one you are using. If you see one you do not recognize, sign it out and tell support.
+
+**Confirm it's you.** Changing what the assistant may do, or the wording of candidate notices, needs a recent sign-in. If you signed in more than 30 minutes ago, the product shows **Confirm it's you** and a **Confirm with my sign-in** button. It sends you through Google or Microsoft again and brings you straight back; for the next ten minutes you can make the change. Confirming with a different account changes nothing.
 
 **My availability for interviews.** Each person sets their own. Two ways:
 
@@ -80,7 +92,7 @@ If a person has both, the declared hours limit the calendar.
 
 **Connected services.** A table of the services the product uses for your company, each with a status: **Connected and working**, **Submitted, awaiting verification**, **Manual action required**, **Not connected** or **Disabled**. The last column explains what each one takes. Two rows to understand:
 
-- The job boards (LinkedIn, Indeed, ZipRecruiter) show **Manual action required** or **Not connected**. This is expected. ITS posts to them by hand under your accounts.
+- The job boards (LinkedIn, Indeed, ZipRecruiter) show **Manual action required** or **Not connected**. This is expected. ITS posts to them by hand under your accounts. Whether a particular role is live on a board is shown on that role's **Posting** tab (section 7), not here.
 - Text messaging shows as off. Screening runs by web chat from an email link.
 
 The line under the table names the AI provider. On your live workspace it reads Anthropic.
@@ -99,8 +111,11 @@ The defaults are the recommended settings. The ones you are most likely to touch
 - **Invite an applicant to a screen** (default: Do it and tell me). Set it to Ask me first if you want to approve every screening invitation.
 - **Recommend who to interview** (default: Do it and tell me).
 - **Send confirmations and reminders** (default: Do it).
+- **Send a message a team member wrote to a candidate** (default: Do it and tell me: the message goes at once and owners are told). Set it to Ask me first or Only a person and an owner or admin reads each message before it goes out. Messages from owners and admins always go at once.
 
-Only owners and admins can change these settings. Every change is recorded. The list includes rows for actions that are not part of release 1 (offers, background checks, references, payroll, outreach). Those rows are inactive; changing them has no effect on the product today.
+Only owners and admins can change these settings, and only after a recent sign-in (**Confirm it's you**, above). Every change is recorded. The list includes rows for actions that are not part of release 1 (offers, background checks, references, payroll, outreach). Those rows are inactive; changing them has no effect on the product today.
+
+**Audit history.** Who did what in your workspace, in plain words, newest first: recruiter access, team changes, rule changes, company changes, candidate records opened, outcomes and downloads. The last 50 are shown. Tick **Include every page an ITS recruiter opened** to see each page as well. **Download as a spreadsheet** gives you everything; the download is itself recorded. Owners, admins, hiring managers and HR can see it.
 
 ## 6. The daily brief
 
@@ -109,7 +124,8 @@ Only owners and admins can change these settings. Every change is recorded. The 
 - **Needs you**: candidates waiting for a decision, or applicants held on an eligibility answer.
 - **Decision**: a role packet to approve, or a screen or interview the assistant proposed under "Ask me first".
 - **New applicants**: how many people applied since yesterday and how many are ready for review.
-- **One step**: a board that needs a manual posting step.
+- **One step**: a board where the job still has to be posted by hand, or a board where the posting is still up after you closed it ("Still posted on ...").
+- **Decision** also covers a message a teammate wrote to a candidate that waits for you to read it, when your rules say so.
 - **Screening**: who is invited, answering now, or completed since yesterday.
 - **Stuck**: a role where nothing has moved for a while, with a suggested action and **Have a recruiter review**.
 - **Recruiter**: a request you sent, shown as "A recruiter will pick this up" or "A recruiter is on it".
@@ -127,16 +143,30 @@ Below that is **Your recruiting chief of staff**, the conversation where a new r
 
 **Approval.** A role waiting for approval shows a card **Approve this role packet** with any assumptions the assistant made. **Approve and post** opens the role and starts posting. **Edit first** lets you change the packet before you approve. Owners, admins and hiring managers can approve, with two rules: the person who ran the intake (or wrote the version being approved) cannot approve it themselves unless they are the company's only owner, and when the packet names a decision maker who is on your team, the approval is reserved for them (an owner can also decide). The card says who can decide and why you cannot, if you cannot. **Send back with a note** returns the role to a draft with the note on its page; **Request approval again** sends it back after the edit. An approval nobody decides within 14 days goes back to a draft the same way. An edit to an open role by someone who can edit but not approve waits for approval on the same card while the role keeps running on its current version; Today shows it as "Approve packet v3 of ...".
 
-**The Posting tab.** One card per place the job appears:
+**The Posting tab.** One card per place the job appears. Each card has a status and one sentence that says what happens next.
 
-- **Your careers page**: served by the product; every open role has a public page and an application form.
-- **Google for Jobs**: the job page carries the data Google reads. Google indexes on its own schedule, so this shows **Submitted, awaiting verification** until it is confirmed.
-- **Applications by email**: an intake address where forwarded applications can arrive once ITS has switched that on for your workspace. Until then, leave it.
-- **LinkedIn basic listing**, **Indeed**, **ZipRecruiter**: ITS posts these by hand under your accounts. Each gets its own application link. ITS records the posting's public address, the product checks it, and the card then shows **Live and verified** with the address. Nothing is called live before that check.
+- **Careers page**: served by the product. The card shows the job page's address with **Copy**. The product opens the page and checks it before calling it **Live and verified**.
+- **Google for Jobs**: the job page carries the data Google reads. Google lists jobs on its own schedule, so this shows **Submitted** until someone sees the job in Google and presses **Mark verified** with a short note.
+- **Applications by email**: an address where forwarded applications arrive once ITS has connected incoming mail for your workspace. It shows **Connected** or **Not connected**. Until it is connected, use each board's application link instead.
+- **LinkedIn**, **Indeed**, **ZipRecruiter**: ITS posts these by hand under your accounts. Each card has that board's own application link with **Copy** and a visit count, **Copy posting package** (the title, employer, location, pay, description, screening questions and links, ready to paste), and the numbered steps. Once the job is up, ITS (or an owner or admin) pastes the posting's address under **Record the public address of the posting** and presses **Record the public URL**. The product opens that page and checks it shows your job, then the card says **Live and verified**. If the check fails, it tries twice more; after three failures the card says **Failed** and why. **Check again** repeats the check. **I checked it myself** lets a person confirm with a note of what they checked; that is recorded with their name.
 
-Statuses you may see on a card: **Live and verified**, **Submitted, awaiting verification**, **Manual action required**, **Not connected**, **Failed** (with a **Retry** button).
+Statuses you may see on a card: **Draft**, **Approved**, **Ready to post** (nothing is on the board yet), **Posted** (the address is recorded and being checked), **Submitted** (Google), **Live and verified**, **Paused**, **Failed**, **Closed**.
 
-**Pause and Resume.** **Pause** at the top of the role page stops new applications: the job page says the position is not accepting applications, the role disappears from your careers page, and nobody is declined. **Resume** puts it back. To stop accepting applications while leaving the job listed (the page then says applications are closed), use the accepting-applications control on the role; nobody is declined by that either. Postings on the boards are paused or removed by ITS by hand; tell your ITS contact.
+**Pausing or closing one board.** **Pause** and **Resume** on a card affect that posting only; resume puts it back where it was. **Close** ends it. The posting may still be visible on the board itself until someone takes it down there. When a board was up, the closed card shows **Removed from this board**: tick it once the posting is gone.
+
+**Other links.** Make an application link for a referral, a direct approach or anything else: pick **Referral**, **Direct** or **Other**, give it a name, and press **Create link**. Applications through it carry that name. **Disable** stops a link; anyone who opens it then sees a not-found page. A board's own link cannot be disabled while its posting is up.
+
+**Applications by source (last 14 days).** How many people applied each day and through which board or link, counted in your time zone. If more than 100 people apply to a role in one day, owners and admins are told the next day. Nobody is turned away because of the number.
+
+**Pause and Resume the role.** **Pause** at the top of the role page stops new applications: the job page stays up and says the position is not accepting applications, the role disappears from your careers page and the job listings, and nobody is declined. **Resume** puts it back and adds any applications that arrived by email while it was paused. Pausing the role does not take the job off the boards; the Posting tab reminds you of that.
+
+**Stop accepting applications.** **Stop accepting applications** at the top of the role page keeps the job listed and the page up, and says applications are closed. Nobody who already applied is affected, and nobody is declined. You can give a reason; your team is told. The banner under the title says since when. **Accept applications again** reopens it.
+
+Only owners and admins can pause the role, stop accepting applications, or change postings and links. Hiring managers see the Posting tab and ask an owner or admin, or ITS.
+
+**Still up.** After a role closes, or after you close one board's posting, a red alert at the top of the role page and a card on **Today** name the boards where the job is still showing. They stay until each board is ticked **Removed from this board**.
+
+**The Report tab.** The figures for the role, each with its definition at the bottom: who applied (by source and by day), where everyone is, how long each step takes, interviews, decisions waiting for you, what the assistant suggested and what you decided, when you overruled the system, recruiter help, messages to candidates (including any that could not be delivered), and outcomes. **Download the applicant list (CSV)** and **Download the summary (CSV)** give you spreadsheets; every download is recorded. Interviewers cannot open the report.
 
 ## 8. Bringing in a recruiter
 
@@ -180,11 +210,13 @@ On the role page press **Close**. Under **Close this role** choose the outcome:
 - **Cancelled**
 - **Closed without a hire**
 
-Add a reason if you like and press **Confirm and close the role**. Candidates who were still active are kept in your talent pool. The job page comes down. The role then lists the boards where the posting is still up; ITS takes each one down and ticks it off, and you can see on the role what is still up.
+Add a reason if you like and press **Confirm and close the role**. Candidates who were still active are kept in your talent pool. The role leaves your careers page and the job listings; the job page itself says the position is closed, and search engines drop it on their own. Every posting on the **Posting** tab closes. The role then names the boards where the posting is still up, in a red alert at the top and on **Today**; ITS takes each one down and ticks **Removed from this board** on the Posting tab.
+
+Hiring managers can close a role too. Pausing a role and stopping applications are for owners and admins (section 7).
 
 ## 11. Privacy requests
 
-Candidates can ask for a copy of their information, a correction, deletion, or a review by a person, from their status page or by email to privacy@identifiedtalent.com. A person at ITS handles every request, confirms receipt within one business day, and works to a tracked deadline.
+Candidates can ask for a copy of their information, a correction, deletion, or a review by a person, from their status page or by email to privacy@identifiedtalent.com. Someone who has lost their status link can use the request form on the privacy page: we email them a confirmation link, and nothing is recorded until they press its button. A person at ITS handles every request, confirms receipt within one business day, and works to a tracked deadline.
 
 **What you see.** That a request of a given kind exists and that it was completed. You do not see its content. A candidate who withdraws shows as withdrawn on their page and on Today.
 
@@ -196,12 +228,13 @@ Candidates can ask for a copy of their information, a correction, deletion, or a
 
 You should never see the words "Development mode" or "fake provider" on your live workspace. They appear only on ITS's own test systems, where the AI is replaced by a stand-in and sign-in links are shown on screen. If you ever see a yellow banner reading "Development mode: the AI provider is a deterministic stand-in", or "Development mode" next to an invitation link, stop and email support@identifiedtalent.com. Do not enter real candidate information there.
 
-## 13. Things that need ITS for now
+## 13. Things that need ITS
 
-Email support@identifiedtalent.com for any of these. Each is planned as a self-service screen.
+Email support@identifiedtalent.com for any of these.
 
-- Removing a team member or changing someone's role.
-- Editing your company name, locations or website.
-- Changing the notices candidates see.
-- Correcting a recorded outcome.
-- A report beyond what Roles, Talent and Interviews show. ITS sends a written weekly summary.
+- Correcting a recorded outcome. An ITS administrator makes the correction and the original is kept.
+- Changing your plan, your program dates or your allowances.
+- Connecting incoming mail, so candidate replies and emailed applications come into the product.
+- Connecting Google Calendar for your workspace.
+
+Everything else in this guide you can do yourself. ITS is glad to help with any of it: removing someone, changing a role, editing your company details or candidate notices, reading the report.

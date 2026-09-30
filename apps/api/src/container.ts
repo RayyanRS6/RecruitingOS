@@ -2,7 +2,7 @@ import { createRuntime, type AiRuntime, type FakeProvider } from "@ros/ai";
 import { cancelInterviewEvents } from "@ros/agents";
 import { eq } from "drizzle-orm";
 import { createDb, inspectConnectionRole, migrate, migrationStatus, postings, problemsWithConnectionRole, roles, seedPlatform, withPlatform, withTenant, type Db, type DbHandle, type DbRole } from "@ros/db";
-import { POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, countActiveAdmins, createRateLimitStore, emit, raiseAlert, raiseAlertOnce, transitionPosting, type RateLimitStore } from "@ros/core";
+import { POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, countActiveAdmins, createRateLimitStore, emit, raiseAlert, transitionPosting, type RateLimitStore } from "@ros/core";
 import { createIntegrations, type Integrations } from "@ros/integrations";
 import { createEngine, type WorkflowEngine } from "@ros/workflows";
 import { REVOKE_JOB_KIND, checkPrivacyRequestDeadlines, listSuppressions, onSuppressionChange, revokeAndDeleteCredentials, setEventSink } from "@ros/core";
@@ -13,7 +13,8 @@ import { toProductEvent } from "@ros/integrations";
 import { loadEnv, type Env } from "./env";
 import { registerSecretValue } from "@ros/core";
 import { UploadGrants } from "./uploads";
-import { MAINTENANCE_JOB_KIND, runMaintenance } from "./maintenance";
+import { HEALTH_CHECK_JOB_KIND, HOURLY_MS, MAINTENANCE_JOB_KIND, checkOperationalHealth, runMaintenance } from "./maintenance";
+import { checkScannerForProduction } from "./scanner-gate";
 import { reportError } from "./observability";
 import { jobFailureReport, stepFailureReport } from "./failure-reports";
 import { DAILY_MS, recurring } from "./recurring-jobs";
@@ -104,12 +105,8 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     const scannerStatus = await integrations.scanner.check();
     if (scannerStatus !== "live") console.warn(`[scanner] ${integrations.scanner.id} did not answer the boot check (${scannerStatus}); quarantined files wait until it does (CLAMAV_HOST, CLAMAV_PORT; docs/runbooks/resume-storage.md)`);
   }
-  if (env.NODE_ENV === "production" && role === "worker" && integrations.scanner.status === "fake") {
-    // The real-data gate (docs/readiness/20 blocker 8): the fake scanner calls everything but the test string clean. Raised by the
-    // worker, the only process that scans (the app never opens a quarantined file). One alert, standing until a person resolves it.
-    console.warn("[scanner] production is running with the fake malware scanner; real candidate files need SCAN_PROVIDER=clamav (docs/runbooks/resume-storage.md)");
-    await raiseAlertOnce(handle.db, { kind: "scanner.fake", severity: "high", title: "Résumé scanning is the fake engine", body: "SCAN_PROVIDER is fake: uploaded files are only checked by type and signature, not for malware. Real candidate files must wait for a real engine. Run ClamAV on Railway and set SCAN_PROVIDER=clamav with CLAMAV_HOST (docs/runbooks/resume-storage.md), then resolve this alert.", details: { provider: integrations.scanner.id } }).catch((err) => console.warn(`[scanner] could not raise the alert: ${err instanceof Error ? err.message : String(err)}`));
-  }
+  // The real-data gate (docs/readiness/20 blocker 8): a production worker on the fake scanner raises one standing alert (scanner-gate.ts).
+  await checkScannerForProduction(handle.db, { nodeEnv: env.NODE_ENV, role, scannerStatus: integrations.scanner.status, scannerId: integrations.scanner.id });
   // Item 5 (18 Sep): every email send consults the do-not-send list first, whatever adapter is underneath. The list is held
   // in memory (loaded at boot, updated the moment it changes in this process, reloaded every minute for other processes) so
   // a send inside a database transaction never queries outside it.
@@ -169,6 +166,12 @@ export async function createContainer(opts: { env?: Record<string, string | unde
   // interrupted sends; then the health checks (a stale worker, a stale queue). Re-armed even when a run fails (H13).
   engine.registerJob(MAINTENANCE_JOB_KIND, recurring(engine, handle.db, MAINTENANCE_JOB_KIND, DAILY_MS, async (ctx) => {
     await runMaintenance(handle.db, ctx.now, { workerInline: env.WORKER_INLINE });
+  }));
+
+  // The stale-queue check every hour, not only with the daily sweep (H3). A worker that stopped is noticed by the app's
+  // /healthz instead (maintenance.ts, appHealthWatch): a job cannot report that the process meant to run it is gone.
+  engine.registerJob(HEALTH_CHECK_JOB_KIND, recurring(engine, handle.db, HEALTH_CHECK_JOB_KIND, HOURLY_MS, async (ctx) => {
+    await checkOperationalHealth(handle.db, ctx.now, { workerInline: env.WORKER_INLINE });
   }));
 
   // The outbox: every email and text queued inside a transaction is sent here, after that transaction committed, once.
@@ -240,7 +243,7 @@ export async function createContainer(opts: { env?: Record<string, string | unde
 
   // The recurring jobs exist from the first boot of any process; tests arm them explicitly so a moved clock never runs a sweep by surprise.
   if (env.NODE_ENV !== "test") {
-    for (const kind of [PRIVACY_DEADLINE_JOB_KIND, MAINTENANCE_JOB_KIND]) await engine.ensureQueued(handle.db, { kind });
+    for (const kind of [PRIVACY_DEADLINE_JOB_KIND, MAINTENANCE_JOB_KIND, HEALTH_CHECK_JOB_KIND]) await engine.ensureQueued(handle.db, { kind });
   }
 
   let draining: Promise<void> | null = null;

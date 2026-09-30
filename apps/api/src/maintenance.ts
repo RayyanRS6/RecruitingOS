@@ -57,10 +57,40 @@ export async function runMaintenance(db: Db, now: Date, opts: MaintenanceOptions
   return report;
 }
 
+/** The hourly queue check the worker runs between daily sweeps (a queue that stalls while the worker still polls). */
+export const HEALTH_CHECK_JOB_KIND = "ops.health_check";
+export const HOURLY_MS = 3600_000;
+/** How often the app runs the checks from /healthz: often enough for an uptime monitor's cadence, cheap enough for any. */
+export const APP_HEALTH_CHECK_EVERY_MS = 5 * 60_000;
+
+/**
+ * The checks from the side of the process that is still up when the worker is not. The worker cannot report its own
+ * death (every job it would run to do so is stuck behind it), so the app runs `checkOperationalHealth` whenever its
+ * /healthz is asked (an uptime monitor asks every few minutes), at most once every `everyMs` of real time per process,
+ * never twice at once. Idempotent through `raiseAlertOnce`, so several app instances raise one alert. A failure is
+ * logged, never answered: the health check still reports.
+ */
+export function appHealthWatch(db: Db, opts: MaintenanceOptions & { everyMs?: number } = {}): (now: Date) => Promise<void> {
+  if (opts.workerInline) return async () => undefined;
+  const everyMs = opts.everyMs ?? APP_HEALTH_CHECK_EVERY_MS;
+  let lastRun = Number.NEGATIVE_INFINITY;
+  let running: Promise<void> | null = null;
+  return async (now) => {
+    if (running || Date.now() - lastRun < everyMs) return;
+    lastRun = Date.now();
+    running = checkOperationalHealth(db, now, { workerInline: false })
+      .then(() => undefined)
+      .catch((err) => console.warn(`[healthz] the operational health check failed: ${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => { running = null; });
+    await running;
+  };
+}
+
 /**
  * The two things that go wrong quietly (audit remediation H3): a worker that stopped polling, and a queue whose
  * oldest due job has waited too long. Each raises one alert, at most once an hour, and never while a person already
- * has one open. Safe to call from anywhere and as often as wanted.
+ * has one open. Safe to call from anywhere and as often as wanted: the app's /healthz (appHealthWatch), the worker's
+ * hourly `ops.health_check` job and the daily sweep all do.
  */
 export async function checkOperationalHealth(db: Db, now: Date, opts: MaintenanceOptions = {}): Promise<{ workerStale: boolean; queueStale: boolean; raised: number }> {
   let raised = 0;

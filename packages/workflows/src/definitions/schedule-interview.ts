@@ -154,6 +154,8 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       if (!b || stale(b, ctx)) return { kind: "complete" };
       const slot = b.iv.selectedSlot;
       if (!slot) return { kind: "next", step: "offer_slots" };
+      // Never a booking nobody attends: with no interviewer left there is no constraint to check, so "free" would be meaningless.
+      if (!b.participants.length) return { kind: "fail", error: "no interviewers on the interview", retryable: false };
       const constraints = await gatherConstraints(b, ctx);
       if (!slotStillFree(slot, constraints)) {
         await emit(ctx.q, { type: "interview.slot_taken", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { slotId: slot.id, attempt: ctx.state.attempt }, correlationId: ctx.run.id });

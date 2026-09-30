@@ -3,11 +3,12 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "../nav";
-import { Button, Card, Chip, ErrorState, Field, Segmented, Skeleton } from "@ros/ui";
+import { Alert, Button, Card, Chip, ErrorState, Field, Segmented, Skeleton } from "@ros/ui";
 import { formatPayRange } from "@ros/contracts";
-import { api, ApiError, type RoleDetail as RoleDetailT, type RolePacket } from "../api/client";
+import { api, ApiError, type Me, type RoleDetail as RoleDetailT, type RolePacket } from "../api/client";
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
+import { canEditPacket, canManageRole, canRecordOutcome, canSeeActivity, canSeeTalent } from "../roles";
 import { AcceptingSwitch, ClosedBanner, PostingTab, StillUpAlert } from "./RolePosting";
 import { ActivityTab, InterviewPlanTab, PacketApprovalCard, PreferencesCard, RequirementList, workModelLabel } from "./RolePlan";
 import { EditPacket } from "./RoleEditor";
@@ -33,11 +34,18 @@ export function RoleDetail() {
   useEffect(() => { if (wantedTab) setTab(tabFrom(wantedTab)); }, [wantedTab]);
   // A tab picked by hand keeps the address honest, so the next `?tab=posting` link is seen as a change.
   const pickTab = (next: Tab) => { setTab(next); if (wantedTab && wantedTab !== next) navigate(`/roles/${id}?tab=${next}`, { replace: true }); };
-  const [editing, setEditing] = useState(false);
+  // What the signed-in person may change here follows the permission matrix (roles.ts); until it is known, nothing that changes the role is offered.
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
+  const myRole = me.data?.memberships.find((m) => m.companyId === me.data?.activeCompanyId)?.role ?? null;
+  // The editor is mounted only while open and starts from the version it was opened on (the one waiting for approval, when there is one).
+  const [editBase, setEditBase] = useState<{ version: number; packet: RolePacket; proposed: boolean; newestAtOpen: number } | null>(null);
+  // "Show vN" on the approval card: the tabs show the version waiting for approval instead of the one the role runs on.
+  const [showProposed, setShowProposed] = useState(false);
 
   const status = useMutation({
     mutationFn: (action: "pause" | "resume") => api.post(`/api/v1/roles/${id}/${action}`, {}),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["role", id] }),
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not change the role."),
   });
   const [closing, setClosing] = useState<{ outcome: string; reason: string } | null>(null);
   const closeWithOutcome = useMutation({
@@ -48,7 +56,20 @@ export function RoleDetail() {
   if (role.isLoading) return <Skeleton lines={5} />;
   if (role.error || !role.data) return <ErrorState message="Could not load this role." onRetry={() => role.refetch()} />;
   const r = role.data;
-  const p = r.currentPacket?.packet;
+  const manage = canManageRole(myRole);
+  const editPacket = canEditPacket(myRole);
+  const talent = canSeeTalent(myRole);
+  const activity = canSeeActivity(myRole);
+  const current = r.currentPacket;
+  const proposed = r.packetApproval?.pending?.editWhileOpen ? r.proposedPacket : null;
+  const shown = showProposed && proposed ? proposed : current;
+  const p = shown?.packet;
+  const head = current?.packet;
+  const editSource = proposed ?? current;
+  const newestVersion = Math.max(0, ...r.packetVersions.map((v) => v.version));
+  const openEditor = () => { if (editSource) setEditBase({ version: editSource.version, packet: editSource.packet, proposed: !!proposed && editSource === proposed, newestAtOpen: newestVersion }); };
+  const tabOptions = ([{ value: "overview", label: "Overview" }, { value: "requirements", label: "Requirements" }, { value: "evaluation", label: "How we'll evaluate" }, { value: "plan", label: "Interview plan" }, { value: "posting", label: "Posting" }, { value: "activity", label: "Activity" }, { value: "history", label: "History" }, { value: "report", label: "Report" }] as Array<{ value: Tab; label: string }>).filter((o) => (o.value !== "report" || talent) && (o.value !== "activity" || activity));
+  const visibleTab: Tab = tabOptions.some((o) => o.value === tab) ? tab : "overview";
 
   return (
     <div className="stack" style={{ gap: 18 }}>
@@ -56,19 +77,19 @@ export function RoleDetail() {
         <div>
           <p className="small muted"><Link to="/roles">Roles</Link> / {r.title}</p>
           <h1>{r.title}</h1>
-          <p>{p ? `${[p.identity.locations[0]?.city, p.identity.locations[0]?.region].filter(Boolean).join(", ")} · ${p.identity.employmentType.replace("_", " ")} · ${workModelLabel(p.identity.remotePolicy)} · ${money(p)}` : "No packet yet."}</p>
+          <p>{head ? `${[head.identity.locations[0]?.city, head.identity.locations[0]?.region].filter(Boolean).join(", ")} · ${head.identity.employmentType.replace("_", " ")} · ${workModelLabel(head.identity.remotePolicy)} · ${money(head)}` : "No packet yet."}</p>
         </div>
         <div className="row">
           <AskRecruiter roleId={r.id} />
-          <AcceptingSwitch role={r} />
-          {r.status === "open" ? <Button onClick={() => status.mutate("pause")}>Pause</Button> : null}
-          {r.status === "paused" ? <Button onClick={() => status.mutate("resume")}>Resume</Button> : null}
-          {["open", "paused"].includes(r.status) ? <Button variant="destructive" onClick={() => setClosing({ outcome: "filled_outside_platform", reason: "" })}>Close</Button> : null}
+          {manage ? <AcceptingSwitch role={r} /> : null}
+          {manage && r.status === "open" ? <Button loading={status.isPending} onClick={() => status.mutate("pause")}>Pause</Button> : null}
+          {manage && r.status === "paused" ? <Button loading={status.isPending} onClick={() => status.mutate("resume")}>Resume</Button> : null}
+          {canRecordOutcome(myRole) && ["open", "paused"].includes(r.status) ? <Button variant="destructive" onClick={() => setClosing({ outcome: "filled_outside_platform", reason: "" })}>Close</Button> : null}
         </div>
       </div>
 
-      <StillUpAlert channels={r.boardsStillUp ?? []} roleStatus={r.status} onOpen={() => pickTab("posting")} />
-      <ClosedBanner role={r} />
+      <StillUpAlert channels={r.boardsStillUp ?? []} roleStatus={r.status} onOpen={() => pickTab("posting")} canManage={manage} />
+      <ClosedBanner role={r} canManage={manage} />
 
       {closing ? (
         <Card needsYou title="Close this role">
@@ -86,20 +107,21 @@ export function RoleDetail() {
         </Card>
       ) : null}
 
-      {p ? <PacketApprovalCard role={r} onEdit={() => setEditing(true)} /> : null}
+      {p ? <PacketApprovalCard role={r} onEdit={openEditor} canEdit={editPacket} showingProposed={shown === proposed && !!proposed} onShowProposed={setShowProposed} /> : null}
 
       {p ? (
         <>
           <div className="row" style={{ justifyContent: "space-between" }}>
-            <Segmented value={tab} onChange={pickTab} ariaLabel="Role packet sections" options={[{ value: "overview", label: "Overview" }, { value: "requirements", label: "Requirements" }, { value: "evaluation", label: "How we'll evaluate" }, { value: "plan", label: "Interview plan" }, { value: "posting", label: "Posting" }, { value: "activity", label: "Activity" }, { value: "history", label: "History" }, { value: "report", label: "Report" }]} />
+            <Segmented value={visibleTab} onChange={pickTab} ariaLabel="Role packet sections" options={tabOptions} />
             <div className="row">
-              <Chip>Packet v{r.currentPacket!.version}</Chip>
-              <Button size="sm" onClick={() => setEditing(true)}>Edit</Button>
-              <Link to={`/roles/${r.id}/talent`} className="btn primary sm">Talent ({r.counts ? Object.values(r.counts).reduce((a, b) => a + b, 0) : 0})</Link>
+              <Chip>Packet v{shown!.version}</Chip>
+              {editPacket ? <Button size="sm" onClick={openEditor}>Edit</Button> : null}
+              {talent ? <Link to={`/roles/${r.id}/talent`} className="btn primary sm">Talent ({r.counts ? Object.values(r.counts).reduce((a, b) => a + b, 0) : 0})</Link> : null}
             </div>
           </div>
+          {proposed && shown === proposed ? <Alert tone="info">Showing v{proposed.version}, the version waiting for approval. The role still runs on v{current?.version ?? "?"} until it is approved. <Button size="sm" onClick={() => setShowProposed(false)}>Back to v{current?.version ?? "?"}</Button></Alert> : null}
 
-          {tab === "overview" ? (
+          {visibleTab === "overview" ? (
             <div className="grid-2">
               <Card title="Public description"><p style={{ whiteSpace: "pre-wrap", color: "var(--ink-2)" }}>{p.description.publicJobDescription}</p></Card>
               <div className="stack">
@@ -126,7 +148,7 @@ export function RoleDetail() {
             </div>
           ) : null}
 
-          {tab === "requirements" ? (
+          {visibleTab === "requirements" ? (
             <div className="grid-2">
               <Card title="Must-haves"><RequirementList items={p.requirements.mustHaves} empty="None listed." /><p className="small muted" style={{ marginTop: 8 }}>"Evidenced in" says where each one is checked; a must-have marked "screen" is asked about in the screening conversation.</p></Card>
               <Card title="Nice-to-haves"><RequirementList items={p.requirements.niceToHaves} empty="None listed." /></Card>
@@ -138,7 +160,7 @@ export function RoleDetail() {
             </div>
           ) : null}
 
-          {tab === "evaluation" ? (
+          {visibleTab === "evaluation" ? (
             <div className="grid-2">
               <Card title="What we look for">
                 <ul style={{ paddingLeft: 18, margin: 0 }}>{p.competencies.map((c) => <li key={c.key}><strong>{c.name}</strong> <Chip>weight {c.weight}</Chip> <Chip>{c.evaluatedIn}</Chip><br /><span className="small muted">{c.definition}</span></li>)}</ul>
@@ -151,15 +173,15 @@ export function RoleDetail() {
             </div>
           ) : null}
 
-          {tab === "plan" ? <InterviewPlanTab roleId={r.id} /> : null}
+          {visibleTab === "plan" ? <InterviewPlanTab roleId={r.id} canEdit={editPacket} /> : null}
 
-          {tab === "posting" ? <PostingTab roleId={r.id} roleStatus={r.status} /> : null}
+          {visibleTab === "posting" ? <PostingTab roleId={r.id} roleStatus={r.status} canManage={manage} /> : null}
 
-          {tab === "activity" ? <ActivityTab roleId={r.id} /> : null}
+          {visibleTab === "activity" ? <ActivityTab roleId={r.id} /> : null}
 
-          {tab === "report" ? <ReportTab roleId={r.id} /> : null}
+          {visibleTab === "report" ? <ReportTab roleId={r.id} /> : null}
 
-          {tab === "history" ? (
+          {visibleTab === "history" ? (
             <Card title="Packet versions">
               <ul style={{ paddingLeft: 18, margin: 0 }}>
                 {r.packetVersions.map((v) => <li key={v.version}>v{v.version} · {v.status} · {v.source.replace("_", " ")} · {new Date(v.createdAt).toLocaleString()} · {v.createdBy.name ?? v.createdBy.kind}{v.changeSummary ? ` · ${v.changeSummary}` : ""}</li>)}
@@ -170,7 +192,7 @@ export function RoleDetail() {
         </>
       ) : null}
 
-      {p ? <EditPacket open={editing} onClose={() => setEditing(false)} roleId={r.id} packet={p} /> : null}
+      {editBase ? <EditPacket key={editBase.version} open onClose={() => setEditBase(null)} roleId={r.id} packet={editBase.packet} version={editBase.version} proposed={editBase.proposed} currentVersion={current?.version ?? null} newerVersion={newestVersion > editBase.newestAtOpen ? newestVersion : null} /> : null}
     </div>
   );
 }

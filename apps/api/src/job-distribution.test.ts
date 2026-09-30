@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { POSTING_VERIFY_JOB_KIND, PostingTransitionError, applyLinkUrl, disableApplicationLink, findLinkByToken, findPostingLink, postingPackage, recordLinkVisit, transitionPosting } from "@ros/core";
-import { applicationLinks, applications, candidates, communications, companies, events, jobs, postings, rolePackets, roles, users, withPlatform, withTenant } from "@ros/db";
+import { POSTING_VERIFY_JOB_KIND, PostingTransitionError, applyLinkUrl, correctOutcome, disableApplicationLink, findLinkByToken, findPostingLink, postingPackage, recordLinkVisit, transitionPosting } from "@ros/core";
+import { applicationLinks, applications, candidates, communications, companies, events, hiringOutcomes, jobs, postings, rolePackets, roles, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeUrlVerifier } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -271,5 +271,22 @@ describe("job distribution: postings, links and verification", () => {
     });
     const [co] = await container.db.select().from(companies).where(eq(companies.id, companyId));
     expect(co.slug).toBe(companySlug);
+  });
+
+  it("a role opened again after closing prepares its closed channels again, but a board still up on the outside stays closed and on the checklist", async () => {
+    // an administrator voids the role's outcome (the role goes back to open) and publishing runs again
+    const [outcome] = await container.db.select().from(hiringOutcomes).where(and(eq(hiringOutcomes.roleId, roleId), eq(hiringOutcomes.milestone, "role")));
+    await withTenant(container.db, companyId, async (tx) => {
+      await correctOutcome(tx, { outcomeId: outcome.id, actor: ownerActor, reason: "closed by mistake" });
+      await container.engine.start(tx, { workflowKey: "publish_role", companyId, subject: { type: "role", id: roleId }, state: { roleId, packetVersion: 1 }, actor: ownerActor });
+    });
+    await container.drain();
+    expect((await container.db.select().from(roles).where(eq(roles.id, roleId)))[0].status).toBe("open");
+    // Indeed was taken down and confirmed, ZipRecruiter was never up: both are prepared again from nothing
+    for (const channel of ["indeed", "ziprecruiter"]) expect(await posting(channel), channel).toMatchObject({ status: "ready_to_post", closedAt: null, closureRequired: false, closureConfirmedAt: null });
+    expect((await posting("careers_page")).status).toBe("live_verified");
+    // LinkedIn is still up and nobody confirmed its removal: it is not offered for posting again, and the checklist keeps it
+    expect(await posting("linkedin_basic")).toMatchObject({ status: "closed", closureRequired: true, closureConfirmedAt: null });
+    expect((await posting("linkedin_basic")).closedAt).toBeTruthy();
   });
 });

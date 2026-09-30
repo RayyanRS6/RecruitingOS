@@ -72,7 +72,13 @@ export function Interviews() {
 function InterviewSheet({ id, role, userId }: { id: string; role: string | null; userId: string | null }) {
   const nav = useNavigate();
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["interview", id], queryFn: () => api.get<InterviewDetail>(`/api/v1/interviews/${id}`), refetchInterval: 10000 });
+  // A refusal or a missing interview is an answer, not a hiccup: it is not retried and the 10-second refresh stops while it stands.
+  const q = useQuery({
+    queryKey: ["interview", id],
+    queryFn: () => api.get<InterviewDetail>(`/api/v1/interviews/${id}`),
+    refetchInterval: (query) => (query.state.status === "error" ? false : 10000),
+    retry: (count, e) => !(e instanceof ApiError && (e.status === 403 || e.status === 404)) && count < 3,
+  });
   const [reason, setReason] = useState("");
   const [confirmCancel, setConfirmCancel] = useState(false);
   const refresh = async () => { await qc.invalidateQueries({ queryKey: ["interview", id] }); await qc.invalidateQueries({ queryKey: ["interviews"] }); await qc.invalidateQueries({ queryKey: ["brief"] }); };
@@ -86,7 +92,7 @@ function InterviewSheet({ id, role, userId }: { id: string; role: string | null;
   const finished = !!i && ["completed", "no_show"].includes(i.status);
   return (
     <Sheet open onClose={() => nav("/interviews")} title={i ? `${i.candidate.firstName} ${i.candidate.lastName} · ${i.title}` : "Interview"}>
-      {q.isLoading || !i ? <Skeleton lines={8} /> : (
+      {q.error && !i ? <ErrorState message={q.error instanceof ApiError && (q.error.status === 404 || q.error.status === 403) ? "This interview is not one of yours, or it no longer exists." : "Could not load this interview."} onRetry={() => q.refetch()} /> : q.isLoading || !i ? <Skeleton lines={8} /> : (
         <div className="stack" style={{ gap: 14 }}>
           <div className="row" style={{ justifyContent: "space-between" }}>
             <span className="row"><Chip tone={STATUS_TONE[i.status] ?? "neutral"}>{STATUS_LABEL[i.status] ?? i.status}</Chip><span className="small muted">{i.roleTitle} · attempt {i.attempt}</span></span>

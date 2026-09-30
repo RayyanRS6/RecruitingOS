@@ -1,6 +1,6 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, gt } from "drizzle-orm";
 import { BOARD_NAME, POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, applyLinkUrl, canTransitionPosting, createApplicationLink, emit, findPostingLink, isBoardChannel, jobUrlsFor, sourceForChannel, transitionPosting, type PostingState } from "@ros/core";
-import { companies, postings, randomToken, rolePackets, roles, uuidv7 } from "@ros/db";
+import { companies, events, postings, randomToken, rolePackets, roles, uuidv7, type Tx } from "@ros/db";
 import { intakeAddress, type PublishResult } from "@ros/integrations";
 import type { StepContext, WorkflowDefinition } from "../types";
 
@@ -21,7 +21,9 @@ type PostingValues = Partial<typeof postings.$inferInsert>;
  * the numbered steps for posting by hand, and waits at "ready to post" until a person records the public URL.
  * Nothing is called live here. A channel failure never fails the run: the row records the error and a retryable
  * channel is tried up to three times over 24 hours. Re-runs (a resumed or re-opened role) re-prepare only the rows
- * nobody holds: a board that is posted, paused or waiting on a person is left alone.
+ * nobody holds: a board that is posted, paused or waiting on a person is left alone. A channel a person closed while
+ * the role stayed open is final (a pause and resume, or a Retry on another channel, never brings it back); only a
+ * role that was closed and opened again prepares its closed rows again, and never a board still up on the outside.
  */
 export const publishRole: WorkflowDefinition<State> = {
   key: "publish_role",
@@ -52,6 +54,7 @@ export const publishRole: WorkflowDefinition<State> = {
         if (!adapter) continue;
         const [existing] = await ctx.q.select().from(postings).where(and(eq(postings.roleId, role.id), eq(postings.channel, channel))).limit(1);
         if (existing && HANDS_OFF.includes(existing.status as PostingState)) continue;
+        if (existing?.status === "closed" && !(await reopenedSinceClosed(ctx.q, role.id, existing))) continue;
         // a board whose verification failed keeps its recorded URL for the person to retry or replace; the workflow does not reset it
         if (existing?.status === "failed" && existing.externalUrl && isBoardChannel(channel)) continue;
         if (existing?.status === "ready_to_post" && attemptsByChannel[channel]) continue; // prepared earlier in this run
@@ -111,9 +114,24 @@ export const publishRole: WorkflowDefinition<State> = {
 };
 
 /**
+ * Whether a closed posting may be prepared again: only when its role was closed after it (or with it) and has since
+ * been opened again, and only when nothing of it is still up on the outside. A board a person closed while the role
+ * stayed open stays closed, and a board whose removal nobody has confirmed yet keeps its place on the "still up"
+ * checklist. The order comes from the event log (ids only grow), so no two clocks are compared.
+ */
+async function reopenedSinceClosed(q: Tx, roleId: string, row: PostingRow): Promise<boolean> {
+  if (row.closureRequired && !row.closureConfirmedAt) return false;
+  const [postingClosed] = await q.select({ id: events.id }).from(events).where(and(eq(events.subjectType, "posting"), eq(events.subjectId, row.id), eq(events.type, "posting.closed"))).orderBy(desc(events.id)).limit(1);
+  if (!postingClosed) return false;
+  const [roleClosedAfter] = await q.select({ id: events.id }).from(events).where(and(eq(events.subjectType, "role"), eq(events.subjectId, roleId), eq(events.type, "role.closed"), gt(events.id, postingClosed.id))).limit(1);
+  return !!roleClosedAfter;
+}
+
+/**
  * Writes what a channel's adapter reported. A new row is inserted at that state; an existing row moves through the
  * state table when the table allows it; a closed or failed row of a re-opened role is re-prepared in place (the
- * workflow is the one origin of posting rows, docs/spec/20). Every write emits `posting.<state>`.
+ * workflow is the one origin of posting rows, docs/spec/20). A closure nobody has confirmed is never cleared here: the
+ * listing may still be up, and the checklist is how the owner knows. Every write emits `posting.<state>`.
  */
 async function writeRow(ctx: StepContext<State>, existing: PostingRow | undefined, postingId: string, to: PostingState, values: PostingValues, payload: Record<string, unknown>): Promise<PostingRow> {
   const { intakeToken, companyId, roleId, channel, ...patch } = values;
@@ -125,7 +143,8 @@ async function writeRow(ctx: StepContext<State>, existing: PostingRow | undefine
   if (existing.status !== to && canTransitionPosting(existing.status, to)) {
     return (await transitionPosting(ctx.q, { postingId: existing.id, to, actor: ctx.actor, now: ctx.now, patch, payload, correlationId: ctx.run.id })).row;
   }
-  const [row] = await ctx.q.update(postings).set({ ...patch, intakeToken, status: to, ...(to === "closed" ? {} : { closedAt: null, closureRequired: false, closureConfirmedAt: null, closureConfirmedBy: null }) }).where(eq(postings.id, existing.id)).returning();
+  const closurePending = existing.closureRequired && !existing.closureConfirmedAt;
+  const [row] = await ctx.q.update(postings).set({ ...patch, intakeToken, status: to, ...(to === "closed" || closurePending ? {} : { closedAt: null, closureRequired: false, closureConfirmedAt: null, closureConfirmedBy: null }) }).where(eq(postings.id, existing.id)).returning();
   await emit(ctx.q, { type: `posting.${to}`, companyId: ctx.companyId, actor: ctx.actor, subject: { type: "posting", id: row.id }, payload: { channel: row.channel, roleId: row.roleId, from: existing.status, to, reprepared: true, ...payload }, correlationId: ctx.run.id });
   return row;
 }

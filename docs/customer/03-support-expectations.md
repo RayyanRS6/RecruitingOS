@@ -2,7 +2,7 @@
 
 **ITS AI Recruiting Department, Founding Partner Program. Release 1.**
 
-Draft of 30 September 2026, for review by ITS before it is given to a customer. This statement is attached to your agreement. It says when we are available, how to reach us, how quickly we respond, what support covers, and how we tell you about problems.
+Draft of 30 September 2026 (checked again against the product the same day), for review by ITS before it is given to a customer. This statement is attached to your agreement. It says when we are available, how to reach us, how quickly we respond, what support covers, and how we tell you about problems.
 
 ## 1. Hours
 
@@ -15,14 +15,15 @@ Draft of 30 September 2026, for review by ITS before it is given to a customer. 
 **Your team**
 
 - **Bring in a recruiter**, inside the product. The button is on Today, on every role and on every candidate. Pick what you need (Review these candidates, Help me decide, Take this role over), add a note if you like, mark it Normal or Urgent, and press **Send to a recruiter**. You see the expected response time straight away, and the request appears on Today until it is answered.
-- **support@identifiedtalent.com** for anything else: a question about the product, a change to your team or company details, something that looks wrong, or a problem that is blocking you. If it is blocking your hiring, say so in the subject line.
+- **support@identifiedtalent.com** for anything else: a question about the product, a change to your plan or program, something that looks wrong, or a problem that is blocking you. If it is blocking your hiring, say so in the subject line. You change your team and your company details yourself in **Setup**; we are glad to help if you ask.
 - Your ITS contact for the program is the person named in your agreement. In the first week, that person checks your workspace every business day.
 
 **Candidates**
 
 - Reply **HUMAN** to any email from the product.
 - Press **Talk to a person instead** during a screening conversation.
-- Use the form on their status page to ask for a copy of their information, a correction, deletion, or a review by a person.
+- Use the form on their status page to ask for a copy of their information, a correction, deletion, or a review by a person. Someone without their status link can use the request form on the privacy page instead.
+- Reply to any email from the product. Once ITS has connected the incoming mail for your workspace, the reply appears on the candidate's page and your team is told; until then a person at ITS reads it.
 - Email **privacy@identifiedtalent.com** for privacy requests.
 
 ## 3. Response times
@@ -53,12 +54,12 @@ Examples of how business hours count:
 
 ## 4. What support covers
 
-- Using the product: sign-in, inviting your team, Setup, roles, Talent, Interviews.
-- The manual posting of your approved job to LinkedIn, Indeed and ZipRecruiter under your accounts, checking each posting, and taking postings down when a role closes.
+- Using the product: sign-in, inviting your team, Setup, roles, Talent, Interviews, the Posting and Report tabs.
+- The manual posting of your approved job to LinkedIn, Indeed and ZipRecruiter under your accounts, recording and checking each posting's address, and taking postings down when a role closes.
 - Recruiting help through Bring in a recruiter: reviewing candidates, advice on a decision, running a role for you.
 - Candidates who ask for a person, cannot be reached, or have a problem with a screening or scheduling link.
 - Privacy requests from candidates.
-- Changes ITS has to make for you until the screen exists: removing a team member, changing someone's role, editing company details, correcting a recorded outcome.
+- Changes only ITS can make: correcting a recorded outcome, and changing your plan, program dates or allowances.
 - Problems with the product itself, and incidents.
 
 ## 5. What support does not cover
@@ -86,7 +87,8 @@ If a message to a candidate fails to arrive, the product tells you on the candid
 ## 7. The weekly rhythm
 
 - A weekly meeting with your ITS contact during the program.
-- A written weekly summary from ITS: applicants by source, where candidates stand, interviews scheduled and completed, decisions waiting on you, requests you sent us and how quickly we answered, candidates we could not reach, and open privacy requests. This continues until the role report exists in the product.
+- A written weekly summary from ITS: applicants by source, where candidates stand, interviews scheduled and completed, decisions waiting on you, requests you sent us and how quickly we answered, candidates we could not reach, and open privacy requests.
+- Most of these figures are also on each role's **Report** tab at any time, and you can download them as spreadsheets. Open privacy requests are the exception: they are only in the weekly summary.
 
 ## 8. Changes to this statement
 

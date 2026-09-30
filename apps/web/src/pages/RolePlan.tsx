@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, EmptyState, ErrorState, Field, Skeleton, Timeline } from "@ros/ui";
 import { api, ApiError, type DecisionMaker, type InterviewPlanView, type Requirement, type RoleDetail, type RoleEvent, type RolePacket } from "../api/client";
 import { toast } from "../toast";
+import { actorWords, describeRoleEvent, roleWords } from "../role-words";
 
 /**
  * The role page's approval card, preferences card, requirement lists, Interview plan tab and Activity tab
@@ -64,9 +65,11 @@ export function PreferencesCard({ packet, decisionMaker }: { packet: RolePacket;
 
 /**
  * The decision on a role packet: approve, send back with a note, or ask again after it was sent back. What the
- * signed-in person may do comes from the API (the self-approval rule and the named decision maker live there).
+ * signed-in person may do comes from the API (the self-approval rule and the named decision maker live there); Edit
+ * and "Request approval again" need packet.edit, so they are left out for anyone without it (`canEdit`).
+ * `onShowProposed` switches the role page's tabs to the version waiting for approval, and back.
  */
-export function PacketApprovalCard({ role, onEdit }: { role: RoleDetail; onEdit: () => void }) {
+export function PacketApprovalCard({ role, onEdit, canEdit, showingProposed, onShowProposed }: { role: RoleDetail; onEdit: () => void; canEdit: boolean; showingProposed: boolean; onShowProposed: (show: boolean) => void }) {
   const qc = useQueryClient();
   const refresh = async () => {
     await qc.invalidateQueries({ queryKey: ["role", role.id] });
@@ -101,11 +104,15 @@ export function PacketApprovalCard({ role, onEdit }: { role: RoleDetail; onEdit:
         <p style={{ color: "var(--ink-2)" }}>
           {sentBack.status === "expired" ? "Nobody decided within 14 days, so the role is a draft again." : `Sent back${sentBack.decidedBy ? ` by ${sentBack.decidedBy.name}` : ""}${sentBack.decidedAt ? ` on ${new Date(sentBack.decidedAt).toLocaleDateString()}` : ""}: ${sentBack.decisionNote ?? "no note was left"}.`}
         </p>
-        <p className="small muted" style={{ marginTop: 6 }}>Edit anything that needs changing, then ask for approval again. Every edit is kept as a new version.</p>
-        <div className="row" style={{ marginTop: 12 }}>
-          <Button variant="primary" loading={again.isPending} onClick={() => again.mutate()}>Request approval again</Button>
-          <Button onClick={onEdit}>Edit first</Button>
-        </div>
+        {canEdit ? (
+          <>
+            <p className="small muted" style={{ marginTop: 6 }}>Edit anything that needs changing, then ask for approval again. Every edit is kept as a new version.</p>
+            <div className="row" style={{ marginTop: 12 }}>
+              <Button variant="primary" loading={again.isPending} onClick={() => again.mutate()}>Request approval again</Button>
+              <Button onClick={onEdit}>Edit first</Button>
+            </div>
+          </>
+        ) : <p className="small muted" style={{ marginTop: 6 }}>An owner, an admin or a hiring manager edits it and asks for approval again.</p>}
       </Card>
     );
   }
@@ -116,7 +123,12 @@ export function PacketApprovalCard({ role, onEdit }: { role: RoleDetail; onEdit:
   return (
     <Card needsYou lift title={pending.editWhileOpen ? `Approve packet v${pending.version} of ${role.title}` : "Approve this role packet"}>
       <p style={{ color: "var(--ink-2)" }}>{pending.rationale ?? (pending.editWhileOpen ? "The role keeps running on its approved version until you decide." : "Review the packet, edit anything, then approve. Approval opens the role and posts it.")}</p>
-      {pending.editWhileOpen && role.proposedPacket ? <p className="small" style={{ color: "var(--ink-2)", marginTop: 6 }}>What changed: {role.proposedPacket.changeSummary ?? "edited"} · by {role.proposedPacket.createdBy.name ?? "a team member"} on {new Date(role.proposedPacket.createdAt).toLocaleDateString()}. Current version: v{role.currentPacket?.version ?? "?"}.</p> : null}
+      {pending.editWhileOpen && role.proposedPacket ? (
+        <div className="row" style={{ marginTop: 6, flexWrap: "wrap" }}>
+          <p className="small" style={{ color: "var(--ink-2)", margin: 0 }}>What changed: {role.proposedPacket.changeSummary ?? "edited"} · by {role.proposedPacket.createdBy.name ?? "a team member"} on {new Date(role.proposedPacket.createdAt).toLocaleDateString()}. Current version: v{role.currentPacket?.version ?? "?"}.</p>
+          <Button size="sm" onClick={() => onShowProposed(!showingProposed)}>{showingProposed ? `Back to v${role.currentPacket?.version ?? "?"}` : `Show v${role.proposedPacket.version}`}</Button>
+        </div>
+      ) : null}
       <p className="small muted" style={{ marginTop: 6 }}>
         {pending.decisionMaker ? `Reserved for ${pending.decisionMaker.name ?? pending.decisionMaker.email}; an owner can also decide.` : "Any owner, admin or hiring manager can decide."}
         {expires ? ` Waits until ${expires}, then goes back to a draft.` : ""}
@@ -140,15 +152,15 @@ export function PacketApprovalCard({ role, onEdit }: { role: RoleDetail; onEdit:
         <div className="row" style={{ marginTop: 12 }}>
           {pending.viewer.mayDecide ? <Button variant="primary" loading={approve.isPending} onClick={() => approve.mutate()}>{pending.editWhileOpen ? "Approve this version" : "Approve and post"}</Button> : null}
           {pending.viewer.mayDecide ? <Button onClick={() => setSendingBack(true)}>Send back with a note</Button> : null}
-          <Button onClick={onEdit}>{pending.viewer.mayDecide ? "Edit first" : "Edit"}</Button>
+          {canEdit ? <Button onClick={onEdit}>{pending.viewer.mayDecide ? "Edit first" : "Edit"}</Button> : null}
         </div>
       )}
     </Card>
   );
 }
 
-/** The rounds with who interviews and whether times can be offered to them, and a way to assign people per round. */
-export function InterviewPlanTab({ roleId }: { roleId: string }) {
+/** The rounds with who interviews and whether times can be offered to them, and, for anyone with packet.edit (`canEdit`), a way to assign people per round. */
+export function InterviewPlanTab({ roleId, canEdit }: { roleId: string; canEdit: boolean }) {
   const qc = useQueryClient();
   const plan = useQuery({ queryKey: ["interview-plan", roleId], queryFn: () => api.get<InterviewPlanView>(`/api/v1/roles/${roleId}/interview-plan`) });
   const [editingKey, setEditingKey] = useState<string | null>(null);
@@ -170,7 +182,7 @@ export function InterviewPlanTab({ roleId }: { roleId: string }) {
   const toggle = (id: string, on: boolean) => setPicked((p) => (on ? [...new Set([...p, id])] : p.filter((x) => x !== id)));
   return (
     <Card title="Interview rounds" aside={<Chip>Packet v{d.version}</Chip>}>
-      <p className="small muted" style={{ marginBottom: 10 }}>Each round names who interviews. Someone with a connected calendar or declared hours can be offered times straight away; the others are asked to add theirs. Assigning interviewers saves a new packet version.</p>
+      <p className="small muted" style={{ marginBottom: 10 }}>Each round names who interviews. Someone with a connected calendar or declared hours can be offered times straight away; the others are asked to add theirs. {canEdit ? "Assigning interviewers saves a new packet version." : "An owner, an admin or a hiring manager assigns the interviewers."}</p>
       <ol style={{ paddingLeft: 18, margin: 0 }} className="stack">
         {d.rounds.map((r) => (
           <li key={r.key}>
@@ -180,10 +192,10 @@ export function InterviewPlanTab({ roleId }: { roleId: string }) {
             <div className="row" style={{ marginTop: 6 }}>
               {r.interviewers.length
                 ? r.interviewers.map((i) => <Chip key={i.userId} tone={i.schedulable ? "good" : "caution"}>{i.name} · {i.schedulable ? "can be scheduled" : "no calendar or hours yet"}</Chip>)
-                : <span className="small muted">Nobody assigned yet{r.interviewerRoles.length ? ` (planned: ${r.interviewerRoles.join(", ")})` : ""}.</span>}
-              {editingKey !== r.key ? <Button size="sm" onClick={() => { setEditingKey(r.key); setPicked(r.interviewers.map((i) => i.userId)); }}>{r.interviewers.length ? "Change" : "Assign interviewers"}</Button> : null}
+                : <span className="small muted">Nobody assigned yet{r.interviewerRoles.length ? ` (planned: ${roleWords(r.interviewerRoles)})` : ""}.</span>}
+              {canEdit && editingKey !== r.key ? <Button size="sm" onClick={() => { setEditingKey(r.key); setPicked(r.interviewers.map((i) => i.userId)); }}>{r.interviewers.length ? "Change" : "Assign interviewers"}</Button> : null}
             </div>
-            {editingKey === r.key ? (
+            {canEdit && editingKey === r.key ? (
               <div className="stack" style={{ gap: 6, marginTop: 8 }}>
                 {d.team.length ? d.team.map((m) => (
                   <label key={m.userId} className="row" style={{ gap: 8 }}>
@@ -205,66 +217,7 @@ export function InterviewPlanTab({ roleId }: { roleId: string }) {
   );
 }
 
-/** Owner Mode never shows raw stage names (docs/07); mirrors STAGE_LABEL in packages/core. */
-const STAGE_WORDS: Record<string, string> = {
-  applied: "Just applied", received: "Received", ineligible: "Doesn't meet eligibility", eligible: "Eligible", triaged: "Ready for your review", screen_invited: "Invited to a screen",
-  screening: "Being screened", screen_complete: "Screen complete", interview_recommended: "Recommended for interview", interview_scheduled: "Interviewing", interview_complete: "Interview done",
-  debrief: "Deciding", finalist: "Finalist", reference_check: "Checking references", offer_draft: "Offer being prepared", offer_approval: "Offer needs your approval", offer_sent: "Offer out",
-  negotiation: "Negotiating", accepted: "Accepted", declined: "Declined the offer", hired: "Hired", onboarding: "Starting soon", withdrawn: "Withdrew", rejected: "Not moving forward", talent_pool: "In your talent pool",
-};
-
-/** Plain words for what happened on a role; anything unknown falls back to the event's own name in words. */
-export function describeRoleEvent(e: RoleEvent): string {
-  const p = e.payload as Record<string, string | number | boolean | null | undefined>;
-  const v = p.version !== undefined && p.version !== null ? `v${p.version}` : "";
-  const note = typeof p.note === "string" && p.note ? `: ${p.note}` : "";
-  const known: Record<string, string> = {
-    "role.created": "Role drafted from the intake conversation",
-    "role_packet.proposed": `Packet ${v} ${p.again ? "sent for approval again" : "proposed for approval"}`.trim(),
-    "role_packet.edited": `Packet ${v} edited${typeof p.changeSummary === "string" && p.changeSummary ? `: ${p.changeSummary}` : ""}`,
-    "role_packet.approved": `Packet ${v} approved${p.via === "edit_while_open" ? " and made current" : ""}`,
-    "approval.requested": "Approval requested",
-    "approval.granted": `Approved${note}`,
-    "approval.denied": `Sent back${note}`,
-    "approval.expired": "The approval ran out of time (14 days)",
-    "approval.cancelled": `Approval withdrawn${typeof p.reason === "string" && p.reason ? ` (${p.reason})` : ""}`,
-    "role.sent_back": p.wasOpen ? `Proposed ${v} retired${note}` : `Back to a draft${note}`,
-    "role.approved": "Role approved",
-    "role.opened": "Role opened",
-    "role.paused": "Role paused",
-    "role.resumed": "Role resumed",
-    "role.closed": "Role closed",
-    "role.filled": "Role filled",
-    "role.applications_closed": "Stopped accepting applications",
-    "role.applications_reopened": "Accepting applications again",
-    "role.volume_high": "Unusually many applications in a day",
-    "role.outcome_recorded": "Outcome recorded",
-    "application.received": "An application arrived",
-    "application.acknowledged": "An applicant was acknowledged",
-    "application.duplicate_detected": "Someone applied again (the original was kept)",
-    "application.ineligible": "An application was held on an eligibility answer",
-    "application.triaged": "An application was assessed",
-    "application.stage_changed": `A candidate is now "${STAGE_WORDS[String(p.to ?? "")] ?? String(p.to ?? "").replace(/_/g, " ")}"`,
-    "application.rejected": "A candidate was declined by a person",
-    "application.withdrawn": "A candidate withdrew",
-    "application.moved_to_talent_pool": "A candidate was added to the talent pool",
-    "candidate.recommended": "A candidate was recommended for interview",
-    "screen.invited": "A candidate was invited to a screen",
-    "screen.completed": "A candidate completed the screen",
-    "interview.requested": "An interview was requested",
-    "interview.scheduled": "An interview was booked",
-    "interview.completed": "An interview took place",
-    "posting.published": "Posted on a channel",
-    "posting.live_verified": "A posting was checked and is live",
-    "posting.closed": "A posting was closed",
-    "posting.closure_confirmed": "A board posting was confirmed taken down",
-    "outcome.recorded": "An outcome was recorded",
-    "recruiter.requested": "A recruiter was asked for help",
-    "recruiter.claimed": "An ITS recruiter picked it up",
-    "recruiter.resolved": "The ITS recruiter responded",
-  };
-  return known[e.type] ?? e.type.replace(/[._]/g, " ");
-}
+// What happened on a role, in plain words (describeRoleEvent), lives in role-words.ts with the channel and role words.
 
 /** Everything that happened on the role, newest first, in plain words. */
 export function ActivityTab({ roleId }: { roleId: string }) {
@@ -272,10 +225,9 @@ export function ActivityTab({ roleId }: { roleId: string }) {
   if (q.isLoading) return <Skeleton lines={5} />;
   if (q.error || !q.data) return <ErrorState message={q.error instanceof ApiError && q.error.status === 403 ? "Your role cannot see this role's activity." : "Could not load the activity."} onRetry={() => q.refetch()} />;
   if (!q.data.length) return <EmptyState title="Nothing yet" body="What happens on this role shows up here, newest first." />;
-  const who = (e: RoleEvent) => e.actor.name ?? (e.actor.kind === "agent" ? `AI (${e.actor.id})` : e.actor.kind === "system" ? "the system" : e.actor.kind);
   return (
     <Card title="Activity" aside={<Chip>{q.data.length} {q.data.length === 1 ? "entry" : "entries"}</Chip>}>
-      <Timeline items={q.data.map((e) => ({ when: e.occurredAt, what: describeRoleEvent(e), who: who(e) }))} />
+      <Timeline items={q.data.map((e) => ({ when: e.occurredAt, what: describeRoleEvent(e), who: actorWords(e.actor) }))} />
       <p className="small muted" style={{ marginTop: 8 }}>Candidates are not named here; open Talent for the people.</p>
     </Card>
   );

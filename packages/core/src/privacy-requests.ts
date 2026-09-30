@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { and, desc, eq, inArray, lte } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { applications, candidates, communications, dataRequests, documents, events, screens, type Queryable } from "@ros/db";
@@ -135,7 +136,10 @@ export async function anonymizeCandidate(
     const scr = await q.select({ id: screens.id, progress: screens.progress }).from(screens).where(inArray(screens.applicationId, appIds));
     scrCount = scr.length;
     for (const s of scr) await q.update(screens).set({ transcript: [], answers: {}, progress: withoutFocusAnswers(s.progress) }).where(eq(screens.id, s.id));
-    for (const a of appIds) await q.update(applications).set({ answers: { noticeVersionsShown: [] }, extraction: null, rejectNote: null }).where(eq(applications.id, a));
+    // The reply address of every old email is retired with a fresh random token: a reply to one of them no longer names
+    // this application, so it cannot write an address or a message back onto the removed record (the webhook also refuses
+    // a reply to an anonymized candidate). The status link keeps its token: its page already says the record is gone.
+    for (const a of appIds) await q.update(applications).set({ answers: { noticeVersionsShown: [] }, extraction: null, rejectNote: null, replyToken: randomBytes(8).toString("hex") }).where(eq(applications.id, a));
   }
   const comms = await q.select({ id: communications.id }).from(communications).where(eq(communications.candidateId, cand.id));
   for (const c of comms) await q.update(communications).set({ bodyText: "[removed at the candidate's request]", bodyHtml: null, subject: "[removed]", toAddress: null }).where(eq(communications.id, c.id));

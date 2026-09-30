@@ -28,6 +28,7 @@ import { schedulePages } from "./pages/schedule";
 import { privacyRequestRoutes } from "./routes/privacy-requests";
 import { observabilityRoutes } from "./routes/observability";
 import { readWorkerHealth } from "./worker-health";
+import { appHealthWatch } from "./maintenance";
 import { redactString } from "@ros/core";
 import { twilioWebhook } from "./webhooks/twilio";
 import { candidatePages } from "./pages/candidate";
@@ -78,12 +79,18 @@ export function createApp(container: Container) {
     return c.body(null, 204);
   });
 
+  const workerWatch = appHealthWatch(container.db, { workerInline: container.env.WORKER_INLINE });
   app.get("/healthz", async (c) => {
     try {
       await container.db.select({ id: companies.id }).from(companies).limit(1);
       // With a separate worker (H15) the newest heartbeat says whether it is polling; `healthy` is false once it is ten minutes old.
       const worker = container.env.WORKER_INLINE ? "inline" : await readWorkerHealth(container.db, container.engine.clock()).then((w) => ({ lastSeenAt: w?.lastSeenAt ?? null, queueDepth: w?.queueDepth ?? null, healthy: !!w?.healthy }));
-      return c.json({ ok: true, db: container.handle.kind, ai: container.ai.provider.id, worker });
+      // H3: the app is the process still up when the worker is not, so it raises the stale-worker and stale-queue alerts (throttled).
+      await workerWatch(container.engine.clock());
+      const workerHealthy = worker === "inline" || worker.healthy;
+      // `?strict=1` is for an uptime monitor that reads only the status code: a stopped worker answers 503 there.
+      if (c.req.query("strict") === "1" && !workerHealthy) return c.json({ ok: false, db: container.handle.kind, ai: container.ai.provider.id, worker, workerHealthy }, 503);
+      return c.json({ ok: true, db: container.handle.kind, ai: container.ai.provider.id, worker, workerHealthy });
     } catch (err) {
       // An anonymous endpoint never shows a driver error (it can name hosts, roles or a connection string); the log has it, redacted.
       console.error(`[healthz] database check failed: ${redactString(err instanceof Error ? err.message : String(err))}`);

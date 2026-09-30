@@ -77,7 +77,10 @@ export const screen: WorkflowDefinition<State> = {
           if ("error" in o) return { kind: "fail", error: `could not open the screen: ${o.error}`, retryable: true };
           opening = o.message;
         }
-        if (!(await ctx.alreadyDone("invite"))) {
+        // Once per screen and run. Not `alreadyDone("invite")`: waiting out quiet hours above leaves an ok ledger entry for
+        // this step, and the invitation would then never go out when the window opens. The run's state names the screen
+        // only in the same transaction that queues the invitation.
+        if (ctx.state.screenId !== scr.id) {
           // A focused screen's invitation counts the open questions and says the conversation starts with them.
           const sent = await sendScreenInvite(ctx.q, ctx.services.integrations, { application: app, candidate, role, company, packet: packetForFocusedInvite(packet, scr.progress), actor: ctx.actor, correlationId: ctx.run.id, appBaseUrl: ctx.services.env.jobsBaseUrl, screen: { id: scr.id, token: scr.token, channel }, opening });
           if (sent.email.status === "failed" && !candidate.email && channel !== "sms") return { kind: "fail", error: "candidate has no email and no SMS consent; nobody can be reached", retryable: false };

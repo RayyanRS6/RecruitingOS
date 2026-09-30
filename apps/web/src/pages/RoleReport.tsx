@@ -12,7 +12,7 @@ export type RoleReport = {
   applicants: { total: number; last30Days: number; timeZone: string; bySource: Array<{ source: string; label: string; sourceDetail: string | null; count: number }>; byDay: Array<{ day: string; count: number }> };
   stages: { total: number; byStage: Array<{ stage: string; label: string; group: string; count: number }>; byGroup: Record<string, number> };
   timeInStage: { byStage: Array<{ stage: string; label: string; group: string; completed: number; medianDays: number | null; averageDays: number | null; nowHere: number; longestDays: number | null }>; waitingOnYou: { count: number; averageDays: number | null; medianDays: number | null; longestDays: number | null } };
-  interviews: { total: number; requested: number; scheduled: number; completed: number; noShow: number; cancelled: number; offerExpired: number; rescheduledByCandidate: number; awaitingDecision: number; byRound: Array<{ roundKey: string; title: string; total: number; scheduled: number; completed: number; noShow: number; cancelled: number }> };
+  interviews: { total: number; requested: number; scheduled: number; completed: number; noShow: number; noShowCandidate: number; noShowInterviewer: number; cancelled: number; offerExpired: number; rescheduledByCandidate: number; awaitingDecision: number; byRound: Array<{ roundKey: string; title: string; total: number; scheduled: number; completed: number; noShow: number; noShowCandidate: number; noShowInterviewer: number; cancelled: number }> };
   pendingDecisions: { count: number; approvals: number; candidates: number; oldestDays: number | null; list: Array<{ kind: "approval" | "candidate"; label: string; days: number; applicationId: string | null; approvalRequestId: string | null }> };
   recommendationsVsDecisions: { assessed: number; rows: Array<{ recommendation: string; label: string; total: number; invited: number; interviewed: number; declined: number; held: number; noActionYet: number }> };
   overrides: { eligibilityOverrides: number; reviewAnyway: number; holds: number; flaggedAssessments: number; byAction: Record<string, number> };
@@ -104,15 +104,17 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
           <dt>Requested, not yet on the calendar</dt><dd>{r.interviews.requested}</dd>
           <dt>On the calendar</dt><dd>{r.interviews.scheduled}</dd>
           <dt>Held</dt><dd>{r.interviews.completed}</dd>
-          <dt>Candidate did not show</dt><dd>{r.interviews.noShow}</dd>
+          <dt>Candidate did not show</dt><dd>{r.interviews.noShowCandidate}</dd>
+          <dt>Interviewer did not show</dt><dd>{r.interviews.noShowInterviewer}</dd>
+          {r.interviews.noShow > r.interviews.noShowCandidate + r.interviews.noShowInterviewer ? <><dt>Did not take place, who was missing not recorded</dt><dd>{r.interviews.noShow - r.interviews.noShowCandidate - r.interviews.noShowInterviewer}</dd></> : null}
           <dt>Cancelled</dt><dd>{r.interviews.cancelled}</dd>
           <dt>Rescheduled by the candidate</dt><dd>{r.interviews.rescheduledByCandidate}</dd>
           <dt>Waiting for your decision</dt><dd>{r.interviews.awaitingDecision}</dd>
         </dl>
         {r.interviews.byRound.length ? (
           <div style={{ marginTop: 10 }}>
-            <Table head={["Round", "All", "On the calendar", "Held", "No-shows", "Cancelled"]} label="Interviews by round">
-              {r.interviews.byRound.map((x) => <tr key={x.roundKey}><td>{x.title}</td><td>{x.total}</td><td>{x.scheduled}</td><td>{x.completed}</td><td>{x.noShow}</td><td>{x.cancelled}</td></tr>)}
+            <Table head={["Round", "All", "On the calendar", "Held", "Candidate did not show", "Interviewer did not show", "Cancelled"]} label="Interviews by round">
+              {r.interviews.byRound.map((x) => <tr key={x.roundKey}><td>{x.title}</td><td>{x.total}</td><td>{x.scheduled}</td><td>{x.completed}</td><td>{x.noShowCandidate}</td><td>{x.noShowInterviewer}</td><td>{x.cancelled}</td></tr>)}
             </Table>
           </div>
         ) : null}

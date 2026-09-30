@@ -6,6 +6,7 @@ import { companies, interviewParticipants, interviews, memberships, users, withP
 import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
 import type { Tenant } from "../middleware/session";
+import { cancelInterviewInTx } from "./interview-cancel";
 
 /**
  * The team behind /companies/current/members and /companies/current/invitations (docs/spec/21, area A). Every
@@ -67,12 +68,14 @@ async function queueInvitationEmail(tx: Tx, team: Team, input: { invitation: Inv
 }
 
 /**
- * Creates the invitation and queues its one email. Refused: an address on an ITS staff domain (recruiters join through
- * a scoped grant, never as members) and an address that is already an active member. An older open invitation for
- * the same address is replaced by the new one.
+ * Creates the invitation and queues its one email. Refused: an owner invitation from anyone but an owner (the same rule
+ * as a role change: accepting the invitation would make the person an owner), an address on an ITS staff domain
+ * (recruiters join through a scoped grant, never as members) and an address that is already an active member. An older
+ * open invitation for the same address is replaced by the new one.
  */
 export async function inviteMember(team: Team, input: { body: InviteMember; inviterName: string }) {
   const { container, tenant, actor } = team;
+  assertMayInviteAs(tenant, input.body.role);
   const email = normalizeEmail(input.body.email);
   const domain = email.split("@")[1] ?? "";
   if (container.env.ITS_STAFF_EMAIL_DOMAINS.includes(domain)) throw new HttpError(400, "staff_domain", "That address belongs to ITS. Recruiters are not team members; they get access through Bring in a recruiter, for one request at a time.");
@@ -89,6 +92,14 @@ export async function inviteMember(team: Team, input: { body: InviteMember; invi
   return { ok: true as const, invitation: publicInvitation(result.row, now), replaced: result.replaced, ...devLinkOf(container, result.link) };
 }
 
+/**
+ * Only an owner grants the owner role, whichever way it is granted: an invitation accepted at sign-in creates the
+ * membership with the invited role, so inviting someone as owner is refused to HR and admins exactly as promoting them is.
+ */
+function assertMayInviteAs(tenant: Tenant, role: string): void {
+  if (role === "owner" && tenant.role !== "owner") throw new HttpError(403, "owner_only", "Only an owner can invite another owner.");
+}
+
 /** A fresh link (the old one stops working) and another seven days; the email goes out again. */
 export async function resendMemberInvitation(team: Team, input: { invitationId: string; inviterName: string }) {
   const { container, tenant, actor } = team;
@@ -96,6 +107,8 @@ export async function resendMemberInvitation(team: Team, input: { invitationId: 
   const result = await withTenant(container.db, tenant.companyId, async (tx) => {
     const rotated = await resendInvitation(tx, { invitationId: input.invitationId, companyId: tenant.companyId, actor, now });
     if (!rotated) throw new HttpError(404, "not_found", "No open invitation with that id.");
+    // A fresh link to an owner invitation is an owner's to send; the refusal rolls the rotation back, so the old link still works.
+    assertMayInviteAs(tenant, rotated.row.role);
     const companyName = await companyNameOf(tx, tenant.companyId);
     const link = await queueInvitationEmail(tx, team, { invitation: rotated.row, token: rotated.token, companyName, inviterName: input.inviterName, again: true });
     return { row: rotated.row, link };
@@ -119,8 +132,8 @@ const OPEN_INTERVIEW_STATUSES = ["proposed", "scheduling", "scheduled"];
  * nobody changes their own membership (409 self_change); the last active owner is neither demoted nor removed
  * (409 last_owner); only an owner grants or takes the owner role, including by removal (403 owner_only). Either change
  * ends the person's sessions so it applies at once. Removal also disconnects their calendar (its credential deletion is
- * queued exactly as the disconnect route does), takes them off the interviews still ahead that counted on them, and
- * tells the owners and admins those interviews need another interviewer.
+ * queued exactly as the disconnect route does), takes them off the interviews still ahead that counted on them, cancels
+ * the ones nobody else was on (services/interview-cancel.ts), and tells the owners and admins what happened to each.
  */
 export async function updateMember(team: Team, input: { userId: string; body: UpdateMember }) {
   const { container, tenant, actor } = team;
@@ -139,7 +152,7 @@ export async function updateMember(team: Team, input: { userId: string; body: Up
     if (!target) throw new HttpError(404, "not_found", "That person is not an active member of your team.");
     const newRole = body.role ?? target.role;
     const roleChanges = newRole !== target.role;
-    if (!removing && !roleChanges) return { row: { userId, role: target.role, status: "active" }, changed: false, removed: false, calendarDeletionQueued: false, interviewsFlagged: 0 };
+    if (!removing && !roleChanges) return { row: { userId, role: target.role, status: "active" }, changed: false, removed: false, calendarDeletionQueued: false, interviewsFlagged: 0, interviewsCancelled: 0 };
     if (target.role === "owner") {
       const [owners] = await tx.select({ n: count() }).from(memberships).where(and(eq(memberships.companyId, tenant.companyId), eq(memberships.role, "owner"), eq(memberships.status, "active")));
       if (Number(owners?.n ?? 0) <= 1) throw new HttpError(409, "last_owner", "This is the only owner. Make someone else an owner first.");
@@ -150,7 +163,7 @@ export async function updateMember(team: Team, input: { userId: string; body: Up
       const [updated] = await tx.update(memberships).set({ role: newRole }).where(eq(memberships.id, target.id)).returning();
       await emit(tx, { type: "membership.changed", companyId: tenant.companyId, actor, subject: { type: "user", id: userId }, payload: { role: newRole, previousRole: target.role, status: "active" } });
       await audit(tx, { companyId: tenant.companyId, actor, action: "membership.changed", target: { type: "user", id: userId }, reason: `role changed from ${target.role} to ${newRole}`, details: { from: target.role, to: newRole } });
-      return { row: { userId, role: updated.role, status: updated.status }, changed: true, removed: false, calendarDeletionQueued: false, interviewsFlagged: 0 };
+      return { row: { userId, role: updated.role, status: updated.status }, changed: true, removed: false, calendarDeletionQueued: false, interviewsFlagged: 0, interviewsCancelled: 0 };
     }
     const [updated] = await tx.update(memberships).set({ status: "removed" }).where(eq(memberships.id, target.id)).returning();
     // The same path as POST /integrations/calendar/:provider/disconnect: the connection is unusable now, the credential's deletion is queued.
@@ -171,14 +184,25 @@ export async function updateMember(team: Team, input: { userId: string; body: Up
       const { [userId]: _gone, ...refs } = p.calendarRefs;
       await tx.update(interviews).set({ calendarRefs: refs }).where(eq(interviews.id, p.interviewId));
     }
-    if (ahead.length) {
-      const titles = [...new Set(ahead.map((p) => p.title))].slice(0, 5).join(", ");
-      await notify(tx, { companyId: tenant.companyId, kind: "member.removed_interviews", title: `${who} was removed; ${ahead.length === 1 ? "an interview needs" : `${ahead.length} interviews need`} another interviewer`, body: `${titles}. Open each interview and add an interviewer, or cancel it.`, action: { label: "Open interviews", href: "/interviews" }, roles: ["owner", "admin"] });
+    // An interview that counted on nobody else cannot take place and nothing adds an interviewer to an existing one, so
+    // it is cancelled through the one cancellation path: its scheduling run ends, a candidate with a booked time is
+    // told, and the candidate goes back to "Interview approved" for the team to approve a new interview. An interview
+    // with other interviewers goes ahead with them.
+    const cancelled: Array<{ title: string; candidateTold: boolean }> = [];
+    const continuing: string[] = [];
+    for (const interviewId of [...new Set(ahead.map((p) => p.interviewId))]) {
+      const [iv] = await tx.select().from(interviews).where(eq(interviews.id, interviewId)).limit(1);
+      if (!iv) continue;
+      const [others] = await tx.select({ n: count() }).from(interviewParticipants).where(eq(interviewParticipants.interviewId, iv.id));
+      if (Number(others?.n ?? 0) > 0) { continuing.push(iv.title); continue; }
+      const done = await cancelInterviewInTx(tx, container, { companyId: tenant.companyId, interview: iv, actor, by: "system", reason: `${who} was removed from the team and was the only interviewer.`, cause: "interviewer_removed", now });
+      cancelled.push({ title: iv.title, candidateTold: done.candidateTold });
     }
-    await emit(tx, { type: "member.removed", companyId: tenant.companyId, actor, subject: { type: "user", id: userId }, payload: { role: target.role, calendarDeletionQueued: !!calendar?.queued, interviewsFlagged: ahead.length } });
+    if (ahead.length) await notify(tx, { companyId: tenant.companyId, kind: "member.removed_interviews", ...removalNotice(who, cancelled, continuing), action: { label: "Open interviews", href: "/interviews" }, roles: ["owner", "admin"] });
+    await emit(tx, { type: "member.removed", companyId: tenant.companyId, actor, subject: { type: "user", id: userId }, payload: { role: target.role, calendarDeletionQueued: !!calendar?.queued, interviewsFlagged: ahead.length, interviewsCancelled: cancelled.length } });
     await emit(tx, { type: "membership.changed", companyId: tenant.companyId, actor, subject: { type: "user", id: userId }, payload: { role: target.role, status: "removed" } });
-    await audit(tx, { companyId: tenant.companyId, actor, action: "membership.changed", target: { type: "user", id: userId }, reason: "removed from the team", details: { role: target.role, calendarDeletionQueued: !!calendar?.queued, interviewsFlagged: ahead.length } });
-    return { row: { userId, role: updated.role, status: updated.status }, changed: true, removed: true, calendarDeletionQueued: !!calendar?.queued, interviewsFlagged: ahead.length };
+    await audit(tx, { companyId: tenant.companyId, actor, action: "membership.changed", target: { type: "user", id: userId }, reason: "removed from the team", details: { role: target.role, calendarDeletionQueued: !!calendar?.queued, interviewsFlagged: ahead.length, interviewsCancelled: cancelled.length } });
+    return { row: { userId, role: updated.role, status: updated.status }, changed: true, removed: true, calendarDeletionQueued: !!calendar?.queued, interviewsFlagged: ahead.length, interviewsCancelled: cancelled.length };
   });
   let sessionsEnded = 0;
   if (outcome.changed) {
@@ -190,5 +214,22 @@ export async function updateMember(team: Team, input: { userId: string; body: Up
     });
     if (outcome.removed) await container.kick();
   }
-  return { ...outcome.row, sessionsEnded, calendarDeletionQueued: outcome.calendarDeletionQueued, interviewsFlagged: outcome.interviewsFlagged };
+  return { ...outcome.row, sessionsEnded, calendarDeletionQueued: outcome.calendarDeletionQueued, interviewsFlagged: outcome.interviewsFlagged, interviewsCancelled: outcome.interviewsCancelled };
+}
+
+/** Plain words for the owners about the interviews a removed person was on: which were cancelled and which go ahead. */
+function removalNotice(who: string, cancelled: Array<{ title: string; candidateTold: boolean }>, continuing: string[]): { title: string; body: string } {
+  const list = (titles: string[]) => [...new Set(titles)].slice(0, 5).join(", ");
+  const parts: string[] = [];
+  if (cancelled.length) {
+    const one = cancelled.length === 1;
+    const told = cancelled.filter((x) => x.candidateTold).length;
+    const toldLine = told ? ` ${told === 1 ? "The candidate who had a booked time was" : `The ${told} candidates who had a booked time were`} told it is cancelled.` : "";
+    parts.push(`${list(cancelled.map((x) => x.title))}: ${who} was the only interviewer, so ${one ? "that interview was" : `those ${cancelled.length} interviews were`} cancelled.${toldLine} To go on with ${one ? "the candidate" : "those candidates"}, approve a new interview with another interviewer from ${one ? "their" : "each candidate's"} page.`);
+  }
+  if (continuing.length) parts.push(`${list(continuing)}: ${continuing.length === 1 ? "goes" : "go"} ahead with the other interviewers.`);
+  const title = cancelled.length
+    ? `${who} was removed; ${cancelled.length === 1 ? "an interview was" : `${cancelled.length} interviews were`} cancelled`
+    : `${who} was removed from ${continuing.length === 1 ? "an interview" : `${continuing.length} interviews`}`;
+  return { title, body: parts.join(" ") };
 }

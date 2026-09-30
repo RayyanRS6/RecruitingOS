@@ -70,7 +70,24 @@ export async function applicationFacts(tx: Tx, app: Pick<typeof applications.$in
 export async function sendDeclineAfterHumanDecision(tx: Tx, container: Container, input: { companyId: string; app: typeof applications.$inferSelect; actor: Actor; reason: string }): Promise<boolean> {
   const { companyId, app, actor, reason } = input;
   const d = await gate(tx, { companyId, roleId: app.roleId, applicationId: app.id, actionType: "disposition.send", subject: { type: "application", id: app.id }, proposal: { reason }, requestedBy: actor });
+  // Under "approval" the request waits for an approver; POST /approvals/:id/decide sends the message when it is approved (sendApprovedDecline).
   if (d.outcome !== "execute") return false;
+  return deliverDecline(tx, container, { companyId, app, actor, reason });
+}
+
+/**
+ * The approved half of a `disposition.send` approval request: the decline message goes out exactly as it would have
+ * without the approval. Nothing is sent when the decision was reversed in the meantime (the candidate is no longer
+ * declined, for instance after "review anyway"). Returns whether the message was queued.
+ */
+export async function sendApprovedDecline(tx: Tx, container: Container, input: { companyId: string; applicationId: string; actor: Actor; reason: string }): Promise<boolean> {
+  const [app] = await tx.select().from(applications).where(eq(applications.id, input.applicationId)).limit(1);
+  if (!app || app.stage !== "rejected") return false;
+  return deliverDecline(tx, container, { companyId: input.companyId, app, actor: input.actor, reason: input.reason || app.rejectReason || "employer_declined" });
+}
+
+async function deliverDecline(tx: Tx, container: Container, input: { companyId: string; app: typeof applications.$inferSelect; actor: Actor; reason: string }): Promise<boolean> {
+  const { companyId, app, actor, reason } = input;
   const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
   const [role] = await tx.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
   const [company] = await tx.select().from(companies).where(eq(companies.id, companyId)).limit(1);

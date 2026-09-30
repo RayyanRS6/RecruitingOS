@@ -39,7 +39,10 @@ export function Login() {
     mutationFn: () => api.post("/api/v1/auth/invite/forget"),
     onSuccess: () => navigate("/login", { replace: true }),
   });
-  const error = send.error ? (send.error instanceof ApiError ? send.error.message : "Could not send the link.") : errParam ? ERRORS[errParam] ?? "Sign-in failed. Try again." : null;
+  // A failed "Continue without the invitation" says so in the same alert, instead of leaving the person stuck with no answer.
+  const forgetError = forgetInvite.error ? (forgetInvite.error instanceof ApiError ? forgetInvite.error.message : "Could not clear the invitation. Try again.") : null;
+  const base = send.error ? (send.error instanceof ApiError ? send.error.message : "Could not send the link.") : errParam ? ERRORS[errParam] ?? "Sign-in failed. Try again." : null;
+  const error = forgetError ? (base ? `${base} ${forgetError}` : forgetError) : base;
   return (
     <main className="main" style={{ maxWidth: 480, margin: "8vh auto" }}>
       <h1 style={{ marginBottom: 6 }}>Recruiting OS</h1>

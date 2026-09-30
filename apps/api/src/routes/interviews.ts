@@ -1,12 +1,12 @@
-import { Hono, type Context } from "hono";
+import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { and, desc, eq, gte, inArray, isNull, lte } from "drizzle-orm";
 import { BookOnBehalf, CancelInterview, InterviewOutcome, InterviewerAvailabilityInput, RecordDecision, RequestInterview, RescheduleInterview } from "@ros/contracts";
-import { STAGE_LABEL, assertCan, audit, availabilityFor, calendarConnectionFor, can, defaultSchedulingWindow, emit, notify, publicConnection, transition, upsertAvailability } from "@ros/core";
-import { sendInterviewCancelled } from "@ros/agents";
+import { STAGE_LABEL, assertCan, audit, availabilityFor, calendarConnectionFor, can, defaultSchedulingWindow, emit, notify, publicConnection, scopeAllows, transition, upsertAvailability } from "@ros/core";
 import { applications, approvalRequests, candidates, companies, events, interviewParticipants, interviews, jobs, memberships, rolePackets, roles, users, withTenant } from "@ros/db";
 import { actorOf, applicationScopeGuard, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { sendDeclineAfterHumanDecision } from "../services/application-actions";
+import { cancelInterviewInTx } from "../services/interview-cancel";
 import { interviewBriefFor } from "../services/interviewer-view";
 
 /**
@@ -47,28 +47,18 @@ async function supersede(c: Context<Vars>, input: { interviewId: string; mode: "
     const [app] = await tx.select().from(applications).where(eq(applications.id, iv.applicationId)).limit(1);
     const actor = actorOf(c);
     if (input.mode === "cancel") {
-      await tx.update(interviews).set({ status: "cancelled", cancelReason: input.reason, attempt: iv.attempt + 1, scheduleToken: null, scheduleTokenExpiresAt: null }).where(eq(interviews.id, iv.id));
-      await emit(tx, { type: "interview.cancelled", companyId: t.companyId, actor, subject: { type: "interview", id: iv.id }, payload: { reason: input.reason, byCandidate: !!input.byCandidate, hadEvents } });
-      if (app.stage === "interview_scheduled") await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "interview_recommended", by: t.role, actor, reason: "interview cancelled" });
-      const parts = await tx.select({ userId: interviewParticipants.userId }).from(interviewParticipants).where(eq(interviewParticipants.interviewId, iv.id));
-      await notify(tx, { companyId: t.companyId, kind: "interview.cancelled", title: `Interview cancelled: ${iv.title}`, body: input.reason ?? "Cancelled.", action: { label: "Open interviews", href: "/interviews" }, userIds: parts.map((p) => p.userId) });
-      if (iv.startsAt) {
-        const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
-        const [role] = await tx.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
-        const [company] = await tx.select().from(companies).where(eq(companies.id, t.companyId)).limit(1);
-        const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
-        if (cand && role && company && pv) await sendInterviewCancelled(tx, container.integrations, { application: app, candidate: cand, role, company, packet: pv.packet, actor, appBaseUrl: container.env.APP_BASE_URL, interview: { ...iv, status: "cancelled" }, interviewerFirstNames: [], candidateTimezone: iv.schedulingWindow.candidateTimezone ?? cand.location?.timezone ?? company.timezone, companyTimezone: company.timezone, byCandidate: !!input.byCandidate, reason: input.reason });
-      }
-    } else {
-      const window = { ...iv.schedulingWindow, ...(input.window ?? {}) };
-      if (!window.fromDate || !window.toDate) Object.assign(window, defaultSchedulingWindow(now, (await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, t.companyId)).limit(1))[0].timezone));
-      await tx.update(interviews).set({ status: "scheduling", attempt: iv.attempt + 1, selectedSlot: null, offeredSlots: [], startsAt: null, endsAt: null, scheduleToken: null, scheduleTokenExpiresAt: null, schedulingWindow: window, rescheduleCountCandidate: input.byCandidate ? iv.rescheduleCountCandidate + 1 : iv.rescheduleCountCandidate, reminders: {}, meetingUrl: iv.linkSource === "pasted" ? iv.meetingUrl : null }).where(eq(interviews.id, iv.id));
-      // The booked time is gone, so the interviewers are back to invited until the workflow books the next one.
-      await tx.update(interviewParticipants).set({ status: "invited" }).where(eq(interviewParticipants.interviewId, iv.id));
-      await emit(tx, { type: "interview.rescheduled", companyId: t.companyId, actor, subject: { type: "interview", id: iv.id }, payload: { reason: input.reason, byCandidate: !!input.byCandidate, attempt: iv.attempt + 1, hadEvents } });
-      if (app.stage === "interview_scheduled") await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "interview_recommended", by: t.role, actor, reason: "interview being rescheduled" });
-      await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: t.companyId, subject: { type: "interview", id: iv.id }, state: { interviewId: iv.id, applicationId: iv.applicationId, roleId: app.roleId, roundKey: iv.roundKey, attempt: iv.attempt + 1 }, idempotencyKey: `schedule:${iv.id}:${iv.attempt + 1}`, actor });
+      // The one cancellation path (services/interview-cancel.ts): it also queues the calendar events' removal.
+      await cancelInterviewInTx(tx, container, { companyId: t.companyId, interview: iv, actor, by: t.role, reason: input.reason, byCandidate: input.byCandidate, now });
+      return iv.id;
     }
+    const window = { ...iv.schedulingWindow, ...(input.window ?? {}) };
+    if (!window.fromDate || !window.toDate) Object.assign(window, defaultSchedulingWindow(now, (await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, t.companyId)).limit(1))[0].timezone));
+    await tx.update(interviews).set({ status: "scheduling", attempt: iv.attempt + 1, selectedSlot: null, offeredSlots: [], startsAt: null, endsAt: null, scheduleToken: null, scheduleTokenExpiresAt: null, schedulingWindow: window, rescheduleCountCandidate: input.byCandidate ? iv.rescheduleCountCandidate + 1 : iv.rescheduleCountCandidate, reminders: {}, meetingUrl: iv.linkSource === "pasted" ? iv.meetingUrl : null }).where(eq(interviews.id, iv.id));
+    // The booked time is gone, so the interviewers are back to invited until the workflow books the next one.
+    await tx.update(interviewParticipants).set({ status: "invited" }).where(eq(interviewParticipants.interviewId, iv.id));
+    await emit(tx, { type: "interview.rescheduled", companyId: t.companyId, actor, subject: { type: "interview", id: iv.id }, payload: { reason: input.reason, byCandidate: !!input.byCandidate, attempt: iv.attempt + 1, hadEvents } });
+    if (app.stage === "interview_scheduled") await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "interview_recommended", by: t.role, actor, reason: "interview being rescheduled" });
+    await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: t.companyId, subject: { type: "interview", id: iv.id }, state: { interviewId: iv.id, applicationId: iv.applicationId, roleId: app.roleId, roundKey: iv.roundKey, attempt: iv.attempt + 1 }, idempotencyKey: `schedule:${iv.id}:${iv.attempt + 1}`, actor });
     if (hadEvents) await tx.insert(jobs).values({ kind: "interview.cancel_events", payload: { interviewId: iv.id, companyId: t.companyId, actor }, runAt: now.toISOString(), maxAttempts: 5 });
     return iv.id;
   });
@@ -76,7 +66,25 @@ async function supersede(c: Context<Vars>, input: { interviewId: string; mode: "
   return result;
 }
 
+/**
+ * ITS staff acting under a scoped grant reach only the interviews of the role or candidate the grant names, on every
+ * route that takes an interview id (the detail carries the interviewer's brief: evidence, strengths, concerns, screen
+ * answers). The same refusal as the application and role guards. Members are unaffected.
+ */
+const interviewScopeGuard: MiddlewareHandler<Vars> = async (c, next) => {
+  const t = c.get("tenant");
+  const id = c.req.param("id");
+  if (t?.staff && id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    const scope = { roleId: t.staff.scope.roleId, applicationId: t.staff.scope.applicationId };
+    const [row] = await withTenant(c.get("container").db, t.companyId, (tx) => tx.select({ applicationId: interviews.applicationId, roleId: applications.roleId }).from(interviews).innerJoin(applications, eq(applications.id, interviews.applicationId)).where(and(eq(interviews.id, id), eq(interviews.companyId, t.companyId))).limit(1));
+    if (row && !scopeAllows(scope, { roleId: row.roleId, applicationId: row.applicationId })) throw new HttpError(403, "staff_scope", "Your access is limited to the role and candidate of the escalation you accepted.");
+  }
+  await next();
+};
+
 export const interviewRoutes = new Hono<Vars>();
+interviewRoutes.use("/:id", interviewScopeGuard);
+interviewRoutes.use("/:id/*", interviewScopeGuard);
 
 interviewRoutes.get("/", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -99,6 +107,8 @@ interviewRoutes.get("/", requireTenant, async (c) => {
       const appIds = (await tx.select({ id: applications.id }).from(applications).where(eq(applications.roleId, t.staff.scope.roleId))).map((a) => a.id);
       list = list.filter((r) => appIds.includes(r.applicationId));
     }
+    // a grant about one candidate shows that candidate's interviews only, the same limit as the role's applications list
+    if (t.staff?.scope.applicationId) list = list.filter((r) => r.applicationId === t.staff!.scope.applicationId);
     const out = [];
     for (const r of list) out.push(await summary(tx, r));
     return out;

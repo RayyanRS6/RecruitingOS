@@ -259,7 +259,7 @@ describe("team invitations, members and roles", () => {
     expect(((await ann2.json()) as { activeCompanyId: string | null }).activeCompanyId).toBeNull();
   });
 
-  it("validates member changes: bad role, self-change, HR cannot grant owner, the last owner stays, a role change ends sessions", async () => {
+  it("validates member changes: bad role, self-change, only an owner grants or takes the owner role, the last owner stays, a role change ends sessions", async () => {
     const members = (await (await json(owner, "GET", "/api/v1/companies/current/members")).json()) as Array<{ userId: string; email: string }>;
     const hankId = members.find((m) => m.email === "hank.manager@teamtest.test")!.userId;
     const patch = (cookie: string, userId: string, body: unknown) => json(cookie, "PATCH", `/api/v1/companies/current/members/${userId}`, body);
@@ -283,6 +283,22 @@ describe("team invitations, members and roles", () => {
     // a second owner joins; the first owner demotes them (two owners, so allowed), which ends their sessions
     const olive = await signInAs(container, app, { companyId, role: "owner", email: "olive.owner@teamtest.test", name: "Olive" });
     const oliveId = (await me(olive)).user.id;
+    // with two owners the last-owner guard no longer answers first; an admin or HR still cannot demote or remove either of them
+    const admin = await signInAs(container, app, { companyId, role: "admin", email: "adam.admin@teamtest.test", name: "Adam" });
+    for (const [who, cookie] of [["admin", admin], ["hr", hr]] as const) {
+      for (const target of [oliveId, ownerId]) {
+        for (const body of [{ role: "admin" }, { status: "removed" }]) {
+          const r = await patch(cookie, target, body);
+          expect(r.status, `${who} ${JSON.stringify(body)} on an owner`).toBe(403);
+          expect(await errorCode(r)).toBe("owner_only");
+        }
+      }
+    }
+    // both membership rows untouched: still owners, still active
+    const owners = await container.db.select({ userId: memberships.userId, status: memberships.status }).from(memberships).where(and(eq(memberships.companyId, companyId), eq(memberships.role, "owner")));
+    const byId = (a: { userId: string }, b: { userId: string }) => a.userId.localeCompare(b.userId);
+    expect(owners.sort(byId)).toEqual([{ userId: oliveId, status: "active" }, { userId: ownerId, status: "active" }].sort(byId));
+    expect((await json(olive, "GET", "/api/v1/auth/me")).status).toBe(200); // a refused change ends nobody's sessions
     const demote = await patch(owner, oliveId, { role: "admin" });
     expect(demote.status).toBe(200);
     const demoted = (await demote.json()) as { role: string; status: string; sessionsEnded: number };
@@ -302,23 +318,52 @@ describe("team invitations, members and roles", () => {
     expect(await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "session.revoked"), eq(auditRecords.reason, "role changed")))).toHaveLength(1);
   });
 
-  it("removal ends sessions, queues the calendar credential's deletion, flags the interviews ahead and hides the person", async () => {
+  it("only an owner invites an owner: HR and an admin are refused (403 owner_only) on the invitation and on sending it again; the owner's goes out", async () => {
+    const abby = await signInAs(container, app, { companyId, role: "admin", email: "abby.admin@teamtest.test", name: "Abby Admin" });
+    for (const cookie of [hr, abby]) {
+      const r = await invite(cookie, { email: "second.owner@teamtest.test", role: "owner" });
+      expect(r.status).toBe(403);
+      expect(await errorCode(r)).toBe("owner_only");
+    }
+    expect(await container.db.select().from(invitations).where(eq(invitations.email, "second.owner@teamtest.test"))).toHaveLength(0);
+    expect(mail().sent.filter((m) => m.to === "second.owner@teamtest.test")).toHaveLength(0);
+    // the owner may, and only the owner may send it again: a refused resend rolls back, so the first link still works
+    const created = (await (await invite(owner, { email: "second.owner@teamtest.test", role: "owner" })).json()) as InviteResponse;
+    expect(created.invitation).toMatchObject({ role: "owner", status: "pending" });
+    for (const cookie of [hr, abby]) {
+      const r = await json(cookie, "POST", `/api/v1/companies/current/invitations/${created.invitation.id}/resend`);
+      expect(r.status).toBe(403);
+      expect(await errorCode(r)).toBe("owner_only");
+    }
+    expect(await (await app.request(pathOf(created.devLink))).text()).toContain("Join Teamtest Dental");
+    expect(mail().sent.filter((m) => m.to === "second.owner@teamtest.test")).toHaveLength(1);
+    expect((await json(owner, "POST", `/api/v1/companies/current/invitations/${created.invitation.id}/revoke`)).status).toBe(200);
+  });
+
+  it("removal ends sessions, queues the calendar credential's deletion, cancels the interview nobody else was on, keeps the one others run, and hides the person", async () => {
     const wes = await signInAs(container, app, { companyId, role: "interviewer", email: "wes.leaving@teamtest.test", name: "Wes Leaving" });
     const wesId = (await me(wes)).user.id;
     await withTenant(container.db, companyId, (tx) => connectCalendar(tx, container.integrations.secrets, { companyId, userId: wesId, provider: "google", refreshToken: "wes-refresh-token-value", account: { email: "wes@calendar.test", calendarId: "wes@calendar.test", timeZone: "America/Los_Angeles" }, scopes: ["calendar.events"], actor: { kind: "user", id: wesId, name: "Wes Leaving" } }));
     const applicationId = await seedApplication("pat.lee@candidate.test");
-    const interviewId = await withTenant(container.db, companyId, async (tx) => {
-      const [iv] = await tx.insert(interviews).values({ companyId, applicationId, roundKey: "r1", title: "Working interview", format: "onsite", durationMinutes: 45, status: "scheduled", timezone: "America/Los_Angeles", createdBy: { kind: "user", id: ownerId }, calendarRefs: { [wesId]: { provider: "google", eventId: "evt-wes", htmlLink: null, meetingUrl: null } } }).returning();
+    const sharedApplicationId = await seedApplication("sam.shared@candidate.test");
+    const startsAt = new Date(Date.now() + 3 * 86_400_000).toISOString();
+    const endsAt = new Date(Date.now() + 3 * 86_400_000 + 45 * 60_000).toISOString();
+    // Wes alone on a booked interview; Wes and the owner together on another
+    const { interviewId, sharedInterviewId } = await withTenant(container.db, companyId, async (tx) => {
+      await tx.update(applications).set({ stage: "interview_scheduled" }).where(eq(applications.id, applicationId));
+      const [iv] = await tx.insert(interviews).values({ companyId, applicationId, roundKey: "r1", title: "Working interview", format: "onsite", durationMinutes: 45, status: "scheduled", startsAt, endsAt, timezone: "America/Los_Angeles", createdBy: { kind: "user", id: ownerId }, calendarRefs: { [wesId]: { provider: "google", eventId: "evt-wes", htmlLink: null, meetingUrl: null } } }).returning();
       await tx.insert(interviewParticipants).values({ companyId, interviewId: iv.id, userId: wesId, role: "interviewer", status: "invited" });
-      return iv.id;
+      const [shared] = await tx.insert(interviews).values({ companyId, applicationId: sharedApplicationId, roundKey: "r1", title: "Chairside interview", format: "onsite", durationMinutes: 45, status: "scheduling", timezone: "America/Los_Angeles", createdBy: { kind: "user", id: ownerId } }).returning();
+      await tx.insert(interviewParticipants).values([{ companyId, interviewId: shared.id, userId: wesId, role: "interviewer", status: "invited" }, { companyId, interviewId: shared.id, userId: ownerId, role: "interviewer", status: "invited" }]);
+      return { interviewId: iv.id, sharedInterviewId: shared.id };
     });
     const before = (await (await json(owner, "GET", "/api/v1/companies/current/members")).json()) as Array<{ userId: string; calendar: { status: string } | null }>;
     expect(before.find((m) => m.userId === wesId)?.calendar?.status).toBe("live");
 
     const r = await json(owner, "PATCH", `/api/v1/companies/current/members/${wesId}`, { status: "removed" });
     expect(r.status).toBe(200);
-    const body = (await r.json()) as { status: string; sessionsEnded: number; calendarDeletionQueued: boolean; interviewsFlagged: number };
-    expect(body).toMatchObject({ status: "removed", calendarDeletionQueued: true, interviewsFlagged: 1 });
+    const body = (await r.json()) as { status: string; sessionsEnded: number; calendarDeletionQueued: boolean; interviewsFlagged: number; interviewsCancelled: number };
+    expect(body).toMatchObject({ status: "removed", calendarDeletionQueued: true, interviewsFlagged: 2, interviewsCancelled: 1 });
     expect(body.sessionsEnded).toBeGreaterThanOrEqual(1);
     // the removed person's next request is refused outright
     expect((await json(wes, "GET", "/api/v1/auth/me")).status).toBe(401);
@@ -339,14 +384,31 @@ describe("team invitations, members and roles", () => {
     expect(conn.status).toBe("not_connected");
     expect(conn.disconnectReason).toBe("removed from the team");
     expect(conn.secretRef).toBeNull();
-    // off the interview for real (the scheduling path reads participants without looking at any status), the booking in their disconnected calendar no longer referenced, and the owner told
+    // off the interviews for real (the scheduling path reads participants without looking at any status), the booking in their disconnected calendar no longer referenced
     expect(await container.db.select().from(interviewParticipants).where(and(eq(interviewParticipants.interviewId, interviewId), eq(interviewParticipants.userId, wesId)))).toHaveLength(0);
     expect(await withTenant(container.db, companyId, (tx) => participantsOf(tx, interviewId))).toEqual([]);
-    expect((await container.db.select().from(interviews).where(eq(interviews.id, interviewId)))[0].calendarRefs).toEqual({});
+    const [gone] = await container.db.select().from(interviews).where(eq(interviews.id, interviewId));
+    expect(gone.calendarRefs).toEqual({});
+    // the interview nobody else was on cannot take place: cancelled (its run ends on the new attempt), the candidate back at
+    // "Interview approved" for a new approval, and told through the outbox that the booked time is off
+    expect(gone).toMatchObject({ status: "cancelled", attempt: 2 });
+    expect(gone.cancelReason).toContain("only interviewer");
+    expect((await container.db.select().from(applications).where(eq(applications.id, applicationId)))[0].stage).toBe("interview_recommended");
+    expect(mail().sent.some((m) => m.to === "pat.lee@candidate.test")).toBe(true);
+    expect((await container.db.select().from(events).where(and(eq(events.type, "interview.cancelled"), eq(events.subjectId, interviewId))))[0].payload).toMatchObject({ cause: "interviewer_removed" });
+    // the interview the owner also runs goes ahead with the owner alone
+    const [shared] = await container.db.select().from(interviews).where(eq(interviews.id, sharedInterviewId));
+    expect(shared.status).toBe("scheduling");
+    expect((await withTenant(container.db, companyId, (tx) => participantsOf(tx, sharedInterviewId))).map((p) => p.userId)).toEqual([ownerId]);
+    // and the owners are told what happened to each, with no promise of a control that does not exist
     const told = await container.db.select().from(notifications).where(and(eq(notifications.kind, "member.removed_interviews"), eq(notifications.userId, ownerId)));
     expect(told).toHaveLength(1);
-    expect(told[0].title).toBe("Wes Leaving was removed; an interview needs another interviewer");
-    expect(told[0].body).toContain("Working interview");
+    expect(told[0].title).toBe("Wes Leaving was removed; an interview was cancelled");
+    expect(told[0].body).toContain("Working interview: Wes Leaving was the only interviewer, so that interview was cancelled.");
+    expect(told[0].body).toContain("The candidate who had a booked time was told");
+    expect(told[0].body).toContain("approve a new interview with another interviewer");
+    expect(told[0].body).toContain("Chairside interview: goes ahead with the other interviewers.");
+    expect(told[0].body).not.toContain("add an interviewer");
     expect(await container.db.select().from(events).where(and(eq(events.type, "member.removed"), eq(events.subjectId, wesId)))).toHaveLength(1);
     // removing them again is a 404: not an active member
     expect((await json(owner, "PATCH", `/api/v1/companies/current/members/${wesId}`, { status: "removed" })).status).toBe(404);

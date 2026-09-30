@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
-import { entitlements } from "@ros/core";
-import { applications, approvalRequests, auditRecords, communications, inboundEmails, interviews, notifications, recruiterEscalations, screens, users } from "@ros/db";
+import { anonymizeCandidate, entitlements } from "@ros/core";
+import { applications, approvalRequests, assessments, auditRecords, communications, inboundEmails, interviews, notifications, recruiterEscalations, screens, users, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -311,6 +311,58 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     expect(outbox().some((m) => m.to === "stranger@example.com")).toBe(false);
   });
 
+  it("a reply Postmark delivers twice (same MessageID) is recorded, told and acted on once", async () => {
+    const cand = await apply("Rae", "Burke");
+    const a = await application(cand.id);
+    const payload = { From: cand.email, To: `reply-${a.replyToken}@intake.example.test`, Subject: "Re: Next step", TextBody: "HUMAN\n\nPlease call me instead.", MessageID: "msg-rae-1" };
+    const first = await inbound(payload);
+    expect(await first.json()).toMatchObject({ matched: true, humanRequested: true });
+    await container.drain();
+    const count = async () => ({
+      inbound: (await container.db.select().from(communications).where(and(eq(communications.applicationId, a.id), eq(communications.direction, "inbound")))).length,
+      replies: (await container.db.select().from(communications).where(and(eq(communications.applicationId, a.id), eq(communications.templateKey, "human_requested_reply")))).length,
+      escalations: (await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, a.id))).length,
+      notices: (await told("message.received")).filter((x) => x.title === "Rae Burke wrote back").length,
+      sent: outbox().filter((m) => m.to === cand.email && m.subject === "Re: Next step").length,
+    });
+    const once = await count();
+    expect(once).toMatchObject({ inbound: 1, replies: 1, sent: 1 });
+    expect(once.escalations).toBeGreaterThanOrEqual(1);
+    // the redelivery after a timeout: acknowledged, nothing recorded, nobody told again, no second "a person will follow up"
+    const again = await inbound(payload);
+    expect(again.status).toBe(200);
+    expect(await again.json()).toMatchObject({ ok: true, matched: true, reply: true, duplicate: true, applicationId: a.id });
+    await container.drain();
+    expect(await count()).toEqual(once);
+    const logs = await container.db.select().from(inboundEmails).where(eq(inboundEmails.toAddress, `reply-${a.replyToken}@intake.example.test`));
+    expect(logs.map((l) => l.status).sort()).toEqual(["duplicate", "matched"]);
+  });
+
+  it("a reply to someone whose record was removed at their request writes nothing back: no address, no words, nobody told", async () => {
+    const cand = await apply("Tess", "Moreno");
+    const a = await application(cand.id);
+    const oldAddress = `reply-${a.replyToken}@intake.example.test`;
+    // the deletion request is fulfilled: the reply address of every old email is retired
+    await withTenant(container.db, companyId, (tx) => anonymizeCandidate(tx, { companyId, candidateId: a.candidateId, actor: { kind: "user", id: ownerId }, deleteFile: (key) => container.integrations.storage.delete(key) }));
+    const after = await application(cand.id);
+    expect(after.replyToken).not.toBe(a.replyToken);
+    const commsBefore = (await container.db.select().from(communications).where(eq(communications.applicationId, a.id))).length;
+    const noticesBefore = (await told("message.received")).length;
+    const r = await inbound({ From: cand.email, FromName: "Tess Moreno", To: oldAddress, Subject: "Re: Your application", TextBody: "Tess Moreno here, my new number is 555-0100.", MessageID: "msg-tess-1" });
+    expect(await r.json()).toEqual({ ok: true, matched: false });
+    // a record anonymized before the address was retired is refused the same way, and the inbound log keeps nothing personal
+    await container.db.update(applications).set({ replyToken: a.replyToken }).where(eq(applications.id, a.id));
+    const r2 = await inbound({ From: cand.email, FromName: "Tess Moreno", To: oldAddress, Subject: "Re: Your application", TextBody: "Tess Moreno here, my new number is 555-0100.", MessageID: "msg-tess-2" });
+    expect(await r2.json()).toEqual({ ok: true, matched: false });
+    const logs = await container.db.select().from(inboundEmails).where(eq(inboundEmails.toAddress, oldAddress));
+    const refused = logs.find((l) => l.error?.includes("removed at the person's request"))!;
+    expect(refused).toMatchObject({ status: "unmatched", fromAddress: "(removed)", subject: null, applicationId: null });
+    expect(refused.parsed).toEqual({});
+    expect(JSON.stringify(refused)).not.toContain("555-0100");
+    expect((await container.db.select().from(communications).where(eq(communications.applicationId, a.id))).length).toBe(commsBefore);
+    expect((await told("message.received")).length).toBe(noticesBefore);
+  });
+
   it("the interviewer's confirmation carries the brief without pay, and the interviewer may open that candidate only", async () => {
     container.integrations.env.emailInConfigured = false;
     const interviewer = await signInAs(container, app, { companyId, role: "interviewer", email: "sam@messages.test", name: "Sam Okafor" });
@@ -318,6 +370,16 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     expect((await json(interviewer, "PUT", "/api/v1/me/availability", { timezone: "America/Los_Angeles", windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 6 })).status).toBe(200);
     const cand = await apply("Elena", "Park");
     const other = await apply("Diego", "Alvarez");
+    // Elena finished a screen: she answered the compensation question, and her scorecard raises a concern that quotes it. Neither reaches an interviewer.
+    const questions = (packet as unknown as { screening: { questions: Array<{ key: string; question: string; kind: string }> } }).screening.questions;
+    const payQuestion = questions.find((q) => q.kind === "compensation")!;
+    const workQuestion = questions.find((q) => q.kind === "skills")!;
+    expect(payQuestion, "the playbook asks about pay").toBeTruthy();
+    const payAnswer = "I am looking for $61 to $64 an hour";
+    const workAnswer = "Six years of perio charting and patient education at a busy family practice";
+    await container.db.insert(screens).values({ companyId, applicationId: cand.id, channel: "web", status: "completed", token: `pay-brief-${cand.id}`, completedAt: new Date(BASE).toISOString(), answers: { [payQuestion.key]: payAnswer, [workQuestion.key]: workAnswer } });
+    const scorecard = { overall: "potential", confidence: "medium", summary: "Two answers.", strengths: [{ claim: "Gave a concrete answer about recent work", evidence: { source: "screen", quote: workAnswer } }], concerns: [{ claim: "Expects more than the posted range", evidence: { source: "screen", quote: payAnswer } }], unknowns: [], competencyFindings: [], requirementFindings: [], anomalies: [], questionFindings: [], compensationExpectation: { stated: payAnswer, withinRange: "above" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation: "hold", rationale: "x" };
+    await container.db.insert(assessments).values({ companyId, applicationId: cand.id, kind: "screen", packetVersion: cand.row.packetVersion, result: scorecard as never, overall: "potential", confidence: "medium" });
     // not on any of their interviews yet: refused
     expect((await json(interviewer, "GET", `/api/v1/applications/${cand.id}`)).status).toBe(403);
     const round = packet.interviews.plan[0];
@@ -340,8 +402,15 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     for (const key of round.competencyKeys) expect(mail!.text).toContain(packet.competencies.find((c) => c.key === key)!.name);
     expect(mail!.text).toContain("Strengths so far:");
     expect(mail!.text).not.toMatch(/Pay expectation/);
-    expect(mail!.text).not.toContain(String(packet.compensation.min));
+    // pay is always written with its dollar sign; a bare number could match the random interview id in the link
+    for (const n of [packet.compensation.min, packet.compensation.max]) expect(mail!.text).not.toContain(`$${n.toLocaleString("en-US")}`);
     expect(mail!.text).not.toMatch(/rationale/i);
+    // what she said in the screen is there, except what she said about pay: not the answer, not the question, not the concern quoting it
+    expect(mail!.text).toContain("What they said in the screen:");
+    expect(mail!.text).toContain(workAnswer);
+    expect(mail!.text).not.toContain("$61");
+    expect(mail!.text).not.toContain(payQuestion.question);
+    expect(mail!.text).not.toContain("Expects more than the posted range");
     // the interviewer's view of that candidate: the brief and little else
     const view = (await (await json(interviewer, "GET", `/api/v1/applications/${cand.id}`)).json()) as { viewer: string; allowedActions: string[]; candidate: Record<string, unknown>; brief: { round: { key: string }; includesPay: boolean; pay: unknown; mustHaves: Array<{ text: string; met: string }> }; interviews: Array<{ id: string }> };
     expect(view.viewer).toBe("interviewer");
@@ -355,6 +424,9 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     const text = JSON.stringify(view);
     expect(text).not.toContain(cand.email);
     expect(text).not.toMatch(/rationale|compensation|internalNotes|communications|documents/);
+    expect(text).toContain(workAnswer);
+    expect(text).not.toContain("$61");
+    expect(text).not.toContain(payQuestion.question);
     expect((await audits("candidate.viewed")).some((a) => a.actor.id === samId && a.target?.id === cand.id)).toBe(true);
     // another candidate: refused
     expect((await json(interviewer, "GET", `/api/v1/applications/${other.id}`)).status).toBe(403);
@@ -362,8 +434,12 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     const mine = (await (await json(interviewer, "GET", `/api/v1/interviews/${iv.id}`)).json()) as { brief: { round: { key: string }; includesPay: boolean } | null };
     expect(mine.brief?.round.key).toBe(round.key);
     expect(mine.brief?.includesPay).toBe(false);
+    expect(JSON.stringify(mine.brief)).toContain(workAnswer);
+    expect(JSON.stringify(mine.brief)).not.toContain("$61");
     const theirs = (await (await json(owner, "GET", `/api/v1/interviews/${iv.id}`)).json()) as { brief: { includesPay: boolean } | null };
     expect(theirs.brief?.includesPay).toBe(true);
+    // the owner may see pay: the answer, the concern and the expectation are all in their copy
+    expect(theirs.brief).toMatchObject({ pay: { expectation: payAnswer, withinRange: "above" }, concerns: expect.arrayContaining([expect.objectContaining({ quote: payAnswer, aboutPay: true })]), screen: { answers: expect.arrayContaining([expect.objectContaining({ answer: payAnswer, aboutPay: true })]) } });
     // the interview page's "Message the candidate" leads to the sheet with the text box open
     const sheet = (await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { interviews: Array<{ id: string }> };
     expect(sheet.interviews.some((i) => i.id === iv.id)).toBe(true);

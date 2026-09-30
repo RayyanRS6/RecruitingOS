@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Field, Segmented, Sheet } from "@ros/ui";
 import { api, ApiError, type EvidenceSource, type Requirement, type RolePacket } from "../api/client";
@@ -66,6 +66,17 @@ function RequirementRows({ rows, onChange, idPrefix, max, addLabel }: { rows: Ro
   );
 }
 
+/** A group of requirement rows: a fieldset named by its legend, since there is no single control for a label to point at. */
+function RequirementGroup({ legend, hint, children }: { legend: string; hint: string; children: ReactNode }) {
+  return (
+    <fieldset className="field" style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+      <legend style={{ fontWeight: 600, fontSize: 13.5, padding: 0, marginBottom: 6 }}>{legend}</legend>
+      <span className="hint">{hint}</span>
+      {children}
+    </fieldset>
+  );
+}
+
 /** The first thing wrong with the simple form, in the owner's words, or null when it can be saved. */
 function problemWith(input: { description: string; min: string; max: string; ceiling: string; mustHaves: Row[]; niceToHaves: Row[] }): string | null {
   if (input.description.trim().length < 50) return "The public description needs at least a few sentences (50 characters).";
@@ -82,7 +93,13 @@ function problemWith(input: { description: string; min: string; max: string; cei
   return null;
 }
 
-export function EditPacket({ open, onClose, roleId, packet }: { open: boolean; onClose: () => void; roleId: string; packet: RolePacket }) {
+/**
+ * The editor's fields are seeded once, from the version it was opened on: the role page mounts it only while it is open
+ * and keys it by that version, so every opening starts from what is there now, never from what the page first loaded.
+ * `proposed` says the version is the one waiting for approval (a teammate's edit to an open role); saving builds on it.
+ * When a version is saved elsewhere while the editor is open (`newerVersion`), it says so before anyone saves over it.
+ */
+export function EditPacket({ open, onClose, roleId, packet, version, proposed, currentVersion, newerVersion }: { open: boolean; onClose: () => void; roleId: string; packet: RolePacket; version: number; proposed: boolean; currentVersion: number | null; newerVersion: number | null }) {
   const qc = useQueryClient();
   const [mode, setMode] = useState<"simple" | "json">("simple");
   const [description, setDescription] = useState(packet.description.publicJobDescription);
@@ -113,10 +130,11 @@ export function EditPacket({ open, onClose, roleId, packet }: { open: boolean; o
     },
     onSuccess: async (r) => {
       toast(r.outcome === "proposed_pending_approval" ? `Saved as version ${r.version}. It takes effect once an approver says yes.` : r.outcome === "proposed" ? `Saved as version ${r.version} with the draft.` : `Saved as version ${r.version}.`);
+      // Closed first, so the editor never shows its own new version as "saved while this was open".
+      onClose();
       await qc.invalidateQueries({ queryKey: ["role", roleId] });
       await qc.invalidateQueries({ queryKey: ["interview-plan", roleId] });
       await qc.invalidateQueries({ queryKey: ["brief"] });
-      onClose();
     },
   });
   const submit = () => {
@@ -133,6 +151,12 @@ export function EditPacket({ open, onClose, roleId, packet }: { open: boolean; o
   return (
     <Sheet open={open} onClose={onClose} title="Edit the role">
       <div className="stack">
+        <p className="small muted" style={{ margin: 0 }}>
+          {proposed
+            ? `You are editing v${version}, the version waiting for approval${currentVersion ? ` (the role still runs on v${currentVersion})` : ""}. Saving keeps its changes and adds yours as a new version.`
+            : `You are editing v${version}. Saving adds a new version; nothing is overwritten.`}
+        </p>
+        {newerVersion ? <Alert tone="caution">A newer version, v{newerVersion}, was saved while this was open. Saving now starts from v{version} and would undo its changes. Copy anything you typed, close this, and open Edit again to start from the newest version.</Alert> : null}
         <Segmented value={mode} onChange={setMode} options={[{ value: "simple", label: "The usual edits" }, { value: "json", label: "Everything (advanced)" }]} />
         {mode === "simple" ? (
           <>
@@ -149,15 +173,15 @@ export function EditPacket({ open, onClose, roleId, packet }: { open: boolean; o
                 <option value="remote">Remote</option>
               </select>
             </Field>
-            <Field label={`Must-haves (up to ${MAX_MUST_HAVES})`} hint="The things you would not hire without. Each says why it matters and where it is checked.">
+            <RequirementGroup legend={`Must-haves (up to ${MAX_MUST_HAVES})`} hint="The things you would not hire without. Each says why it matters and where it is checked.">
               <RequirementRows rows={mustHaves} onChange={setMustHaves} idPrefix="mh" max={MAX_MUST_HAVES} addLabel="Add a must-have" />
-            </Field>
-            <Field label={`Nice-to-haves (up to ${MAX_NICE_TO_HAVES})`} hint="Helpful, never a reason to hold anyone.">
+            </RequirementGroup>
+            <RequirementGroup legend={`Nice-to-haves (up to ${MAX_NICE_TO_HAVES})`} hint="Helpful, never a reason to hold anyone.">
               <RequirementRows rows={niceToHaves} onChange={setNiceToHaves} idPrefix="nh" max={MAX_NICE_TO_HAVES} addLabel="Add a nice-to-have" />
-            </Field>
+            </RequirementGroup>
           </>
         ) : (
-          <Field label="Role packet JSON" hint="Validated on save. Eligibility rules must use the allowed types."><textarea className="textarea" style={{ minHeight: 360, fontFamily: "var(--mono)", fontSize: 12 }} value={json} onChange={(e) => setJson(e.target.value)} /></Field>
+          <Field label="Role packet JSON" htmlFor="packet-json" hint="Validated on save. Eligibility rules must use the allowed types."><textarea id="packet-json" className="textarea" style={{ minHeight: 360, fontFamily: "var(--mono)", fontSize: 12 }} value={json} onChange={(e) => setJson(e.target.value)} /></Field>
         )}
         <Field label="What changed and why" htmlFor="sum"><input id="sum" className="input" value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="e.g. Raised the range after seeing the market number" /></Field>
         {problem ? <Alert tone="caution">{problem}</Alert> : null}

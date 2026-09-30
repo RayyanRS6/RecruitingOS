@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { jobs, workerHeartbeats } from "@ros/db";
+import { adminAlerts, jobs, workerHeartbeats } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { appHealthWatch } from "./maintenance";
 import { HEARTBEAT_STALE_MS, WorkerHealth, listeningPort, queueSnapshot, readWorkerHealth, staleAfterMs, startHealthServer, writeHeartbeat } from "./worker-health";
 
 /**
@@ -88,19 +89,59 @@ describe("worker health", () => {
     const external = await createContainer({ memory: true, now, env: { ...testEnv, WORKER_INLINE: "false" } });
     try {
       const app = createApp(external);
-      const health = async () => ((await (await app.request("/healthz")).json()) as { ok: boolean; worker: { lastSeenAt: string | null; queueDepth: number | null; healthy: boolean } | string });
-      expect((await health()).worker).toEqual({ lastSeenAt: null, queueDepth: null, healthy: false });
+      const health = async () => ((await (await app.request("/healthz")).json()) as { ok: boolean; workerHealthy: boolean; worker: { lastSeenAt: string | null; queueDepth: number | null; healthy: boolean } | string });
+      const first = await health();
+      expect(first.worker).toEqual({ lastSeenAt: null, queueDepth: null, healthy: false });
+      expect(first.workerHealthy).toBe(false);
+      // H3: the app, the process that is up while the worker is not, raised the stale-worker alert from its own health check
+      const raised = await external.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "worker.stale"));
+      expect(raised).toHaveLength(1);
+      expect(raised[0].body).toContain("No worker has ever written a heartbeat");
+      // an uptime monitor that reads only the status code asks with ?strict=1 and sees the stopped worker
+      expect((await app.request("/healthz?strict=1")).status).toBe(503);
       await writeHeartbeat(external.db, { workerId: "railway-1", now: now(), queueDepth: 3, oldestQueuedAt: null, version: null });
       const fresh = await health();
       expect(fresh.ok).toBe(true);
       expect(fresh.worker).toMatchObject({ queueDepth: 3, healthy: true });
+      expect(fresh.workerHealthy).toBe(true);
+      expect((await app.request("/healthz?strict=1")).status).toBe(200);
       offset += HEARTBEAT_STALE_MS + 60_000;
       const stale = await health();
       expect(stale.ok).toBe(true); // the app itself is fine; the worker's state is reported, not hidden
       expect(stale.worker).toMatchObject({ queueDepth: 3, healthy: false });
+      expect(stale.workerHealthy).toBe(false);
       // the inline mode still says so
-      const inline = (await (await createApp(container).request("/healthz")).json()) as { worker: unknown };
+      const inline = (await (await createApp(container).request("/healthz")).json()) as { worker: unknown; workerHealthy: boolean };
       expect(inline.worker).toBe("inline");
+      expect(inline.workerHealthy).toBe(true);
+    } finally {
+      await external.close();
+    }
+  });
+
+  it("the app's watch raises the alert once a heartbeat goes stale, at most once per interval, and never with an inline queue", async () => {
+    const external = await createContainer({ memory: true, now, env: { ...testEnv, WORKER_INLINE: "false" } });
+    try {
+      const alerts = async () => (await external.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "worker.stale"))).length;
+      await writeHeartbeat(external.db, { workerId: "railway-2", now: now(), queueDepth: 0, oldestQueuedAt: null, version: null });
+      const watch = appHealthWatch(external.db, { workerInline: false, everyMs: 0 });
+      await watch(now());
+      expect(await alerts()).toBe(0); // a fresh heartbeat: nothing to say
+      offset += HEARTBEAT_STALE_MS + 60_000;
+      await watch(now());
+      expect(await alerts()).toBe(1);
+      await watch(now());
+      expect(await alerts()).toBe(1); // one standing alert, not one per check
+      // throttled: a second check inside the interval does not run at all
+      const throttled = appHealthWatch(external.db, { workerInline: false, everyMs: 60 * 60_000 });
+      await external.db.delete(adminAlerts).where(eq(adminAlerts.kind, "worker.stale"));
+      await throttled(now());
+      await external.db.delete(adminAlerts).where(eq(adminAlerts.kind, "worker.stale"));
+      await throttled(now());
+      expect(await alerts()).toBe(0);
+      // the queue runs in the app itself: there is no separate worker to watch
+      await appHealthWatch(external.db, { workerInline: true, everyMs: 0 })(now());
+      expect(await alerts()).toBe(0);
     } finally {
       await external.close();
     }

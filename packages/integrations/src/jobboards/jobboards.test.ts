@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { RolePacket } from "@ros/contracts";
 import { CareersPageAdapter, EMAIL_IN_NOT_CONFIGURED, EmailInAdapter, GoogleJobsAdapter, JOB_VALID_DAYS, jobPostingJsonLd, jobValidThrough, schemaEmploymentType } from "./native";
 import { IndeedAdapter, LinkedInBasicJobsAdapter, ZipRecruiterAdapter, jobFeedJson, jobFeedXml, linkedInFeedXml, type FeedJob } from "./external";
-import { FakeUrlVerifier, LINK_CHECK_MAX_BYTES, LINK_CHECK_USER_AGENT, RealUrlVerifier, titleMatches } from "./verify";
+import { FakeUrlVerifier, LINK_CHECK_MAX_BYTES, LINK_CHECK_REFUSED_DETAIL, LINK_CHECK_USER_AGENT, RealUrlVerifier, isNonPublicAddress, titleMatches } from "./verify";
 import type { PostingInput } from "../types";
 
 const packet = {
@@ -161,10 +161,11 @@ describe("URL verification (item 12)", () => {
       if (!page) throw new TypeError("fetch failed");
       return page();
     }) as unknown as typeof fetch;
-    const real = new RealUrlVerifier(fetchFn);
+    const real = new RealUrlVerifier(fetchFn, { resolveHost: async () => [{ address: "93.184.215.14", family: 4 }] });
     const title = { expectedTitle: "registered dental hygienist" };
     expect(await real.verify("https://board.example/ok", title)).toEqual({ ok: true });
-    expect(seen[0].init.redirect).toBe("follow");
+    // redirects are followed by hand so every hop is checked
+    expect(seen[0].init.redirect).toBe("manual");
     expect((seen[0].init.headers as Record<string, string>)["user-agent"]).toBe(LINK_CHECK_USER_AGENT);
     expect(seen[0].init.signal).toBeInstanceOf(AbortSignal);
     expect(await real.verify("https://board.example/gone", title)).toMatchObject({ ok: false, reason: "status", detail: expect.stringContaining("410") });
@@ -173,5 +174,49 @@ describe("URL verification (item 12)", () => {
     expect(await real.verify("https://board.example/down", title)).toMatchObject({ ok: false, reason: "unreachable", detail: "fetch failed" });
     expect(await real.verify("not a url", title)).toMatchObject({ ok: false, reason: "unreachable" });
     expect(await real.verify("ftp://board.example/x", title)).toMatchObject({ ok: false, reason: "unreachable" });
+  });
+
+  it("the real verifier never reaches a private, internal or odd address, directly, through DNS or through a redirect, and says nothing about why", async () => {
+    const fetched: string[] = [];
+    const pages: Record<string, () => Response> = {
+      "https://board.example/moved": () => new Response(null, { status: 302, headers: { location: "http://10.0.0.7:8080/admin" } }),
+      "https://board.example/to-metadata": () => new Response(null, { status: 301, headers: { location: "http://169.254.169.254/latest/meta-data/" } }),
+      "https://board.example/to-http": () => new Response(null, { status: 302, headers: { location: "http://board.example/job" } }),
+      "http://board.example/job": () => new Response("<h1>Registered Dental Hygienist</h1>", { status: 200 }),
+      "https://board.example/loop": () => new Response(null, { status: 302, headers: { location: "https://board.example/loop" } }),
+      "https://rebind.example/job": () => new Response("<h1>Registered Dental Hygienist</h1>", { status: 200 }),
+    };
+    const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+      fetched.push(String(url));
+      expect(init?.redirect).toBe("manual");
+      const page = pages[String(url)];
+      if (!page) throw new TypeError("fetch failed");
+      return page();
+    }) as unknown as typeof fetch;
+    const dns: Record<string, string[]> = { "board.example": ["93.184.215.14"], "rebind.example": ["93.184.215.14", "127.0.0.1"], "metadata.example": ["169.254.169.254"], "six.example": ["fd00::1"] };
+    const real = new RealUrlVerifier(fetchFn, { resolveHost: async (host) => (dns[host] ?? []).map((address) => ({ address, family: address.includes(":") ? 6 : 4 })) });
+    const title = { expectedTitle: "registered dental hygienist" };
+    const refused = { ok: false, reason: "unreachable", detail: LINK_CHECK_REFUSED_DETAIL };
+    for (const url of [
+      "https://127.0.0.1/", "https://localhost/", "https://10.1.2.3/", "https://172.20.0.5/", "https://192.168.1.10/", "https://169.254.169.254/latest/meta-data/",
+      "https://100.64.0.1/", "https://0.0.0.0/", "https://[::1]/", "https://[fd12::1]/", "https://[fe80::1]/", "https://[::ffff:10.0.0.1]/",
+      "https://worker.railway.internal/healthz", "https://postgres/", "https://board.example:8443/job", "http://board.example/job", "https://user:pw@board.example/job",
+      "https://metadata.example/", "https://six.example/", "https://rebind.example/job", "https://unknown.example/",
+    ]) expect(await real.verify(url, title), url).toEqual(refused);
+    // a public page that redirects inside is refused at the hop, never fetched there
+    expect(await real.verify("https://board.example/moved", title)).toEqual(refused);
+    expect(await real.verify("https://board.example/to-metadata", title)).toEqual(refused);
+    expect(fetched.some((u) => /10\.0\.0\.7|169\.254/.test(u))).toBe(false);
+    // a board may send the browser on to plain http on the standard port; a redirect loop gives up
+    expect(await real.verify("https://board.example/to-http", title)).toEqual({ ok: true });
+    expect(await real.verify("https://board.example/loop", title)).toMatchObject({ ok: false, reason: "unreachable" });
+    expect(fetched.filter((u) => u === "https://board.example/loop").length).toBe(6);
+    // nothing was ever fetched on a refused host
+    expect(fetched.every((u) => u.startsWith("https://board.example/") || u === "http://board.example/job")).toBe(true);
+  });
+
+  it("classifies addresses: every private, local and reserved range is refused, public ones pass", () => {
+    for (const a of ["10.0.0.1", "127.0.0.1", "172.16.0.1", "172.31.255.255", "192.168.0.1", "169.254.169.254", "100.64.0.1", "100.127.255.255", "0.0.0.0", "224.0.0.1", "255.255.255.255", "198.18.0.1", "::", "::1", "fc00::1", "fdff::1", "fe80::1", "ff02::1", "::ffff:127.0.0.1", "::ffff:192.168.1.1", "64:ff9b::10.0.0.1", "2001:db8::1", "not an address"]) expect(isNonPublicAddress(a), a).toBe(true);
+    for (const a of ["93.184.215.14", "8.8.8.8", "172.15.0.1", "172.32.0.1", "100.63.255.255", "100.128.0.1", "2606:4700:4700::1111", "::ffff:8.8.8.8", "64:ff9b::8.8.8.8"]) expect(isNonPublicAddress(a), a).toBe(false);
   });
 });

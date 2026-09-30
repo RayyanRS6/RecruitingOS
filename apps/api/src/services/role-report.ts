@@ -22,7 +22,12 @@ export type StageCount = { stage: ApplicationStage; label: string; group: OwnerG
 export type StageTime = { stage: ApplicationStage; label: string; group: OwnerGroup; completed: number; medianDays: number | null; averageDays: number | null; nowHere: number; longestDays: number | null };
 export type PendingItem = { kind: "approval" | "candidate"; label: string; days: number; applicationId: string | null; approvalRequestId: string | null };
 export type RecommendationRow = { recommendation: string; label: string; total: number; invited: number; interviewed: number; declined: number; held: number; noActionYet: number };
-export type RoundCount = { roundKey: string; title: string; total: number; scheduled: number; completed: number; noShow: number; cancelled: number };
+/**
+ * `noShow` is every interview that did not take place because someone was missing; `noShowCandidate` and
+ * `noShowInterviewer` say who, from the outcome a person recorded. A no-show recorded without saying who counts in the
+ * total only, so the customer's own missed interviews are never put down to the candidate.
+ */
+export type RoundCount = { roundKey: string; title: string; total: number; scheduled: number; completed: number; noShow: number; noShowCandidate: number; noShowInterviewer: number; cancelled: number };
 export type RoleReport = {
   generatedAt: string;
   /** The role the report is about; null for the administrator's view across a customer's roles. */
@@ -30,7 +35,7 @@ export type RoleReport = {
   applicants: { total: number; last30Days: number; timeZone: string; bySource: SourceCount[]; byDay: DayCount[] };
   stages: { total: number; byStage: StageCount[]; byGroup: Record<OwnerGroup, number> };
   timeInStage: { byStage: StageTime[]; waitingOnYou: { count: number; averageDays: number | null; medianDays: number | null; longestDays: number | null } };
-  interviews: { total: number; requested: number; scheduled: number; completed: number; noShow: number; cancelled: number; offerExpired: number; rescheduledByCandidate: number; awaitingDecision: number; byRound: RoundCount[] };
+  interviews: { total: number; requested: number; scheduled: number; completed: number; noShow: number; noShowCandidate: number; noShowInterviewer: number; cancelled: number; offerExpired: number; rescheduledByCandidate: number; awaitingDecision: number; byRound: RoundCount[] };
   /** Decisions only a person can make: pending approvals plus candidates waiting on the owner (including those held on an eligibility answer). */
   pendingDecisions: { count: number; approvals: number; candidates: number; oldestDays: number | null; list: PendingItem[] };
   recommendationsVsDecisions: { assessed: number; rows: RecommendationRow[] };
@@ -46,7 +51,7 @@ export type RoleReport = {
 type AppRow = { id: string; roleId: string; candidateId: string; source: string; sourceDetail: string | null; stage: ApplicationStage; stageChangedAt: string; createdAt: string; latestAssessmentId: string | null; rejectReason: string | null };
 type EventRow = { subjectId: string; occurredAt: string; payload: Record<string, unknown> };
 type AssessmentRow = { id: string; applicationId: string; createdAt: string; recommendation: string | null };
-type InterviewRow = { applicationId: string; status: string; roundKey: string; title: string; rescheduleCountCandidate: number; decision: string | null };
+type InterviewRow = { applicationId: string; status: string; outcome?: string | null; roundKey: string; title: string; rescheduleCountCandidate: number; decision: string | null };
 type ApprovalRow = { id: string; actionType: string; applicationId: string | null; createdAt: string };
 type EscalationRow = { status: string; createdAt: string; firstResponseAt: string | null; slaDueAt: string | null; resolvedAt: string | null };
 type OutcomeRow = { applicationId: string | null; roleId: string | null; outcome: string; milestone: string; recordedAt: string; correctionOf: string | null; correctedAt: string | null };
@@ -98,7 +103,7 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
     ? await tx.select({ id: assessments.id, applicationId: assessments.applicationId, createdAt: assessments.createdAt, recommendation: sql<string | null>`${assessments.result}->>'recommendation'` }).from(assessments).where(and(eq(assessments.companyId, companyId), inArray(assessments.id, latestIds)))
     : [];
   const ivs = ids.length
-    ? await tx.select({ applicationId: interviews.applicationId, status: interviews.status, roundKey: interviews.roundKey, title: interviews.title, rescheduleCountCandidate: interviews.rescheduleCountCandidate, decision: interviews.decision }).from(interviews).where(and(eq(interviews.companyId, companyId), inArray(interviews.applicationId, ids))).orderBy(asc(interviews.createdAt), asc(interviews.id))
+    ? await tx.select({ applicationId: interviews.applicationId, status: interviews.status, outcome: interviews.outcome, roundKey: interviews.roundKey, title: interviews.title, rescheduleCountCandidate: interviews.rescheduleCountCandidate, decision: interviews.decision }).from(interviews).where(and(eq(interviews.companyId, companyId), inArray(interviews.applicationId, ids))).orderBy(asc(interviews.createdAt), asc(interviews.id))
     : [];
   const approvals = await tx
     .select({ id: approvalRequests.id, actionType: approvalRequests.actionType, applicationId: approvalRequests.applicationId, createdAt: approvalRequests.createdAt })
@@ -205,7 +210,8 @@ const REJECT_REASON_LABEL: Record<string, string> = {
   unspecified: "No reason recorded",
 };
 
-const APPROVAL_LABEL: Record<string, string> = {
+/** Plain words for every approval a person may be asked for; the brief's decision cards use the same labels. */
+export const APPROVAL_LABEL: Record<string, string> = {
   "role_packet.approve": "Approve the role packet",
   "application.invite_screen": "Invite to a screen?",
   "application.recommend_interview": "Interview this candidate?",
@@ -288,22 +294,28 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
 
   // 4. Interviews by status and by round; a request is an interview not yet on the calendar.
   const rounds = new Map<string, RoundCount>();
-  const iv = { total: 0, requested: 0, scheduled: 0, completed: 0, noShow: 0, cancelled: 0, offerExpired: 0, rescheduledByCandidate: 0, awaitingDecision: 0 };
+  const iv = { total: 0, requested: 0, scheduled: 0, completed: 0, noShow: 0, noShowCandidate: 0, noShowInterviewer: 0, cancelled: 0, offerExpired: 0, rescheduledByCandidate: 0, awaitingDecision: 0 };
   for (const i of data.interviews) {
+    // Who was missing comes from the recorded outcome: the status is "no_show" either way.
+    const missing = i.status === "no_show" ? (i.outcome === "no_show_candidate" ? "candidate" : i.outcome === "no_show_interviewer" ? "interviewer" : "unsaid") : null;
     iv.total += 1;
     if (i.status === "proposed" || i.status === "scheduling") iv.requested += 1;
     if (i.status === "scheduled") iv.scheduled += 1;
     if (i.status === "completed") iv.completed += 1;
-    if (i.status === "no_show") iv.noShow += 1;
+    if (missing) iv.noShow += 1;
+    if (missing === "candidate") iv.noShowCandidate += 1;
+    if (missing === "interviewer") iv.noShowInterviewer += 1;
     if (i.status === "cancelled") iv.cancelled += 1;
     if (i.status === "offer_expired") iv.offerExpired += 1;
     iv.rescheduledByCandidate += i.rescheduleCountCandidate;
     if ((i.status === "completed" || i.status === "no_show") && !i.decision) iv.awaitingDecision += 1;
-    const r = rounds.get(i.roundKey) ?? { roundKey: i.roundKey, title: i.title, total: 0, scheduled: 0, completed: 0, noShow: 0, cancelled: 0 };
+    const r = rounds.get(i.roundKey) ?? { roundKey: i.roundKey, title: i.title, total: 0, scheduled: 0, completed: 0, noShow: 0, noShowCandidate: 0, noShowInterviewer: 0, cancelled: 0 };
     r.total += 1;
     if (i.status === "scheduled") r.scheduled += 1;
     if (i.status === "completed") r.completed += 1;
-    if (i.status === "no_show") r.noShow += 1;
+    if (missing) r.noShow += 1;
+    if (missing === "candidate") r.noShowCandidate += 1;
+    if (missing === "interviewer") r.noShowInterviewer += 1;
     if (i.status === "cancelled") r.cancelled += 1;
     rounds.set(i.roundKey, r);
   }
@@ -516,11 +528,17 @@ export function summaryRows(r: RoleReport): Array<[string, string, string | numb
   add("Interviews", "Requested", r.interviews.requested);
   add("Interviews", "Scheduled", r.interviews.scheduled);
   add("Interviews", "Completed", r.interviews.completed);
-  add("Interviews", "No-shows", r.interviews.noShow);
+  add("Interviews", "Candidate did not show", r.interviews.noShowCandidate);
+  add("Interviews", "Interviewer did not show", r.interviews.noShowInterviewer);
+  if (r.interviews.noShow > r.interviews.noShowCandidate + r.interviews.noShowInterviewer) add("Interviews", "Did not take place, who was missing not recorded", r.interviews.noShow - r.interviews.noShowCandidate - r.interviews.noShowInterviewer);
   add("Interviews", "Cancelled", r.interviews.cancelled);
   add("Interviews", "Rescheduled by the candidate", r.interviews.rescheduledByCandidate);
   add("Interviews", "Awaiting your decision", r.interviews.awaitingDecision);
-  for (const round of r.interviews.byRound) add("Interviews by round", round.title, round.total);
+  for (const round of r.interviews.byRound) {
+    add("Interviews by round", round.title, round.total);
+    if (round.noShowCandidate) add("Interviews by round", `${round.title}: candidate did not show`, round.noShowCandidate);
+    if (round.noShowInterviewer) add("Interviews by round", `${round.title}: interviewer did not show`, round.noShowInterviewer);
+  }
   add("Pending decisions", "Total", r.pendingDecisions.count);
   add("Pending decisions", "Oldest (days)", r.pendingDecisions.oldestDays);
   for (const row of r.recommendationsVsDecisions.rows) {

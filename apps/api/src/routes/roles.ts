@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome } from "@ros/contracts";
-import { CLOSER_LOOK_LABEL, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, assertCan, audit, can, emit, evidenceView, listOutcomes, openEscalationsFor, ownerGroup, recordApplicationOutcome, recordRoleOutcome } from "@ros/core";
+import { CLOSER_LOOK_LABEL, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, assertCan, audit, can, emit, evidenceView, listOutcomes, openEscalationsFor, ownerGroup, recordApplicationOutcome, recordRoleOutcome, scopeAllows } from "@ros/core";
+import { withEmptyPay, withoutPay } from "../services/pay-redaction";
 import { users } from "@ros/db";
 import { assertMayApprovePacket, packetApprovalView } from "../services/packet-approval";
 import { createPacketVersion, currentVersionOf } from "../services/packet-versions";
@@ -11,7 +12,7 @@ import { HttpError } from "../middleware/errors";
 import { DOWNLOAD_URL_TTL_SECONDS, safeFilename } from "../uploads";
 import type { Container } from "../container";
 import { allowedApplicationActions, applicationFactsFrom, performApplicationAction, sendDeclineAfterHumanDecision } from "../services/application-actions";
-import { replayHeldEmails } from "../webhooks/postmark";
+import { replayHeldEmails, settleHeldEmailsOnClose } from "../webhooks/postmark";
 import { interviewerApplicationView } from "../services/interviewer-view";
 
 export const roleRoutes = new Hono<Vars>();
@@ -49,7 +50,7 @@ roleRoutes.get("/", requireTenant, async (c) => {
 roleRoutes.get("/:id", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.read");
-  const canSeeComp = ["owner", "admin", "hiring_manager", "hr", "recruiter"].includes(t.role);
+  const canSeeComp = can(t.role, "compensation.read");
   const row = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
     if (!role) return null;
@@ -60,11 +61,16 @@ roleRoutes.get("/:id", requireTenant, async (c) => {
     const pending = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.status, "pending")));
     const counts: Record<string, number> = {};
     for (const a of apps) counts[a.stage] = (counts[a.stage] ?? 0) + 1;
-    const redact = (p: typeof current) => (p && !canSeeComp ? { ...p, packet: { ...p.packet, compensation: { ...p.packet.compensation, min: 0, max: 0, mid: 0, ceiling: 0 } } } : p);
+    // Without compensation.read the pay section keeps its shape but carries no figure anywhere (services/pay-redaction.ts).
+    const redact = (p: typeof current) => (p && !canSeeComp ? withEmptyPay(p) : p);
+    // Waiting requests can carry a candidate's name and a message written to them (F11): only for those who read
+    // applications, and for ITS staff only the requests their grant covers. The approval card below reads them all.
+    const scope = t.staff ? { roleId: t.staff.scope.roleId, applicationId: t.staff.scope.applicationId } : null;
+    const visiblePending = !can(t.role, "application.read") ? [] : scope ? pending.filter((p) => scopeAllows(scope, { roleId: p.roleId, applicationId: p.applicationId })) : pending;
     // A version proposed while the role runs (an edit waiting for approval): shown beside the current one, never in its place.
     const proposed = current && ["open", "paused"].includes(role.status) ? packets.find((p) => p.status === "proposed" && p.version > current.version) ?? null : null;
     const approval = await packetApprovalView(tx, { tenant: t, role, packets, pending });
-    return { ...role, currentPacket: redact(current), proposedPacket: redact(proposed), packetVersions: packets.map((p) => ({ id: p.id, version: p.version, status: p.status, source: p.source, changeSummary: p.changeSummary, createdAt: p.createdAt, createdBy: p.createdBy })), postings: posts, boardsStillUp: posts.filter((p) => p.closureRequired && !p.closureConfirmedAt).map((p) => p.channel), counts, pendingApprovals: pending, packetApproval: approval.packetApproval, decisionMaker: approval.decisionMaker };
+    return { ...role, currentPacket: redact(current), proposedPacket: redact(proposed), packetVersions: packets.map((p) => ({ id: p.id, version: p.version, status: p.status, source: p.source, changeSummary: p.changeSummary, createdAt: p.createdAt, createdBy: p.createdBy })), postings: posts, boardsStillUp: posts.filter((p) => p.closureRequired && !p.closureConfirmedAt).map((p) => p.channel), counts, pendingApprovals: visiblePending, packetApproval: approval.packetApproval, decisionMaker: approval.decisionMaker };
   });
   if (!row) throw new HttpError(404, "not_found", "Role not found.");
   return c.json(row);
@@ -75,11 +81,9 @@ roleRoutes.get("/:id/packets", requireTenant, async (c) => {
   assertCan(t.role, "role.read");
   const rows = await withTenant(c.get("container").db, t.companyId, (tx) => tx.select().from(rolePackets).where(eq(rolePackets.roleId, c.req.param("id"))).orderBy(desc(rolePackets.version)));
   if (can(t.role, "compensation.read")) return c.json(rows);
-  // Interviewers never see pay (docs/spec/21, area A): the figures are left out, never shown as zero.
-  return c.json(rows.map((p) => {
-    const { min: _min, mid: _mid, max: _max, ceiling: _ceiling, ...rest } = p.packet.compensation;
-    return { ...p, packet: { ...p.packet, compensation: rest } };
-  }));
+  // Interviewers never see pay (docs/spec/21, area A): only the basis, the currency and whether the range is shown to
+  // candidates; the figures, the bonus, the benefits and the sources that quote the figures are left out, never zeroed.
+  return c.json(rows.map((p) => withoutPay(p)));
 });
 
 /**
@@ -121,8 +125,10 @@ roleRoutes.post("/:id/approve", requireTenant, async (c) => {
     if (proposedVersion !== body.version) throw new HttpError(409, "version_mismatch", `The pending approval is for version ${proposedVersion}.`);
     const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, body.version))).limit(1);
     await assertMayApprovePacket(tx, { tenant: t, req, role, version: pv ?? null });
-    await tx.update(approvalRequests).set({ status: "approved", decidedBy: t.userId, decidedAt: new Date().toISOString(), decisionNote: body.note ?? null }).where(eq(approvalRequests.id, req.id));
-    await tx.update(rolePackets).set({ approvedBy: t.userId, approvedAt: new Date().toISOString() }).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, body.version)));
+    // On the engine's clock, like POST /approvals/:id/decide: the waiting workflow judges expiry on that clock.
+    const decidedAt = container.engine.clock().toISOString();
+    await tx.update(approvalRequests).set({ status: "approved", decidedBy: t.userId, decidedAt, decisionNote: body.note ?? null }).where(eq(approvalRequests.id, req.id));
+    await tx.update(rolePackets).set({ approvedBy: t.userId, approvedAt: decidedAt }).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, body.version)));
     await emit(tx, { type: "approval.granted", companyId: t.companyId, actor: actorOf(c), subject: { type: "approval_request", id: req.id }, payload: { actionType: req.actionType, roleId: role.id, version: body.version, note: body.note ?? null }, correlationId: req.workflowRunId });
     await emit(tx, { type: "role.approved", companyId: t.companyId, actor: actorOf(c), subject: { type: "role", id: role.id }, payload: { version: body.version } });
     await container.engine.signal(tx, { companyId: t.companyId, key: `approval:${req.id}`, payload: { decision: "approved" } });
@@ -351,6 +357,8 @@ roleRoutes.post("/:id/outcome", requireTenant, async (c) => {
   });
   const label: Record<string, string> = { filled: "closed the role as filled", filled_outside_platform: "closed the role: filled outside the platform", role_cancelled: "cancelled the role", no_hire: "closed the role without a hire" };
   await tellRecruiterAboutOutcome(container, t.companyId, result.role.id, null, `${actor.name ?? "The customer"} ${label[body.outcome]}.`, `role_outcome:${result.row.id}`);
+  // Applications emailed while the role was paused or closed to applications were held with a promise to add them (C19); a close keeps it by putting them in the talent pool.
+  const held = await settleHeldEmailsOnClose(container, { companyId: t.companyId, roleId: result.role.id });
   await container.kick();
-  return c.json({ ok: true, outcomeId: result.row.id, role: result.role, movedToTalentPool: result.movedToTalentPool, statement: OUTCOME_STATEMENT });
+  return c.json({ ok: true, outcomeId: result.row.id, role: result.role, movedToTalentPool: result.movedToTalentPool + held.addedToTalentPool, heldEmailsAddedToTalentPool: held.addedToTalentPool, statement: OUTCOME_STATEMENT });
 });

@@ -59,7 +59,8 @@ export async function consumeMagicLink(
   if (user.platformRole !== "none" || (await activeGrantFor(q, user.id))) throw new StaffProviderRequired();
 
   // Team invitations (docs/spec/21, area A): the one this browser carried and any other open one for the address.
-  const invited = await acceptPendingInvitations(q, { user: { id: user.id, email: user.email, name: user.name }, tokenHash: input.invitationTokenHash ?? null, staff: false, ip: input.ip });
+  // Invitation expiry is judged on the caller's clock too, the same one the session's `openedAt` comes from.
+  const invited = await acceptPendingInvitations(q, { user: { id: user.id, email: user.email, name: user.name }, tokenHash: input.invitationTokenHash ?? null, staff: false, now: input.openedAt, ip: input.ip });
   const ms = await q.select().from(memberships).where(and(eq(memberships.userId, user.id), eq(memberships.status, "active"))).limit(1);
   const activeCompanyId = invited.activeCompanyId ?? ms[0]?.companyId ?? null;
 

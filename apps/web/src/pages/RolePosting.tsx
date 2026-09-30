@@ -5,17 +5,19 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, ErrorState, Field, Sheet, Skeleton, Table } from "@ros/ui";
 import { api, ApiError, type ApplicationLink, type Posting, type PostingView, type PostingsResponse, type RoleDetail, type VolumeReport } from "../api/client";
 import { toast } from "../toast";
+import { boardNames } from "../role-words";
 
 /**
  * The Posting tab and the header pieces of the role page (docs/spec/20 section 2, items 9 to 17). A posting is one
  * role on one channel; ITS posts to the boards by hand from the customer's own account, records the public address,
  * and the worker checks it before anything is called live. Every state on screen says what happens next.
+ *
+ * Every change here needs role.manage (owner, admin, recruiter). Anyone else (a hiring manager, HR, an interviewer)
+ * sees the same tab read-only, with one line saying who can change it, instead of buttons the API always refuses.
  */
 
-const CHANNEL_LABEL: Record<string, string> = { careers_page: "Careers page", google_jobs: "Google for Jobs", email_in: "Applications by email", linkedin_basic: "LinkedIn", indeed: "Indeed", ziprecruiter: "ZipRecruiter" };
-export function boardNames(channels: string[]): string {
-  return channels.map((c) => CHANNEL_LABEL[c] ?? c).join(", ");
-}
+/** What the read-only tab says to someone without role.manage. */
+export const READ_ONLY_POSTINGS = "Only an owner or an admin can change postings: record a board's address, pause, close, or tick a board off as taken down. Ask one of them; everything here stays visible to you.";
 
 type Tone = "neutral" | "accent" | "needs" | "good" | "caution" | "critical";
 const STATE_TONE: Record<string, Tone> = { draft: "neutral", approved: "neutral", ready_to_post: "needs", posted_manually: "accent", submitted_integration: "accent", live_verified: "good", paused: "caution", failed: "critical", closed: "neutral" };
@@ -61,7 +63,8 @@ function zoneName(timeZone: string): string {
   }
 }
 
-type Run = (channel: string, action: string, done: string, body?: unknown) => void;
+/** Starts one posting action; `onSuccess` runs only once the API has accepted it, so a form keeps what was typed when the request fails. */
+type Run = (channel: string, action: string, done: string, body?: unknown, onSuccess?: () => void) => void;
 
 /* ------------------------------------------------------------------------------------------------------------ */
 /* Header pieces: the accepting switch, the closed banner, the "still up" alert                                   */
@@ -108,17 +111,17 @@ export function AcceptingSwitch({ role }: { role: RoleDetail }) {
   );
 }
 
-export function ClosedBanner({ role }: { role: RoleDetail }) {
+export function ClosedBanner({ role, canManage }: { role: RoleDetail; canManage: boolean }) {
   if (role.acceptingApplications || role.status === "closed") return null;
   return (
     <Alert tone="caution">
-      <strong>Not taking new applications</strong> since {when(role.applicationsClosedAt)}{role.applicationsClosedReason ? ` (${role.applicationsClosedReason})` : ""}. The job page stays up and says applications are closed. Everyone who already applied is untouched. Use "Accept applications again" above to reopen.
+      <strong>Not taking new applications</strong> since {when(role.applicationsClosedAt)}{role.applicationsClosedReason ? ` (${role.applicationsClosedReason})` : ""}. The job page stays up and says applications are closed. Everyone who already applied is untouched. {canManage ? "Use \"Accept applications again\" above to reopen." : "An owner or an admin can reopen it."}
     </Alert>
   );
 }
 
 /** The boards a person still has to take down (item 15): after the role closed, or after they closed one board's posting while the role stays open. */
-export function StillUpAlert({ channels, roleStatus, onOpen }: { channels: string[]; roleStatus: string; onOpen: () => void }) {
+export function StillUpAlert({ channels, roleStatus, onOpen, canManage }: { channels: string[]; roleStatus: string; onOpen: () => void; canManage: boolean }) {
   if (!channels.length) return null;
   const one = channels.length === 1;
   return (
@@ -126,8 +129,8 @@ export function StillUpAlert({ channels, roleStatus, onOpen }: { channels: strin
       <strong>Still up on: {boardNames(channels)}.</strong>{" "}
       {roleStatus === "closed"
         ? `The role is closed, but ${one ? "this board still shows" : "these boards still show"} the job.`
-        : `You closed the posting ${one ? "there" : "on these boards"}, but ${one ? "the board still shows" : "they still show"} the job.`}{" "}
-      Take it down from your own account, then tick it off on the Posting tab. <Button size="sm" onClick={onOpen}>Go to the Posting tab</Button>
+        : `The posting was closed ${one ? "there" : "on these boards"}, but ${one ? "the board still shows" : "they still show"} the job.`}{" "}
+      {canManage ? "Take it down from your own account, then tick it off on the Posting tab." : "An owner or an admin takes it down from the company's account and ticks it off on the Posting tab; ask one of them."} <Button size="sm" onClick={onOpen}>Go to the Posting tab</Button>
     </Alert>
   );
 }
@@ -136,7 +139,7 @@ export function StillUpAlert({ channels, roleStatus, onOpen }: { channels: strin
 /* The tab                                                                                                        */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-export function PostingTab({ roleId, roleStatus }: { roleId: string; roleStatus: string }) {
+export function PostingTab({ roleId, roleStatus, canManage }: { roleId: string; roleStatus: string; canManage: boolean }) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["postings", roleId], queryFn: () => api.get<PostingsResponse>(`/api/v1/roles/${roleId}/postings`) });
   const volume = useQuery({ queryKey: ["volume", roleId], queryFn: () => api.get<VolumeReport>(`/api/v1/roles/${roleId}/volume`) });
@@ -150,7 +153,7 @@ export function PostingTab({ roleId, roleStatus }: { roleId: string; roleStatus:
     onSuccess: async (_data, input) => { toast(input.done); await refresh(); },
     onError: (e) => toast(message(e, "That did not work. Try again.")),
   });
-  const run: Run = (channel, action, done, body) => act.mutate({ channel, action, body, done });
+  const run: Run = (channel, action, done, body, onSuccess) => act.mutate({ channel, action, body, done }, onSuccess ? { onSuccess } : undefined);
 
   if (q.isLoading) return <Skeleton lines={6} />;
   if (q.error || !q.data) return <ErrorState message="Could not load the postings." onRetry={() => q.refetch()} />;
@@ -162,23 +165,24 @@ export function PostingTab({ roleId, roleStatus }: { roleId: string; roleStatus:
 
   return (
     <div className="stack">
+      {!canManage ? <Alert tone="info">{READ_ONLY_POSTINGS}</Alert> : null}
       {roleStatus === "draft" || roleStatus === "pending_approval" ? <Alert tone="caution">Posting starts when the role is approved and open. Nothing is posted anywhere until then.</Alert> : null}
-      {roleStatus === "paused" ? <Alert tone="caution">The role is paused: it is off the careers page and the feeds, and postings keep their state. Resume the role to carry on. A board posting stays visible on the board until you pause or remove it there.</Alert> : null}
-      {roleStatus === "closed" ? <Alert tone={d.boardsStillUp.length ? "critical" : "neutral"}>{d.boardsStillUp.length ? `The role is closed. Still up on: ${boardNames(d.boardsStillUp)}. Take each posting down from your own account, then tick it off below.` : "The role is closed and every board is confirmed down. Nothing more to do here."}</Alert> : null}
+      {roleStatus === "paused" ? <Alert tone="caution">The role is paused: it is off the careers page and the feeds, and postings keep their state. Resume the role to carry on. A board posting stays visible on the board until it is paused or removed there.</Alert> : null}
+      {roleStatus === "closed" ? <Alert tone={d.boardsStillUp.length ? "critical" : "neutral"}>{d.boardsStillUp.length ? `The role is closed. Still up on: ${boardNames(d.boardsStillUp)}. ${canManage ? "Take each posting down from your own account, then tick it off below." : "An owner or an admin takes each posting down and ticks it off below."}` : "The role is closed and every board is confirmed down. Nothing more to do here."}</Alert> : null}
       {d.postings.length === 0 ? <p className="muted">Nothing prepared yet. The channels are prepared the moment the role is approved.</p> : null}
 
       {careers || google ? (
         <div className="grid-2">
-          {careers ? <NativeCard p={careers} jobUrl={d.urls.job} run={run} busy={busy} roleStatus={roleStatus} /> : null}
-          {google ? <NativeCard p={google} jobUrl={d.urls.job} run={run} busy={busy} roleStatus={roleStatus} /> : null}
+          {careers ? <NativeCard p={careers} jobUrl={d.urls.job} run={run} busy={busy} roleStatus={roleStatus} canManage={canManage} /> : null}
+          {google ? <NativeCard p={google} jobUrl={d.urls.job} run={run} busy={busy} roleStatus={roleStatus} canManage={canManage} /> : null}
         </div>
       ) : null}
 
-      <EmailInPanel emailIn={d.emailIn} run={run} busy={busy} roleStatus={roleStatus} />
+      <EmailInPanel emailIn={d.emailIn} run={run} busy={busy} roleStatus={roleStatus} canManage={canManage} />
 
-      {boards.map((p) => <BoardCard key={p.id} p={p} run={run} busy={busy} roleStatus={roleStatus} />)}
+      {boards.map((p) => <BoardCard key={p.id} p={p} run={run} busy={busy} roleStatus={roleStatus} canManage={canManage} />)}
 
-      <OtherLinks roleId={roleId} links={d.links.filter((l) => !l.postingId)} roleStatus={roleStatus} onChange={refresh} />
+      <OtherLinks roleId={roleId} links={d.links.filter((l) => !l.postingId)} roleStatus={roleStatus} onChange={refresh} canManage={canManage} />
 
       <VolumeCard report={volume.data} loading={volume.isLoading} failed={!!volume.error} onRetry={() => volume.refetch()} />
     </div>
@@ -236,7 +240,7 @@ function VerifyNote({ p, run, busy, onDone }: { p: PostingView; run: Run; busy: 
     <div className="stack" style={{ gap: 8, marginTop: 8, maxWidth: 520 }}>
       <Field label="What did you check, and when?" htmlFor={id} hint="Required. Recorded with your name; this is what makes the posting count as live."><textarea id={id} className="textarea" value={note} onChange={(e) => setNote(e.target.value)} placeholder={p.channel === "google_jobs" ? "e.g. Seen in Search Console on 24 September" : `e.g. Opened the listing on ${p.name} on 24 September; title and apply link are right`} /></Field>
       <div className="row">
-        <Button variant="primary" disabled={note.trim().length < 3 || busy} onClick={() => { run(p.channel, "verify", `${p.name} is now live and verified, with your note.`, { note: note.trim() }); onDone(); }}>Confirm: I checked it</Button>
+        <Button variant="primary" disabled={note.trim().length < 3 || busy} onClick={() => run(p.channel, "verify", `${p.name} is now live and verified, with your note.`, { note: note.trim() }, onDone)}>Confirm: I checked it</Button>
         <Button variant="quiet" onClick={onDone}>Cancel</Button>
       </div>
     </div>
@@ -252,7 +256,7 @@ function CloseConfirm({ p, run, busy, onDone }: { p: PostingView; run: Run; busy
       <p className="small" style={{ color: "var(--ink-2)" }}>{up ? `Closing here does not remove it from ${p.name}: take it down from your own account too, then tick "Removed from this board".` : "Closing here is final for this channel; a re-opened role prepares it again."}</p>
       <Field label="Reason (optional)" htmlFor={id}><input id={id} className="input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
       <div className="row">
-        <Button variant="destructive" disabled={busy} onClick={() => { run(p.channel, "close", `${p.name} closed.`, { reason: reason.trim() || undefined }); onDone(); }}>Yes, close it</Button>
+        <Button variant="destructive" disabled={busy} onClick={() => run(p.channel, "close", `${p.name} closed.`, { reason: reason.trim() || undefined }, onDone)}>Yes, close it</Button>
         <Button variant="quiet" onClick={onDone}>Keep it</Button>
       </div>
     </div>
@@ -278,23 +282,24 @@ function Actions({ p, run, busy, roleStatus, onVerify, onClose }: { p: PostingVi
   );
 }
 
-function RemovedCheckbox({ p, run, busy }: { p: PostingView; run: Run; busy: boolean }) {
+/** The removal checklist item. Read-only (shown, never tickable) for anyone without role.manage. */
+function RemovedCheckbox({ p, run, busy, canManage }: { p: PostingView; run: Run; busy: boolean; canManage: boolean }) {
   if (p.status !== "closed" || !p.closureRequired) return null;
   const id = `removed-${p.id}`;
   return (
     <div className="row" style={{ marginTop: 10 }}>
-      <input id={id} type="checkbox" checked={!!p.closureConfirmedAt} disabled={!!p.closureConfirmedAt || busy} onChange={() => run(p.channel, "closure-confirm", `Recorded: removed from ${p.name}.`)} />
+      <input id={id} type="checkbox" checked={!!p.closureConfirmedAt} disabled={!canManage || !!p.closureConfirmedAt || busy} onChange={() => run(p.channel, "closure-confirm", `Recorded: removed from ${p.name}.`)} />
       <label htmlFor={id}>Removed from this board{p.closureConfirmedAt ? ` (confirmed ${when(p.closureConfirmedAt)})` : ""}</label>
     </div>
   );
 }
 
-function BoardCard({ p, run, busy, roleStatus }: { p: PostingView; run: Run; busy: boolean; roleStatus: string }) {
+function BoardCard({ p, run, busy, roleStatus, canManage }: { p: PostingView; run: Run; busy: boolean; roleStatus: string; canManage: boolean }) {
   const [url, setUrl] = useState("");
   const [open, setOpen] = useState<null | "verify" | "close">(null);
   const [showSteps, setShowSteps] = useState(false);
   const stepsOpen = p.status === "ready_to_post" || showSteps;
-  const canRecord = roleStatus !== "closed" && ["ready_to_post", "posted_manually", "failed"].includes(p.status);
+  const canRecord = canManage && roleStatus !== "closed" && ["ready_to_post", "posted_manually", "failed"].includes(p.status);
   const urlId = `url-${p.id}`;
   return (
     <Card>
@@ -323,18 +328,18 @@ function BoardCard({ p, run, busy, roleStatus }: { p: PostingView; run: Run; bus
               <input id={urlId} className="input" inputMode="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder={`https://www.${p.channel === "linkedin_basic" ? "linkedin.com/jobs/view/..." : p.channel === "indeed" ? "indeed.com/viewjob?jk=..." : "ziprecruiter.com/jobs/..."}`} />
             </Field>
           </div>
-          <Button variant="primary" disabled={!url.trim() || busy} onClick={() => { run(p.channel, "url", "Address recorded. Checking the link now.", { url: url.trim() }); setUrl(""); }}>Record the public URL</Button>
+          <Button variant="primary" disabled={!url.trim() || busy} onClick={() => run(p.channel, "url", "Address recorded. Checking the link now.", { url: url.trim() }, () => setUrl(""))}>Record the public URL</Button>
         </div>
       ) : null}
-      {open === "verify" ? <VerifyNote p={p} run={run} busy={busy} onDone={() => setOpen(null)} /> : null}
-      {open === "close" ? <CloseConfirm p={p} run={run} busy={busy} onDone={() => setOpen(null)} /> : null}
-      {open === null ? <Actions p={p} run={run} busy={busy} roleStatus={roleStatus} onVerify={() => setOpen("verify")} onClose={() => setOpen("close")} /> : null}
-      <RemovedCheckbox p={p} run={run} busy={busy} />
+      {canManage && open === "verify" ? <VerifyNote p={p} run={run} busy={busy} onDone={() => setOpen(null)} /> : null}
+      {canManage && open === "close" ? <CloseConfirm p={p} run={run} busy={busy} onDone={() => setOpen(null)} /> : null}
+      {canManage && open === null ? <Actions p={p} run={run} busy={busy} roleStatus={roleStatus} onVerify={() => setOpen("verify")} onClose={() => setOpen("close")} /> : null}
+      <RemovedCheckbox p={p} run={run} busy={busy} canManage={canManage} />
     </Card>
   );
 }
 
-function NativeCard({ p, jobUrl, run, busy, roleStatus }: { p: PostingView; jobUrl: string; run: Run; busy: boolean; roleStatus: string }) {
+function NativeCard({ p, jobUrl, run, busy, roleStatus, canManage }: { p: PostingView; jobUrl: string; run: Run; busy: boolean; roleStatus: string; canManage: boolean }) {
   const [open, setOpen] = useState<null | "verify" | "close">(null);
   return (
     <Card>
@@ -342,16 +347,16 @@ function NativeCard({ p, jobUrl, run, busy, roleStatus }: { p: PostingView; jobU
       <p className="small" style={{ color: "var(--ink-2)" }}>{nativeStateLine(p, jobUrl)}</p>
       {p.channel === "careers_page" ? <p className="small">Job page: <a href={jobUrl} target="_blank" rel="noreferrer">{jobUrl}</a> <Button size="sm" onClick={() => copy(jobUrl, "the job page address")}>Copy</Button></p> : null}
       {p.channel === "google_jobs" && p.instructions ? <p className="small muted">{p.instructions}</p> : null}
-      {open === "verify" ? <VerifyNote p={p} run={run} busy={busy} onDone={() => setOpen(null)} /> : null}
-      {open === "close" ? <CloseConfirm p={p} run={run} busy={busy} onDone={() => setOpen(null)} /> : null}
-      {open === null ? <Actions p={p} run={run} busy={busy} roleStatus={roleStatus} onVerify={() => setOpen("verify")} onClose={() => setOpen("close")} /> : null}
+      {canManage && open === "verify" ? <VerifyNote p={p} run={run} busy={busy} onDone={() => setOpen(null)} /> : null}
+      {canManage && open === "close" ? <CloseConfirm p={p} run={run} busy={busy} onDone={() => setOpen(null)} /> : null}
+      {canManage && open === null ? <Actions p={p} run={run} busy={busy} roleStatus={roleStatus} onVerify={() => setOpen("verify")} onClose={() => setOpen("close")} /> : null}
     </Card>
   );
 }
 
 /** Not a board: the intake address and whether inbound mail is connected. A failed connection is checked again from here once ITS has connected the mail domain. */
-function EmailInPanel({ emailIn, run, busy, roleStatus }: { emailIn: PostingsResponse["emailIn"]; run: Run; busy: boolean; roleStatus: string }) {
-  const canRecheck = emailIn.status === "failed" && roleStatus === "open";
+function EmailInPanel({ emailIn, run, busy, roleStatus, canManage }: { emailIn: PostingsResponse["emailIn"]; run: Run; busy: boolean; roleStatus: string; canManage: boolean }) {
+  const canRecheck = canManage && emailIn.status === "failed" && roleStatus === "open";
   return (
     <Card title="Applications by email" aside={<Chip tone={emailIn.connected ? "good" : "caution"}>{emailIn.connected ? "Connected" : "Not connected"}</Chip>}>
       {emailIn.address ? (
@@ -372,7 +377,7 @@ function EmailInPanel({ emailIn, run, busy, roleStatus }: { emailIn: PostingsRes
   );
 }
 
-function OtherLinks({ roleId, links, roleStatus, onChange }: { roleId: string; links: ApplicationLink[]; roleStatus: string; onChange: () => Promise<void> }) {
+function OtherLinks({ roleId, links, roleStatus, onChange, canManage }: { roleId: string; links: ApplicationLink[]; roleStatus: string; onChange: () => Promise<void>; canManage: boolean }) {
   const [source, setSource] = useState<"referral" | "direct" | "other">("referral");
   const [label, setLabel] = useState("");
   const [detail, setDetail] = useState("");
@@ -401,7 +406,7 @@ function OtherLinks({ roleId, links, roleStatus, onChange }: { roleId: string; l
                 {l.disabledAt ? <span className="small muted">Disabled {when(l.disabledAt)}</span> : (
                   <span className="row">
                     <Button size="sm" onClick={() => copy(l.url, "the link")}>Copy</Button>
-                    <Button size="sm" variant="quiet" disabled={disable.isPending} onClick={() => disable.mutate(l.id)}>Disable</Button>
+                    {canManage ? <Button size="sm" variant="quiet" disabled={disable.isPending} onClick={() => disable.mutate(l.id)}>Disable</Button> : null}
                   </span>
                 )}
               </td>
@@ -409,7 +414,7 @@ function OtherLinks({ roleId, links, roleStatus, onChange }: { roleId: string; l
           ))}
         </Table>
       ) : <p className="small muted" style={{ marginTop: 8 }}>No other links yet.</p>}
-      {roleStatus !== "closed" ? (
+      {canManage && roleStatus !== "closed" ? (
         <div className="row" style={{ alignItems: "flex-end", marginTop: 10, flexWrap: "wrap" }}>
           <Field label="Kind" htmlFor="link-source"><select id="link-source" className="select" value={source} onChange={(e) => setSource(e.target.value as "referral" | "direct" | "other")}><option value="referral">Referral</option><option value="direct">Direct</option><option value="other">Other</option></select></Field>
           <Field label="Name (what you will see)" htmlFor="link-label"><input id="link-label" className="input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder={source === "referral" ? "Referral: Dr. Patel" : source === "direct" ? "Email to past applicants" : "Community board"} /></Field>

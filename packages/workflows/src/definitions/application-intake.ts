@@ -5,7 +5,7 @@ import { ASSESSMENT_UNAVAILABLE_TEXT, RESUME_UNREADABLE_TEXT, createEscalation, 
 import { applications, assessments, candidates, companies, documents, rolePackets, roles, type Tx } from "@ros/db";
 import { assessApplication, extractResume, sendAcknowledgment } from "@ros/agents";
 import { twoPhase, type WorkflowDefinition } from "../types";
-import { processQuarantinedDocument } from "../documents";
+import { examineQuarantinedDocument, queueObjectDiscard, recordQuarantineVerdict, type QuarantineExamination } from "../documents";
 
 type State = { applicationId: string; roleId: string; ineligibleUntil?: string; heldAt?: string; remindersSent?: number };
 
@@ -13,8 +13,8 @@ type State = { applicationId: string; roleId: string; ineligibleUntil?: string; 
  * From "application received" to "ready for the owner" (docs/06 `application_intake`).
  * acknowledge → validate (quarantined résumé checked, scanned, moved) → extract → eligibility → (ineligible: hold for a person, remind, escalate an overdue review; never decline) | (eligible → assess)
  *
- * The two steps that call the model (`extract`, `ready`) do so in a prepare phase with no transaction open; their
- * transaction only writes what the model returned.
+ * The steps that call a provider (`validate` the malware scanner and storage, `extract` and `ready` the model) do so in
+ * a prepare phase with no transaction open; their transaction only writes what came back.
  */
 export const applicationIntake: WorkflowDefinition<State> = {
   key: "application_intake",
@@ -47,16 +47,34 @@ export const applicationIntake: WorkflowDefinition<State> = {
       return { kind: "next", step: "validate" };
     },
 
-    /** Decision 2: a résumé is only ever read after the worker has inspected and scanned it. A scanner outage retries; a refused file is recorded and the application goes on without it. */
-    async validate(ctx) {
-      const loaded = await load(ctx.q, ctx.state.applicationId);
-      if (!loaded) return { kind: "fail", error: "application not found", retryable: false };
-      const { app } = loaded;
-      if (!app.resumeDocumentId) return { kind: "next", step: "extract" };
-      const result = await processQuarantinedDocument(ctx.q, ctx.services.integrations, { documentId: app.resumeDocumentId, companyId: ctx.companyId, actor: ctx.actor, correlationId: ctx.run.id, now: ctx.now });
-      if (result.outcome === "retry") return { kind: "fail", error: `résumé scan unavailable: ${result.error}`, retryable: true };
-      return { kind: "next", step: "extract" };
-    },
+    /**
+     * Decision 2: a résumé is only ever read after the worker has inspected and scanned it. A scanner outage retries; a
+     * refused file is recorded and the application goes on without it. The scan (a call to the malware engine), the
+     * clean copy and the text extraction happen before the transaction opens; the transaction only records the verdict,
+     * and the quarantine copy is removed by a job that exists only once that record has committed.
+     */
+    validate: twoPhase<State, QuarantineExamination | null>({
+      async prepare(ctx) {
+        const documentId = await ctx.read(async (q) => (await load(q, ctx.state.applicationId))?.app.resumeDocumentId ?? null);
+        if (!documentId) return null;
+        return examineQuarantinedDocument({ db: ctx.db, integrations: ctx.services.integrations, engine: ctx.services.engine }, { documentId, companyId: ctx.companyId, now: ctx.now });
+      },
+      async run(ctx, examined) {
+        const loaded = await load(ctx.q, ctx.state.applicationId);
+        if (!loaded) return { kind: "fail", error: "application not found", retryable: false };
+        const { app } = loaded;
+        if (!app.resumeDocumentId) return { kind: "next", step: "extract" };
+        if (examined?.documentId !== app.resumeDocumentId) {
+          const [doc] = await ctx.q.select({ status: documents.status }).from(documents).where(eq(documents.id, app.resumeDocumentId)).limit(1);
+          if (doc?.status !== "quarantined") return { kind: "next", step: "extract" };
+          return { kind: "fail", error: "the résumé arrived after the read phase; checking it again", retryable: true };
+        }
+        const { outcome, discard } = await recordQuarantineVerdict(ctx.q, examined, { companyId: ctx.companyId, actor: ctx.actor, correlationId: ctx.run.id, now: ctx.now });
+        await queueObjectDiscard(ctx.q, ctx.services.engine, { companyId: ctx.companyId, keys: discard });
+        if (outcome.outcome === "retry") return { kind: "fail", error: `résumé scan unavailable: ${outcome.error}`, retryable: true };
+        return { kind: "next", step: "extract" };
+      },
+    }),
 
     extract: twoPhase<State, { documentId: string; out: RunOutcome<ResumeExtraction> } | null>({
       async prepare(ctx) {

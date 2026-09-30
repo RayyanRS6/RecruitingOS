@@ -5,7 +5,7 @@ import { MAX_RESUME_BYTES } from "@ros/contracts";
 import { anonymizeCandidate, buildCandidateCsp, entitlements } from "@ros/core";
 import { applications, auditRecords, candidates, documents, events, withTenant } from "@ros/db";
 import { EICAR_TEST_STRING, type FakeMalwareScanner, type MemoryStorageAdapter } from "@ros/integrations";
-import { processQuarantinedDocument } from "@ros/workflows";
+import { discardUnusedObject, examineQuarantinedDocument, processQuarantinedDocument, recordQuarantineVerdict } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { NO_SCRIPT_MAX_RESUME_BYTES } from "./pages/candidate";
@@ -27,6 +27,7 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
   const baseEnv = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: "http://localhost:3001" };
   const storage = () => container.integrations.storage as MemoryStorageAdapter;
   const scanner = () => container.integrations.scanner as FakeMalwareScanner;
+  const scanDeps = () => ({ db: container.db, integrations: container.integrations, engine: container.engine });
   const signIn = async (email: string) => {
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
     const { devLink } = (await r1.json()) as { devLink: string };
@@ -355,7 +356,7 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
     const key = `quarantine/${companyId}/${roleId}/oversized-test.pdf`;
     await storage().put(key, new Uint8Array(MAX_RESUME_BYTES + 1), "application/pdf");
     const doc = await withTenant(container.db, companyId, async (tx) => (await tx.insert(documents).values({ companyId, candidateId: appRow.candidateId, applicationId: appRow.id, kind: "resume", filename: "oversized.pdf", mime: "application/pdf", sizeBytes: MAX_RESUME_BYTES + 1, storageKey: key, sha256: "pending", status: "quarantined", uploadedVia: "email" }).returning())[0]);
-    const outcome = await withTenant(container.db, companyId, (tx) => processQuarantinedDocument(tx, container.integrations, { documentId: doc.id, companyId, actor: { kind: "system", id: "test" } }));
+    const outcome = await processQuarantinedDocument(scanDeps(), { documentId: doc.id, companyId, actor: { kind: "system", id: "test" } });
     expect(outcome).toEqual({ outcome: "rejected", documentId: doc.id, reason: "too_large" });
     const after = await documentOf(doc.id);
     expect(after).toMatchObject({ status: "rejected", rejectedReason: "too_large", textExtracted: null, sha256: "rejected" });
@@ -366,7 +367,7 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
     const audits = await container.db.select().from(auditRecords).where(eq(auditRecords.action, "document.rejected"));
     expect(audits.some((a) => (a.target as { id: string })?.id === doc.id && a.reason === "too_large")).toBe(true);
     // a second pass changes nothing: the row is no longer quarantined
-    expect(await withTenant(container.db, companyId, (tx) => processQuarantinedDocument(tx, container.integrations, { documentId: doc.id, companyId, actor: { kind: "system", id: "test" } }))).toEqual({ outcome: "skipped", documentId: doc.id });
+    expect(await processQuarantinedDocument(scanDeps(), { documentId: doc.id, companyId, actor: { kind: "system", id: "test" } })).toEqual({ outcome: "skipped", documentId: doc.id });
     // the application itself is untouched by the stray document
     expect((await applicationOf(token)).resumeDocumentId).not.toBe(doc.id);
   });
@@ -381,5 +382,56 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
     expect(html).toContain('name="uploadGrant"');
     expect(csp).toContain("connect-src 'self';");
     expect(buildCandidateCsp({ nonce: "n", production: true, connectOrigins: ["https://abc.storage.supabase.co"] })).toContain("connect-src 'self' https://abc.storage.supabase.co;");
+  });
+
+  it("the scan and the clean copy happen before the verdict's transaction; a verdict that never commits leaves the file in quarantine, the next pass takes it, and the unused copy is swept", async () => {
+    const { r, token } = await apply((fd) => fd.set("resume", new File(["Dana Example, RDH"], "dana.txt", { type: "text/plain" })), "203.0.113.35");
+    expect(r.status).toBe(302);
+    await container.drain();
+    const appRow = await applicationOf(token);
+    const key = `quarantine/${companyId}/${roleId}/rollback-test.txt`;
+    await storage().put(key, text("Dana Example\nRegistered dental hygienist, 6 years.\n"), "text/plain");
+    const doc = await withTenant(container.db, companyId, async (tx) => (await tx.insert(documents).values({ companyId, candidateId: appRow.candidateId, applicationId: appRow.id, kind: "resume", filename: "dana.txt", mime: "text/plain", sizeBytes: 50, storageKey: key, sha256: "pending", status: "quarantined", uploadedVia: "email" }).returning())[0]);
+    // phase one: scanned and copied, with no transaction open; the row and the quarantine file are untouched
+    const first = await examineQuarantinedDocument(scanDeps(), { documentId: doc.id, companyId });
+    expect(first).toMatchObject({ verdict: "clean", documentId: doc.id, storageKey: key });
+    const firstCopy = (first as { finalKey: string }).finalKey;
+    expect(storage().has(firstCopy)).toBe(true);
+    expect(storage().has(key)).toBe(true);
+    expect(await documentOf(doc.id)).toMatchObject({ status: "quarantined", storageKey: key });
+    // phase two rolls back (the commit fails, the worker dies): the row still points at a file that is still there
+    await expect(withTenant(container.db, companyId, async (tx) => {
+      await recordQuarantineVerdict(tx, first, { companyId, actor: { kind: "system", id: "test" } });
+      throw new Error("the commit failed");
+    })).rejects.toThrow("the commit failed");
+    expect(await documentOf(doc.id)).toMatchObject({ status: "quarantined", storageKey: key, textExtracted: null });
+    expect(storage().has(key)).toBe(true);
+    // the next pass finds the file and records it clean; the quarantine copy goes only after that commit
+    expect(await processQuarantinedDocument(scanDeps(), { documentId: doc.id, companyId, actor: { kind: "system", id: "test" } })).toMatchObject({ outcome: "clean", documentId: doc.id });
+    const after = await documentOf(doc.id);
+    expect(after).toMatchObject({ status: "clean", scanVerdict: "clean" });
+    expect(after.textExtracted).toContain("Registered dental hygienist");
+    expect(after.storageKey).not.toBe(firstCopy);
+    expect(storage().has(after.storageKey)).toBe(true);
+    expect(storage().has(key)).toBe(false);
+    // a verdict written for a row that already moved on changes nothing and hands back its own copy for removal
+    expect(await withTenant(container.db, companyId, (tx) => recordQuarantineVerdict(tx, first, { companyId, actor: { kind: "system", id: "test" } }))).toEqual({ outcome: { outcome: "skipped", documentId: doc.id }, discard: [firstCopy] });
+    // the copy from the attempt that never committed is removed by the sweep an hour later; the copy in use stays
+    expect(storage().has(firstCopy)).toBe(true);
+    const engine = container.engine as unknown as { now: () => Date };
+    const realNow = engine.now;
+    engine.now = () => new Date(Date.now() + 2 * 3600_000);
+    try {
+      await container.drain();
+    } finally {
+      engine.now = realNow;
+    }
+    expect(storage().has(firstCopy)).toBe(false);
+    expect(storage().has(after.storageKey)).toBe(true);
+    // the sweep never touches an object a live row uses, nor another company's
+    await discardUnusedObject(container.db, storage(), { companyId, key: after.storageKey });
+    expect(storage().has(after.storageKey)).toBe(true);
+    await discardUnusedObject(container.db, storage(), { companyId: "00000000-0000-0000-0000-000000000000", key: after.storageKey });
+    expect(storage().has(after.storageKey)).toBe(true);
   });
 });

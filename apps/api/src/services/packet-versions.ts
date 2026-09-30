@@ -35,8 +35,10 @@ export function currentVersionOf(role: Pick<RoleRow, "currentPacketVersion">, ve
  */
 export async function cancelPendingPacketApprovals(tx: Tx, container: Container, input: { companyId: string; roleId: string; actor: Actor; reason: string }): Promise<number> {
   const pending = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, input.roleId), eq(approvalRequests.actionType, "role_packet.approve"), eq(approvalRequests.status, "pending")));
+  // Stamped on the engine's clock, the one the approval's request and expiry are judged on.
+  const decidedAt = container.engine.clock().toISOString();
   for (const p of pending) {
-    await tx.update(approvalRequests).set({ status: "cancelled", decidedAt: new Date().toISOString(), decisionNote: input.reason }).where(eq(approvalRequests.id, p.id));
+    await tx.update(approvalRequests).set({ status: "cancelled", decidedAt, decisionNote: input.reason }).where(eq(approvalRequests.id, p.id));
     await emit(tx, { type: "approval.cancelled", companyId: input.companyId, actor: input.actor, subject: { type: "approval_request", id: p.id }, payload: { actionType: p.actionType, roleId: input.roleId, version: (p.proposal as { version?: number }).version ?? null, reason: input.reason }, correlationId: p.workflowRunId });
     if (p.workflowRunId) await container.engine.cancel(tx, p.workflowRunId, input.actor, input.reason);
   }
@@ -77,7 +79,7 @@ export async function createPacketVersion(
   const next = (versions[0]?.version ?? 0) + 1;
   const editorMayApprove = can(t.role, "role.approve");
   const approvesNow = role.status === "open" && editorMayApprove;
-  const now = new Date().toISOString();
+  const now = container.engine.clock().toISOString();
   const [pv] = await tx
     .insert(rolePackets)
     .values({ companyId: t.companyId, roleId: role.id, version: next, packet: input.packet, status: approvesNow ? "approved" : "proposed", source: input.source ?? "human_edit", changeSummary: input.changeSummary, createdBy: actor, approvedBy: approvesNow ? t.userId : null, approvedAt: approvesNow ? now : null })

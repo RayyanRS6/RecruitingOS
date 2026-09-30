@@ -27,6 +27,20 @@ async function seedOpenRole(request: APIRequestContext, base: string) {
   return { roleId, slug: company.slug, ownerId: me.user.id, eligibility: role.currentPacket.packet.requirements.eligibility, firstRound: role.currentPacket.packet.interviews.plan[0].key };
 }
 
+type BoardPosting = { channel: string; isBoard: boolean; link: { url: string; visits: number } | null };
+const SOURCE_OF_CHANNEL: Record<string, string> = { linkedin_basic: "linkedin", indeed: "indeed", ziprecruiter: "ziprecruiter" };
+
+/** A board's own tracked apply link, the one its posting package carries (docs/spec/20 items 7 and 9), once publishing has made it. */
+async function boardLink(request: APIRequestContext, base: string, roleId: string, channel?: string): Promise<{ channel: string; url: string; visits: number }> {
+  let found: BoardPosting | undefined;
+  await expect.poll(async () => {
+    const d = (await (await request.get(`${base}/api/v1/roles/${roleId}/postings`)).json()) as { postings: BoardPosting[] };
+    found = d.postings.find((p) => p.isBoard && p.link && SOURCE_OF_CHANNEL[p.channel] && (!channel || p.channel === channel));
+    return !!found;
+  }, { timeout: 60_000, message: "a board posting with its own tracked apply link" }).toBe(true);
+  return { channel: found!.channel, url: found!.link!.url, visits: found!.link!.visits };
+}
+
 test.describe("candidate journey on a phone", () => {
   skipWithoutFakeSignIn();
   test("job page, application with the acknowledgment, screening conversation and scheduling, all accessible on a phone", async ({ page, baseURL }) => {
@@ -42,7 +56,15 @@ test.describe("candidate journey on a phone", () => {
     await expect(page.locator('script[type="application/ld+json"]')).toHaveCount(1);
     await expectAccessible(page, "job page");
     await noHorizontalOverflow(page, "job page");
-    await page.getByRole("link", { name: "Apply now" }).click();
+    await expect(page.getByRole("link", { name: "Apply now" })).toBeVisible();
+
+    // the candidate arrives the way a board sends them: the tracked apply link from the board's posting package is served
+    // by the deployed app (never Next.js's not-found page), counts the visit and lands on the form with the source remembered
+    const board = await boardLink(page.request, baseURL!, seeded.roleId);
+    const tracked = new URL(board.url);
+    expect(tracked.pathname).toMatch(/^\/a\/[a-z0-9]{12}$/);
+    await page.goto(tracked.pathname);
+    await page.waitForURL(new RegExp(`/careers/${seeded.slug}/jobs/${seeded.roleId}/apply$`));
 
     // the form: the transparency block and the privacy link are on the page; the acknowledgment starts unchecked
     await expect(page.getByRole("heading", { name: "Apply", exact: true })).toBeVisible();
@@ -80,7 +102,8 @@ test.describe("candidate journey on a phone", () => {
     await page.getByRole("checkbox", { name: /I have read the notice above/ }).check();
     await page.getByRole("button", { name: "Send my application" }).click();
     await page.waitForURL(/\/c\/status\//);
-    await expect(page.getByText(/Your application is in/)).toBeVisible();
+    // the confirmation card only: while the application is still "received" the stage sentence below says "Your application is in" too
+    await expect(page.getByText("Thanks, Maria. Your application is in.", { exact: true })).toBeVisible();
     await expectAccessible(page, "status page");
     await noHorizontalOverflow(page, "status page");
     const statusPath = new URL(page.url()).pathname;
@@ -99,8 +122,11 @@ test.describe("candidate journey on a phone", () => {
     await expectAccessible(page, "screen page after an answer");
 
     // the owner approves an interview through the API; the candidate picks a time on the phone
-    const applications = (await (await page.request.get(`${baseURL}/api/v1/roles/${seeded.roleId}/applications`)).json()) as Array<{ id: string }>;
+    const applications = (await (await page.request.get(`${baseURL}/api/v1/roles/${seeded.roleId}/applications`)).json()) as Array<{ id: string; source: string }>;
     expect(applications.length).toBe(1);
+    // the application is credited to the board whose link was followed, and the link counted the visit
+    expect(applications[0].source).toBe(SOURCE_OF_CHANNEL[board.channel]);
+    expect((await boardLink(page.request, baseURL!, seeded.roleId, board.channel)).visits).toBeGreaterThan(board.visits);
     const approved = await page.request.post(`${baseURL}/api/v1/applications/${applications[0].id}/interviews`, { data: { roundKey: seeded.firstRound, interviewerUserIds: [seeded.ownerId], linkSource: "calendar" } });
     expect(approved.status(), await approved.text()).toBe(201);
     await page.goto(statusPath);
