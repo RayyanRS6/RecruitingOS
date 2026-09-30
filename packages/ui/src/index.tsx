@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect } from "react";
+import type { ReactNode } from "react";
 
 /** Design system components (docs/07). Styling lives in tokens.css; these are semantic wrappers. */
 
@@ -94,31 +94,9 @@ export function Segmented<T extends string>(props: { value: T; options: Array<{ 
   );
 }
 
-export function Sheet(props: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
-  const { open, onClose } = props;
-  // Escape closes the sheet wherever the focus is: when an action removes the button that had focus (a decision card
-  // that disappears once recorded), focus falls back to the page, outside the dialog, and the key must still work.
-  useEffect(() => {
-    if (!open) return;
-    const closeOnEscape = (e: globalThis.KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", closeOnEscape);
-    return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [open, onClose]);
-  if (!open) return null;
-  return (
-    // The backdrop is not a control: a click outside closes the sheet, Escape closes it from the keyboard, and the Close button does both.
-    <div className="sheet-backdrop">
-      <button type="button" className="sheet-backdrop-hit" aria-label="Close" onClick={props.onClose} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", background: "transparent", border: 0, padding: 0, cursor: "default" }} />
-      <div className="sheet" role="dialog" aria-modal="true" aria-label={props.title} style={{ position: "relative" }}>
-        <div className="row" style={{ justifyContent: "space-between", marginBottom: 14 }}>
-          <h2>{props.title}</h2>
-          <Button variant="quiet" onClick={props.onClose}>Close</Button>
-        </div>
-        {props.children}
-      </div>
-    </div>
-  );
-}
+// The sheet listens for Escape on the document, which needs a React hook, so it lives in its own client module: the
+// rest of this file stays usable from server components (the shell's loading screen imports it).
+export { Sheet } from "./sheet";
 
 export function Timeline(props: { items: Array<{ when: string; what: string; who?: string }> }) {
   return (
