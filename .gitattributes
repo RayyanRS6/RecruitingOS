@@ -1,0 +1,3 @@
+# Document fixtures are byte-exact files (a PDF's cross-reference table counts bytes): never convert their line endings.
+*.pdf binary
+*.docx binary
