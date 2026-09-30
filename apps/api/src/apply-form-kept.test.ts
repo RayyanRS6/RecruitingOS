@@ -17,7 +17,7 @@ describe("the apply form: who can see it, and what a re-shown form keeps", () =>
   let slug = "";
   let roleId = "";
   let eligibilityKeys: string[] = [];
-  const unescape = (html: string) => html.replace(/&#39;/g, "'").replace(/&quot;/g, "\"").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  const decodeEntities = (html: string) => html.replace(/&#39;/g, "'").replace(/&quot;/g, "\"").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
   const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
   const signIn = async (email: string) => {
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
@@ -63,11 +63,11 @@ describe("the apply form: who can see it, and what a re-shown form keeps", () =>
   });
 
   it("the form names who can see an application, and the privacy page it points to lists each kind of provider and its job", async () => {
-    const page = unescape(await (await app.request(`/careers/${slug}/jobs/${roleId}/apply`)).text());
+    const page = decodeEntities(await (await app.request(`/careers/${slug}/jobs/${roleId}/apply`)).text());
     const who = page.match(/<strong>Who can see it:<\/strong>([^<]*)<\/p>/)![1];
     expect(who).not.toContain("listed in the privacy notice");
     for (const kind of ["hosting", "file storage", "email delivery", "AI service"]) expect(who).toContain(kind);
-    const privacy = unescape(await (await app.request("/privacy")).text());
+    const privacy = decodeEntities(await (await app.request("/privacy")).text());
     expect(privacy).toContain("Who can see your information");
     for (const line of ["Hosting:", "Database and file storage:", "Email delivery:", "An AI service:", "Calendars (Google or Microsoft):"]) expect(privacy).toContain(line);
     expect(privacy).toContain("We do not sell your information.");
@@ -79,7 +79,7 @@ describe("the apply form: who can see it, and what a re-shown form keeps", () =>
     const grant = await directUpload("dana-resume.txt", "Dana Kept\nRegistered dental hygienist, 6 years.\n");
     const again = await apply(form({ uploadGrant: grant, acknowledged: null }));
     expect(again.status).toBe(400);
-    const html = unescape(await again.text());
+    const html = decodeEntities(await again.text());
     expect(grantIn(html)).toBe(grant);
     expect(html).toContain("Your resume dana-resume.txt is still attached.");
     expect(html).toContain("Everything you entered is still here.");
@@ -94,18 +94,18 @@ describe("the apply form: who can see it, and what a re-shown form keeps", () =>
   it("a file sent inside the form, or a grant that no longer opens, is asked for again, never claimed as kept", async () => {
     const withFile = await apply(form({ email: "lee.file@example.com", resume: new File(["Lee File, dental hygienist"], "lee.txt", { type: "text/plain" }), acknowledged: null }));
     expect(withFile.status).toBe(400);
-    const a = unescape(await withFile.text());
+    const a = decodeEntities(await withFile.text());
     expect(a).toContain("Everything you typed is still here, but please attach your resume again.");
     expect(a).not.toContain("Everything you entered is still here.");
     expect(a).toContain("Your resume is not attached any more. Please choose the file again.");
     expect(grantIn(a)).toBe("");
     const forged = await apply(form({ email: "sam.forged@example.com", uploadGrant: "not-a-real-grant", acknowledged: null }));
     expect(forged.status).toBe(400);
-    const b = unescape(await forged.text());
+    const b = decodeEntities(await forged.text());
     expect(b).toContain("please attach your resume again");
     expect(grantIn(b)).toBe("");
     // without any resume, the promise stands as it was
     const plain = await apply(form({ email: "kim.plain@example.com", noResume: "Hygienist for five years.", acknowledged: null }));
-    expect(unescape(await plain.text())).toContain("Everything you entered is still here.");
+    expect(decodeEntities(await plain.text())).toContain("Everything you entered is still here.");
   });
 });
