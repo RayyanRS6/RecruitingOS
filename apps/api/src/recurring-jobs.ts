@@ -17,19 +17,21 @@ type JobContext = Parameters<JobHandler>[1];
 export function recurring(engine: WorkflowEngine, db: Db, kind: string, everyMs: number, body: (ctx: JobContext) => Promise<void>): JobHandler {
   return async (_payload, ctx) => {
     let failed = false;
+    let bodyError: unknown = null;
     try {
       await body(ctx);
     } catch (err) {
       failed = true;
-      throw err;
-    } finally {
-      try {
-        await engine.ensureQueued(db, { kind, runAt: new Date(ctx.now.getTime() + everyMs) });
-      } catch (err) {
-        if (!failed) throw err;
-        console.error(`[queue] ${kind}: could not arm the next run: ${err instanceof Error ? err.message : String(err)}`);
-      }
+      bodyError = err;
     }
+    // The next run is armed whatever the body did; no throw leaves a `finally`, so no error can hide another.
+    try {
+      await engine.ensureQueued(db, { kind, runAt: new Date(ctx.now.getTime() + everyMs) });
+    } catch (err) {
+      if (!failed) throw err;
+      console.error(`[queue] ${kind}: could not arm the next run: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (failed) throw bodyError;
   };
 }
 
