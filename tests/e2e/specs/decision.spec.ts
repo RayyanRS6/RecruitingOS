@@ -62,8 +62,13 @@ test.describe("decision after an interview", () => {
     await expectAccessible(page, "interview sheet after the outcome");
 
     // "Record the decision" is the deep link: it opens the candidate's sheet directly, with the decision card on top
-    await ivSheet.getByRole("link", { name: "Record the decision" }).click();
-    await expect(page).toHaveURL(/\/talent\?open=/);
+    const decide = ivSheet.getByRole("link", { name: "Record the decision" });
+    await expect(decide).toHaveAttribute("href", /\/talent\?open=/);
+    // the sheet re-renders once the outcome is saved; a click that lands mid-render is tried again until the page changes
+    await expect(async () => {
+      if (!/\/talent\?open=/.test(page.url())) await decide.click({ timeout: 5_000 });
+      await expect(page).toHaveURL(/\/talent\?open=/, { timeout: 3_000 });
+    }).toPass({ timeout: 30_000 });
     const candidate = page.getByRole("dialog", { name: "Maria Reyes" });
     await expect(candidate).toBeVisible({ timeout: 30_000 });
     await expect(candidate.getByRole("heading", { name: "How did the interview go?" })).toBeVisible();

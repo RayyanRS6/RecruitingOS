@@ -146,7 +146,8 @@ test.describe("candidate journey on a phone", () => {
 
     // back on the status page the booked interview says what to prepare
     await page.goto(statusPath);
-    await expect(page.getByText(/What to prepare/)).toBeVisible({ timeout: 30_000 });
+    // the status card's label, not the confirmation message further down that also mentions it
+    await expect(page.getByText("What to prepare:", { exact: true })).toBeVisible({ timeout: 30_000 });
     await expectAccessible(page, "status page with a booked interview");
   });
 });
