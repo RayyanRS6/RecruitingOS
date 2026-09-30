@@ -9,7 +9,7 @@ import { clientIp, type Vars } from "./session";
  * trips raises an alert for the ITS console. Webhooks are limited generously and never refuse a provider's valid retry.
  */
 export type SubjectKind = "ip" | "user" | "tenant" | "token" | "email" | "role" | "provider" | "auth_failure";
-export type Rule = { by: SubjectKind; windowMs: number; limit: number; /** route param holding the token or role id */ param?: string; /** body field holding the email (a JSON body) or the token (a posted form) */ field?: string };
+export type Rule = { by: SubjectKind; windowMs: number; limit: number; /** route param holding the token or role id */ param?: string; /** body field holding the email (a JSON body or a posted form) or the token (a posted form) */ field?: string };
 export type Policy = { name: string; rules: Rule[] };
 
 const MIN = 60_000;
@@ -27,6 +27,10 @@ export const POLICIES = {
   screen: { name: "candidate.screen", rules: [{ by: "token", windowMs: HOUR, limit: 120, param: "token" }, { by: "ip", windowMs: HOUR, limit: 240 }] },
   screenHuman: { name: "candidate.screen_human", rules: [{ by: "token", windowMs: HOUR, limit: 30, param: "token" }, { by: "ip", windowMs: HOUR, limit: 60 }] },
   privacy: { name: "candidate.privacy_request", rules: [{ by: "token", windowMs: HOUR, limit: 5, param: "token" }, { by: "ip", windowMs: HOUR, limit: 10 }] },
+  /** The public privacy-request form (no link to bind to): per address, and per mailbox typed into the form (the email is normalized, so a change of case is the same mailbox). */
+  privacyForm: { name: "candidate.privacy_form", rules: [{ by: "ip", windowMs: HOUR, limit: 10 }, { by: "email", windowMs: HOUR, limit: 5, field: "email" }] },
+  /** Pressing the confirmation button on the emailed privacy-request link: per link (the posted token) and per address. */
+  privacyVerify: { name: "candidate.privacy_verify", rules: [{ by: "token", windowMs: HOUR, limit: 10, field: "token" }, { by: "ip", windowMs: HOUR, limit: 30 }] },
   withdraw: { name: "candidate.withdraw", rules: [{ by: "token", windowMs: HOUR, limit: 5, param: "token" }, { by: "ip", windowMs: HOUR, limit: 20 }] },
   smsPref: { name: "candidate.sms_pref", rules: [{ by: "token", windowMs: HOUR, limit: 10, param: "token" }, { by: "ip", windowMs: HOUR, limit: 30 }] },
   schedule: { name: "candidate.schedule", rules: [{ by: "token", windowMs: HOUR, limit: 30, param: "token" }, { by: "ip", windowMs: HOUR, limit: 60 }] },
@@ -59,9 +63,12 @@ async function subjectOf(c: Context<Vars>, rule: Rule): Promise<string | undefin
     case "token": case "role": return rule.field ? formField(c, rule.field) : c.req.param(rule.param ?? "token");
     case "provider": return c.req.path.split("/")[2] ?? "unknown";
     case "email": {
+      // the same mailbox however it is typed: trimmed and lower-cased, from a JSON body or a posted form
+      const field = rule.field ?? "email";
+      if (!(c.req.header("content-type") ?? "").includes("json")) return (await formField(c, field))?.trim().toLowerCase() || undefined;
       try {
         const body = (await c.req.json()) as Record<string, unknown>;
-        const v = body[rule.field ?? "email"];
+        const v = body[field];
         return typeof v === "string" ? v.trim().toLowerCase() : undefined;
       } catch { return undefined; }
     }

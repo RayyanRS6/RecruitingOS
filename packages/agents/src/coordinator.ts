@@ -1,8 +1,8 @@
 import type { Actor, RolePacket } from "@ros/contracts";
 import { emit, disclosureLine } from "@ros/core";
 import { communications, type Queryable, type applications, type candidates, type companies, type roles } from "@ros/db";
-import type { Integrations, SendResult } from "@ros/integrations";
-import { queueCommunication } from "./outbox";
+import { replyAddress, type Integrations, type SendResult } from "@ros/integrations";
+import { queueCommunication, type QueueResult } from "./outbox";
 
 type App = typeof applications.$inferSelect;
 type Cand = typeof candidates.$inferSelect;
@@ -12,12 +12,59 @@ type Company = typeof companies.$inferSelect;
 export type MessageInput = { application: App; candidate: Cand; role: Role; company: Company; packet: RolePacket; actor: Actor; correlationId?: string | null };
 
 /** Founder decision F6: a dedicated ITS sending address with the customer's hiring team as the display name; never the customer's domain. */
-function fromAddress(company: Company, integrations: Integrations): string {
+export function fromAddress(company: Company, integrations: Integrations): string {
   return `${company.name} hiring team <${integrations.env.fromAddress}>`;
+}
+
+/**
+ * Where a candidate's reply lands (F12). With the inbound mail domain configured, every candidate email carries a
+ * per-application address, reply-<token>@<intake domain>, and the reply comes back into the product: the Postmark
+ * inbound webhook records it on the application and tells the team. Without it, replies go to the monitored ITS
+ * mailbox, where a person reads them (docs/runbooks/candidate-replies.md).
+ */
+export function replyToFor(application: Pick<App, "replyToken">, integrations: Integrations): string {
+  if (integrations.env.emailInConfigured && application.replyToken) return replyAddress(application.replyToken, integrations.env.intakeDomain);
+  return integrations.env.replyTo;
 }
 
 function signature(packet: RolePacket, company: Company): string {
   return packet.communication.signature || `The hiring team at ${company.name}`;
+}
+
+/**
+ * What follows a message a person wrote (F11): who sent it and how to reach a person. No disclosure line, because no
+ * AI wrote it; the sheet shows this footer under the text box so the sender sees exactly what the candidate will.
+ */
+export function freeformFooter(input: { senderName: string; company: Company }): string {
+  return `${input.senderName}\n${input.company.name} hiring team\n\nThis message was written by ${input.senderName}. Reply to this email to reach a person on the team.`;
+}
+
+/**
+ * A message a team member wrote to the candidate, sent as themselves under the company's sending name. Goes through
+ * the outbox like every candidate email; the caller has already passed the policy gate and audits the send.
+ */
+export async function sendFreeformMessage(q: Queryable, integrations: Integrations, input: MessageInput & { subject: string | null; text: string; senderName: string; idempotencyKey: string }): Promise<QueueResult | SendResult> {
+  const { application, candidate, company, packet } = input;
+  if (!candidate.email) return { status: "failed", error: "candidate has no email address", retryable: false };
+  const subject = input.subject?.trim() || `A message from ${company.name} about ${packet.identity.title}`;
+  const text = `${input.text.trim()}\n\n${freeformFooter({ senderName: input.senderName, company })}`;
+  return queueCommunication(q, integrations, {
+    channel: "email",
+    companyId: company.id,
+    candidateId: candidate.id,
+    applicationId: application.id,
+    to: candidate.email,
+    from: fromAddress(company, integrations),
+    replyTo: replyToFor(application, integrations),
+    subject,
+    text,
+    templateKey: "freeform",
+    idempotencyKey: input.idempotencyKey,
+    tags: { template: "freeform", applicationId: application.id },
+    actor: input.actor,
+    correlationId: input.correlationId ?? null,
+    disclosureIncluded: false,
+  });
 }
 
 /** The acknowledgment every applicant gets within a minute. Templated, disclosed, idempotent. */
@@ -107,7 +154,7 @@ export async function deliver(
     applicationId: application.id,
     to: input.to,
     from: fromAddress(company, integrations),
-    replyTo: integrations.env.replyTo,
+    replyTo: replyToFor(application, integrations),
     subject: input.subject,
     text: input.text,
     templateKey: input.templateKey,

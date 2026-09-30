@@ -43,7 +43,7 @@ export function cspHeaderName(mode: CspMode): "Content-Security-Policy" | "Conte
 
 export type NormalizedCspReport = { mode: string; surface: "candidate" | "app"; documentPath: string; violatedDirective: string; effectiveDirective: string | null; blockedOrigin: string | null; sourceFile: string | null; lineNumber: number | null; userAgent: string | null };
 
-const TOKEN_PATH = /\/c\/(status|screen|schedule)\/[^/?#]+/g;
+const TOKEN_PATH = /\/c\/(status|screen|schedule|privacy-request\/verify)\/[^/?#]+/g;
 
 /** A request path with every candidate link token replaced by `[token]`: safe for audit records, error reports and logs. */
 export function maskTokenPath(path: string): string {

@@ -44,6 +44,14 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     } else if (p.actionType === "application.invite_screen" || p.actionType === "application.recommend_interview") {
       const verb = p.actionType === "application.invite_screen" ? "Invite to a screen" : "Interview";
       cards.push({ kind: "decision", title: `${verb}? ${role?.title ?? ""}`.trim(), body: p.rationale ?? "", roleId: p.roleId ?? undefined, applicationId: p.applicationId ?? undefined, approvalRequestId: p.id, actions: [{ label: `Yes, ${verb.toLowerCase()}`, method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "approve" } }, { label: "Review first", method: "GET", path: p.applicationId ? `/roles/${p.roleId}/talent?open=${p.applicationId}` : `/roles/${p.roleId}/talent` }] });
+    } else if (p.actionType === "message.send_freeform") {
+      // A message a team member wrote to a candidate, waiting for an approver (F11): the text is on the card, so the decision can be made from here.
+      // Only those who may decide it get the card; the writer, and anyone else the decide route would refuse, are told on the candidate's page instead.
+      if (viewer && !p.requiredRoles.includes(viewer.role)) continue;
+      const m = p.proposal as { subject?: string | null; text?: string; senderName?: string; candidateName?: string };
+      const who = m.candidateName ?? "the candidate";
+      const open = p.applicationId ? `/roles/${p.roleId}/talent?open=${p.applicationId}` : `/roles/${p.roleId}/talent`;
+      cards.push({ kind: "decision", title: `Send this message to ${who}?`, body: `${m.senderName ?? "A team member"} wrote to ${who}${role ? ` about ${role.title}` : ""}${m.subject ? ` ("${m.subject}")` : ""}:\n\n${m.text ?? ""}`, roleId: p.roleId ?? undefined, applicationId: p.applicationId ?? undefined, approvalRequestId: p.id, actions: [{ label: "Yes, send it", method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "approve" } }, { label: "Do not send", method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "reject" } }, { label: "Open the candidate", method: "GET", path: open }] });
     } else {
       // Any other approval: the decide route needs a decision in the body, so the card posts one, and links to the page the request is about.
       const where = p.applicationId ? `/roles/${p.roleId}/talent?open=${p.applicationId}` : p.roleId ? `/roles/${p.roleId}` : null;

@@ -53,6 +53,7 @@ Same local database: a new applicant (Jordan Lee) applied through the public for
 - Owners can invite to a screen, mark for interview, hold, decline with a reason, or ask a recruiter from every candidate; the People page shows the screening conversation, both scorecards, and the assistant's pending suggestions. Home shows "What the assistant did".
 - Stuck-role detector (daily per company): candidates waiting on the owner 3+ days, screen invites unanswered 3+ days, decisions pending 2+ days, no applicants in 14 days. Ladder: brief line → email with a one-tap link → offer of a recruiter (`intervention.offer_recruiter`) → recruiter escalation, with the `intervention.nudge` cooldown (48h) between rungs; interventions resolve when the owner acts.
 - Plan limits: `text_screens` is checked before every invite and metered; exhaustion tells the owner and never pages a recruiter.
+- Insufficient evidence is a state the owner can see (30 September 2026): an assessment that could not say enough (review manually, or "unknown") keeps the candidate in "Waiting on you" as "Needs a closer look", with the open questions in plain words on the Talent card, a filter for those rows, and a notification that names what is missing; "Ask about this in a screen" invites the candidate to a web screen that starts with exactly those questions; assessments say why the confidence is what it is; a résumé file with no text and a missing assessment are both said on the card, not only in the timeline (`apps/api/src/intelligence.test.ts`).
 
 ## Known gaps in Slice 2
 

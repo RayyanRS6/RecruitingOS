@@ -1,7 +1,8 @@
-import { and, eq } from "drizzle-orm";
-import { computeSlots, createEscalation, emit, notify, slotStillFree, transition } from "@ros/core";
-import { applications, candidates, companies, interviewParticipants, interviews, rolePackets, roles } from "@ros/db";
-import { constraintsFor, createInterviewEvents, participantsOf, queueCommunication, sendInterviewConfirmation, sendInterviewReminder, sendSlotsOffered, sendSlotsReminder } from "@ros/agents";
+import { and, eq, inArray } from "drizzle-orm";
+import type { MembershipRole } from "@ros/contracts";
+import { can, computeSlots, createEscalation, emit, notify, slotStillFree, transition } from "@ros/core";
+import { applications, candidates, companies, interviewParticipants, interviews, memberships, rolePackets, roles } from "@ros/db";
+import { composeInterviewerBrief, constraintsFor, createInterviewEvents, participantsOf, queueCommunication, redactBriefPay, renderInterviewerBriefText, sendInterviewConfirmation, sendInterviewReminder, sendSlotsOffered, sendSlotsReminder } from "@ros/agents";
 import { randomToken } from "@ros/db";
 import type { StepContext, WorkflowDefinition } from "../types";
 
@@ -184,9 +185,13 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       if (!(await ctx.alreadyDone("confirm"))) {
         await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.confirmed", title: `Interview booked: ${b.candidate.firstName} ${b.candidate.lastName}, ${b.iv.title}`, body: `${new Date(b.iv.startsAt!).toLocaleString("en-US", { timeZone: b.company.timezone, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} (${b.company.timezone}).${b.iv.meetingUrl ? ` Join: ${b.iv.meetingUrl}` : ""}`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` }, userIds: b.participants.map((p) => p.userId) });
         await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.confirmed", title: `Interview booked: ${b.candidate.firstName} ${b.candidate.lastName}, ${b.iv.title}`, body: `${new Date(b.iv.startsAt!).toLocaleString("en-US", { timeZone: b.company.timezone, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} with ${b.participants.map((p) => p.firstName).join(", ")}.`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
+        // The interviewer's brief (F7, F8) rides with the confirmation: the round, what it covers, what the evidence says so far. Pay only for roles that may see it.
+        const brief = b.packet ? await composeInterviewerBrief(ctx.q, { applicationId: b.app.id, candidateFirstName: b.candidate.firstName, packet: b.packet, roundKey: b.iv.roundKey }) : null;
+        const memberRoles = new Map((await ctx.q.select({ userId: memberships.userId, role: memberships.role }).from(memberships).where(and(eq(memberships.companyId, ctx.companyId), inArray(memberships.userId, b.participants.map((p) => p.userId))))).map((m) => [m.userId, m.role as MembershipRole]));
         for (const p of b.participants) {
+          const mine = brief ? (can(memberRoles.get(p.userId) ?? null, "compensation.read") ? brief : redactBriefPay(brief)) : null;
           // Team mail leaves through the outbox too: recorded here, sent after this step commits, never twice per attempt.
-          await queueCommunication(ctx.q, ctx.services.integrations, { channel: "email", companyId: ctx.companyId, to: p.email, from: `${ctx.services.integrations.env.productName} <${ctx.services.integrations.env.fromAddress}>`, subject: `Interview booked: ${b.candidate.firstName} ${b.candidate.lastName} for ${b.role.title}`, text: `${b.iv.title} on ${new Date(b.iv.startsAt!).toLocaleString("en-US", { timeZone: b.company.timezone, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} (${b.company.timezone}).${b.iv.meetingUrl ? `\nJoin: ${b.iv.meetingUrl}` : ""}\n\nOpen: ${ctx.services.env.appBaseUrl}/interviews/${b.iv.id}`, templateKey: "interview_confirmed_interviewer", idempotencyKey: `iv_confirm_int:${b.iv.id}:${b.iv.attempt}:${p.userId}`, tags: { template: "interview_confirmed_interviewer" }, actor: ctx.actor, correlationId: ctx.run.id }, ctx.now);
+          await queueCommunication(ctx.q, ctx.services.integrations, { channel: "email", companyId: ctx.companyId, to: p.email, from: `${ctx.services.integrations.env.productName} <${ctx.services.integrations.env.fromAddress}>`, subject: `Interview booked: ${b.candidate.firstName} ${b.candidate.lastName} for ${b.role.title}`, text: `${b.iv.title} on ${new Date(b.iv.startsAt!).toLocaleString("en-US", { timeZone: b.company.timezone, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} (${b.company.timezone}).${b.iv.meetingUrl ? `\nJoin: ${b.iv.meetingUrl}` : ""}\n\nOpen: ${ctx.services.env.appBaseUrl}/interviews/${b.iv.id}${mine ? `\n\n${renderInterviewerBriefText(mine)}` : ""}`, templateKey: "interview_confirmed_interviewer", idempotencyKey: `iv_confirm_int:${b.iv.id}:${b.iv.attempt}:${p.userId}`, tags: { template: "interview_confirmed_interviewer" }, actor: ctx.actor, correlationId: ctx.run.id }, ctx.now);
         }
       }
       await emit(ctx.q, { type: "interview.confirmed", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { startsAt: b.iv.startsAt, attempt: ctx.state.attempt }, correlationId: ctx.run.id });

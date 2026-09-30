@@ -6,6 +6,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { InvitationRefused, audit, consumeMagicLink, createMagicLink, escapeHtml, findInvitationByToken, hashInvitationToken, invitationState, isStaffAccount, newMfaTransactionId, normalizeEmail, revokeSession, roleInWords, sealMfaTransaction, setActiveCompany, SignInRefused, MFA_TRANSACTION_TTL_MS } from "@ros/core";
 import { companies, memberships, users, withPlatform } from "@ros/db";
 import { mfaRoutes } from "./auth-mfa";
+import { REAUTH_STATE_SUFFIX, completeReauth, readReauthMarker } from "./auth-sessions";
 import { renderSignInLinkPage } from "../pages/signin-link";
 import { renderInvitePage, type InvitePageProps } from "../pages/invite";
 import { MFA_COOKIE, clearInviteCookie, mfaCookieOptions, needsSecondFactor, openSession, readInviteCookie, sessionCookieOptions, setInviteCookie, signInPolicy } from "./auth-shared";
@@ -64,6 +65,9 @@ authRoutes.get("/callback", async (c) => {
   try {
     const { accessToken } = await container.integrations.identity.exchangeCode({ code, codeVerifier: verifier });
     const identity = await container.integrations.identity.verify(accessToken);
+    // "Confirm it's you" (audit finding A12): a flow marked reauth=1 stamps the session already open instead of opening one.
+    const reauth = readReauthMarker(c, container);
+    if (reauth && returnedState.endsWith(REAUTH_STATE_SUFFIX)) return await completeReauth(c, container, { identity, marker: reauth, returnedState });
     if (await needsSecondFactor(container, identity)) {
       // Microsoft has vouched for an ITS staff member; the authenticator step opens the session, not this route.
       deleteCookie(c, PKCE_COOKIE, { path: "/" });
@@ -173,7 +177,7 @@ authRoutes.get("/consume", async (c) => {
 async function consumeWithInvitation(c: Context<Vars>, container: Container, token: string) {
   const invitationTokenHash = readInviteCookie(c, container);
   try {
-    const result = await withPlatform(container.db, (tx) => consumeMagicLink(tx, { token, ip: clientIp(c), userAgent: c.req.header("user-agent"), invitationTokenHash }));
+    const result = await withPlatform(container.db, (tx) => consumeMagicLink(tx, { token, ip: clientIp(c), userAgent: c.req.header("user-agent"), invitationTokenHash, openedAt: container.engine.clock() }));
     if (invitationTokenHash) clearInviteCookie(c, container);
     return result;
   } catch (err) {

@@ -104,8 +104,8 @@ Defaults are the local development values. "prod" in the Required column means t
 | `POSTMARK_WEBHOOK_SECRET` | when postmark | | Bounce, complaint and delivery webhooks |
 | `EMAIL_FROM_DOMAIN` | prod | `mail.localhost` | Sending domain (SPF, DKIM, DMARC at the provider) |
 | `EMAIL_FROM_ADDRESS` | prod | `updates@<EMAIL_FROM_DOMAIN>` | The single sending address; display names name the customer's hiring team |
-| `EMAIL_REPLY_TO` | prod | `ITS_QUEUE_EMAIL` | Monitored ITS mailbox for candidate replies until the platform inbox exists |
-| `EMAIL_INTAKE_DOMAIN` | | `intake.localhost` | Per-role intake addresses |
+| `EMAIL_REPLY_TO` | prod | `ITS_QUEUE_EMAIL` | Monitored ITS mailbox for candidate replies while the inbound domain is not configured; a person reads it. With the inbound domain live, every candidate email carries a per-application `reply-<token>@` address and replies come back into the product (docs/runbooks/candidate-replies.md) |
+| `EMAIL_INTAKE_DOMAIN` | | `intake.localhost` | Per-role intake addresses and per-application reply addresses |
 | `ITS_QUEUE_EMAIL` | prod | `recruiters@its.localhost` | The ITS queue mailbox: recruiter requests, administrator changes, ended access |
 | `PRIVACY_EMAIL` | | `privacy@identifiedtalent.com` | The privacy-request address shown to candidates |
 | `PRODUCT_NAME` | | `Recruiting OS` | Internal product name in owner- and staff-facing system mail |

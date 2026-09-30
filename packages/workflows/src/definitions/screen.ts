@@ -1,12 +1,13 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { ScreenAssessment, ScreenChannel, ScreenTurn } from "@ros/contracts";
 import type { RunOutcome } from "@ros/ai";
 import { emit, entitlements, gate, nextContactWindow, notify, transition } from "@ros/core";
 import { applications, assessments, candidates, companies, rolePackets, roles, screens, type Tx } from "@ros/db";
-import { applyScreenOpening, assessScreen, createScreen, prepareScreenOpening, sendScreenInvite, sendScreenReminder } from "@ros/agents";
+import { applyScreenOpening, assessScreen, createScreen, focusQuestionsFrom, packetForFocusedInvite, prepareScreenOpening, sendScreenInvite, sendScreenReminder, type FocusQuestion } from "@ros/agents";
 import { twoPhase, type WorkflowDefinition } from "../types";
 
-type State = { applicationId: string; roleId: string; screenId?: string; channel?: "web" | "sms"; invitedBy?: string; remindedAt?: string };
+/** `focus: "unknowns"` ("Ask about this in a screen"): the screen opens with the résumé assessment's open questions before the packet's own. */
+type State = { applicationId: string; roleId: string; screenId?: string; channel?: "web" | "sms"; invitedBy?: string; remindedAt?: string; focus?: "unknowns" };
 
 const INVITE_WAIT_HOURS = 48;
 const REMIND_WAIT_HOURS = 72;
@@ -34,13 +35,14 @@ export const screen: WorkflowDefinition<State> = {
           const ent = await entitlements.check(q, ctx.companyId, "text_screens", 1);
           if (!ent.ok && company.planKey !== "design_partner") return null;
           const channel = chooseChannel(ctx.state.channel, candidate);
-          if (channel === "sms" && nextContactWindow(ctx.now, company.timezone).getTime() > ctx.now.getTime()) return { channel, needsOpening: false }; // quiet hours: the run waits
+          if (channel === "sms" && nextContactWindow(ctx.now, company.timezone, company.settings.businessHours).getTime() > ctx.now.getTime()) return { channel, needsOpening: false }; // quiet hours: the run waits
           const existing = (await q.select().from(screens).where(and(eq(screens.applicationId, app.id), eq(screens.status, "invited"))).limit(1))[0];
-          return { channel, needsOpening: channel === "sms", existing: existing ?? null };
+          const focusQuestions = ctx.state.focus === "unknowns" && !existing ? await focusQuestionsFor(q, app.id) : null;
+          return { channel, needsOpening: channel === "sms", existing: existing ?? null, focusQuestions };
         });
         if (!plan) return { channel: "web", opening: null };
         if (!plan.needsOpening) return { channel: plan.channel, opening: null };
-        const opening = await prepareScreenOpening(ctx.db, ctx.services.ai, { companyId: ctx.companyId, applicationId: ctx.state.applicationId, channel: plan.channel, workflowRunId: ctx.run.id, screen: plan.existing ?? null });
+        const opening = await prepareScreenOpening(ctx.db, ctx.services.ai, { companyId: ctx.companyId, applicationId: ctx.state.applicationId, channel: plan.channel, workflowRunId: ctx.run.id, screen: plan.existing ?? null, focusQuestions: plan.focusQuestions ?? null });
         return { channel: plan.channel, opening };
       },
       async run(ctx, prepared) {
@@ -61,11 +63,13 @@ export const screen: WorkflowDefinition<State> = {
         }
         const channel = chooseChannel(ctx.state.channel, candidate);
         if (channel === "sms") {
-          const allowed = nextContactWindow(ctx.now, company.timezone);
-          if (allowed.getTime() > ctx.now.getTime()) return { kind: "wait", wait: { kind: "timer", until: allowed.toISOString(), reason: "quiet hours: texts go out between 8:00 and 21:00 local time" }, resumeStep: "invite" };
+          const allowed = nextContactWindow(ctx.now, company.timezone, company.settings.businessHours);
+          if (allowed.getTime() > ctx.now.getTime()) return { kind: "wait", wait: { kind: "timer", until: allowed.toISOString(), reason: "quiet hours: texts go out between 8:00 and 21:00 local time, inside the company's contact hours" }, resumeStep: "invite" };
         }
         const expiresAt = new Date(ctx.now.getTime() + (INVITE_WAIT_HOURS + REMIND_WAIT_HOURS) * 3600_000).toISOString();
-        const scr = await createScreen(ctx.q, { companyId: ctx.companyId, applicationId: app.id, channel, workflowRunId: ctx.run.id, expiresAt, now: ctx.now });
+        // "Ask about this in a screen": the open questions are fixed on the screen now, so a later assessment never changes a conversation under way.
+        const focusQuestions = ctx.state.focus === "unknowns" ? await focusQuestionsFor(ctx.q, app.id) : null;
+        const scr = await createScreen(ctx.q, { companyId: ctx.companyId, applicationId: app.id, channel, workflowRunId: ctx.run.id, expiresAt, now: ctx.now, focusQuestions });
         let opening: string | null = null;
         if (channel === "sms") {
           if (prepared.channel !== "sms") return { kind: "fail", error: "the channel changed after the read phase; preparing the opening again", retryable: true };
@@ -74,12 +78,13 @@ export const screen: WorkflowDefinition<State> = {
           opening = o.message;
         }
         if (!(await ctx.alreadyDone("invite"))) {
-          const sent = await sendScreenInvite(ctx.q, ctx.services.integrations, { application: app, candidate, role, company, packet, actor: ctx.actor, correlationId: ctx.run.id, appBaseUrl: ctx.services.env.jobsBaseUrl, screen: { id: scr.id, token: scr.token, channel }, opening });
+          // A focused screen's invitation counts the open questions and says the conversation starts with them.
+          const sent = await sendScreenInvite(ctx.q, ctx.services.integrations, { application: app, candidate, role, company, packet: packetForFocusedInvite(packet, scr.progress), actor: ctx.actor, correlationId: ctx.run.id, appBaseUrl: ctx.services.env.jobsBaseUrl, screen: { id: scr.id, token: scr.token, channel }, opening });
           if (sent.email.status === "failed" && !candidate.email && channel !== "sms") return { kind: "fail", error: "candidate has no email and no SMS consent; nobody can be reached", retryable: false };
           await entitlements.record(ctx.q, ctx.companyId, "text_screens", 1, "screen", { screenId: scr.id });
         }
         if (app.stage !== "screen_invited") await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "screen_invited", by: "system", actor: ctx.actor, correlationId: ctx.run.id });
-        await emit(ctx.q, { type: "screen.invited", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "screen", id: scr.id }, payload: { channel, applicationId: app.id, invitedBy: ctx.state.invitedBy ?? "system" }, correlationId: ctx.run.id });
+        await emit(ctx.q, { type: "screen.invited", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "screen", id: scr.id }, payload: { channel, applicationId: app.id, invitedBy: ctx.state.invitedBy ?? "system", focus: ctx.state.focus ?? null, focusQuestions: scr.progress.focusQuestions?.length ?? 0 }, correlationId: ctx.run.id });
         return { kind: "wait", wait: { kind: "event", eventTypes: ["started", "completed", "human"], subjectId: `screen:${scr.id}`, until: new Date(ctx.now.getTime() + INVITE_WAIT_HOURS * 3600_000).toISOString(), reason: "waiting for the candidate to start; reminder after 48h" }, state: { screenId: scr.id, channel }, resumeStep: "after_invite" };
       },
     }),
@@ -103,7 +108,7 @@ export const screen: WorkflowDefinition<State> = {
       const [scr] = await ctx.q.select().from(screens).where(eq(screens.id, ctx.state.screenId!)).limit(1);
       if (scr?.status !== "invited") return { kind: "next", step: "after_invite" };
       if (scr.channel === "sms") {
-        const allowed = nextContactWindow(ctx.now, b.company.timezone);
+        const allowed = nextContactWindow(ctx.now, b.company.timezone, b.company.settings.businessHours);
         if (allowed.getTime() > ctx.now.getTime()) return { kind: "wait", wait: { kind: "timer", until: allowed.toISOString(), reason: "quiet hours" }, resumeStep: "remind" };
       }
       await sendScreenReminder(ctx.q, ctx.services.integrations, { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet: b.packet, actor: ctx.actor, correlationId: ctx.run.id, appBaseUrl: ctx.services.env.jobsBaseUrl, screen: { id: scr.id, token: scr.token, channel: scr.channel as "web" | "sms" } });
@@ -199,6 +204,12 @@ export const screen: WorkflowDefinition<State> = {
     },
   },
 };
+
+/** The open questions of the latest résumé assessment, as the first questions of a focused screen. */
+async function focusQuestionsFor(q: Tx, applicationId: string): Promise<FocusQuestion[]> {
+  const [latest] = await q.select({ result: assessments.result }).from(assessments).where(and(eq(assessments.applicationId, applicationId), eq(assessments.kind, "triage"))).orderBy(desc(assessments.createdAt)).limit(1);
+  return focusQuestionsFrom(latest?.result.unknowns ?? []);
+}
 
 /** Text when the candidate agreed to texts and has a number and has not opted out; otherwise the web chat by email. */
 function chooseChannel(preferred: "web" | "sms" | undefined, candidate: typeof candidates.$inferSelect): ScreenChannel {

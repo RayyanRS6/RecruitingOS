@@ -24,7 +24,7 @@ export async function sendPrivacyAcknowledgment(q: Queryable, integrations: Inte
 
 We received your request for ${KIND_TEXT[row.kind] ?? row.kind} regarding your application with ${input.companyName}.
 
-${row.verificationStatus === "verified_by_link" ? "Because it came through your own status link, no further verification is needed." : `To protect your information we will confirm it came from you before acting; reply from the address you applied with if you have not already.`}
+${row.verificationStatus === "verified_by_link" ? (row.channel === "email_form" ? "Because you confirmed this request from your email address, no further verification is needed." : "Because it came through your own status link, no further verification is needed.") : `To protect your information we will confirm it came from you before acting; reply from the address you applied with if you have not already.`}
 We will complete it by ${due} and confirm when it is done. Reference: ${row.id.slice(0, 8)}.
 
 Questions? Write to ${input.privacyEmail}.

@@ -4,11 +4,12 @@ import { MAX_RESUME_BYTES, type Actor } from "@ros/contracts";
 import { notify, recordWebhookReceipt } from "@ros/core";
 import { handleEmailEvent } from "@ros/agents";
 import { inboundEmails, notifications, postings, roles, withPlatform, withTenant, type Tx } from "@ros/db";
-import { extractApplicantFromInbound, extractIntakeToken, parsePostmarkEvent, parsePostmarkInbound, verifyPostmarkWebhookAuth, type InboundEmail } from "@ros/integrations";
+import { extractApplicantFromInbound, extractIntakeToken, extractReplyToken, parsePostmarkEvent, parsePostmarkInbound, verifyPostmarkWebhookAuth, type InboundEmail } from "@ros/integrations";
 import type { Container } from "../container";
 import type { Vars } from "../middleware/session";
 import { createApplication, type NewApplication, type ResumeInput } from "../services/applications";
 import { handleSubscriptionChange } from "../services/email-subscriptions";
+import { receiveCandidateReply } from "../services/replies";
 
 type RoleRow = typeof roles.$inferSelect;
 type InboundRow = typeof inboundEmails.$inferSelect;
@@ -40,6 +41,13 @@ postmarkWebhook.post("/inbound", async (c) => {
   const mail = parsePostmarkInbound(payload);
   const token = extractIntakeToken(mail.to, container.integrations.env.intakeDomain);
   const [inbound] = await container.db.insert(inboundEmails).values({ toAddress: mail.to, fromAddress: mail.from, subject: mail.subject, parsed: { text: mail.text.slice(0, 20000), attachments: mail.attachments.map((a) => ({ filename: a.filename, contentType: a.contentType, sizeBytes: a.sizeBytes })) }, status: "received" }).returning();
+  // A candidate's reply to one of our emails (F12): the per-application address names the application; the reply is
+  // recorded on it and the team told (services/replies.ts). Never an application, whatever the body says.
+  const replyToken = extractReplyToken(mail.to, container.integrations.env.intakeDomain);
+  if (replyToken) {
+    const outcome = await receiveCandidateReply(container, { inbound, mail, replyToken });
+    return c.json(outcome.body, outcome.status as 200 | 202);
+  }
   if (!token) {
     await container.db.update(inboundEmails).set({ status: "unmatched", error: "no intake token in recipient address" }).where(eq(inboundEmails.id, inbound.id));
     return c.json({ ok: true, matched: false });

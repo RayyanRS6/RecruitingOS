@@ -8,6 +8,7 @@ import { emit } from "./events";
 import { addBusinessHours, slaBusinessHours } from "./business-hours";
 import { loadBusinessCalendar } from "./business-calendar";
 import { defaultUrgency, genericSummary, requiredExpertise, type EscalationUrgency } from "./escalation-preview";
+import { screenAnswersOf } from "./screen-answers";
 
 /**
  * "Ask a recruiter." Captures the complete context so the recruiter never has to ask
@@ -83,7 +84,7 @@ export async function buildEscalationContext(q: Queryable, companyId: string, ro
       ctx.candidate = cand ? { id: cand.id, name: `${cand.firstName} ${cand.lastName}`, email: cand.email, phone: cand.phone, locationText: cand.locationText, consent: cand.consent, preferences: cand.preferences } : null;
       ctx.resumeText = docs.find((d) => d.kind === "resume")?.textExtracted ?? null;
       ctx.assessments = asmts.map((a) => ({ kind: a.kind, overall: a.overall, confidence: a.confidence, result: a.result, createdAt: a.createdAt }));
-      ctx.screens = scr.map((s) => ({ channel: s.channel, status: s.status, transcript: s.transcript, answers: s.answers }));
+      ctx.screens = scr.map((s) => ({ channel: s.channel, status: s.status, transcript: s.transcript, answers: screenAnswersOf(s) }));
       ctx.interviews = ivs.map((i) => ({ roundKey: i.roundKey, title: i.title, status: i.status, startsAt: i.startsAt }));
       ctx.scorecards = cards.map((c) => ({ interviewId: c.interviewId, status: c.status, entries: c.entries, recommendation: c.recommendation }));
       ctx.communications = comms.map((c) => ({ direction: c.direction, channel: c.channel, subject: c.subject, body: c.bodyText, status: c.status, at: c.createdAt }));

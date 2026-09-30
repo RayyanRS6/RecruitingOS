@@ -50,15 +50,22 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
 
   const MARIA_RESUME = `Maria Reyes, RDH\nmaria.reyes@example.com | (949) 555-0100\n\nRegistered Dental Hygienist at Smile Bright Dental 2019 - present\nDental Hygienist at Coastal Family Dentistry 2015 - 2019\n\nLicenses: RDH license CA #RDH12345, active\nCertifications: BLS/CPR current\nSkills: Dentrix, periodontal charting, digital radiography, perio maintenance`;
 
+  // The owner signs in with an email link. A rule change (PUT /policies) is refused from a session older than thirty
+  // minutes (audit finding A12), so after a step has moved the clock by days she signs in again before changing one.
+  const signIn = async () => {
+    const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "dana@brightline.test" }) });
+    const { devLink } = (await r1.json()) as { devLink: string };
+    const consume = await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: new URL(devLink).searchParams.get("token") }) });
+    cookie = consume.headers.get("set-cookie")!.split(";")[0];
+  };
+
   beforeAll(async () => {
     // Texting on: this file covers the SMS screening path (decision M2 keeps texting off by default).
     container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SMS_ENABLED: "true" } });
     app = createApp(container);
     setClock(0);
-    const { devLink } = (await (await json("POST", "/api/v1/auth/magic-link", { email: "dana@brightline.test" })).json()) as { devLink: string };
-    const consume = await json("POST", "/api/v1/auth/magic-link/consume", { token: new URL(devLink).searchParams.get("token") });
-    cookie = consume.headers.get("set-cookie")!.split(";")[0];
-    const co = (await (await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "100-199", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { slug: string };
+    await signIn();
+    const co =(await (await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "100-199", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { slug: string };
     slug = co.slug;
     const c1 = (await (await json("POST", "/api/v1/intake/conversation/messages", { message: "I need a dental hygienist in Irvine. Full time. $45 to $55 an hour. I need someone who can start within 30 days." })).json()) as { intakeSessionId: string };
     await json("POST", `/api/v1/intake/sessions/${c1.intakeSessionId}/messages`, { message: "It's a replacement, our hygienist moved. Ceiling is $58. Interviewers: Dr. Chen and me. I decide. Must-haves: active CA RDH license, perio experience. Deal-breakers: can't work Saturdays." });
@@ -272,7 +279,8 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
 
   let omarId = "";
   it("lets the owner decide directly when the policy is human-only: mark for interview, and refuse an invite at the wrong stage", async () => {
-    await json("PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "human_only", approverRoles: [] });
+    await signIn(); // days have passed on the clock since she signed in: a rule change needs a fresh sign-in (A12)
+    expect((await json("PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "human_only", approverRoles: [] })).status).toBe(200);
     const a = await apply({ first: "Omar", last: "Haddad", email: "omar@example.com", resume: "Omar Haddad\nRegistered Dental Hygienist at Lakeside Dental 2016 - present\nRDH license CA active\nPerio charting, Open Dental" });
     omarId = a.id;
     expect(a.stage).toBe("triaged");
@@ -283,7 +291,7 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect((await reload(a.id)).stage).toBe("interview_recommended");
     expect((await eventsOf("candidate.recommended")).some((e) => e.subjectId === a.id && e.actor.kind === "user")).toBe(true);
     expect((await json("POST", `/api/v1/applications/${a.id}/actions`, { action: "invite_screen" })).status).toBe(409);
-    await json("PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "auto_notify", approverRoles: [] });
+    expect((await json("PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "auto_notify", approverRoles: [] })).status).toBe(200);
   });
 
   it("nudges up the ladder when candidates wait on the owner, ends with a recruiter, and resolves when the owner acts", async () => {
@@ -336,7 +344,8 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     await ent.applyPlan(container.db, co.id, "design_partner");
     const [row] = await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, co.id), eq(entitlements.key, "text_screens")));
     await container.db.update(entitlements).set({ used: row.limit! }).where(eq(entitlements.id, row.id));
-    await json("PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "auto_notify", approverRoles: [] });
+    await signIn(); // the nudges test moved the clock by days: a rule change needs a fresh sign-in (A12)
+    expect((await json("PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "auto_notify", approverRoles: [] })).status).toBe(200);
     const a = await apply({ first: "Lena", last: "Park", email: "lena.park@example.com", resume: "Lena Park\nRegistered Dental Hygienist at Coastal Dental 2018 - present\nRDH license CA active\nPerio therapy and patient education" });
     expect(a.stage).toBe("screen_invited");
     expect(await container.db.select().from(screens).where(eq(screens.applicationId, a.id))).toHaveLength(1);

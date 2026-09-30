@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import type { EvidenceAssessment, ResumeExtraction } from "@ros/contracts";
 import type { RunOutcome } from "@ros/ai";
-import { createEscalation, evaluateEligibility, emit, gate, notify, resolvePolicy, transition } from "@ros/core";
+import { ASSESSMENT_UNAVAILABLE_TEXT, RESUME_UNREADABLE_TEXT, createEscalation, evaluateEligibility, emit, gate, notify, resolvePolicy, transition } from "@ros/core";
 import { applications, assessments, candidates, companies, documents, rolePackets, roles, type Tx } from "@ros/db";
 import { assessApplication, extractResume, sendAcknowledgment } from "@ros/agents";
 import { twoPhase, type WorkflowDefinition } from "../types";
@@ -184,17 +184,19 @@ export const applicationIntake: WorkflowDefinition<State> = {
       async run(ctx, prepared) {
         const loaded = await load(ctx.q, ctx.state.applicationId);
         if (!loaded) return { kind: "fail", error: "application not found", retryable: false };
-        const { app } = loaded;
+        const { app, candidate, role } = loaded;
         if (app.stage !== "eligible") return { kind: "complete" }; // ineligible held for review, or already moved by a human
         if (app.latestAssessmentId) return { kind: "next", step: "after_triage" };
         if (!prepared) return { kind: "fail", error: "the application became eligible after the read phase; assessing again", retryable: true };
         const out = prepared.out;
         if (!out.ok) {
           if (out.reason === "error") return { kind: "fail", error: out.error, retryable: true };
-          // Invalid or refused twice: the owner reviews without an assessment; nothing is hidden.
+          // Invalid or refused twice: the owner reviews without an assessment; nothing is hidden, and the owner is told in so many words.
           await emit(ctx.q, { type: "ai.output_invalid", companyId: ctx.companyId, actor: { kind: "agent", id: "triage", runId: out.runId }, subject: { type: "application", id: app.id }, payload: { error: out.error, reason: out.reason }, correlationId: ctx.run.id });
           await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, reason: "assessment unavailable; manual review", correlationId: ctx.run.id });
           await emit(ctx.q, { type: "application.triaged", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { assessmentId: null, recommendation: "review_manually", reason: "assessment unavailable" }, correlationId: ctx.run.id });
+          const name = `${candidate.firstName} ${candidate.lastName}`;
+          await notify(ctx.q, { companyId: ctx.companyId, kind: "application.assessment_unavailable", title: `We could not assess ${name} automatically; please review`, body: `${ASSESSMENT_UNAVAILABLE_TEXT} The assistant's answer was not usable after two tries. Nothing is hidden: the application, the résumé and the answers are on ${candidate.firstName}'s page.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
           return { kind: "complete" };
         }
         const [row] = await ctx.q
@@ -218,8 +220,20 @@ export const applicationIntake: WorkflowDefinition<State> = {
       const [asmt] = await ctx.q.select().from(assessments).where(eq(assessments.id, app.latestAssessmentId)).limit(1);
       const rec = (asmt?.result as { recommendation?: string } | undefined)?.recommendation;
       const name = `${candidate.firstName} ${candidate.lastName}`;
+      if (rec === "hold") {
+        await notify(ctx.q, { companyId: ctx.companyId, kind: "application.needs_review", title: `${name} needs your review`, body: `The assessment found weak evidence for ${role.title}: ${asmt?.result.summary ?? ""}`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
+        return { kind: "complete" };
+      }
       if (rec !== "screen") {
-        await notify(ctx.q, { companyId: ctx.companyId, kind: "application.needs_review", title: `${name} needs your review`, body: rec === "hold" ? `The assessment found weak evidence for ${role.title}: ${asmt?.result.summary ?? ""}` : `Not enough to assess automatically: ${asmt?.result.summary ?? "no resume text"}`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
+        // Insufficient evidence: say what is missing in plain words (the open questions), and what the owner can do about it.
+        const unknowns = asmt?.result.unknowns.map((u) => u.question) ?? [];
+        const unreadable = await resumeUnreadable(ctx.q, app);
+        const body = [
+          unreadable ? RESUME_UNREADABLE_TEXT : "",
+          unknowns.length ? `Open questions: ${unknowns.join(" ")}` : `Not enough to assess automatically: ${asmt?.result.summary ?? "no résumé text"}`,
+          "Ask about it in a short screen, or review the application yourself.",
+        ].filter(Boolean).join(" ");
+        await notify(ctx.q, { companyId: ctx.companyId, kind: "application.needs_review", title: `${name} needs a closer look`, body, action: { label: "Take a closer look", href: `/roles/${role.id}/talent?open=${app.id}` } });
         return { kind: "complete" };
       }
       const g = await gate(ctx.q, { companyId: ctx.companyId, roleId: role.id, applicationId: app.id, actionType: "application.invite_screen", subject: { type: "application", id: app.id }, proposal: { assessmentId: asmt.id, recommendation: rec }, rationale: `${name} looks like a fit for ${role.title}: ${asmt.result.summary}`, requestedBy: { kind: "agent", id: "triage", runId: asmt.aiRunId ?? undefined }, workflowRunId: ctx.run.id, expiresInHours: 24 * 7 });
@@ -239,6 +253,13 @@ export const applicationIntake: WorkflowDefinition<State> = {
     },
   },
 };
+
+/** A clean résumé file with nothing to read (a scan without a text layer): the assessment used the written answers only. */
+async function resumeUnreadable(q: Tx, app: { resumeDocumentId: string | null; extraction: unknown }): Promise<boolean> {
+  if (!app.resumeDocumentId || app.extraction) return false;
+  const [doc] = await q.select({ status: documents.status, text: documents.textExtracted }).from(documents).where(eq(documents.id, app.resumeDocumentId)).limit(1);
+  return !!doc && doc.status === "clean" && !doc.text;
+}
 
 async function load(q: Tx, applicationId: string) {
   const [app] = await q.select().from(applications).where(eq(applications.id, applicationId)).limit(1);

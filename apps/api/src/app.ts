@@ -8,11 +8,16 @@ import { errorHandler } from "./middleware/errors";
 import { sessionMiddleware, type Vars } from "./middleware/session";
 import { authRoutes } from "./routes/auth";
 import { companyRoutes } from "./routes/companies";
+import { companySettingsRoutes } from "./routes/company-settings";
+import { authSessionRoutes } from "./routes/auth-sessions";
+import { privacyRequestPages } from "./pages/privacy-request";
 import { intakeRoutes } from "./routes/intake";
 import { applicationRoutes, roleRoutes } from "./routes/roles";
 import { postingRoutes } from "./routes/postings";
 import { rolePacketRoutes } from "./routes/role-packets";
 import { reportRoutes } from "./routes/reports";
+import { messageRoutes } from "./routes/messages";
+import { compareRoutes } from "./routes/compare";
 import { approvalRoutes, briefRoutes, escalationRoutes, eventRoutes } from "./routes/approvals-escalations-events";
 import { adminRoutes } from "./routes/admin";
 import { policyRoutes } from "./routes/policies";
@@ -87,12 +92,16 @@ export function createApp(container: Container) {
   });
 
   app.route("/api/v1/auth", authRoutes);
+  app.route("/api/v1/auth", authSessionRoutes);
   app.route("/api/v1/companies", companyRoutes);
+  app.route("/api/v1/companies", companySettingsRoutes);
   app.route("/api/v1/intake", intakeRoutes);
   app.route("/api/v1/roles", roleRoutes);
   app.route("/api/v1/roles", postingRoutes);
   app.route("/api/v1/roles", rolePacketRoutes);
   app.route("/api/v1/roles", reportRoutes);
+  app.route("/api/v1/roles", compareRoutes);
+  app.route("/api/v1/applications", messageRoutes);
   app.route("/api/v1/applications", applicationRoutes);
   app.route("/api/v1/approvals", approvalRoutes);
   app.route("/api/v1/escalations", escalationRoutes);
@@ -113,6 +122,8 @@ export function createApp(container: Container) {
   app.route("/webhooks/postmark", postmarkWebhook);
   app.route("/webhooks/twilio", twilioWebhook);
   app.route("/", candidatePages);
+  // The public privacy-request form and its confirmation link (audit finding D13): pages/privacy-request.tsx.
+  app.route("/", privacyRequestPages);
   // Tracked application links, the sitemap, robots and the public job feeds (docs/spec/20 items 5 to 7): pages/links.tsx and pages/public-feeds.ts.
   app.route("/", linkPages);
   app.route("/", publicFeeds);

@@ -28,15 +28,22 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
   const setClock = (offsetMs: number) => { clockOffset = offsetMs; (container.engine as unknown as { now: () => Date }).now = () => new Date(BASE + clockOffset); };
   const advance = async (ms: number) => { setClock(clockOffset + ms); await container.drain(); };
 
+  // Dana signs in with an email link. A rule change (PUT /policies) is refused from a session older than thirty minutes
+  // (audit finding A12), so once the steps have moved the clock by days she signs in again before changing one.
+  const signIn = async () => {
+    const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "dana@brightline.test" }) });
+    const { devLink } = (await r1.json()) as { devLink: string };
+    const consume = await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: new URL(devLink).searchParams.get("token") }) });
+    cookie = consume.headers.get("set-cookie")!.split(";")[0];
+  };
+
   beforeAll(async () => {
     // Texting on for the scenario: step 5 consents to texts and step 7 runs the screen by SMS (decision M2 keeps texting off by default).
     container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", STORAGE_PROVIDER: "memory", SMS_ENABLED: "true" } });
     app = createApp(container);
     setClock(0);
-    const { devLink } = (await (await json("POST", "/api/v1/auth/magic-link", { email: "dana@brightline.test" })).json()) as { devLink: string };
-    const consume = await json("POST", "/api/v1/auth/magic-link/consume", { token: new URL(devLink).searchParams.get("token") });
-    cookie = consume.headers.get("set-cookie")!.split(";")[0];
-    const co = (await (await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "100-199", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }] })).json()) as { slug: string };
+    await signIn();
+    const co =(await (await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "100-199", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }] })).json()) as { slug: string };
     slug = co.slug;
   });
   afterAll(async () => { await container.close(); });
@@ -355,7 +362,9 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     expect((await json("PUT", "/api/v1/me/availability", { timezone: "America/Los_Angeles", windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 3 })).status).toBe(200);
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { interviews: { plan: Array<{ key: string; title: string }> } } } };
     const round = role.currentPacket.packet.interviews.plan[0];
-    // human approval: the click is the approval; policy interview.request never drops below approval
+    // human approval: the click is the approval; policy interview.request never drops below approval. Steps 10b and 10c
+    // moved the clock by days, so Dana signs in again first: a rule change needs a fresh sign-in (A12).
+    await signIn();
     expect((await json("PUT", "/api/v1/policies", { actionType: "interview.request", level: "auto", approverRoles: [] })).status).toBe(400);
     const r = await json("POST", `/api/v1/applications/${a.id}/interviews`, { roundKey: round.key, interviewerUserIds: [ownerUserId], linkSource: "pasted", meetingUrl: "https://meet.example.com/brightline-rdh" });
     expect(r.status, await r.clone().text()).toBe(201);

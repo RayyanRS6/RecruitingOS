@@ -21,6 +21,7 @@ How to assess:
 - unknowns: the questions a screen should ask, each with why it matters for this role.
 - recommendation: "screen" when the candidate is eligible and overall is strong or potential; "hold" when overall is weak on evidence; "review_manually" when overall is unknown, the resume could not be read, or the information contradicts itself.
 - summary: two or three plain sentences an owner can read in ten seconds. rationale: why the recommendation, citing the findings.
+- confidenceReasons: one to four short plain phrases saying what drives the confidence level, written for an owner who is not a recruiter ("no resume, only the written summary", "two must-haves have no evidence", "the dates in the resume contradict each other", "the resume could not be read"). Leave the list empty only when confidence is high and nothing is missing.
 - secondaryScore (0 to 100) is optional and secondary; the findings are the assessment.
 
 ${FAIRNESS_RULES}`;

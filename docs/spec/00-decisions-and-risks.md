@@ -738,3 +738,30 @@ no Trigger.dev integration, no change to the database-backed worker). Next: the 
 (`docs/runbooks/railway-worker.md`, one screen at a time), then the Supabase Auth redirect allow list for that
 address. Follow-up recorded: Railway's `railway.json` mechanism is deprecated in favour of its Infrastructure as Code
 with legacy support ending 1 December 2026; migrate before then.
+
+**Insufficient evidence as a state, and the one-click follow-up (30 Sep, docs/spec/21 P1, audit findings E1 to E8 and
+J15):** nothing new is stored. "Needs a closer look" is read off the latest résumé assessment wherever the owner meets
+the application (`evidenceView` in packages/core, used by the Talent list payload; the candidate page derives the same
+from the detail it holds in `apps/web/src/evidence.ts`): the application waits for the owner ("triaged") and the
+assistant could not say enough (recommendation `review_manually`, overall "unknown", or no assessment at all because
+the model's answer was unusable twice). The list row carries `evidence` (needs a closer look, the reason in plain words,
+the open questions, the top strength and concern, the confidence reasons, whether the résumé had no text, whether the
+assessment is missing) and the label "Needs a closer look" in place of "Ready for your review"; the Talent page has a
+filter for those rows; the notification names the open questions instead of "not enough to assess". The assessment
+contract gained an optional `confidenceReasons` list (the prompt asks for it; the fake fills it from what it could see;
+code adds a reason when it drops an unverifiable quote). The fake triage handler now follows the prompt's own rule
+(overall "unknown" recommends `review_manually`) and treats a résumé that shows the kind of work but none of the
+must-haves as "potential", so a hygienist's résumé with no licence line still goes to a screen while a résumé about
+other work goes to the owner; a must-have with no evidence yields a concern (no quote, since there is nothing to quote)
+and an open question. "Ask about this in a screen" is the existing `invite_screen` with `focus: "unknowns"` (action
+`ask_in_screen`, capability offered only when the résumé assessment left questions open): the screen workflow fixes the
+open questions on the screen row (`progress.focusQuestions`, keys `unknown_n`) and every reader of the packet sees them
+as the first screening questions; their answers are kept beside the questions, not in `answers`, and every reader (the
+candidate page's "x of N answered" included) merges the two places through `screenAnswersOf` in @ros/core; the
+invitation and the opening say the conversation
+starts with a few quick questions about the candidate's background. The message template stays in coordinator.ts (one
+template): the focused invitation passes a packet whose human-alternative line carries the sentence. Two failure
+branches are now said on the card and in a notification, not only in the timeline: a clean résumé with no text
+("The résumé could not be read; the written answers were used") and no usable assessment after two tries ("We could
+not assess <name> automatically; please review", kind `application.assessment_unavailable`). Tests:
+`apps/api/src/intelligence.test.ts`.

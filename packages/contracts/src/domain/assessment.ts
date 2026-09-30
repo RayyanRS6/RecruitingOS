@@ -51,6 +51,8 @@ export const Finding = z.object({
 export const EvidenceAssessment = z.object({
   overall: Overall,
   confidence: Confidence,
+  /** What drives the confidence level, in plain words ("no résumé, only the written summary", "two must-haves have no evidence"). Optional: older assessments have none. */
+  confidenceReasons: z.array(z.string().min(1).max(200)).max(6).optional(),
   summary: z.string().min(1),
   strengths: z.array(Finding).default([]),
   concerns: z.array(Finding).default([]),

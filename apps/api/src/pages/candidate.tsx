@@ -3,7 +3,7 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { ApplyRequest, CandidateSmsPreference, MAX_RESUME_BYTES, formatPayRange, inspectResumeFile, type RolePacket } from "@ros/contracts";
-import { openScreen, requestHuman, runScreenTurn } from "@ros/agents";
+import { answersOf, focusedPacket, openScreen, requestHuman, runScreenTurn } from "@ros/agents";
 import { STAGE_LABEL, audit, candidateNotices, createDataRequest, emit, fulfilSmsOptOut, fulfilWithdrawal, humanResponseExpectation, loadBusinessCalendar, noticesFor, notify, openHumanReview, resolveJurisdictions, transition, type Notice } from "@ros/core";
 import { CandidatePrivacyRequest } from "@ros/contracts";
 import { sendPrivacyAcknowledgment, sendPrivacyCompletion } from "@ros/agents";
@@ -505,12 +505,13 @@ candidatePages.get("/privacy", async (c) => {
       <p>{n?.text}</p>
       <h2>Your choices</h2>
       <ul class="steps">
-        <li>Ask what we hold about you, correct it, or delete it: email <a href={`mailto:${privacyEmail}`}>{privacyEmail}</a> from the address you applied with (we verify it is you). A person records the request, confirms receipt within one business day, and completes it within the legal deadline.</li>
+        <li>Ask what we hold about you, correct it, or delete it: <a href="/c/privacy-request">use the request form</a> with the address you applied with (we confirm it is you by email), or write to <a href={`mailto:${privacyEmail}`}>{privacyEmail}</a> from that address. A person records the request, confirms receipt within one business day, and completes it within the legal deadline.</li>
         <li>Stop text messages any time by replying STOP.</li>
         <li>Ask to talk to a person instead of an automated conversation by replying HUMAN.</li>
       </ul>
       <h2>Automated tools</h2>
       <p>{noticesFor(["*"]).find((x) => x.key === "ai_use")?.text}</p>
+      <a class="btn" href="/c/privacy-request" style="margin-top:8px">Request, correct or delete my information</a>
     </Layout>,
   );
 });
@@ -553,8 +554,9 @@ candidatePages.get("/c/screen/:token", async (c) => {
     await openScreen(container.db, company.id, screenDeps(container), { screenId: screen.id, actor: { kind: "system", id: "screen_web" } });
     screen = (await container.db.select().from(screens).where(eq(screens.id, screen.id)).limit(1))[0];
   }
-  const total = packet.screening.questions.length;
-  const answered = Object.keys(screen.answers).length;
+  // A screen that opened with the open questions counts them too, so "x of N" matches the "N questions" the invitation promised.
+  const total = focusedPacket(packet, screen.progress).screening.questions.length;
+  const answered = Object.keys(answersOf(screen)).length;
   const err = c.req.query("error");
   const notice = noticesFor(["*"]).find((n) => n.key === "ai_use");
   const calendar = await loadBusinessCalendar(container.db);

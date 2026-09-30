@@ -1,8 +1,8 @@
 import { Hono, type Context } from "hono";
-import { and, desc, eq, inArray } from "drizzle-orm";
-import { CreateCompany, InviteMember, UpdateCompany, UpdateMember } from "@ros/contracts";
-import { assertCan, audit, emit, raiseAlert, setActiveCompany, revokeStaffGrant } from "@ros/core";
-import { auditRecords, companies, entitlements as entitlementRows, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
+import { desc, eq } from "drizzle-orm";
+import { CreateCompany, InviteMember, UpdateMember } from "@ros/contracts";
+import { assertCan, audit, raiseAlert, setActiveCompany, revokeStaffGrant } from "@ros/core";
+import { companies, entitlements as entitlementRows, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
 import { actorOf, requireTenant, requireUser, type Vars } from "../middleware/session";
 import { createCompany } from "../services/companies";
 import { inviteMember, listInvitations, listTeam, resendMemberInvitation, revokeMemberInvitation, updateMember } from "../services/team";
@@ -35,26 +35,8 @@ companyRoutes.get("/current", requireTenant, async (c) => {
   return c.json({ ...row, integrations: container.integrations.statuses(), ai: { provider: container.ai.provider.id } });
 });
 
-companyRoutes.patch("/current", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "company.update");
-  const body = UpdateCompany.parse(await c.req.json());
-  const container = c.get("container");
-  const row = await withTenant(container.db, t.companyId, async (tx) => {
-    const [existing] = await tx.select().from(companies).where(eq(companies.id, t.companyId)).limit(1);
-    const patch: Partial<typeof companies.$inferInsert> = {};
-    if (body.name) patch.name = body.name;
-    if (body.timezone) patch.timezone = body.timezone;
-    if (body.locations) patch.locations = body.locations;
-    if (body.sizeBand) patch.sizeBand = body.sizeBand;
-    if (body.vertical) patch.vertical = body.vertical.toLowerCase();
-    if (body.settings || body.website) patch.settings = { ...existing.settings, ...(body.settings ?? {}), ...(body.website ? { website: body.website } : {}) };
-    const [updated] = await tx.update(companies).set(patch).where(eq(companies.id, t.companyId)).returning();
-    await emit(tx, { type: "company.updated", companyId: t.companyId, actor: actorOf(c), subject: { type: "company", id: t.companyId }, payload: { fields: Object.keys(patch) } });
-    return updated;
-  });
-  return c.json(row);
-});
+// PATCH /current (the typed company preferences), GET /current/audit and /current/audit.csv (the customer's own history)
+// and POST /current/members/:userId/sign-out live in routes/company-settings.ts, mounted after this router.
 
 /** The team (docs/spec/21, area A): active members with their scheduling readiness; never a credential or its reference. */
 companyRoutes.get("/current/members", requireTenant, async (c) => {
@@ -182,20 +164,4 @@ companyRoutes.post("/current/staff-access/:grantId/revoke", requireTenant, async
   }
   await container.integrations.email.send({ to: container.env.ITS_QUEUE_EMAIL, from, subject: `[access ended] ${result.companyName} ended a recruiter's access`, text: `Recruiter: ${result.recruiter?.name ?? result.recruiter?.email ?? result.recruiterUserId}\nReason given by the customer: ${reason}\n${result.escalationId ? `The request is open again in the queue: ${container.env.APP_BASE_URL}/recruiter/queue/${result.escalationId}` : ""}`, idempotencyKey: `grant_revoked_queue:${result.grant.id}`, tags: { template: "staff_access_revoked_queue" } });
   return c.json({ ok: true, grantId: result.grant.id, endedAt: now.toISOString(), escalationId: result.escalationId, recruiterNotified });
-});
-
-/**
- * The customer's own audit history for recruiter access (21 Sep, item 1): who was granted what, when it ended and why,
- * with the person who acted. Members with events.read; never ITS staff acting under a grant.
- */
-const CUSTOMER_AUDIT_ACTIONS = new Set(["staff.access_granted", "staff.access_ended", "staff.access_revoked", "admin.break_glass"]);
-companyRoutes.get("/current/audit", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  if (t.staff) throw new HttpError(403, "forbidden", "Staff cannot read the customer's audit history.");
-  assertCan(t.role, "events.read");
-  const wanted = (c.req.query("actions") ?? "").split(",").map((a) => a.trim()).filter((a) => CUSTOMER_AUDIT_ACTIONS.has(a));
-  const actions = wanted.length ? wanted : [...CUSTOMER_AUDIT_ACTIONS];
-  const limit = Math.min(200, Math.max(1, Number(c.req.query("limit") ?? "50") || 50));
-  const rows = await withTenant(c.get("container").db, t.companyId, (tx) => tx.select({ id: auditRecords.id, action: auditRecords.action, actor: auditRecords.actor, reason: auditRecords.reason, target: auditRecords.target, details: auditRecords.details, createdAt: auditRecords.createdAt }).from(auditRecords).where(and(eq(auditRecords.companyId, t.companyId), inArray(auditRecords.action, actions))).orderBy(desc(auditRecords.createdAt)).limit(limit));
-  return c.json(rows.map((r) => ({ id: r.id, action: r.action, actor: { kind: r.actor.kind, name: r.actor.name ?? null }, reason: r.reason, target: r.target, at: r.createdAt, details: { grantId: (r.details as { grantId?: string }).grantId ?? null, scope: (r.details as { scope?: unknown }).scope ?? null, kind: (r.details as { kind?: string }).kind ?? null } })));
 });

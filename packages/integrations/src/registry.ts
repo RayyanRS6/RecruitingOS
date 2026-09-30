@@ -45,7 +45,8 @@ export type Integrations = {
   analytics: AnalyticsAdapter;
   /** Salt for the keyed analytics identifiers; never the same across environments. */
   analyticsSalt: string;
-  env: { fromDomain: string; fromAddress: string; replyTo: string; intakeDomain: string; appBaseUrl: string; productName: string };
+  /** `emailInConfigured`: the inbound mail domain is real and Postmark delivers to it, so intake addresses and per-application reply addresses work (docs/runbooks/candidate-replies.md). */
+  env: { fromDomain: string; fromAddress: string; replyTo: string; intakeDomain: string; emailInConfigured: boolean; appBaseUrl: string; productName: string };
   /** The clock the outbox stamps its jobs with. The app points it at the workflow engine's clock, so a message queued now is due now on the clock that runs the queue (tests move that clock). */
   clock: () => Date;
   statuses(): Array<{ kind: string; provider: string; status: AdapterStatus }>;
@@ -102,7 +103,7 @@ export function createIntegrations(env: Record<string, string | undefined> = pro
     calendars,
     analytics,
     analyticsSalt: env.ANALYTICS_SALT ?? "dev-only-analytics-salt",
-    env: { fromDomain, fromAddress: env.EMAIL_FROM_ADDRESS ?? `updates@${fromDomain}`, replyTo: env.EMAIL_REPLY_TO ?? env.ITS_QUEUE_EMAIL ?? `updates@${fromDomain}`, intakeDomain, appBaseUrl, productName: env.PRODUCT_NAME ?? "Recruiting OS" },
+    env: { fromDomain, fromAddress: env.EMAIL_FROM_ADDRESS ?? `updates@${fromDomain}`, replyTo: env.EMAIL_REPLY_TO ?? env.ITS_QUEUE_EMAIL ?? `updates@${fromDomain}`, intakeDomain, emailInConfigured, appBaseUrl, productName: env.PRODUCT_NAME ?? "Recruiting OS" },
     clock: () => new Date(),
     statuses: () => [
       { kind: "email", provider: email.id, status: email.status },

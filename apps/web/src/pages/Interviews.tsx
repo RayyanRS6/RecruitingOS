@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "../nav";
 import { Alert, Button, Card, Chip, EmptyState, ErrorState, Field, Sheet, Skeleton, Table, Timeline } from "@ros/ui";
-import { api, ApiError, type InterviewDetail, type InterviewSummary, type Me } from "../api/client";
+import { api, ApiError, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me } from "../api/client";
 import { toast } from "../toast";
 import { canDecideInterviews, canManageInterviews, canSeeTalent } from "../roles";
 
@@ -88,7 +88,11 @@ function InterviewSheet({ id, role, userId }: { id: string; role: string | null;
     <Sheet open onClose={() => nav("/interviews")} title={i ? `${i.candidate.firstName} ${i.candidate.lastName} · ${i.title}` : "Interview"}>
       {q.isLoading || !i ? <Skeleton lines={8} /> : (
         <div className="stack" style={{ gap: 14 }}>
-          <div className="row"><Chip tone={STATUS_TONE[i.status] ?? "neutral"}>{STATUS_LABEL[i.status] ?? i.status}</Chip><span className="small muted">{i.roleTitle} · attempt {i.attempt}</span></div>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <span className="row"><Chip tone={STATUS_TONE[i.status] ?? "neutral"}>{STATUS_LABEL[i.status] ?? i.status}</Chip><span className="small muted">{i.roleTitle} · attempt {i.attempt}</span></span>
+            {canSeeTalent(role) ? <Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}&message=1`} className="btn secondary sm">Message the candidate</Link> : null}
+          </div>
+          {i.brief ? <BriefCard brief={i.brief} /> : null}
           {finished ? (
             <Card needsYou={!i.decision && canDecideInterviews(role)} title="After the interview">
               {i.decision ? (
@@ -140,5 +144,55 @@ function InterviewSheet({ id, role, userId }: { id: string; role: string | null;
         </div>
       )}
     </Sheet>
+  );
+}
+
+const MET_LABEL: Record<string, string> = { yes: "met", partially: "partly met", no: "not met", unknown: "unknown so far" };
+const MET_TONE: Record<string, "good" | "accent" | "caution" | "neutral"> = { yes: "good", partially: "accent", no: "caution", unknown: "neutral" };
+const FINDING_LABEL: Record<string, string> = { evidenced: "seen", partially_evidenced: "partly seen", not_evidenced: "not seen yet", contradicted: "contradicted" };
+const FINDING_TONE: Record<string, "good" | "accent" | "caution" | "neutral"> = { evidenced: "good", partially_evidenced: "accent", not_evidenced: "neutral", contradicted: "caution" };
+
+/** The interviewer's brief (F7): what the round is for, what to look for, what the evidence says so far. No score, no rationale, pay only when the role may see it. */
+function BriefCard({ brief }: { brief: InterviewerBrief }) {
+  return (
+    <Card title={`Your brief: ${brief.round.title}`}>
+      <p className="small" style={{ color: "var(--ink-2)" }}><strong>What this round is for:</strong> {brief.round.purpose}</p>
+      <div className="stack" style={{ gap: 10, marginTop: 10 }}>
+        <div>
+          <h3 className="small" style={{ margin: "0 0 4px" }}>What to look for</h3>
+          <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+            {brief.competencies.map((c) => <li key={c.key}><strong>{c.name}</strong>: {c.definition} <Chip tone={c.finding ? FINDING_TONE[c.finding] ?? "neutral" : "neutral"}>{c.finding ? FINDING_LABEL[c.finding] ?? c.finding : "not assessed yet"}</Chip>{c.note ? <span className="muted"> {c.note}</span> : null}</li>)}
+          </ul>
+        </div>
+        {brief.questions.length ? (
+          <div>
+            <h3 className="small" style={{ margin: "0 0 4px" }}>Questions the plan suggests</h3>
+            <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>{brief.questions.map((qn, i) => <li key={i}>{qn}</li>)}</ul>
+          </div>
+        ) : null}
+        <div>
+          <h3 className="small" style={{ margin: "0 0 4px" }}>Must-haves and what we know</h3>
+          <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+            {brief.mustHaves.map((m) => <li key={m.key}>{m.text} <Chip tone={MET_TONE[m.met] ?? "neutral"}>{MET_LABEL[m.met] ?? m.met}</Chip>{m.quote ? <span className="muted"> "{m.quote}"</span> : null}</li>)}
+          </ul>
+        </div>
+        <div>
+          <h3 className="small" style={{ margin: "0 0 4px" }}>Strengths so far</h3>
+          {brief.strengths.length ? <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>{brief.strengths.map((s, i) => <li key={i}>{s.claim}{s.quote ? <span className="muted"> "{s.quote}"</span> : null}</li>)}</ul> : <p className="small muted" style={{ margin: 0 }}>None recorded yet.</p>}
+        </div>
+        <div>
+          <h3 className="small" style={{ margin: "0 0 4px" }}>Worth exploring</h3>
+          {brief.concerns.length ? <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>{brief.concerns.map((s, i) => <li key={i}>{s.claim}{s.quote ? <span className="muted"> "{s.quote}"</span> : null}</li>)}</ul> : <p className="small muted" style={{ margin: 0 }}>Nothing flagged yet.</p>}
+        </div>
+        {brief.screen?.answers.length ? (
+          <details>
+            <summary className="small">What they said in the screen ({brief.screen.answers.length} answers)</summary>
+            <dl className="kv small" style={{ marginTop: 6 }}>{brief.screen.answers.map((a, i) => <div key={i}><dt>{a.question}</dt><dd>{a.answer}</dd></div>)}</dl>
+          </details>
+        ) : null}
+        {brief.includesPay && brief.pay?.expectation ? <p className="small"><strong>Pay expectation:</strong> {brief.pay.expectation} <Chip tone={brief.pay.withinRange === "yes" ? "good" : brief.pay.withinRange === "unknown" ? "neutral" : "caution"}>{brief.pay.withinRange === "yes" ? "within the range" : brief.pay.withinRange === "unknown" ? "not compared" : `${brief.pay.withinRange} the range`}</Chip></p> : null}
+        <p className="small muted" style={{ margin: 0 }}>The decision after the interview is the hiring team's, recorded with a reason. Nothing here is a score.</p>
+      </div>
+    </Card>
   );
 }

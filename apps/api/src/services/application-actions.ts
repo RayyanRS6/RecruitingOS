@@ -1,9 +1,9 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { z } from "zod";
 import type { Actor, ApplicationAction } from "@ros/contracts";
 import { STAGE_LABEL, assertCan, can, emit, gate, transition } from "@ros/core";
 import type { MembershipRole } from "@ros/contracts";
-import { applications, approvalRequests, candidates, companies, interviews, rolePackets, roles, screens, type Tx } from "@ros/db";
+import { applications, approvalRequests, assessments, candidates, companies, interviews, rolePackets, roles, screens, type Tx } from "@ros/db";
 import { sendDisposition } from "@ros/agents";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
@@ -19,10 +19,13 @@ export const SCREEN_OPEN_STATUSES: readonly string[] = ["invited", "reminded", "
 export const INTERVIEW_ACTIVE_STATUSES: readonly string[] = ["proposed", "scheduling", "scheduled"];
 export const INTERVIEW_DONE_STATUSES: readonly string[] = ["completed", "no_show"];
 
-export type ApplicationCapability = "invite_screen" | "interview" | "advance_to_interview" | "hold" | "reject" | "move_to_talent_pool" | "override_eligibility" | "review_anyway" | "record_decision" | "record_outcome";
+export type ApplicationCapability = "invite_screen" | "ask_in_screen" | "interview" | "advance_to_interview" | "hold" | "reject" | "move_to_talent_pool" | "override_eligibility" | "review_anyway" | "record_decision" | "record_outcome";
 
-/** `role` is the viewer's tenant role when known: the interview capabilities are then limited to roles that hold the matching permission, so a person never sees a card the route would refuse. */
-export type ApplicationFacts = { stage: string; rejectReason: string | null; hasOpenScreen: boolean; hasActiveInterview: boolean; hasUndecidedInterview: boolean; role?: MembershipRole | null };
+/**
+ * `role` is the viewer's tenant role when known: the interview capabilities are then limited to roles that hold the matching permission, so a person never sees a card the route would refuse.
+ * `openUnknowns` is how many questions the latest résumé assessment left open: "Ask about this in a screen" needs at least one.
+ */
+export type ApplicationFacts = { stage: string; rejectReason: string | null; hasOpenScreen: boolean; hasActiveInterview: boolean; hasUndecidedInterview: boolean; role?: MembershipRole | null; openUnknowns?: number };
 
 export function allowedApplicationActions(f: ApplicationFacts): ApplicationCapability[] {
   const out: ApplicationCapability[] = [];
@@ -30,6 +33,8 @@ export function allowedApplicationActions(f: ApplicationFacts): ApplicationCapab
   const mayRequestInterview = !f.role || can(f.role, "interview.request");
   const mayDecide = !f.role || can(f.role, "interview.decide");
   if (["triaged", "eligible", "received", "screen_invited", "screening"].includes(f.stage) && !f.hasOpenScreen) out.push("invite_screen");
+  // The one-click follow-up on an assessment with open questions: the same invitation, opened with those questions.
+  if (out.includes("invite_screen") && (f.openUnknowns ?? 0) > 0) out.push("ask_in_screen");
   if (["triaged", "screen_complete", "interview_recommended", "interview_complete", "eligible", "screen_invited", "screening"].includes(f.stage) && !f.hasActiveInterview && mayRequestInterview) out.push("interview");
   if (["screen_complete", "triaged", "eligible", "screen_invited", "screening"].includes(f.stage)) out.push("advance_to_interview");
   if (!terminal && f.stage !== "talent_pool") out.push("hold", "move_to_talent_pool");
@@ -41,8 +46,8 @@ export function allowedApplicationActions(f: ApplicationFacts): ApplicationCapab
   return out;
 }
 
-/** The facts the list depends on, from rows the caller may already hold. */
-export function applicationFactsFrom(app: Pick<typeof applications.$inferSelect, "stage" | "rejectReason">, screenStatuses: string[], interviewRows: Array<{ status: string; decision: string | null }>, role?: MembershipRole | null): ApplicationFacts {
+/** The facts the list depends on, from rows the caller may already hold. `triage` is the latest résumé assessment when the caller has it; without it "ask in a screen" is not offered. */
+export function applicationFactsFrom(app: Pick<typeof applications.$inferSelect, "stage" | "rejectReason">, screenStatuses: string[], interviewRows: Array<{ status: string; decision: string | null }>, role?: MembershipRole | null, triage?: { result: { unknowns: unknown[] } } | null): ApplicationFacts {
   return {
     stage: app.stage,
     rejectReason: app.rejectReason,
@@ -50,13 +55,15 @@ export function applicationFactsFrom(app: Pick<typeof applications.$inferSelect,
     hasActiveInterview: interviewRows.some((i) => INTERVIEW_ACTIVE_STATUSES.includes(i.status)),
     hasUndecidedInterview: interviewRows.some((i) => INTERVIEW_DONE_STATUSES.includes(i.status) && !i.decision),
     role: role ?? null,
+    openUnknowns: triage?.result.unknowns.length ?? 0,
   };
 }
 
 export async function applicationFacts(tx: Tx, app: Pick<typeof applications.$inferSelect, "id" | "stage" | "rejectReason">, role?: MembershipRole | null): Promise<ApplicationFacts> {
   const scr = await tx.select({ status: screens.status }).from(screens).where(eq(screens.applicationId, app.id));
   const ivs = await tx.select({ status: interviews.status, decision: interviews.decision }).from(interviews).where(eq(interviews.applicationId, app.id));
-  return applicationFactsFrom(app, scr.map((s) => s.status), ivs, role);
+  const [triage] = await tx.select({ result: assessments.result }).from(assessments).where(and(eq(assessments.applicationId, app.id), eq(assessments.kind, "triage"))).orderBy(desc(assessments.createdAt)).limit(1);
+  return applicationFactsFrom(app, scr.map((s) => s.status), ivs, role, triage ?? null);
 }
 
 /** Founder decision (correction 6): candidate-facing decline communication only after the human decision is recorded. */
@@ -82,7 +89,8 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
   const by = t.role;
   const facts = await applicationFacts(tx, app, t.role);
   if (!allowedApplicationActions(facts).includes(body.action)) {
-    if (body.action === "invite_screen" && facts.hasOpenScreen) throw new HttpError(409, "already_invited", "They already have an open screening invitation.");
+    if ((body.action === "invite_screen" || body.action === "ask_in_screen") && facts.hasOpenScreen) throw new HttpError(409, "already_invited", "They already have an open screening invitation.");
+    if (body.action === "ask_in_screen" && !(facts.openUnknowns ?? 0)) throw new HttpError(409, "nothing_to_ask", "The assessment left no open questions to ask about; invite them to the usual screen instead.");
     if (body.action === "override_eligibility") throw new HttpError(409, "invalid", "Only ineligible applications can be overridden.");
     if (body.action === "review_anyway") throw new HttpError(409, "invalid", "Only applications declined on an eligibility answer can be reopened here.");
     throw new HttpError(409, "invalid", `Cannot ${body.action.replace(/_/g, " ")} someone who is ${STAGE_LABEL[app.stage].toLowerCase()}.`);
@@ -126,8 +134,11 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "hold", note: body.note ?? null } });
       return { ok: true, stage: app.stage };
     }
-    case "invite_screen": {
+    case "invite_screen":
+    case "ask_in_screen": {
       assertCan(t.role, "application.act");
+      // "Ask about this in a screen": the same invitation, opened with the assessment's open questions (docs/spec/21, P1).
+      const focus = body.action === "ask_in_screen" || body.focus === "unknowns" ? ("unknowns" as const) : undefined;
       // The owner's click is the approval when a policy asked for one.
       const pend = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.applicationId, app.id), eq(approvalRequests.actionType, "application.invite_screen"), eq(approvalRequests.status, "pending")));
       for (const p of pend) {
@@ -135,9 +146,9 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
         await emit(tx, { type: "approval.granted", companyId: t.companyId, actor, subject: { type: "approval_request", id: p.id }, payload: { actionType: p.actionType }, correlationId: p.workflowRunId });
         await container.engine.signal(tx, { companyId: t.companyId, key: `approval:${p.id}`, payload: { decision: "approved" } });
       }
-      const { runId } = await container.engine.start(tx, { workflowKey: "screen", companyId: t.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: app.roleId, channel: body.channel, invitedBy: t.userId }, idempotencyKey: `screen:${app.id}:${Date.now()}`, actor });
-      await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "invite_screen", channel: body.channel ?? "auto", note: body.note ?? null, workflowRunId: runId } });
-      return { ok: true, stage: app.stage, workflowRunId: runId };
+      const { runId } = await container.engine.start(tx, { workflowKey: "screen", companyId: t.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: app.roleId, channel: body.channel, invitedBy: t.userId, ...(focus ? { focus } : {}) }, idempotencyKey: `screen:${app.id}:${Date.now()}`, actor });
+      await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: body.action, channel: body.channel ?? "auto", focus: focus ?? null, note: body.note ?? null, workflowRunId: runId } });
+      return { ok: true, stage: app.stage, workflowRunId: runId, next: focus ? "Invitation on its way. The screen starts with the open questions from the assessment; the answers land on the candidate's page." : undefined };
     }
     case "advance_to_interview": {
       assertCan(t.role, "application.act");

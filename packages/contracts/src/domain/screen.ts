@@ -27,6 +27,13 @@ export const ScreenProgress = z.object({
   followUps: z.record(z.string(), z.number()).default({}),
   confusedTurns: z.number().int().default(0),
   failures: z.number().int().default(0),
+  /**
+   * "Ask about this in a screen": the résumé assessment's open questions, asked before the packet's own questions
+   * (keys `unknown_1`, `unknown_2`, ...). Fixed when the screen is created so a later assessment never changes a
+   * conversation under way; each answer is recorded beside its question (not in `answers`, which holds the packet's
+   * own; readers merge the two through `screenAnswersOf` in @ros/core). Absent on an ordinary screen.
+   */
+  focusQuestions: z.array(z.object({ key: z.string().min(1), question: z.string().min(1), whyItMatters: z.string().optional(), answer: z.string().optional() })).optional(),
 });
 export type ScreenProgress = z.infer<typeof ScreenProgress>;
 

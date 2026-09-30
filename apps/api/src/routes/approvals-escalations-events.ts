@@ -7,6 +7,7 @@ import { actorOf, clientIp, requireRecruiterOrAdmin, requireTenant, type Vars } 
 import { HttpError } from "../middleware/errors";
 import { composeBrief } from "../services/brief";
 import { assertMayApprovePacket } from "../services/packet-approval";
+import { settleMessageApproval } from "../services/messages";
 
 export const approvalRoutes = new Hono<Vars>();
 
@@ -45,6 +46,8 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
     await tx.update(approvalRequests).set({ status, decidedBy: t.userId, decidedAt: new Date().toISOString(), decisionNote: body.note ?? null, decisionEdits: body.edits ?? null }).where(eq(approvalRequests.id, req.id));
     await emit(tx, { type: body.decision === "approve" ? "approval.granted" : "approval.denied", companyId: t.companyId, actor: actorOf(c), subject: { type: "approval_request", id: req.id }, payload: { actionType: req.actionType, roleId: req.roleId, version: Number.isFinite(proposedVersion) ? proposedVersion : null, note: body.note ?? null }, correlationId: req.workflowRunId });
     await container.engine.signal(tx, { companyId: t.companyId, key: `approval:${req.id}`, payload: { decision: status } });
+    // A message a team member wrote to a candidate (F11): approved, it goes out under their name; declined, they are told.
+    if (req.actionType === "message.send_freeform") await settleMessageApproval(tx, container, { req, status, actor: actorOf(c), tenant: t, note: body.note ?? null });
     if (status === "approved" && req.applicationId) {
       const [app] = await tx.select().from(applications).where(eq(applications.id, req.applicationId)).limit(1);
       if (app && req.actionType === "application.invite_screen") {

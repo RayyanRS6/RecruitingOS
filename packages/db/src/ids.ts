@@ -23,3 +23,22 @@ export function uuidv7(now: number = Date.now()): string {
 export function randomToken(bytes = 24): string {
   return randomBytes(bytes).toString("base64url");
 }
+
+const LOWERCASE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+/**
+ * A random token of lowercase letters and digits only, for tokens that travel in the local part of an email address
+ * (a mail server may lowercase an address, so a case-sensitive token would stop matching). 16 characters give about
+ * 82 bits; the draw is unbiased because 256 is reduced to the alphabet's size before use.
+ */
+export function lowercaseToken(length = 16): string {
+  const out: string[] = [];
+  while (out.length < length) {
+    for (const byte of randomBytes(length)) {
+      if (byte >= 252) continue; // 252 is the largest multiple of 36 below 256; anything above it would skew the draw
+      out.push(LOWERCASE_ALPHABET[byte % LOWERCASE_ALPHABET.length]);
+      if (out.length === length) break;
+    }
+  }
+  return out.join("");
+}

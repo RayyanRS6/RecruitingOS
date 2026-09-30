@@ -91,5 +91,7 @@ export function verifyAssessmentQuotes(a: EvidenceAssessment, sources: Partial<R
     return { ...f, evidence: undefined, met: f.met === "yes" ? ("partially" as const) : f.met };
   });
   const anomalies = dropped ? [...a.anomalies, { kind: "unverified_quote", detail: `${dropped} claim${dropped === 1 ? "" : "s"} cited text that is not in the source and ${dropped === 1 ? "was" : "were"} discarded` }] : a.anomalies;
-  return { ...a, strengths, concerns, competencyFindings, requirementFindings, anomalies };
+  // Dropping a claim lowers what the owner can rely on; say so where the card explains the confidence.
+  const confidenceReasons = dropped ? [...(a.confidenceReasons ?? []), `${dropped === 1 ? "one claim" : `${dropped} claims`} quoted text that is not in the source and ${dropped === 1 ? "was" : "were"} dropped`] : a.confidenceReasons;
+  return { ...a, strengths, concerns, competencyFindings, requirementFindings, anomalies, ...(confidenceReasons ? { confidenceReasons } : {}) };
 }

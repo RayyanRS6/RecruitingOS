@@ -11,6 +11,11 @@ export type CompanySettings = {
   retention?: Record<string, number>;
   careersPage?: { enabled: boolean; intro?: string };
   brief?: { channel: "email" | "in_app" | "sms"; hourLocal: number };
+  /**
+   * When the company wants candidates contacted (audit finding J16): days 0 (Sunday) to 6, and local times "HH:MM".
+   * Narrows the legal quiet-hours window for texts (packages/core/src/contact-hours.ts); never widens it.
+   */
+  businessHours?: { days: number[]; start: string; end: string };
   /** Design Partner pilot term (founder decision F8): roles in progress are never cut off when it ends. */
   pilot?: { startedAt: string; endsAt: string; extendedUntil?: string };
 };
@@ -83,6 +88,8 @@ export const sessions = pgTable(
     identityProvider: text("identity_provider"),
     aal: text("aal"),
     mfaVerifiedAt: ts("mfa_verified_at"),
+    /** When the holder last confirmed with their sign-in provider inside this session (migration 0024); unlocks policy and notice changes for ten minutes. */
+    reauthenticatedAt: ts("reauthenticated_at"),
     revokedAt: ts("revoked_at"),
     createdAt: createdAt(),
   },

@@ -2,7 +2,7 @@ export * from "./types";
 export * from "./registry";
 export { FakeEmailAdapter, FakeSmsAdapter } from "./email/fake";
 export { PostmarkEmailAdapter } from "./email/postmark";
-export { parsePostmarkInbound, extractIntakeToken, intakeAddress, extractApplicantFromInbound } from "./email/inbound";
+export { parsePostmarkInbound, extractIntakeToken, intakeAddress, extractApplicantFromInbound, extractReplyToken, replyAddress } from "./email/inbound";
 export { jobPostingJsonLd, jobValidThrough, schemaEmploymentType, SCHEMA_EMPLOYMENT_TYPE, JOB_VALID_DAYS, EMAIL_IN_NOT_CONFIGURED, type JobPostingJsonLdInput } from "./jobboards/native";
 export { linkedInFeedXml, jobFeedXml, jobFeedJson, feedSalaryText, type FeedJob, type FeedMeta } from "./jobboards/external";
 export { RealUrlVerifier, FakeUrlVerifier, titleMatches, normalizeForTitleMatch, LINK_CHECK_USER_AGENT, LINK_CHECK_TIMEOUT_MS, LINK_CHECK_MAX_BYTES, type UrlVerifier, type VerifyResult, type FakeAnswer } from "./jobboards/verify";

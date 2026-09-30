@@ -220,7 +220,7 @@ Founder P0 actions are in section 10. Counsel or the founder's written acceptanc
 - Company preferences screen: notices (audited), business hours, editable company details with a typed contract.
 - Named decision maker becomes an approver; self-approval rule. Built 30 September 2026 (area B in the shortfalls table above).
 - Free-form owner-to-candidate message under the existing policy.
-- Insufficient evidence as an explicit state that offers a one-click follow-up question.
+- Insufficient evidence as an explicit state that offers a one-click follow-up question. Built 30 September 2026: "Needs a closer look" on the Talent list (label, filter chip, what is missing in plain words) and in the notification, "Ask about this in a screen" (`ask_in_screen`, a screen that starts with the assessment's open questions), `confidenceReasons` on the assessment, and the two failure branches said on the card (`apps/api/src/intelligence.test.ts`).
 - Real-model eval thresholds recorded in `packages/evals/results` from staging.
 
 **Deferred (unchanged founder decisions).** Scorecards and debriefs (release 2, decision A1), offers and e-signature,

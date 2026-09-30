@@ -85,6 +85,47 @@ export function candidateNotices(notices: Notice[]): Notice[] {
   return notices.filter((n) => !NOTICES_NOT_RENDERED.includes(n.key));
 }
 
+export type NoticeOverrides = Record<string, { version: string; text: string; jurisdictions: string[] }>;
+
+/** A notice version is the date of the change (docs/08): what the candidate saw is recorded as `key@version`. */
+export function noticeVersionFor(now: Date): string {
+  return now.toISOString().slice(0, 10);
+}
+
+/**
+ * Applies a company's rewording of its notices (audit finding A8). A new text gets today's version and keeps the
+ * default's jurisdictions; null puts the standard text back; an unchanged text changes nothing (the version stays).
+ * Returns the new override map and what changed, so the caller can audit each key with its versions.
+ */
+export function applyNoticeOverrides(
+  existing: NoticeOverrides | undefined,
+  changes: Partial<Record<NoticeKey, { text: string } | null>>,
+  now: Date,
+): { notices: NoticeOverrides; changed: Array<{ key: NoticeKey; version: string | null; previousVersion: string | null }> } {
+  const notices: NoticeOverrides = { ...(existing ?? {}) };
+  const changed: Array<{ key: NoticeKey; version: string | null; previousVersion: string | null }> = [];
+  for (const [k, change] of Object.entries(changes)) {
+    const key = k as NoticeKey;
+    const base = DEFAULT_NOTICES.find((n) => n.key === key);
+    if (!base) continue;
+    const before = notices[key];
+    if (change === null) {
+      if (!before) continue;
+      delete notices[key];
+      changed.push({ key, version: null, previousVersion: before.version });
+      continue;
+    }
+    if (!change) continue;
+    const text = change.text.trim();
+    if (before?.text === text) continue;
+    const version = noticeVersionFor(now);
+    // several rewordings on one day share the version: the version names the day the text became current
+    notices[key] = { version, text, jurisdictions: before?.jurisdictions ?? base.jurisdictions };
+    changed.push({ key, version, previousVersion: before?.version ?? null });
+  }
+  return { notices, changed };
+}
+
 /** The disclosure line every automated candidate message carries. */
 export function disclosureLine(companyName: string): string {
   return `This message was sent by the hiring team at ${companyName} with help from an AI recruiting assistant. Reply HUMAN at any time to reach a person.`;

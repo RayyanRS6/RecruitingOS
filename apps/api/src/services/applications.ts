@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { inspectResumeFile, type Actor } from "@ros/contracts";
 import { audit, dedupeKey, emit, normalizeEmailForDedupe, normalizePhone } from "@ros/core";
-import { applications, candidates, documents, randomToken, roles, uuidv7, type ApplicationAcknowledgment, type Tx } from "@ros/db";
+import { applications, candidates, documents, lowercaseToken, randomToken, roles, uuidv7, type ApplicationAcknowledgment, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import { quarantineKey } from "../uploads";
 
@@ -96,6 +96,8 @@ export async function createApplication(tx: Tx, container: Container, input: New
         stage: "applied",
         answers: { eligibility: input.eligibilityAnswers, noResume: input.noResumeAnswers, noticeVersionsShown: input.noticeVersionsShown, ...(input.acknowledgment ? { acknowledgment: input.acknowledgment } : {}) },
         statusToken: randomToken(24),
+        // The reply address's token (F12): its own random value, never the status token, lowercase because it travels in an email address.
+        replyToken: lowercaseToken(16),
       })
       .returning();
   }

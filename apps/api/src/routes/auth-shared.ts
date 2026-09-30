@@ -35,7 +35,7 @@ export function signInPolicy(container: Container): SignInPolicy {
 export async function openSession(container: Container, c: Context<Vars>, identity: Parameters<typeof openSessionFromIdentity>[1]["identity"]) {
   const invitationTokenHash = readInviteCookie(c, container);
   try {
-    const result = await withPlatform(container.db, (tx) => openSessionFromIdentity(tx, { identity, policy: signInPolicy(container), ip: clientIp(c), userAgent: c.req.header("user-agent"), invitationTokenHash }));
+    const result = await withPlatform(container.db, (tx) => openSessionFromIdentity(tx, { identity, policy: signInPolicy(container), ip: clientIp(c), userAgent: c.req.header("user-agent"), invitationTokenHash, openedAt: container.engine.clock() }));
     if (invitationTokenHash) clearInviteCookie(c, container);
     return result;
   } catch (err) {

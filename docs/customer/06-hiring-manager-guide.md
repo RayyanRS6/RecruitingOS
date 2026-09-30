@@ -96,11 +96,13 @@ You do not have to do anything on the boards yourself. If a board asks your acco
 
 **Talent** shows the candidates for one role. If you have more than one role, pick it at the top right. The line under the title says what the page is for: who applied, what the evidence says, and what needs you. Nobody is declined automatically on judgment.
 
-**Groups.** Five tabs across the top: **All**, **Waiting on you**, **In process**, **Not moving forward**, **Hired**. Start with **Waiting on you**.
+**Groups.** Five tabs across the top: **All**, **Waiting on you**, **In process**, **Not moving forward**, **Hired**. Start with **Waiting on you**. Next to them, **Needs a closer look** narrows the list to the candidates the assistant could not say enough about (the number in brackets is how many).
 
-**The card.** Each candidate shows their name, where they applied from, their stage in plain words ("Just applied", "Ready for your review", "Invited to a screen", "Interviewing", "Finalist", "Not moving forward" and so on), their most recent positions, years of experience, licenses, where they are based, and any flags on the resume. If an eligibility answer did not match, it says **Did not meet** and the question. If the assistant has written an assessment, the card shows the overall reading, the confidence and a one-line summary.
+**The card.** Each candidate shows their name, where they applied from, their stage in plain words ("Just applied", "Ready for your review", "Invited to a screen", "Interviewing", "Finalist", "Not moving forward" and so on), their most recent positions, years of experience, licenses, where they are based, and any flags on the resume. If an eligibility answer did not match, it says **Did not meet** and the question. If the assistant has written an assessment, the card shows the overall reading, the confidence and a one-line summary, then its top strength (with where the evidence came from), its top concern, and how many questions are still open ("2 questions open").
 
 **The overall readings** are **Strong match**, **Potential match**, **Weak match** and **Insufficient evidence**. They are not scores. They summarize what the evidence shows against your must-haves and what you look for.
+
+**Needs a closer look.** When the assistant could not say enough (the reading is Insufficient evidence, or it recommends a person look), the candidate stays in **Waiting on you** with the label **Needs a closer look** and the card says what is missing in plain words: the open questions, or that the resume could not be read. The notification you receive says the same. Two things can be missing that are worth knowing: **The résumé could not be read; the written answers were used** means the file was fine but had no text in it (a photo or a scan), so the assessment rests on what the candidate typed; **We could not assess this application automatically; please review it yourself** means the assistant's answer was unusable twice, so there is no assessment at all. Nothing is hidden in either case: the resume, the answers and the messages are on the candidate's page. The button on the card reads **Take a closer look**.
 
 Press **Review** (or the name) to open the candidate.
 
@@ -145,8 +147,8 @@ If the candidate asks for a person, the conversation goes to an ITS recruiter wi
 
 When the screen is complete, the candidate's page gets a **Screen scorecard** and the candidate moves to **Waiting on you**. It has:
 
-- three chips: the overall reading, the recommendation (**Worth a screen**, **Hold**, **Needs a human look**, **Strong: interview**, **Interview** or **Concern raised**), and the confidence
-- a summary
+- three chips: the overall reading, the recommendation (**Worth a screen**, **Hold**, **Needs a closer look**, **Strong: interview**, **Interview** or **Concern raised**), and the confidence
+- a summary, and under it why the confidence is what it is ("Confidence is low because no résumé, only the written summary; two must-haves have no evidence")
 - **Pay expectation** and **Availability** if the candidate stated them, with whether they fit your range and schedule
 - **Must-haves**: each one with yes, partially, no or unknown, and the quoted evidence
 - **Answers**: what each screening answer showed
@@ -157,7 +159,7 @@ When the screen is complete, the candidate's page gets a **Screen scorecard** an
 
 The **Resume assessment**, written when the application arrived, has the same shape without the answers.
 
-Read the evidence, not just the chips. Unknowns are questions to ask at interview. If something is wrong, use **Something wrong?** on the card and pick the reason: **Cited the wrong evidence**, **Made something up**, **Broke a rule we set**, **Bias concern**, **Poorly worded**, **Took the wrong next step**, **Missed a good candidate**, **Overrated this candidate** or **Missed context we gave**. A person at ITS reviews every flag. Flagging changes nothing about the candidate.
+Read the evidence, not just the chips. Unknowns are questions to ask; under them, **Ask about this in a screen** invites the candidate to a short web screen that starts with exactly those questions before the usual ones (the invitation says so: "a few quick questions about your background"). The answers appear on the candidate's page beside the questions. When a screen is already open the button gives way to a sentence saying so, since the invitation cannot be sent twice. If something is wrong, use **Something wrong?** on the card and pick the reason: **Cited the wrong evidence**, **Made something up**, **Broke a rule we set**, **Bias concern**, **Poorly worded**, **Took the wrong next step**, **Missed a good candidate**, **Overrated this candidate** or **Missed context we gave**. A person at ITS reviews every flag. Flagging changes nothing about the candidate.
 
 ## 10. Approving an interview and picking interviewers
 

@@ -22,22 +22,28 @@ Conventions added in release 1: `Idempotency-Key` header honored on every mutati
 | POST | /auth/logout | → `{ok}` | existing |
 | GET | /auth/me | → `MeResponse` (+ `ai.provider`, `auth {provider, aal, mfaVerifiedAt}`); active memberships only | changed |
 | POST | /auth/switch | `{companyId}` → `{ok}` | existing; ITS staff only for companies with an open escalation (D11) |
-| GET | /auth/sessions | → `Session[]` (id, createdAt, lastSeenAt, ip, userAgent, current) | new |
-| POST | /auth/sessions/:id/revoke and /auth/sessions/revoke-all | → `{ok}` | new |
-| POST | /auth/reauth | `{token}` (fresh magic link) → `{ok, reauthUntil}` (10 min) | new; required before policy changes (D12) |
+| GET | /auth/sessions | → `SessionSummary[]` (id, createdAt, lastSeenAt, expiresAt, addressHash (a short hash, never the address), userAgent, provider, reauthenticatedAt, current); the person's own open sessions, the current one first | built (A11; routes/auth-sessions.ts) |
+| POST | /auth/sessions/:id/revoke | → `{ok, current}`; one of the person's own sessions (404 otherwise); revoking the current one also clears the cookie; audited `session.revoked` | built (A11) |
+| POST | /auth/sessions/revoke-all | → `{ok, sessionsEnded}`; "sign out everywhere else": every other session of the person; audited | built (A11) |
+| POST | /auth/reauth/start | `{returnTo?, provider?}` (JSON → `{ok, url, provider}`; a posted form → 302 to the provider). Seals a marker (`ros_reauth`, 10 min) and starts the same PKCE flow with a state ending in `-reauth1`; the callback stamps `sessions.reauthenticated_at` on the open session (audited `session.reauthenticated`) and returns to `returnTo?reauth=ok` (`mismatch` for another account, `failed` otherwise); no new session. A policy or notice change needs a session younger than 30 minutes or a confirmation in the last 10 (403 `reauth_required`) | built (A12; replaces the magic-link reauth) |
 
 ## Companies and team
 
 | Method | Path | Body → Response | Status |
 |---|---|---|---|
 | POST | /companies | `CreateCompany` → `Company` | existing |
-| GET / PATCH | /companies/current | `UpdateCompany` → `Company` (+ integrations statuses, plan, usage) | changed: plan and usage |
+| GET | /companies/current | → `Company` (+ integrations statuses, plan, usage) | changed: plan and usage |
+| PATCH | /companies/current | `UpdateCompany` (strict): `{name?, website?, timezone?, sizeBand?, locations?, settings?: CompanySettingsInput {website, logoUrl, benefitsSummary, careersPage.intro, businessHours {days, start, end} \| null, notices {key: {text} \| null}}}` → `Company` + `changed[]` + `notices[]`. The plan, the pilot term, the allowances, the status and the vertical answer 400 `not_yours_to_change`; unknown keys 400 `invalid_request`. Audited `company.updated` (the changed keys) and `notice.changed` per notice (version = the date); emits `company.updated`. Notice changes need re-authentication (403 `reauth_required`). `company.update`; never staff | changed (A8, J16; routes/company-settings.ts) |
+| GET | /companies/current/notices | → every notice with the text in force, `version`, `overridden`, `defaultText`, `defaultVersion` | new (A8) |
+| GET | /companies/current/audit | `?actions=a,b&prefix=staff.&exclude=staff.tenant_accessed&from=YYYY-MM-DD&to=&before=<id of the last row>&limit=50` (max 200; the cursor is a row, not a time, so rows written in one transaction are never skipped; 400 for a cursor that is not a row of this list) → `CustomerAuditRow[]` `{id, action, description (plain words), actor {kind, name}, reason, target, at, details}`; only customer-visible actions (recruiter access, team, rules, company, candidate views, outcomes, exports); `events.read`; 403 for staff under a grant | changed (A9; was recruiter access only) |
+| GET | /companies/current/audit.csv | same filters, up to 5000 rows, `text/csv`; the download is audited `audit.exported` | new (A9) |
+| POST | /companies/current/members/:userId/sign-out | → `{ok, userId, sessionsEnded}`; ends every session of an active member; `members.manage`; 400 `self_sign_out`, 404 for a non-member; audited `session.revoked` | new (A11) |
 | GET | /companies/current/members | → `Member[]`: active members only, each with calendar and availability status | changed |
 | GET | /companies/current/invitations | → open invitations `{id, email, role, name, expiresAt, invitedBy: {name}}` (never the token) | new (spec 21, area A) |
 | POST | /companies/current/members/invite (also /companies/current/invites) | `InviteMember` `{email, role: owner\|admin\|hiring_manager\|interviewer\|hr, name?}` → `{ok, invitation, replaced}`; one email through the outbox with the invitation link; 400 `staff_domain`, 409 `already_member`; an older open invitation for the address is replaced; audited `invitation.sent` | changed |
 | POST | /companies/current/invitations/:id/resend, /revoke | → `{ok, invitation}`; `members.manage`; audited `invitation.resent` / `invitation.revoked` | new |
 | PATCH | /companies/current/members/:userId | `UpdateMember` `{role?, status?: active\|removed}` → `{userId, role, status, sessionsEnded, calendarDeletionQueued, interviewsFlagged}`; 404 unless an active member, 409 `self_change`, 409 `last_owner`, 403 `owner_only`; either change ends the person's sessions; removal disconnects their calendar (credential deletion queued), flags interviews still ahead and notifies the owners, emits `member.removed` | changed |
-| PUT | /companies/current/notices | `{key, text, jurisdictions}` → `Notice` (human-only, audited, reauth) | new |
+| PUT | /companies/current/notices | superseded: notices are reworded through `PATCH /companies/current` `settings.notices` (versioned, audited, re-authentication required) | dropped |
 
 ## Intake, roles, packets, postings
 
@@ -165,7 +171,7 @@ The daily `stuck_role_detector` run counts yesterday's applications per open rol
 | GET /c/status/:token ; POST /c/status/:token/withdraw ; POST /c/status/:token/sms ; POST /c/status/:token/rotate | existing; rotate new |
 | GET/POST /c/screen/:token ; POST /c/screen/:token/human | existing |
 | GET /c/schedule/:token ; POST /c/schedule/:token `{slotId, timezone, accessibilityNote?}` ; POST /c/schedule/:token/none-work ; GET /c/schedule/:token/confirmed ; GET /c/schedule/:token/ics ; GET/POST /c/schedule/:token/reschedule ; POST /c/schedule/:token/cancel | new |
-| GET /privacy ; GET/POST /c/privacy-request ; GET /c/privacy-request/verify/:token | changed / new |
+| GET /privacy (links to the form) ; GET/POST /c/privacy-request (`PrivacyRequestForm` `{email, kind: access\|correct\|delete, details?, company? (slug), website (honeypot)}`; rate-limited per address and per mailbox (the email normalized); records nothing: the request itself travels sealed in a single-use link (24 h) emailed directly, not through the outbox, one per employer holding the address; an unknown address is told only in its own mailbox) ; GET /c/privacy-request/verify/:token (shows the kind, the employer, the reference and one button; changes nothing, so a mail scanner confirms nothing) ; POST /c/privacy-request/verify `{token}` (rate-limited per link and per address; creates the `data_requests` row as `channel: email_form`, `verified_by_link`, `in_progress`, and sends the acknowledgment; a second link for the same request within a day lands on the first record with `data_request.replayed`; a reused, forged or expired link answers 410; the token is masked in logs, error reports and security events like the other candidate links) | built (D13; pages/privacy-request.tsx) |
 
 ## Webhooks
 

@@ -80,7 +80,16 @@ export type AuditAction =
   | "invitation.revoked"
   | "invitation.accepted"
   /** The role report's applicant list or figures left as a file (docs/spec/21 section 7, P1): who, which role, how many rows. */
-  | "report.exported";
+  | "report.exported"
+  /** Company preferences changed by an owner or admin (audit finding A8): which keys, never the old and new text of a notice (notice.changed carries the versions). */
+  | "company.updated"
+  /** The customer's own audit history left as a file (audit finding A9): who, how many rows, which filters. */
+  | "audit.exported"
+  /** The holder of a session confirmed with their sign-in provider again before a sensitive change (audit finding A12). */
+  | "session.reauthenticated"
+  /** A person wrote to a candidate from the sheet (F11): who, which application, whether it went at once or waited for an approval, and who approved it. Never the text. */
+  | "message.sent"
+  | "message.approval_requested";
 
 /** Privileged and access actions. Distinct from domain events: this answers "who looked at what, and why." */
 export async function audit(

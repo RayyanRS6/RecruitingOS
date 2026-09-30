@@ -41,9 +41,40 @@ export const CreateCompany = z.object({
 });
 export type CreateCompany = z.infer<typeof CreateCompany>;
 
-export const UpdateCompany = CreateCompany.partial().extend({
-  settings: z.record(z.string(), z.unknown()).optional(),
-});
+/** The candidate notices a company may reword (mirrors NoticeKey in packages/core/src/compliance.ts; the versions are stamped by the server). */
+export const NoticeKey = z.enum(["ai_use", "sms_consent", "recording", "privacy", "pay_transparency", "adverse_decision_explanation"]);
+export type NoticeKey = z.infer<typeof NoticeKey>;
+const LocalTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a time like 09:00");
+/** When the company wants candidates contacted: days 0 (Sunday) to 6, local start and end. Narrows the quiet-hours rule for texts; never widens it. */
+export const BusinessHoursInput = z.object({ days: z.array(z.number().int().min(0).max(6)).min(1).max(7), start: LocalTime, end: LocalTime }).strict()
+  .refine((h) => h.start < h.end, { message: "The end time must be after the start time.", path: ["end"] });
+export type BusinessHoursInput = z.infer<typeof BusinessHoursInput>;
+/** A reworded notice: the text only; the server stamps the version with the date of the change and keeps the jurisdictions. Null puts the standard text back. */
+export const NoticeOverrideInput = z.object({ text: z.string().trim().min(20).max(4000) }).strict();
+const WebsiteInput = z.string().trim().max(200).refine((v) => v === "" || /^(https?:\/\/)?[\w-]+(\.[\w-]+)+(\/\S*)?$/i.test(v), "Use a web address like acme.com");
+const LogoUrlInput = z.string().trim().max(500).refine((v) => v === "" || /^https:\/\/\S+$/i.test(v), "Use a full https:// address for the logo");
+/**
+ * What owners and admins may change themselves (audit findings A8 and J16). Everything else on a company (the plan, the
+ * pilot term, the allowances, the status) is set by Identified Talent Solutions and refused here.
+ */
+export const CompanySettingsInput = z.object({
+  website: WebsiteInput.optional(),
+  logoUrl: LogoUrlInput.optional(),
+  benefitsSummary: z.string().trim().max(2000).optional(),
+  careersPage: z.object({ intro: z.string().trim().max(1000).optional() }).strict().optional(),
+  businessHours: BusinessHoursInput.nullable().optional(),
+  notices: z.partialRecord(NoticeKey, NoticeOverrideInput.nullable()).optional(),
+}).strict();
+export type CompanySettingsInput = z.infer<typeof CompanySettingsInput>;
+export const UpdateCompany = z.object({
+  name: z.string().trim().min(2).max(120),
+  website: WebsiteInput,
+  timezone: z.string().min(1).max(64),
+  sizeBand: CreateCompany.shape.sizeBand,
+  locations: z.array(Location).min(1).max(20),
+  settings: CompanySettingsInput,
+}).partial().strict();
+export type UpdateCompany = z.infer<typeof UpdateCompany>;
 
 /** The roles a team member can hold. `recruiter` is ITS staff under a scoped grant, never invited or assigned. */
 export const TeamRole = z.enum(["owner", "admin", "hiring_manager", "interviewer", "hr"]);
@@ -73,12 +104,19 @@ export type RequestRoleApproval = z.infer<typeof RequestRoleApproval>;
 
 // Applications
 export const ApplicationAction = z.object({
-  action: z.enum(["invite_screen", "advance_to_interview", "reject", "hold", "move_to_talent_pool", "override_eligibility", "review_anyway"]),
+  /** ask_in_screen: invite_screen with `focus: "unknowns"`, the one-click follow-up on an assessment that needs a closer look. */
+  action: z.enum(["invite_screen", "ask_in_screen", "advance_to_interview", "reject", "hold", "move_to_talent_pool", "override_eligibility", "review_anyway"]),
   reason: RejectReason.optional(),
   note: z.string().max(2000).optional(),
   /** invite_screen: preferred channel; defaults to SMS with consent, else web chat by email. */
   channel: z.enum(["web", "sms"]).optional(),
+  /** invite_screen: "unknowns" opens the screen with the résumé assessment's open questions before the packet's own. */
+  focus: z.enum(["unknowns"]).optional(),
 });
+
+/** POST /applications/:id/messages: a message a person writes to a candidate (F11). The product adds the sending name and the footer; no disclosure line, since no AI wrote it. */
+export const SendCandidateMessage = z.object({ subject: z.string().trim().max(200).optional(), text: z.string().trim().min(1, "Write the message first.").max(5000) });
+export type SendCandidateMessage = z.infer<typeof SendCandidateMessage>;
 
 /**
  * Human-recorded hiring outcomes (21 Sep, item 4). A person records what happened; the platform never generates,
@@ -193,6 +231,9 @@ export const DataRequestKind = z.enum(["access", "correct", "delete", "sms_opt_o
 export type DataRequestKind = z.infer<typeof DataRequestKind>;
 /** The status-page form offers exactly these four; withdrawals and text-message choices have their own controls. */
 export const CandidatePrivacyRequest = z.object({ kind: z.enum(["access", "correct", "delete", "human_review"]), details: z.string().max(2000).optional() });
+/** The public privacy-request form (audit finding D13): who is asking, what for, in their words; confirmed by an emailed link before anyone acts. `website` is the honeypot. */
+export const PrivacyRequestForm = z.object({ email: z.email(), kind: z.enum(["access", "correct", "delete"]), details: z.string().trim().max(2000).optional(), company: z.string().trim().max(80).optional(), website: z.string().max(0).optional() });
+export type PrivacyRequestForm = z.infer<typeof PrivacyRequestForm>;
 export const AdminCreateDataRequest = z.object({ companyId: z.string().min(1), requesterEmail: z.string().email(), kind: DataRequestKind, details: z.string().max(2000).optional(), candidateId: z.string().optional(), applicationId: z.string().optional() });
 export const DataRequestNote = z.object({ text: z.string().min(1).max(2000) });
 export const DataRequestAssign = z.object({ userId: z.string().min(1).nullable() });

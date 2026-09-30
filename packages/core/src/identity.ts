@@ -40,7 +40,7 @@ export function evaluateSignIn(identity: IdentityLike, existing: { platformRole:
  */
 export async function openSessionFromIdentity(
   q: Queryable,
-  input: { identity: IdentityLike; policy?: SignInPolicy; ip?: string; userAgent?: string; now?: Date; invitationTokenHash?: string | null },
+  input: { identity: IdentityLike; policy?: SignInPolicy; ip?: string; userAgent?: string; now?: Date; invitationTokenHash?: string | null; openedAt?: Date },
 ): Promise<{ sessionToken: string; userId: string; activeCompanyId: string | null; staff: boolean; expiresAt: string; invitationsAccepted: number }> {
   const policy = input.policy ?? DEFAULT_SIGN_IN_POLICY;
   const now = input.now ?? new Date();
@@ -79,6 +79,8 @@ export async function openSessionFromIdentity(
   const [row] = await q.insert(sessions).values({
     userId: user.id, tokenHash: hashToken(sessionToken), activeCompanyId, expiresAt, lastSeenAt: now.toISOString(), ip: input.ip ?? null, userAgent: input.userAgent ?? null,
     identityProvider: input.identity.provider, aal: input.identity.aal, mfaVerifiedAt: input.identity.mfaVerifiedAt,
+    // When the session opened, on the caller's clock: the freshness rule for policy and notice changes (A12) reads it against the same clock.
+    createdAt: (input.openedAt ?? now).toISOString(),
   }).returning({ id: sessions.id });
   await audit(q, { companyId: null, actor: { kind: "user", id: user.id, name: user.name ?? user.email }, action: "session.opened", target: { type: "user", id: user.id }, reason: input.identity.provider, ip: input.ip, details: { sessionId: row.id, provider: input.identity.provider, aal: input.identity.aal, staff: decision.staff, mfaVerifiedAt: input.identity.mfaVerifiedAt } });
   return { sessionToken, userId: user.id, activeCompanyId, staff: decision.staff, expiresAt, invitationsAccepted: invited.accepted.length };

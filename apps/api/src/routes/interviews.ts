@@ -7,6 +7,7 @@ import { applications, approvalRequests, candidates, companies, events, intervie
 import { actorOf, applicationScopeGuard, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { sendDeclineAfterHumanDecision } from "../services/application-actions";
+import { interviewBriefFor } from "../services/interviewer-view";
 
 /**
  * Interviews (docs/07 §Interviews and calendars; slice 5 step 9). A person approves every interview (policy
@@ -120,7 +121,9 @@ interviewRoutes.get("/:id", requireTenant, async (c) => {
       const avail = await availabilityFor(tx, t.companyId, p.userId);
       sources.push({ userId: p.userId, source: conn && conn.status === "live" ? "calendar" : avail?.windows.length ? "declared" : "none", calendarStatus: conn?.status ?? null });
     }
-    return { ...s, timeline, availabilitySources: sources };
+    // The interviewer's brief (F7): the round, what it covers, what the evidence says so far; pay only for roles that may see it.
+    const brief = await interviewBriefFor(tx, { interview: iv, viewerRole: t.role });
+    return { ...s, timeline, availabilitySources: sources, brief };
   });
   if (!row) throw new HttpError(404, "not_found", "Interview not found.");
   return c.json(row);

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
-import { and, count, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome } from "@ros/contracts";
-import { OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, assertCan, audit, can, emit, listOutcomes, openEscalationsFor, ownerGroup, recordApplicationOutcome, recordRoleOutcome } from "@ros/core";
+import { CLOSER_LOOK_LABEL, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, assertCan, audit, can, emit, evidenceView, listOutcomes, openEscalationsFor, ownerGroup, recordApplicationOutcome, recordRoleOutcome } from "@ros/core";
 import { users } from "@ros/db";
 import { assertMayApprovePacket, packetApprovalView } from "../services/packet-approval";
 import { createPacketVersion, currentVersionOf } from "../services/packet-versions";
@@ -12,6 +12,7 @@ import { DOWNLOAD_URL_TTL_SECONDS, safeFilename } from "../uploads";
 import type { Container } from "../container";
 import { allowedApplicationActions, applicationFactsFrom, performApplicationAction, sendDeclineAfterHumanDecision } from "../services/application-actions";
 import { replayHeldEmails } from "../webhooks/postmark";
+import { interviewerApplicationView } from "../services/interviewer-view";
 
 export const roleRoutes = new Hono<Vars>();
 roleRoutes.use("/:id", roleScopeGuard);
@@ -167,15 +168,21 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
     const cands = ids.length ? await tx.select().from(candidates).where(inArray(candidates.id, ids)) : [];
     const latest = apps.filter((a) => a.latestAssessmentId).map((a) => a.latestAssessmentId!);
     const asmts = latest.length ? await tx.select().from(assessments).where(inArray(assessments.id, latest)) : [];
+    // Whether each résumé file had text to read (a clean scan without a text layer has none): one query, no text pulled.
+    const docIds = apps.filter((a) => a.resumeDocumentId).map((a) => a.resumeDocumentId!);
+    const docs = docIds.length ? await tx.select({ id: documents.id, status: documents.status, hasText: sql<boolean>`${documents.textExtracted} is not null` }).from(documents).where(inArray(documents.id, docIds)) : [];
     return apps
       .filter((a) => (!q.group || ownerGroup(a.stage) === q.group) && (!q.stage || a.stage === q.stage))
       .map((a) => {
         const cand = cands.find((x) => x.id === a.candidateId);
         const asmt = asmts.find((x) => x.id === a.latestAssessmentId);
+        const doc = docs.find((d) => d.id === a.resumeDocumentId);
+        // Insufficient evidence as a state the owner can see: derived here and on the candidate page from the same assessment, never stored.
+        const evidence = evidenceView({ stage: a.stage, latest: asmt ?? null, resumeUnreadable: !!doc && doc.status === "clean" && !doc.hasText && !a.extraction });
         return {
           id: a.id,
           stage: a.stage,
-          stageLabel: STAGE_LABEL[a.stage],
+          stageLabel: evidence.needsCloserLook ? CLOSER_LOOK_LABEL : STAGE_LABEL[a.stage],
           group: ownerGroup(a.stage),
           source: a.source,
           createdAt: a.createdAt,
@@ -183,6 +190,7 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
           eligibility: a.eligibility,
           extractionSummary: a.extraction ? { positions: a.extraction.positions.slice(0, 3).map((p) => `${p.title}${p.employer ? ` at ${p.employer}` : ""}`), licenses: a.extraction.licenses.map((l) => l.name), years: a.extraction.yearsOfExperienceEstimate ?? null, anomalies: a.extraction.anomalies } : null,
           assessment: asmt ? { overall: asmt.overall, confidence: asmt.confidence, summary: asmt.result.summary, strengths: asmt.result.strengths.slice(0, 2), concerns: asmt.result.concerns.slice(0, 1) } : null,
+          evidence,
         };
       });
   });
@@ -196,10 +204,14 @@ applicationRoutes.use("/:id/*", applicationScopeGuard);
 
 applicationRoutes.get("/:id", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  assertCan(t.role, "application.read");
+  // An interviewer holds no application.read but may open the candidates they are interviewing (F8): they get the
+  // brief with pay and internal rationale left out (services/interviewer-view.ts), and a 403 for anyone else.
+  const interviewerOnly = t.role === "interviewer";
+  if (!interviewerOnly) assertCan(t.role, "application.read");
   const row = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const [app] = await tx.select().from(applications).where(eq(applications.id, c.req.param("id"))).limit(1);
     if (!app) return null;
+    if (interviewerOnly) return interviewerApplicationView(tx, { app, tenant: t, actor: actorOf(c) });
     const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
     const docs = await tx.select({ id: documents.id, kind: documents.kind, filename: documents.filename, mime: documents.mime, sizeBytes: documents.sizeBytes, hasText: documents.textExtracted, status: documents.status, uploadedVia: documents.uploadedVia, rejectedReason: documents.rejectedReason, validatedAt: documents.validatedAt }).from(documents).where(eq(documents.applicationId, app.id));
     const asmts = await tx.select().from(assessments).where(eq(assessments.applicationId, app.id)).orderBy(desc(assessments.createdAt));
@@ -209,10 +221,14 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const ivs = await tx.select({ id: interviews.id, roundKey: interviews.roundKey, title: interviews.title, status: interviews.status, startsAt: interviews.startsAt, endsAt: interviews.endsAt, timezone: interviews.timezone, meetingUrl: interviews.meetingUrl, attempt: interviews.attempt, outcome: interviews.outcome, decision: interviews.decision, offeredSlots: interviews.offeredSlots, createdAt: interviews.createdAt }).from(interviews).where(eq(interviews.applicationId, app.id)).orderBy(desc(interviews.createdAt));
     const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
     const packetLabels = pv ? { mustHaves: pv.packet.requirements.mustHaves.map((m) => ({ key: m.key, text: m.text })), competencies: pv.packet.competencies.map((c) => ({ key: c.key, name: c.name })), questions: pv.packet.screening.questions.map((q) => ({ key: q.key, question: q.question })) } : { mustHaves: [], competencies: [], questions: [] };
-    const pendingApprovals = await tx.select({ id: approvalRequests.id, actionType: approvalRequests.actionType, rationale: approvalRequests.rationale, createdAt: approvalRequests.createdAt }).from(approvalRequests).where(and(eq(approvalRequests.applicationId, app.id), eq(approvalRequests.status, "pending")));
+    // `proposal` carries a waiting message's text (F11), so the sheet can show it to the approver; `requiredRoles` says who may decide.
+    const pendingApprovals = await tx.select({ id: approvalRequests.id, actionType: approvalRequests.actionType, rationale: approvalRequests.rationale, createdAt: approvalRequests.createdAt, proposal: approvalRequests.proposal, requiredRoles: approvalRequests.requiredRoles }).from(approvalRequests).where(and(eq(approvalRequests.applicationId, app.id), eq(approvalRequests.status, "pending")));
     await audit(tx, { companyId: t.companyId, actor: actorOf(c), action: "candidate.viewed", target: { type: "application", id: app.id } });
-    const allowedActions = allowedApplicationActions(applicationFactsFrom(app, scr.map((s) => s.status), ivs, t.role));
-    return { ...app, stageLabel: STAGE_LABEL[app.stage], group: ownerGroup(app.stage), allowedActions, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: comms, timeline, screens: scr.map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, assessmentId: s.assessmentId })), pendingApprovals, packetLabels };
+    // The latest résumé assessment (rows are newest first) is what offers "ask about this in a screen", the same rule the action route applies.
+    const allowedActions = allowedApplicationActions(applicationFactsFrom(app, scr.map((s) => s.status), ivs, t.role, asmts.find((x) => x.kind === "triage") ?? null));
+    // The status token opens the candidate's status page and the reply token is all that authenticates a reply, so neither leaves the server.
+    const { statusToken: _statusToken, replyToken: _replyToken, ...appOut } = app;
+    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: ownerGroup(app.stage), allowedActions, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: comms, timeline, screens: scr.map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, assessmentId: s.assessmentId })), pendingApprovals, packetLabels };
   });
   if (!row) throw new HttpError(404, "not_found", "Application not found.");
   return c.json(row);

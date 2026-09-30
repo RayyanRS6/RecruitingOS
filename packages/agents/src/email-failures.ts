@@ -86,7 +86,7 @@ async function smsFallback(q: Queryable, integrations: Integrations, input: { ca
   const [app] = appId ? await q.select().from(applications).where(eq(applications.id, appId)).limit(1) : await q.select().from(applications).where(eq(applications.candidateId, cand.id)).orderBy(desc(applications.createdAt)).limit(1);
   if (!app) return "not_possible";
   const [company] = await q.select().from(companies).where(eq(companies.id, input.companyId)).limit(1);
-  const allowed = nextContactWindow(input.now, company.timezone);
+  const allowed = nextContactWindow(input.now, company.timezone, company.settings.businessHours);
   if (allowed.getTime() > input.now.getTime()) {
     await q.insert(jobs).values({ kind: "email.fallback_sms", payload: { applicationId: app.id, communicationId: input.communication?.id ?? null }, runAt: allowed.toISOString(), maxAttempts: 3 });
     return "scheduled";

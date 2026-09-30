@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { boolean, index, integer, jsonb, numeric, pgTable, text, uniqueIndex, uuid, vector, date } from "drizzle-orm/pg-core";
 import type {
   Actor,
@@ -260,6 +261,8 @@ export const applications = pgTable(
     extraction: jsonb("extraction").$type<ResumeExtraction | null>(),
     latestAssessmentId: uuid("latest_assessment_id"),
     statusToken: text("status_token").notNull(),
+    /** The per-application reply address's token (migration 0023): lowercase, random, never the status token. The code sets it at creation; the database default covers direct inserts. */
+    replyToken: text("reply_token").notNull().default(sql`substr(replace(gen_random_uuid()::text, '-', ''), 1, 16)`),
     inactiveAt: ts("inactive_at"),
     withdrawnAt: ts("withdrawn_at"),
     withdrawReason: text("withdraw_reason"),
@@ -274,6 +277,7 @@ export const applications = pgTable(
     index("applications_company_role_stage_idx").on(t.companyId, t.roleId, t.stage),
     index("applications_company_candidate_idx").on(t.companyId, t.candidateId),
     uniqueIndex("applications_status_token_idx").on(t.statusToken),
+    uniqueIndex("applications_reply_token_idx").on(t.replyToken),
   ],
 );
 
