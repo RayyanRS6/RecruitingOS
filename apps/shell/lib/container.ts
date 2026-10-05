@@ -31,7 +31,14 @@ async function build(): Promise<Shell> {
 }
 
 export function getShell(): Promise<Shell> {
-  if (!g.__rosShell) g.__rosShell = build();
+  if (!g.__rosShell) {
+    g.__rosShell = build().catch((err) => {
+      // A start that failed (a migration not applied yet, the database briefly unreachable) is tried again on the next
+      // request instead of being remembered for the life of the instance.
+      g.__rosShell = undefined;
+      throw err;
+    });
+  }
   return g.__rosShell;
 }
 
