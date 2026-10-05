@@ -17,6 +17,11 @@ const config: NextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@ros/api", "@ros/web", "@ros/ui", "@ros/core", "@ros/db", "@ros/contracts", "@ros/integrations", "@ros/workflows", "@ros/agents", "@ros/ai", "@ros/playbooks"],
   serverExternalPackages: ["@electric-sql/pglite", "pg", "@anthropic-ai/sdk"],
+  // Production boot compares the database with the migration files (a release migrates first, docs/14), so the SQL
+  // files ship with every server function. Traced from the workspace root, they land at
+  // /var/task/packages/db/migrations on Vercel, where the database package finds them walking up from the app.
+  outputFileTracingRoot: repoRoot,
+  outputFileTracingIncludes: { "/**": ["../../packages/db/migrations/*.sql"] },
   poweredByHeader: false,
   // Candidate pages set their own headers inside Hono; the shell adds nothing that could leak.
   headers: async () => [{ source: "/(.*)", headers: [{ key: "X-Content-Type-Options", value: "nosniff" }, { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" }] }],
