@@ -25,7 +25,11 @@ export class SupabaseIdentityProvider implements IdentityProvider {
     if (!this.cfg.url) throw new IdentityError("not_configured", "Sign-in is not configured.");
     const u = new URL(`${this.issuer}/authorize`);
     u.searchParams.set("provider", input.provider);
-    u.searchParams.set("redirect_to", input.redirectTo);
+    // The service keeps its own state with Google or Microsoft and returns to redirect_to with only `code` added, keeping
+    // the address's query. The application's state therefore rides inside redirect_to, or the callback never sees it.
+    const back = new URL(input.redirectTo);
+    back.searchParams.set("state", input.state);
+    u.searchParams.set("redirect_to", back.toString());
     u.searchParams.set("code_challenge", input.codeChallenge);
     u.searchParams.set("code_challenge_method", "s256");
     // Identity scopes only (correction 4): no calendar permission rides on the sign-in registration.

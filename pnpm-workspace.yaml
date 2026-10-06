@@ -6,5 +6,9 @@ allowBuilds:
   '@sentry/cli': false
   esbuild: true
 # Dependency audit (21 Sep, item 7): next pins a postcss with two high advisories; 8.5.x is a compatible patch line.
+# 7 Oct: source-map-js (GHSA-68fv-2mgg-jv7q, under postcss) and sharp (GHSA-wq5f-xc86-pv6w, under next) gained high
+# advisories; both are build-time or image-optimisation paths, moved to the patched lines.
 overrides:
   "postcss@<8.5.23": ">=8.5.23"
+  "source-map-js@<1.2.2": "^1.2.2"
+  "sharp@<0.35.5": "^0.35.5"
