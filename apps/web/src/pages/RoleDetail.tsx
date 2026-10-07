@@ -9,6 +9,7 @@ import { api, ApiError, type Me, type RoleDetail as RoleDetailT, type RolePacket
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
 import { canEditPacket, canManageRole, canRecordOutcome, canSeeActivity, canSeeTalent } from "../roles";
+import { payShownLabel } from "../role-words";
 import { AcceptingSwitch, ClosedBanner, PostingTab, StillUpAlert } from "./RolePosting";
 import { ActivityTab, InterviewPlanTab, PacketApprovalCard, PreferencesCard, RequirementList, workModelLabel } from "./RolePlan";
 import { EditPacket } from "./RoleEditor";
@@ -129,7 +130,7 @@ export function RoleDetail() {
                   <dl className="kv">
                     <dt>Range</dt><dd>{money(p)}</dd>
                     <dt>Ceiling</dt><dd>{p.compensation.basis === "hourly" ? `$${p.compensation.ceiling}/hr` : `$${p.compensation.ceiling.toLocaleString()}`} <span className="muted small">(never exceeded without your approval)</span></dd>
-                    <dt>Shown to candidates</dt><dd>{p.compensation.discloseRange ? "Yes" : "No"}</dd>
+                    <dt>Shown to candidates</dt><dd>{payShownLabel(shown!, p.compensation.discloseRange)}</dd>
                     <dt>Sources</dt><dd>{p.compensation.sources.map((s) => s.name).join("; ") || "owner-stated"}</dd>
                   </dl>
                 </Card>
@@ -163,7 +164,7 @@ export function RoleDetail() {
           {visibleTab === "evaluation" ? (
             <div className="grid-2">
               <Card title="What we look for">
-                <ul style={{ paddingLeft: 18, margin: 0 }}>{p.competencies.map((c) => <li key={c.key}><strong>{c.name}</strong> <Chip>weight {c.weight}</Chip> <Chip>{c.evaluatedIn}</Chip><br /><span className="small muted">{c.definition}</span></li>)}</ul>
+                <ul style={{ paddingLeft: 18, margin: 0 }}>{p.competencies.map((c) => <li key={c.key}><strong>{c.name}</strong> <Chip>{c.evaluatedIn}</Chip><br /><span className="small muted">{c.definition}</span></li>)}</ul>
               </Card>
               <Card title={`Screening questions (about ${p.screening.maxMinutes} minutes)`}>
                 <ol style={{ paddingLeft: 18, margin: 0 }}>{p.screening.questions.map((q) => <li key={q.key}>{q.question} <Chip>{q.kind}</Chip></li>)}</ol>

@@ -5,7 +5,7 @@ import { applications, approvalRequests, candidates, communications, interviewPa
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInStaff } from "./test-helpers";
+import { signInAs, signInStaff } from "./test-helpers";
 
 /**
  * Approvals and who may see or decide them (final review, api area): a decline message held for approval goes out when
@@ -172,5 +172,23 @@ describe("approvals: sending the held decline, who sees and decides what", () =>
     expect(approvals.length).toBeGreaterThan(0);
     expect(approvals.every((a) => a.roleId === roleA || a.roleId === null)).toBe(true);
     expect((await (await json(owner, "GET", "/api/v1/approvals")).json() as Array<{ roleId: string | null }>).some((a) => a.roleId === roleB)).toBe(true);
+  });
+
+  it("the 'Approve the role' card goes only to people the approve route accepts: not the hiring manager who drafted it, not HR", async () => {
+    const manager = await signInAs(container, app, { companyId, role: "hiring_manager" });
+    const s = (await (await json(manager, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental assistant in Irvine, $24 to $28 an hour, full time. It's growth. Ceiling $30. Must-haves: radiography certificate. Just draft it." })).json()) as { session: { id: string } };
+    const { roleId } = (await (await json(manager, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string };
+    await container.drain();
+    const [pending] = await container.db.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, roleId), eq(approvalRequests.actionType, "role_packet.approve"), eq(approvalRequests.status, "pending")));
+    expect(pending).toBeTruthy();
+    const cardFor = async (cookie: string) => (await brief(cookie)).find((c) => c.approvalRequestId === pending.id);
+    // the person who drafted it cannot approve it (they are not the sole owner), so they get no card to press
+    expect(await cardFor(manager)).toBeUndefined();
+    expect((await json(manager, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1 })).status).toBe(409);
+    // HR holds no role.approve
+    expect(await cardFor(hr)).toBeUndefined();
+    // the owner gets it, and the route agrees
+    expect((await cardFor(owner))?.title).toMatch(/Approve the role/);
+    expect((await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" })).status).toBe(200);
   });
 });

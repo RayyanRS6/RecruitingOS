@@ -17,6 +17,9 @@
   "triage.hallucination": {
     "minPassRate": 1
   },
+  "triage.bias_pairs": {
+    "minPassRate": 1
+  },
   "screen.conversation": {
     "minPassRate": 1
   },

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome } from "@ros/contracts";
-import { CLOSER_LOOK_LABEL, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, assertCan, audit, can, emit, evidenceView, listOutcomes, openEscalationsFor, ownerGroup, recordApplicationOutcome, recordRoleOutcome, scopeAllows } from "@ros/core";
+import { CLOSER_LOOK_LABEL, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, assertCan, audit, can, emit, evidenceView, jobNoticesFor, listOutcomes, openEscalationsFor, ownerGroup, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows } from "@ros/core";
 import { withEmptyPay, withoutPay } from "../services/pay-redaction";
 import { users } from "@ros/db";
 import { assertMayApprovePacket, packetApprovalView } from "../services/packet-approval";
@@ -11,7 +11,8 @@ import { actorOf, applicationScopeGuard, clientIp, requireTenant, roleScopeGuard
 import { HttpError } from "../middleware/errors";
 import { DOWNLOAD_URL_TTL_SECONDS, safeFilename } from "../uploads";
 import type { Container } from "../container";
-import { allowedApplicationActions, applicationFactsFrom, performApplicationAction, sendDeclineAfterHumanDecision } from "../services/application-actions";
+import { applicationActionState, applicationFactsFrom, declineAfterHumanDecision, declineMessagePolicy, declineSent, performApplicationAction } from "../services/application-actions";
+import { screenScorecards } from "../services/screen-scorecards";
 import { replayHeldEmails, settleHeldEmailsOnClose } from "../webhooks/postmark";
 import { interviewerApplicationView } from "../services/interviewer-view";
 
@@ -63,6 +64,14 @@ roleRoutes.get("/:id", requireTenant, async (c) => {
     for (const a of apps) counts[a.stage] = (counts[a.stage] ?? 0) + 1;
     // Without compensation.read the pay section keeps its shape but carries no figure anywhere (services/pay-redaction.ts).
     const redact = (p: typeof current) => (p && !canSeeComp ? withEmptyPay(p) : p);
+    // Whether candidates see the range, by the public pages' rule: the owner's choice, or a pay transparency law where the job is (plan 0.8).
+    const [company] = await tx.select({ locations: companies.locations, settings: companies.settings }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
+    const withPayView = (p: typeof current) => {
+      const shown = redact(p);
+      if (!p || !shown) return shown;
+      const notices = jobNoticesFor({ jobLocations: p.packet.identity.locations, companyLocations: company?.locations ?? [], overrides: company?.settings.notices });
+      return { ...shown, payShown: payShown(p.packet.compensation, notices), payRequiredByLaw: payTransparencyApplies(notices) };
+    };
     // Waiting requests can carry a candidate's name and a message written to them (F11): only for those who read
     // applications, and for ITS staff only the requests their grant covers. The approval card below reads them all.
     const scope = t.staff ? { roleId: t.staff.scope.roleId, applicationId: t.staff.scope.applicationId } : null;
@@ -70,7 +79,7 @@ roleRoutes.get("/:id", requireTenant, async (c) => {
     // A version proposed while the role runs (an edit waiting for approval): shown beside the current one, never in its place.
     const proposed = current && ["open", "paused"].includes(role.status) ? packets.find((p) => p.status === "proposed" && p.version > current.version) ?? null : null;
     const approval = await packetApprovalView(tx, { tenant: t, role, packets, pending });
-    return { ...role, currentPacket: redact(current), proposedPacket: redact(proposed), packetVersions: packets.map((p) => ({ id: p.id, version: p.version, status: p.status, source: p.source, changeSummary: p.changeSummary, createdAt: p.createdAt, createdBy: p.createdBy })), postings: posts, boardsStillUp: posts.filter((p) => p.closureRequired && !p.closureConfirmedAt).map((p) => p.channel), counts, pendingApprovals: visiblePending, packetApproval: approval.packetApproval, decisionMaker: approval.decisionMaker };
+    return { ...role, currentPacket: withPayView(current), proposedPacket: withPayView(proposed), packetVersions: packets.map((p) => ({ id: p.id, version: p.version, status: p.status, source: p.source, changeSummary: p.changeSummary, createdAt: p.createdAt, createdBy: p.createdBy })), postings: posts, boardsStillUp: posts.filter((p) => p.closureRequired && !p.closureConfirmedAt).map((p) => p.channel), counts, pendingApprovals: visiblePending, packetApproval: approval.packetApproval, decisionMaker: approval.decisionMaker };
   });
   if (!row) throw new HttpError(404, "not_found", "Role not found.");
   return c.json(row);
@@ -139,6 +148,8 @@ roleRoutes.post("/:id/approve", requireTenant, async (c) => {
 });
 
 // Closing a role records its outcome through POST /:id/outcome (21 Sep, item 4); the old unconfirmed close is gone.
+// Pause only from open and resume only from paused (Wave 0 item 0.8): a resume must never reopen a closed role or
+// restart publishing for a draft, and a second click changes nothing.
 for (const action of ["pause", "resume"] as const) {
   roleRoutes.post(`/:id/${action}`, requireTenant, async (c) => {
     const t = c.get("tenant")!;
@@ -148,9 +159,13 @@ for (const action of ["pause", "resume"] as const) {
     const row = await withTenant(container.db, t.companyId, async (tx) => {
       const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
       if (!role) throw new HttpError(404, "not_found", "Role not found.");
+      if (action === "pause" && role.status !== "open") throw new HttpError(409, "not_open", role.status === "paused" ? "This role is already paused." : `Only an open role can be paused. This role is ${role.status === "closed" ? "closed" : "not open yet"}.`);
+      if (action === "resume" && role.status !== "paused") throw new HttpError(409, "not_paused", role.status === "closed" ? "This role is closed, so it cannot be resumed. Open a new role to hire again." : role.status === "open" ? "This role is already open." : "Only a paused role can be resumed.");
       const now = new Date().toISOString();
       const patch = action === "pause" ? { status: "paused", pausedAt: now } : { status: "open", pausedAt: null };
-      const [updated] = await tx.update(roles).set(patch).where(eq(roles.id, role.id)).returning();
+      // the state is checked again in the write itself, so two clicks at once pause (or resume) once
+      const [updated] = await tx.update(roles).set(patch).where(and(eq(roles.id, role.id), eq(roles.status, action === "pause" ? "open" : "paused"))).returning();
+      if (!updated) throw new HttpError(409, action === "pause" ? "not_open" : "not_paused", "Someone changed this role a moment ago. Refresh to see where it is now.");
       await emit(tx, { type: action === "pause" ? "role.paused" : "role.resumed", companyId: t.companyId, actor: actorOf(c), subject: { type: "role", id: role.id }, payload: { reason: body.reason ?? null } });
       if (action === "resume") await container.engine.start(tx, { workflowKey: "publish_role", companyId: t.companyId, subject: { type: "role", id: role.id }, state: { roleId: role.id, packetVersion: role.currentPacketVersion }, actor: actorOf(c) });
       return updated;
@@ -231,10 +246,13 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const pendingApprovals = await tx.select({ id: approvalRequests.id, actionType: approvalRequests.actionType, rationale: approvalRequests.rationale, createdAt: approvalRequests.createdAt, proposal: approvalRequests.proposal, requiredRoles: approvalRequests.requiredRoles }).from(approvalRequests).where(and(eq(approvalRequests.applicationId, app.id), eq(approvalRequests.status, "pending")));
     await audit(tx, { companyId: t.companyId, actor: actorOf(c), action: "candidate.viewed", target: { type: "application", id: app.id } });
     // The latest résumé assessment (rows are newest first) is what offers "ask about this in a screen", the same rule the action route applies.
-    const allowedActions = allowedApplicationActions(applicationFactsFrom(app, scr.map((s) => s.status), ivs, t.role, asmts.find((x) => x.kind === "triage") ?? null));
+    // Every choice the page shows but cannot take comes with the reason (plan 0.5), and the decline step says before the click what the candidate will get.
+    const { allowed: allowedActions, blockedReasons } = applicationActionState(applicationFactsFrom(app, scr.map((s) => s.status), ivs, t.role, asmts.find((x) => x.kind === "triage") ?? null));
+    const declineMessage = await declineMessagePolicy(tx, { companyId: t.companyId, roleId: app.roleId });
+    const scorecards = await screenScorecards(tx, scr);
     // The status token opens the candidate's status page and the reply token is all that authenticates a reply, so neither leaves the server.
     const { statusToken: _statusToken, replyToken: _replyToken, ...appOut } = app;
-    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: ownerGroup(app.stage), allowedActions, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: comms, timeline, screens: scr.map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, assessmentId: s.assessmentId })), pendingApprovals, packetLabels };
+    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: ownerGroup(app.stage), allowedActions, blockedReasons, declineMessage, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: comms, timeline, screens: scr.map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, assessmentId: s.assessmentId, ...scorecards.get(s.id) })), pendingApprovals, packetLabels };
   });
   if (!row) throw new HttpError(404, "not_found", "Application not found.");
   return c.json(row);
@@ -334,14 +352,14 @@ applicationRoutes.post("/:id/outcome", requireTenant, async (c) => {
     try {
       const r = await recordApplicationOutcome(tx, { companyId: t.companyId, applicationId: c.req.param("id") ?? "", outcome: body.outcome, by: t.role, actor, hireDate: body.hireDate, offerAcceptedAt: body.offerAcceptedAt, reason: body.reason, note: body.note, now: container.engine.clock() });
       // the candidate hears about a decline the same way as from the Decline button: after the human decision, gated
-      const dispositionSent = body.outcome === "employer_declined" ? await sendDeclineAfterHumanDecision(tx, container, { companyId: t.companyId, app: r.app, actor, reason: body.reason ?? "employer_declined" }) : false;
-      return { ...r, dispositionSent };
+      const candidateNotice = body.outcome === "employer_declined" ? await declineAfterHumanDecision(tx, container, { companyId: t.companyId, app: r.app, actor, reason: body.reason ?? "employer_declined" }) : null;
+      return { ...r, dispositionSent: !!candidateNotice && declineSent(candidateNotice), candidateNotice };
     } catch (e) { outcomeHttpError(e); }
   });
   const label: Record<string, string> = { hired_externally: "recorded a hire (offer accepted outside the platform)", candidate_withdrew: "recorded that the candidate withdrew", employer_declined: "declined the candidate", offer_declined_externally: "recorded that the candidate declined an offer made outside the platform", no_hire: "closed the process for this candidate without a hire" };
   await tellRecruiterAboutOutcome(container, t.companyId, result.roleId, c.req.param("id") ?? null, `${actor.name ?? "The customer"} ${label[body.outcome]}.`, `outcome:${result.row.id}`);
   await container.kick();
-  return c.json({ ok: true, outcomeId: result.row.id, stage: result.to, roleId: result.roleId, roleStillOpen: result.roleStillOpen, dispositionSent: result.dispositionSent, movedToTalentPool: 0, statement: OUTCOME_STATEMENT, next: result.roleStillOpen ? "The role is still open. Close it with its outcome when you are ready; that is a separate confirmation." : null }, 201);
+  return c.json({ ok: true, outcomeId: result.row.id, stage: result.to, roleId: result.roleId, roleStillOpen: result.roleStillOpen, dispositionSent: result.dispositionSent, ...(result.candidateNotice ? { candidateNotice: result.candidateNotice } : {}), movedToTalentPool: 0, statement: OUTCOME_STATEMENT, next: result.roleStillOpen ? "The role is still open. Close it with its outcome when you are ready; that is a separate confirmation." : null }, 201);
 });
 
 roleRoutes.post("/:id/outcome", requireTenant, async (c) => {

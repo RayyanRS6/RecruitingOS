@@ -101,6 +101,23 @@ ${disclosure}`;
   });
 }
 
+/**
+ * What a candidate email says about future roles (Wave 0 item 0.11). Someone who already asked not to be kept is never
+ * offered it again: their choice is acknowledged instead.
+ */
+export function futureRolesLine(candidate: { preferences: { talentPoolOptOut?: boolean } }): string {
+  return candidate.preferences.talentPoolOptOut
+    ? "As you asked, we will not keep your details for future roles."
+    : "We would like to keep your information for future openings unless you prefer we do not; reply \"no thanks\" and we will remove you from consideration for future roles.";
+}
+
+/** The screen reminder's last word to someone no longer interested; it promises nothing about future roles to a person who opted out. */
+export function reminderClosingLine(candidate: { preferences: { talentPoolOptOut?: boolean } }): string {
+  return candidate.preferences.talentPoolOptOut
+    ? "If you are no longer interested, no reply is needed; we will close the application in a few days."
+    : "If you are no longer interested, no reply is needed; we will close the application in a few days and keep you in mind for future openings.";
+}
+
 /** A respectful, specific disposition after a human decision or an owner-authored eligibility rule. */
 export async function sendDisposition(q: Queryable, integrations: Integrations, input: MessageInput & { reason: string }): Promise<SendResult> {
   const { application, candidate, company, packet } = input;
@@ -114,7 +131,7 @@ Thank you for your interest in the ${packet.identity.title} position at ${compan
 
 ${why}
 
-We would like to keep your information for future openings unless you prefer we do not; reply "no thanks" and we will remove you from consideration for future roles.
+${futureRolesLine(candidate)}
 
 ${signature(packet, company)}
 
@@ -215,7 +232,7 @@ export async function sendScreenReminder(q: Queryable, integrations: Integration
 
 A quick reminder: the short screening conversation for the ${packet.identity.title} position at ${company.name} is waiting for you whenever you have ${packet.screening.maxMinutes} minutes: ${url}
 
-If you are no longer interested, no reply is needed; we will close the application in a few days and keep you in mind for future openings.
+${reminderClosingLine(candidate)}
 
 ${packet.communication.humanAlternativeText}
 

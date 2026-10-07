@@ -30,11 +30,21 @@ export const MeResponse = z.object({
 export type MeResponse = z.infer<typeof MeResponse>;
 
 // Companies
+/** A real IANA time zone name ("America/Chicago"): interview times and the hours texts may be sent are worked out in it. */
+export function isTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
 export const CreateCompany = z.object({
   name: z.string().min(2).max(120),
   vertical: z.string().min(2).max(60),
   sizeBand: z.enum(["1-19", "20-49", "50-99", "100-199", "200-499", "500+"]),
-  timezone: z.string().default("America/Los_Angeles"),
+  /** The sign-up form sends the owner's own zone; the default stays only for callers that send none. */
+  timezone: z.string().min(1).max(64).refine(isTimeZone, { message: "Choose a time zone from the list." }).default("America/Los_Angeles"),
   locations: z.array(Location).min(1),
   ownerName: z.string().min(1).optional(),
   website: z.string().optional(),
@@ -176,14 +186,23 @@ export const DecideApproval = z.object({
 });
 
 // Escalations
+/**
+ * What a recruiter brought in for a request may see: one candidate (and the role they applied for), one role and its
+ * candidates, or all of the company's hiring. The ids carry it; "company" must be chosen out loud, never inferred from
+ * missing ids, so a request with no role and no candidate is refused unless it says `scope: "company"`.
+ */
+export const EscalationScope = z.enum(["application", "role", "company"]);
+export type EscalationScope = z.infer<typeof EscalationScope>;
 export const CreateEscalation = z.object({
   kind: z.enum(["ask", "review", "takeover", "negotiation", "search_support", "candidate_issue"]),
+  scope: EscalationScope.optional(),
   roleId: z.string().optional(),
   applicationId: z.string().optional(),
   question: z.string().min(1).max(4000),
   /** Optional; the category sets a default. Shown to recruiters before acceptance (correction 11). */
   urgency: z.enum(["low", "normal", "high", "critical"]).optional(),
 });
+export type CreateEscalation = z.infer<typeof CreateEscalation>;
 export const ResolveEscalation = z.object({ resolution: z.string().min(1).max(4000), /** Recruiter effort, for capacity and pricing (founder decision F12). */ minutesSpent: z.number().int().min(0).max(1440).optional() });
 
 // Emergency access for platform administrators (founder decision F10): MFA, a recorded reason, a short expiry.

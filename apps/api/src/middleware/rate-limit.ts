@@ -33,6 +33,10 @@ export const POLICIES = {
   privacyVerify: { name: "candidate.privacy_verify", rules: [{ by: "token", windowMs: HOUR, limit: 10, field: "token" }, { by: "ip", windowMs: HOUR, limit: 30 }] },
   withdraw: { name: "candidate.withdraw", rules: [{ by: "token", windowMs: HOUR, limit: 5, param: "token" }, { by: "ip", windowMs: HOUR, limit: 20 }] },
   smsPref: { name: "candidate.sms_pref", rules: [{ by: "token", windowMs: HOUR, limit: 10, param: "token" }, { by: "ip", windowMs: HOUR, limit: 30 }] },
+  /** "Don't keep me for future roles" on the status page: per link and per address. */
+  talentPoolPref: { name: "candidate.talent_pool_pref", rules: [{ by: "token", windowMs: HOUR, limit: 10, param: "token" }, { by: "ip", windowMs: HOUR, limit: 30 }] },
+  /** "Lost your link?": anyone may ask, so per address and per mailbox typed (normalized); the answer is the same whether or not the address is known. */
+  linkRequest: { name: "candidate.link_request", rules: [{ by: "ip", windowMs: HOUR, limit: 10 }, { by: "email", windowMs: HOUR, limit: 3, field: "email" }] },
   schedule: { name: "candidate.schedule", rules: [{ by: "token", windowMs: HOUR, limit: 30, param: "token" }, { by: "ip", windowMs: HOUR, limit: 60 }] },
   scheduleNoneWork: { name: "candidate.schedule_none", rules: [{ by: "token", windowMs: HOUR, limit: 20, param: "token" }] },
   reschedule: { name: "candidate.reschedule", rules: [{ by: "token", windowMs: HOUR, limit: 10, param: "token" }] },

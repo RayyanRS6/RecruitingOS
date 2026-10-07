@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RolePacket } from "@ros/contracts";
-import { CareersPageAdapter, EMAIL_IN_NOT_CONFIGURED, EmailInAdapter, GoogleJobsAdapter, JOB_VALID_DAYS, jobPostingJsonLd, jobValidThrough, schemaEmploymentType } from "./native";
+import { CareersPageAdapter, EMAIL_IN_NOT_CONFIGURED, EmailInAdapter, GoogleJobsAdapter, jobPostingJsonLd, jobValidThrough, schemaEmploymentType } from "./native";
 import { IndeedAdapter, LinkedInBasicJobsAdapter, ZipRecruiterAdapter, jobFeedJson, jobFeedXml, linkedInFeedXml, type FeedJob } from "./external";
 import { FakeUrlVerifier, LINK_CHECK_MAX_BYTES, LINK_CHECK_REFUSED_DETAIL, LINK_CHECK_USER_AGENT, RealUrlVerifier, isNonPublicAddress, titleMatches } from "./verify";
 import type { PostingInput } from "../types";
@@ -25,15 +25,22 @@ describe("JobPosting structured data (docs/spec/20 item 4)", () => {
     expect(schemaEmploymentType("gig")).toBe("OTHER");
   });
 
-  it("keeps an open job valid for sixty days from posting and ends a closed one on the day it closed", () => {
-    expect(JOB_VALID_DAYS).toBe(60);
-    expect(jobValidThrough({ datePosted: "2026-09-01" })).toBe("2026-10-31");
-    expect(jobValidThrough({ datePosted: "2026-09-01", closedAt: "2026-09-20T15:04:05.000Z" })).toBe("2026-09-20");
+  it("validThrough is only ever a real date: the closing day, else the day applications stopped, else a set closing date; an open job with none has none (Wave 0 item 0.8)", () => {
+    expect(jobValidThrough({})).toBeUndefined();
+    expect(jobValidThrough({ closedAt: null, stoppedAt: null, closesOn: null })).toBeUndefined();
+    expect(jobValidThrough({ closedAt: "2026-09-20T15:04:05.000Z" })).toBe("2026-09-20");
+    expect(jobValidThrough({ stoppedAt: "2026-09-18T08:00:00.000Z" })).toBe("2026-09-18");
+    expect(jobValidThrough({ closesOn: "2026-10-15" })).toBe("2026-10-15");
+    // the closing day wins over everything; a stop wins over a planned date
+    expect(jobValidThrough({ closedAt: "2026-09-20T15:04:05.000Z", stoppedAt: "2026-09-18T08:00:00.000Z", closesOn: "2026-10-15" })).toBe("2026-09-20");
+    expect(jobValidThrough({ stoppedAt: "2026-09-18T08:00:00.000Z", closesOn: "2026-10-15" })).toBe("2026-09-18");
   });
 
   it("names the client company as the employer with its website and logo when known, and never emits CONTRACT or INTERNSHIP", () => {
     const ld = jobPostingJsonLd({ ...input, datePosted: "2026-09-01", companyWebsite: "https://brightline.example", companyLogoUrl: "https://brightline.example/logo.png" });
-    expect(ld).toMatchObject({ "@type": "JobPosting", title: "Registered Dental Hygienist", datePosted: "2026-09-01", validThrough: "2026-10-31", employmentType: "FULL_TIME", directApply: true, url: input.jobUrl });
+    expect(ld).toMatchObject({ "@type": "JobPosting", title: "Registered Dental Hygienist", datePosted: "2026-09-01", employmentType: "FULL_TIME", directApply: true, url: input.jobUrl });
+    // an open job with no closing date carries no invented end date (JSON drops the undefined key)
+    expect(JSON.parse(JSON.stringify(ld))).not.toHaveProperty("validThrough");
     expect(ld.hiringOrganization).toEqual({ "@type": "Organization", name: "Brightline Dental Group", sameAs: "https://brightline.example", logo: "https://brightline.example/logo.png" });
     expect(ld.jobLocation).toMatchObject({ "@type": "Place", address: { addressLocality: "Irvine", addressRegion: "CA", postalCode: "92618", addressCountry: "US" } });
     expect(ld.baseSalary).toMatchObject({ currency: "USD", value: { minValue: 45, maxValue: 55, unitText: "HOUR" } });
@@ -42,6 +49,14 @@ describe("JobPosting structured data (docs/spec/20 item 4)", () => {
     expect(plain.hiringOrganization).toEqual({ "@type": "Organization", name: "Brightline Dental Group" });
     const closed = jobPostingJsonLd({ ...input, datePosted: "2026-09-01", closedAt: "2026-09-15T00:00:00.000Z" });
     expect(closed.validThrough).toBe("2026-09-15");
+    const paused = jobPostingJsonLd({ ...input, datePosted: "2026-09-01", stoppedAt: "2026-09-12T10:00:00.000Z" });
+    expect(paused.validThrough).toBe("2026-09-12");
+  });
+
+  it("the pay range follows the page: the packet's choice by default, shown whenever the page must show it", () => {
+    const hidden = { ...packet, compensation: { ...packet.compensation, discloseRange: false } } as RolePacket;
+    expect(jobPostingJsonLd({ ...input, packet: hidden, datePosted: "2026-09-01" }).baseSalary).toBeUndefined();
+    expect(jobPostingJsonLd({ ...input, packet: hidden, datePosted: "2026-09-01", showPay: true }).baseSalary).toMatchObject({ currency: "USD", value: { minValue: 45, maxValue: 55 } });
   });
 });
 
@@ -75,6 +90,14 @@ describe("feeds (item 6)", () => {
     expect(j.publisher).toBe("Recruiting OS");
     expect(j.lastBuildDate).toBe("2026-09-22T10:00:00.000Z");
     expect(j.jobs[0]).toMatchObject({ referenceNumber: "role-1", applyUrl: input.applyUrl, datePosted: "2026-09-01", validThrough: "2026-10-31", employmentType: "FULL_TIME", hiringOrganization: { name: "Brightline \"Dental\" Group" }, salary: { minValue: 45, maxValue: 55, currency: "USD", unitText: "HOUR" } });
+  });
+
+  it("leaves the expiration date out of both feeds when a job has none, instead of inventing one", () => {
+    const open: FeedJob = { ...job, validThrough: undefined };
+    const xml = jobFeedXml([open], meta);
+    expect(xml).not.toContain("<expirationdate>");
+    expect(xml).toContain("<category><![CDATA[Dental]]></category>\n    <remote>no</remote>");
+    expect((jobFeedJson([open], meta) as { jobs: Array<Record<string, unknown>> }).jobs[0]).not.toHaveProperty("validThrough");
   });
 
   it("keeps the LinkedIn feed working, with the publisher URL and the same escaping", () => {

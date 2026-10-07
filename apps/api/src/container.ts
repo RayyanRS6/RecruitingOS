@@ -18,6 +18,7 @@ import { checkScannerForProduction } from "./scanner-gate";
 import { reportError } from "./observability";
 import { jobFailureReport, stepFailureReport } from "./failure-reports";
 import { DAILY_MS, recurring } from "./recurring-jobs";
+import { LINK_REQUEST_JOB_KIND, emailStatusLinks } from "./services/applications";
 
 const PRIVACY_DEADLINE_JOB_KIND = "privacy.deadline_check";
 
@@ -180,6 +181,12 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     const companyId = String(payload.companyId ?? "");
     if (!communicationId || !companyId) return;
     await sendQueuedCommunication(handle.db, integrations, { communicationId, companyId }, ctx);
+  });
+
+  // "Lost your link?" (Wave 0 item 0.1): the page queued the request and answered at once; the lookup and the emails happen here.
+  engine.registerJob(LINK_REQUEST_JOB_KIND, async (payload, ctx) => {
+    const email = typeof payload.email === "string" ? payload.email : "";
+    if (email) await emailStatusLinks({ db: handle.db, integrations, jobsBaseUrl: env.JOBS_BASE_URL }, email, ctx.now);
   });
 
   engine.registerJob("email.retry", async (payload, ctx) => {

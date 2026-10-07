@@ -78,29 +78,32 @@ export function schemaEmploymentType(employmentType: string): string {
   return SCHEMA_EMPLOYMENT_TYPE[employmentType] ?? "OTHER";
 }
 
-/** How long an open job stays valid from the day it was posted; recomputed on every request, so renewal is automatic. */
-export const JOB_VALID_DAYS = 60;
-
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
 /**
- * `validThrough`: the day the role closed when it is closed (so the block stays on the page, in the past), otherwise
- * sixty days after the posting date, recomputed each time the page is rendered.
+ * `validThrough` (Wave 0 item 0.8), only ever a real date: the day the role closed; otherwise the day it stopped taking
+ * applications (paused, or the accepting switch turned off); otherwise the day applications are due to close, when one
+ * is set. An open role with no closing date has none, and the value is left out rather than invented.
  */
-export function jobValidThrough(input: { datePosted: string; closedAt?: string | null }): string {
+export function jobValidThrough(input: { closedAt?: string | null; stoppedAt?: string | null; closesOn?: string | null }): string | undefined {
   if (input.closedAt) return isoDate(new Date(input.closedAt));
-  const posted = new Date(input.datePosted);
-  return isoDate(new Date(posted.getTime() + JOB_VALID_DAYS * 86_400_000));
+  if (input.stoppedAt) return isoDate(new Date(input.stoppedAt));
+  if (input.closesOn) return input.closesOn.slice(0, 10);
+  return undefined;
 }
 
 export type JobPostingJsonLdInput = PostingInput & {
   datePosted: string;
-  /** Overrides the computed value; the page normally leaves it to `jobValidThrough`. */
-  validThrough?: string;
+  /** Overrides the computed value; the page normally passes the dates and leaves it to `jobValidThrough`. */
+  validThrough?: string | null;
   /** When the role is closed: the block stays on the page with `validThrough` in the past. */
   closedAt?: string | null;
+  /** When the role stopped taking applications without closing (paused, or the accepting switch off). */
+  stoppedAt?: string | null;
+  /** Whether the pay range is shown; defaults to the packet's own choice. A page in a pay-transparency jurisdiction shows it regardless. */
+  showPay?: boolean;
   /** The employer's website (`hiringOrganization.sameAs`) and logo, when the company set them. */
   companyWebsite?: string | null;
   companyLogoUrl?: string | null;
@@ -120,14 +123,14 @@ export function jobPostingJsonLd(input: JobPostingJsonLdInput): Record<string, u
     description: p.description.publicJobDescription,
     identifier: { "@type": "PropertyValue", name: input.companyName, value: input.roleId },
     datePosted: input.datePosted,
-    validThrough: input.validThrough ?? jobValidThrough({ datePosted: input.datePosted, closedAt: input.closedAt }),
+    validThrough: input.validThrough ?? jobValidThrough({ closedAt: input.closedAt, stoppedAt: input.stoppedAt }),
     employmentType: schemaEmploymentType(p.identity.employmentType),
     hiringOrganization,
     jobLocation: loc
       ? { "@type": "Place", address: { "@type": "PostalAddress", streetAddress: loc.address1, addressLocality: loc.city, addressRegion: loc.region, postalCode: loc.postalCode, addressCountry: loc.country ?? "US" } }
       : undefined,
     jobLocationType: p.identity.remotePolicy === "remote" ? "TELECOMMUTE" : undefined,
-    baseSalary: comp.discloseRange
+    baseSalary: (input.showPay ?? comp.discloseRange)
       ? { "@type": "MonetaryAmount", currency: comp.currency, value: { "@type": "QuantitativeValue", minValue: comp.min, maxValue: comp.max, unitText: comp.basis === "hourly" ? "HOUR" : "YEAR" } }
       : undefined,
     directApply: true,

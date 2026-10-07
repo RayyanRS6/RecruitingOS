@@ -12,3 +12,4 @@ export * from "./interviewer-brief";
 export * from "./privacy-messages";
 export * from "./email-failures";
 export * from "./outbox";
+export * from "./candidate-links";

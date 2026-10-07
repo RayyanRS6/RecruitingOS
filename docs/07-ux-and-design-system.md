@@ -30,9 +30,9 @@ Below the brief, the owner types. Replies are short, cite records with links, an
 
 **Calendar.** Interviews this week with briefs, interviewer load, and unscheduled interviews waiting on candidates.
 
-**Setup.** Company profile, team and roles, integrations with status badges, "What the AI may do on its own" (the policy editor, grouped by lifecycle stage with the four levels as a segmented control), notices and consent texts (with the jurisdictions they apply to), billing and usage.
+**Setup.** Company profile, team and roles, integrations with status badges, "What the AI may do on its own" (the policy editor, grouped by lifecycle stage with the four levels as a segmented control that offers only the levels an action allows), notices and consent texts (with the jurisdictions they apply to), billing and usage.
 
-**Bring in a recruiter** is a persistent button in the conversation and on every decision card. It opens a short sheet: "What do you want help with?" with three quick picks (Review these candidates · Help me decide · Take this role over) and a free-text box, then confirms the SLA.
+**Bring in a recruiter** is a persistent button in the conversation and on every decision card. It opens a short sheet: "What do you want help with?" with three quick picks (Review these candidates · Help me decide · Take this role over) and a free-text box, says what the recruiter will see and until when, then confirms the SLA. Opened from the top of Today (no role or candidate in view), it first asks "Which hire is this about?" (a role, or All of your hiring) and needs a one-line note.
 
 ## Recruiter Mode
 

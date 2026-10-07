@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "../nav";
-import { Alert, Button, Card, Field } from "@ros/ui";
+import { Alert, Button, Card, ErrorState, Field, Skeleton } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 
 const ERRORS: Record<string, string> = {
@@ -18,6 +18,7 @@ const ERRORS: Record<string, string> = {
   mfa_required: "ITS staff need a second factor. Finish multi-factor sign-in with Microsoft and try again.",
   email_unverified: "Your email address is not verified with the sign-in provider. Verify it and try again.",
   exchange_failed: "The sign-in could not be completed. Try again.",
+  identity_mismatch: "This email address is already linked to a different Google or Microsoft account. Sign in with the account you used before, or contact ITS support to change it.",
 };
 
 /**
@@ -51,13 +52,14 @@ export function Login() {
         <div className="stack">
           {error ? <Alert tone="critical">{error}</Alert> : null}
           {errParam === "invite_email_mismatch" ? <div><Button variant="quiet" size="sm" loading={forgetInvite.isPending} onClick={() => forgetInvite.mutate()}>Continue without the invitation</Button></div> : null}
+          {/* The sign-in choices come from the server; if they cannot be loaded, say so and offer a retry instead of an empty card. */}
+          {config.isLoading ? <Skeleton lines={2} /> : config.error ? <ErrorState message="We could not load the sign-in options. Check your connection and try again." onRetry={() => config.refetch()} /> : null}
           {config.data?.providers.length ? (
             <div className="stack" style={{ gap: 8 }}>
               {config.data.providers.map((p) => (
                 <a key={p.key} className="btn primary" href={`/api/v1/auth/start/${p.key}`} style={{ textAlign: "center", textDecoration: "none" }}>Continue with {p.label}</a>
               ))}
               {config.data.mode === "fake_identity" ? <p className="small muted">Development: the provider buttons open a fake sign-in page; nothing leaves this machine.</p> : null}
-              <p className="small muted">ITS staff: use Microsoft with your second factor.</p>
             </div>
           ) : null}
           {config.data?.magicLink ? (
@@ -74,6 +76,12 @@ export function Login() {
                 <Button type="submit" variant="secondary" loading={send.isPending}>Email me a sign-in link</Button>
               </form>
             )
+          ) : null}
+          {config.data?.providers.length ? (
+            <details className="small muted">
+              <summary>ITS staff</summary>
+              <p style={{ marginTop: 6 }}>Sign in with Microsoft and your second factor.</p>
+            </details>
           ) : null}
         </div>
       </Card>

@@ -414,7 +414,6 @@ function fakeTriageAssess(req: StructuredRequest<unknown>): EvidenceAssessment {
     competencyFindings,
     requirementFindings,
     anomalies,
-    secondaryScore: mustHaves.length ? Math.round(((yes + partial * 0.5) / mustHaves.length) * 100) : undefined,
     recommendation,
     rationale: recommendation === "screen" ? "Eligible, with relevant evidence for the must-haves; a screen will settle the unknowns." : noText ? "There is nothing to assess against; a human should look." : overall === "unknown" ? `The ${where} shows none of the must-haves and nothing about this kind of work; a person should look or ask.` : "Eligibility was not met; the owner reviews before anything else happens.",
   };

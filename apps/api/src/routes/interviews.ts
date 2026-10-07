@@ -5,7 +5,7 @@ import { STAGE_LABEL, assertCan, audit, availabilityFor, calendarConnectionFor, 
 import { applications, approvalRequests, candidates, companies, events, interviewParticipants, interviews, jobs, memberships, rolePackets, roles, users, withTenant } from "@ros/db";
 import { actorOf, applicationScopeGuard, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
-import { sendDeclineAfterHumanDecision } from "../services/application-actions";
+import { declineAfterHumanDecision, declineSent, type DeclineNotice } from "../services/application-actions";
 import { cancelInterviewInTx } from "../services/interview-cancel";
 import { interviewBriefFor } from "../services/interviewer-view";
 
@@ -264,7 +264,8 @@ applicationInterviewRoutes.post("/:id/interviews", requireTenant, async (c) => {
  * The human decision after an interview (HARD human-only in spirit: there is no automated path to any of these). It is
  * recorded on the newest interview that is over and still undecided, so a second decision never overwrites the first
  * one's, and a "not moving forward" sends the respectful message through the same gate as the actions route
- * (founder correction 6: candidate-facing decline only after the human decision). `dispositionSent` says whether it went.
+ * (founder correction 6: candidate-facing decline only after the human decision). `dispositionSent` says whether it went,
+ * and `candidateNotice` what became of it, word for word on the page (sent, waiting for approval, not sent and why).
  */
 applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -280,13 +281,15 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
     let stage = app.stage;
     let nextRoundKey: string | null = null;
     let dispositionSent: boolean | undefined;
+    let candidateNotice: DeclineNotice | undefined;
     if (body.decision === "not_moving_forward") {
       if (!body.reason) throw new HttpError(400, "reason_required", "A reason is required to decline a candidate.");
       assertCan(t.role, "application.reject");
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "rejected", by: t.role, actor, reason: body.reason, payload: { note: body.note ?? null } });
       await tx.update(applications).set({ rejectNote: body.note ?? null }).where(eq(applications.id, app.id));
       await emit(tx, { type: "application.rejected", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { reason: body.reason, byHuman: true, afterInterview: true } });
-      dispositionSent = await sendDeclineAfterHumanDecision(tx, container, { companyId: t.companyId, app, actor, reason: body.reason });
+      candidateNotice = await declineAfterHumanDecision(tx, container, { companyId: t.companyId, app, actor, reason: body.reason });
+      dispositionSent = declineSent(candidateNotice);
       stage = "rejected";
     } else if (body.decision === "finalist") {
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "finalist", by: t.role, actor, reason: body.note ?? "finalist after interview" });
@@ -302,7 +305,7 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
     }
     await emit(tx, { type: "interview.decision_recorded", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { decision: body.decision, interviewId: last?.id ?? null, note: body.note ?? null, nextRoundKey } });
     await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "interview.decision", decision: body.decision } });
-    return { ok: true, stage, nextRoundKey, ...(dispositionSent === undefined ? {} : { dispositionSent }) };
+    return { ok: true, stage, nextRoundKey, ...(dispositionSent === undefined ? {} : { dispositionSent, candidateNotice }) };
   });
   await container.kick();
   return c.json(result);

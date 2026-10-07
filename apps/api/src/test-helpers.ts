@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import type { MembershipRole } from "@ros/contracts";
 import { grantPlatformRole, type PlatformRole } from "@ros/core";
-import { memberships, users, withPlatform } from "@ros/db";
+import { applications, candidates, memberships, users, withPlatform } from "@ros/db";
 import type { FakeIdentityProvider } from "@ros/integrations";
 import type { createApp } from "./app";
 import type { Container } from "./container";
@@ -67,6 +67,16 @@ export function refuseApplicationRole(url: string): void {
   }
   // Through the Supabase pooler the user is written `<role>.<project ref>`.
   if (/^(ros_app|ros_worker|app_tenant)(\.|$)/.test(user)) throw new Error(`TEST_DATABASE_URL connects as ${user}: use the owner role of an empty test database (the one that applied its migrations), never ros_app or ros_worker; the application roles cannot read the migration ledger and the suites' direct reads rely on seeing every row (docs/readiness/03 section 2)`);
+}
+
+/**
+ * The status token of the application an address made for a role. Since Wave 0 item 0.1 the apply form answers every
+ * submission with the same receipt and the link travels only by email, so suites read it from the database.
+ */
+export async function statusTokenFor(container: Container, input: { roleId: string; email: string }): Promise<string> {
+  const [row] = await container.db.select({ token: applications.statusToken }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(eq(applications.roleId, input.roleId), eq(candidates.email, input.email.trim().toLowerCase()))).limit(1);
+  if (!row) throw new Error(`no application from ${input.email} for role ${input.roleId}`);
+  return row.token;
 }
 
 /**

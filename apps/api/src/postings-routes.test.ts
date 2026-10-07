@@ -285,8 +285,18 @@ describe("posting routes: the owner's Posting tab API", () => {
     expect((await body<{ boardsStillUp: string[] }>(await get(owner, `/api/v1/roles/${roleId}`))).boardsStillUp).toEqual(["indeed"]);
     // pausing and resuming the role prepares its channels again, and a Retry elsewhere does too: the closed board stays closed, on the checklist and in the brief
     const preparedBefore = (await eventsOf("posting.ready_to_post")).filter((e) => e.subjectId === closed.id).length;
+    // the role itself pauses only from open and resumes only from paused (Wave 0 item 0.8): a second click changes nothing
+    const openNotPaused = await post(owner, `/api/v1/roles/${roleId}/resume`);
+    expect(openNotPaused.status).toBe(409);
+    expect((await body<ErrorBody>(openNotPaused)).error).toMatchObject({ code: "not_paused", message: "This role is already open." });
+    const resumedBefore = (await eventsOf("role.resumed")).length;
     expect((await post(owner, `/api/v1/roles/${roleId}/pause`)).status).toBe(200);
+    const twice = await post(owner, `/api/v1/roles/${roleId}/pause`);
+    expect(twice.status).toBe(409);
+    expect((await body<ErrorBody>(twice)).error).toMatchObject({ code: "not_open", message: "This role is already paused." });
+    expect((await eventsOf("role.paused")).filter((e) => e.subjectId === roleId)).toHaveLength(1);
     expect((await post(owner, `/api/v1/roles/${roleId}/resume`)).status).toBe(200);
+    expect((await eventsOf("role.resumed")).length).toBe(resumedBefore + 1);
     await container.drain();
     expect((await body<{ action: string }>(await post(owner, P("email_in", "retry")))).action).toBe("republish");
     await container.drain();
@@ -316,11 +326,24 @@ describe("posting routes: the owner's Posting tab API", () => {
     expect((await body<ErrorBody>(refused)).error.message).toMatch(/from "Closed" to "Paused"/);
   });
 
-  it("Google for Jobs is marked verified by a person with a note and goes through pause and resume; the careers page can be checked again; a failed native channel is prepared again", async () => {
+  it("Google for Jobs is marked verified by a person with a note; the careers page and Google follow the role and cannot be paused or closed on their own; one an earlier version left paused can be resumed; the careers page can be checked again; a failed native channel is prepared again", async () => {
     const google = await body<PostingView>(await post(owner, P("google_jobs", "verify"), { note: "Seen in Search Console on 24 September." }));
     expect(google).toMatchObject({ status: "live_verified", verificationNote: "Seen in Search Console on 24 September." });
     expect(google.verifiedBy).toMatchObject({ kind: "user", id: ownerId });
-    expect((await body<PostingView>(await post(owner, P("google_jobs", "pause")))).status).toBe("paused");
+    // Wave 0 item 0.8: a pause or close here would change a label while the job page stayed up and kept taking applications
+    for (const channel of ["careers_page", "google_jobs"]) {
+      for (const action of ["pause", "close"]) {
+        const refused = await post(owner, P(channel, action));
+        expect(refused.status, `${channel} ${action}`).toBe(409);
+        const err = (await body<ErrorBody>(refused)).error;
+        expect(err.code).toBe("follows_the_role");
+        expect(err.message).toMatch(/accepting applications|pause the role/);
+      }
+    }
+    expect((await posting("google_jobs")).status).toBe("live_verified");
+    expect((await posting("careers_page")).status).toBe("live_verified");
+    // a Google posting an earlier version left paused comes back to where it was
+    await container.db.update(postings).set({ status: "paused", pausedAt: new Date(BASE + clockOffset).toISOString() }).where(eq(postings.id, google.id));
     const back = await body<PostingView>(await post(owner, P("google_jobs", "resume")));
     expect(back).toMatchObject({ status: "live_verified", verificationNote: "Seen in Search Console on 24 September." });
     expect((await post(owner, P("google_jobs", "retry"))).status).toBe(409); // live: nothing to retry
@@ -487,6 +510,14 @@ describe("posting routes: the owner's Posting tab API", () => {
     expect((await body<ErrorBody>(late)).error.message).toMatch(/from "Closed" to "Posted"/);
     expect((await post(owner, `/api/v1/roles/${roleId}/links`, { source: "referral", label: "Too late" })).status).toBe(409);
     expect((await body<ErrorBody>(await post(owner, `/api/v1/roles/${roleId}/applications/accepting`, { accepting: false }))).error.code).toBe("role_closed");
+    // a closed role cannot be resumed back to open, nor paused (Wave 0 item 0.8): before, resume reopened it and published it again
+    const publishRunsBefore = (await eventsOf("workflow.started")).filter((e) => (e.payload as { workflowKey?: string }).workflowKey === "publish_role").length;
+    const resumeClosed = await post(owner, `/api/v1/roles/${roleId}/resume`);
+    expect(resumeClosed.status).toBe(409);
+    expect((await body<ErrorBody>(resumeClosed)).error.code).toBe("not_paused");
+    expect((await body<ErrorBody>(await post(owner, `/api/v1/roles/${roleId}/pause`))).error.code).toBe("not_open");
+    expect((await container.db.select({ status: roles.status }).from(roles).where(eq(roles.id, roleId)))[0].status).toBe("closed");
+    expect((await eventsOf("workflow.started")).filter((e) => (e.payload as { workflowKey?: string }).workflowKey === "publish_role").length).toBe(publishRunsBefore);
     // the checklist
     expect((await body<PostingView>(await post(owner, P("linkedin_basic", "closure-confirm")))).stillUp).toBe(false);
     const half = (await body<Brief>(await get(owner, "/api/v1/brief"))).cards.find((c) => c.title.startsWith("Still posted on"));

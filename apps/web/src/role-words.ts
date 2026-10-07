@@ -17,6 +17,16 @@ export function boardNames(channels: string[]): string {
   return channels.map((c) => CHANNEL_LABEL[c] ?? c).join(", ");
 }
 
+/**
+ * "Shown to candidates" on the Pay card, by the public pages' rule (`payShown` in packages/core, sent by the API with
+ * each packet): the owner's choice, or a pay transparency law where the job is, which shows it whatever the choice.
+ */
+export function payShownLabel(packet: { payShown?: boolean; payRequiredByLaw?: boolean }, discloseRange: boolean): string {
+  const shown = packet.payShown ?? discloseRange;
+  if (!shown) return "No";
+  return !discloseRange && packet.payRequiredByLaw ? "Yes: the law where this job is requires it" : "Yes";
+}
+
 /** A team role as a person ("a hiring manager"), for sentences such as "planned: an owner, a hiring manager". */
 const ROLE_WORDS: Record<string, string> = { owner: "an owner", admin: "an admin", hiring_manager: "a hiring manager", hr: "someone from HR", interviewer: "an interviewer", recruiter: "a recruiter" };
 export function roleWords(roles: string[]): string {

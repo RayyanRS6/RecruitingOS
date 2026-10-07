@@ -15,7 +15,8 @@ import type { EngineDeps, EngineOptions, PrepareContext, RunRow, StartInput, Ste
  * - `wait` suspends the run on a human decision, an event, or a timer; `signal` wakes event and human waits;
  *   timers are jobs with a future `run_at`.
  * - Failures retry with exponential backoff; after `maxAttempts` the run fails, emits `workflow.failed`, and
- *   creates a recruiter escalation so nothing dies silently.
+ *   creates a recruiter escalation for the role or candidate involved (an alert for ITS administrators when the run
+ *   names neither) so nothing dies silently.
  */
 export type JobHandler = (payload: Record<string, unknown>, ctx: { attempt: number; maxAttempts: number; now: Date }) => Promise<void>;
 
@@ -263,7 +264,9 @@ export class WorkflowEngine {
         return res;
       });
     } catch (err) {
-      outcome = { kind: "threw", error: err instanceof Error ? err.message : String(err) };
+      // A step's own "fail" result rolls its transaction back by throwing StepFailed; it keeps the step's word on whether
+      // trying again can help, so a failure that cannot be retried goes straight to failForGood.
+      outcome = err instanceof StepFailed ? { kind: "fail", error: err.message, retryable: err.retryable } : { kind: "threw", error: err instanceof Error ? err.message : String(err) };
     }
 
     if (outcome.kind === "threw" || (outcome.kind === "fail" && outcome.retryable !== false)) {
@@ -331,20 +334,41 @@ export class WorkflowEngine {
       // a reporting hook never affects the run
     }
     if (run.companyId) {
+      const subject = run.subject;
+      const roleId = (run.state.roleId as string | undefined) ?? (subject.type === "role" ? subject.id : null);
+      const applicationId = (run.state.applicationId as string | undefined) ?? (subject.type === "application" ? subject.id : null);
+      // A failed run with no role and no candidate attached goes to ITS administrators, never to a recruiter with access
+      // to the whole company (founder decision Q31: automatic requests reach only the candidate or role involved).
+      if (!roleId && !applicationId) {
+        try {
+          await raiseAlert(this.deps.db, {
+            kind: "workflow.failed",
+            severity: "high",
+            title: `A workflow stopped and needs a look: ${def.key}`,
+            body: `Step "${stepKey}" failed after ${attempts} attempts: ${error}. No role or candidate is attached, so no recruiter was brought in; open the run in the console.`,
+            companyId: run.companyId,
+            target: { type: "workflow_run", id: run.id },
+            details: { workflowKey: def.key, step: stepKey, attempts },
+          });
+        } catch {
+          // the alert is a courtesy; the failed run is in the console regardless
+        }
+      }
       try {
         await withTenant(this.deps.db, run.companyId, async (q) => {
-          const subject = run.subject;
-          const esc = await createEscalation(q, {
-            companyId: run.companyId!,
-            roleId: (run.state.roleId as string | undefined) ?? (subject.type === "role" ? subject.id : null),
-            applicationId: (run.state.applicationId as string | undefined) ?? (subject.type === "application" ? subject.id : null),
-            kind: def.escalationKind ?? "stuck_role",
-            question: `Workflow ${def.key} failed at step "${stepKey}" after ${attempts} attempts: ${error}. Please take over.`,
-            requestedBy: actor,
-            workflowRunId: run.id,
-          });
-          await q.update(workflowRuns).set({ escalationId: esc.id }).where(eq(workflowRuns.id, run.id));
-          await emit(q, { type: "workflow.escalated", companyId: run.companyId, actor, subject: { type: "workflow_run", id: run.id }, payload: { escalationId: esc.id }, correlationId: run.id });
+          if (roleId || applicationId) {
+            const esc = await createEscalation(q, {
+              companyId: run.companyId!,
+              roleId,
+              applicationId,
+              kind: def.escalationKind ?? "stuck_role",
+              question: `Workflow ${def.key} failed at step "${stepKey}" after ${attempts} attempts: ${error}. Please take over.`,
+              requestedBy: actor,
+              workflowRunId: run.id,
+            });
+            await q.update(workflowRuns).set({ escalationId: esc.id }).where(eq(workflowRuns.id, run.id));
+            await emit(q, { type: "workflow.escalated", companyId: run.companyId, actor, subject: { type: "workflow_run", id: run.id }, payload: { escalationId: esc.id }, correlationId: run.id });
+          }
           if (def.onFailure) {
             const ctx: StepContext = { run, companyId: run.companyId!, state: run.state, q, services: this.deps.services, wake: null, now: this.now(), actor, alreadyDone: async () => false };
             await def.onFailure(ctx, error);

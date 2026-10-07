@@ -74,6 +74,25 @@ export function noticesFor(jurisdictions: string[], overrides?: Record<string, {
   return out;
 }
 
+/** The notices a job's public pages carry: from the job's and the company's locations, in the company's own wording. */
+export function jobNoticesFor(input: { jobLocations: Array<Location | null | undefined>; companyLocations?: Array<Location | null | undefined>; overrides?: Record<string, { version: string; text: string; jurisdictions: string[] }> }): Notice[] {
+  return noticesFor(resolveJurisdictions([...input.jobLocations, ...(input.companyLocations ?? [])]), input.overrides);
+}
+
+/** Whether a pay transparency law covers the job: its notice is among the job's notices. */
+export function payTransparencyApplies(notices: Notice[]): boolean {
+  return notices.some((n) => n.key === "pay_transparency");
+}
+
+/**
+ * Whether candidates see the pay range (Wave 0 item 0.8): when the owner chose to show it, and always where a pay
+ * transparency law covers the job, since that notice tells the candidate the range is "shown above". The job page, the
+ * apply form, the feeds, the board packages, the screening assistant and the owner's role page all ask this one question.
+ */
+export function payShown(compensation: { discloseRange: boolean }, notices: Notice[]): boolean {
+  return compensation.discloseRange || payTransparencyApplies(notices);
+}
+
 /**
  * The notices a candidate page renders as text. Two keys stay defined but are never shown as notices: `recording` is
  * for a feature release 1 does not have (docs/readiness/20 section F), and `sms_consent` is a consent checkbox, not a

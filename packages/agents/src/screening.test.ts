@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
-import { EMPTY_SCREEN_PROGRESS, advanceProgress, enforceTurnRules } from "./screening";
+import { EMPTY_SCREEN_PROGRESS, WITHDRAW_CONFIRM_KEY, advanceProgress, enforceTurnRules, screenCommand, withdrawPending } from "./screening";
 
 /**
  * The follow-up cap (docs/05; docs/spec/21 section 7, P0 row "follow-up cap test"): whatever the model says, a question
@@ -69,5 +69,42 @@ describe("enforceTurnRules: the follow-up cap", () => {
     const t = enforceTurnRules(stray, packet, asking("experience"), {});
     expect(t.questionKey).toBeNull();
     expect(t.answerRecorded).toBeNull();
+  });
+});
+
+/**
+ * The keyword commands (Wave 0 item 0.7): only a message that is the command itself counts, so an answer that happens to
+ * start with one of the words is recorded as an answer; WITHDRAW asks first, and the reply to that question decides.
+ */
+describe("screenCommand: whole-message keywords", () => {
+  it("an answer that starts with a keyword is an answer", () => {
+    expect(screenCommand("Representative at a phone store for two years")).toBeNull();
+    expect(screenCommand("Withdraw cash from the till at closing and count the drawer")).toBeNull();
+    expect(screenCommand("Agent for a travel company, 2019 to 2022")).toBeNull();
+    expect(screenCommand("Person-centred care is how I work")).toBeNull();
+    expect(screenCommand("Yes")).toBeNull(); // nothing is pending: an ordinary answer
+  });
+
+  it("the command alone, in any case, with a full stop or an exclamation mark, is the command", () => {
+    for (const m of ["HUMAN", "human", " Human. ", "person!", "Agent", "representative", "a person"]) expect(screenCommand(m), m).toBe("human");
+    expect(screenCommand("Could I talk to a real person about the schedule?")).toBe("human");
+    expect(screenCommand("I'd rather speak with a human")).toBe("human");
+    for (const m of ["WITHDRAW", "withdraw.", "Withdraw my application"]) expect(screenCommand(m), m).toBe("withdraw");
+  });
+
+  it("while a withdrawal waits, CONFIRM or YES confirms it, NO keeps the application, anything else is an answer", () => {
+    for (const m of ["CONFIRM", "yes", "Y", "withdraw"]) expect(screenCommand(m, true), m).toBe("confirm_withdraw");
+    for (const m of ["no", "No.", "keep", "keep going", "Keep my application"]) expect(screenCommand(m, true), m).toBe("keep_application");
+    expect(screenCommand("Sorry, I meant I have worked weekends for three years", true)).toBeNull();
+    expect(screenCommand("HUMAN", true)).toBe("human");
+  });
+
+  it("a withdrawal is pending only while the latest assistant message is the question", () => {
+    const at = "2026-10-07T10:00:00.000Z";
+    const asked = [{ role: "assistant" as const, content: "First question", at }, { role: "candidate" as const, content: "WITHDRAW", at }, { role: "assistant" as const, content: "Do you want to withdraw?", at, questionKey: WITHDRAW_CONFIRM_KEY }];
+    expect(withdrawPending(asked)).toBe(true);
+    expect(withdrawPending([...asked, { role: "candidate" as const, content: "hmm", at }])).toBe(true);
+    expect(withdrawPending([...asked, { role: "candidate" as const, content: "no", at }, { role: "assistant" as const, content: "No problem.", at }])).toBe(false);
+    expect(withdrawPending([])).toBe(false);
   });
 });

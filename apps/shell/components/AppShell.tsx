@@ -55,11 +55,9 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
             <NavLink to="/admin">Console</NavLink>
           </>
         ) : null}
+        {/* Which AI company we use is shown in Setup, not here. Sign out stays reachable on phones and tablets (tokens.css). */}
         <div className="foot">
-          {me.user.name ?? me.user.email}
-          <br />
-          AI: {me.ai.provider === "fake" ? <span title="Deterministic test provider; never used in production">fake provider (dev)</span> : me.ai.provider}
-          <br />
+          <span className="who">{me.user.name ?? me.user.email}</span>
           <Button variant="quiet" size="sm" onClick={logout}>Sign out</Button>
         </div>
       </nav>

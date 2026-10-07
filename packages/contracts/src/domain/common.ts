@@ -90,6 +90,8 @@ export const Evidence = z.object({
   ref: z.string().optional(),
   confidence: Confidence.optional(),
   context: z.string().optional(),
+  /** Set in code, never trusted from the model: a claim about the candidate with nothing verified quoted from them (shown as "no quote"). */
+  unquoted: z.boolean().optional(),
 });
 export type Evidence = z.infer<typeof Evidence>;
 

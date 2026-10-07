@@ -217,9 +217,10 @@ export const applicationIntake: WorkflowDefinition<State> = {
           await notify(ctx.q, { companyId: ctx.companyId, kind: "application.assessment_unavailable", title: `We could not assess ${name} automatically; please review`, body: `${ASSESSMENT_UNAVAILABLE_TEXT} The assistant's answer was not usable after two tries. Nothing is hidden: the application, the résumé and the answers are on ${candidate.firstName}'s page.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
           return { kind: "complete" };
         }
+        // The model writes no number (plan 0.9); the column stays for a score worked out in code later.
         const [row] = await ctx.q
           .insert(assessments)
-          .values({ companyId: ctx.companyId, applicationId: app.id, kind: "triage", packetVersion: app.packetVersion, aiRunId: out.runId, result: out.output, overall: out.output.overall, confidence: out.output.confidence, secondaryScore: out.output.secondaryScore !== undefined ? String(out.output.secondaryScore) : null })
+          .values({ companyId: ctx.companyId, applicationId: app.id, kind: "triage", packetVersion: app.packetVersion, aiRunId: out.runId, result: out.output, overall: out.output.overall, confidence: out.output.confidence, secondaryScore: null })
           .returning({ id: assessments.id });
         await ctx.q.update(applications).set({ latestAssessmentId: row.id }).where(eq(applications.id, app.id));
         await emit(ctx.q, { type: "assessment.created", companyId: ctx.companyId, actor: { kind: "agent", id: "triage", runId: out.runId }, subject: { type: "application", id: app.id }, payload: { kind: "triage", assessmentId: row.id, overall: out.output.overall, recommendation: out.output.recommendation, confidence: out.output.confidence }, correlationId: ctx.run.id });

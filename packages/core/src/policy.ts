@@ -7,11 +7,34 @@ import { emit } from "./events";
  * Platform defaults (docs/06). Company and role rows override them.
  * `human_only` actions are never executed by the system, whatever a row says.
  */
-/** Actions that may never be set below a level (AC10.1: the AI never starts scheduling on its own). */
-export const MIN_LEVELS: Partial<Record<ActionType, PolicyLevel>> = { "interview.request": "approval" };
+/**
+ * Actions that may never be set below a level (AC10.1: the AI never starts scheduling on its own). A drafted role is
+ * always approved by a person before it opens, pay included, and offers are never drafted, sent or revised on their own.
+ */
+export const MIN_LEVELS: Partial<Record<ActionType, PolicyLevel>> = {
+  "interview.request": "approval",
+  "role_packet.approve": "approval",
+  "offer.draft": "approval",
+  "offer.send": "approval",
+  "offer.revise": "approval",
+};
+/**
+ * Actions that may never be set above a level. Role approval is a person's click: "only a person" would leave every new
+ * role waiting for a decision the system is told never to ask for, so it stays at "ask me first".
+ */
+export const MAX_LEVELS: Partial<Record<ActionType, PolicyLevel>> = { "role_packet.approve": "approval" };
 const LEVEL_RANK: Record<PolicyLevel, number> = { auto: 0, auto_notify: 1, approval: 2, human_only: 3 };
 export function levelAtLeast(level: PolicyLevel, min: PolicyLevel): boolean {
   return LEVEL_RANK[level] >= LEVEL_RANK[min];
+}
+
+/** The level an action actually runs at: a saved row outside the floor or the ceiling is read as the nearest allowed level. */
+export function clampLevel(actionType: ActionType, level: PolicyLevel): PolicyLevel {
+  const min = MIN_LEVELS[actionType];
+  if (min && !levelAtLeast(level, min)) return min;
+  const max = MAX_LEVELS[actionType];
+  if (max && LEVEL_RANK[level] > LEVEL_RANK[max]) return max;
+  return level;
 }
 
 export const HARD_HUMAN_ONLY: ReadonlySet<ActionType> = new Set([
@@ -73,7 +96,12 @@ export const DEFAULT_POLICIES: Record<ActionType, { level: PolicyLevel; approver
   "outreach.send": { level: "auto_notify", approverRoles: [] },
 };
 
-/** Resolution order: takeover overlay → role → company → platform default. */
+/**
+ * Resolution order: takeover overlay → role → company → platform default. The floors, the ceiling and the hard
+ * "only a person" list are applied to the saved rows first; the takeover overlay comes last and only ever turns an
+ * automatic action into the recruiter's approval, so an action that already needs a person (role approval among them)
+ * keeps its own approvers during a takeover.
+ */
 export async function resolvePolicy(q: Queryable, companyId: string, roleId: string | null, actionType: ActionType): Promise<PolicyDecision> {
   const def = DEFAULT_POLICIES[actionType];
   let decision: PolicyDecision = { actionType, level: def.level, approverRoles: def.approverRoles, source: "default", params: def.params ?? {} };
@@ -95,16 +123,23 @@ export async function resolvePolicy(q: Queryable, companyId: string, roleId: str
     if (roleRows[0]) {
       decision = { actionType, level: roleRows[0].level as PolicyLevel, approverRoles: roleRows[0].approverRoles, source: "role", params: roleRows[0].params };
     }
+  }
+  if (HARD_HUMAN_ONLY.has(actionType)) decision = { ...decision, level: "human_only" };
+  // Rows saved before a floor or ceiling existed are read through it, so no data migration is needed. A row moved to
+  // "approval" with no approver list gets the action's own list; so does packet approval, which is decided by role with
+  // no fallback list (approval-deciders.ts), or nobody could approve the role.
+  const clamped = clampLevel(actionType, decision.level);
+  const moved = clamped !== decision.level;
+  if (moved) decision = { ...decision, level: clamped };
+  if (decision.level === "approval" && !decision.approverRoles.length && (moved || actionType === "role_packet.approve")) decision = { ...decision, approverRoles: def.approverRoles };
+  if (roleId && (decision.level === "auto" || decision.level === "auto_notify")) {
     const active = await q
       .select()
       .from(takeovers)
       .where(and(eq(takeovers.companyId, companyId), eq(takeovers.roleId, roleId), eq(takeovers.status, "active")))
       .limit(1);
-    if (active[0] && (decision.level === "auto" || decision.level === "auto_notify")) {
-      decision = { ...decision, level: "approval", approverRoles: ["recruiter"], source: "takeover" };
-    }
+    if (active[0]) decision = { ...decision, level: "approval", approverRoles: ["recruiter"], source: "takeover" };
   }
-  if (HARD_HUMAN_ONLY.has(actionType)) decision = { ...decision, level: "human_only" };
   return decision;
 }
 

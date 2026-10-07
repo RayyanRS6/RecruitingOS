@@ -84,10 +84,10 @@ Each step lists what the user sees, what the system does, and the acceptance cri
 
 ### Step 5. Secure candidate application
 
-- Candidate: name, email, optional phone with a separate unchecked SMS consent (only when SMS is enabled), location, resume (PDF, DOCX, text, 8 MB) or four written answers, eligibility questions in plain language, notices with versions, submit; lands on the status page.
+- Candidate: name, email, optional phone with a separate unchecked SMS consent (only when SMS is enabled), location, resume (PDF, DOCX, text, 8 MB) or a few lines about recent work instead, eligibility questions in plain language, notices with versions, submit; lands on a receipt that says the status link goes by email (the same receipt for a repeat submission, which changes nothing on the existing record; "Lost your link?" emails it again).
 - System: honeypot, rate limit, dedupe by normalized email or phone, consent records with notice versions, resume stored with SHA-256, `application_intake` started; email-in path parses forwarded applications.
 - AC5.1 Application under three minutes on a phone; keyboard and screen-reader operable; errors name the field.
-- AC5.2 A duplicate application by the same person to the same role updates the existing application and emits `application.duplicate_detected`; no second acknowledgment.
+- AC5.2 A duplicate application by the same person to the same role (the same address, from the form or by email) changes nothing: the existing application and person keep their consent, phone, location and résumé, no second application or acknowledgment is created, and an uploaded file is discarded. It emits `application.duplicate_detected`, the submitter sees the same receipt as anyone else, and the address on file (never the one typed) gets one short email with that application's status link at most once a day. A direct-upload grant attaches its file to one submission only; reused, it is refused like an expired one.
 - AC5.3 Acknowledgment email with the disclosure and the human alternative within 60 seconds in 99% of cases (measured by `application.acknowledged` minus `application.received`).
 - AC5.4 Resume text extraction runs in the worker, not the request (S6); a file that cannot be read produces `resume.extraction_failed` and the application still proceeds.
 

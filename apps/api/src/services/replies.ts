@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, like } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { createEscalation, humanResponseExpectation, loadBusinessCalendar, notify } from "@ros/core";
 import { fromAddress, queueCommunication, recordInbound, replyToFor, requestHuman } from "@ros/agents";
@@ -6,13 +6,16 @@ import { applications, candidates, communications, companies, inboundEmails, rol
 import type { InboundEmail } from "@ros/integrations";
 import type { Container } from "../container";
 import { screenDeps } from "./screens";
+import { optOutOfTalentPool } from "./talent-pool";
 
 /**
  * A candidate's reply to one of our emails (docs/spec/21 F12, D9, H12). With the inbound mail domain configured, every
  * candidate email carries a per-application Reply-To address; the Postmark inbound webhook hands a message to that
  * address here. The reply is recorded on the application as an inbound communication, the team is told with a link
  * straight to the candidate, and a reply whose first line is HUMAN hands the conversation to a person exactly as the
- * HUMAN keyword does in a screening text. Nothing here ever creates an application or changes a stage.
+ * HUMAN keyword does in a screening text. After a decline, a first line of "no thanks" answers the decline email's offer
+ * and keeps the person out of the talent pool; before one, the same words are passed to the team as they are. Nothing
+ * here ever creates an application or changes a stage.
  */
 type App = typeof applications.$inferSelect;
 type InboundRow = typeof inboundEmails.$inferSelect;
@@ -30,7 +33,27 @@ export function humanRequested(text: string): boolean {
   return /^human[.!]?$/i.test(firstLine(text));
 }
 
-export async function handleCandidateReply(tx: Tx, container: Container, input: { app: App; mail: InboundEmail }): Promise<{ communicationId: string; humanRequested: boolean; duplicate?: boolean }> {
+/**
+ * "No thanks" as the whole first line (any case, with or without a comma, "no thank you" too) answers the decline
+ * email's offer: do not keep me for future roles (Wave 0 item 0.11). A longer sentence that merely starts that way is
+ * a message for the team, not an opt-out.
+ */
+export function noThanksRequested(text: string): boolean {
+  return /^no[,.]?\s*(thanks|thank you)[.!]*$/i.test(firstLine(text));
+}
+
+/**
+ * Whether a "no thanks" answers the offer about future roles: only the decline email makes it, so only once the
+ * application was declined or moved to the talent pool, or a decline email went out. Before that, "no thanks" to a
+ * screening invitation or an interview time more likely turns down that step, which is the team's to follow up.
+ */
+async function noThanksMeansFutureRoles(tx: Tx, app: App): Promise<boolean> {
+  if (app.stage === "rejected" || app.stage === "talent_pool") return true;
+  const [declineEmail] = await tx.select({ id: communications.id }).from(communications).where(and(eq(communications.applicationId, app.id), eq(communications.direction, "outbound"), like(communications.templateKey, "disposition:%"))).limit(1);
+  return !!declineEmail;
+}
+
+export async function handleCandidateReply(tx: Tx, container: Container, input: { app: App; mail: InboundEmail }): Promise<{ communicationId: string; humanRequested: boolean; talentPoolOptOut?: boolean; duplicate?: boolean }> {
   const { app, mail } = input;
   // Postmark redelivers a message it thinks was not taken (a timeout after this transaction committed, for instance):
   // the same MessageID on this application is the same reply, recorded once, acted on once.
@@ -49,14 +72,22 @@ export async function handleCandidateReply(tx: Tx, container: Container, input: 
   const name = `${candidate.firstName} ${candidate.lastName}`.trim() || "A candidate";
   const open = `/roles/${app.roleId}/talent?open=${app.id}`;
   const wantsHuman = humanRequested(text);
+  // After a decline the opt-out is done at once and confirmed by email; anything else they wrote stays in the thread for the team.
+  const saidNoThanks = !wantsHuman && noThanksRequested(text);
+  const aboutFutureRoles = saidNoThanks && (await noThanksMeansFutureRoles(tx, app));
+  const optedOut = aboutFutureRoles && (await optOutOfTalentPool(tx, container, { application: app, source: "email_reply" }));
+  const quoted = `About ${role.title}: "${firstLine(text).slice(0, 140)}"`;
   await notify(tx, {
     companyId: app.companyId,
     kind: "message.received",
     title: `${name} wrote back`,
-    body: wantsHuman ? `They asked for a person about ${role.title}. A recruiter has been asked to follow up; you can also reply yourself.` : `About ${role.title}: "${firstLine(text).slice(0, 140)}"`,
+    body: wantsHuman ? `They asked for a person about ${role.title}. A recruiter has been asked to follow up; you can also reply yourself.`
+      : optedOut ? `About ${role.title}: they replied "no thanks", so they will not be kept for future roles. They were sent a confirmation; nothing else changed.`
+      : saidNoThanks && !aboutFutureRoles ? `${quoted}. This may mean they do not want to go ahead with this step. Nothing was changed; reply to check with them.`
+      : quoted,
     action: { label: "Read it", href: open },
   });
-  if (!wantsHuman) return { communicationId, humanRequested: false };
+  if (!wantsHuman) return { communicationId, humanRequested: false, talentPoolOptOut: optedOut };
 
   const now = container.engine.clock();
   const calendar = await loadBusinessCalendar(tx, now);
@@ -106,7 +137,7 @@ export async function receiveCandidateReply(container: Container, input: { inbou
     await withPlatform(container.db, (tx) => tx.update(inboundEmails).set({ status: r.duplicate ? "duplicate" : "matched", companyId: app.companyId, applicationId: app.id }).where(eq(inboundEmails.id, input.inbound.id)));
     if (r.duplicate) return { status: 200, body: { ok: true, matched: true, reply: true, duplicate: true, applicationId: app.id } };
     await container.kick();
-    return { status: 200, body: { ok: true, matched: true, reply: true, applicationId: app.id, humanRequested: r.humanRequested } };
+    return { status: 200, body: { ok: true, matched: true, reply: true, applicationId: app.id, humanRequested: r.humanRequested, talentPoolOptOut: !!r.talentPoolOptOut } };
   } catch (err) {
     await withPlatform(container.db, (tx) => tx.update(inboundEmails).set({ status: "error", companyId: app.companyId, error: err instanceof Error ? err.message : String(err) }).where(eq(inboundEmails.id, input.inbound.id)));
     return { status: 202, body: { ok: false, matched: true, reply: true, error: "could not record the reply; queued for review" } };

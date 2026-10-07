@@ -5,7 +5,7 @@ import { applications, cspReports, screens } from "@ros/db";
 import { safeJsonLd } from "./pages/layout";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAdmin } from "./test-helpers";
+import { signInAdmin, statusTokenFor } from "./test-helpers";
 
 /**
  * Founder instruction of 21 September 2026, item 6: candidate pages and the application carry a strict content-security
@@ -51,7 +51,8 @@ describe("content-security policy on candidate pages", () => {
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
     fd.set("acknowledged", "yes");
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
-    statusToken = r.headers.get("location")!.split("/c/status/")[1].split("?")[0];
+    expect(r.status).toBe(302);
+    statusToken = await statusTokenFor(container, { roleId, email: "ivy.chen@example.com" });
     await container.drain();
     const [appRow] = await container.db.select().from(applications).where(eq(applications.statusToken, statusToken));
     applicationId = appRow.id;
@@ -71,7 +72,7 @@ describe("content-security policy on candidate pages", () => {
 
   it("every candidate page carries the strict policy in report-only mode by default, with a fresh nonce on the style and the structured data", async () => {
     expect(screenToken).toBeTruthy();
-    const pages = [`/careers/${companySlug}`, `/careers/${companySlug}/jobs/${roleId}`, `/careers/${companySlug}/jobs/${roleId}/apply`, `/c/status/${statusToken}`, `/c/screen/${screenToken}`, "/privacy"];
+    const pages = [`/careers/${companySlug}`, `/careers/${companySlug}/jobs/${roleId}`, `/careers/${companySlug}/jobs/${roleId}/apply`, `/careers/${companySlug}/jobs/${roleId}/applied`, `/c/status/${statusToken}`, `/c/screen/${screenToken}`, "/c/link-request", "/privacy"];
     const nonces = new Set<string>();
     for (const path of pages) {
       const r = await app.request(path);

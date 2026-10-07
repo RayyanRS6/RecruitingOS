@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { ESCALATION_PREVIEW_FIELDS, ESCALATION_PREVIEW_FORBIDDEN_KEYS, defaultUrgency, entitlements, genericSummary } from "@ros/core";
-import { applications, auditRecords, staffAccessGrants } from "@ros/db";
+import { ESCALATION_PREVIEW_FIELDS, ESCALATION_PREVIEW_FORBIDDEN_KEYS, anonymizeCandidate, defaultUrgency, entitlements, genericSummary, notify } from "@ros/core";
+import { applications, auditRecords, notifications, recruiterEscalations, staffAccessGrants, withPlatform, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -156,6 +156,34 @@ describe("recruiter queue preview carries no candidate-sensitive data before acc
     expect(detail.grant.purpose).not.toContain("Maria");
     const [grant] = await container.db.select().from(staffAccessGrants).where(eq(staffAccessGrants.escalationId, escalationId));
     expect(grant.purpose).toBe("review: The customer wants a recruiter to review one candidate for this role.");
+  });
+
+  it("deleting the candidate's data reaches the recruiter's copy, the requests that name them and the team's notices", async () => {
+    // a second request about the role names her too, and so does a notice to the team
+    const roleWide = (await (await json(owner, "POST", "/api/v1/escalations", { kind: "ask", roleId, question: "Should we interview Maria Reyes or wait? Her number is (949) 555-0100." })).json()) as { id: string };
+    await withTenant(container.db, companyId, (tx) => notify(tx, { companyId, kind: "test.named", title: "Maria Reyes finished her screen", body: "Maria Reyes (maria.reyes@example.com) answered every question." }));
+    const [app] = await container.db.select().from(applications).where(eq(applications.id, applicationId));
+    await withPlatform(container.db, (tx) => anonymizeCandidate(tx, { companyId, candidateId: app.candidateId, actor: { kind: "user", id: "admin-test", name: "ITS admin" }, deleteFile: async () => {} }));
+    // what identifies her (the role's own packet, pay and interview plan included, stays: it is not about her)
+    const expectNoTrace = (body: unknown) => { const text = JSON.stringify(body); for (const s of ["Maria", "Reyes", "maria.reyes", "555-0100", "Coastal Family"]) expect(text, `must not contain ${s}`).not.toContain(s); };
+    // the recruiter's copy keeps the company and the role, nothing about her
+    const detail = (await (await json(recruiter, "GET", `/api/v1/escalations/${escalationId}`)).json()) as { accessGranted: boolean; question: string; contextSnapshot: Record<string, unknown> };
+    expect(detail.accessGranted).toBe(true);
+    expectNoTrace({ question: detail.question, contextSnapshot: detail.contextSnapshot });
+    expect(detail.question).toBe("[removed at the candidate's request]");
+    expect(detail.contextSnapshot).not.toHaveProperty("candidate");
+    expect(detail.contextSnapshot).not.toHaveProperty("resumeText");
+    expect((detail.contextSnapshot.role as { title?: string } | null)?.title).toMatch(/hygienist/i);
+    // the other request keeps its words with her name and number taken out
+    const [other] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, roleWide.id));
+    expect(other.question).toBe("Should we interview a candidate or wait? Her number is [removed].");
+    // and the notices the team got no longer name her
+    const named = await container.db.select().from(notifications).where(eq(notifications.kind, "test.named"));
+    expect(named.length).toBeGreaterThan(0);
+    for (const n of named) expectNoTrace({ title: n.title, body: n.body });
+    expect(named[0].title).toBe("A candidate finished her screen");
+    // the customer's own list is clean as well
+    expectNoTrace(await (await json(owner, "GET", "/api/v1/escalations/mine")).json());
   });
 
   it("urgency defaults follow the category and the summary is always template text", () => {

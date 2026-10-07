@@ -116,9 +116,9 @@ export type FeedJob = {
   country: string;
   postalCode?: string;
   description: string;
-  /** ISO dates (YYYY-MM-DD). */
+  /** ISO dates (YYYY-MM-DD). `validThrough` is left out when the job has no real end date (packages/integrations/src/jobboards/native.ts). */
   datePosted: string;
-  validThrough: string;
+  validThrough?: string | null;
   /** A schema.org token: FULL_TIME, PART_TIME, CONTRACTOR, TEMPORARY, INTERN, PER_DIEM, OTHER. */
   employmentType: string;
   salary?: { min: number; max: number; currency: string; basis: "hourly" | "salary" } | null;
@@ -155,8 +155,7 @@ export function jobFeedXml(jobs: FeedJob[], meta: FeedMeta): string {
     <description>${cdata(j.description)}</description>
     <salary>${cdata(feedSalaryText(j.salary))}</salary>
     <jobtype>${cdata(JOB_TYPE_WORD[j.employmentType] ?? "other")}</jobtype>
-    <category>${cdata(j.category ?? "")}</category>
-    <expirationdate>${cdata(j.validThrough)}</expirationdate>${j.remote !== undefined ? `\n    <remote>${j.remote ? "yes" : "no"}</remote>` : ""}
+    <category>${cdata(j.category ?? "")}</category>${j.validThrough ? `\n    <expirationdate>${cdata(j.validThrough)}</expirationdate>` : ""}${j.remote !== undefined ? `\n    <remote>${j.remote ? "yes" : "no"}</remote>` : ""}
   </job>`,
     )
     .join("\n");
@@ -182,7 +181,7 @@ export function jobFeedJson(jobs: FeedJob[], meta: FeedMeta): Record<string, unk
       postalCode: j.postalCode ?? null,
       description: j.description,
       datePosted: j.datePosted,
-      validThrough: j.validThrough,
+      ...(j.validThrough ? { validThrough: j.validThrough } : {}),
       employmentType: j.employmentType,
       jobType: JOB_TYPE_WORD[j.employmentType] ?? "other",
       salary: j.salary ? { minValue: j.salary.min, maxValue: j.salary.max, currency: j.salary.currency, unitText: j.salary.basis === "hourly" ? "HOUR" : "YEAR", text: feedSalaryText(j.salary) } : null,

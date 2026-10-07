@@ -5,7 +5,7 @@ import { adminAlerts, applications, auditRecords, candidates, communications, da
 import type { FakeEmailAdapter, MemoryStorageAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAdmin, testContainerOptions } from "./test-helpers";
+import { signInAdmin, statusTokenFor, testContainerOptions } from "./test-helpers";
 
 /**
  * Correction 7 (docs/runbooks/privacy-requests.md), built with synthetic data: a candidate can ask for a copy, a
@@ -58,7 +58,8 @@ describe("candidate privacy requests", () => {
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
     fd.set("acknowledged", "yes");
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
-    statusToken = r.headers.get("location")!.split("/c/status/")[1].split("?")[0];
+    expect(r.status).toBe(302);
+    statusToken = await statusTokenFor(container, { roleId, email: "maria.reyes@example.com" });
     await container.drain();
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
     applicationId = a.id;
@@ -219,7 +220,8 @@ describe("candidate privacy requests", () => {
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
     fd.set("acknowledged", "yes");
     const applied = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
-    const token = applied.headers.get("location")!.split("/c/status/")[1].split("?")[0];
+    expect(applied.status).toBe(302);
+    const token = await statusTokenFor(container, { roleId, email: "noor.haddad@example.com" });
     await container.drain();
     const [appRow0] = await container.db.select().from(applications).where(eq(applications.statusToken, token));
     const before = (await container.db.select().from(dr)).length;

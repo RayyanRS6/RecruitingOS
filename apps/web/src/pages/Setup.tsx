@@ -5,20 +5,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, ErrorState, Field, Segmented, Skeleton, Table } from "@ros/ui";
 import { api, ApiError, type MyCalendar } from "../api/client";
 import { useSearchParams } from "../nav";
+import { LEVELS, allowedLevels, type PolicyLevel } from "../policy-levels";
+import { ACCESS_DAYS, accessChip } from "../recruiter-access";
 import { toast } from "../toast";
 import { TeamCard } from "./TeamCard";
 
 type BusinessHours = { days: number[]; start: string; end: string };
 type CompanySettings = { website?: string; logoUrl?: string; benefitsSummary?: string; careersPage?: { enabled: boolean; intro?: string }; businessHours?: BusinessHours; notices?: Record<string, { version: string; text: string }>; pilot?: { startedAt: string; endsAt: string; extendedUntil?: string } };
 type Company ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; timezone: string; planKey: string; status: string; plan?: { key: string; name: string; limits: Record<string, number | null> } | null; usage?: Record<string, { used: number; limit: number | null }>; locations: Array<{ city?: string; region?: string; country?: string }>; settings: CompanySettings; integrations: Array<{ kind: string; provider: string; status: string }>; ai: { provider: string } };
-type PolicyRow ={ group: string; actionType: string; level: "auto" | "auto_notify" | "approval" | "human_only"; approverRoles: string[]; source: string; locked: boolean; defaultLevel: string };
-
-const LEVELS = [
-  { value: "auto", label: "Do it" },
-  { value: "auto_notify", label: "Do it and tell me" },
-  { value: "approval", label: "Ask me first" },
-  { value: "human_only", label: "Only a person" },
-] as const;
+/** minLevel and maxLevel: the floor and ceiling the API holds the action to; only the levels between them are offered. */
+type PolicyRow ={ group: string; actionType: string; level: PolicyLevel; approverRoles: string[]; source: string; locked: boolean; defaultLevel: string; minLevel?: PolicyLevel | null; maxLevel?: PolicyLevel | null };
 
 export function Setup() {
   const qc = useQueryClient();
@@ -76,7 +72,7 @@ export function Setup() {
       </Card>
 
       <Card title="What the AI may do on its own">
-        <p className="small muted" style={{ marginBottom: 10 }}>Four levels for every action. Some decisions always stay with a person and cannot be changed. Changes are recorded.</p>
+        <p className="small muted" style={{ marginBottom: 10 }}>Four levels for every action. Some decisions always stay with a person, and some always wait for a person's approval (approving a role, offers, interviews); those offer only the choices allowed. Changes are recorded.</p>
         {!canManagePolicy && myRole ? <Alert tone="info">Only owners and admins change these rules. You can see what applies; ask one of them if something should work differently.</Alert> : null}
         {policies.isLoading ? <Skeleton lines={6} /> : groups.map((g) => (
           <div key={g} style={{ marginBottom: 14 }}>
@@ -84,9 +80,9 @@ export function Setup() {
             <div className="stack" style={{ gap: 6 }}>
               {policies.data!.filter((p) => p.group === g).map((p) => (
                 <div key={p.actionType} className="row" style={{ justifyContent: "space-between", padding: "6px 0", borderTop: "1px solid var(--line)" }}>
-                  <div><span>{actionLabel(p.actionType)}</span>{p.locked ? <Chip>always a person</Chip> : p.source !== "default" ? <Chip tone="accent">customized</Chip> : null}</div>
+                  <div><span>{actionLabel(p.actionType)}</span>{p.locked ? <Chip>always a person</Chip> : p.minLevel === "approval" ? <Chip>a person approves</Chip> : p.source !== "default" ? <Chip tone="accent">customized</Chip> : null}</div>
                   {canManagePolicy ? (
-                    <Segmented value={p.level} onChange={(v) => setPolicy.mutate({ actionType: p.actionType, level: v, approverRoles: p.approverRoles })} options={p.locked ? [{ value: "human_only", label: "Only a person" }] : [...LEVELS]} ariaLabel={p.actionType} />
+                    <Segmented value={p.level} onChange={(v) => setPolicy.mutate({ actionType: p.actionType, level: v, approverRoles: p.approverRoles })} options={allowedLevels(p)} ariaLabel={actionLabel(p.actionType)} />
                   ) : <Chip tone="neutral">{LEVELS.find((l) => l.value === p.level)?.label ?? p.level}</Chip>}
                 </div>
               ))}
@@ -121,7 +117,7 @@ function explainStatus(i: { kind: string; provider: string; status: string }): s
 
 function actionLabel(a: string): string {
   return ({
-    "role_packet.approve": "Approve a drafted role", "role.publish": "Post an approved role", "posting.sponsor_spend": "Spend on sponsored ads within budget",
+    "role_packet.approve": "Approve a drafted role, pay included", "posting.sponsor_spend": "Spend on sponsored ads within budget",
     "application.triage": "Read and assess applicants (information only)", "application.hold_ineligible": "Hold an applicant who answers no to an eligibility question, and remind you (never declines)", "application.reject_ineligible": "Decline an applicant held on an eligibility answer",
     "application.reject_on_assessment": "Decline a candidate on judgment", "application.invite_screen": "Invite an applicant to a screen", "screen.conduct": "Run a screening conversation",
     "application.recommend_interview": "Recommend who to interview", "message.send_templated": "Send confirmations and reminders", "message.send_freeform": "Send a message a team member wrote to a candidate (set to approval or only a person, an owner or admin reads it first; their own go at once)",
@@ -228,16 +224,16 @@ function RecruiterAccess({ canRevoke }: { canRevoke: boolean }) {
   const past = (q.data ?? []).filter((g) => !g.active).slice(0, 10);
   return (
     <Card title="ITS recruiter access">
-      <p className="small muted">A recruiter gets access only when you ask for one, only to that request's role and candidate, for at most 14 days. Every page they open is recorded in your activity. {canRevoke ? "You can end it at any time." : "Owners and admins can end it at any time."}</p>
+      <p className="small muted">A recruiter gets access when your team asks for one, and also when the system brings one in on its own: a candidate asks for a person, or something gets stuck. A request about one candidate or one role gives access to that alone; all of your hiring only when someone on your team chose that. Access ends a day after the request is resolved, or after {ACCESS_DAYS} days at most, and you are told when a recruiter starts. Every page they open is recorded in your activity. {canRevoke ? "You can end it at any time." : "Owners and admins can end it at any time."}</p>
       {q.isLoading ? <Skeleton lines={2} /> : active.length === 0 ? <p className="small muted" style={{ marginTop: 8 }}>No recruiter has access right now.</p> : (
         <div className="stack" style={{ gap: 8, marginTop: 8 }}>
           {active.map((g) => (
             <div key={g.id} className="stack" style={{ gap: 6, padding: "8px 0", borderTop: "1px solid var(--line)" }}>
               <div className="row" style={{ justifyContent: "space-between" }}>
                 <span><strong>{g.recruiterName ?? g.recruiterEmail}</strong> <span className="small muted">· {g.purpose}</span></span>
-                <Chip tone="accent">{g.applicationId ? "one candidate" : g.roleTitle ? `role: ${g.roleTitle}` : "whole company"}</Chip>
+                <Chip tone="accent">{accessChip(g)}</Chip>
               </div>
-              <span className="small muted">Ends {new Date(g.expiresAt).toLocaleString()}{g.escalationId ? " or when the request is resolved" : ""}.</span>
+              <span className="small muted">Ends {new Date(g.expiresAt).toLocaleString()}{g.escalationId ? ", or a day after the request is resolved if that is sooner" : ""}.</span>
               {canRevoke ? (
                 confirming === g.id ? (
                   <div className="stack" style={{ gap: 6 }}>

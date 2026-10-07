@@ -165,9 +165,10 @@ export const screen: WorkflowDefinition<State> = {
           return { kind: "fail", error: `scorecard could not be produced: ${out.error}`, retryable: false };
         }
         const [app] = await ctx.q.select().from(applications).where(eq(applications.id, scr.applicationId)).limit(1);
+        // The model writes no number (plan 0.9); the column stays for a score worked out in code later.
         const [row] = await ctx.q
           .insert(assessments)
-          .values({ companyId: ctx.companyId, applicationId: scr.applicationId, kind: "screen", packetVersion: app.packetVersion, aiRunId: out.runId, result: out.output, overall: out.output.overall, confidence: out.output.confidence, secondaryScore: out.output.secondaryScore !== undefined ? String(out.output.secondaryScore) : null })
+          .values({ companyId: ctx.companyId, applicationId: scr.applicationId, kind: "screen", packetVersion: app.packetVersion, aiRunId: out.runId, result: out.output, overall: out.output.overall, confidence: out.output.confidence, secondaryScore: null })
           .returning({ id: assessments.id });
         await ctx.q.update(screens).set({ assessmentId: row.id }).where(eq(screens.id, scr.id));
         await ctx.q.update(applications).set({ latestAssessmentId: row.id }).where(eq(applications.id, scr.applicationId));

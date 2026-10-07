@@ -14,6 +14,11 @@ export type ScreenContext = {
   focusUnknowns: string[];
   /** The candidate's latest message, or null when the assistant opens the conversation. */
   latestCandidateMessage: string | null;
+  /**
+   * Whether the job's public pages show the pay range (`payShown` in packages/core: the owner's choice, or a pay
+   * transparency law where the job is), so the assistant says what the candidate already saw. Without it, the owner's choice.
+   */
+  payShown?: boolean;
 };
 
 const SCREEN_SYSTEM = `You conduct a short, structured screening conversation with a job candidate on behalf of a small business, by text. You are warm, plain, and brief. You ask the packet's screening questions one at a time, record answers faithfully, and hand the conversation to a person whenever the candidate asks for one.
@@ -35,11 +40,11 @@ Rules:
 
 ${FAIRNESS_RULES}`;
 
-function packetBlock(p: RolePacket, company: string): string {
+function packetBlock(p: RolePacket, company: string, payShown: boolean): string {
   const comp = p.compensation;
   return [
     `Company: ${company}. Role: ${p.identity.title}, ${p.identity.employmentType.replace("_", " ")}${p.identity.schedule ? `, schedule ${p.identity.schedule}` : ""}, ${p.identity.locations.map((l) => [l.city, l.region].filter(Boolean).join(", ")).join("; ")}.`,
-    `Posted pay: ${comp.discloseRange ? `${comp.basis} ${comp.min} to ${comp.max} ${comp.currency}` : "not disclosed; say a person can discuss pay"}.`,
+    `Posted pay: ${payShown ? `${comp.basis} ${comp.min} to ${comp.max} ${comp.currency}` : "not disclosed; say a person can discuss pay"}.`,
     `Screening questions in order (about ${p.screening.maxMinutes} minutes): ${p.screening.questions.map((q, i) => `${i + 1}. [${q.key}] (${q.kind}${q.competencyKey ? `, competency ${q.competencyKey}` : ""}) ${q.question}${q.modelAnswer ? ` Model answer: ${q.modelAnswer}` : ""}${q.followUpIf ? ` Follow up if: ${q.followUpIf}` : ""}`).join(" ")}`,
     `Competencies: ${p.competencies.map((c) => `[${c.key}] ${c.name}: ${c.definition}`).join(" | ")}`,
     // Must-haves the packet marks as evidenced in the screen: the conversation confirms each one in plain words, inside the questions above or as a short follow-up.
@@ -50,15 +55,16 @@ function packetBlock(p: RolePacket, company: string): string {
   ].join("\n");
 }
 
+// Version 2 (plan 0.8): the posted pay follows the public pages' rule, so a range the law makes the job page show is stated.
 export const screenTurnPrompt: PromptDef<ScreenContext, ScreenTurn> = {
   key: "screen.turn",
-  version: 1,
+  version: 2,
   task: "screen.turn",
   agent: "screening",
   schema: ScreenTurn,
   system: (ctx) => [
     { text: SCREEN_SYSTEM, cache: true },
-    { text: packetBlock(ctx.packet, ctx.company.name), cache: true },
+    { text: packetBlock(ctx.packet, ctx.company.name, ctx.payShown ?? ctx.packet.compensation.discloseRange), cache: true },
     // The focus questions themselves are already in the packet block (as the leading questions); the progress here is where the conversation stands.
     { text: `Channel: ${ctx.channel}. Candidate first name: ${ctx.candidate.firstName}. Progress (JSON): ${JSON.stringify({ ...ctx.progress, focusQuestions: undefined })}. Focus follow-ups on: ${ctx.focusUnknowns.join("; ") || "nothing specific"}.` },
   ],
@@ -70,19 +76,23 @@ export const screenTurnPrompt: PromptDef<ScreenContext, ScreenTurn> = {
   ],
 };
 
-const ASSESS_SYSTEM = `You write the scorecard for a completed screening conversation. Findings must quote the candidate's own words verbatim from the transcript (source "screen"); quotes are verified in code. Per question: answered or not, what was established, whether it meets the model answer. Per competency: evidenced / partially_evidenced / not_evidenced / contradicted with a quote when evidenced. Record the compensation expectation and whether it is within the posted range, availability and whether it matches the schedule, and eligibility confirmations. Recommendation: strong_interview when the must-haves and most competencies are evidenced and logistics fit; interview when the substance is there with some unknowns; hold when logistics do not fit or the evidence is thin; decline_recommended only when the candidate's own statements contradict a must-have. People decide; this is advice. Do not record or reason about any protected characteristic the candidate may have mentioned.
+const ASSESS_SYSTEM = `You write the scorecard for a completed screening conversation. Findings must quote the candidate's own words verbatim from the transcript (source "screen"); quotes are verified in code, a quote that is not in the transcript is removed and its claim discarded, and a claim with no quote is shown to the owner marked "no quote". Per question: answered or not, what was established, whether it meets the model answer. Per competency: evidenced / partially_evidenced / not_evidenced / contradicted with a quote when evidenced. requirementFindings: one entry per must-have the screen was to confirm (use the requirement key): met yes / partially / no / unknown, with a quote when yes, partially or no; "no" only when the candidate's own words show it is not met, otherwise "unknown" (code turns a "no" without a verified quote into "unknown"). Record the compensation expectation and whether it is within the posted range, availability and whether it matches the schedule, and eligibility confirmations. Recommendation: strong_interview when the must-haves and most competencies are evidenced and logistics fit; interview when the substance is there with some unknowns; hold when logistics do not fit or the evidence is thin; decline_recommended only when the candidate's own statements contradict a must-have. Give no number or score of any kind. People decide; this is advice. Do not record or reason about any protected characteristic the candidate may have mentioned.
 
 ${FAIRNESS_RULES}`;
 
+/** What the model is asked for: the scorecard without `secondaryScore` (plan 0.9); the model never writes a number. */
+export const ScreenAssessModelOutput = ScreenAssessment.omit({ secondaryScore: true });
+
+// Version 2 (plan 0.9): must-have findings with quotes, a "no" only on the candidate's words, and no number.
 export const screenAssessPrompt: PromptDef<ScreenContext, ScreenAssessment> = {
   key: "screen.assess",
-  version: 1,
+  version: 2,
   task: "screen.assess",
   agent: "screening",
-  schema: ScreenAssessment,
+  schema: ScreenAssessModelOutput,
   system: (ctx) => [
     { text: ASSESS_SYSTEM, cache: true },
-    { text: packetBlock(ctx.packet, ctx.company.name), cache: true },
+    { text: packetBlock(ctx.packet, ctx.company.name, ctx.payShown ?? ctx.packet.compensation.discloseRange), cache: true },
   ],
   messages: (ctx) => [
     { role: "user", content: `<transcript>\n${ctx.transcript.map((t) => `${t.role}: ${t.content}`).join("\n")}\n</transcript>\n\nRecorded answers (JSON): ${JSON.stringify(ctx.answers)}\nProgress (JSON): ${JSON.stringify(ctx.progress)}\n\nWrite the scorecard.` },

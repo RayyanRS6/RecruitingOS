@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { and, desc, eq, inArray, lte } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { applications, candidates, communications, dataRequests, documents, events, screens, type Queryable } from "@ros/db";
+import { applications, candidates, communications, dataRequests, documents, events, notifications, recruiterEscalations, screens, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { emit } from "./events";
 import { raiseAlert, resolveAlertsFor } from "./alerts";
@@ -110,8 +110,9 @@ export async function fulfilCorrectionRequest(q: Queryable, row: DataRequestRow,
 
 /**
  * Anonymization in place of deletion (runbook step 5): identity fields become tokens; resumes and their text, screening
- * transcripts and answers (the answers to a screen's opening questions included), and message bodies are removed; stage
- * history, audit records and aggregate counts stay.
+ * transcripts and answers (the answers to a screen's opening questions included), and message bodies are removed, and so
+ * is everything about them in a recruiter's copy and in requests and notices that name them; stage history, audit
+ * records and aggregate counts stay.
  * Refused unless counsel recorded an approval on this request and the administrator confirmed.
  */
 export async function anonymizeCandidate(
@@ -143,10 +144,77 @@ export async function anonymizeCandidate(
   }
   const comms = await q.select({ id: communications.id }).from(communications).where(eq(communications.candidateId, cand.id));
   for (const c of comms) await q.update(communications).set({ bodyText: "[removed at the candidate's request]", bodyHtml: null, subject: "[removed]", toAddress: null }).where(eq(communications.id, c.id));
+  const scrubbed = await scrubRecruiterCopies(q, { companyId: input.companyId, appIds, candidate: cand, now });
   await q.update(candidates).set({ firstName: "Removed", lastName: token, email: null, phone: null, location: null, locationText: null, dedupeKey: `removed:${cand.id}`, tags: [], embedding: null, anonymizedAt: now.toISOString(), consent: {}, preferences: { smsOptOut: true } }).where(eq(candidates.id, cand.id));
-  await audit(q, { companyId: input.companyId, actor: input.actor, action: "data.anonymized", target: { type: "candidate", id: cand.id }, reason: "deletion request fulfilled by anonymization after a counsel decision", details: { documents: docs.length, screens: scrCount, communications: comms.length } });
+  await audit(q, { companyId: input.companyId, actor: input.actor, action: "data.anonymized", target: { type: "candidate", id: cand.id }, reason: "deletion request fulfilled by anonymization after a counsel decision", details: { documents: docs.length, screens: scrCount, communications: comms.length, escalations: scrubbed.escalations, notifications: scrubbed.notifications } });
   await emit(q, { type: "candidate.anonymized", companyId: input.companyId, actor: input.actor, subject: { type: "candidate", id: cand.id }, payload: { documents: docs.length } });
   return { documents: docs.length, screens: scrCount, communications: comms.length };
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export type IdentifyingPatterns = { name: RegExp[]; contact: RegExp[] };
+
+/**
+ * The patterns that identify the person in free text: their full name, and their email and phone (any spacing, an
+ * optional area-code bracket). A first name on its own is not matched: it would rewrite ordinary words and other people.
+ */
+export function identifyingPatterns(person: { firstName: string; lastName: string; email: string | null; phone: string | null }): IdentifyingPatterns {
+  const out: IdentifyingPatterns = { name: [], contact: [] };
+  const first = person.firstName.trim();
+  const last = person.lastName.trim();
+  if (first && last) out.name.push(new RegExp(`${escapeRegExp(first)}\\s+${escapeRegExp(last)}`, "gi"));
+  if (person.email) out.contact.push(new RegExp(escapeRegExp(person.email.trim()), "gi"));
+  const digits = (person.phone ?? "").replace(/\D/g, "").slice(-10);
+  if (digits.length === 10) out.contact.push(new RegExp(`\\(?${digits.split("").join("[\\s().+-]*")}`, "g"));
+  return out;
+}
+
+/** The name becomes `nameWord` ("a candidate") so a sentence still reads; an email or phone becomes "[removed]". */
+export function redactPerson(text: string, patterns: IdentifyingPatterns, nameWord: string): string {
+  const named = patterns.name.reduce((t, p) => t.replace(p, nameWord), text);
+  return patterns.contact.reduce((t, p) => t.replace(p, "[removed]"), named);
+}
+
+/**
+ * A deletion reaches the recruiter's copy too (Q31 family, step 13): a request about one of the person's applications
+ * keeps the company and role context but loses everything about the candidate, and its question is removed; any other
+ * request, recruiter answer or in-app notice that names them has the name, email and phone replaced.
+ */
+async function scrubRecruiterCopies(q: Queryable, input: { companyId: string; appIds: string[]; candidate: { firstName: string; lastName: string; email: string | null; phone: string | null }; now: Date }): Promise<{ escalations: number; notifications: number }> {
+  const patterns = identifyingPatterns(input.candidate);
+  const removed = "[removed at the candidate's request]";
+  let escalationCount = 0;
+  const escs = await q.select({ id: recruiterEscalations.id, applicationId: recruiterEscalations.applicationId, question: recruiterEscalations.question, resolution: recruiterEscalations.resolution, contextSnapshot: recruiterEscalations.contextSnapshot }).from(recruiterEscalations).where(eq(recruiterEscalations.companyId, input.companyId));
+  for (const e of escs) {
+    if (e.applicationId && input.appIds.includes(e.applicationId)) {
+      const { company, role, packet } = e.contextSnapshot as { company?: unknown; role?: unknown; packet?: unknown };
+      await q.update(recruiterEscalations).set({ question: removed, resolution: e.resolution === null ? null : redactPerson(e.resolution, patterns, "the candidate"), contextSnapshot: { capturedAt: (e.contextSnapshot as { capturedAt?: string }).capturedAt ?? null, company: company ?? null, role: role ?? null, packet: packet ?? null, candidateRemovedAt: input.now.toISOString() } }).where(eq(recruiterEscalations.id, e.id));
+      escalationCount++;
+      continue;
+    }
+    if (!patterns.name.length && !patterns.contact.length) continue;
+    const question = redactPerson(e.question, patterns, "a candidate");
+    const resolution = e.resolution === null ? null : redactPerson(e.resolution, patterns, "a candidate");
+    if (question !== e.question || resolution !== e.resolution) {
+      await q.update(recruiterEscalations).set({ question, resolution }).where(eq(recruiterEscalations.id, e.id));
+      escalationCount++;
+    }
+  }
+  let notificationCount = 0;
+  if (patterns.name.length || patterns.contact.length) {
+    const notes = await q.select({ id: notifications.id, title: notifications.title, body: notifications.body }).from(notifications).where(eq(notifications.companyId, input.companyId));
+    for (const n of notes) {
+      const title = redactPerson(n.title, patterns, "A candidate");
+      const body = redactPerson(n.body, patterns, "a candidate");
+      if (title === n.title && body === n.body) continue;
+      await q.update(notifications).set({ title, body }).where(eq(notifications.id, n.id));
+      notificationCount++;
+    }
+  }
+  return { escalations: escalationCount, notifications: notificationCount };
 }
 
 export class CounselDecisionRequired extends Error {
@@ -174,8 +242,19 @@ export async function fulfilSmsOptOut(q: Queryable, row: DataRequestRow, actor: 
   return resolve(q, row, "Text messages stopped.", actor, "fulfilled", now);
 }
 
-/** "Ask a person to review my application": a recruiter escalation carries it; the request closes when the escalation resolves. */
-export async function openHumanReview(q: Queryable, row: DataRequestRow, input: { roleId: string | null; actor: Actor }): Promise<DataRequestRow> {
+/**
+ * "Ask a person to review my application": a recruiter escalation carries it; the request closes when the escalation
+ * resolves. A request that names no application and no role would give the recruiter the whole company, so it goes to
+ * ITS administrators instead (Q31): an admin alert, and a note on the request, which the privacy console lists with its
+ * deadline. Privacy requests are platform records, so this always runs in a platform transaction, where alerts can be
+ * written.
+ */
+export async function openHumanReview(q: Queryable, row: DataRequestRow, input: { roleId: string | null; actor: Actor; now?: Date }): Promise<DataRequestRow> {
+  if (!input.roleId && !row.applicationId) {
+    await raiseAlert(q, { kind: "privacy_request.human_review", severity: "high", title: "A candidate asked for a person to review their application", body: "The request names no role or application, so no recruiter was brought in. Find the application from the privacy request and arrange the review.", companyId: row.companyId, target: { type: "candidate", id: row.candidateId ?? row.id }, details: { requestId: row.id } });
+    const note = { at: (input.now ?? new Date()).toISOString(), by: "system", text: "Human review requested with no application attached: no recruiter was brought in; ITS administrators arrange it." };
+    return touch(q, row, { status: "in_progress", notes: [...row.notes, note] }, input.actor, "human review sent to ITS administrators");
+  }
   const esc = await createEscalation(q, { companyId: row.companyId, roleId: input.roleId, applicationId: row.applicationId ?? null, kind: "candidate_issue", question: "A candidate asked for a person to review their application. Their words are on the privacy request in the ITS console, not here.", requestedBy: input.actor, summaryOrigin: "candidate" });
   return touch(q, row, { escalationId: esc.id, status: "in_progress" }, input.actor, "human review escalated", { escalationId: esc.id });
 }

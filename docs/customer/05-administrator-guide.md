@@ -13,7 +13,7 @@ Screen names and button labels in **bold** are the ones you will see in the prod
 3. Your Google or Microsoft account handles the sign-in, including any two-step verification you have turned on there. ITS never sees or keeps a password.
 4. The first time, you land on **Tell us about your company** (section 2). After that you land on **Today**.
 
-Your session lasts up to thirty days of inactivity. Press **Sign out** at the bottom of the left rail to end it sooner. **Your sessions** in **Setup** lists every place you are signed in (section 5).
+Your session lasts up to thirty days of inactivity. Press **Sign out** at the bottom of the left rail (at the end of the top bar on a phone or tablet) to end it sooner. **Your sessions** in **Setup** lists every place you are signed in (section 5).
 
 If you see "Email me a sign-in link" on the sign-in page, ignore it. It is only offered in some setups, and your workspace uses Google or Microsoft.
 
@@ -23,12 +23,13 @@ Only one person does this: the owner. Fill in **Tell us about your company**:
 
 - **Company name**
 - **Your name**
-- **What kind of business**: pick the closest. This chooses the playbook the assistant starts from for roles, screening questions and pay ranges.
+- **What kind of business**: pick the closest. The hint under it says whether we have a hiring guide for that kind of business (today: consumer brands, retail, agencies, software, professional services and dental practices) or whether your roles are drafted from what you tell the assistant and public pay data.
 - **How many employees**
 - **City** and **State** (two letters)
+- **Time zone**: filled in from your computer. Interview times and the hours candidates may be texted use it, so check it.
 - **Website (optional)**
 
-Press **Create my hiring workspace**. You are now the owner. Everything you invite others into lives inside this workspace.
+Press **Create my hiring workspace**. You are now the owner. Everything you invite others into lives inside this workspace. If you signed in with the wrong account, press **Sign out** at the top of the form.
 
 To change these details later, and to add more, use the **Company** card in **Setup** (section 5).
 
@@ -104,7 +105,7 @@ The line under the table names the AI provider. On your live workspace it reads 
 - **Ask me first**: the assistant proposes it and waits for a person to approve.
 - **Only a person**: the assistant never does it.
 
-Some rows are marked **always a person**. They are locked at "Only a person" and nobody can change them: declining a candidate on judgment, declining an applicant held on an eligibility answer, deciding who to hire, negotiating an offer, acting on a background check, changing these rules, changing eligibility rules, changing candidate notices, deleting candidate data, and exporting data. "Advance someone to an interview" can never be set below **Ask me first**.
+Some rows are marked **always a person**. They are locked at "Only a person" and nobody can change them: declining a candidate on judgment, declining an applicant held on an eligibility answer, deciding who to hire, negotiating an offer, acting on a background check, changing these rules, changing eligibility rules, changing candidate notices, deleting candidate data, and exporting data. Rows marked **a person approves** offer only the choices allowed: "Approve a drafted role, pay included" is always **Ask me first** (a person approves every role before it opens), and "Advance someone to an interview", "Draft an offer", "Send an offer" and "Revise an offer" can never be set below **Ask me first**.
 
 The defaults are the recommended settings. The ones you are most likely to touch:
 
@@ -129,9 +130,11 @@ Only owners and admins can change these settings, and only after a recent sign-i
 - **Screening**: who is invited, answering now, or completed since yesterday.
 - **Stuck**: a role where nothing has moved for a while, with a suggested action and **Have a recruiter review**.
 - **Recruiter**: a request you sent, shown as "A recruiter will pick this up" or "A recruiter is on it".
-- **All clear**: nothing needs you.
+- **Nothing waiting**: nothing needs you. A new company with no role yet sees **Start a hire** here.
 
-Under the brief, **What the assistant did** lists what happened since you last looked: an invitation sent, a resume that could not be read, an interview booked, a recruiter's answer. Press **Mark all read** when you have seen them.
+A role packet waiting for approval appears as a **Decision** only for the people who can approve it: not for the person who started the role (unless they are the only owner), and only for the named decision maker or an owner when the packet names one.
+
+Under the brief, **What the assistant did** lists what happened since you last looked: an invitation sent, a resume that could not be read, an interview booked, a recruiter's answer. It shows the eight newest. Press **Mark all read** when you have seen them; when there are more than eight it reads **Mark these read** and marks only the ones on screen.
 
 Below that is **Your recruiting chief of staff**, the conversation where a new role starts. The hiring manager guide covers it.
 
@@ -172,18 +175,21 @@ Only owners and admins can pause the role, stop accepting applications, or chang
 
 Press **Bring in a recruiter** on Today, on a role, or on a candidate. In the panel:
 
-1. Pick what you want: **Review these candidates**, **Help me decide**, or **Take this role over**.
-2. Pick **Normal** or **Urgent**. Urgent moves the request to the top of the queue; it does not change the promised time.
-3. Add anything specific under **Anything specific?** (optional).
-4. Press **Send to a recruiter**.
+1. From Today only: under **Which hire is this about?** choose one of your roles, or **All of your hiring**, and write one line under **In one line, what do you need?**. On a role or a candidate the request is about that role or candidate.
+2. Pick what you want: **Review these candidates**, **Help me decide**, or **Take this role over**.
+3. Pick **Normal** or **Urgent**. Urgent marks the request urgent for the recruiter; it does not change the promised time.
+4. On a role or a candidate, add anything specific under **Anything specific?** (optional).
+5. Press **Send to a recruiter**.
 
-You see "A recruiter has it" and the expected response time. The request appears on Today until it is answered. The recruiter's answer appears under **What the assistant did** and on the candidate's timeline.
+The panel says what the recruiter will see before you send. You see "A recruiter has it", the expected response time and the access again. The request appears on Today until it is answered. The recruiter's answer appears under **What the assistant did** and on the candidate's timeline.
 
-**What the recruiter can see.** Before accepting, only your company name, the role title, the kind of request, its urgency, the skill it needs and the time remaining. After accepting, the role and the one candidate the request concerns, for at most 14 days, ending 24 hours after they mark it resolved. Every page they open is recorded in your **Access history** under **ITS recruiter access** in Setup.
+**What the recruiter can see.** Before accepting, only your company name, the role title, the kind of request, its urgency, the skill it needs and the time remaining. After accepting, what the request names: one candidate and the role they applied for, one role and its candidates, or all of your hiring when you chose that. Access lasts at most 14 days and ends a day after they mark it resolved. Every page they open is recorded in your **Access history** under **ITS recruiter access** in Setup, and you are told as soon as a recruiter starts.
+
+**When your plan's roles are used up.** If your plan's number of open roles is reached, drafting a new role says so and offers **Talk to ITS about more roles**, which sends ITS a request about your hiring as a whole.
 
 **Ending access.** In **Setup**, under **ITS recruiter access**, press **End this recruiter's access**, type a short reason under **Why you are ending it (the recruiter sees this)**, and press **End access now**. Access ends immediately, the recruiter is told, the request goes back to the queue, and your activity log records it. Only owners and admins can do this.
 
-The product also brings in a recruiter on its own in three cases: a candidate asked for a person during a screen, a held application waited three days without a decision, or a chosen interview time collided three times. You see these on Today like any other request.
+The product also brings in a recruiter on its own in three cases: a candidate asked for a person during a screen, a held application waited three days without a decision, or a chosen interview time collided three times. The recruiter then sees only that candidate or role, and you are told as soon as they start. A failed step that names no role or candidate goes to ITS administrators instead. You see these on Today like any other request. A recruiter working on one request can ask for more help only about the same candidate or role, never about the rest of your hiring, and you are told who asked when another recruiter picks it up.
 
 ## 9. Recording outcomes
 
@@ -194,7 +200,7 @@ The product never makes or sends an offer. When something happens outside the pr
 - **Hired (offer accepted outside the platform)**, with the hire date and, optionally, the date the offer was accepted
 - **Declined an offer made outside the platform**
 - **The candidate withdrew**
-- **We declined the candidate (they receive a respectful message)**, with a reason
+- **We declined the candidate**, with a reason (only for people who may decline candidates; the step says what the candidate will get under your settings)
 - **No hire for this candidate**
 
 Press **Continue**, then **Yes, record it**. The record carries your name. Only an ITS administrator can correct it, and the original is kept. After recording a hire, the product asks **Close the role too?**; closing is a separate decision.

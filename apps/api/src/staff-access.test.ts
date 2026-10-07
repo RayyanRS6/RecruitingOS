@@ -131,6 +131,39 @@ describe("ITS recruiter access is explicit, scoped, time-limited and audited", (
     expect(sample.reason).toMatch(/^review:/);
   });
 
+  it("the Today brief, the activity list and the request list show a role-scoped recruiter only their role", async () => {
+    const other = await json(owner, "POST", "/api/v1/escalations", { kind: "review", roleId: roleOutOfScope, question: "Please check the ecommerce shortlist too." });
+    expect(other.status).toBe(201);
+    type Card = { kind: string; title: string; body: string; roleId?: string };
+    const ownerBrief = ((await (await json(owner, "GET", "/api/v1/brief")).json()) as { cards: Card[] }).cards;
+    expect(ownerBrief.some((c) => c.roleId === roleOutOfScope)).toBe(true);
+    const theirs = (await json(recruiter, "GET", "/api/v1/brief"));
+    expect(theirs.status).toBe(200);
+    const cards = ((await theirs.json()) as { cards: Card[] }).cards;
+    expect(cards.some((c) => c.roleId === roleOutOfScope)).toBe(false);
+    expect(JSON.stringify(cards)).not.toContain("ecommerce shortlist");
+    expect(cards.some((c) => c.kind === "escalation" && c.roleId === roleInScope)).toBe(true);
+    // the activity list: nothing about the other role, its packet or its request
+    const ownerEvents = (await (await json(owner, "GET", "/api/v1/events")).json()) as Array<{ subjectId: string; payload: Record<string, unknown> }>;
+    expect(ownerEvents.some((e) => e.subjectId === roleOutOfScope || e.subjectId.startsWith(`${roleOutOfScope}:`))).toBe(true);
+    const evs = (await (await json(recruiter, "GET", "/api/v1/events")).json()) as Array<{ type: string; subjectType: string; subjectId: string; payload: Record<string, unknown> }>;
+    expect(evs.length).toBeGreaterThan(0);
+    for (const e of evs) {
+      expect(e.subjectId.startsWith(roleOutOfScope)).toBe(false);
+      expect(e.payload.roleId === undefined || e.payload.roleId === roleInScope).toBe(true);
+    }
+    expect(evs.some((e) => e.subjectId === roleInScope || e.subjectId.startsWith(`${roleInScope}:`))).toBe(true);
+    // the customer's request list: only the request about the role in scope
+    const mine = (await (await json(recruiter, "GET", "/api/v1/escalations/mine")).json()) as Array<{ id: string; question: string }>;
+    expect(mine.map((m) => m.question)).not.toContain("Please check the ecommerce shortlist too.");
+    expect(mine.some((m) => m.id === escalationId)).toBe(true);
+    expect(((await (await json(owner, "GET", "/api/v1/escalations/mine")).json()) as unknown[]).length).toBeGreaterThan(mine.length);
+    // and the recruiter cannot open a request about a role outside the grant
+    expect((await json(recruiter, "POST", "/api/v1/escalations", { kind: "ask", roleId: roleOutOfScope, question: "Peek?" })).status).toBe(403);
+    // nor one about all of the company's hiring, which a claim would turn into access to every role
+    expect((await json(recruiter, "POST", "/api/v1/escalations", { kind: "ask", scope: "company", question: "Everything?" })).status).toBe(403);
+  });
+
   it("resolution records effort and shortens access to a day; expiry ends it and the customer is told", async () => {
     const r = await json(recruiter, "POST", `/api/v1/escalations/${escalationId}/resolve`, { resolution: "Two of the five are worth interviewing; notes on the candidate pages.", minutesSpent: 25 });
     expect(r.status).toBe(200);

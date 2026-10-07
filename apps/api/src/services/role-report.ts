@@ -48,7 +48,8 @@ export type RoleReport = {
   };
 };
 
-type AppRow = { id: string; roleId: string; candidateId: string; source: string; sourceDetail: string | null; stage: ApplicationStage; stageChangedAt: string; createdAt: string; latestAssessmentId: string | null; rejectReason: string | null };
+/** `talentPoolOptOut`: the person asked not to be kept for future roles, so they are never counted in the talent pool. */
+type AppRow = { id: string; roleId: string; candidateId: string; source: string; sourceDetail: string | null; stage: ApplicationStage; stageChangedAt: string; createdAt: string; latestAssessmentId: string | null; rejectReason: string | null; talentPoolOptOut?: boolean };
 type EventRow = { subjectId: string; occurredAt: string; payload: Record<string, unknown> };
 type AssessmentRow = { id: string; applicationId: string; createdAt: string; recommendation: string | null };
 type InterviewRow = { applicationId: string; status: string; outcome?: string | null; roundKey: string; title: string; rescheduleCountCandidate: number; decision: string | null };
@@ -88,8 +89,9 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
   const roleIds = roleRows.map((r) => r.id);
   const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId)).limit(1);
   const apps = (await tx
-    .select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId, source: applications.source, sourceDetail: applications.sourceDetail, stage: applications.stage, stageChangedAt: applications.stageChangedAt, createdAt: applications.createdAt, latestAssessmentId: applications.latestAssessmentId, rejectReason: applications.rejectReason })
+    .select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId, source: applications.source, sourceDetail: applications.sourceDetail, stage: applications.stage, stageChangedAt: applications.stageChangedAt, createdAt: applications.createdAt, latestAssessmentId: applications.latestAssessmentId, rejectReason: applications.rejectReason, talentPoolOptOut: sql<boolean>`coalesce((${candidates.preferences}->>'talentPoolOptOut')::boolean, false)` })
     .from(applications)
+    .leftJoin(candidates, eq(candidates.id, applications.candidateId))
     .where(and(eq(applications.companyId, companyId), inArray(applications.roleId, roleIds)))
     .orderBy(asc(applications.createdAt))) as AppRow[];
   const ids = apps.map((a) => a.id);
@@ -389,7 +391,8 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
     declinedByEmployer: count("employer_declined"),
     declinedOffer: count("offer_declined_externally"),
     noHire: count("no_hire"),
-    talentPool: data.apps.filter((a) => a.stage === "talent_pool").length,
+    // Someone who asked not to be kept for future roles left the role but is not in the pool (Wave 0 item 0.11).
+    talentPool: data.apps.filter((a) => a.stage === "talent_pool" && !a.talentPoolOptOut).length,
     corrections: data.outcomes.filter((o) => o.correctionOf).length,
     role: roleOutcome ? { outcome: roleOutcome.outcome, recordedAt: roleOutcome.recordedAt } : null,
     rolesByOutcome,

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { and, eq, isNull } from "drizzle-orm";
 import { ActionType, UpsertPolicy } from "@ros/contracts";
-import { DEFAULT_POLICIES, HARD_HUMAN_ONLY, MIN_LEVELS, assertCan, audit, emit, levelAtLeast, resolvePolicy } from "@ros/core";
+import { DEFAULT_POLICIES, HARD_HUMAN_ONLY, MAX_LEVELS, MIN_LEVELS, assertCan, audit, clampLevel, emit, levelAtLeast, resolvePolicy } from "@ros/core";
 import { policies, withTenant } from "@ros/db";
 import { actorOf, requireTenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
@@ -10,8 +10,12 @@ import { assertRecentAuth } from "../middleware/reauth";
 /** "What may the AI do on its own?" Company defaults and per-role overrides, resolved for display. */
 export const policyRoutes = new Hono<Vars>();
 
+/** The levels as Setup names them, for refusals a person reads. */
+const LEVEL_WORDS: Record<string, string> = { auto: "Do it", auto_notify: "Do it and tell me", approval: "Ask me first", human_only: "Only a person" };
+
+// "Post an approved role" is not listed: publishing always follows approval and no rule ever changed it.
 const GROUPS: Record<string, string[]> = {
-  "Roles and posting": ["role_packet.approve", "role.publish", "posting.sponsor_spend"],
+  "Roles and posting": ["role_packet.approve", "posting.sponsor_spend"],
   "Applicants": ["application.triage", "application.hold_ineligible", "application.reject_ineligible", "application.reject_on_assessment", "application.invite_screen", "screen.conduct", "application.recommend_interview"],
   "Messages": ["message.send_templated", "message.send_freeform", "disposition.send"],
   "Interviews": ["interview.request", "interview.schedule", "interview.reschedule", "interview.record", "scorecard.draft", "debrief.recommend", "candidate.hire_decision"],
@@ -31,7 +35,8 @@ policyRoutes.get("/", requireTenant, async (c) => {
       for (const a of actions) {
         const actionType = ActionType.parse(a);
         const d = await resolvePolicy(tx, t.companyId, roleId, actionType);
-        out.push({ group, actionType, level: d.level, approverRoles: d.approverRoles, source: d.source, locked: HARD_HUMAN_ONLY.has(actionType), defaultLevel: DEFAULT_POLICIES[actionType].level });
+        // minLevel and maxLevel tell Setup which choices to offer, so it never shows one the PUT below refuses.
+        out.push({ group, actionType, level: d.level, approverRoles: d.approverRoles, source: d.source, locked: HARD_HUMAN_ONLY.has(actionType), defaultLevel: DEFAULT_POLICIES[actionType].level, minLevel: MIN_LEVELS[actionType] ?? null, maxLevel: MAX_LEVELS[actionType] ?? null });
       }
     }
     return out;
@@ -46,8 +51,11 @@ policyRoutes.put("/", requireTenant, async (c) => {
   assertRecentAuth(c);
   const body = UpsertPolicy.parse(await c.req.json());
   if (HARD_HUMAN_ONLY.has(body.actionType) && body.level !== "human_only") throw new HttpError(400, "locked", "That decision always stays with a person.");
-  const min = MIN_LEVELS[body.actionType];
-  if (min && !levelAtLeast(body.level, min)) throw new HttpError(400, "minimum_level", `That action needs at least "${min}": a person approves it before anything happens.`);
+  const allowed = clampLevel(body.actionType, body.level);
+  if (allowed !== body.level) {
+    if (levelAtLeast(allowed, body.level)) throw new HttpError(400, "minimum_level", `A person approves this before anything happens, so it cannot be set below "${LEVEL_WORDS[allowed]}".`);
+    throw new HttpError(400, "maximum_level", `This stays at "${LEVEL_WORDS[allowed]}": a person approves it from the card on Today. "${LEVEL_WORDS[body.level]}" would leave it waiting with nobody asked to decide.`);
+  }
   const container = c.get("container");
   const row = await withTenant(container.db, t.companyId, async (tx) => {
     const where = body.roleId ? and(eq(policies.companyId, t.companyId), eq(policies.roleId, body.roleId), eq(policies.actionType, body.actionType)) : and(eq(policies.companyId, t.companyId), isNull(policies.roleId), eq(policies.actionType, body.actionType));

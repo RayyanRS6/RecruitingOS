@@ -8,6 +8,7 @@ import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { PUBLIC_FEED_CACHE_MS, resetPublicFeedCache } from "./pages/public-feeds";
 import { jobUrls } from "./services/job-urls";
+import { statusTokenFor } from "./test-helpers";
 
 /**
  * The candidate-facing job surfaces (docs/spec/20 section 2 items 1 to 8, 19 and 20; docs/readiness/20 section D):
@@ -124,6 +125,19 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(versions).not.toContain("recording@");
     expect(versions).not.toContain("sms_consent@");
     expect(html).toContain("up to 4 MB without JavaScript");
+    // the facts header (Wave 0 item 0.8): the job, the employer, where, how, the kind of job and the pay the notice says is "shown above"
+    const role = await roleRow();
+    const [pv] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, role.currentPacketVersion!)));
+    const header = html.slice(0, html.indexOf("<form"));
+    expect(header).toContain(`Apply: ${pv.packet.identity.title}`);
+    expect(header).toContain("Ledger Dental");
+    const loc = pv.packet.identity.locations[0];
+    expect(header).toContain(`<span class="chip">${[loc.city, loc.region].filter(Boolean).join(", ")}</span>`);
+    expect(header).toContain(`<span class="chip">${({ onsite: "On site", hybrid: "Hybrid", remote: "Remote" } as Record<string, string>)[pv.packet.identity.remotePolicy]}</span>`);
+    expect(header).toContain('<span class="chip">Full time</span>');
+    expect(header).toMatch(/<span class="chip">\$45–\$55 an hour<\/span>/);
+    expect(header).toContain("tell us about your recent work in the box below instead");
+    expect(html).not.toContain("four short questions");
     // the job page
     const job = decodeEntities(await (await app.request(`/careers/${slug}/jobs/${roleId}`)).text());
     expect(job).toContain("A short screening conversation online (about");
@@ -161,7 +175,9 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     // with the box ticked: the application is in, the acknowledgment recorded, and the notice versions are the server's, not the browser's claim
     const accepted = await apply(applyForm({ noticeVersionsShown: "made-up@1", smsConsent: "yes", phone: "(949) 555-0100" }), { "x-forwarded-for": "203.0.113.7" });
     expect(accepted.status).toBe(302);
-    anaStatusToken = accepted.headers.get("location")!.split("/c/status/")[1].split("?")[0];
+    // the receipt, never the status page: the link travels by email only (Wave 0 item 0.1)
+    expect(accepted.headers.get("location")).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
+    anaStatusToken = await statusTokenFor(container, { roleId, email: "ana.lopez@example.com" });
     await container.drain();
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
     expect(a.answers.noticeVersionsShown).toEqual(expect.arrayContaining(["ai_use@2026-09-01", "privacy@2026-09-01", "pay_transparency@2026-09-01"]));
@@ -213,7 +229,7 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
       expect(await c2.db.select().from(events).where(eq(events.type, "consent.granted"))).toHaveLength(1);
       const ack = (c2.integrations.email as FakeEmailAdapter).sent.find((m) => m.to === "ana.lopez@example.com" && /received your application/.test(m.subject))!;
       expect(ack.text).toContain("A short screening conversation (by text or online, about");
-      const status = decodeEntities(await (await a2.request(r.headers.get("location")!)).text());
+      const status = decodeEntities(await (await a2.request(`/c/status/${await statusTokenFor(c2, { roleId: seeded.roleId, email: "ana.lopez@example.com" })}`)).text());
       expect(status).toContain("Text messages:");
       expect(status).toContain("on");
     } finally {
@@ -456,7 +472,8 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(xml).toContain(`<applyurl><![CDATA[${urls.apply}]]></applyurl>`);
     expect(xml).toContain(`<referencenumber><![CDATA[${roleId}]]></referencenumber>`);
     expect(xml).toContain(`<date><![CDATA[${datePosted}]]></date>`);
-    expect(xml).toContain(`<expirationdate><![CDATA[${jobValidThrough({ datePosted })}]]></expirationdate>`);
+    // an open role with no closing date carries no invented end date (Wave 0 item 0.8)
+    expect(xml).not.toContain("<expirationdate>");
     expect(xml).toContain("<jobtype><![CDATA[full-time]]></jobtype>");
     expect(xml).toContain(`<title><![CDATA[${pv.packet.identity.title}]]></title>`);
     expect(xml).toContain(`<city><![CDATA[${loc.city ?? ""}]]></city>`);
@@ -471,7 +488,8 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     const feed = (await jsonRes.json()) as { publisher: string; publisherUrl: string; lastBuildDate: string; jobs: Array<Record<string, unknown>> };
     expect(feed.publisherUrl).toBe("https://jobs.example.test");
     expect(feed.jobs).toHaveLength(1);
-    expect(feed.jobs[0]).toMatchObject({ referenceNumber: roleId, title: pv.packet.identity.title, url: urls.job, applyUrl: urls.apply, company: "Ledger & Sons <Dental>", hiringOrganization: { name: "Ledger & Sons <Dental>" }, city: loc.city ?? null, state: loc.region ?? null, country: loc.country ?? "US", datePosted, validThrough: jobValidThrough({ datePosted }), employmentType: "FULL_TIME", jobType: "full-time", category: "dental", remote: false });
+    expect(feed.jobs[0]).toMatchObject({ referenceNumber: roleId, title: pv.packet.identity.title, url: urls.job, applyUrl: urls.apply, company: "Ledger & Sons <Dental>", hiringOrganization: { name: "Ledger & Sons <Dental>" }, city: loc.city ?? null, state: loc.region ?? null, country: loc.country ?? "US", datePosted, employmentType: "FULL_TIME", jobType: "full-time", category: "dental", remote: false });
+    expect(feed.jobs[0]).not.toHaveProperty("validThrough");
     expect(feed.jobs[0].salary).toMatchObject({ minValue: 45, maxValue: 55, currency: "USD", unitText: "HOUR" });
     expect(JSON.stringify(feed)).not.toMatch(/ana\.lopez|ben\.osei|ros_src/);
     // LinkedIn keeps working, with the publisher URL and each job's canonical page
@@ -497,21 +515,52 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     resetPublicFeedCache(container);
   });
 
-  it("the JobPosting data renews validThrough while the role is open, stays on a paused page, names the employer's website and logo, and shows the closing day once the role is closed", async () => {
+  it("pay is shown wherever a pay transparency law covers the job, even if the packet says not to, on the job page, the form, the structured data and the feeds", async () => {
+    const role = await roleRow();
+    const [pv] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, role.currentPacketVersion!)));
+    const hidden = { ...pv.packet, compensation: { ...pv.packet.compensation, discloseRange: false } };
+    await container.db.update(rolePackets).set({ packet: hidden }).where(eq(rolePackets.id, pv.id));
+    resetPublicFeedCache(container);
+    try {
+      // Irvine, CA: the pay transparency notice applies and says the range is "shown above", so it is
+      const page = decodeEntities(await (await app.request(`/careers/${slug}/jobs/${roleId}`)).text());
+      expect(page).toContain("The pay range for this position is shown above as required by law");
+      expect(page).toMatch(/<span class="chip">\$45–\$55 an hour<\/span>/);
+      expect(jsonLdOf(page).baseSalary).toMatchObject({ currency: "USD", value: { minValue: 45, maxValue: 55, unitText: "HOUR" } });
+      const form = decodeEntities(await (await app.request(`/careers/${slug}/jobs/${roleId}/apply`)).text());
+      expect(form.slice(0, form.indexOf("<form"))).toMatch(/<span class="chip">\$45–\$55 an hour<\/span>/);
+      expect(await (await app.request("/feeds/jobs.xml")).text()).toMatch(/<salary><!\[CDATA\[USD 45-55 per hour\]\]><\/salary>/);
+      // and the owner's role page says the same, with the reason, instead of "not shown"
+      const roleView = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { payShown: boolean; payRequiredByLaw: boolean; packet: { compensation: { discloseRange: boolean } } } };
+      expect(roleView.currentPacket).toMatchObject({ payShown: true, payRequiredByLaw: true, packet: { compensation: { discloseRange: false } } });
+    } finally {
+      await container.db.update(rolePackets).set({ packet: pv.packet }).where(eq(rolePackets.id, pv.id));
+      resetPublicFeedCache(container);
+    }
+  });
+
+  it("the JobPosting data carries no invented end date while the role is open, the day it stopped while paused or switched off, names the employer's website and logo, and shows the closing day once the role is closed", async () => {
     const urls = jobUrls(container.env, { slug, roleId });
     const path = urls.job.replace("https://jobs.example.test", "");
     const role = await roleRow();
     const datePosted = (role.openedAt ?? role.createdAt).slice(0, 10);
     const open = jsonLdOf(await (await app.request(path)).text());
-    expect(open).toMatchObject({ "@type": "JobPosting", datePosted, validThrough: jobValidThrough({ datePosted }), employmentType: "FULL_TIME", url: urls.job, directApply: true });
+    expect(open).toMatchObject({ "@type": "JobPosting", datePosted, employmentType: "FULL_TIME", url: urls.job, directApply: true });
+    expect(open).not.toHaveProperty("validThrough");
     expect(open.hiringOrganization).toMatchObject({ name: "Ledger Dental", sameAs: "https://ledgerdental.example", logo: "https://ledgerdental.example/logo.png" });
-    expect(Date.parse(open.validThrough as string) - Date.parse(datePosted)).toBe(60 * 86_400_000);
-    // paused: the block stays, with the same renewing date
+    // the accepting switch off: the day it was switched off
+    await setAccepting(false);
+    const switchedOff = await roleRow();
+    expect(jsonLdOf(await (await app.request(path)).text()).validThrough).toBe(jobValidThrough({ stoppedAt: switchedOff.applicationsClosedAt }));
+    await setAccepting(true);
+    // paused: the block stays, ending the day the role was paused
     expect((await json(owner, "POST", `/api/v1/roles/${roleId}/pause`, {})).status).toBe(200);
+    const pausedRole = await roleRow();
     const paused = jsonLdOf(await (await app.request(path)).text());
-    expect(paused).toMatchObject({ "@type": "JobPosting", validThrough: jobValidThrough({ datePosted }) });
+    expect(paused).toMatchObject({ "@type": "JobPosting", validThrough: new Date(pausedRole.pausedAt!).toISOString().slice(0, 10) });
     expect((await json(owner, "POST", `/api/v1/roles/${roleId}/resume`, {})).status).toBe(200);
     await container.drain();
+    expect(jsonLdOf(await (await app.request(path)).text())).not.toHaveProperty("validThrough");
     // closed: the page stays up, says so, and the block carries the closing day
     setClock(2 * 86_400_000);
     expect((await json(owner, "POST", `/api/v1/roles/${roleId}/outcome`, { outcome: "role_cancelled", confirm: true, reason: "Budget pulled." })).status).toBe(200);

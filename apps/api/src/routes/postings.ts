@@ -76,7 +76,7 @@ function linkView(container: Container, l: ApplicationLinkRow): LinkView {
 
 /** Everything the package and the cards are built from: the company, the current packet, the public URLs, the intake address, the links. */
 async function postingContext(tx: Tx, container: Container, role: RoleRow) {
-  const [company] = await tx.select({ name: companies.name, slug: companies.slug }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
+  const [company] = await tx.select({ name: companies.name, slug: companies.slug, locations: companies.locations, settings: companies.settings }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
   const [pv] = role.currentPacketVersion ? await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, role.currentPacketVersion))).limit(1) : [];
   const posts = (await tx.select().from(postings).where(eq(postings.roleId, role.id))).sort((a, b) => (POSTING_CHANNELS as readonly string[]).indexOf(a.channel) - (POSTING_CHANNELS as readonly string[]).indexOf(b.channel));
   const links = await listApplicationLinks(tx, role.id);
@@ -93,7 +93,7 @@ type PostingContext = Awaited<ReturnType<typeof postingContext>>;
 function packageFor(ctx: PostingContext, p: PostingRow): { text: string; fields: Record<string, string> } | null {
   if (!ctx.packet || p.channel === "email_in") return null;
   const active = ctx.links.find((l) => l.postingId === p.id && !l.disabledAt) ?? null;
-  return postingPackage({ packet: ctx.packet, companyName: ctx.company?.name ?? "", jobUrl: ctx.urls.job, applyUrl: active ? ctx.linkUrl(active) : ctx.urls.apply, intakeAddress: ctx.emailInConnected ? ctx.emailInAddress : null, boardName: isBoardChannel(p.channel) ? CHANNEL_NAME[p.channel] : null });
+  return postingPackage({ packet: ctx.packet, companyName: ctx.company?.name ?? "", jobUrl: ctx.urls.job, applyUrl: active ? ctx.linkUrl(active) : ctx.urls.apply, intakeAddress: ctx.emailInConnected ? ctx.emailInAddress : null, boardName: isBoardChannel(p.channel) ? CHANNEL_NAME[p.channel] : null, companyLocations: ctx.company?.locations ?? [], noticeOverrides: ctx.company?.settings.notices });
 }
 
 function postingView(container: Container, ctx: PostingContext, p: PostingRow): PostingView {
@@ -228,10 +228,21 @@ postingRoutes.post("/:id/postings/:channel/verify", requireTenant, async (c) => 
   return c.json(result);
 });
 
+/**
+ * The careers page and the Google listing are the job page itself (Wave 0 item 0.8): pausing or closing them here would
+ * change a label while the page stayed up and kept taking applications. They follow the role instead, so these moves
+ * are refused with the way to do it. (Resuming one that an earlier version left paused stays possible.)
+ */
+function refuseNativeMove(channel: PostingChannel, action: "pause" | "close"): void {
+  if (channel !== "careers_page" && channel !== "google_jobs") return;
+  throw new HttpError(409, "follows_the_role", `${CHANNEL_NAME[channel]} shows the job page itself, so it cannot be ${action === "pause" ? "paused" : "closed"} on its own. To stop new applications, turn off "accepting applications" or pause the role; ${action === "pause" ? "the page then says so" : "closing the role closes it too"}.`);
+}
+
 postingRoutes.post("/:id/postings/:channel/pause", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.manage");
   const channel = channelParam(c);
+  refuseNativeMove(channel, "pause");
   const body = PostingReason.parse(await c.req.json().catch(() => ({})));
   const container = c.get("container");
   const actor = actorOf(c);
@@ -284,6 +295,7 @@ postingRoutes.post("/:id/postings/:channel/close", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.manage");
   const channel = channelParam(c);
+  refuseNativeMove(channel, "close");
   const body = PostingReason.parse(await c.req.json().catch(() => ({})));
   const container = c.get("container");
   const actor = actorOf(c);

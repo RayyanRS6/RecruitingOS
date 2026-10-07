@@ -5,7 +5,7 @@ import { applications, auditRecords, events, interviews, withTenant } from "@ros
 import { PRODUCT_EVENT_NAMES, toProductEvent, type FakeAnalyticsAdapter, type FakeGoogleCalendarProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { testContainerOptions } from "./test-helpers";
+import { statusTokenFor, testContainerOptions } from "./test-helpers";
 
 /**
  * Item 8 of the founder's instruction of 18 September 2026: the tests that must never be deferred. Tenant isolation,
@@ -53,8 +53,10 @@ describe("release-1 security coverage", () => {
     fd.set("acknowledged", "yes");
     const r = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
     expect(r.status).toBe(302);
+    // the response is the receipt for everyone; it never carries the status link (Wave 0 item 0.1)
+    expect(r.headers.get("location")).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
     await container.drain();
-    return r.headers.get("location")!.split("/c/status/")[1].split("?")[0];
+    return statusTokenFor(container, { roleId, email });
   };
 
   beforeAll(async () => {

@@ -76,8 +76,11 @@ export const roleApproval: WorkflowDefinition<State> = {
         });
         return { kind: "wait", wait: { kind: "human", approvalRequestId: result.approvalRequestId, until }, state: { approvalRequestId: result.approvalRequestId, wasOpen, expiresAt: until }, resumeStep: "on_decision" };
       }
-      if (result.outcome === "execute") return { kind: "next", step: "open", state: { wasOpen } }; // a company policy could make packet approval automatic
-      return { kind: "fail", error: "packet approval is configured human_only; nothing to do", retryable: false };
+      // No policy can make packet approval automatic or "only a person": resolvePolicy holds it at "approval" (MIN_LEVELS
+      // and MAX_LEVELS in packages/core/src/policy.ts). Should either outcome ever come back, the run stops for a person
+      // instead of opening a role, and its pay, that nobody approved.
+      if (result.outcome === "execute") return { kind: "fail", error: "packet approval resolved to automatic; a person must approve every role", retryable: false };
+      return { kind: "fail", error: "packet approval resolved to human_only; nobody would be asked to approve the role", retryable: false };
     },
 
     async on_decision(ctx) {

@@ -9,6 +9,7 @@ import { discardUnusedObject, examineQuarantinedDocument, processQuarantinedDocu
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { NO_SCRIPT_MAX_RESUME_BYTES } from "./pages/candidate";
+import { statusTokenFor } from "./test-helpers";
 
 /**
  * Founder decision 2 (22 September 2026): résumés go straight to private storage under short-lived single-object
@@ -48,7 +49,7 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
     fd.set("acknowledged", "yes");
     extra(fd);
     const r = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd, headers: ip ? { "x-forwarded-for": ip } : undefined });
-    const token = r.status === 302 ? r.headers.get("location")!.split("/c/status/")[1]!.split("?")[0]! : "";
+    const token = r.status === 302 ? await statusTokenFor(container, { roleId, email: String(fd.get("email")) }) : "";
     return { r, token };
   };
   const applicationOf = async (token: string) => (await container.db.select().from(applications).where(eq(applications.statusToken, token)))[0]!;

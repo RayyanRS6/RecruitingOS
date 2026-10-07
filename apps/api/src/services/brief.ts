@@ -1,10 +1,12 @@
 import { and, desc, eq, gte, inArray, isNull } from "drizzle-orm";
-import { POSTING_CHANNELS, STAGE_LABEL, can, isBoardChannel, ownerGroup } from "@ros/core";
+import { POSTING_CHANNELS, STAGE_LABEL, can, isBoardChannel, mayDecideApproval, ownerGroup, selfApprovalCheck } from "@ros/core";
 import { detectStuckRoles } from "@ros/agents";
 import type { MembershipRole } from "@ros/contracts";
-import { applications, approvalRequests, assessments, candidates, companies, events, interviewParticipants, interviews, postings, recruiterEscalations, roles, screens, type Tx } from "@ros/db";
+import { applications, approvalRequests, assessments, candidates, companies, events, interviewParticipants, interviews, postings, recruiterEscalations, rolePackets, roles, screens, type Tx } from "@ros/db";
+import type { Tenant } from "../middleware/session";
 import { mayDecideByRole } from "./approvers";
 import { APPROVAL_LABEL } from "./role-report";
+import { escalationInScope, inStaffScope, staffMayAsk, staffScopeOf, type StaffScope } from "./staff-scope";
 
 /**
  * What a decision card says for an approval that has no card of its own: a question in plain words (never an action
@@ -33,8 +35,18 @@ export type BriefCard = {
 
 export type Brief = { generatedAt: string; cards: BriefCard[]; summary: string };
 
-/** Who is reading the brief. An interviewer sees only their own interviews; every other role sees the company's day. */
-export type BriefViewer = { userId: string; role: MembershipRole };
+/**
+ * Who is reading the brief. An interviewer sees only their own interviews; an ITS recruiter under a grant for one role
+ * or one candidate sees only that (`scope`); every other role sees the company's day.
+ */
+export type BriefViewer = { userId: string; role: MembershipRole; scope?: StaffScope | null };
+
+export function briefViewerOf(t: Tenant): BriefViewer {
+  return { userId: t.userId, role: t.role, scope: staffScopeOf(t) };
+}
+
+/** The empty card's way forward: the client opens the new-role conversation on "/?start=1" (until a page of its own exists). */
+export const START_HIRE_PATH = "/?start=1";
 
 /**
  * The morning brief, Slice 1: deterministic, from the system of record. The orchestrator agent replaces the
@@ -44,20 +56,27 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   if (viewer?.role === "interviewer") return interviewerBrief(tx, companyId, viewer);
   const since = new Date(Date.now() - 24 * 3600_000).toISOString();
   const cards: BriefCard[] = [];
+  const scope = viewer?.scope ?? null;
   // The after-interview cards ask for a decision or an approval, so they go only to the roles that can give one (HR cannot). An unknown viewer is treated as the owner.
   const afterInterview = { decides: !viewer || can(viewer.role, "interview.decide"), requests: !viewer || can(viewer.role, "interview.request") };
   // Posting work (post on a board and record its address, tick a board off once taken down) needs role.manage; every
   // posting route refuses anyone else, so a hiring manager or HR never gets a card they cannot act on.
   const managesPostings = !viewer || can(viewer.role, "role.manage");
-  const openRoles = await tx.select().from(roles).where(and(eq(roles.companyId, companyId), inArray(roles.status, ["open", "paused", "pending_approval"])));
+  // "Bring in a recruiter" about a whole role is offered only to someone POST /escalations accepts it from: an ITS recruiter
+  // given one candidate may not ask about the whole role (staff-scope.ts, staffMayAsk).
+  const mayAskAboutRole = (roleId: string) => staffMayAsk(scope, { roleId, applicationId: null });
+  const openRoles = (await tx.select().from(roles).where(and(eq(roles.companyId, companyId), inArray(roles.status, ["open", "paused", "pending_approval"])))).filter((r) => inStaffScope(scope, { roleId: r.id }));
 
-  const pending = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, companyId), eq(approvalRequests.status, "pending"))).orderBy(desc(approvalRequests.createdAt));
+  const pending = (await tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, companyId), eq(approvalRequests.status, "pending"))).orderBy(desc(approvalRequests.createdAt))).filter((p) => inStaffScope(scope, { roleId: p.roleId, applicationId: p.applicationId }));
   // The candidates the waiting requests are about, in one query, so a card can name the person instead of an action key.
   const pendingAppIds = [...new Set(pending.map((p) => p.applicationId).filter((x): x is string => !!x))];
   const pendingNames = pendingAppIds.length ? await tx.select({ id: applications.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(inArray(applications.id, pendingAppIds)) : [];
   for (const p of pending) {
     const role = openRoles.find((r) => r.id === p.roleId);
     if (p.actionType === "role_packet.approve") {
+      // The card is offered only to someone the approve route would accept: the approver roles, the named decision maker
+      // (or an owner), and not the person who started the role or wrote the version unless they are the sole owner.
+      if (viewer && !(await mayApprovePacketFromBrief(tx, companyId, viewer, p))) continue;
       // A version proposed while the role runs is a different decision from opening a new role: the card says which.
       const proposal = p.proposal as { version?: number; editWhileOpen?: boolean };
       const editWhileOpen = !!proposal.editWhileOpen && role?.status !== "pending_approval";
@@ -87,7 +106,8 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   }
 
   for (const role of openRoles.filter((r) => r.status === "open")) {
-    const apps = await tx.select().from(applications).where(and(eq(applications.roleId, role.id)));
+    // A recruiter given one candidate counts and names only that candidate, never the rest of the role's applicants.
+    const apps = (await tx.select().from(applications).where(and(eq(applications.roleId, role.id)))).filter((a) => inStaffScope(scope, { roleId: role.id, applicationId: a.id }));
     const fresh = apps.filter((a) => a.createdAt >= since);
     // Candidates whose interview is over get a card of their own below, so they are not counted here a second time.
     const waiting = apps.filter((a) => (ownerGroup(a.stage) === "waiting_on_you" && a.stage !== "interview_complete") || a.stage === "eligible");
@@ -99,7 +119,7 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     if (waiting.length) {
       const names = await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, waiting.slice(0, 5).map((a) => a.candidateId)));
       const list = waiting.slice(0, 5).map((a) => { const n = names.find((x) => x.id === a.candidateId); return `${`${n?.firstName ?? ""} ${n?.lastName ?? ""}`.trim()} (${STAGE_LABEL[a.stage]})`; }).join(", ");
-      cards.push({ kind: "needs_review", title: `${waiting.length} ${waiting.length === 1 ? "candidate needs" : "candidates need"} your review for ${role.title}`, body: list, roleId: role.id, actions: [{ label: "Review", method: "GET", path: `/roles/${role.id}/talent` }, { label: "Bring in a recruiter", method: "POST", path: `/api/v1/escalations`, body: { kind: "review", roleId: role.id } }] });
+      cards.push({ kind: "needs_review", title: `${waiting.length} ${waiting.length === 1 ? "candidate needs" : "candidates need"} your review for ${role.title}`, body: list, roleId: role.id, actions: [{ label: "Review", method: "GET", path: `/roles/${role.id}/talent` }, ...(mayAskAboutRole(role.id) ? [{ label: "Bring in a recruiter", method: "POST" as const, path: `/api/v1/escalations`, body: { kind: "review", roleId: role.id } }] : [])] });
     }
     if (ineligible.length) {
       cards.push({ kind: "needs_review", title: `${ineligible.length} ${ineligible.length === 1 ? "applicant" : "applicants"} for ${role.title} did not meet an eligibility rule`, body: "Held for your decision. Nothing is sent to them unless you decline; override if the answer was a mistake.", roleId: role.id, actions: [{ label: "Review", method: "GET", path: `/roles/${role.id}/talent?stage=ineligible` }] });
@@ -121,7 +141,7 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   // Boards still up after a posting closed (docs/spec/20 item 15): the checklist lives on the role's Posting tab. The
   // whole role may be closed, or a person closed one board's posting while the role stays open; the card says which.
   const channelOrder = (channel: string) => (POSTING_CHANNELS as readonly string[]).indexOf(channel);
-  const stillUp: Array<{ roleId: string; channel: string }> = !managesPostings ? [] : (await tx.select({ roleId: postings.roleId, channel: postings.channel }).from(postings).where(and(eq(postings.companyId, companyId), eq(postings.closureRequired, true), isNull(postings.closureConfirmedAt)))).filter((p) => isBoardChannel(p.channel)).sort((a, b) => channelOrder(a.channel) - channelOrder(b.channel));
+  const stillUp: Array<{ roleId: string; channel: string }> = !managesPostings ? [] : (await tx.select({ roleId: postings.roleId, channel: postings.channel }).from(postings).where(and(eq(postings.companyId, companyId), eq(postings.closureRequired, true), isNull(postings.closureConfirmedAt)))).filter((p) => isBoardChannel(p.channel) && inStaffScope(scope, { roleId: p.roleId })).sort((a, b) => channelOrder(a.channel) - channelOrder(b.channel));
   if (stillUp.length) {
     const affectedRoles = await tx.select({ id: roles.id, title: roles.title, status: roles.status }).from(roles).where(inArray(roles.id, [...new Set(stillUp.map((p) => p.roleId))]));
     for (const role of affectedRoles) {
@@ -134,26 +154,47 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     }
   }
   for (const d of await detectStuckRoles(tx, companyId, new Date())) {
-    cards.push({ kind: "stuck", title: d.title, body: d.body, roleId: d.roleId, actions: [{ label: d.action.label, method: "GET", path: d.action.href }, { label: "Have a recruiter review", method: "POST", path: `/api/v1/escalations`, body: { kind: "review", roleId: d.roleId } }] });
+    if (!inStaffScope(scope, { roleId: d.roleId })) continue;
+    cards.push({ kind: "stuck", title: d.title, body: d.body, roleId: d.roleId, actions: [{ label: d.action.label, method: "GET", path: d.action.href }, ...(mayAskAboutRole(d.roleId) ? [{ label: "Have a recruiter review", method: "POST" as const, path: `/api/v1/escalations`, body: { kind: "review", roleId: d.roleId } }] : [])] });
   }
 
-  const escalations = await tx.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), inArray(recruiterEscalations.status, ["open", "claimed", "in_progress"])));
+  const escalations = (await tx.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), inArray(recruiterEscalations.status, ["open", "claimed", "in_progress"])))).filter((e) => escalationInScope(scope, e));
   for (const e of escalations) {
     cards.push({ kind: "escalation", title: e.status === "open" ? "A recruiter will pick this up" : "A recruiter is on it", body: e.question.slice(0, 200), roleId: e.roleId ?? undefined, applicationId: e.applicationId ?? undefined, actions: [] });
   }
   if (cards.length === 0) {
-    cards.push({ kind: "empty", title: openRoles.length ? "Nothing needs you right now" : "Tell me who you need to hire", body: openRoles.length ? "Applicants are being acknowledged and screened. I will tell you when someone is worth your time." : "Describe the role in a sentence or two and I will ask what I need to know.", actions: [] });
+    // A brand-new company's first screen always offers the way forward; so does a quiet day.
+    const startsHires = !viewer || (can(viewer.role, "role.create") && can(viewer.role, "compensation.read") && !scope);
+    const actions: BriefCard["actions"] = openRoles.length ? [{ label: "See your roles", method: "GET", path: "/roles" }] : startsHires ? [{ label: "Start a hire", method: "GET", path: START_HIRE_PATH }] : [];
+    cards.push({ kind: "empty", title: openRoles.length ? "Nothing needs you right now" : startsHires ? "Tell me who you need to hire" : "No roles are open yet", body: openRoles.length ? "Applicants are being acknowledged and screened. I will tell you when someone is worth your time." : startsHires ? "Describe the role in a sentence or two and I will ask what I need to know." : "When someone on your team opens a role, its applicants and decisions show up here.", actions });
   }
   // Today answers four questions (docs/FOUNDER-CONTEXT.md §08): what needs me, who is worth a look, what is at risk, what was done for me.
   const needsMe = cards.filter((c) => c.kind === "decision" || c.kind === "needs_review").length;
   const strongIds = new Set((await tx.select({ id: assessments.applicationId }).from(assessments).where(and(eq(assessments.companyId, companyId), eq(assessments.overall, "strong")))).map((r) => r.id));
-  const strongWaiting = (await tx.select({ id: applications.id, stage: applications.stage }).from(applications).where(eq(applications.companyId, companyId))).filter((a) => strongIds.has(a.id) && ownerGroup(a.stage) === "waiting_on_you").length;
+  const companyApps = (await tx.select({ id: applications.id, roleId: applications.roleId, stage: applications.stage }).from(applications).where(eq(applications.companyId, companyId))).filter((a) => inStaffScope(scope, { roleId: a.roleId, applicationId: a.id }));
+  const strongWaiting = companyApps.filter((a) => strongIds.has(a.id) && ownerGroup(a.stage) === "waiting_on_you").length;
   const atRisk = cards.filter((c) => c.kind === "stuck").length + escalations.length;
   const AUTOMATED = new Set(["application.acknowledged", "resume.ingested", "eligibility.evaluated", "application.triaged", "screen.invited", "screen.assessed", "candidate.recommended", "posting.published", "message.sent", "intervention.sent"]);
-  const recent = await tx.select({ type: events.type, actor: events.actor }).from(events).where(and(eq(events.companyId, companyId), gte(events.occurredAt, since)));
-  const handled = recent.filter((e) => AUTOMATED.has(e.type) && (e.actor.kind === "system" || e.actor.kind === "agent")).length;
+  const recent = await tx.select({ type: events.type, actor: events.actor, subjectId: events.subjectId }).from(events).where(and(eq(events.companyId, companyId), gte(events.occurredAt, since)));
+  // Under a scoped grant, only what was done about the role or the candidate in scope is counted.
+  const inScopeSubjects = scope ? new Set<string>([...openRoles.map((r) => r.id), ...companyApps.map((a) => a.id)]) : null;
+  const handled = recent.filter((e) => AUTOMATED.has(e.type) && (e.actor.kind === "system" || e.actor.kind === "agent") && (!inScopeSubjects || inScopeSubjects.has(e.subjectId))).length;
   const summary = `${needsMe} ${needsMe === 1 ? "thing needs" : "things need"} you · ${strongWaiting} strong ${strongWaiting === 1 ? "candidate" : "candidates"} ready · ${atRisk} at risk · ${handled} handled for you since yesterday.`;
   return { generatedAt: new Date().toISOString(), cards, summary };
+}
+
+/**
+ * The same three checks as packet-approval.ts `assertMayApprovePacket`, applied before the card is built: role.approve,
+ * the request's approver roles or named decision maker, and the self-approval rule (sole owners excepted).
+ */
+async function mayApprovePacketFromBrief(tx: Tx, companyId: string, viewer: BriefViewer, req: typeof approvalRequests.$inferSelect): Promise<boolean> {
+  if (!can(viewer.role, "role.approve")) return false;
+  if (!mayDecideApproval(req, { userId: viewer.userId, role: viewer.role }).ok) return false;
+  const [role] = req.roleId ? await tx.select({ id: roles.id, createdBy: roles.createdBy }).from(roles).where(eq(roles.id, req.roleId)).limit(1) : [];
+  if (!role) return false;
+  const version = Number((req.proposal as { version?: number }).version);
+  const [pv] = Number.isFinite(version) ? await tx.select({ createdBy: rolePackets.createdBy }).from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, version))).limit(1) : [];
+  return (await selfApprovalCheck(tx, { companyId, userId: viewer.userId, roleCreatedBy: role.createdBy, versionCreatedBy: pv?.createdBy ?? role.createdBy })).ok;
 }
 
 const whenIn = (iso: string, timeZone: string) => new Date(iso).toLocaleString("en-US", { timeZone, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });

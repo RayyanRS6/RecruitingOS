@@ -263,10 +263,15 @@ function CloseConfirm({ p, run, busy, onDone }: { p: PostingView; run: Run; busy
   );
 }
 
-/** The buttons a state allows. A closed posting only offers the removal checkbox, drawn by the card. */
+/**
+ * The buttons a state allows. A closed posting only offers the removal checkbox, drawn by the card. The careers page
+ * and the Google listing are the job page itself, so they have no Pause or Close of their own (Wave 0 item 0.8): they
+ * follow the role and the accepting switch. Resume stays for one an earlier version left paused.
+ */
 function Actions({ p, run, busy, roleStatus, onVerify, onClose }: { p: PostingView; run: Run; busy: boolean; roleStatus: string; onVerify: () => void; onClose: () => void }) {
   if (roleStatus === "closed" || p.status === "closed" || p.status === "draft" || p.status === "approved") return null;
   const google = p.channel === "google_jobs";
+  const native = p.channel === "careers_page" || google;
   const checkable = p.isBoard || p.channel === "careers_page";
   return (
     <div className="row" style={{ marginTop: 10, flexWrap: "wrap" }}>
@@ -275,9 +280,9 @@ function Actions({ p, run, busy, roleStatus, onVerify, onClose }: { p: PostingVi
       {p.status === "failed" && !p.externalUrl && p.isBoard ? <Button size="sm" disabled={busy} onClick={() => run(p.channel, "retry", "Back to the steps.")}>Start over</Button> : null}
       {p.status === "failed" && !checkable ? <Button size="sm" disabled={busy} onClick={() => run(p.channel, "retry", "Retrying.")}>Retry</Button> : null}
       {["posted_manually", "submitted_integration"].includes(p.status) || (p.status === "failed" && (p.externalUrl || google)) ? <Button size="sm" disabled={busy} onClick={onVerify}>{google ? "Mark verified" : "I checked it myself"}</Button> : null}
-      {["ready_to_post", "posted_manually", "submitted_integration", "live_verified"].includes(p.status) ? <Button size="sm" disabled={busy} onClick={() => run(p.channel, "pause", `${p.name} paused.`)}>Pause</Button> : null}
+      {!native && ["ready_to_post", "posted_manually", "submitted_integration", "live_verified"].includes(p.status) ? <Button size="sm" disabled={busy} onClick={() => run(p.channel, "pause", `${p.name} paused.`)}>Pause</Button> : null}
       {p.status === "paused" ? <Button size="sm" variant="primary" disabled={busy} onClick={() => run(p.channel, "resume", `${p.name} resumed.`)}>Resume</Button> : null}
-      <Button size="sm" variant="quiet" disabled={busy} onClick={onClose}>Close</Button>
+      {!native ? <Button size="sm" variant="quiet" disabled={busy} onClick={onClose}>Close</Button> : null}
     </div>
   );
 }
@@ -340,16 +345,16 @@ function BoardCard({ p, run, busy, roleStatus, canManage }: { p: PostingView; ru
 }
 
 function NativeCard({ p, jobUrl, run, busy, roleStatus, canManage }: { p: PostingView; jobUrl: string; run: Run; busy: boolean; roleStatus: string; canManage: boolean }) {
-  const [open, setOpen] = useState<null | "verify" | "close">(null);
+  const [open, setOpen] = useState<null | "verify">(null);
   return (
     <Card>
       <Header p={p} />
       <p className="small" style={{ color: "var(--ink-2)" }}>{nativeStateLine(p, jobUrl)}</p>
       {p.channel === "careers_page" ? <p className="small">Job page: <a href={jobUrl} target="_blank" rel="noreferrer">{jobUrl}</a> <Button size="sm" onClick={() => copy(jobUrl, "the job page address")}>Copy</Button></p> : null}
       {p.channel === "google_jobs" && p.instructions ? <p className="small muted">{p.instructions}</p> : null}
+      {roleStatus !== "closed" && p.status !== "closed" ? <p className="small muted">This follows the role. To stop new applications, use "Stop accepting applications" at the top of the page, or pause the role. The job page then says so, and Google drops the listing on its own.</p> : null}
       {canManage && open === "verify" ? <VerifyNote p={p} run={run} busy={busy} onDone={() => setOpen(null)} /> : null}
-      {canManage && open === "close" ? <CloseConfirm p={p} run={run} busy={busy} onDone={() => setOpen(null)} /> : null}
-      {canManage && open === null ? <Actions p={p} run={run} busy={busy} roleStatus={roleStatus} onVerify={() => setOpen("verify")} onClose={() => setOpen("close")} /> : null}
+      {canManage && open === null ? <Actions p={p} run={run} busy={busy} roleStatus={roleStatus} onVerify={() => setOpen("verify")} onClose={() => undefined} /> : null}
     </Card>
   );
 }

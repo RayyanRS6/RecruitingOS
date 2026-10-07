@@ -69,8 +69,8 @@ Levels: `auto`, `auto_notify`, `approval`, `human_only`. Resolution: role policy
 
 | Action | Default | Approvers (approval level) | Can the company change it? |
 |---|---|---|---|
-| role_packet.approve | approval | owner, admin, hiring_manager | approver list only; cannot become auto |
-| role.publish | auto | | yes |
+| role_packet.approve | approval | owner, admin, hiring_manager | approver list only; always approval: neither auto nor human_only (`MIN_LEVELS` and `MAX_LEVELS`; rows saved earlier are read through them) |
+| role.publish | auto | | not shown: publishing always follows approval and the row changed nothing |
 | message.send_templated | auto | | no (acknowledgments and confirmations are the product) |
 | message.send_freeform | auto_notify | | yes (release 1 has no freeform sends; shown for transparency) |
 | application.triage | auto (information) | | no |

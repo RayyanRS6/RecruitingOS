@@ -142,7 +142,7 @@ Press **Review** (or the name) to open the candidate.
 When a candidate answers no to a required eligibility question, the card reads **Held on an eligibility answer** with the question and the answer. Nothing is sent to the candidate. You are reminded daily, and an ITS recruiter is brought in after three days if nobody decides.
 
 - If the answer was a mistake or you want to keep them anyway, type why under **Why keep them in?** and press **Keep them in**. Your reason is recorded.
-- If you agree they do not meet the requirement, press **Decline now**. The candidate gets a respectful message.
+- If you agree they do not meet the requirement, press **Decline now**, read what the candidate will get under your settings, and press **Confirm decline**. Nothing happens on the first press. The message afterwards says exactly what happened: a short, courteous email is on its way, it is waiting for approval, or nothing was sent and the candidate has not been told.
 
 A candidate declined this way shows **Declined on an eligibility answer** with a **Review anyway** button in case you change your mind.
 
@@ -217,7 +217,7 @@ Once the interview is over, the candidate waits on you: they appear under **Wait
 
 - **Next round**: the candidate moves on. The page opens the interview approval for the next round with its interviewers; check them and approve, and times go out from there.
 - **Finalist**: write what stood out under **What stood out (kept internally)** and press **Confirm finalist**.
-- **Not moving forward**: pick a reason, add a note if you like, and press **Confirm decline**. The candidate gets a respectful message after you confirm, never before.
+- **Not moving forward**: pick a reason, add a note if you like, and press **Confirm decline**. Nothing reaches the candidate before you confirm; the confirm step says what they will get under your settings, and the message afterwards says what happened.
 
 Release 1 has no interviewer scorecards. Record what matters in the note. The decision shows on the interview page too.
 
@@ -245,7 +245,7 @@ The product never makes or sends an offer, and it asks for no pay, tax, identity
 - **Hired (offer accepted outside the platform)**: add the hire date, and the date the offer was accepted if you know it
 - **Declined an offer made outside the platform**
 - **The candidate withdrew**
-- **We declined the candidate (they receive a respectful message)**: add a reason
+- **We declined the candidate**: add a reason. The step says what the candidate will get under your settings. Shown only to people who may decline candidates.
 - **No hire for this candidate**
 
 Press **Continue**, then **Yes, record it**. The record carries your name and can only be corrected by an ITS administrator, with the original kept. After a hire, the product asks **Close the role too?**. Closing the role is a separate decision, made from the role page, and candidates who were still active stay in your talent pool.

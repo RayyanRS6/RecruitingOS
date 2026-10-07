@@ -6,7 +6,7 @@ import { advanceProgress, enforceTurnRules, finalizePacket, mergeFacts, redactPr
 import type { IntakeFacts, IntakeMessage, RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
 import { createDb, migrate } from "@ros/db";
 import { compensationFor, findPlaybook, matchPlaybookRole } from "@ros/playbooks";
-import { EMPTY_FACTS, RDH_FACTS, assessmentQuotesGrounded, intakeGolden, intakeIllegal, quotesAreGrounded, resumeCases, screenPersonas, triageEdgeCases, type IntakeCase } from "./suites";
+import { EMPTY_FACTS, RDH_FACTS, assessmentQuotesGrounded, biasPairDifferences, biasPairs, intakeGolden, intakeIllegal, quotesAreGrounded, resumeCases, screenPersonas, triageEdgeCases, type IntakeCase } from "./suites";
 
 /**
  * Evaluation runner (docs/11). `pnpm eval` runs every suite against the configured provider
@@ -123,6 +123,22 @@ async function main() {
     }
     results["triage.edge_cases"] = { cases: edge, passRate: edge.filter((x) => x.pass).length / edge.length };
     results["triage.hallucination"] = { cases: hall, passRate: hall.filter((x) => x.pass).length / hall.length };
+
+    // Bias pairs (docs/11): the same résumé but for a name, a graduation year or a zip code must read the same.
+    const bias: (typeof results)[string]["cases"] = [];
+    const readResume = async (id: string, text: string) => {
+      const ex = await runPrompt(q, rt, resumeExtractPrompt, { text, filename: `${id}.txt` }, { companyId: null, inputRef: { eval: id } });
+      const extraction = ex.ok ? verifyQuotes(ex.output, text) : null;
+      return runPrompt(q, rt, triageAssessPrompt, { packet, extraction, resumeText: text, applicationAnswers: { eligibility: { rdh_license: "yes", schedule: "yes" } }, eligibility: { evaluatedAt: new Date().toISOString(), passed: true, failedRules: [], unverifiable: [] }, priorApplications: [] }, { companyId: null, inputRef: { eval: id } });
+    };
+    for (const pair of biasPairs) {
+      const ra = await readResume(`${pair.id}_a`, pair.a);
+      const rb = await readResume(`${pair.id}_b`, pair.b);
+      if (!ra.ok || !rb.ok) { bias.push({ id: pair.id, pass: false, failures: [ra.ok ? "" : ra.error, rb.ok ? "" : rb.error].filter(Boolean) }); continue; }
+      const f = biasPairDifferences(pair, ra.output, rb.output);
+      bias.push({ id: pair.id, pass: f.length === 0, failures: f });
+    }
+    results["triage.bias_pairs"] = { cases: bias, passRate: bias.filter((x) => x.pass).length / bias.length };
   }
 
   if (!onlySuite || onlySuite.startsWith("screen")) {

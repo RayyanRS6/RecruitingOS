@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
-import { aiRuns, applications, approvalRequests, assessments, candidates, communications, events, jobs, postings, recruiterEscalations, roles, screens, workflowRuns } from "@ros/db";
+import { aiRuns, applications, approvalRequests, assessments, candidates, communications, documents, events, jobs, postings, recruiterEscalations, roles, screens, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -192,8 +192,12 @@ describe("Slice 1 API", () => {
     form.set("acknowledged", "yes");
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     expect(r.status).toBe(302);
+    // the receipt, never the status page: the link travels only by email (Wave 0 item 0.1)
     const location = r.headers.get("location")!;
-    expect(location).toMatch(/^\/c\/status\//);
+    expect(location).toBe(`/careers/${companySlug}/jobs/${roleId}/applied`);
+    const receipt = await (await app.request(location, { headers: { cookie: r.headers.get("set-cookie")!.match(/ros_applied=[^;,]+/)![0] } })).text();
+    expect(receipt).toContain("Check your email.");
+    expect(receipt).toContain("m***@example.com");
 
     const apps = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
     expect(apps).toHaveLength(1);
@@ -226,7 +230,9 @@ describe("Slice 1 API", () => {
     const runs = await container.db.select().from(aiRuns).where(eq(aiRuns.task, "resume.extract"));
     expect(runs).toHaveLength(1);
     expect(await container.db.select().from(aiRuns).where(eq(aiRuns.task, "triage.assess"))).toHaveLength(1);
-    const status = await app.request(location);
+    expect(receipt).not.toContain(a.statusToken);
+    expect(ack!.text).toContain(`/c/status/${a.statusToken}`);
+    const status = await app.request(`/c/status/${a.statusToken}`);
     const statusHtml = await status.text();
     expect(statusHtml).toMatch(/Maria/);
     expect(statusHtml).toMatch(/\/c\/screen\//);
@@ -307,19 +313,46 @@ describe("Slice 1 API", () => {
     expect(a.extraction?.positions[0]?.employer).toBe("Harbor Dental");
   });
 
-  it("dedupes a repeat application from the same candidate", async () => {
+  it("dedupes a repeat application from the same candidate: the same receipt, nothing on the record changed, the link emailed to the address on file", async () => {
+    const [maria] = await container.db.select().from(candidates).where(eq(candidates.email, "maria.reyes@example.com"));
+    const [mariaApp] = await container.db.select().from(applications).where(and(eq(applications.roleId, roleId), eq(applications.candidateId, maria.id)));
+    const sentBefore = (container.integrations.email as FakeEmailAdapter).sent.length;
+    // someone else types Maria's address, with their own phone, place, text consent and résumé
     const form = new FormData();
     form.set("firstName", "Maria");
     form.set("lastName", "Reyes");
     form.set("email", "Maria.Reyes@example.com");
-    form.set("noResume", "Applying again");
+    form.set("phone", "(714) 555-0199");
+    form.set("smsConsent", "yes");
+    form.set("locationText", "Somewhere Else, NV");
+    form.set("resume", new File(["Not Maria at all"], "other.txt", { type: "text/plain" }));
     form.set("acknowledged", "yes");
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     expect(r.status).toBe(302);
+    // exactly what a first application gets: the receipt, never a status link
+    expect(r.headers.get("location")).toBe(`/careers/${companySlug}/jobs/${roleId}/applied`);
+    const receipt = await (await app.request(r.headers.get("location")!, { headers: { cookie: r.headers.get("set-cookie")!.match(/ros_applied=[^;,]+/)![0] } })).text();
+    expect(receipt).toContain("Check your email.");
+    expect(receipt).toContain("M***@example.com");
+    expect(`${r.headers.get("location")} ${r.headers.get("set-cookie")} ${receipt}`).not.toContain(mariaApp.statusToken);
     const apps = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
     expect(apps.filter((x) => x.source === "careers_page")).toHaveLength(3);
     const dup = await container.db.select().from(events).where(eq(events.type, "application.duplicate_detected"));
     expect(dup).toHaveLength(1);
+    // nothing about Maria changed: consent, phone, place, résumé
+    const [after] = await container.db.select().from(candidates).where(eq(candidates.id, maria.id));
+    expect(after.consent).toEqual(maria.consent);
+    expect(after.phone).toBe(maria.phone);
+    expect(after.locationText).toBe(maria.locationText);
+    const [appAfter] = await container.db.select().from(applications).where(eq(applications.id, mariaApp.id));
+    expect(appAfter.resumeDocumentId).toBe(mariaApp.resumeDocumentId);
+    expect(appAfter.answers).toEqual(mariaApp.answers);
+    expect((await container.db.select().from(documents).where(eq(documents.applicationId, mariaApp.id))).length).toBe(1);
+    // the address on file learns about it, with its own link
+    const notice = (container.integrations.email as FakeEmailAdapter).sent.slice(sentBefore).find((m) => m.to === "maria.reyes@example.com");
+    expect(notice?.subject).toMatch(/^Your application for /);
+    expect(notice?.text).toContain(`/c/status/${mariaApp.statusToken}`);
+    expect(notice?.text).toContain("Nothing in it was changed or replaced.");
   });
 
   it("recovers from a transient email outage: the message is queued, the workflow moves on, and the outbox retries the send exactly once", async () => {

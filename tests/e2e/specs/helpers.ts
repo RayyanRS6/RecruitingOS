@@ -51,11 +51,16 @@ export async function signIn(page: Page, input: { email: string; name: string; p
 export async function createCompanyThroughTheForm(page: Page, name: string) {
   await page.waitForURL("**/setup/company");
   await expectAccessible(page, "company setup");
+  // someone who signed in with the wrong account can leave from here
+  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
   await page.getByLabel("Company name").fill(name);
   await page.getByLabel("Your name").fill("Dana Whitfield");
   await page.getByLabel("What kind of business").selectOption("dental");
   await page.getByLabel("How many employees").selectOption("20-49");
   await page.getByLabel("City").fill("Tustin");
+  // State and size start empty, and the time zone starts from the browser's own (empty when it is not a US zone).
+  await page.getByLabel("State").fill("CA");
+  await page.getByLabel("Time zone").selectOption("America/Los_Angeles");
   await page.getByRole("button", { name: /Create|Continue|Save/ }).click();
   await page.waitForURL((u) => u.pathname === "/");
 }
@@ -76,6 +81,26 @@ export async function seedRoleAndApplicant(request: APIRequestContext, base: str
   for (const rule of role.currentPacket.packet.requirements.eligibility) multipart[`elig_${rule.key}`] = "yes";
   const applied = await request.post(`${base}/careers/${company.slug}/jobs/${roleId}/apply`, { multipart, maxRedirects: 0 });
   expect(applied.status()).toBe(302);
-  const statusPath = applied.headers().location!;
-  return { roleId, slug: company.slug, statusPath, candidateEmail: multipart.email as string };
+  // every submission lands on the same receipt; the status link travels only by email (Wave 0 item 0.1)
+  expect(applied.headers().location).toBe(`/careers/${company.slug}/jobs/${roleId}/applied`);
+  const candidateEmail = multipart.email as string;
+  const statusPath = await statusPathFromEmail(request, base, roleId, candidateEmail);
+  return { roleId, slug: company.slug, statusPath, candidateEmail };
+}
+
+/**
+ * The status page path from the acknowledgment email, read the way the owner sees it on the candidate's page (the
+ * message thread), once the worker has sent it. The apply form never returns the link itself.
+ */
+export async function statusPathFromEmail(request: APIRequestContext, base: string, roleId: string, email: string): Promise<string> {
+  let path = "";
+  await expect.poll(async () => {
+    const list = (await (await request.get(`${base}/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; candidate: { email: string | null } | null }>;
+    const mine = list.find((a) => a.candidate?.email === email.toLowerCase());
+    if (!mine) return "";
+    const detail = (await (await request.get(`${base}/api/v1/applications/${mine.id}`)).json()) as { communications: Array<{ templateKey: string | null; bodyText: string }> };
+    path = detail.communications.find((m) => m.templateKey === "acknowledgment")?.bodyText.match(/\/c\/status\/[A-Za-z0-9_-]+/)?.[0] ?? "";
+    return path;
+  }, { timeout: 60_000, message: "the acknowledgment email with the status link" }).not.toBe("");
+  return path;
 }

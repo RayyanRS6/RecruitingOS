@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { can, type Permission } from "../../packages/core/src/permissions";
 import { defaultInterviewers } from "../../apps/web/src/interview-defaults";
-import { actorWords, describeRoleEvent, roleWords } from "../../apps/web/src/role-words";
+import { actorWords, describeRoleEvent, payShownLabel, roleWords } from "../../apps/web/src/role-words";
 import { canDecideInterviews, canEditPacket, canManageInterviews, canManageRole, canRecordOutcome, canRequestInterviews, canSeeActivity, canSeeTalent, canStartHire } from "../../apps/web/src/roles";
 
 /**
@@ -42,6 +42,19 @@ describe("the web pages' copy of the permission matrix", () => {
     expect(canRecordOutcome("recruiter")).toBe(false);
     expect(canEditPacket("hr")).toBe(false);
     expect(canSeeTalent("interviewer")).toBe(false);
+  });
+});
+
+describe("the Pay card's 'Shown to candidates'", () => {
+  it("follows the public pages' rule: the owner's choice, or a pay transparency law where the job is", () => {
+    expect(payShownLabel({ payShown: true, payRequiredByLaw: false }, true)).toBe("Yes");
+    expect(payShownLabel({ payShown: true, payRequiredByLaw: true }, true)).toBe("Yes");
+    // the owner chose not to show it, but the law where the job is shows it anyway, and the page says why
+    expect(payShownLabel({ payShown: true, payRequiredByLaw: true }, false)).toBe("Yes: the law where this job is requires it");
+    expect(payShownLabel({ payShown: false, payRequiredByLaw: false }, false)).toBe("No");
+    // an older answer without the fields reads the owner's choice
+    expect(payShownLabel({}, true)).toBe("Yes");
+    expect(payShownLabel({}, false)).toBe("No");
   });
 });
 

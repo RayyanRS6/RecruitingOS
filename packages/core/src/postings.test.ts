@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RolePacket } from "@ros/contracts";
-import { BOARD_CHANNELS, POSTING_STATES, POSTING_TRANSITIONS, PostingTransitionError, assertPostingTransition, canTransitionPosting, isBoardChannel, postingPackage } from "./postings";
+import { BOARD_CHANNELS, POSTING_STATES, POSTING_TRANSITIONS, PostingTransitionError, assertPostingTransition, canTransitionPosting, isBoardChannel, payLine, postingPackage } from "./postings";
+import { jobNoticesFor, payShown, payTransparencyApplies } from "./compliance";
 import { LINK_TOKEN_LENGTH, SOURCES, applyLinkUrl, isLinkToken, newLinkToken, sourceForChannel } from "./application-links";
 import { jobUrlsFor } from "./job-urls";
 
@@ -110,11 +111,24 @@ describe("posting package (item 9)", () => {
     expect(pkg.text).toContain(packet.description.publicJobDescription);
   });
 
-  it("keeps an undisclosed pay range out of the package", () => {
-    const hidden = { ...packet, compensation: { ...packet.compensation, discloseRange: false } } as RolePacket;
+  it("keeps an undisclosed pay range out of the package where no pay transparency law covers the job", () => {
+    const hidden = { ...packet, identity: { ...packet.identity, locations: [{ city: "Austin", region: "TX", country: "US" }] }, compensation: { ...packet.compensation, discloseRange: false } } as RolePacket;
     const pkg = postingPackage({ packet: hidden, companyName: "Brightline Dental Group", jobUrl: "https://j/x", applyUrl: "https://j/a/t" });
     expect(pkg.fields.pay).toBe("Not disclosed publicly");
     expect(pkg.text).not.toContain("$45");
     expect(pkg.text).not.toContain("send applications instead");
+    // the company's own location counts too, as on the job page
+    expect(postingPackage({ packet: hidden, companyName: "Brightline Dental Group", jobUrl: "https://j/x", applyUrl: "https://j/a/t", companyLocations: [{ city: "Denver", region: "CO", country: "US" }] }).fields.pay).toBe("$45–$55 an hour (hourly, USD)");
+  });
+
+  it("states the range where a pay transparency law covers the job, whatever the packet says, the same rule as the job page", () => {
+    const hidden = { ...packet, compensation: { ...packet.compensation, discloseRange: false } } as RolePacket;
+    const pkg = postingPackage({ packet: hidden, companyName: "Brightline Dental Group", jobUrl: "https://j/x", applyUrl: "https://j/a/t" });
+    expect(pkg.fields.pay).toBe("$45–$55 an hour (hourly, USD)");
+    expect(payLine(hidden)).toBe(pkg.fields.pay);
+    const notices = jobNoticesFor({ jobLocations: hidden.identity.locations });
+    expect(payTransparencyApplies(notices)).toBe(true);
+    expect(payShown(hidden.compensation, notices)).toBe(true);
+    expect(payShown(hidden.compensation, jobNoticesFor({ jobLocations: [{ city: "Austin", region: "TX", country: "US" }] }))).toBe(false);
   });
 });

@@ -1,10 +1,12 @@
 /** @jsxRuntime automatic */
 /** @jsxImportSource hono/jsx */
 import { Hono, type Context } from "hono";
+import { getCookie, setCookie } from "hono/cookie";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { ApplyRequest, CandidateSmsPreference, MAX_RESUME_BYTES, formatPayRange, inspectResumeFile, type RolePacket } from "@ros/contracts";
-import { answersOf, focusedPacket, openScreen, requestHuman, runScreenTurn } from "@ros/agents";
-import { STAGE_LABEL, audit, candidateNotices, createDataRequest, emit, fulfilSmsOptOut, fulfilWithdrawal, humanResponseExpectation, loadBusinessCalendar, noticesFor, notify, openHumanReview, resolveJurisdictions, transition, type Notice } from "@ros/core";
+import { z } from "zod";
+import { ApplyRequest, CandidateSmsPreference, MAX_RESUME_BYTES, inspectResumeFile, type RolePacket } from "@ros/contracts";
+import { answerWithdrawPrompt, answersOf, focusedPacket, openScreen, requestHuman, runScreenTurn, withdrawPending } from "@ros/agents";
+import { STAGE_LABEL, audit, candidateNotices, createDataRequest, emit, fulfilSmsOptOut, fulfilWithdrawal, humanResponseExpectation, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, openHumanReview, openPayload, sealPayload, transition, type Notice } from "@ros/core";
 import { CandidatePrivacyRequest } from "@ros/contracts";
 import { sendPrivacyAcknowledgment, sendPrivacyCompletion } from "@ros/agents";
 import { applications, candidates, communications, companies, dataRequests, interviews, rolePackets, roles, screens, uuidv7, withPlatform, withTenant } from "@ros/db";
@@ -14,16 +16,50 @@ import { UPLOAD_GRANT_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS, checkUploadIntent, qu
 import { clientIp, type Vars } from "../middleware/session";
 import type { Container } from "../container";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
-import { createApplication, type ResumeInput } from "../services/applications";
+import { createApplication, markUploadUsed, queueLinkRequest, uploadAlreadyUsed, type ResumeInput } from "../services/applications";
 import { jobUrls } from "../services/job-urls";
 import { screenDeps } from "../services/screens";
+import { optBackIntoTalentPool, optOutOfTalentPool } from "../services/talent-pool";
+import { JobFacts, payShown, publicPay, roleValidThrough } from "./job-facts";
 import { Layout, currentNonce } from "./layout";
 import { clearApplicationSource, resolveApplicationSource } from "./links";
 
 export const candidatePages = new Hono<Vars>();
 
-function money(p: RolePacket): string {
-  return formatPayRange(p.compensation, { onlyIfDisclosed: true });
+/** The notices a public page of this job carries, for its jurisdictions and the company's own wording. */
+function jobNotices(packet: RolePacket, company: Pick<typeof companies.$inferSelect, "locations" | "settings">): Notice[] {
+  return jobNoticesFor({ jobLocations: packet.identity.locations, companyLocations: company.locations, overrides: company.settings.notices });
+}
+
+/**
+ * The receipt everyone sees after sending the form (Wave 0 item 0.1): new or repeat, the page is the same, and the
+ * status link only ever travels by email to the address on file. The address shown is masked and carried for a
+ * short while in a sealed cookie the browser cannot read, never in the URL.
+ */
+export const RECEIPT_COOKIE = "ros_applied";
+const RECEIPT_PURPOSE = "application-receipt";
+const RECEIPT_TTL_MS = 30 * 60_000;
+type ReceiptPayload = { v: 1; roleId: string; to: string; exp: number };
+
+/** "a***@example.com": enough for the person to recognise their own address, nothing more. */
+export function maskEmail(email: string): string {
+  const e = email.trim();
+  const at = e.lastIndexOf("@");
+  if (at < 1 || at === e.length - 1) return "the email address you gave";
+  return `${e[0]}***@${e.slice(at + 1)}`;
+}
+
+function receiptPath(slug: string, roleId: string): string {
+  return `/careers/${slug}/jobs/${roleId}/applied`;
+}
+
+/** Sends the browser to the receipt, with the masked address it shows. The same answer for every kind of submission. */
+function toReceipt(c: Context<Vars>, job: { company: { slug: string }; role: { id: string } }, typedEmail: string) {
+  const container = c.get("container");
+  const path = receiptPath(job.company.slug, job.role.id);
+  const payload: ReceiptPayload = { v: 1, roleId: job.role.id, to: maskEmail(typedEmail), exp: container.engine.clock().getTime() + RECEIPT_TTL_MS };
+  setCookie(c, RECEIPT_COOKIE, sealPayload(RECEIPT_PURPOSE, payload, container.env.SESSION_SECRET), { httpOnly: true, sameSite: "Lax", secure: container.env.NODE_ENV === "production", path, maxAge: RECEIPT_TTL_MS / 1000 });
+  return c.redirect(path);
 }
 
 /**
@@ -80,7 +116,7 @@ candidatePages.get("/careers/:slug", async (c) => {
           <a class="btn" href={`/careers/${company.slug}/jobs/${r.id}`}>{r.acceptingApplications ? "View and apply" : "View details"}</a>
         </div>
       ))}
-      <p class="notice"><a href="/privacy">How we handle your information</a></p>
+      <p class="notice"><a href="/c/link-request">Already applied? Get your application link again</a> · <a href="/privacy">How we handle your information</a></p>
     </Layout>,
   );
 });
@@ -93,8 +129,10 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
   const accepting = acceptingApplications(role);
   const smsEnabled = container.env.SMS_ENABLED;
   const urls = jobUrls(container.env, { slug: company.slug, roleId: role.id });
-  // The JobPosting block stays on paused and closed pages (docs/spec/20 item 4): validThrough renews itself while the
-  // role is open and becomes the closing day once it is closed, so search engines drop the listing on their own.
+  const allNotices = jobNotices(packet, company);
+  const notices = candidateNotices(allNotices);
+  // The JobPosting block stays on paused and closed pages (docs/spec/20 item 4). validThrough is a real date only: the
+  // closing day, or the day the role stopped taking applications; an open role with no closing date carries none.
   const jsonLd = jobPostingJsonLd({
     roleId: role.id,
     companyName: company.name,
@@ -103,23 +141,16 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
     jobUrl: urls.job,
     applyUrl: urls.apply,
     datePosted: (role.openedAt ?? role.createdAt).slice(0, 10),
-    closedAt: role.status === "closed" ? (role.closedAt ?? role.updatedAt) : null,
+    validThrough: roleValidThrough(role) ?? null,
+    showPay: payShown(packet, allNotices),
     companyWebsite: company.settings.website ?? null,
     companyLogoUrl: company.settings.logoUrl ?? null,
   });
-  const loc = packet.identity.locations[0];
-  const jurisdictions = resolveJurisdictions([...packet.identity.locations, ...company.locations]);
-  const notices = candidateNotices(noticesFor(jurisdictions, company.settings.notices));
   return c.html(
     <Layout title={`${packet.identity.title} at ${company.name}`} jsonLd={jsonLd}>
       <p class="meta"><a href={`/careers/${company.slug}`}>{company.name}</a></p>
       <h1>{packet.identity.title}</h1>
-      <div class="chips">
-        {loc ? <span class="chip">{[loc.city, loc.region].filter(Boolean).join(", ")}</span> : null}
-        <span class="chip">{packet.identity.employmentType.replace("_", " ")}</span>
-        {money(packet) ? <span class="chip">{money(packet)}</span> : null}
-        {packet.identity.schedule ? <span class="chip">{packet.identity.schedule}</span> : null}
-      </div>
+      <JobFacts packet={packet} pay={publicPay(packet, allNotices)} />
       {!accepting ? <div class="err" role="status">{closedMessage(role)}</div> : null}
       <p style="white-space:pre-wrap">{packet.description.publicJobDescription}</p>
       <h2>What to expect</h2>
@@ -131,7 +162,7 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
       </ol>
       {notices.filter((n) => n.key === "ai_use" || n.key === "pay_transparency").map((n) => <p class="notice">{n.text}</p>)}
       {accepting ? <a class="btn" href={`/careers/${company.slug}/jobs/${role.id}/apply`}>Apply now</a> : null}
-      <p class="notice" style="margin-top:22px"><a href="/privacy">How we handle your information</a></p>
+      <p class="notice" style="margin-top:22px"><a href="/c/link-request">Already applied? Get your application link again</a> · <a href="/privacy">How we handle your information</a></p>
     </Layout>,
   );
 });
@@ -174,7 +205,7 @@ function TransparencyBlock(props: { company: { name: string }; notices: Notice[]
       <p><strong>What we collect:</strong> your name, your email, your phone number if you give one, where you are based, your resume or the summary you write, and your answers to the questions above.</p>
       <p><strong>Why:</strong> to consider you for this position and to contact you about it. Nothing else.</p>
       <p><strong>Who can see it:</strong> the hiring team at {props.company.name}; an Identified Talent Solutions recruiter only if {props.company.name} brings one in to help; and the companies that run this service for us: hosting, file storage, email delivery, and the AI service that helps organize applications. Each does only its own job; the privacy page linked below says what each one does.</p>
-      <p><strong>Your choices:</strong> after you apply, your status page lets you ask for a copy of your information, correct it, withdraw your application, or delete your information. You can also email <a href={`mailto:${props.privacyEmail}`}>{props.privacyEmail}</a> at any time. A person handles every request.</p>
+      <p><strong>Your choices:</strong> after you apply, we email you a link to your own status page, where you can ask for a copy of your information, correct it, withdraw your application, or delete your information. You can also email <a href={`mailto:${props.privacyEmail}`}>{props.privacyEmail}</a> at any time. A person handles every request.</p>
       <p><a href="/privacy">Read how we handle your information</a></p>
       {props.notices.map((n) => <p class="notice">{n.text}</p>)}
       <label class="check" for="acknowledged">
@@ -199,9 +230,12 @@ function ApplyForm(props: ApplyFormProps) {
   const kept = props.state?.resume ?? null;
   return (
     <Layout title={`Apply: ${props.packet.identity.title} at ${props.company.name}`}>
-      <p class="meta"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>← {props.packet.identity.title}</a></p>
-      <h1>Apply</h1>
-      <p>Three minutes. Upload a resume, or answer four short questions instead.</p>
+      <p class="meta"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>← Back to the job</a></p>
+      {/* The facts of the job stay in view while applying (Wave 0 item 0.8), pay included wherever the page must show it. */}
+      <h1>Apply: {props.packet.identity.title}</h1>
+      <p class="meta" style="margin-bottom:0">{props.company.name}</p>
+      <JobFacts packet={props.packet} pay={publicPay(props.packet, props.notices)} />
+      <p>It takes about three minutes. Upload a resume, or tell us about your recent work in the box below instead.</p>
       {props.error ? <div class="err" role="alert">{props.error}</div> : null}
       <form method="post" enctype="multipart/form-data" data-upload-intent={`/careers/${props.company.slug}/jobs/${props.role.id}/upload-intent`}>
         <input type="text" name="website" tabindex={-1} autocomplete="off" style="position:absolute;left:-10000px" aria-label="Leave this field empty" />
@@ -281,7 +315,7 @@ candidatePages.get("/careers/:slug/jobs/:roleId/apply", async (c) => {
   const container = c.get("container");
   const job = await loadJob(container.db, c.req.param("slug"), c.req.param("roleId"));
   if (!job || !acceptingApplications(job.role)) return c.notFound();
-  const notices = noticesFor(resolveJurisdictions([...job.packet.identity.locations, ...job.company.locations]), job.company.settings.notices);
+  const notices = jobNotices(job.packet, job.company);
   // Funnel measurement without identity (correction 14): a random per-visit reference, no candidate data, no client script; the source comes from the tracked-link cookie when there is one.
   void container.integrations.analytics.capture({ name: "application_started", subjectRef: randomToken(12), companyRef: refFor(job.company.id, container.integrations.analyticsSalt), at: new Date().toISOString(), properties: { source: resolveApplicationSource(c, job.role.id).source } }).catch(() => undefined);
   return c.html(<ApplyForm company={job.company} role={job.role} packet={job.packet} notices={notices} smsEnabled={container.env.SMS_ENABLED} privacyEmail={container.env.PRIVACY_EMAIL} />);
@@ -314,7 +348,7 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
   if (!job || !acceptingApplications(job.role)) return c.notFound();
   const { company, role, packet } = job;
   const smsEnabled = container.env.SMS_ENABLED;
-  const notices = noticesFor(resolveJurisdictions([...packet.identity.locations, ...company.locations]), company.settings.notices);
+  const notices = jobNotices(packet, company);
   // The versions recorded as shown are the server's own, computed from the same inputs as the render; a browser cannot claim a different set.
   const noticeVersionsShown = noticeVersionsFor(notices, smsEnabled);
   const body = await c.req.parseBody({ all: true });
@@ -332,6 +366,8 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
   const values = { firstName: str("firstName"), lastName: str("lastName"), email: str("email"), phone: str("phone"), locationText: str("locationText"), noResume: str("noResume") };
   const state = (missing: string[] = [], resume: Pick<ApplyFormState, "resume" | "resumeLost"> = { resume: null, resumeLost: false }): Partial<ApplyFormState> => ({ values, answers, acknowledged, smsConsent, missing, ...resume });
   const again = (error: string, missing: string[] = [], resume?: Pick<ApplyFormState, "resume" | "resumeLost">) => c.html(<ApplyForm company={company} role={role} packet={packet} notices={notices} smsEnabled={smsEnabled} privacyEmail={container.env.PRIVACY_EMAIL} error={error} state={state(missing, resume)} />, 400);
+  // Honeypot: a filled hidden field gets exactly the receipt a person gets, and nothing is recorded.
+  if (str("website")) return toReceipt(c, job, values.email);
   const parsed = ApplyRequest.safeParse({
     firstName: values.firstName,
     lastName: values.lastName,
@@ -341,7 +377,6 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
     smsConsent,
     answers: eligibilityAnswers,
     noResumeAnswers: values.noResume ? { summary: values.noResume } : undefined,
-    website: str("website") || undefined,
     noticeVersionsShown,
     acknowledged,
   });
@@ -359,14 +394,17 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
     const still = keptSentence(resumeLost);
     return again(onlyAcknowledgment ? `One more step: please confirm you have read the notice at the bottom of the form. ${still}` : `Please check the highlighted fields: a first name, last name, a valid email, and the confirmation at the bottom of the form are required. ${still}`, missing, { resume: keptResume, resumeLost });
   }
-  if (parsed.data.website) return c.html(<Layout title="Thanks"><h1>Thanks</h1><p>Your application was received.</p></Layout>); // honeypot: pretend success
 
   let resume: ResumeInput | null = null;
+  let usedUploadId: string | null = null;
   const grantToken = str("uploadGrant");
   if (grantToken) {
     // The browser uploaded straight to storage; the grant names the object. It must be for this company and role.
     const grant = container.uploadGrants.open(grantToken, container.engine.clock());
-    if (!grant || grant.companyId !== company.id || grant.roleId !== role.id) return again("Your uploaded resume could not be attached (the upload expired). Please attach the file again.");
+    const expired = "Your uploaded resume could not be attached (the upload expired). Please attach the file again.";
+    if (!grant || grant.companyId !== company.id || grant.roleId !== role.id) return again(expired);
+    // One submission per grant, refused before the file is looked at (services/applications.ts, uploadAlreadyUsed).
+    if (await withTenant(container.db, company.id, (tx) => uploadAlreadyUsed(tx, { roleId: role.id, uploadId: grant.uploadId }))) return again(expired);
     const head = await container.integrations.storage.head(grant.key);
     if (!head || head.size === 0) return again("Your uploaded resume did not arrive. Please attach the file again.");
     if (head.size > MAX_RESUME_BYTES) {
@@ -374,6 +412,7 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
       return again("Resume files must be under 8 MB.");
     }
     resume = { kind: "stored", filename: grant.filename, mime: grant.mime, storageKey: grant.key, sizeBytes: head.size, via: "direct" };
+    usedUploadId = grant.uploadId;
   } else {
     const file = body.resume;
     if (file && typeof file === "object" && "arrayBuffer" in file) {
@@ -394,8 +433,11 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
   const ip = clientIp(c);
   // The source comes from the tracked-link cookie when it names this role (docs/spec/20 items 8 and 19); the token itself is never stored.
   const origin = resolveApplicationSource(c, role.id);
-  const result = await withTenant(container.db, company.id, (tx) =>
-    createApplication(tx, container, {
+  // A new application and a repeat one end on the same receipt (Wave 0 item 0.1): the page never shows or links to an
+  // existing application, so typing someone else's address reveals nothing and changes nothing on their record.
+  await withTenant(container.db, company.id, async (tx) => {
+    if (usedUploadId) await markUploadUsed(tx, { companyId: company.id, roleId: role.id, uploadId: usedUploadId });
+    return createApplication(tx, container, {
       companyId: company.id,
       roleId: role.id,
       source: origin.source,
@@ -414,11 +456,102 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
       noResumeAnswers: parsed.data.noResumeAnswers,
       resume,
       ip,
-    }, { kind: "candidate", id: "applicant" }),
-  );
+    }, { kind: "candidate", id: "applicant" });
+  });
   await container.kick();
   clearApplicationSource(c);
-  return c.redirect(`/c/status/${result.application.statusToken}?new=1`);
+  return toReceipt(c, job, parsed.data.email);
+});
+
+/** The receipt (Wave 0 item 0.1). Identical for a first application, a repeat one and a bot; it never names a status link. */
+function Receipt(props: { company: { slug: string; name: string }; role: { id: string }; packet: RolePacket; to: string | null }) {
+  return (
+    <Layout title="Check your email">
+      <p class="meta"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>{props.packet.identity.title}</a> · {props.company.name}</p>
+      <h1>Thanks for applying</h1>
+      <div class="card" role="status">
+        {/* True for a first application and a repeat alike: a repeat's reminder goes at most once a day, so it may be in an earlier email. */}
+        <p><strong>Check your email.</strong> Your own link to this application goes to {props.to ?? "the email address you gave"}. If you applied for this job before, look in our earlier emails too: we send the link again at most once a day.</p>
+        <p style="margin:0">Keep that email. The link is how you check where things stand, withdraw, or ask about your information. There is no account or password.</p>
+      </div>
+      <h2>What happens next</h2>
+      <ol class="steps">
+        <li>The hiring team at {props.company.name} reviews your application. People make every decision.</li>
+        <li>You hear from us by email either way.</li>
+      </ol>
+      <h2>No email?</h2>
+      <p>It can take a few minutes. Look in your spam or promotions folder too. If it still has not arrived, we can send your link again.</p>
+      <a class="btn btn-quiet" href="/c/link-request">Send my link again</a>
+      <p class="notice" style="margin-top:22px"><a href="/privacy">How we handle your information</a></p>
+    </Layout>
+  );
+}
+
+candidatePages.get("/careers/:slug/jobs/:roleId/applied", async (c) => {
+  const container = c.get("container");
+  const job = await loadJob(container.db, c.req.param("slug"), c.req.param("roleId"));
+  if (!job) return c.notFound();
+  const sealed = openPayload<ReceiptPayload>(RECEIPT_PURPOSE, getCookie(c, RECEIPT_COOKIE), container.env.SESSION_SECRET, container.engine.clock().getTime());
+  const to = sealed?.v === 1 && sealed.roleId === job.role.id && typeof sealed.to === "string" ? sealed.to : null;
+  c.header("Cache-Control", "no-store");
+  return c.html(<Receipt company={job.company} role={job.role} packet={job.packet} to={to} />);
+});
+
+/* ------------------------------------------------------------------------------------------------------------ */
+/* "Lost your link?" (Wave 0 item 0.1): the status link goes again to the address on file, never to the page.   */
+/* ------------------------------------------------------------------------------------------------------------ */
+
+/** The form's one field, checked here (the shared contracts stay as they are in this wave). */
+const LinkRequestForm = z.object({ email: z.email().max(254) });
+
+function LinkRequestPage(props: { error?: string; email?: string }) {
+  return (
+    <Layout title="Get your application link again">
+      <h1>Lost your link?</h1>
+      <p>Type the email address you applied with. If we have an application from that address, we email your link to it. We only ever send it to that address, never to this page.</p>
+      {props.error ? <div class="err" role="alert">{props.error}</div> : null}
+      <form method="post" action="/c/link-request" class="card">
+        <div style="position:absolute;left:-10000px" aria-hidden="true"><label for="website">Leave this empty</label><input id="website" name="website" type="text" tabindex={-1} autocomplete="off" /></div>
+        <label for="email">Your email address</label>
+        <input id="email" name="email" type="email" required autocomplete="email" value={props.email ?? ""} />
+        <button class="btn" type="submit" style="margin-top:14px">Email me my link</button>
+      </form>
+      <p class="notice"><a href="/privacy">How we handle your information</a></p>
+    </Layout>
+  );
+}
+
+/** What every request answers, whether or not the address is known: only the mailbox learns that. */
+function LinkRequestSent() {
+  return (
+    <Layout title="Check your email">
+      <h1>Check your email</h1>
+      <div class="card" role="status">
+        <p><strong>If we have an application from that address, your link is on its way.</strong></p>
+        <p style="margin:0">It can take a few minutes; look in your spam or promotions folder too. To protect your privacy, this page looks the same whether or not we found anything.</p>
+      </div>
+      <p class="notice">Still nothing? You may have applied with a different address. <a href="/c/link-request">Try another address</a>.</p>
+    </Layout>
+  );
+}
+
+candidatePages.get("/c/link-request", (c) => {
+  c.header("Cache-Control", "no-store");
+  return c.html(c.req.query("sent") === "1" ? <LinkRequestSent /> : <LinkRequestPage />);
+});
+
+candidatePages.post("/c/link-request", rateLimit(POLICIES.linkRequest), async (c) => {
+  const container = c.get("container");
+  const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
+  const str = (k: string) => (typeof form[k] === "string" ? (form[k] as string) : "");
+  // the honeypot is answered like everyone else and sends nothing
+  if (str("website")) return c.redirect("/c/link-request?sent=1", 303);
+  const parsed = LinkRequestForm.safeParse({ email: str("email").trim() });
+  if (!parsed.success) return c.html(<LinkRequestPage error="Please check the email address and send it again." email={str("email")} />, 400);
+  // One queued job for every address, known or not; the worker looks it up (in production the kick does nothing here).
+  await queueLinkRequest(container, parsed.data.email);
+  await container.kick();
+  return c.redirect("/c/link-request?sent=1", 303);
 });
 
 candidatePages.get("/c/status/:token", async (c) => {
@@ -437,7 +570,7 @@ candidatePages.get("/c/status/:token", async (c) => {
   const prepare = iv && iv.status === "scheduled" ? await withTenant(c.get("container").db, app.companyId, async (tx) => (await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1))[0]?.packet.interviews.plan.find((r) => r.key === iv.roundKey)?.purpose ?? null) : null;
   const smsEnabled = c.get("container").env.SMS_ENABLED;
   const smsOn = !!cand?.consent.sms?.granted && !cand?.preferences.smsOptOut;
-  const isNew = c.req.query("new") === "1";
+  const poolOptOut = !!cand?.preferences.talentPoolOptOut;
   const next: Record<string, string> = {
     applied: "We are confirming your application now.",
     received: "Your application is in. We are checking the basics.",
@@ -455,13 +588,12 @@ candidatePages.get("/c/status/:token", async (c) => {
     offer_sent: "Check your messages for the offer.",
     accepted: "Welcome aboard.",
     hired: "You are on the team.",
-    rejected: "Thank you for applying. This role did not work out, and we will keep you in mind for future openings unless you ask us not to.",
+    rejected: poolOptOut ? "Thank you for applying. This role did not work out." : "Thank you for applying. This role did not work out, and we will keep you in mind for future openings unless you ask us not to.",
     withdrawn: "You withdrew this application. Reply to any of our emails to reactivate it.",
-    talent_pool: "We are keeping you in mind for future openings.",
+    talent_pool: poolOptOut ? "This role is not moving forward for you. As you asked, nobody will contact you about future openings." : "We are keeping you in mind for future openings.",
   };
   return c.html(
     <Layout title={`Your application at ${company?.name ?? ""}`}>
-      {isNew ? <div class="card"><strong>Thanks, {cand?.firstName}. Your application is in.</strong><p style="margin:6px 0 0">A confirmation is on its way to {cand?.email}.</p></div> : null}
       <h1>{role?.title}</h1>
       <p class="meta">{company?.name}</p>
       <div class="card status">
@@ -496,6 +628,19 @@ candidatePages.get("/c/status/:token", async (c) => {
           <button class="btn secondary" type="submit" style="width:auto;margin-top:8px">Withdraw my application</button>
         </form>
       ) : null}
+      {/* Wave 0 item 0.11: the talent-pool choice is one click either way, and it only ever affects future roles. */}
+      {poolOptOut ? (
+        <form method="post" action={`/c/status/${app.statusToken}/talent-pool`} class="card">
+          <p><strong>Future roles:</strong> you asked us not to keep your details for future roles, so nobody will contact you about other openings at {company?.name}.</p>
+          <input type="hidden" name="pref" value="in" />
+          <button class="btn btn-quiet" type="submit" style="width:auto">Keep me for future roles again</button>
+        </form>
+      ) : (
+        <form method="post" action={`/c/status/${app.statusToken}/talent-pool`} class="card">
+          <p><strong>Future roles:</strong> {company?.name} may keep your details to tell you about other openings later. This does not change your current application.</p>
+          <button class="btn btn-quiet" type="submit" style="width:auto">Don't keep me for future roles</button>
+        </form>
+      )}
       <h2>Need something?</h2>
       <p>Reply to any of our emails with HUMAN to reach a person, or use the form below. To request, correct, or delete your information you can also email <a href={`mailto:${c.get("container").env.PRIVACY_EMAIL}`}>{c.get("container").env.PRIVACY_EMAIL}</a>; see <a href="/privacy">how we handle your information</a>.</p>
       {c.req.query("request") ? <div class="card" role="status"><strong>We have your request.</strong><p style="margin:6px 0 0">A confirmation with the completion date is on its way to {cand?.email ?? "your email"}. Reference {c.req.query("request")}.</p></div> : null}
@@ -547,6 +692,8 @@ candidatePages.get("/privacy", async (c) => {
         <li>Ask what we hold about you, correct it, or delete it: <a href="/c/privacy-request">use the request form</a> with the address you applied with (we confirm it is you by email), or write to <a href={`mailto:${privacyEmail}`}>{privacyEmail}</a> from that address. A person records the request, confirms receipt within one business day, and completes it within the legal deadline.</li>
         <li>Stop text messages any time by replying STOP.</li>
         <li>Ask to talk to a person instead of an automated conversation by replying HUMAN.</li>
+        <li>Ask not to be kept for future roles: use the button on your status page, or reply "no thanks" to any of our emails.</li>
+        <li>Lost the link to your status page? <a href="/c/link-request">We can email it to you again</a>, only ever to the address you applied with.</li>
       </ul>
       <h2>Automated tools</h2>
       <p>{noticesFor(["*"]).find((x) => x.key === "ai_use")?.text}</p>
@@ -612,6 +759,17 @@ candidatePages.get("/c/screen/:token", async (c) => {
       <div class="thread">
         {screen.transcript.map((t) => <div class={`msg ${t.role}`}>{t.content}</div>)}
       </div>
+      {active && withdrawPending(screen.transcript) ? (
+        // WITHDRAW asked first (Wave 0 item 0.7): nothing is withdrawn until the candidate presses the first button.
+        <div class="card" role="status">
+          <strong>Do you want to withdraw your application?</strong>
+          <p style="margin:6px 0 0">Withdrawing ends this conversation and your application for {packet.identity.title}. To keep going instead, just type your answer below.</p>
+          <form method="post" action={`/c/screen/${screen.token}/withdraw`} class="actions">
+            <button class="btn" type="submit" name="confirm" value="yes" style="width:auto">Yes, withdraw my application</button>
+            <button class="btn secondary" type="submit" name="confirm" value="no">No, keep my application</button>
+          </form>
+        </div>
+      ) : null}
       {active ? (
         <>
           <div class="progress"><span>{answered} of {total} answered</span><span class="bar"><i style={`width:${Math.round((answered / Math.max(1, total)) * 100)}%`} /></span></div>
@@ -652,6 +810,24 @@ candidatePages.post("/c/screen/:token/human", rateLimit(POLICIES.screenHuman), a
   if (!b) return c.notFound();
   if (["invited", "reminded", "in_progress"].includes(b.screen.status)) {
     await withTenant(container.db, b.company.id, async (tx) => requestHuman(tx, screenDeps(container), { screenId: b.screen.id, reason: "candidate pressed 'Talk to a person'", actor: { kind: "candidate", id: b.candidate.id }, reply: `Understood. A person from ${b.company.name} will follow up with you ${humanResponseExpectation(new Date(), await loadBusinessCalendar(tx))}.`, replyChannel: "web" }));
+    await container.kick();
+  }
+  return c.redirect(`/c/screen/${b.screen.token}`);
+});
+
+/**
+ * The answer to "do you want to withdraw?" on the web (Wave 0 item 0.7): `confirm=yes` withdraws the application and
+ * closes the conversation, `confirm=no` keeps it and picks up where it was. The link itself is the proof, as on the
+ * status page; a screen that already ended is left as it is.
+ */
+candidatePages.post("/c/screen/:token/withdraw", rateLimit(POLICIES.withdraw), async (c) => {
+  const container = c.get("container");
+  const b = await loadScreenByToken(container.db, c.req.param("token") ?? "");
+  if (!b) return c.notFound();
+  if (await anonymizedFor(container, b.candidate.id)) return linkGone(c);
+  const body = await c.req.parseBody();
+  if (body.confirm === "yes" || body.confirm === "no") {
+    await withTenant(container.db, b.company.id, (tx) => answerWithdrawPrompt(tx, screenDeps(container), { screenId: b.screen.id, confirm: body.confirm === "yes", channel: "web", actor: { kind: "candidate", id: b.candidate.id } }));
     await container.kick();
   }
   return c.redirect(`/c/screen/${b.screen.token}`);
@@ -769,5 +945,20 @@ candidatePages.post("/c/status/:token/sms", rateLimit(POLICIES.smsPref), async (
       await fulfilSmsOptOut(tx, req, actor, container.engine.clock());
     });
   }
+  return c.redirect(`/c/status/${app.statusToken}`);
+});
+
+/**
+ * "Don't keep me for future roles" (Wave 0 item 0.11): one click on the status link, confirmed by email; a repeat
+ * changes nothing. `pref=in` ("Keep me for future roles again") takes the choice back, with nothing sent.
+ */
+candidatePages.post("/c/status/:token/talent-pool", rateLimit(POLICIES.talentPoolPref), async (c) => {
+  const container = c.get("container");
+  const [app] = await container.db.select().from(applications).where(eq(applications.statusToken, c.req.param("token") ?? "")).limit(1);
+  if (!app) return c.notFound();
+  if (await anonymizedFor(container, app.candidateId)) return linkGone(c);
+  const body = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
+  if (body.pref === "in") await withTenant(container.db, app.companyId, (tx) => optBackIntoTalentPool(tx, { application: app }));
+  else if (await withTenant(container.db, app.companyId, (tx) => optOutOfTalentPool(tx, container, { application: app, source: "status_page" }))) await container.kick();
   return c.redirect(`/c/status/${app.statusToken}`);
 });

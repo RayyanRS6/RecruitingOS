@@ -59,6 +59,9 @@ test.describe("route inventory", () => {
       await page.goto(path);
       await expect(page.getByRole("heading", { level: 1 }).first()).toContainText(heading, { timeout: 30_000 });
       await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
+      // Sign out stays reachable in the phone's top bar too, and the menu does not name the AI company
+      await expect(page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: "Sign out" })).toBeVisible();
+      await expect(page.getByRole("navigation", { name: "Main" })).not.toContainText("AI:");
       await expectAccessible(page, path);
       await noHorizontalOverflow(page, path);
     }

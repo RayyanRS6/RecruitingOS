@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
-import { formatPayRange, type Actor, type RolePacket } from "@ros/contracts";
+import { formatPayRange, type Actor, type Location, type RolePacket } from "@ros/contracts";
 import { postings, type Queryable } from "@ros/db";
+import { jobNoticesFor, payShown, type NoticeOverrides } from "./compliance";
 import { emit } from "./events";
 
 /**
@@ -152,6 +153,9 @@ export type PostingPackageInput = {
   intakeAddress?: string | null;
   /** The board this package is for, for the heading; optional. */
   boardName?: string | null;
+  /** The company's locations and notice wording, so the pay line follows the same rule as the job page; optional. */
+  companyLocations?: Location[];
+  noticeOverrides?: NoticeOverrides;
 };
 
 export type PostingPackage = { text: string; fields: Record<string, string> };
@@ -163,9 +167,10 @@ export function locationLine(packet: RolePacket): string {
   return `${where}${remote}`;
 }
 
-export function payLine(packet: RolePacket): string {
+/** The pay as a board posting states it: shown exactly when the job page shows it (`payShown`), so no board omits a range the law requires. */
+export function payLine(packet: RolePacket, company: { locations?: Location[]; noticeOverrides?: NoticeOverrides } = {}): string {
   const c = packet.compensation;
-  if (!c.discloseRange) return "Not disclosed publicly";
+  if (!payShown(c, jobNoticesFor({ jobLocations: packet.identity.locations, companyLocations: company.locations, overrides: company.noticeOverrides }))) return "Not disclosed publicly";
   return `${formatPayRange(c)} (${c.basis === "hourly" ? "hourly" : "salary"}, ${c.currency})`;
 }
 
@@ -178,7 +183,7 @@ export function postingPackage(input: PostingPackageInput): PostingPackage {
     employer: input.companyName,
     location: locationLine(p),
     employmentType: EMPLOYMENT_TYPE_LABEL[p.identity.employmentType] ?? p.identity.employmentType,
-    pay: payLine(p),
+    pay: payLine(p, { locations: input.companyLocations, noticeOverrides: input.noticeOverrides }),
     description: p.description.publicJobDescription,
     screeningQuestions: questions.join("\n"),
     applyUrl: input.applyUrl,

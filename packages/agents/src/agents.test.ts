@@ -1,9 +1,43 @@
 import { describe, expect, it } from "vitest";
-import { FakeProvider } from "@ros/ai";
+import { FakeProvider, screenTurnPrompt, type ScreenContext } from "@ros/ai";
 import { IntakeTurn, RolePacket } from "@ros/contracts";
+import { futureRolesLine, reminderClosingLine } from "./coordinator";
 import { registerFakeHandlers } from "./fake-handlers";
 import { mergeFacts } from "./intake";
 import { verifyQuotes } from "./triage";
+
+describe("what candidate emails say about future roles (Wave 0 item 0.11)", () => {
+  it("offers the talent pool only to someone who has not said no to it, and acknowledges the choice otherwise", () => {
+    expect(futureRolesLine({ preferences: {} })).toMatch(/reply "no thanks"/);
+    const optedOut = futureRolesLine({ preferences: { talentPoolOptOut: true } });
+    expect(optedOut).toBe("As you asked, we will not keep your details for future roles.");
+    expect(optedOut).not.toMatch(/no thanks|keep your information/);
+    expect(reminderClosingLine({ preferences: {} })).toMatch(/keep you in mind for future openings\.$/);
+    expect(reminderClosingLine({ preferences: { talentPoolOptOut: true } })).toBe("If you are no longer interested, no reply is needed; we will close the application in a few days.");
+  });
+});
+
+describe("the screening assistant states pay as the job page does (plan 0.8)", () => {
+  const packet = {
+    identity: { title: "Registered Dental Hygienist", employmentType: "full_time", locations: [{ city: "Irvine", region: "CA" }] },
+    compensation: { basis: "hourly", min: 45, max: 55, currency: "USD", discloseRange: false },
+    screening: { questions: [], maxMinutes: 10 },
+    competencies: [],
+    requirements: { mustHaves: [] },
+    communication: { candidateMayBeTold: [], tone: "warm", humanAlternativeText: "Reply HUMAN for a person." },
+    interviews: { plan: [] },
+  } as unknown as ScreenContext["packet"];
+  const ctx = (payShown?: boolean): ScreenContext => ({ company: { name: "Harbor Dental" }, packet, candidate: { firstName: "Dana" }, channel: "web", progress: { askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0 }, answers: {}, transcript: [], focusUnknowns: [], latestCandidateMessage: null, ...(payShown === undefined ? {} : { payShown }) });
+  const system = (c: ScreenContext) => screenTurnPrompt.system(c).map((b) => b.text).join("\n");
+
+  it("gives the range the law makes the public page show, even when the owner chose not to", () => {
+    expect(screenTurnPrompt.version).toBe(2);
+    expect(system(ctx(true))).toContain("Posted pay: hourly 45 to 55 USD.");
+    expect(system(ctx(false))).toContain("Posted pay: not disclosed; say a person can discuss pay.");
+    // without the public rule's answer, the owner's own choice
+    expect(system(ctx())).toContain("Posted pay: not disclosed");
+  });
+});
 
 describe("fake intake handler", () => {
   const fake = new FakeProvider();

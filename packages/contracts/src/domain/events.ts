@@ -19,7 +19,7 @@ export const EventType = z.enum([
   "posting.verification_failed", "posting.closure_required", "posting.closure_confirmed",
   "application_link.created", "application_link.disabled",
   "application.received", "application.acknowledged", "application.duplicate_detected", "candidate.created", "candidate.merged",
-  "resume.ingested", "resume.extraction_failed", "document.upload_authorized", "document.uploaded", "document.validated", "document.rejected", "document.deleted", "eligibility.evaluated", "application.ineligible", "application.hold_reminded", "application.triaged",
+  "resume.ingested", "resume.extraction_failed", "document.upload_authorized", "document.upload_used", "document.uploaded", "document.validated", "document.rejected", "document.deleted", "eligibility.evaluated", "application.ineligible", "application.hold_reminded", "application.triaged",
   "assessment.created", "application.stage_changed", "application.inactive", "application.withdrawn", "application.rejected",
   "application.moved_to_talent_pool",
   "screen.invited", "screen.started", "screen.completed", "screen.abandoned", "screen.expired", "screen.human_requested", "screen.assessed",

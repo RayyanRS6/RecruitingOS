@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { createCompanyThroughTheForm, expectAccessible, signIn, skipWithoutFakeSignIn } from "./helpers";
+import { createCompanyThroughTheForm, expectAccessible, signIn, skipWithoutFakeSignIn, statusPathFromEmail } from "./helpers";
 
 /**
  * The candidate's own journey on a phone (docs/spec/20 items 2 and 3; docs/readiness/20 section D): the job page, the
@@ -66,8 +66,9 @@ test.describe("candidate journey on a phone", () => {
     await page.goto(tracked.pathname);
     await page.waitForURL(new RegExp(`/careers/${seeded.slug}/jobs/${seeded.roleId}/apply$`));
 
-    // the form: the transparency block and the privacy link are on the page; the acknowledgment starts unchecked
-    await expect(page.getByRole("heading", { name: "Apply", exact: true })).toBeVisible();
+    // the form: the job's facts on top, the transparency block and the privacy link on the page; the acknowledgment starts unchecked
+    await expect(page.getByRole("heading", { level: 1, name: /^Apply: / })).toBeVisible();
+    await expect(page.getByText("$45–$55 an hour").first()).toBeVisible();
     await expect(page.getByRole("heading", { name: "Before you send" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Read how we handle your information" })).toHaveAttribute("href", "/privacy");
     const acknowledgment = page.getByRole("checkbox", { name: /I have read the notice above/ });
@@ -98,15 +99,35 @@ test.describe("candidate journey on a phone", () => {
     }
     await expectAccessible(page, "apply form with the acknowledgment missing");
 
-    // ticking the box sends it; the status page confirms without a login
+    // ticking the box sends it; the receipt says to check email, with the address masked, and never shows the status link
     await page.getByRole("checkbox", { name: /I have read the notice above/ }).check();
     await page.getByRole("button", { name: "Send my application" }).click();
-    await page.waitForURL(/\/c\/status\//);
-    // the confirmation card only: while the application is still "received" the stage sentence below says "Your application is in" too
-    await expect(page.getByText("Thanks, Maria. Your application is in.", { exact: true })).toBeVisible();
+    await page.waitForURL(new RegExp(`/careers/${seeded.slug}/jobs/${seeded.roleId}/applied$`));
+    await expect(page.getByRole("heading", { level: 1, name: "Thanks for applying" })).toBeVisible();
+    await expect(page.getByText("m***@example.com")).toBeVisible();
+    // the same words stay true for someone who applied before (their reminder goes at most once a day)
+    await expect(page.getByText(/look in our earlier emails too/)).toBeVisible();
+    await expect(page.getByRole("link", { name: "Send my link again" })).toHaveAttribute("href", "/c/link-request");
+    await expectAccessible(page, "receipt");
+    await noHorizontalOverflow(page, "receipt");
+    // "Lost your link?" is reachable from the receipt and accessible on a phone
+    await page.getByRole("link", { name: "Send my link again" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Lost your link?" })).toBeVisible();
+    await expectAccessible(page, "lost your link");
+    await noHorizontalOverflow(page, "lost your link");
+
+    // the status page opens from the emailed link, without a login
+    const statusPath = await statusPathFromEmail(page.request, baseURL!, seeded.roleId, email);
+    await page.goto(statusPath);
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     await expectAccessible(page, "status page");
     await noHorizontalOverflow(page, "status page");
-    const statusPath = new URL(page.url()).pathname;
+    // "Future roles" is one click either way, and the page says which way it stands (Wave 0 item 0.11)
+    await page.getByRole("button", { name: "Don't keep me for future roles" }).click();
+    await expect(page.getByText(/you asked us not to keep your details for future roles/)).toBeVisible();
+    await expectAccessible(page, "status page after opting out of future roles");
+    await page.getByRole("button", { name: "Keep me for future roles again" }).click();
+    await expect(page.getByRole("button", { name: "Don't keep me for future roles" })).toBeVisible();
 
     // the screening conversation (policy: invited automatically after triage), one question at a time
     await page.goto(statusPath);

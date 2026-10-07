@@ -1,11 +1,12 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
-import type { Actor, RolePacket, ScreenChannel, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
+import type { Actor, RolePacket, ScreenAssessment, ScreenChannel, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
 import { runPromptDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type RunOutcome, type ScreenContext } from "@ros/ai";
-import { createEscalation, emit, humanResponseExpectation, loadBusinessCalendar, notify, transition } from "@ros/core";
+import { createEscalation, emit, humanResponseExpectation, jobNoticesFor, loadBusinessCalendar, notify, payShown, transition } from "@ros/core";
 import { applications, assessments, candidates, companies, randomToken, rolePackets, roles, screens, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { deliverSms, recordInbound } from "./coordinator";
 import { answersOf, focusedPacket, isFocusKey, withFocusAnswer, type FocusQuestion } from "./screen-focus";
+import { applyEvidenceRules } from "./triage";
 
 /**
  * The Screening agent (docs/05). Conversation turns run when the candidate writes (web chat or SMS); the durable
@@ -78,6 +79,8 @@ function contextOf(b: ApplicationBundle, screen: ConversationState, latest: stri
     transcript: screen.transcript,
     focusUnknowns: b.triageUnknowns,
     latestCandidateMessage: latest,
+    // The same pay rule as the job page the candidate applied from.
+    payShown: payShown(b.packet.compensation, jobNoticesFor({ jobLocations: b.packet.identity.locations, companyLocations: b.company.locations, overrides: b.company.settings.notices })),
   };
 }
 
@@ -181,26 +184,89 @@ export async function beginScreenTurn(q: Queryable, deps: ScreenDeps, input: Tur
     await q.update(screens).set({ transcript, lastCandidateMessageAt: now }).where(eq(screens.id, screen.id));
   }
 
-  // Keyword commands never go through the model.
-  if (/^\s*(human|person|agent|representative)\b/i.test(input.message) || /\b(talk|speak) to a (real )?(person|human)\b/i.test(input.message)) {
+  // Keyword commands never go through the model, and only a message that is the command itself counts (Wave 0 item
+  // 0.7): "Representative at a phone store for two years" is an answer; "HUMAN" asks for a person. WITHDRAW asks first.
+  const command = screenCommand(input.message, withdrawPending(screen.transcript));
+  if (command === "confirm_withdraw" || command === "keep_application") {
+    const msg = await answerWithdrawPrompt(q, deps, { screenId: screen.id, confirm: command === "confirm_withdraw", channel: input.channel, actor: input.actor });
+    if (msg === null) return { kind: "done", result: { kind: "closed", message: "This screening has closed. Reply HUMAN if you would like a person to follow up." } };
+    return { kind: "done", result: { kind: "reply", message: msg, done: command === "confirm_withdraw", humanRequested: false, ...(command === "confirm_withdraw" ? { withdrawn: true } : {}) } };
+  }
+  if (command === "human") {
     const msg = `Understood. A person from ${company.name} will follow up with you ${humanResponseExpectation(new Date(), await loadBusinessCalendar(q))}. Thank you for your patience.`;
     await requestHuman(q, deps, { screenId: screen.id, reason: "candidate asked for a person", actor: input.actor, reply: msg, replyChannel: input.channel });
     return { kind: "done", result: { kind: "reply", message: msg, done: false, humanRequested: true } };
   }
-  if (/^\s*withdraw\b/i.test(input.message)) {
-    const msg = `Understood, we have withdrawn your application for ${packet.identity.title}. Thank you for your time, and reply to any of our emails if you change your mind.`;
-    await q.update(screens).set({ status: "abandoned", transcript: [...transcript, { role: "assistant", content: msg, at: new Date().toISOString(), channel: input.channel }] }).where(eq(screens.id, screen.id));
-    await emit(q, { type: "screen.abandoned", companyId: company.id, actor: candidateActor, subject: { type: "screen", id: screen.id }, payload: { reason: "withdrawn" }, correlationId: screen.workflowRunId });
-    await transition(q, { applicationId: app.id, companyId: company.id, to: "withdrawn", by: "candidate", actor: candidateActor, reason: "candidate withdrew during screening", correlationId: screen.workflowRunId });
-    await emit(q, { type: "application.withdrawn", companyId: company.id, actor: candidateActor, subject: { type: "application", id: app.id }, payload: { during: "screen" }, correlationId: screen.workflowRunId });
-    await notify(q, { companyId: company.id, kind: "candidate.withdrawn", title: `${candidate.firstName} ${candidate.lastName} withdrew`, body: `They withdrew from ${packet.identity.title} during the screening conversation.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
-    if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: msg, idempotencyKey: `screen_withdrawn:${screen.id}`, templateKey: "screen_withdrawn", disclosureIncluded: false });
-    await deps.signal?.(q, { companyId: company.id, key: `screen:${screen.id}:completed`, payload: { withdrawn: true } });
-    return { kind: "done", result: { kind: "reply", message: msg, done: true, humanRequested: false, withdrawn: true } };
+  if (command === "withdraw") {
+    // Nothing is withdrawn yet: the candidate is asked once, and the answer to that question decides.
+    const msg = input.channel === "sms"
+      ? `Do you want to withdraw your application for ${packet.identity.title}? Reply CONFIRM to withdraw. To keep your application, just reply with your answer.`
+      : `Do you want to withdraw your application for ${packet.identity.title}? Press "Yes, withdraw my application" below to confirm. To keep your application, just type your answer.`;
+    await q.update(screens).set({ transcript: [...transcript, { role: "assistant", content: msg, at: new Date().toISOString(), channel: input.channel, questionKey: WITHDRAW_CONFIRM_KEY }] }).where(eq(screens.id, screen.id));
+    if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: msg, idempotencyKey: `screen_withdraw_ask:${screen.id}:${transcript.length}`, templateKey: "screen_withdraw_ask", disclosureIncluded: false });
+    return { kind: "done", result: { kind: "reply", message: msg, done: false, humanRequested: false } };
   }
 
   const fresh = (await q.select().from(screens).where(eq(screens.id, screen.id)).limit(1))[0];
   return { kind: "pending", b: { ...b, screen: fresh }, transcript, ctx: contextOf(b, { ...fresh, transcript }, input.message) };
+}
+
+/** The marker on the assistant's "do you want to withdraw?" message: while it is the latest assistant message, the next reply decides. */
+export const WITHDRAW_CONFIRM_KEY = "withdraw_confirm";
+
+export type ScreenCommand = "human" | "withdraw" | "confirm_withdraw" | "keep_application";
+
+/**
+ * The keyword commands of a screening conversation (Wave 0 item 0.7). Only a message that is the command itself counts,
+ * so an answer that happens to start with "Representative" or "Withdraw" is recorded as an answer. The plain request
+ * "talk to a person" counts wherever it appears. While a withdrawal waits for confirmation, CONFIRM (or YES, or
+ * WITHDRAW again) confirms it and NO keeps the application; anything else is an ordinary answer and the question lapses.
+ */
+export function screenCommand(message: string, pendingWithdraw = false): ScreenCommand | null {
+  const m = message.trim();
+  if (pendingWithdraw) {
+    if (/^(confirm|yes|y|withdraw)[.!]?$/i.test(m)) return "confirm_withdraw";
+    if (/^(no|nope|keep|keep going|keep it|keep my application)[.!]?$/i.test(m)) return "keep_application";
+  }
+  if (/^(human|person|a person|a human|agent|representative)[.!]?$/i.test(m) || /\b(talk|speak) (to|with) a (real )?(person|human)\b/i.test(m)) return "human";
+  if (/^withdraw( my application)?[.!]?$/i.test(m)) return "withdraw";
+  return null;
+}
+
+/** Whether the conversation is waiting for the candidate to confirm a withdrawal: the latest assistant message asked. */
+export function withdrawPending(transcript: ScreenTranscriptEntry[]): boolean {
+  for (let i = transcript.length - 1; i >= 0; i--) if (transcript[i].role === "assistant") return transcript[i].questionKey === WITHDRAW_CONFIRM_KEY;
+  return false;
+}
+
+/**
+ * The candidate's answer to "do you want to withdraw?": a CONFIRM reply or the web page's button withdraws the
+ * application (the conversation closes, the team is told, the workflow wakes); NO or the page's other button keeps it
+ * and picks up where the conversation was. A screen that is no longer active is left alone (null). Returns the message
+ * the candidate is shown, which also goes by text on that channel.
+ */
+export async function answerWithdrawPrompt(q: Queryable, deps: ScreenDeps, input: { screenId: string; confirm: boolean; channel: ScreenChannel; actor: Actor }): Promise<string | null> {
+  const b = await loadScreenBundle(q, input.screenId);
+  if (!b || !ACTIVE_STATUSES.has(b.screen.status)) return null;
+  const { screen, app, candidate, company, packet } = b;
+  const candidateActor: Actor = { kind: "candidate", id: candidate.id };
+  const at = new Date().toISOString();
+  if (!input.confirm) {
+    const current = screen.progress.currentQuestionKey ? packet.screening.questions.find((x) => x.key === screen.progress.currentQuestionKey) : undefined;
+    const msg = `No problem, your application stays active.${current ? ` Here is where we were: ${current.question}` : ""}`;
+    await q.update(screens).set({ transcript: [...screen.transcript, { role: "assistant", content: msg, at, channel: input.channel }] }).where(eq(screens.id, screen.id));
+    if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: msg, idempotencyKey: `screen_withdraw_kept:${screen.id}:${screen.transcript.length}`, templateKey: "screen_withdraw_kept", disclosureIncluded: false });
+    return msg;
+  }
+  const msg = `Understood, we have withdrawn your application for ${packet.identity.title}. Thank you for your time, and reply to any of our emails if you change your mind.`;
+  await q.update(screens).set({ status: "abandoned", transcript: [...screen.transcript, { role: "assistant", content: msg, at, channel: input.channel }] }).where(eq(screens.id, screen.id));
+  await emit(q, { type: "screen.abandoned", companyId: company.id, actor: candidateActor, subject: { type: "screen", id: screen.id }, payload: { reason: "withdrawn" }, correlationId: screen.workflowRunId });
+  await transition(q, { applicationId: app.id, companyId: company.id, to: "withdrawn", by: "candidate", actor: candidateActor, reason: "candidate withdrew during screening", correlationId: screen.workflowRunId });
+  await emit(q, { type: "application.withdrawn", companyId: company.id, actor: candidateActor, subject: { type: "application", id: app.id }, payload: { during: "screen", channel: input.channel }, correlationId: screen.workflowRunId });
+  await notify(q, { companyId: company.id, kind: "candidate.withdrawn", title: `${candidate.firstName} ${candidate.lastName} withdrew`, body: `They withdrew from ${packet.identity.title} during the screening conversation, and confirmed it.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
+  if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: msg, idempotencyKey: `screen_withdrawn:${screen.id}`, templateKey: "screen_withdrawn", disclosureIncluded: false });
+  await deps.signal?.(q, { companyId: company.id, key: `screen:${screen.id}:completed`, payload: { withdrawn: true } });
+  return msg;
 }
 
 /**
@@ -327,34 +393,41 @@ export function advanceProgress(progress: ScreenProgress, turn: ScreenTurn): Scr
 }
 
 /** The scorecard for a completed screen, called with no transaction open. Quotes are verified against the transcript in code. */
-export async function assessScreen(db: Db, ai: AiRuntime, input: { companyId: string; screenId: string; workflowRunId?: string | null }): Promise<RunOutcome<import("@ros/contracts").ScreenAssessment>> {
+export async function assessScreen(db: Db, ai: AiRuntime, input: { companyId: string; screenId: string; workflowRunId?: string | null }): Promise<RunOutcome<ScreenAssessment>> {
   const b = await withTenant(db, input.companyId, (q) => loadScreenBundle(q, input.screenId));
   if (!b) throw new Error("screen not found");
   const ctx = contextOf(b, b.screen, null);
   const out = await runPromptDetached(db, ai, screenAssessPrompt, ctx, { companyId: b.company.id, workflowRunId: input.workflowRunId ?? b.screen.workflowRunId, inputRef: { screenId: b.screen.id, turns: b.screen.transcript.length } });
   if (!out.ok) return out;
   const candidateText = `${b.screen.transcript.filter((t) => t.role === "candidate").map((t) => t.content).join("\n")}\n${Object.values(answersOf(b.screen)).join("\n")}`;
+  return { ...out, output: verifyScreenQuotes(out.output, candidateText) };
+}
+
+/**
+ * The scorecard's evidence rules (plan 0.9): every quote must be the candidate's own words from the transcript or the
+ * recorded answers. Strengths, concerns, competency and must-have findings go through the same rules as a résumé
+ * reading (`applyEvidenceRules`: drop or strip, "no" only on a verified quote, "no quote" marks, confidence step-down);
+ * answer findings and eligibility confirmations lose a quote that is not there.
+ */
+export function verifyScreenQuotes(a: ScreenAssessment, candidateText: string): ScreenAssessment {
   const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
   const src = norm(candidateText);
-  const ok = (quote?: string) => !quote || src.includes(norm(quote));
-  let dropped = 0;
-  const a = out.output;
-  /** Keeps a finding whose quote is in the transcript; otherwise counts it and returns the stripped version. */
-  const keepOrStrip = <T,>(grounded: boolean, item: T, stripped: () => T): T => {
-    if (grounded) return item;
-    dropped += 1;
-    return stripped();
-  };
-  const verified = {
-    ...a,
-    strengths: a.strengths.filter((f) => { const g = ok(f.evidence.quote); if (!g) dropped += 1; return g; }),
-    concerns: a.concerns.filter((f) => { const g = ok(f.evidence.quote); if (!g) dropped += 1; return g; }),
-    questionFindings: a.questionFindings.map((f) => keepOrStrip(ok(f.evidence?.quote), f, () => ({ ...f, evidence: undefined }))),
-    competencyFindings: a.competencyFindings.map((f) => keepOrStrip(ok(f.evidence?.quote), f, () => ({ ...f, evidence: undefined, finding: f.finding === "evidenced" ? ("partially_evidenced" as const) : f.finding }))),
-    eligibilityConfirmations: a.eligibilityConfirmations.map((e) => keepOrStrip(ok(e.quote), e, () => ({ ...e, quote: undefined }))),
-    anomalies: dropped ? [...a.anomalies, { kind: "unverified_quote", detail: `${dropped} quote${dropped === 1 ? "" : "s"} not found in the transcript; discarded` }] : a.anomalies,
-  };
-  return { ...out, output: verified };
+  const ok = (quote?: string) => !quote?.trim() || src.includes(norm(quote));
+  let stripped = 0;
+  const questionFindings = a.questionFindings.map((f) => {
+    if (ok(f.evidence?.quote)) return f;
+    stripped += 1;
+    return { ...f, evidence: undefined };
+  });
+  const eligibilityConfirmations = a.eligibilityConfirmations.map((e) => {
+    if (ok(e.quote)) return e;
+    stripped += 1;
+    return { ...e, quote: undefined };
+  });
+  // Every quote in a scorecard is checked against the candidate's words, whatever source it names.
+  const checked = applyEvidenceRules({ ...a, questionFindings, eligibilityConfirmations }, (e) => src.includes(norm(e.quote ?? "")));
+  if (!stripped) return checked;
+  return { ...checked, anomalies: [...checked.anomalies, { kind: "unverified_quote", detail: `${stripped} answer quote${stripped === 1 ? "" : "s"} not found in the transcript; discarded` }] };
 }
 
 /** The most recent screen for an application, if any. */

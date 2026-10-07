@@ -70,13 +70,13 @@ Every workflow definition declares: trigger, preconditions, steps (actions), suc
 ### `escalation` (Slice 1 minimal, Slice 6 full)
 - **Trigger:** `recruiter.requested` from any surface, or from a workflow failure.
 - **Steps:** `snapshot` (EscalationContext: company, role, packet version, candidate(s), resume text, assessments, screen transcript, interviews and scorecards, compensation, communication history, preferences, audit history summary) → `notify` (ITS queue) → `wait(event: recruiter.claimed)` → `wait(event: recruiter.resolved | takeover)` → `close`.
-- **Takeover (Slice 6):** `takeovers` row; the role's `auto` and `auto_notify` policies become `approval` with `approver_role = recruiter` for the duration; the recruiter operates; handback restores the policy snapshot; every action logged with the recruiter as actor.
+- **Takeover (Slice 6):** `takeovers` row; the role's `auto` and `auto_notify` policies become `approval` with `approver_role = recruiter` for the duration (read after the floors and ceilings, so an action that already needs a person, role approval among them, keeps its own approvers); the recruiter operates; handback restores the policy snapshot; every action logged with the recruiter as actor.
 
 ## Resilience matrix
 
 | Condition | Behavior |
 |---|---|
-| External API failure | Step retries with backoff (3 to 5 attempts); non-critical channels degrade (posting to other boards continues); critical steps escalate; the owner is told what is pending |
+| External API failure | Step retries with backoff (3 to 5 attempts); non-critical channels degrade (posting to other boards continues); critical steps escalate; the owner is told what is pending. A step that reports a failure trying again cannot fix (`retryable: false`: a missing record, a role approval that resolved to no person, a scorecard the model could not produce twice) fails at once and escalates without retries |
 | Calendar conflict | Re-check busy immediately before booking; on conflict, recompute slots and re-offer; never double-book |
 | Email bounce | Mark communication `bounced`; try SMS if consented; flag the candidate record; ask the candidate for another address via any working channel |
 | Candidate response (any time) | Inbound message matched to the candidate and application; if a workflow is waiting on `message.received` it resumes; otherwise the Coordinator classifies (question, reschedule, withdraw, opt-out, complaint) and routes |
@@ -99,7 +99,7 @@ Resolution order: role policy → company policy → platform default. Takeover 
 | Action type | Default | Approver |
 |---|---|---|
 | `role_packet.propose` | auto | |
-| `role_packet.approve` | approval | owner, admin, hiring_manager |
+| `role_packet.approve` | approval, always (a floor and a ceiling: never auto, never human_only) | owner, admin, hiring_manager |
 | `role.publish` | auto | |
 | `posting.sponsor_spend` | auto within budget; approval above | owner, admin |
 | `message.send_templated` (acknowledgment, reminders, confirmations) | auto | |
@@ -116,10 +116,10 @@ Resolution order: role policy → company policy → platform default. Takeover 
 | `scorecard.draft` | auto (information) | |
 | `debrief.recommend` | approval (recommendation) | owner, hiring_manager |
 | `candidate.hire_decision` | human_only | |
-| `offer.draft` | approval | owner, admin |
-| `offer.send` | approval | owner, admin |
+| `offer.draft` | approval (never lower) | owner, admin |
+| `offer.send` | approval (never lower) | owner, admin |
 | `offer.negotiate` | human_only | |
-| `offer.revise` | approval | owner, admin |
+| `offer.revise` | approval (never lower) | owner, admin |
 | `disposition.send` (rejection after a human decision) | auto_notify | |
 | `reference.request` | auto_notify | |
 | `background_check.order` | approval | owner, admin, hr |

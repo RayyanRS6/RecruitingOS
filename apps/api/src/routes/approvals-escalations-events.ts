@@ -1,11 +1,12 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, isNull, like } from "drizzle-orm";
-import { CreateEscalation, DecideApproval, ResolveEscalation } from "@ros/contracts";
+import { CreateEscalation, DecideApproval, ResolveEscalation, type EscalationScope } from "@ros/contracts";
 import { ESCALATION_ACCESS_DAYS, activeStaffGrant, assertCan, audit, businessMinutesBetween, createEscalation, describeHours, emit, endStaffGrant, grantStaffAccess, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, recordStaffAccess, scopeAllows, toEscalationPreview, transition, type EscalationPreview } from "@ros/core";
-import { applications, approvalRequests, companies, events, recruiterEscalations, rolePackets, roles, staffAccessGrants, withPlatform, withTenant } from "@ros/db";
+import { applications, approvalRequests, companies, events, recruiterEscalations, rolePackets, roles, staffAccessGrants, withPlatform, withTenant, type Tx } from "@ros/db";
 import { actorOf, clientIp, requireRecruiterOrAdmin, requireTenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
-import { composeBrief } from "../services/brief";
+import { briefViewerOf, composeBrief } from "../services/brief";
+import { escalationInScope, eventTargets, inStaffScope, staffMayAsk, staffScopeOf } from "../services/staff-scope";
 import { assertMayApprovePacket } from "../services/packet-approval";
 import { settleMessageApproval } from "../services/messages";
 import { sendApprovedDecline } from "../services/application-actions";
@@ -85,17 +86,56 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
 
 export const escalationRoutes = new Hono<Vars>();
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** What the recruiter sees, in the words every message about their access uses (Q31: say the real access). */
+function accessWords(scope: EscalationScope): string {
+  if (scope === "application") return "this candidate and the role they applied for";
+  if (scope === "role") return "this role and its candidates";
+  return "all of your hiring: every role and every candidate";
+}
+// Said to whoever asked: hiring managers and HR may ask, but only owners and admins hold staff_access.revoke.
+const ACCESS_LIMITS = `Their access starts when they pick the request up and ends a day after it is resolved, or after ${ESCALATION_ACCESS_DAYS} days at most. An owner or admin can end it sooner in Setup, and every page they open is recorded.`;
+
+/**
+ * Settles what a request covers before it is created. The ids decide it; a request with neither a role nor a candidate
+ * covers the whole company only when the person said so (`scope: "company"`), never by leaving the ids out. A candidate
+ * brings their role along, so the recruiter can read the role they applied for.
+ */
+async function settleScope(tx: Tx, body: CreateEscalation): Promise<{ scope: EscalationScope; roleId: string | null; applicationId: string | null }> {
+  const scope: EscalationScope | undefined = body.scope ?? (body.applicationId ? "application" : body.roleId ? "role" : undefined);
+  if (!scope) throw new HttpError(400, "scope_required", "Say which hire this is about, or choose all of your hiring.");
+  if (scope === "company") {
+    if (body.roleId || body.applicationId) throw new HttpError(400, "scope_mismatch", "A request about all of your hiring does not name a role or a candidate.");
+    return { scope, roleId: null, applicationId: null };
+  }
+  if (scope === "role" && (!body.roleId || body.applicationId)) throw new HttpError(400, "scope_mismatch", "A request about a role names that role and no single candidate.");
+  if (scope === "application" && !body.applicationId) throw new HttpError(400, "scope_mismatch", "A request about a candidate names that candidate.");
+  if (body.applicationId) {
+    const [app] = UUID.test(body.applicationId) ? await tx.select({ id: applications.id, roleId: applications.roleId }).from(applications).where(eq(applications.id, body.applicationId)).limit(1) : [];
+    if (!app) throw new HttpError(404, "not_found", "That candidate is not in your company.");
+    if (body.roleId && body.roleId !== app.roleId) throw new HttpError(400, "scope_mismatch", "That candidate applied to a different role.");
+    return { scope, roleId: app.roleId, applicationId: app.id };
+  }
+  const [role] = UUID.test(body.roleId!) ? await tx.select({ id: roles.id }).from(roles).where(eq(roles.id, body.roleId!)).limit(1) : [];
+  if (!role) throw new HttpError(404, "not_found", "That role is not in your company.");
+  return { scope, roleId: role.id, applicationId: null };
+}
+
 /** "Bring in a recruiter." The customer's request; the SLA counts business hours (founder decision F12). */
 escalationRoutes.post("/", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "escalation.create");
   const body = CreateEscalation.parse(await c.req.json());
   const container = c.get("container");
-  const { created, preview, hours, timeZone } = await withTenant(container.db, t.companyId, async (tx) => {
-    const created = await createEscalation(tx, { companyId: t.companyId, roleId: body.roleId ?? null, applicationId: body.applicationId ?? null, kind: body.kind, question: body.question, requestedBy: actorOf(c), urgency: body.urgency });
+  const { created, preview, hours, timeZone, scope } = await withTenant(container.db, t.companyId, async (tx) => {
+    const { scope, roleId, applicationId } = await settleScope(tx, body);
+    // A recruiter under a grant asks only about what that grant covers, never wider: claiming the request would grant it.
+    if (!staffMayAsk(staffScopeOf(t), { roleId, applicationId })) throw new HttpError(403, "staff_scope", "Your access is limited to the role or candidate of the request you accepted, so you can only ask about that.");
+    const created = await createEscalation(tx, { companyId: t.companyId, roleId, applicationId, kind: body.kind, question: body.question, requestedBy: actorOf(c), urgency: body.urgency });
     const [row] = await tx.select({ urgency: recruiterEscalations.urgency, requiredExpertise: recruiterEscalations.requiredExpertise, summary: recruiterEscalations.summary }).from(recruiterEscalations).where(eq(recruiterEscalations.id, created.id)).limit(1);
     const calendar = await loadBusinessCalendar(tx);
-    return { created, preview: row, hours: describeHours(calendar), timeZone: calendar.timeZone };
+    return { created, preview: row, hours: describeHours(calendar), timeZone: calendar.timeZone, scope };
   });
   // The queue notification is pre-acceptance context (correction 11): category, urgency, expertise and the generic summary. Never the customer's words.
   await container.integrations.email.send({
@@ -107,17 +147,23 @@ escalationRoutes.post("/", requireTenant, async (c) => {
     tags: { template: "escalation" },
   });
   const due = new Date(created.slaDueAt);
-  return c.json({ id: created.id, slaDueAt: created.slaDueAt, message: `A recruiter has everything about this role and candidate and will respond by ${due.toLocaleString("en-US", { timeZone, weekday: "long", hour: "numeric", minute: "2-digit" })} (business hours are ${hours}).` }, 201);
+  return c.json({ id: created.id, slaDueAt: created.slaDueAt, scope, message: `A recruiter will respond by ${due.toLocaleString("en-US", { timeZone, weekday: "long", hour: "numeric", minute: "2-digit" })} (business hours are ${hours}). They will see ${accessWords(scope)}. ${ACCESS_LIMITS}` }, 201);
 });
 
-/** The customer's own requests, with who is on them and when their access ends. */
+/**
+ * The customer's own requests, with who is on them and when their access ends. The words in them can name candidates,
+ * so the list needs escalation.create (an interviewer sees only their own interviews), and a recruiter under a scoped
+ * grant sees only the requests about what the grant covers.
+ */
 escalationRoutes.get("/mine", requireTenant, async (c) => {
   const t = c.get("tenant")!;
+  assertCan(t.role, "escalation.create");
+  const scope = staffScopeOf(t);
   const rows = await withTenant(c.get("container").db, t.companyId, (tx) =>
-    tx.select({ id: recruiterEscalations.id, kind: recruiterEscalations.kind, status: recruiterEscalations.status, urgency: recruiterEscalations.urgency, summary: recruiterEscalations.summary, question: recruiterEscalations.question, createdAt: recruiterEscalations.createdAt, resolution: recruiterEscalations.resolution, slaDueAt: recruiterEscalations.slaDueAt, firstResponseAt: recruiterEscalations.firstResponseAt, accessExpiresAt: recruiterEscalations.accessExpiresAt })
+    tx.select({ id: recruiterEscalations.id, kind: recruiterEscalations.kind, status: recruiterEscalations.status, urgency: recruiterEscalations.urgency, summary: recruiterEscalations.summary, question: recruiterEscalations.question, createdAt: recruiterEscalations.createdAt, resolution: recruiterEscalations.resolution, slaDueAt: recruiterEscalations.slaDueAt, firstResponseAt: recruiterEscalations.firstResponseAt, accessExpiresAt: recruiterEscalations.accessExpiresAt, roleId: recruiterEscalations.roleId, applicationId: recruiterEscalations.applicationId })
       .from(recruiterEscalations).where(eq(recruiterEscalations.companyId, t.companyId)).orderBy(desc(recruiterEscalations.createdAt)),
   );
-  return c.json(rows);
+  return c.json(rows.filter((r) => escalationInScope(scope, r)));
 });
 
 const PREVIEW_COLUMNS = {
@@ -202,6 +248,10 @@ escalationRoutes.post("/:id/claim", requireRecruiterOrAdmin, async (c) => {
     // 21 Sep, item 1: when the customer ended this recruiter's access to this request, the same recruiter cannot take it back.
     const removedByCustomer = await tx.select({ id: staffAccessGrants.id }).from(staffAccessGrants).where(and(eq(staffAccessGrants.escalationId, e.id), eq(staffAccessGrants.userId, s.user.id), like(staffAccessGrants.revokeReason, "revoked by the customer:%"))).limit(1);
     if (removedByCustomer.length) throw new HttpError(403, "revoked_by_customer", "The customer ended your access to this request. Another recruiter must take it.");
+    // All of a company's hiring is shared only when someone at the company chose it (Q31). A request that names no role
+    // and no candidate and was raised by anyone else (made before that rule, or by ITS staff) grants nothing; an ITS
+    // administrator resolves it from the console without opening the company's records.
+    if (!e.roleId && !e.applicationId && e.requestedBy.kind !== "user") throw new HttpError(409, "company_access_not_chosen", "This request names no role or candidate, and nobody at the company chose to share all of their hiring. An ITS administrator can resolve it from the console without opening the company's records.");
     const actor = { kind: "recruiter" as const, id: s.user.id, name: s.user.name ?? s.user.email };
     const existing = await activeStaffGrant(tx, s.user.id, e.companyId, now);
     const grant = existing && existing.escalationId === e.id ? existing : await grantStaffAccess(tx, {
@@ -211,7 +261,16 @@ escalationRoutes.post("/:id/claim", requireRecruiterOrAdmin, async (c) => {
     });
     const [u] = await tx.update(recruiterEscalations).set({ status: "claimed", assignedToUserId: s.user.id, claimedAt: e.claimedAt ?? now.toISOString(), firstResponseAt: e.firstResponseAt ?? now.toISOString(), accessExpiresAt: grant.expiresAt }).where(eq(recruiterEscalations.id, e.id)).returning();
     await emit(tx, { type: "recruiter.claimed", companyId: e.companyId, actor, subject: { type: "escalation", id: e.id }, payload: { grantId: grant.id, expiresAt: grant.expiresAt } });
-    await notify(tx, { companyId: e.companyId, kind: "recruiter.claimed", title: `${actor.name} (ITS recruiter) picked up your request`, body: `They can see this role and candidate until ${new Date(grant.expiresAt).toLocaleDateString()}; every page they open is recorded in your activity.`, action: { label: "See requests", href: "/" } });
+    // Told at once, in the real terms (Q31): who, why, what they can see and until when. A request the team did not make
+    // (an ITS recruiter asked while working on another request, a candidate asked for a person, or something got stuck)
+    // says how it came about.
+    const scope: EscalationScope = e.applicationId ? "application" : e.roleId ? "role" : "company";
+    const byTeam = e.requestedBy.kind === "user";
+    const why = byTeam ? ""
+      : e.requestedBy.kind === "recruiter" ? `${e.requestedBy.name ?? "An ITS recruiter"} (ITS recruiter) asked for this while working on another of your requests, so a recruiter was brought in. `
+      : e.requestedBy.kind === "candidate" || e.kind === "candidate_issue" ? "A candidate needed a person, so a recruiter was brought in. "
+      : "Something got stuck and needs a person, so a recruiter was brought in. ";
+    await notify(tx, { companyId: e.companyId, kind: "recruiter.claimed", title: byTeam ? `${actor.name} (ITS recruiter) picked up your request` : `${actor.name} (ITS recruiter) was brought in`, body: `${why}They can see ${accessWords(scope)} until ${new Date(grant.expiresAt).toLocaleDateString("en-US")}, or until a day after the request is resolved if that is sooner. Every page they open is recorded in your activity, and an owner or admin can end their access in Setup.`, action: { label: "Recruiter access", href: "/setup" } });
     return { escalation: u, grant: { id: grant.id, purpose: grant.purpose, expiresAt: grant.expiresAt, scope: { roleId: grant.roleId, applicationId: grant.applicationId } } };
   });
   return c.json(row);
@@ -258,18 +317,24 @@ escalationRoutes.post("/:id/release", requireRecruiterOrAdmin, async (c) => {
 
 export const eventRoutes = new Hono<Vars>();
 
+/** The activity list. A recruiter under a grant for one role or one candidate reads only the events about it. */
 eventRoutes.get("/", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "events.read");
   const subjectType = c.req.query("subjectType");
   const subjectId = c.req.query("subjectId");
   const type = c.req.query("type");
-  const rows = await withTenant(c.get("container").db, t.companyId, (tx) => {
+  const scope = staffScopeOf(t);
+  const rows = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const conds = [eq(events.companyId, t.companyId)];
     if (subjectType) conds.push(eq(events.subjectType, subjectType));
     if (subjectId) conds.push(eq(events.subjectId, subjectId));
     if (type) conds.push(eq(events.type, type));
-    return tx.select().from(events).where(and(...conds)).orderBy(desc(events.occurredAt)).limit(200);
+    // Scoped: read further back, keep what the grant covers, and answer with the same 200 at most.
+    const found = await tx.select().from(events).where(and(...conds)).orderBy(desc(events.occurredAt)).limit(scope ? 2000 : 200);
+    if (!scope) return found;
+    const targets = await eventTargets(tx, found);
+    return found.filter((e) => inStaffScope(scope, targets.get(e.id) ?? {})).slice(0, 200);
   });
   return c.json(rows);
 });
@@ -279,6 +344,6 @@ export const briefRoutes = new Hono<Vars>();
 briefRoutes.get("/", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.read");
-  const brief = await withTenant(c.get("container").db, t.companyId, (tx) => composeBrief(tx, t.companyId, { userId: t.userId, role: t.role }));
+  const brief = await withTenant(c.get("container").db, t.companyId, (tx) => composeBrief(tx, t.companyId, briefViewerOf(t)));
   return c.json(brief);
 });

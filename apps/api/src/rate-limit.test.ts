@@ -5,6 +5,7 @@ import { adminAlerts, applications, auditRecords } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { loadEnv } from "./env";
+import { statusTokenFor } from "./test-helpers";
 
 /**
  * Founder instruction of 21 September 2026, item 5: shared, provider-neutral rate limiting on every public surface,
@@ -155,7 +156,8 @@ describe("rate limiting", () => {
       fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
       fd.set("acknowledged", "yes");
       const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: fd, headers: { "x-forwarded-for": "198.51.100.10" } });
-      statusToken = r.headers.get("location")!.split("/c/status/")[1].split("?")[0];
+      expect(r.status).toBe(302);
+      statusToken = await statusTokenFor(container, { roleId, email: "rosa.diaz@example.com" });
       await container.drain();
     });
     afterAll(async () => {
