@@ -19,7 +19,12 @@ which carries the nonce and whose JSON is escaped so that nothing an owner types
 element. Every inline `<style>` (the page stylesheet and the screening page's own) carries the nonce; the test checks
 every style and script element on every candidate page, screening included. Inline event handlers were removed
 (the time-zone picker has a button; withdrawing an application and cancelling an interview confirm with a required
-checkbox instead of a `confirm()` dialog).
+checkbox instead of a `confirm()` dialog). The pages' stylesheet asks for their fonts (IBM Plex Sans, Bricolage
+Grotesque) only from this deployment's own origin (`/fonts/`, served from `apps/shell/public/fonts`), so `font-src 'self'`
+covers them and no font host learns who opened a job page (`apps/api/src/candidate-look.test.ts`). **Not done yet:** the
+font files themselves are not in the repository. Until someone runs `scripts/fetch-fonts.ts` (with approval, since it
+downloads files), reviews the files and the lock it writes (`apps/api/src/pages/fonts.lock.json`: exact versions and a
+SHA-256 per file) and commits them, candidate pages show the device's own sans-serif. The policy is the same either way.
 
 **The application** (every Next.js page; set in `apps/shell/middleware.ts`, built by `apps/shell/lib/csp.ts`):
 

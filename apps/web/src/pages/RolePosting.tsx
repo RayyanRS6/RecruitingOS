@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, ErrorState, Field, Sheet, Skeleton, Table } from "@ros/ui";
+import { Alert, Button, Card, ErrorState, Field, Pill, Sheet, Skeleton, Table, type Tone } from "@ros/ui";
 import { api, ApiError, type ApplicationLink, type Posting, type PostingView, type PostingsResponse, type RoleDetail, type VolumeReport } from "../api/client";
 import { toast } from "../toast";
 import { boardNames } from "../role-words";
@@ -19,8 +19,8 @@ import { boardNames } from "../role-words";
 /** What the read-only tab says to someone without role.manage. */
 export const READ_ONLY_POSTINGS = "Only an owner or an admin can change postings: record a board's address, pause, close, or tick a board off as taken down. Ask one of them; everything here stays visible to you.";
 
-type Tone = "neutral" | "accent" | "needs" | "good" | "caution" | "critical";
-const STATE_TONE: Record<string, Tone> = { draft: "neutral", approved: "neutral", ready_to_post: "needs", posted_manually: "accent", submitted_integration: "accent", live_verified: "good", paused: "caution", failed: "critical", closed: "neutral" };
+/** The dot beside each posting state: green once a check proved it live, amber while it waits on a person or is paused. */
+const STATE_TONE: Record<string, Tone> = { draft: "neutral", approved: "neutral", ready_to_post: "caution", posted_manually: "accent", submitted_integration: "accent", live_verified: "good", paused: "caution", failed: "critical", closed: "neutral" };
 
 function copy(text: string, what: string) {
   navigator.clipboard.writeText(text).then(() => toast(`Copied ${what}.`), () => toast("Could not copy. Select the text and copy it by hand."));
@@ -197,7 +197,7 @@ function Header({ p }: { p: PostingView }) {
   return (
     <div className="card-title">
       <h2 style={{ fontSize: 15 }}>{p.name}</h2>
-      <Chip tone={STATE_TONE[p.status] ?? "neutral"}>{p.stateLabel}</Chip>
+      <Pill size="sm" tone={STATE_TONE[p.status] ?? "neutral"}>{p.stateLabel}</Pill>
     </div>
   );
 }
@@ -363,7 +363,7 @@ function NativeCard({ p, jobUrl, run, busy, roleStatus, canManage }: { p: Postin
 function EmailInPanel({ emailIn, run, busy, roleStatus, canManage }: { emailIn: PostingsResponse["emailIn"]; run: Run; busy: boolean; roleStatus: string; canManage: boolean }) {
   const canRecheck = canManage && emailIn.status === "failed" && roleStatus === "open";
   return (
-    <Card title="Applications by email" aside={<Chip tone={emailIn.connected ? "good" : "caution"}>{emailIn.connected ? "Connected" : "Not connected"}</Chip>}>
+    <Card title="Applications by email" aside={<Pill size="sm" tone={emailIn.connected ? "good" : "caution"}>{emailIn.connected ? "Connected" : "Not connected"}</Pill>}>
       {emailIn.address ? (
         <p className="small">Address: <code>{emailIn.address}</code> <Button size="sm" onClick={() => copy(emailIn.address!, "the intake address")}>Copy</Button></p>
       ) : <p className="small muted">No address yet; it is created when the role is prepared.</p>}

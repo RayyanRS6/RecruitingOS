@@ -100,7 +100,7 @@ test.describe("owner and candidate journey", () => {
     await expect(page.getByRole("cell", { name: /Maria Reyes/ })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText("Scheduled").first()).toBeVisible();
     await expectAccessible(page, "interviews");
-    await page.getByRole("link", { name: "Open" }).first().click();
+    await page.getByRole("link", { name: "Open", exact: true }).first().click();
     const ivSheet = page.getByRole("dialog");
     await expect(ivSheet.getByText(/Captions on/)).toBeVisible();
     await expectAccessible(page, "interview sheet");

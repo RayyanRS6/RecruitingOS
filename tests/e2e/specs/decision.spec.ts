@@ -51,7 +51,7 @@ test.describe("decision after an interview", () => {
     // the owner records that the interview took place; the candidate moves to "Interview done: decision needed"
     await page.goto("/interviews");
     await expect(page.getByRole("cell", { name: /Maria Reyes/ })).toBeVisible({ timeout: 30_000 });
-    await page.getByRole("link", { name: "Open" }).first().click();
+    await page.getByRole("link", { name: "Open", exact: true }).first().click();
     const ivSheet = page.getByRole("dialog");
     await expect(ivSheet.getByRole("heading", { name: "Did it take place?" })).toBeVisible();
     await expectAccessible(page, "interview sheet before the outcome");
@@ -90,7 +90,7 @@ test.describe("decision after an interview", () => {
     await page.goto("/interviews");
     await expect(page.getByRole("cell", { name: /Maria Reyes/ })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("cell", { name: "Finalist", exact: true })).toBeVisible();
-    await page.getByRole("link", { name: "Open" }).first().click();
+    await page.getByRole("link", { name: "Open", exact: true }).first().click();
     await expect(page.getByRole("dialog").getByText("Decision: Finalist")).toBeVisible();
     await expect(page.getByRole("dialog").getByText(/Calm, precise/)).toBeVisible();
     await expectAccessible(page, "interview sheet with the decision");

@@ -29,7 +29,7 @@ The full list, with each provider's role, is in the subprocessor list you receiv
 - The owner and admins see everything in your company's workspace.
 - Hiring managers see roles, candidates, pay and the activity timeline, and can decide on candidates.
 - HR sees roles, candidates and pay, can act on candidates but cannot decline them, and can manage the team.
-- Interviewers see the roles and their own interviews. For each candidate they interview they get a short brief: what the round is for, how the candidate stands on your must-haves, strengths and what is worth exploring. They can open only those candidates, never others, and never see pay.
+- Interviewers can read the role descriptions and see their own interviews; their list of roles shows only the roles they interview for, without applicant numbers. For each candidate they interview they get a short brief: what the round is for, how the candidate stands on your must-haves, strengths and what is worth exploring. They can open only those candidates, never others, and never see pay.
 
 **ITS recruiters.** Only when you ask for one, only for that request, and only for the time it takes (section 4).
 

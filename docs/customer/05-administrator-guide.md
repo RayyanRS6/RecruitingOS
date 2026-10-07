@@ -35,13 +35,17 @@ To change these details later, and to add more, use the **Company** card in **Se
 
 ## 3. The screens at a glance
 
-The left rail has five entries:
+At the top of the left rail is your company, with your role in it and a cog that opens **Setup**. Below it, for owners, admins and hiring managers, is **Start a hire**: it opens the new-role conversation on Today (or the draft you already started). Nothing is saved until you send your first message. Pressing **N** on any page does the same, unless you are typing in a box or have changed something on that page (so nothing you were working on is lost); you can turn that key off in **Setup**, under **Keyboard shortcut**.
+
+The rail then has five entries:
 
 - **Today**: the daily brief and the conversation with the assistant. This is where a new role starts.
-- **Roles**: every role, its status and its pipeline.
+- **Roles**: every role, its status and its pipeline. Up to eight roles you are working on are listed under it: a green dot and the number of applicants for an open role, a grey dot for a paused role, a draft or one waiting for approval. **All roles** shows the rest. For an interviewer, this list and the **Roles** page show only the roles they interview for, without applicant counts.
 - **Talent**: the candidates for a role, grouped by what needs you.
 - **Interviews**: every interview in motion or done, and each interviewer's load.
 - **Setup**: your company, your team, recruiter access, your sessions, availability, connected services, what the assistant may do on its own, and the audit history.
+
+Your name, your email address and **Sign out** are at the bottom. On a role's own pages the rail folds to a narrow column of icons to leave room for the work. On a phone or a tablet the rail becomes a bar across the top: **Start a hire** and **Sign out** stay in it, and **Menu** opens the rest.
 
 **Bring in a recruiter** appears on Today, on every role and on every candidate.
 
@@ -56,7 +60,7 @@ People who have not signed in yet are listed under **Invited, not yet in**, with
 | **Owner** | You, and anyone else who should hold the account | Everything, including making other owners | Remove the last owner (there is always at least one) |
 | **Admin** | A second person who runs the account with you | Everything the owner can: company settings, team, roles, postings, candidates, pay, rules, recruiter access, outcomes, the audit history | Make someone an owner or change an owner's role |
 | **Hiring manager** | The person who runs a hire | Start a role in the conversation, edit and approve the packet, see candidates and pay, invite to a screen, hold, approve interviews, record the decision after an interview, decline, write to candidates, record outcomes and close a role, bring in a recruiter, see the timeline and the report | Change the team, change what the assistant may do, end a recruiter's access, pause a role, change postings, stop accepting applications |
-| **Interviewer** | Anyone who meets candidates but does not decide | See the roles and their own interviews, with a short brief on each candidate they interview; say whether an interview took place; set their own availability | See pay, the candidate list or other candidates; act on candidates; see the report |
+| **Interviewer** | Anyone who meets candidates but does not decide | See the roles they interview for and their own interviews, with a short brief on each candidate they interview; say whether an interview took place; set their own availability | See pay, the candidate list or other candidates; act on candidates; see the report |
 | **HR** | Someone who keeps records and manages the team | See roles, candidates and pay; invite to a screen, hold; write to candidates; record outcomes; say whether an interview they sat on took place; bring in a recruiter; invite, change and remove team members | Approve a role; edit a packet; decline a candidate; approve an interview or decide after one |
 
 **Changing a role.** Pick the new role from the list next to the person and press **Change role**. They are signed out everywhere and get the new role when they sign in again.
@@ -71,6 +75,10 @@ Notes:
 - Every invitation, change of role and removal is recorded in the audit history.
 
 ## 5. The Setup screen
+
+A menu beside the cards (across the top on a phone) jumps straight to each one: Company, Team, Recruiter access, Your sessions, Your availability, Keyboard shortcut, Connected services, What the AI may do, and Audit history. It lists only the cards you see.
+
+**Keyboard shortcut.** For the people who may start a hire: **Press N to start a hire** is on unless you untick it. The choice is kept in the browser you are using.
 
 **Company.** Your name, careers page address, website, kind of business, size, time zone, locations, contact hours, candidate notices, plan and usage. **Plan** shows your program and, where it has an end date, that date; a role already in progress is never cut off on that date. **Usage** shows what your program includes and what you have used.
 
@@ -140,9 +148,9 @@ Below that is **Your recruiting chief of staff**, the conversation where a new r
 
 ## 7. Roles and posting
 
-**Roles** lists every role with a status chip: **Draft**, **Needs your approval**, **Open**, **Paused**, **Filled** or **Closed**. Each card shows days open, the number of applicants, how many are waiting on you, and a pipeline bar. **Open** goes to the role page; **Talent** goes to its candidates. **Open a new role** takes you to Today.
+**Roles** lists every role with a status: **Draft**, **Waiting for approval**, **Open**, **Paused**, **Filled** or **Closed**. Each card shows days open, the number of applicants, how many are waiting on you, and a pipeline bar (an interviewer sees only the roles they interview for, without these numbers). **Open** goes to the role page; **Talent** goes to its candidates. **Start a hire** (for the people who may start one) opens the new-role conversation on Today.
 
-**The role page** has the title, location and pay at the top, then tabs: **Overview**, **Requirements**, **How we'll evaluate**, **Interview plan**, **Posting**, **Activity**, **History**, **Report**. **Edit** opens the editor; every save is a new version, and **History** lists them all. Nothing is overwritten. **Interview plan** shows who interviews in each round and whether times can be offered to them yet; **Activity** is everything that happened on the role, newest first, in plain words.
+**The role page** has the title, its status, location and pay at the top, then tabs: **Overview**, **Requirements**, **How we'll evaluate**, **Interview plan**, **Posting**, **Activity**, **History**, **Report**. **Edit** opens the editor; every save is a new version, and **History** lists them all. Nothing is overwritten. **Interview plan** shows who interviews in each round and whether times can be offered to them yet; **Activity** is everything that happened on the role, newest first, in plain words.
 
 **Approval.** A role waiting for approval shows a card **Approve this role packet** with any assumptions the assistant made. **Approve and post** opens the role and starts posting. **Edit first** lets you change the packet before you approve. Owners, admins and hiring managers can approve, with two rules: the person who ran the intake (or wrote the version being approved) cannot approve it themselves unless they are the company's only owner, and when the packet names a decision maker who is on your team, the approval is reserved for them (an owner can also decide). The card says who can decide and why you cannot, if you cannot. **Send back with a note** returns the role to a draft with the note on its page; **Request approval again** sends it back after the edit. An approval nobody decides within 14 days goes back to a draft the same way. An edit to an open role by someone who can edit but not approve waits for approval on the same card while the role keeps running on its current version; Today shows it as "Approve packet v3 of ...".
 

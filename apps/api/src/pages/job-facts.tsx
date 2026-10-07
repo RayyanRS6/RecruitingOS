@@ -3,6 +3,7 @@
 import { formatPayRange, type RolePacket } from "@ros/contracts";
 import { payShown as payShownByRule, type Notice } from "@ros/core";
 import { jobValidThrough } from "@ros/integrations";
+import { Icon, type CandidateIconName } from "./icons";
 
 /**
  * The plain facts every public job surface states the same way (Wave 0 item 0.8): where, how, what kind of job and
@@ -26,19 +27,28 @@ export function publicPay(packet: RolePacket, notices: Notice[]): string {
   return payShown(packet, notices) ? formatPayRange(packet.compensation) : "";
 }
 
-/** Where, how, what kind of job, the pay and the schedule, as chips. */
+const WORK_MODEL_ICON: Record<string, CandidateIconName> = { onsite: "building", hybrid: "hybrid", remote: "home" };
+
+/** One fact as a pill: its icon for the eye, its name for a screen reader ("Pay: $45–$55 an hour"), its words for both. */
+function Fact(props: { icon: CandidateIconName; name: string; text: string }) {
+  return (
+    <li class="fact"><Icon name={props.icon} /><span class="sr-only">{props.name}: </span><span class="fact-text">{props.text}</span></li>
+  );
+}
+
+/** Where, how, what kind of job, the pay and the schedule, as pills. */
 export function JobFacts(props: { packet: RolePacket; pay: string }) {
   const { identity } = props.packet;
   const loc = identity.locations[0];
   const place = loc ? [loc.city, loc.region].filter(Boolean).join(", ") : "";
   return (
-    <div class="chips">
-      {place ? <span class="chip">{place}</span> : null}
-      <span class="chip">{WORK_MODEL[identity.remotePolicy] ?? identity.remotePolicy}</span>
-      <span class="chip">{EMPLOYMENT[identity.employmentType] ?? identity.employmentType.replace(/_/g, " ")}</span>
-      {props.pay ? <span class="chip">{props.pay}</span> : null}
-      {identity.schedule ? <span class="chip">{identity.schedule}</span> : null}
-    </div>
+    <ul class="facts">
+      {place ? <Fact icon="pin" name="Location" text={place} /> : null}
+      <Fact icon={WORK_MODEL_ICON[identity.remotePolicy] ?? "building"} name="Workplace" text={WORK_MODEL[identity.remotePolicy] ?? identity.remotePolicy} />
+      <Fact icon="briefcase" name="Job type" text={EMPLOYMENT[identity.employmentType] ?? identity.employmentType.replace(/_/g, " ")} />
+      {props.pay ? <Fact icon="pay" name="Pay" text={props.pay} /> : null}
+      {identity.schedule ? <Fact icon="clock" name="Schedule" text={identity.schedule} /> : null}
+    </ul>
   );
 }
 

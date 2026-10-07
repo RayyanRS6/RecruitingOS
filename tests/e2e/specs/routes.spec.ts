@@ -65,6 +65,34 @@ test.describe("route inventory", () => {
       await expectAccessible(page, path);
       await noHorizontalOverflow(page, path);
     }
+    // The rail (Wave DS): "Start a hire" is in it for an owner; the open role is listed under Roles on a wide screen,
+    // and on a phone the links open from the Menu button while Start a hire and Sign out stay in the bar.
+    await page.goto("/roles");
+    const rail = page.getByRole("navigation", { name: "Main" });
+    await expect(rail.getByRole("link", { name: "Start a hire" })).toBeVisible({ timeout: 30_000 });
+    if ((page.viewportSize()?.width ?? 0) > 900) {
+      await expect(rail.getByRole("link", { name: /Hygienist/i })).toBeVisible({ timeout: 30_000 });
+    } else {
+      await rail.getByRole("button", { name: "Menu" }).click();
+      await expect(rail.getByRole("link", { name: "Interviews" })).toBeVisible();
+      await expectAccessible(page, "phone menu open");
+    }
+    // N outside a text field opens the new-role conversation on Today; opening it saves nothing (the draft starts with
+    // the first message), so a stray key leaves no draft behind
+    await page.keyboard.press("n");
+    await expect(page).toHaveURL(/\/$/, { timeout: 30_000 });
+    await expect(page.getByRole("heading", { name: "Your recruiting chief of staff" })).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator("main")).toContainText("Tell me who you need to hire.");
+    const draft = await page.request.get(`${baseURL}/api/v1/intake/sessions/current`);
+    expect(((await draft.json()) as { session: unknown }).session).toBeNull();
+    // and on a page where something was typed but not saved, N is left alone so the typing is not thrown away
+    await page.goto("/setup");
+    await page.getByLabel("Buffer between interviews (minutes)").fill("25");
+    await page.getByRole("heading", { level: 1 }).click();
+    await page.keyboard.press("n");
+    await page.waitForTimeout(1_000);
+    await expect(page).toHaveURL(/\/setup$/);
+    await expect(page.getByLabel("Buffer between interviews (minutes)")).toHaveValue("25");
     await page.goto(`/roles/${seeded.roleId}/people`);
     await expect(page).toHaveURL(new RegExp(`/roles/${seeded.roleId}/talent`));
     await page.goto("/people");
@@ -98,7 +126,7 @@ test.describe("route inventory", () => {
     await expectAccessible(page, "admin console");
     await noHorizontalOverflow(page, "admin console");
     for (const tab of ["Failures", "Business calendar", "Administrators", "Outcomes", "Queue"]) {
-      await page.getByRole("button", { name: tab }).click();
+      await page.getByRole("tab", { name: tab }).click();
       await expectAccessible(page, `admin ${tab}`);
       await noHorizontalOverflow(page, `admin ${tab}`);
     }

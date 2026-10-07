@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, ErrorState, Field, Skeleton } from "@ros/ui";
+import { Alert, Avatar, Button, Card, Chip, ErrorState, Field, Pill, Skeleton } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 import { toast } from "../toast";
 
@@ -98,9 +98,9 @@ export function TeamCard({ myRole, myUserId }: { myRole: string; myUserId: strin
             return (
               <div key={m.userId} className="stack" style={{ gap: 4, padding: "6px 0", borderTop: "1px solid var(--line)" }}>
                 <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-                  <span>{nameOf(m)}{self ? <span className="muted small"> (you)</span> : null} <span className="muted small">{m.email}</span></span>
+                  <span className="row" style={{ flexWrap: "nowrap", minWidth: 0 }}><Avatar name={nameOf(m)} size="sm" /><span>{nameOf(m)}{self ? <span className="muted small"> (you)</span> : null} <span className="muted small">{m.email}</span></span></span>
                   <span className="row" style={{ gap: 6, flexWrap: "wrap" }}>
-                    <Chip tone={m.schedulable ? "good" : "caution"}>{m.calendar?.status === "live" ? `${m.calendar.provider} calendar` : m.availability ? "hours declared" : "no availability"}</Chip>
+                    <Pill size="sm" tone={m.schedulable ? "good" : "caution"}>{m.calendar?.status === "live" ? `${m.calendar.provider} calendar` : m.availability ? "hours declared" : "no availability"}</Pill>
                     {canTouch ? (
                       <select className="select" aria-label={`Role of ${nameOf(m)}`} value={roleChange?.userId === m.userId ? roleChange.role : m.role} onChange={(e) => setRoleChange({ userId: m.userId, role: e.target.value })} disabled={update.isPending}>
                         {ROLES.filter((r) => isOwner || r.value !== "owner").map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}

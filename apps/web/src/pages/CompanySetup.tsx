@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "../nav";
-import { Alert, Button, Card, Field } from "@ros/ui";
+import { Alert, Button, Card, Eyebrow, Field } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 import { VERTICALS, ZONE_CHOICES, browserTimeZone, snapTimeZone, verticalHint } from "../company-setup";
 
@@ -53,7 +53,10 @@ export function CompanySetup() {
   return (
     <main className="main" style={{ maxWidth: 560, margin: "6vh auto" }}>
       <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
-        <h1>Tell us about your company</h1>
+        <div>
+          <Eyebrow>Getting started</Eyebrow>
+          <h1 style={{ marginTop: 6 }}>Tell us about your company</h1>
+        </div>
         <Button variant="quiet" size="sm" loading={leaving} onClick={signOut}>Sign out</Button>
       </div>
       <p className="muted" style={{ margin: "6px 0 18px" }}>Two minutes. This shapes every role you open: how it is drafted, the notices candidates see, and where jobs get posted.</p>

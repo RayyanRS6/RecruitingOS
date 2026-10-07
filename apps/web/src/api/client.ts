@@ -32,7 +32,8 @@ export type Me = MeResponse;
 export type BriefCard = { kind: string; title: string; body: string; roleId?: string; applicationId?: string; approvalRequestId?: string; actions: Array<{ label: string; method: "GET" | "POST"; path: string; body?: Record<string, unknown> }> };
 export type Brief = { generatedAt: string; cards: BriefCard[]; summary: string };
 
-export type RoleSummary = { id: string; title: string; status: string; openedAt: string | null; counts: Record<string, number> & { total: number }; needsYou: number; daysOpen: number | null };
+/** `countsHidden`: the list was read by an interviewer, so it holds only the roles they interview for and no applicant counts. */
+export type RoleSummary = { id: string; title: string; status: string; openedAt: string | null; createdAt?: string; counts: Record<string, number> & { total: number }; countsHidden?: boolean; needsYou: number; daysOpen: number | null };
 /** One role on one channel, with the nine-state fields (docs/spec/20). `status` is one of the nine posting states; `stateLabel` on PostingView is the owner's word for it. */
 export type Posting = { id: string; channel: string; status: string; externalUrl: string | null; intakeToken: string | null; instructions: string | null; steps: string[]; error: string | null; publishedAt: string | null; publicUrlRecordedAt: string | null; verifiedAt: string | null; verifiedBy: { kind: string; id: string; name?: string } | null; verificationNote: string | null; verificationError: string | null; verificationAttempts: number; pausedAt: string | null; closedAt: string | null; closureRequired: boolean; closureConfirmedAt: string | null; closureConfirmedBy: { kind: string; id: string; name?: string } | null };
 /** A team member as the decision maker of a role packet (matched from the packet's preferences to an active approver). */

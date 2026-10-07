@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearchParams } from "../nav";
-import { Alert, Bubble, Button, Card, Chip, ErrorState, Skeleton } from "@ros/ui";
+import { Alert, Bubble, Button, Card, ErrorState, PageHeader, Pill, Skeleton, type Tone } from "@ros/ui";
 import { api, ApiError, type Brief, type BriefCard, type IntakeSession, type Me, type Notification } from "../api/client";
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
@@ -51,51 +51,55 @@ export function Home() {
     setReady(!ESSENTIAL_FACTS.some((k) => s.missingFacts.includes(k)));
   }, [current.data, sessionId, turns.length]);
 
+  // "Start a hire" opens the conversation for a new role; the draft itself (an intake session) is made only when the
+  // first message is sent, so pressing the button, following a link or a stray N key saves nothing and records nothing.
+  const [drafting, setDrafting] = useState(false);
   const startOver = useMutation({
     mutationFn: async () => { if (sessionId) await api.post(`/api/v1/intake/sessions/${sessionId}/abandon`); },
     onSettled: async () => {
       setSessionId(null);
+      setDrafting(false);
       setReady(false);
       setTurns([]);
       await qc.invalidateQueries({ queryKey: ["intake", "current"] });
     },
   });
 
-  // "Start a hire": an intake session begins before the first message, and the conversation box takes focus.
-  const startHire = useMutation({
-    mutationFn: () => api.post<{ session: IntakeSession }>("/api/v1/intake/sessions", {}),
-    onSuccess: async (r) => {
-      setSessionId(r.session.id);
-      setReady(false);
-      setTurns([{ role: "assistant", content: "Tell me who you need to hire. The title, where they will work, the pay range and why the role is open is a good start; I will ask about the rest." }]);
-      await qc.invalidateQueries({ queryKey: ["intake", "current"] });
-      inputRef.current?.focus();
-    },
-    onError: (err) => toast(err instanceof ApiError ? err.message : "Could not start a hire. Try again."),
-  });
+  const focusMessage = () => { inputRef.current?.focus(); inputRef.current?.scrollIntoView({ block: "center" }); };
   const beginHire = () => {
-    if (sessionId) { inputRef.current?.focus(); inputRef.current?.scrollIntoView({ block: "center" }); return; }
-    startHire.mutate();
+    if (sessionId || drafting) { focusMessage(); return; }
+    setDrafting(true);
+    setReady(false);
+    setTurns([{ role: "assistant", content: "Tell me who you need to hire. The title, where they will work, the pay range and why the role is open is a good start; I will ask about the rest." }]);
+    inputRef.current?.focus();
   };
 
-  // The empty Today card's "Start a hire" links here with ?start=1: once the resume check has answered, it opens the
-  // conversation (or the draft already in progress), then the address goes back to plain Today.
+  // The empty Today card's "Start a hire", the rail's button and its N shortcut link here with ?start=1: once the resume
+  // check has answered, it opens the conversation (or the draft already in progress), then the address goes back to
+  // plain Today. Back on plain Today the next ?start=1 counts again, so the rail's button works a second time here.
   const [params] = useSearchParams();
   const wantsStart = params.get("start") === "1";
   const started = useRef(false);
   useEffect(() => {
-    if (!wantsStart || started.current || !mayStartHire || current.isPending) return;
+    if (!wantsStart) { started.current = false; return; }
+    if (started.current || !mayStartHire || current.isPending) return;
     started.current = true;
     nav("/", { replace: true });
-    if (current.data?.session) { inputRef.current?.focus(); inputRef.current?.scrollIntoView({ block: "center" }); }
-    else startHire.mutate();
-  }, [wantsStart, mayStartHire, current.isPending, current.data, nav, startHire]);
+    // The conversation already open on this page counts too, even before the resume check has caught up with it.
+    if (current.data?.session || sessionId || drafting) focusMessage();
+    else beginHire();
+  }, [wantsStart, mayStartHire, current.isPending, current.data, sessionId, drafting, nav, beginHire, focusMessage]);
 
   const send = useMutation({
     mutationFn: async (message: string) => {
       if (sessionId) {
         const r = await api.post<{ session: IntakeSession; reply: { assistantMessage?: string; readyToCompile?: boolean; error?: string; recovery?: string } }>(`/api/v1/intake/sessions/${sessionId}/messages`, { message });
         return { reply: r.reply.assistantMessage ?? `${r.reply.error ?? "Something went wrong."} ${r.reply.recovery ?? ""}`, ready: !!r.reply.readyToCompile, sessionId };
+      }
+      // The first message after "Start a hire" starts the draft with it.
+      if (drafting) {
+        const r = await api.post<{ session: IntakeSession; reply: { assistantMessage?: string; readyToCompile?: boolean; error?: string } | null }>("/api/v1/intake/sessions", { initialMessage: message });
+        return { reply: r.reply?.assistantMessage ?? `${r.reply?.error ?? "Something went wrong."} Try again, or ask a recruiter to finish this with you.`, ready: !!r.reply?.readyToCompile, sessionId: r.session.id };
       }
       const r = await api.post<{ reply: string; intakeSessionId?: string; readyToCompile?: boolean }>("/api/v1/intake/conversation/messages", { message });
       return { reply: r.reply, ready: !!r.readyToCompile, sessionId: r.intakeSessionId ?? null };
@@ -104,6 +108,10 @@ export function Home() {
     onSuccess: (r) => {
       setTurns((t) => [...t, { role: "assistant", content: r.reply }]);
       setSessionId(r.sessionId);
+      if (r.sessionId) {
+        setDrafting(false);
+        qc.invalidateQueries({ queryKey: ["intake", "current"] });
+      }
       setReady(r.ready);
     },
     onError: (err) => setTurns((t) => [...t, { role: "system", content: err instanceof ApiError ? err.message : "That didn't go through. Try again." }]),
@@ -143,16 +151,17 @@ export function Home() {
 
   return (
     <div className="stack" style={{ gap: 20 }}>
-      <div className="page-head">
-        <div>
-          <h1>Good {greeting()}.</h1>
-          <p>{brief.data?.summary ?? "What needs you, who is worth a look, what is at risk, and what was handled for you."}</p>
-        </div>
-        <div className="row">
-          {mayStartHire ? <Button variant="primary" loading={startHire.isPending} onClick={beginHire}>Start a hire</Button> : null}
-          <AskRecruiter />
-        </div>
-      </div>
+      <PageHeader
+        eyebrow="Today"
+        title={`Good ${greeting()}.`}
+        sub={brief.data?.summary ?? "What needs you, who is worth a look, what is at risk, and what was handled for you."}
+        actions={
+          <>
+            {mayStartHire ? <Button variant="primary" icon="plus" onClick={beginHire}>Start a hire</Button> : null}
+            <AskRecruiter />
+          </>
+        }
+      />
 
       {/* A card's one-click request says what the recruiter will see and until when, and stays until read (the card itself may go). */}
       {sentToRecruiter ? <Alert tone="info"><div className="row" style={{ justifyContent: "space-between" }}><span>{sentToRecruiter}</span><Button size="sm" variant="quiet" onClick={() => setSentToRecruiter(null)}>Got it</Button></div></Alert> : null}
@@ -192,7 +201,7 @@ export function Home() {
             <input ref={inputRef} className="input" style={{ flex: 1 }} placeholder={sessionId ? "Answer, or say 'draft it'" : "Who do you need to hire?"} value={draft} onChange={(e) => setDraft(e.target.value)} aria-label="Message" />
             <Button type="submit" variant="primary" loading={send.isPending}>Send</Button>
           </form>
-          {sessionId ? <p className="small muted">This conversation is drafting a role. <Button variant="quiet" size="sm" loading={startOver.isPending} onClick={() => startOver.mutate()}>Start over</Button></p> : null}
+          {sessionId || drafting ? <p className="small muted">This conversation is drafting a role. <Button variant="quiet" size="sm" loading={startOver.isPending} onClick={() => startOver.mutate()}>Start over</Button></p> : null}
         </div>
       </Card>
     </div>
@@ -221,7 +230,7 @@ function BriefCardView({ card, onSentToRecruiter }: { card: BriefCard; onSentToR
     <Card needsYou={needsYou} lift={needsYou}>
       <div className="card-title">
         <h2 style={{ fontSize: 16 }}>{card.title}</h2>
-        <Chip tone={needsYou ? "needs" : card.kind === "escalation" ? "accent" : "neutral"}>{label(card.kind)}</Chip>
+        <Pill size="sm" tone={cardTone(card.kind, needsYou)}>{label(card.kind)}</Pill>
       </div>
       {card.body ? <p className="small" style={{ color: "var(--ink-2)", whiteSpace: "pre-wrap" }}>{card.body}</p> : null}
       {card.actions.length ? (
@@ -237,6 +246,12 @@ function BriefCardView({ card, onSentToRecruiter }: { card: BriefCard; onSentToR
       ) : null}
     </Card>
   );
+}
+
+/** A card's pill: amber when it waits on you, ink when a recruiter is involved, green when there is nothing waiting. */
+function cardTone(kind: string, needsYou: boolean): Tone {
+  if (needsYou) return "caution";
+  return kind === "escalation" ? "accent" : kind === "empty" ? "good" : "neutral";
 }
 
 function label(kind: string): string {

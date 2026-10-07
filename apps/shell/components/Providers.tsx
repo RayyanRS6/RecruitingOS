@@ -2,9 +2,13 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Toaster } from "@ros/ui";
 import type { Me } from "../lib/session";
 
-/** React Query for every page; the server-resolved session seeds the "me" query so nothing flashes. */
+/**
+ * React Query for every page; the server-resolved session seeds the "me" query so nothing flashes. The design system's
+ * Toaster shows what toast() (apps/web/src/toast.ts) sends: a title, and a second line when there is more to say.
+ */
 export function Providers({ children, me }: { children: ReactNode; me: Me | null }) {
   const [client] = useState(() => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 5_000 } } });
@@ -18,14 +22,4 @@ export function Providers({ children, me }: { children: ReactNode; me: Me | null
       <Toaster />
     </QueryClientProvider>
   );
-}
-
-function Toaster() {
-  const [message, setMessage] = useState<string | null>(null);
-  useEffect(() => {
-    const onToast = (e: Event) => { setMessage((e as CustomEvent<string>).detail); setTimeout(() => setMessage(null), 2600); };
-    window.addEventListener("ros:toast", onToast);
-    return () => window.removeEventListener("ros:toast", onToast);
-  }, []);
-  return message ? <div className="toast" role="status">{message}</div> : null;
 }

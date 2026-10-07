@@ -1,12 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, ErrorState, Field, Segmented, Skeleton, Table } from "@ros/ui";
+import { Alert, Button, Card, Chip, ErrorState, Field, PageHeader, Pill, Segmented, Skeleton, Table, type Tone } from "@ros/ui";
 import { api, ApiError, type MyCalendar } from "../api/client";
 import { useSearchParams } from "../nav";
 import { LEVELS, allowedLevels, type PolicyLevel } from "../policy-levels";
 import { ACCESS_DAYS, accessChip } from "../recruiter-access";
+import { canSeeActivity, canStartHire } from "../roles";
+import { setupSections } from "../setup-sections";
+import { browserStorage, SHORTCUT_CHANGED_EVENT, START_HIRE_KEY, setStartHireShortcut, startHireShortcutOn } from "../start-hire";
 import { toast } from "../toast";
 import { TeamCard } from "./TeamCard";
 
@@ -34,6 +37,10 @@ export function Setup() {
     onError: (e) => { if (e instanceof ApiError && e.code === "reauth_required") { setReauthNeeded(true); toast("Confirm it's you first, then change the rule again."); } else toast(e instanceof ApiError ? e.message : "Could not save."); },
   });
 
+  // The section menu (plan I1): every card has an id; the menu lists the ones this person sees.
+  const sections = setupSections({ mayStartHire: canStartHire(myRole), seesAudit: canSeeActivity(myRole) });
+  const [inView, setInView] = useSectionInView(sections.map((s) => s.id).join(" "), !!company.data);
+
   if (company.isLoading) return <Skeleton lines={5} />;
   if (company.error || !company.data) return <ErrorState message="Could not load settings." onRetry={() => company.refetch()} />;
   const c = company.data;
@@ -41,64 +48,134 @@ export function Setup() {
 
   return (
     <div className="stack" style={{ gap: 18 }}>
-      <div className="page-head"><div><h1>Setup</h1><p>Your company, your team, what is connected, and what the AI may do on its own.</p></div></div>
+      <PageHeader eyebrow={c.name} title="Setup" sub="Your company, your team, what is connected, and what the AI may do on its own." />
 
       {reauthOutcome === "ok" ? <Alert tone="info">Thanks, that is confirmed. You can change the rules and the candidate notices for the next ten minutes.</Alert> : reauthOutcome === "mismatch" ? <Alert tone="critical">That sign-in was a different account. Confirm with the account you are signed in as.</Alert> : reauthOutcome === "failed" ? <Alert tone="critical">The confirmation did not complete. Try again.</Alert> : null}
       {reauthNeeded ? <ReauthPrompt /> : null}
 
-      <div className="grid-2">
-        <CompanyCard company={c} canEdit={["owner", "admin"].includes(myRole)} onReauthRequired={() => setReauthNeeded(true)} />
-        <TeamCard myRole={myRole} myUserId={me.data?.user.id ?? ""} />
-      </div>
+      <div className="setup-layout">
+        <nav className="section-menu" aria-label="Setup sections">
+          {sections.map((s) => <a key={s.id} href={`#${s.id}`} aria-current={inView === s.id ? "true" : undefined} onClick={() => setInView(s.id)}>{s.label}</a>)}
+        </nav>
+        <div className="stack" style={{ gap: 18 }}>
+          <div className="grid-2">
+            <Section id="setup-company"><CompanyCard company={c} canEdit={["owner", "admin"].includes(myRole)} onReauthRequired={() => setReauthNeeded(true)} /></Section>
+            <Section id="setup-team"><TeamCard myRole={myRole} myUserId={me.data?.user.id ?? ""} /></Section>
+          </div>
 
-      <RecruiterAccess canRevoke={["owner", "admin"].includes(myRole)} />
+          <Section id="setup-recruiters"><RecruiterAccess canRevoke={["owner", "admin"].includes(myRole)} /></Section>
 
-      <YourSessions />
+          <Section id="setup-sessions"><YourSessions /></Section>
 
-      <MyAvailability />
+          <Section id="setup-availability"><MyAvailability /></Section>
 
-      <Card title="Connected services">
-        <Table head={["What", "Provider", "Status", "What it takes"]}>
-          {c.integrations.map((i) => (
-            <tr key={`${i.kind}-${i.provider}`}>
-              <td>{i.kind}</td>
-              <td>{i.provider}</td>
-              <td><Chip tone={i.status === "live" ? "good" : i.status === "fake" ? "caution" : i.status === "manual_action_required" ? "needs" : i.status === "awaiting_verification" ? "accent" : "neutral"}>{SERVICE_STATE_LABEL[i.status] ?? i.status.replace(/_/g, " ")}</Chip></td>
-              <td className="small muted">{explainStatus(i)}</td>
-            </tr>
-          ))}
-        </Table>
-        <p className="small muted" style={{ marginTop: 8 }}>AI provider: <strong>{c.ai.provider}</strong>{c.ai.provider === "fake" ? " (deterministic stand-in for development; production refuses to start with it)" : ""}.</p>
-      </Card>
+          {canStartHire(myRole) ? <Section id="setup-shortcut"><ShortcutCard /></Section> : null}
 
-      <Card title="What the AI may do on its own">
-        <p className="small muted" style={{ marginBottom: 10 }}>Four levels for every action. Some decisions always stay with a person, and some always wait for a person's approval (approving a role, offers, interviews); those offer only the choices allowed. Changes are recorded.</p>
-        {!canManagePolicy && myRole ? <Alert tone="info">Only owners and admins change these rules. You can see what applies; ask one of them if something should work differently.</Alert> : null}
-        {policies.isLoading ? <Skeleton lines={6} /> : groups.map((g) => (
-          <div key={g} style={{ marginBottom: 14 }}>
-            <h3 style={{ marginBottom: 6 }}>{g}</h3>
-            <div className="stack" style={{ gap: 6 }}>
-              {policies.data!.filter((p) => p.group === g).map((p) => (
-                <div key={p.actionType} className="row" style={{ justifyContent: "space-between", padding: "6px 0", borderTop: "1px solid var(--line)" }}>
-                  <div><span>{actionLabel(p.actionType)}</span>{p.locked ? <Chip>always a person</Chip> : p.minLevel === "approval" ? <Chip>a person approves</Chip> : p.source !== "default" ? <Chip tone="accent">customized</Chip> : null}</div>
-                  {canManagePolicy ? (
-                    <Segmented value={p.level} onChange={(v) => setPolicy.mutate({ actionType: p.actionType, level: v, approverRoles: p.approverRoles })} options={allowedLevels(p)} ariaLabel={actionLabel(p.actionType)} />
-                  ) : <Chip tone="neutral">{LEVELS.find((l) => l.value === p.level)?.label ?? p.level}</Chip>}
+          <Section id="setup-services">
+            <Card title="Connected services">
+              <Table head={["What", "Provider", "Status", "What it takes"]}>
+                {c.integrations.map((i) => (
+                  <tr key={`${i.kind}-${i.provider}`}>
+                    <td>{i.kind}</td>
+                    <td>{i.provider}</td>
+                    <td><Pill size="sm" tone={SERVICE_STATE_TONE[i.status] ?? "neutral"}>{SERVICE_STATE_LABEL[i.status] ?? i.status.replace(/_/g, " ")}</Pill></td>
+                    <td className="small muted">{explainStatus(i)}</td>
+                  </tr>
+                ))}
+              </Table>
+              <p className="small muted" style={{ marginTop: 8 }}>AI provider: <strong>{c.ai.provider}</strong>{c.ai.provider === "fake" ? " (deterministic stand-in for development; production refuses to start with it)" : ""}.</p>
+            </Card>
+          </Section>
+
+          <Section id="setup-rules">
+            <Card title="What the AI may do on its own">
+              <p className="small muted" style={{ marginBottom: 10 }}>Four levels for every action. Some decisions always stay with a person, and some always wait for a person's approval (approving a role, offers, interviews); those offer only the choices allowed. Changes are recorded.</p>
+              {!canManagePolicy && myRole ? <Alert tone="info">Only owners and admins change these rules. You can see what applies; ask one of them if something should work differently.</Alert> : null}
+              {policies.isLoading ? <Skeleton lines={6} /> : groups.map((g) => (
+                <div key={g} style={{ marginBottom: 14 }}>
+                  <h3 style={{ marginBottom: 6 }}>{g}</h3>
+                  <div className="stack" style={{ gap: 6 }}>
+                    {policies.data!.filter((p) => p.group === g).map((p) => (
+                      <div key={p.actionType} className="row" style={{ justifyContent: "space-between", padding: "6px 0", borderTop: "1px solid var(--line)" }}>
+                        <div><span>{actionLabel(p.actionType)}</span>{p.locked ? <Chip>always a person</Chip> : p.minLevel === "approval" ? <Chip>a person approves</Chip> : p.source !== "default" ? <Chip tone="accent">customized</Chip> : null}</div>
+                        {canManagePolicy ? (
+                          <Segmented value={p.level} onChange={(v) => setPolicy.mutate({ actionType: p.actionType, level: v, approverRoles: p.approverRoles })} options={allowedLevels(p)} ariaLabel={actionLabel(p.actionType)} />
+                        ) : <Chip tone="neutral">{LEVELS.find((l) => l.value === p.level)?.label ?? p.level}</Chip>}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ))}
-            </div>
-          </div>
-        ))}
-        {setPolicy.error ? <Alert tone="critical">{setPolicy.error instanceof ApiError ? setPolicy.error.message : "Could not save."}</Alert> : null}
-      </Card>
+              {setPolicy.error ? <Alert tone="critical">{setPolicy.error instanceof ApiError ? setPolicy.error.message : "Could not save."}</Alert> : null}
+            </Card>
+          </Section>
 
-      <AuditHistory />
+          {canSeeActivity(myRole) ? <Section id="setup-audit"><AuditHistory /></Section> : null}
+        </div>
+      </div>
     </div>
+  );
+}
+
+/** One card's place on the page: the section menu jumps here, and stops short of the sticky menu on phones. */
+function Section({ id, children }: { id: string; children: ReactNode }) {
+  return <div id={id} className="setup-section">{children}</div>;
+}
+
+/**
+ * Which section is on screen, for the menu to mark: the first one crossing the upper part of the window. A click on the
+ * menu marks its section at once. `ids` is a space-separated list; nothing is watched until the cards are on the page.
+ */
+function useSectionInView(ids: string, ready: boolean): [string | null, (id: string) => void] {
+  const [current, setCurrent] = useState<string | null>(null);
+  useEffect(() => {
+    if (!ready || typeof IntersectionObserver === "undefined") return;
+    const order = ids.split(" ");
+    const visible = new Set<string>();
+    const watcher = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) visible.add(e.target.id);
+        else visible.delete(e.target.id);
+      }
+      const first = order.find((id) => visible.has(id));
+      if (first) setCurrent(first);
+    }, { rootMargin: "-15% 0px -60% 0px" });
+    for (const id of order) {
+      const el = document.getElementById(id);
+      if (el) watcher.observe(el);
+    }
+    return () => watcher.disconnect();
+  }, [ids, ready]);
+  return [current, setCurrent];
+}
+
+/**
+ * The N shortcut for Start a hire (WCAG 2.1.4: a one-letter shortcut can be turned off). Kept in this browser; the rail
+ * hears the change at once. Shown to the people who may start a hire.
+ */
+function ShortcutCard() {
+  const [on, setOn] = useState(true);
+  useEffect(() => { setOn(startHireShortcutOn(browserStorage())); }, []);
+  const change = (next: boolean) => {
+    const kept = setStartHireShortcut(browserStorage(), next);
+    setOn(next);
+    window.dispatchEvent(new CustomEvent(SHORTCUT_CHANGED_EVENT, { detail: { on: next } }));
+    toast(next ? `${START_HIRE_KEY} starts a hire again.` : `${START_HIRE_KEY} no longer starts a hire.`, kept ? undefined : "This browser would not save the choice, so it lasts until you reload the page.");
+  };
+  return (
+    <Card title="Keyboard shortcut">
+      <p className="small muted">Press {START_HIRE_KEY} on any page to start a hire, unless you are typing in a box or have changed something on that page, so nothing you were working on is lost. Turn it off if it gets in your way, for example when you use speech input. This is saved in this browser only.</p>
+      <label className="small" style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
+        <input type="checkbox" checked={on} onChange={(e) => change(e.target.checked)} />
+        Press {START_HIRE_KEY} to start a hire
+      </label>
+    </Card>
   );
 }
 
 /** Only verified states are shown (founder decision F4). */
 const SERVICE_STATE_LABEL: Record<string, string> = { live: "Connected and working", awaiting_verification: "Submitted, awaiting verification", manual_action_required: "Manual action required", not_connected: "Not connected", fake: "Development stand-in", disabled: "Disabled" };
+const SERVICE_STATE_TONE: Record<string, Tone> = { live: "good", awaiting_verification: "accent", manual_action_required: "caution", fake: "caution" };
 
 function explainStatus(i: { kind: string; provider: string; status: string }): string {
   if (i.status === "fake") return "Development stand-in: records what it would send. Never used in production.";
@@ -172,7 +249,7 @@ function MyAvailability() {
           <h3 style={{ marginBottom: 6 }}>Calendar</h3>
           {q.isLoading ? <Skeleton lines={2} /> : c && c.status !== "not_connected" ? (
             <div className="row" style={{ justifyContent: "space-between" }}>
-              <span>{c.provider} · {c.externalAccountId} <Chip tone={c.status === "live" ? "good" : "needs"}>{c.status === "live" ? "connected" : c.status.replace(/_/g, " ")}</Chip>{c.lastError ? <span className="small muted"> {c.lastError}</span> : null}</span>
+              <span>{c.provider} · {c.externalAccountId} <Pill size="sm" tone={c.status === "live" ? "good" : "caution"}>{c.status === "live" ? "connected" : c.status.replace(/_/g, " ")}</Pill>{c.lastError ? <span className="small muted"> {c.lastError}</span> : null}</span>
               <div className="row">{c.status !== "live" ? <a className="btn secondary sm" href="/api/v1/integrations/calendar/google/connect">Reconnect</a> : null}<Button size="sm" variant="quiet" loading={disconnect.isPending} onClick={() => disconnect.mutate()}>Disconnect</Button></div>
             </div>
           ) : (
@@ -312,7 +389,7 @@ function YourSessions() {
         <div className="stack" style={{ gap: 6, marginTop: 8 }}>
           {rows.map((s) => (
             <div key={s.id} className="row" style={{ justifyContent: "space-between", padding: "6px 0", borderTop: "1px solid var(--line)" }}>
-              <span className="small">{s.current ? <Chip tone="good">this one</Chip> : null} {browser(s.userAgent)} · signed in with {PROVIDER[s.provider] ?? s.provider} · {s.lastSeenAt ? `last seen ${new Date(s.lastSeenAt).toLocaleString()}` : `opened ${new Date(s.createdAt).toLocaleString()}`}{s.addressHash ? ` · address ${s.addressHash.slice(0, 6)}` : ""}</span>
+              <span className="small">{s.current ? <Pill size="sm" tone="good">this one</Pill> : null} {browser(s.userAgent)} · signed in with {PROVIDER[s.provider] ?? s.provider} · {s.lastSeenAt ? `last seen ${new Date(s.lastSeenAt).toLocaleString()}` : `opened ${new Date(s.createdAt).toLocaleString()}`}{s.addressHash ? ` · address ${s.addressHash.slice(0, 6)}` : ""}</span>
               {s.current ? null : <Button size="sm" variant="quiet" loading={revokeOne.isPending} onClick={() => revokeOne.mutate(s.id)}>Sign out</Button>}
             </div>
           ))}

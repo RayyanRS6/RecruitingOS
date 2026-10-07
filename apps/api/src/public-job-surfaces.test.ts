@@ -132,10 +132,10 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(header).toContain(`Apply: ${pv.packet.identity.title}`);
     expect(header).toContain("Ledger Dental");
     const loc = pv.packet.identity.locations[0];
-    expect(header).toContain(`<span class="chip">${[loc.city, loc.region].filter(Boolean).join(", ")}</span>`);
-    expect(header).toContain(`<span class="chip">${({ onsite: "On site", hybrid: "Hybrid", remote: "Remote" } as Record<string, string>)[pv.packet.identity.remotePolicy]}</span>`);
-    expect(header).toContain('<span class="chip">Full time</span>');
-    expect(header).toMatch(/<span class="chip">\$45–\$55 an hour<\/span>/);
+    expect(header).toContain(`<span class="fact-text">${[loc.city, loc.region].filter(Boolean).join(", ")}</span>`);
+    expect(header).toContain(`<span class="fact-text">${({ onsite: "On site", hybrid: "Hybrid", remote: "Remote" } as Record<string, string>)[pv.packet.identity.remotePolicy]}</span>`);
+    expect(header).toContain('<span class="fact-text">Full time</span>');
+    expect(header).toMatch(/<span class="fact-text">\$45–\$55 an hour<\/span>/);
     expect(header).toContain("tell us about your recent work in the box below instead");
     expect(html).not.toContain("four short questions");
     // the job page
@@ -525,10 +525,10 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
       // Irvine, CA: the pay transparency notice applies and says the range is "shown above", so it is
       const page = decodeEntities(await (await app.request(`/careers/${slug}/jobs/${roleId}`)).text());
       expect(page).toContain("The pay range for this position is shown above as required by law");
-      expect(page).toMatch(/<span class="chip">\$45–\$55 an hour<\/span>/);
+      expect(page).toMatch(/<span class="fact-text">\$45–\$55 an hour<\/span>/);
       expect(jsonLdOf(page).baseSalary).toMatchObject({ currency: "USD", value: { minValue: 45, maxValue: 55, unitText: "HOUR" } });
       const form = decodeEntities(await (await app.request(`/careers/${slug}/jobs/${roleId}/apply`)).text());
-      expect(form.slice(0, form.indexOf("<form"))).toMatch(/<span class="chip">\$45–\$55 an hour<\/span>/);
+      expect(form.slice(0, form.indexOf("<form"))).toMatch(/<span class="fact-text">\$45–\$55 an hour<\/span>/);
       expect(await (await app.request("/feeds/jobs.xml")).text()).toMatch(/<salary><!\[CDATA\[USD 45-55 per hour\]\]><\/salary>/);
       // and the owner's role page says the same, with the reason, instead of "not shown"
       const roleView = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { payShown: boolean; payRequiredByLaw: boolean; packet: { compensation: { discloseRange: boolean } } } };

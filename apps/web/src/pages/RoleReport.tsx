@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Card, Chip, EmptyState, ErrorState, PipelineBar, Skeleton, Table } from "@ros/ui";
+import { Alert, Card, EmptyState, ErrorState, PipelineBar, Pill, Skeleton, Table } from "@ros/ui";
 import { Link } from "../nav";
 import { api } from "../api/client";
 
@@ -61,7 +61,7 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
           <Stat n={r.applicants.last30Days} label="in the last 30 days" />
         </div>
         <div className="row" style={{ gap: 2, alignItems: "flex-end", height: 40, marginTop: 10 }} role="img" aria-label={`Applicants per day over the last 30 days: ${r.applicants.byDay.filter((d) => d.count).map((d) => `${d.day} ${d.count}`).join(", ") || "none"}`}>
-          {r.applicants.byDay.map((d) => <span key={d.day} title={`${d.day}: ${d.count}`} style={{ flex: 1, minWidth: 3, height: `${maxDay ? Math.max(4, (d.count / maxDay) * 100) : 4}%`, background: d.count ? "var(--accent)" : "var(--line)", borderRadius: 2 }} />)}
+          {r.applicants.byDay.map((d) => <span key={d.day} title={`${d.day}: ${d.count}`} style={{ flex: 1, minWidth: 3, height: `${maxDay ? Math.max(4, (d.count / maxDay) * 100) : 4}%`, background: d.count ? "var(--ink-2)" : "var(--line)", borderRadius: 2 }} />)}
         </div>
         <p className="small muted" style={{ margin: "4px 0 10px" }}>One bar per day, oldest on the left, days in {r.applicants.timeZone}.</p>
         {r.applicants.bySource.length ? (
@@ -74,7 +74,7 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
       <Card title="Where everyone is">
         <PipelineBar counts={r.stages.byGroup} total={r.stages.total} />
         <div className="row" style={{ marginTop: 8 }}>
-          {(["waiting_on_you", "in_process", "not_moving_forward", "hired"] as const).map((g) => <Chip key={g} tone={g === "waiting_on_you" ? "needs" : g === "hired" ? "good" : g === "in_process" ? "accent" : "neutral"}>{GROUP_LABEL[g]}: {r.stages.byGroup[g] ?? 0}</Chip>)}
+          {(["waiting_on_you", "in_process", "not_moving_forward", "hired"] as const).map((g) => <Pill key={g} size="sm" tone={g === "waiting_on_you" ? "caution" : g === "hired" ? "good" : g === "in_process" ? "accent" : "neutral"}>{GROUP_LABEL[g]}: <span className="tabular">{r.stages.byGroup[g] ?? 0}</span></Pill>)}
         </div>
         {r.stages.byStage.length ? (
           <div style={{ marginTop: 10 }}>

@@ -12,12 +12,12 @@ const CodeForm: FC<{ action: string; cancelAction: string; error?: string | null
   <>
   <form method="post" action={p.action}>
     {p.error ? <div class="err" role="alert">{p.error}</div> : null}
-    <label for="code">{p.label}</label>
-    <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength={6} required autofocus />
-    <p><button class="btn" type="submit">{p.button}</button></p>
-    <p><small>Codes change every 30 seconds. Enter the one showing now.</small></p>
+    <label for="code" class="flush">{p.label}</label>
+    <input id="code" class="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength={6} required autofocus />
+    <small>Codes change every 30 seconds. Enter the one showing now.</small>
+    <button class="btn" type="submit">{p.button}</button>
   </form>
-  <form method="post" action={p.cancelAction}><p><button class="btn btn-quiet" type="submit">{p.cancelLabel ?? "Cancel and return to sign-in"}</button></p></form>
+  <form method="post" action={p.cancelAction}><button class="btn secondary" type="submit">{p.cancelLabel ?? "Cancel and return to sign-in"}</button></form>
   </>
 );
 
@@ -27,6 +27,7 @@ function grouped(secret: string): string {
 
 export const EnrolPage: FC<{ productName: string; secret: string; uri: string; qrSvg: string | null; backup: boolean; error?: string | null; action: string; cancelAction: string }> = (p) => (
   <Layout title={p.backup ? "Add a backup authenticator" : "Set up your authenticator app"}>
+    <p class="eyebrow">{p.productName}</p>
     <h1>{p.backup ? "Add a backup authenticator" : "Set up your authenticator app"}</h1>
     <p>
       {p.backup
@@ -35,7 +36,7 @@ export const EnrolPage: FC<{ productName: string; secret: string; uri: string; q
     </p>
     <div class="card">
       <h2>1. Add the account to your app</h2>
-      {p.qrSvg ? <p><img alt="QR code to scan with your authenticator app" width={200} height={200} src={`data:image/svg+xml;utf8,${encodeURIComponent(p.qrSvg)}`} /></p> : <p class="notice">The QR code is shown only once. If you have not added the account yet, type the setup key by hand.</p>}
+      {p.qrSvg ? <p><img class="qr" alt="QR code to scan with your authenticator app" width={200} height={200} src={`data:image/svg+xml;utf8,${encodeURIComponent(p.qrSvg)}`} /></p> : <p class="notice">The QR code is shown only once. If you have not added the account yet, type the setup key by hand.</p>}
       <p>Scan the code, or enter this key by hand:</p>
       <p>Setup key: <code id="setup-key">{grouped(p.secret)}</code></p>
       <p><small>Time-based, six digits, 30 seconds. Manual entry link: <a href={p.uri}>open in an authenticator app</a>.</small></p>
@@ -49,6 +50,7 @@ export const EnrolPage: FC<{ productName: string; secret: string; uri: string; q
 
 export const VerifyPage: FC<{ productName: string; error?: string | null; action: string; cancelAction: string }> = (p) => (
   <Layout title="Enter your code">
+    <p class="eyebrow">{p.productName}</p>
     <h1>Enter your code</h1>
     <p>Open your authenticator app and enter the code it shows for {p.productName}.</p>
     <div class="card">
@@ -63,10 +65,12 @@ export const BackupOfferPage: FC<{ backupHref: string; skipAction: string; conti
     <h1>You are signed in.</h1>
     <p>You have one authenticator. If that phone is lost, only the platform owner can reset your second factor. A backup authenticator on another device avoids that.</p>
     <div class="card">
-      <p><a class="btn" href={p.backupHref}>Add a backup authenticator</a></p>
-      <form method="post" action={p.skipAction}>
-        <p><button class="btn btn-quiet" type="submit">Not now</button></p>
-      </form>
+      <div class="actions">
+        <a class="btn" href={p.backupHref}>Add a backup authenticator</a>
+        <form method="post" action={p.skipAction}>
+          <button class="btn secondary" type="submit">Not now</button>
+        </form>
+      </div>
       <p><small>You can add one at any later sign-in from this same screen. <a href={p.continueHref}>Continue to the app</a>.</small></p>
     </div>
   </Layout>

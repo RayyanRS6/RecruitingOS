@@ -6,7 +6,7 @@ import { withEmptyPay, withoutPay } from "../services/pay-redaction";
 import { users } from "@ros/db";
 import { assertMayApprovePacket, packetApprovalView } from "../services/packet-approval";
 import { createPacketVersion, currentVersionOf } from "../services/packet-versions";
-import { aiRuns, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviews, postings, rolePackets, roles, screens, withTenant } from "@ros/db";
+import { aiRuns, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviewParticipants, interviews, postings, rolePackets, roles, screens, withTenant } from "@ros/db";
 import { actorOf, applicationScopeGuard, clientIp, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { DOWNLOAD_URL_TTL_SECONDS, safeFilename } from "../uploads";
@@ -28,6 +28,13 @@ roleRoutes.get("/", requireTenant, async (c) => {
     const list = await tx.select().from(roles).where(status ? and(eq(roles.companyId, t.companyId), eq(roles.status, status)) : eq(roles.companyId, t.companyId)).orderBy(desc(roles.createdAt));
     const visible = t.staff?.scope.roleId ? list.filter((x) => x.id === t.staff!.scope.roleId) : list;
     if (!visible.length) return [];
+    // An interviewer holds role.read but not application.read: the list names only the roles they interview for, the
+    // same rule as their interviews list, and carries no applicant counts or waiting decisions (countsHidden).
+    if (t.role === "interviewer") {
+      const mine = await tx.select({ roleId: applications.roleId }).from(interviewParticipants).innerJoin(interviews, eq(interviews.id, interviewParticipants.interviewId)).innerJoin(applications, eq(applications.id, interviews.applicationId)).where(eq(interviewParticipants.userId, t.userId));
+      const ids = new Set(mine.map((m) => m.roleId));
+      return visible.filter((r) => ids.has(r.id)).map((r) => ({ ...r, counts: { total: 0 }, countsHidden: true, needsYou: 0, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null }));
+    }
     // Three queries for the whole list, whatever its length: the roles, their applicants by stage, their open decisions.
     const roleIds = visible.map((r) => r.id);
     const stageCounts = await tx.select({ roleId: applications.roleId, stage: applications.stage, n: count() }).from(applications).where(inArray(applications.roleId, roleIds)).groupBy(applications.roleId, applications.stage);

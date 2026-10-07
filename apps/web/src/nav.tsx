@@ -27,6 +27,12 @@ export function useNavigate(): (to: string, opts?: { replace?: boolean }) => voi
   return (to, opts) => (opts?.replace ? router.replace(to) : router.push(to));
 }
 
+/** Asks the server for the signed-in frame again (the session it was drawn from changed: another company, a new grant). */
+export function useRefresh(): () => void {
+  const router = useRouter();
+  return () => router.refresh();
+}
+
 export function useSearchParams(): [URLSearchParams] {
   const sp = nextUseSearchParams();
   return [new URLSearchParams(sp?.toString() ?? "")];

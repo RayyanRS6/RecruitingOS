@@ -114,6 +114,11 @@ describe("candidate cancels an interview", () => {
     expect(html).toContain('name="reason"');
     expect(html).toContain('name="confirm"');
     expect(html).toMatch(/if you like \(optional\)/);
+    // cancelling and asking for another time are outlined secondary buttons, styled on this page too (not only on the screening page)
+    expect(html).toContain('<button class="btn secondary" type="submit">Cancel the interview</button>');
+    expect(html).toContain('<button class="btn secondary" type="submit">Ask for a different time</button>');
+    expect(html).toContain(".btn.secondary { background: var(--surface)");
+    expect(html).toMatch(/<a class="btn" href="\/c\/schedule\/[^"]+\/ics"><svg class="icon"[^>]*>.*?<\/svg>Add to my calendar<\/a>/);
     // without the box the interview stands
     const unconfirmed = await post(`/c/schedule/${booked.token}/cancel`, { reason: "changed my mind" });
     expect(unconfirmed.status).toBe(302);

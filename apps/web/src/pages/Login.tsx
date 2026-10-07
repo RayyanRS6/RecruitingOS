@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "../nav";
-import { Alert, Button, Card, ErrorState, Field, Skeleton } from "@ros/ui";
+import { Alert, Button, Card, ErrorState, Eyebrow, Field, Skeleton } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 
 const ERRORS: Record<string, string> = {
@@ -46,7 +46,8 @@ export function Login() {
   const error = forgetError ? (base ? `${base} ${forgetError}` : forgetError) : base;
   return (
     <main className="main" style={{ maxWidth: 480, margin: "8vh auto" }}>
-      <h1 style={{ marginBottom: 6 }}>Recruiting OS</h1>
+      <Eyebrow>Sign in</Eyebrow>
+      <h1 style={{ margin: "6px 0" }}>Recruiting OS</h1>
       <p className="muted" style={{ marginBottom: 20 }}>A recruiting department for companies too small to have one.</p>
       <Card>
         <div className="stack">

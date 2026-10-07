@@ -3,12 +3,13 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "../nav";
-import { Alert, Button, Card, Chip, EmptyState, ErrorState, EvidenceChip, Field, Segmented, Sheet, Skeleton, StatusChip, Table, Timeline } from "@ros/ui";
+import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, EvidenceChip, Field, PageHeader, Segmented, Skeleton, StatusChip, Table, Timeline } from "@ros/ui";
 import { api, ApiError, type ActionResult, type ApplicationCapability, type ApplicationDetail, type ApplicationSummary, type AssessmentResult, type CompareResponse, type InterviewPlanView, type Me, type MessagePreview, type RoleSummary, type Screen, type SendMessageResult } from "../api/client";
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
 import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, NO_QUOTE_LABEL, RESUME_UNREADABLE_TEXT, SCORECARD_UNAVAILABLE_TEXT, closerLook, competencyUnquoted, isUnquoted, openScreenOf, requirementUnquoted, resumeUnreadable, scorecardUnavailable, screenQuestionText } from "../evidence";
 import { defaultInterviewers } from "../interview-defaults";
+import { activeCompanyOf } from "../rail";
 import { actionToast, declineConfirmText, decisionToast, outcomeToast } from "../talent-actions";
 
 type Group = "all" | "waiting_on_you" | "in_process" | "not_moving_forward" | "hired";
@@ -20,6 +21,8 @@ export function People() {
   const nav = useNavigate();
   const [search] = useSearchParams();
   const roles = useQuery({ queryKey: ["roles"], queryFn: () => api.get<RoleSummary[]>("/api/v1/roles") });
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
+  const companyName = activeCompanyOf(me.data).name;
   const roleId = params.id ?? roles.data?.find((r) => r.status === "open")?.id ?? roles.data?.[0]?.id;
   const [group, setGroup] = useState<Group>("all");
   // Compare mode (F10): tick up to five people and see the must-haves and competencies side by side; nothing is ranked.
@@ -48,22 +51,23 @@ export function People() {
 
   return (
     <div className="stack" style={{ gap: 18 }}>
-      <div className="page-head">
-        <div>
-          <h1>Talent{role ? ` · ${role.title}` : ""}</h1>
-          <p>Who applied, what the evidence says, and what needs you. Nobody is declined automatically on judgment.</p>
-        </div>
-        <div className="row">
-          {roles.data && roles.data.length > 1 ? (
-            <select className="select" style={{ width: "auto" }} value={roleId ?? ""} onChange={(e) => nav(`/roles/${e.target.value}/talent`)} aria-label="Role">
-              {roles.data.map((r) => <option key={r.id} value={r.id}>{r.title}</option>)}
-            </select>
-          ) : null}
-          {roleId && (apps.data?.length ?? 0) > 1 ? <Button variant={compareOpen ? "primary" : "secondary"} onClick={() => setCompareOpen((v) => !v)}>{compareOpen ? "Done comparing" : "Compare"}</Button> : null}
-          {roleId ? <AskRecruiter roleId={roleId} /> : null}
-        </div>
-      </div>
-      {!roleId ? <EmptyState title="No roles yet" body="Open a role first." action={<Link to="/" className="btn primary">Go to Home</Link>} /> : (
+      <PageHeader
+        eyebrow={companyName ?? undefined}
+        title={`Talent${role ? ` · ${role.title}` : ""}`}
+        sub="Who applied, what the evidence says, and what needs you. Nobody is declined automatically on judgment."
+        actions={
+          <>
+            {roles.data && roles.data.length > 1 ? (
+              <select className="select" style={{ width: "auto" }} value={roleId ?? ""} onChange={(e) => nav(`/roles/${e.target.value}/talent`)} aria-label="Role">
+                {roles.data.map((r) => <option key={r.id} value={r.id}>{r.title}</option>)}
+              </select>
+            ) : null}
+            {roleId && (apps.data?.length ?? 0) > 1 ? <Button variant={compareOpen ? "primary" : "secondary"} onClick={() => setCompareOpen((v) => !v)}>{compareOpen ? "Done comparing" : "Compare"}</Button> : null}
+            {roleId ? <AskRecruiter roleId={roleId} /> : null}
+          </>
+        }
+      />
+      {!roleId ? <EmptyState icon="talent" title="No roles yet" body="Open a role first." action={<Link to="/" className="btn primary">Go to Today</Link>} /> : (
         <>
           <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
             <Segmented value={group} onChange={setGroup} ariaLabel="Group" options={[{ value: "all", label: `All (${apps.data?.length ?? 0})` }, { value: "waiting_on_you", label: "Waiting on you" }, { value: "in_process", label: "In process" }, { value: "not_moving_forward", label: "Not moving forward" }, { value: "hired", label: "Hired" }]} />
@@ -71,13 +75,16 @@ export function People() {
           </div>
           {compareOpen && roleId ? <ComparePanel roleId={roleId} candidates={list.map((a) => ({ id: a.id, name: a.candidate?.name ?? "Unknown", stageLabel: a.stageLabel }))} /> : null}
           {apps.isLoading ? <Skeleton lines={4} /> : apps.error ? <ErrorState message="Could not load candidates." onRetry={() => apps.refetch()} /> : list.length === 0 ? (
-            <EmptyState title="Nobody here yet" body={evidenceFilter === "closer_look" ? "Nobody needs a closer look right now: the assistant had enough to say about everyone here." : group === "all" ? "Applicants appear here as soon as they apply. Share your careers page or forward applications to the role's intake address." : "Nothing in this group."} />
+            <EmptyState icon="talent" title="Nobody here yet" body={evidenceFilter === "closer_look" ? "Nobody needs a closer look right now: the assistant had enough to say about everyone here." : group === "all" ? "Applicants appear here as soon as they apply. Share your careers page or forward applications to the role's intake address." : "Nothing in this group."} />
           ) : (
             <div className="stack">
               {list.map((a) => (
                 <Card key={a.id} needsYou={a.group === "waiting_on_you"}>
                   <div className="card-title">
-                    <h2 style={{ fontSize: 16 }}><button type="button" className="btn quiet" style={{ padding: 0, fontFamily: "var(--display)", fontSize: 16 }} onClick={() => setOpenId(a.id)}>{a.candidate?.name ?? "Unknown"}</button></h2>
+                    <div className="row" style={{ flexWrap: "nowrap", minWidth: 0 }}>
+                      <Avatar name={a.candidate?.name} />
+                      <h2 style={{ fontSize: 16 }}><button type="button" className="btn quiet" style={{ padding: 0, fontFamily: "var(--display)", fontSize: 16 }} onClick={() => setOpenId(a.id)}>{a.candidate?.name ?? "Unknown"}</button></h2>
+                    </div>
                     <div className="row"><Chip tone="source">{a.source.replace("_", " ")}</Chip><StatusChip stage={a.stage} label={a.stageLabel} group={a.group} /></div>
                   </div>
                   <div className="row small" style={{ color: "var(--ink-2)" }}>
@@ -200,7 +207,7 @@ function ApplicationSheet({ id, roleId, onClose, openMessage = false }: { id: st
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not start the interview."),
   });
   return (
-    <Sheet open onClose={onClose} title={a ? `${a.candidate.firstName} ${a.candidate.lastName}` : "Candidate"}>
+    <Drawer open onClose={onClose} title={a ? `${a.candidate.firstName} ${a.candidate.lastName}` : "Candidate"} leading={a ? <Avatar name={`${a.candidate.firstName} ${a.candidate.lastName}`} size="lg" /> : undefined}>
       {q.isLoading || !a ? <Skeleton lines={6} /> : (
         <div className="stack" style={{ gap: 14 }}>
           <div className="row"><StatusChip stage={a.stage} label={a.stageLabel} group={a.group} /><Chip tone="source">{a.source.replace("_", " ")}</Chip><span className="small muted">applied {new Date(a.createdAt).toLocaleDateString()}</span></div>
@@ -389,7 +396,7 @@ function ApplicationSheet({ id, roleId, onClose, openMessage = false }: { id: st
           </Card>
         </div>
       )}
-    </Sheet>
+    </Drawer>
   );
 }
 

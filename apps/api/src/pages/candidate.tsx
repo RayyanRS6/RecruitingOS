@@ -20,6 +20,7 @@ import { createApplication, markUploadUsed, queueLinkRequest, uploadAlreadyUsed,
 import { jobUrls } from "../services/job-urls";
 import { screenDeps } from "../services/screens";
 import { optBackIntoTalentPool, optOutOfTalentPool } from "../services/talent-pool";
+import { Icon } from "./icons";
 import { JobFacts, payShown, publicPay, roleValidThrough } from "./job-facts";
 import { Layout, currentNonce } from "./layout";
 import { clearApplicationSource, resolveApplicationSource } from "./links";
@@ -106,17 +107,24 @@ candidatePages.get("/careers/:slug", async (c) => {
   const open = await db.select().from(roles).where(and(eq(roles.companyId, company.id), eq(roles.status, "open"))).orderBy(desc(roles.openedAt));
   return c.html(
     <Layout title={`Careers at ${company.name}`}>
+      <p class="eyebrow">Careers</p>
       <h1>Work with {company.name}</h1>
-      <p class="meta">{company.settings.careersPage?.intro ?? "We respond to every applicant and keep the process short."}</p>
+      <p class="lead">{company.settings.careersPage?.intro ?? "We respond to every applicant and keep the process short."}</p>
       {open.length === 0 ? <div class="card">No open positions right now. Check back soon.</div> : null}
-      {open.map((r) => (
-        <div class="card">
-          <h2 style="margin-top:0">{r.title}</h2>
-          {r.acceptingApplications ? null : <p class="meta">Not taking new applications right now.</p>}
-          <a class="btn" href={`/careers/${company.slug}/jobs/${r.id}`}>{r.acceptingApplications ? "View and apply" : "View details"}</a>
-        </div>
-      ))}
-      <p class="notice"><a href="/c/link-request">Already applied? Get your application link again</a> · <a href="/privacy">How we handle your information</a></p>
+      {open.length ? (
+        <ul class="roles">
+          {open.map((r) => (
+            <li class="card role">
+              <div>
+                <h2>{r.title}</h2>
+                {r.acceptingApplications ? null : <p class="meta">Not taking new applications right now.</p>}
+              </div>
+              <a class="btn secondary" href={`/careers/${company.slug}/jobs/${r.id}`}>{r.acceptingApplications ? "View and apply" : "View details"}<span class="sr-only">: {r.title}</span><Icon name="arrow-right" /></a>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <p class="foot"><a href="/c/link-request">Already applied? Get your application link again</a> · <a href="/privacy">How we handle your information</a></p>
     </Layout>,
   );
 });
@@ -147,22 +155,38 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
     companyLogoUrl: company.settings.logoUrl ?? null,
   });
   return c.html(
-    <Layout title={`${packet.identity.title} at ${company.name}`} jsonLd={jsonLd}>
-      <p class="meta"><a href={`/careers/${company.slug}`}>{company.name}</a></p>
-      <h1>{packet.identity.title}</h1>
-      <JobFacts packet={packet} pay={publicPay(packet, allNotices)} />
-      {!accepting ? <div class="err" role="status">{closedMessage(role)}</div> : null}
-      <p style="white-space:pre-wrap">{packet.description.publicJobDescription}</p>
-      <h2>What to expect</h2>
-      <ol class="steps">
-        <li>Apply in about three minutes. We confirm by email.</li>
-        <li>A short screening conversation {smsEnabled ? "by text or online" : "online"} (about {packet.screening.maxMinutes} minutes) if your background looks like a fit.</li>
-        {packet.interviews.plan.map((r) => <li>{r.title} ({r.durationMinutes} minutes)</li>)}
-        <li>A decision, and a real answer either way.</li>
-      </ol>
-      {notices.filter((n) => n.key === "ai_use" || n.key === "pay_transparency").map((n) => <p class="notice">{n.text}</p>)}
-      {accepting ? <a class="btn" href={`/careers/${company.slug}/jobs/${role.id}/apply`}>Apply now</a> : null}
-      <p class="notice" style="margin-top:22px"><a href="/c/link-request">Already applied? Get your application link again</a> · <a href="/privacy">How we handle your information</a></p>
+    <Layout title={`${packet.identity.title} at ${company.name}`} jsonLd={jsonLd} wide>
+      <div class="job-head">
+        <p class="eyebrow"><a href={`/careers/${company.slug}`}>Careers at {company.name}</a></p>
+        <h1>{packet.identity.title}</h1>
+        <JobFacts packet={packet} pay={publicPay(packet, allNotices)} />
+      </div>
+      {!accepting ? <div class="alert caution" role="status">{closedMessage(role)}</div> : null}
+      {/* The description, the steps and the notices come first in reading order; the apply panel follows them (beside them on a wide screen, held at the bottom of a phone's screen). */}
+      <div class={accepting ? "job-layout" : "job-layout solo"}>
+        <div class="card job-body">
+          <h2>About the job</h2>
+          <p class="desc">{packet.description.publicJobDescription}</p>
+          <h2>What to expect</h2>
+          <ol class="steps">
+            <li>Apply in about three minutes. We confirm by email.</li>
+            <li>A short screening conversation {smsEnabled ? "by text or online" : "online"} (about {packet.screening.maxMinutes} minutes) if your background looks like a fit.</li>
+            {packet.interviews.plan.map((r) => <li>{r.title} ({r.durationMinutes} minutes)</li>)}
+            <li>A decision, and a real answer either way.</li>
+          </ol>
+          {notices.filter((n) => n.key === "ai_use" || n.key === "pay_transparency").map((n) => <p class="notice">{n.text}</p>)}
+        </div>
+        {accepting ? (
+          <div class="apply-panel">
+            <div class="card apply-card">
+              <p class="apply-title">{packet.identity.title}</p>
+              <p class="meta">About three minutes. We confirm by email.</p>
+              <a class="btn" href={`/careers/${company.slug}/jobs/${role.id}/apply`}>Apply now</a>
+            </div>
+          </div>
+        ) : null}
+      </div>
+      <p class="foot"><a href="/c/link-request">Already applied? Get your application link again</a> · <a href="/privacy">How we handle your information</a></p>
     </Layout>,
   );
 });
@@ -200,7 +224,7 @@ type ApplyFormProps = {
 function TransparencyBlock(props: { company: { name: string }; notices: Notice[]; privacyEmail: string; acknowledged: boolean; missing: boolean; resumeLost: boolean }) {
   return (
     <section class="card" aria-labelledby="before-you-send">
-      <h2 id="before-you-send" style="margin-top:0">Before you send</h2>
+      <h2 id="before-you-send">Before you send</h2>
       <p><strong>{props.company.name}</strong> runs this hiring process and is the employer. People at {props.company.name} make every hiring decision; software only helps organize and summarize.</p>
       <p><strong>What we collect:</strong> your name, your email, your phone number if you give one, where you are based, your resume or the summary you write, and your answers to the questions above.</p>
       <p><strong>Why:</strong> to consider you for this position and to contact you about it. Nothing else.</p>
@@ -230,12 +254,12 @@ function ApplyForm(props: ApplyFormProps) {
   const kept = props.state?.resume ?? null;
   return (
     <Layout title={`Apply: ${props.packet.identity.title} at ${props.company.name}`}>
-      <p class="meta"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>← Back to the job</a></p>
+      <p class="back"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}><Icon name="arrow-left" />Back to the job</a></p>
       {/* The facts of the job stay in view while applying (Wave 0 item 0.8), pay included wherever the page must show it. */}
+      <p class="eyebrow">{props.company.name}</p>
       <h1>Apply: {props.packet.identity.title}</h1>
-      <p class="meta" style="margin-bottom:0">{props.company.name}</p>
       <JobFacts packet={props.packet} pay={publicPay(props.packet, props.notices)} />
-      <p>It takes about three minutes. Upload a resume, or tell us about your recent work in the box below instead.</p>
+      <p class="lead">It takes about three minutes. Upload a resume, or tell us about your recent work in the box below instead.</p>
       {props.error ? <div class="err" role="alert">{props.error}</div> : null}
       <form method="post" enctype="multipart/form-data" data-upload-intent={`/careers/${props.company.slug}/jobs/${props.role.id}/upload-intent`}>
         <input type="text" name="website" tabindex={-1} autocomplete="off" style="position:absolute;left:-10000px" aria-label="Leave this field empty" />
@@ -467,12 +491,12 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
 function Receipt(props: { company: { slug: string; name: string }; role: { id: string }; packet: RolePacket; to: string | null }) {
   return (
     <Layout title="Check your email">
-      <p class="meta"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>{props.packet.identity.title}</a> · {props.company.name}</p>
+      <p class="eyebrow"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>{props.packet.identity.title}</a> · {props.company.name}</p>
       <h1>Thanks for applying</h1>
       <div class="card" role="status">
         {/* True for a first application and a repeat alike: a repeat's reminder goes at most once a day, so it may be in an earlier email. */}
         <p><strong>Check your email.</strong> Your own link to this application goes to {props.to ?? "the email address you gave"}. If you applied for this job before, look in our earlier emails too: we send the link again at most once a day.</p>
-        <p style="margin:0">Keep that email. The link is how you check where things stand, withdraw, or ask about your information. There is no account or password.</p>
+        <p>Keep that email. The link is how you check where things stand, withdraw, or ask about your information. There is no account or password.</p>
       </div>
       <h2>What happens next</h2>
       <ol class="steps">
@@ -481,8 +505,8 @@ function Receipt(props: { company: { slug: string; name: string }; role: { id: s
       </ol>
       <h2>No email?</h2>
       <p>It can take a few minutes. Look in your spam or promotions folder too. If it still has not arrived, we can send your link again.</p>
-      <a class="btn btn-quiet" href="/c/link-request">Send my link again</a>
-      <p class="notice" style="margin-top:22px"><a href="/privacy">How we handle your information</a></p>
+      <a class="btn secondary" href="/c/link-request">Send my link again</a>
+      <p class="foot"><a href="/privacy">How we handle your information</a></p>
     </Layout>
   );
 }
@@ -507,16 +531,17 @@ const LinkRequestForm = z.object({ email: z.email().max(254) });
 function LinkRequestPage(props: { error?: string; email?: string }) {
   return (
     <Layout title="Get your application link again">
+      <p class="eyebrow">Your application</p>
       <h1>Lost your link?</h1>
-      <p>Type the email address you applied with. If we have an application from that address, we email your link to it. We only ever send it to that address, never to this page.</p>
+      <p class="lead">Type the email address you applied with. If we have an application from that address, we email your link to it. We only ever send it to that address, never to this page.</p>
       {props.error ? <div class="err" role="alert">{props.error}</div> : null}
       <form method="post" action="/c/link-request" class="card">
         <div style="position:absolute;left:-10000px" aria-hidden="true"><label for="website">Leave this empty</label><input id="website" name="website" type="text" tabindex={-1} autocomplete="off" /></div>
-        <label for="email">Your email address</label>
+        <label for="email" class="flush">Your email address</label>
         <input id="email" name="email" type="email" required autocomplete="email" value={props.email ?? ""} />
-        <button class="btn" type="submit" style="margin-top:14px">Email me my link</button>
+        <button class="btn" type="submit">Email me my link</button>
       </form>
-      <p class="notice"><a href="/privacy">How we handle your information</a></p>
+      <p class="foot"><a href="/privacy">How we handle your information</a></p>
     </Layout>
   );
 }
@@ -525,12 +550,13 @@ function LinkRequestPage(props: { error?: string; email?: string }) {
 function LinkRequestSent() {
   return (
     <Layout title="Check your email">
+      <p class="eyebrow">Your application</p>
       <h1>Check your email</h1>
       <div class="card" role="status">
         <p><strong>If we have an application from that address, your link is on its way.</strong></p>
-        <p style="margin:0">It can take a few minutes; look in your spam or promotions folder too. To protect your privacy, this page looks the same whether or not we found anything.</p>
+        <p>It can take a few minutes; look in your spam or promotions folder too. To protect your privacy, this page looks the same whether or not we found anything.</p>
       </div>
-      <p class="notice">Still nothing? You may have applied with a different address. <a href="/c/link-request">Try another address</a>.</p>
+      <p class="foot">Still nothing? You may have applied with a different address. <a href="/c/link-request">Try another address</a>.</p>
     </Layout>
   );
 }
@@ -594,8 +620,8 @@ candidatePages.get("/c/status/:token", async (c) => {
   };
   return c.html(
     <Layout title={`Your application at ${company?.name ?? ""}`}>
+      <p class="eyebrow">{company?.name ? `${company.name} · ` : ""}Your application</p>
       <h1>{role?.title}</h1>
-      <p class="meta">{company?.name}</p>
       <div class="card status">
         <div><span>Status</span><strong>{STAGE_LABEL[app.stage]}</strong></div>
         <div><span>Applied</span><span>{new Date(app.createdAt).toLocaleDateString()}</span></div>
@@ -604,19 +630,19 @@ candidatePages.get("/c/status/:token", async (c) => {
       <h2>What happens next</h2>
       <p>{next[app.stage] ?? "We will keep you posted."}</p>
       {openScreen_ ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue the screening conversation" : "Start the screening conversation"}</a> : null}
-      {iv && iv.status === "scheduling" && iv.scheduleToken && iv.offeredSlots.length ? <div class="card"><strong>Pick a time for your {iv.title.toLowerCase()}.</strong><p style="margin:6px 0 10px">{company?.name} would like to interview you.</p><a class="btn" href={`/c/schedule/${iv.scheduleToken}`}>Choose a time</a></div> : null}
-      {iv && iv.status === "scheduled" && iv.startsAt && iv.scheduleToken ? <div class="card"><strong>Your interview: {iv.title}</strong><p style="margin:6px 0 0">{new Intl.DateTimeFormat("en-US", { timeZone: ivTz, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(iv.startsAt))}{iv.meetingUrl ? <span> · <a href={iv.meetingUrl}>Join link</a></span> : null}</p>{prepare ? <p style="margin:8px 0 0"><strong>What to prepare:</strong> {prepare} Bring examples from your own work, and any questions you have for the team.</p> : null}<p style="margin:8px 0 0"><a href={`/c/schedule/${iv.scheduleToken}/confirmed`}>Details, calendar file, reschedule or cancel</a></p></div> : null}
+      {iv && iv.status === "scheduling" && iv.scheduleToken && iv.offeredSlots.length ? <div class="card"><strong>Pick a time for your {iv.title.toLowerCase()}.</strong><p>{company?.name} would like to interview you.</p><a class="btn" href={`/c/schedule/${iv.scheduleToken}`}><Icon name="calendar" />Choose a time</a></div> : null}
+      {iv && iv.status === "scheduled" && iv.startsAt && iv.scheduleToken ? <div class="card"><strong>Your interview: {iv.title}</strong><p>{new Intl.DateTimeFormat("en-US", { timeZone: ivTz, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(iv.startsAt))}{iv.meetingUrl ? <span> · <a href={iv.meetingUrl}>Join link</a></span> : null}</p>{prepare ? <p><strong>What to prepare:</strong> {prepare} Bring examples from your own work, and any questions you have for the team.</p> : null}<p><a href={`/c/schedule/${iv.scheduleToken}/confirmed`}>Details, calendar file, reschedule or cancel</a></p></div> : null}
       {msgs.length ? <h2>Messages we sent you</h2> : null}
-      {msgs.map((m) => <div class="card"><strong>{m.subject}</strong><p style="white-space:pre-wrap;margin-top:8px">{m.bodyText}</p></div>)}
-      {c.req.query("withdrawn") === "1" ? <div class="card"><strong>Your application is withdrawn.</strong><p style="margin:6px 0 0">Thank you for your time. Reply to any of our emails if you change your mind.</p></div> : null}
+      {msgs.map((m) => <div class="card"><strong>{m.subject}</strong><p class="pre">{m.bodyText}</p></div>)}
+      {c.req.query("withdrawn") === "1" ? <div class="card"><strong>Your application is withdrawn.</strong><p>Thank you for your time. Reply to any of our emails if you change your mind.</p></div> : null}
       <h2>Your choices</h2>
       {smsEnabled || smsOn ? (
         <div class="card">
           <p><strong>Text messages:</strong> {smsOn ? "on" : "off"}. {cand?.phone || !smsEnabled ? "" : "Add a mobile number by replying to our email to receive texts."}</p>
           {cand?.phone && (smsOn || smsEnabled) ? (
-            <form method="post" action={`/c/status/${app.statusToken}/sms`} style="margin-top:8px">
+            <form method="post" action={`/c/status/${app.statusToken}/sms`}>
               <input type="hidden" name="pref" value={smsOn ? "off" : "on"} />
-              <button class="btn secondary" type="submit" style="width:auto">{smsOn ? "Stop text messages" : "Allow text messages"}</button>
+              <button class="btn secondary" type="submit">{smsOn ? "Stop text messages" : "Allow text messages"}</button>
             </form>
           ) : null}
         </div>
@@ -625,7 +651,7 @@ candidatePages.get("/c/status/:token", async (c) => {
         <form method="post" action={`/c/status/${app.statusToken}/withdraw`} class="card">
           <p><strong>No longer interested?</strong> One click withdraws your application; we will confirm by email and keep your information only as long as the law requires.</p>
           <label class="check"><input type="checkbox" name="confirm" value="yes" required /> Yes, withdraw my application.</label>
-          <button class="btn secondary" type="submit" style="width:auto;margin-top:8px">Withdraw my application</button>
+          <button class="btn secondary" type="submit">Withdraw my application</button>
         </form>
       ) : null}
       {/* Wave 0 item 0.11: the talent-pool choice is one click either way, and it only ever affects future roles. */}
@@ -633,20 +659,20 @@ candidatePages.get("/c/status/:token", async (c) => {
         <form method="post" action={`/c/status/${app.statusToken}/talent-pool`} class="card">
           <p><strong>Future roles:</strong> you asked us not to keep your details for future roles, so nobody will contact you about other openings at {company?.name}.</p>
           <input type="hidden" name="pref" value="in" />
-          <button class="btn btn-quiet" type="submit" style="width:auto">Keep me for future roles again</button>
+          <button class="btn secondary" type="submit">Keep me for future roles again</button>
         </form>
       ) : (
         <form method="post" action={`/c/status/${app.statusToken}/talent-pool`} class="card">
           <p><strong>Future roles:</strong> {company?.name} may keep your details to tell you about other openings later. This does not change your current application.</p>
-          <button class="btn btn-quiet" type="submit" style="width:auto">Don't keep me for future roles</button>
+          <button class="btn secondary" type="submit">Don't keep me for future roles</button>
         </form>
       )}
       <h2>Need something?</h2>
       <p>Reply to any of our emails with HUMAN to reach a person, or use the form below. To request, correct, or delete your information you can also email <a href={`mailto:${c.get("container").env.PRIVACY_EMAIL}`}>{c.get("container").env.PRIVACY_EMAIL}</a>; see <a href="/privacy">how we handle your information</a>.</p>
-      {c.req.query("request") ? <div class="card" role="status"><strong>We have your request.</strong><p style="margin:6px 0 0">A confirmation with the completion date is on its way to {cand?.email ?? "your email"}. Reference {c.req.query("request")}.</p></div> : null}
+      {c.req.query("request") ? <div class="card" role="status"><strong>We have your request.</strong><p>A confirmation with the completion date is on its way to {cand?.email ?? "your email"}. Reference {c.req.query("request")}.</p></div> : null}
       <h2>Your information</h2>
       <form method="post" action={`/c/status/${app.statusToken}/privacy`} class="card">
-        <label for="pk">What would you like?</label>
+        <label for="pk" class="flush">What would you like?</label>
         <select id="pk" name="kind" required>
           <option value="access">Send me a copy of my information</option>
           <option value="correct">Correct something in my information</option>
@@ -656,7 +682,7 @@ candidatePages.get("/c/status/:token", async (c) => {
         <label for="pd">Details (optional)</label>
         <textarea id="pd" name="details" rows={3} maxlength={2000} placeholder="For example: my phone number is wrong, it should be ..."></textarea>
         <p class="notice">Requests made from this page are verified by the link itself. We confirm receipt and completion by email. Deleting keeps only what the law requires, without your name or contact details. A person handles every request; nothing is decided by software.</p>
-        <button class="btn secondary" type="submit" style="width:auto">Send request</button>
+        <button class="btn secondary" type="submit">Send request</button>
       </form>
     </Layout>,
   );
@@ -668,6 +694,7 @@ candidatePages.get("/privacy", async (c) => {
   const smsEnabled = c.get("container").env.SMS_ENABLED;
   return c.html(
     <Layout title="How we handle your information">
+      <p class="eyebrow">Privacy</p>
       <h1>How we handle your information</h1>
       <p>{n?.text}</p>
       {/* The apply form's "Who can see it" points here (docs/readiness/20 section D, item 6): every kind of service provider that touches an application, and what each one does. */}
@@ -697,7 +724,7 @@ candidatePages.get("/privacy", async (c) => {
       </ul>
       <h2>Automated tools</h2>
       <p>{noticesFor(["*"]).find((x) => x.key === "ai_use")?.text}</p>
-      <a class="btn" href="/c/privacy-request" style="margin-top:8px">Request, correct or delete my information</a>
+      <a class="btn" href="/c/privacy-request">Request, correct or delete my information</a>
     </Layout>,
   );
 });
@@ -718,15 +745,20 @@ async function loadScreenByToken(db: Vars["Variables"]["container"]["db"], token
   return { screen: scr, app, candidate: cand, role, company, packet: pv.packet };
 }
 
-const SCREEN_CSS = `
-.thread{display:flex;flex-direction:column;gap:10px;margin:16px 0}
-.msg{max-width:92%;padding:12px 14px;border-radius:14px;white-space:pre-wrap;line-height:1.45}
-.msg.assistant{background:var(--bg2);border:1px solid var(--line);align-self:flex-start;border-bottom-left-radius:4px}
-.msg.candidate{background:var(--soft);color:var(--accent-ink);align-self:flex-end;border-bottom-right-radius:4px}
-.msg.system{background:transparent;color:var(--ink3);font-size:13px;align-self:center}
-.progress{font-size:13px;color:var(--ink3);display:flex;justify-content:space-between;align-items:center;margin-top:8px}
-.bar{height:6px;background:var(--line);border-radius:999px;overflow:hidden;flex:1;margin-left:12px}.bar i{display:block;height:100%;background:var(--accent)}
-.actions{display:flex;gap:10px;margin-top:10px;flex-wrap:wrap}.btn.secondary{background:var(--bg2);color:var(--accent-ink);border:1px solid var(--line);width:auto}
+/**
+ * The conversation's own styles, on top of the page stylesheet: the assistant's messages on the left in a sunken box,
+ * the candidate's in near-black on the right (as in the application), and a quiet progress bar. Buttons and their
+ * secondary look come from the page stylesheet, like every other candidate page.
+ */
+export const SCREEN_CSS = `
+.thread { display: flex; flex-direction: column; gap: 10px; margin: 20px 0; }
+.msg { max-width: 88%; padding: 12px 16px; border-radius: 16px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.assistant { align-self: flex-start; background: var(--ground); border: 1px solid var(--line); color: var(--ink); border-bottom-left-radius: 6px; }
+.msg.candidate { align-self: flex-end; background: var(--ink); color: var(--ground); border-bottom-right-radius: 6px; }
+.msg.system { align-self: center; background: transparent; color: var(--ink-3); font-size: 14px; }
+.progress { display: flex; align-items: center; gap: 12px; margin-top: 8px; color: var(--ink-3); font-size: 14px; font-variant-numeric: tabular-nums; }
+.bar { flex: 1; height: 6px; overflow: hidden; border-radius: var(--r-pill); background: var(--surface-2); }
+.bar i { display: block; height: 100%; border-radius: inherit; background: var(--ink); }
 `;
 
 candidatePages.get("/c/screen/:token", async (c) => {
@@ -747,14 +779,13 @@ candidatePages.get("/c/screen/:token", async (c) => {
   const notice = noticesFor(["*"]).find((n) => n.key === "ai_use");
   const calendar = await loadBusinessCalendar(container.db);
   return c.html(
-    <Layout title={`Screening: ${packet.identity.title} at ${company.name}`}>
-      <style nonce={currentNonce()} dangerouslySetInnerHTML={{ __html: SCREEN_CSS }} />
-      <p class="meta">{company.name} · {packet.identity.title}</p>
+    <Layout title={`Screening: ${packet.identity.title} at ${company.name}`} extraCss={SCREEN_CSS}>
+      <p class="eyebrow">{company.name} · {packet.identity.title}</p>
       <h1>A few questions, {candidate.firstName}</h1>
-      <p>About {packet.screening.maxMinutes} minutes, one question at a time. You can stop and come back any time; this page remembers where you were.</p>
+      <p class="lead">About {packet.screening.maxMinutes} minutes, one question at a time. You can stop and come back any time; this page remembers where you were.</p>
       {screen.status === "expired" ? <div class="err">This screening link has expired. Reply to any of our emails and a person will pick it up with you.</div> : null}
-      {screen.status === "human_requested" ? <div class="card"><strong>A person will follow up.</strong><p style="margin:6px 0 0">Someone from {company.name}'s hiring team has your conversation and will reach out {humanResponseExpectation(new Date(), calendar)}.</p></div> : null}
-      {screen.status === "completed" ? <div class="card"><strong>Thanks, that is everything.</strong><p style="margin:6px 0 0">The hiring team reviews your answers and you hear back within a few days. <a href={`/c/status/${app.statusToken}`}>Check your status</a> any time.</p></div> : null}
+      {screen.status === "human_requested" ? <div class="card"><strong>A person will follow up.</strong><p>Someone from {company.name}'s hiring team has your conversation and will reach out {humanResponseExpectation(new Date(), calendar)}.</p></div> : null}
+      {screen.status === "completed" ? <div class="card"><strong>Thanks, that is everything.</strong><p>The hiring team reviews your answers and you hear back within a few days. <a href={`/c/status/${app.statusToken}`}>Check your status</a> any time.</p></div> : null}
       {screen.status === "abandoned" ? <div class="card">This application was withdrawn. Reply to any of our emails if you change your mind.</div> : null}
       <div class="thread">
         {screen.transcript.map((t) => <div class={`msg ${t.role}`}>{t.content}</div>)}
@@ -763,9 +794,9 @@ candidatePages.get("/c/screen/:token", async (c) => {
         // WITHDRAW asked first (Wave 0 item 0.7): nothing is withdrawn until the candidate presses the first button.
         <div class="card" role="status">
           <strong>Do you want to withdraw your application?</strong>
-          <p style="margin:6px 0 0">Withdrawing ends this conversation and your application for {packet.identity.title}. To keep going instead, just type your answer below.</p>
+          <p>Withdrawing ends this conversation and your application for {packet.identity.title}. To keep going instead, just type your answer below.</p>
           <form method="post" action={`/c/screen/${screen.token}/withdraw`} class="actions">
-            <button class="btn" type="submit" name="confirm" value="yes" style="width:auto">Yes, withdraw my application</button>
+            <button class="btn" type="submit" name="confirm" value="yes">Yes, withdraw my application</button>
             <button class="btn secondary" type="submit" name="confirm" value="no">No, keep my application</button>
           </form>
         </div>
@@ -786,8 +817,8 @@ candidatePages.get("/c/screen/:token", async (c) => {
           </form>
         </>
       ) : null}
-      <p class="notice" style="margin-top:22px">{notice?.text}</p>
-      <p class="notice"><a href="/privacy">How we handle your information</a></p>
+      <p class="notice">{notice?.text}</p>
+      <p class="foot"><a href="/privacy">How we handle your information</a></p>
     </Layout>,
   );
 });

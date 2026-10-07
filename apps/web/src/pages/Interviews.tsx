@@ -3,21 +3,24 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "../nav";
-import { Alert, Button, Card, Chip, EmptyState, ErrorState, Field, Sheet, Skeleton, Table, Timeline } from "@ros/ui";
+import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, Field, PageHeader, Pill, Skeleton, Table, Timeline, type Tone } from "@ros/ui";
 import { api, ApiError, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me } from "../api/client";
 import { toast } from "../toast";
+import { activeCompanyOf } from "../rail";
 import { canDecideInterviews, canManageInterviews, canSeeTalent } from "../roles";
 
 const STATUS_LABEL: Record<string, string> = { proposed: "Preparing times", scheduling: "Waiting on the candidate", scheduled: "Scheduled", completed: "Completed", cancelled: "Cancelled", no_show: "No-show", offer_expired: "Times expired" };
 const DECISION_LABEL: Record<string, string> = { next_round: "Next round", finalist: "Finalist", not_moving_forward: "Not moving forward", hired: "Hired" };
-const STATUS_TONE: Record<string, "neutral" | "accent" | "needs" | "good" | "caution" | "critical"> = { proposed: "accent", scheduling: "needs", scheduled: "good", completed: "neutral", cancelled: "critical", no_show: "caution", offer_expired: "caution" };
+// Red is only for a missing must-have or a critical error (docs/07), so a cancelled interview is plain grey.
+const STATUS_TONE: Record<string, Tone> = { proposed: "accent", scheduling: "caution", scheduled: "good", completed: "neutral", cancelled: "neutral", no_show: "caution", offer_expired: "caution" };
 const when = (iso: string | null, tz: string | null) => (iso ? new Date(iso).toLocaleString("en-US", { timeZone: tz ?? undefined, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "not yet");
 
 /** Interviews across roles (docs/04): who, when, who is interviewing, and what needs a person. */
 export function Interviews() {
   const { id } = useParams();
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
-  const role = me.data?.memberships.find((m) => m.companyId === me.data?.activeCompanyId)?.role ?? null;
+  const company = activeCompanyOf(me.data);
+  const role = company.role;
   const list = useQuery({ queryKey: ["interviews"], queryFn: () => api.get<InterviewSummary[]>("/api/v1/interviews"), refetchInterval: 15000 });
   const upcoming = (list.data ?? []).filter((i) => ["proposed", "scheduling", "scheduled"].includes(i.status)).sort((a, b) => (a.startsAt ?? "9").localeCompare(b.startsAt ?? "9"));
   const past = (list.data ?? []).filter((i) => !["proposed", "scheduling", "scheduled"].includes(i.status));
@@ -25,19 +28,19 @@ export function Interviews() {
   for (const i of upcoming) for (const p of i.participants) load[p.name ?? p.email] = (load[p.name ?? p.email] ?? 0) + 1;
   return (
     <div className="stack" style={{ gap: 18 }}>
-      <div className="page-head"><div><h1>Interviews</h1><p>{canManageInterviews(role) ? "Every interview a person approved: waiting on the candidate, scheduled, or done. Reschedule and cancel from here; nothing is decided by software." : "Your interviews: waiting on the candidate, scheduled, or done. Afterwards, tell us whether it took place; the hiring team records the decision."}</p></div></div>
+      <PageHeader eyebrow={company.name ?? undefined} title="Interviews" sub={canManageInterviews(role) ? "Every interview a person approved: waiting on the candidate, scheduled, or done. Reschedule and cancel from here; nothing is decided by software." : "Your interviews: waiting on the candidate, scheduled, or done. Afterwards, tell us whether it took place; the hiring team records the decision."} />
       {list.isLoading ? <Skeleton lines={4} /> : list.error ? <ErrorState message="Could not load interviews." onRetry={() => list.refetch()} /> : (
         <>
-          {upcoming.length === 0 ? <EmptyState title="No interviews in motion" body={canSeeTalent(role) ? "Open a candidate and choose Interview to start one." : "You will see an interview here as soon as you are put on one."} action={canSeeTalent(role) ? <Link to="/talent" className="btn primary">Go to Talent</Link> : undefined} /> : (
+          {upcoming.length === 0 ? <EmptyState icon="interviews" title="No interviews in motion" body={canSeeTalent(role) ? "Open a candidate and choose Interview to start one." : "You will see an interview here as soon as you are put on one."} action={canSeeTalent(role) ? <Link to="/talent" className="btn primary">Go to Talent</Link> : undefined} /> : (
             <Card title={`In motion (${upcoming.length})`}>
               <Table head={["Candidate", "Round", "When", "Interviewers", "Status", ""]}>
                 {upcoming.map((i) => (
                   <tr key={i.id}>
-                    <td>{i.candidate.firstName} {i.candidate.lastName}<br /><span className="small muted">{i.roleTitle}</span></td>
+                    <td><CandidateCell i={i} /></td>
                     <td>{i.title}</td>
                     <td>{when(i.startsAt, i.timezone)}{i.status === "scheduling" ? <><br /><span className="small muted">{i.offeredSlots.length} times offered</span></> : null}</td>
                     <td className="small">{i.participants.map((p) => p.name ?? p.email).join(", ")}</td>
-                    <td><Chip tone={STATUS_TONE[i.status] ?? "neutral"}>{STATUS_LABEL[i.status] ?? i.status}</Chip></td>
+                    <td><Pill size="sm" tone={STATUS_TONE[i.status] ?? "neutral"}>{STATUS_LABEL[i.status] ?? i.status}</Pill></td>
                     <td><Link to={`/interviews/${i.id}`} className="btn quiet sm">Open</Link></td>
                   </tr>
                 ))}
@@ -50,10 +53,10 @@ export function Interviews() {
               <Table head={["Candidate", "Round", "When", "Outcome", "Decision", ""]}>
                 {past.map((i) => (
                   <tr key={i.id}>
-                    <td>{i.candidate.firstName} {i.candidate.lastName}<br /><span className="small muted">{i.roleTitle}</span></td>
+                    <td><CandidateCell i={i} /></td>
                     <td>{i.title}</td>
                     <td>{when(i.startsAt, i.timezone)}</td>
-                    <td><Chip tone={STATUS_TONE[i.status] ?? "neutral"}>{i.outcome ? i.outcome.replace(/_/g, " ") : STATUS_LABEL[i.status] ?? i.status}</Chip></td>
+                    <td><Pill size="sm" tone={STATUS_TONE[i.status] ?? "neutral"}>{i.outcome ? i.outcome.replace(/_/g, " ") : STATUS_LABEL[i.status] ?? i.status}</Pill></td>
                     <td className="small">{i.decision ? DECISION_LABEL[i.decision] ?? i.decision.replace(/_/g, " ") : "not yet"}</td>
                     <td><Link to={`/interviews/${i.id}`} className="btn quiet sm">Open</Link></td>
                   </tr>
@@ -64,6 +67,17 @@ export function Interviews() {
         </>
       )}
       {id ? <InterviewSheet id={id} role={role} userId={me.data?.user.id ?? null} /> : null}
+    </div>
+  );
+}
+
+/** The candidate column: initials, the name, and the role underneath. */
+function CandidateCell({ i }: { i: InterviewSummary }) {
+  const name = `${i.candidate.firstName} ${i.candidate.lastName}`;
+  return (
+    <div className="row" style={{ flexWrap: "nowrap", alignItems: "flex-start" }}>
+      <Avatar name={name} size="sm" />
+      <span>{name}<br /><span className="small muted">{i.roleTitle}</span></span>
     </div>
   );
 }
@@ -91,11 +105,11 @@ function InterviewSheet({ id, role, userId }: { id: string; role: string | null;
   const participant = !!i && !!userId && i.participants.some((p) => p.userId === userId);
   const finished = !!i && ["completed", "no_show"].includes(i.status);
   return (
-    <Sheet open onClose={() => nav("/interviews")} title={i ? `${i.candidate.firstName} ${i.candidate.lastName} · ${i.title}` : "Interview"}>
+    <Drawer open onClose={() => nav("/interviews")} title={i ? `${i.candidate.firstName} ${i.candidate.lastName} · ${i.title}` : "Interview"} leading={i ? <Avatar name={`${i.candidate.firstName} ${i.candidate.lastName}`} size="lg" /> : undefined}>
       {q.error && !i ? <ErrorState message={q.error instanceof ApiError && (q.error.status === 404 || q.error.status === 403) ? "This interview is not one of yours, or it no longer exists." : "Could not load this interview."} onRetry={() => q.refetch()} /> : q.isLoading || !i ? <Skeleton lines={8} /> : (
         <div className="stack" style={{ gap: 14 }}>
           <div className="row" style={{ justifyContent: "space-between" }}>
-            <span className="row"><Chip tone={STATUS_TONE[i.status] ?? "neutral"}>{STATUS_LABEL[i.status] ?? i.status}</Chip><span className="small muted">{i.roleTitle} · attempt {i.attempt}</span></span>
+            <span className="row"><Pill tone={STATUS_TONE[i.status] ?? "neutral"}>{STATUS_LABEL[i.status] ?? i.status}</Pill><span className="small muted">{i.roleTitle} · attempt {i.attempt}</span></span>
             {canSeeTalent(role) ? <Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}&message=1`} className="btn secondary sm">Message the candidate</Link> : null}
           </div>
           {i.brief ? <BriefCard brief={i.brief} /> : null}
@@ -149,7 +163,7 @@ function InterviewSheet({ id, role, userId }: { id: string; role: string | null;
           <Card title="Timeline"><Timeline items={i.timeline.map((e) => ({ when: new Date(e.occurredAt).toLocaleString(), what: e.type.replace(/[._]/g, " "), who: e.actor.name ?? e.actor.kind }))} /></Card>
         </div>
       )}
-    </Sheet>
+    </Drawer>
   );
 }
 

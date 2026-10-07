@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, EmptyState, ErrorState, Field, Skeleton, Timeline } from "@ros/ui";
+import { Alert, Avatar, Button, Card, Chip, EmptyState, ErrorState, Field, Pill, Skeleton, Timeline } from "@ros/ui";
 import { api, ApiError, type DecisionMaker, type InterviewPlanView, type Requirement, type RoleDetail, type RoleEvent, type RolePacket } from "../api/client";
 import { toast } from "../toast";
 import { actorWords, describeRoleEvent, roleWords } from "../role-words";
@@ -48,7 +48,7 @@ export function PreferencesCard({ packet, decisionMaker }: { packet: RolePacket;
       <dl className="kv">
         <dt>Final decision</dt>
         <dd>
-          {decisionMaker ? <>{decisionMaker.name ?? decisionMaker.email} <Chip tone="good">on the team</Chip></> : stated ? <>{stated}{statedIsAPerson ? <> <Chip tone="caution">not on the team yet</Chip></> : null}</> : "Not named yet"}
+          {decisionMaker ? <>{decisionMaker.name ?? decisionMaker.email} <Pill size="sm" tone="good">on the team</Pill></> : stated ? <>{stated}{statedIsAPerson ? <> <Pill size="sm" tone="caution">not on the team yet</Pill></> : null}</> : "Not named yet"}
           <br />
           <span className="small muted">{decisionMaker ? "Packet approvals are reserved for them; an owner can also decide." : statedIsAPerson ? "Invite them to the team and approvals will go to them." : "Any owner, admin or hiring manager can approve."}</span>
         </dd>
@@ -191,7 +191,7 @@ export function InterviewPlanTab({ roleId, canEdit }: { roleId: string; canEdit:
             <span className="small muted">{r.purpose}</span>
             <div className="row" style={{ marginTop: 6 }}>
               {r.interviewers.length
-                ? r.interviewers.map((i) => <Chip key={i.userId} tone={i.schedulable ? "good" : "caution"}>{i.name} · {i.schedulable ? "can be scheduled" : "no calendar or hours yet"}</Chip>)
+                ? r.interviewers.map((i) => <Pill key={i.userId} size="sm" tone={i.schedulable ? "good" : "caution"}>{i.name} · {i.schedulable ? "can be scheduled" : "no calendar or hours yet"}</Pill>)
                 : <span className="small muted">Nobody assigned yet{r.interviewerRoles.length ? ` (planned: ${roleWords(r.interviewerRoles)})` : ""}.</span>}
               {canEdit && editingKey !== r.key ? <Button size="sm" onClick={() => { setEditingKey(r.key); setPicked(r.interviewers.map((i) => i.userId)); }}>{r.interviewers.length ? "Change" : "Assign interviewers"}</Button> : null}
             </div>
@@ -200,8 +200,9 @@ export function InterviewPlanTab({ roleId, canEdit }: { roleId: string; canEdit:
                 {d.team.length ? d.team.map((m) => (
                   <label key={m.userId} className="row" style={{ gap: 8 }}>
                     <input type="checkbox" checked={picked.includes(m.userId)} onChange={(e) => toggle(m.userId, e.target.checked)} />
+                    <Avatar name={m.name} size="sm" />
                     <span>{m.name} <span className="small muted">({m.role.replace(/_/g, " ")})</span></span>
-                    <Chip tone={m.schedulable ? "good" : "caution"}>{m.schedulable ? "availability known" : "no calendar or hours yet"}</Chip>
+                    <Pill size="sm" tone={m.schedulable ? "good" : "caution"}>{m.schedulable ? "availability known" : "no calendar or hours yet"}</Pill>
                   </label>
                 )) : <p className="small muted">Nobody is on the team yet. Invite people from Setup.</p>}
                 <div className="row">

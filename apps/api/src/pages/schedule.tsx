@@ -8,6 +8,7 @@ import { interviewIcs, participantsOf, sendInterviewCancelled } from "@ros/agent
 import { applications, candidates, companies, interviews, jobs, rolePackets, roles, withTenant, type Db } from "@ros/db";
 import type { Vars } from "../middleware/session";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
+import { Icon } from "./icons";
 import { Layout } from "./layout";
 
 /**
@@ -56,24 +57,24 @@ schedulePages.get("/c/schedule/:token", async (c) => {
   const error = c.req.query("error");
   return c.html(
     <Layout title={`Pick a time: ${b.iv.title} at ${b.company.name}`}>
-      <p class="meta">{b.company.name} · {b.packet?.identity.title ?? b.role.title}</p>
+      <p class="eyebrow">{b.company.name} · {b.packet?.identity.title ?? b.role.title}</p>
       <h1>Pick a time for your {b.iv.title.toLowerCase()}</h1>
-      <p>{b.iv.durationMinutes} minutes, {b.iv.format.replace("_", " ")}{b.participants.length ? ` with ${b.participants.map((p) => p.firstName).join(" and ")}` : ""}. Times are shown in <strong>{tz.replace(/_/g, " ")}</strong>.</p>
+      <p class="lead">{b.iv.durationMinutes} minutes, {b.iv.format.replace("_", " ")}{b.participants.length ? ` with ${b.participants.map((p) => p.firstName).join(" and ")}` : ""}. Times are shown in <strong>{tz.replace(/_/g, " ")}</strong>.</p>
       <form method="get" action={`/c/schedule/${b.iv.scheduleToken}`} class="card">
-        <label for="tz">Show times in</label>
+        <label for="tz" class="flush">Show times in</label>
         <select id="tz" name="tz">{[...new Set([tz, ...ZONES])].map((z) => <option value={z} selected={z === tz}>{z.replace(/_/g, " ")}</option>)}</select>
-        <button class="btn secondary" type="submit" style="width:auto;margin-top:8px">Show times</button>
+        <button class="btn secondary" type="submit">Show times</button>
       </form>
       {error === "slot_unknown" ? <div class="err">That time is no longer available. Choose another.</div> : null}
       <form method="post" action={`/c/schedule/${b.iv.scheduleToken}`}>
         <input type="hidden" name="timezone" value={tz} />
-        <fieldset style="border:0;padding:0;margin:0">
-          <legend class="meta">Available times</legend>
+        <fieldset>
+          <legend>Available times</legend>
           {groups.map((g) => (
             <div class="card">
               <strong>{g.label}</strong>
               {g.slots.map((s) => (
-                <label class="check" for={`slot-${s.id}`}><input type="radio" id={`slot-${s.id}`} name="slotId" value={s.id} required /> {s.label}</label>
+                <label class="check slot" for={`slot-${s.id}`}><input type="radio" id={`slot-${s.id}`} name="slotId" value={s.id} required /> {s.label}</label>
               ))}
             </div>
           ))}
@@ -85,7 +86,7 @@ schedulePages.get("/c/schedule/:token", async (c) => {
       <h2>None of these work?</h2>
       <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/none-work`} class="card">
         <input type="hidden" name="timezone" value={tz} />
-        <label for="note">Tell us what does</label>
+        <label for="note" class="flush">Tell us what does</label>
         <textarea id="note" name="note" rows={3} maxlength={1000} placeholder="For example: mornings before 10, any day but Wednesday"></textarea>
         <button class="btn secondary" type="submit">Ask for other times</button>
       </form>
@@ -154,7 +155,7 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
   const start = b.iv.startsAt;
   return c.html(
     <Layout title={`Confirmed: ${b.iv.title} at ${b.company.name}`}>
-      <p class="meta">{b.company.name} · {b.packet?.identity.title ?? b.role.title}</p>
+      <p class="eyebrow">{b.company.name} · {b.packet?.identity.title ?? b.role.title}</p>
       <h1>You're confirmed</h1>
       <div class="card status">
         <div><span>When</span><strong>{formatInZone(start, tz)}</strong></div>
@@ -163,12 +164,12 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
         <div><span>Who</span><span>{b.participants.map((p) => p.firstName).join(", ") || "the hiring team"}</span></div>
         {b.iv.meetingUrl && /^https?:\/\//i.test(b.iv.meetingUrl) ? <div><span>Join</span><a href={b.iv.meetingUrl} rel="noopener">{b.iv.meetingUrl}</a></div> : <div><span>Format</span><span>{b.iv.format.replace("_", " ")}</span></div>}
       </div>
-      <a class="btn" href={`/c/schedule/${b.iv.scheduleToken}/ics`}>Add to my calendar</a>
+      <a class="btn" href={`/c/schedule/${b.iv.scheduleToken}/ics`}><Icon name="calendar" />Add to my calendar</a>
       <h2>Need to change it?</h2>
       {b.iv.rescheduleCountCandidate < MAX_CANDIDATE_RESCHEDULES ? (
         <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/reschedule`} class="card">
           <p>We will send new times. You can do this {MAX_CANDIDATE_RESCHEDULES - b.iv.rescheduleCountCandidate === 1 ? "one more time" : "twice"}.</p>
-          <button class="btn secondary" type="submit" style="width:auto">Ask for a different time</button>
+          <button class="btn secondary" type="submit">Ask for a different time</button>
         </form>
       ) : (
         <div class="card"><p>You have rescheduled twice. Reply to any of our emails and a person will arrange a time with you.</p></div>
@@ -178,7 +179,7 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
         <label for="cancel-reason">Tell us why, if you like (optional)</label>
         <input type="text" id="cancel-reason" name="reason" maxlength={500} placeholder="For example: I accepted another offer" />
         <label class="check"><input type="checkbox" name="confirm" value="yes" required /> Yes, cancel this interview.</label>
-        <button class="btn secondary" type="submit" style="width:auto">Cancel the interview</button>
+        <button class="btn secondary" type="submit">Cancel the interview</button>
       </form>
     </Layout>,
   );

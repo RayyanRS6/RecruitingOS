@@ -48,7 +48,13 @@ describe("the Next.js shell mounts the Hono application", () => {
   it("the application's content-security middleware leaves every mounted Hono path alone and still covers the pages", async () => {
     const { config } = (await import("../middleware")) as { config: { matcher: string[] } };
     const covered = new RegExp(`^${config.matcher[0]}$`);
-    for (const path of ["/a/abcdefghijkl", "/sitemap.xml", "/robots.txt", "/files/put/x", "/careers/brightline", "/c/status/x", "/api/v1/auth/me", "/feeds/jobs.xml", "/webhooks/postmark/inbound", "/healthz", "/privacy"]) expect(covered.test(path), path).toBe(false);
-    for (const path of ["/", "/roles/123", "/admin", "/about", "/setup"]) expect(covered.test(path), path).toBe(true);
+    for (const path of ["/a/abcdefghijkl", "/sitemap.xml", "/robots.txt", "/files/put/x", "/careers/brightline", "/c/status/x", "/api/v1/auth/me", "/feeds/jobs.xml", "/webhooks/postmark/inbound", "/healthz", "/privacy", "/fonts/ibm-plex-sans-latin-400-normal.woff2"]) expect(covered.test(path), path).toBe(false);
+    for (const path of ["/", "/roles/123", "/admin", "/about", "/setup", "/fontsize"]) expect(covered.test(path), path).toBe(true);
+  });
+
+  it("serves the self-hosted font files with a year-long cache", async () => {
+    const { default: config } = (await import("../next.config")) as { default: { headers: () => Promise<Array<{ source: string; headers: Array<{ key: string; value: string }> }>> } };
+    const fonts = (await config.headers()).find((h) => h.source === "/fonts/:file*");
+    expect(fonts?.headers).toContainEqual({ key: "Cache-Control", value: "public, max-age=31536000, immutable" });
   });
 });

@@ -2,22 +2,24 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, ErrorState, Field, Segmented, Sheet, Skeleton, Table } from "@ros/ui";
+import { Alert, Button, Card, Chip, ErrorState, Field, PageHeader, Segmented, Sheet, Skeleton, Table, Tabs } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 import { toast } from "../toast";
 import { CustomerReportSheet } from "./AdminCustomerReport";
 
 type Tab = "customers" | "runs" | "ai" | "failures" | "costs" | "queue" | "calendar" | "privacy" | "admins" | "outcomes";
 const reason = { headers: { "x-admin-reason": "admin console" } };
+const SECTIONS: Array<{ id: Tab; label: string }> = [{ id: "customers", label: "Customers" }, { id: "runs", label: "Workflows" }, { id: "ai", label: "AI runs" }, { id: "failures", label: "Failures" }, { id: "costs", label: "Costs" }, { id: "queue", label: "Queue" }, { id: "calendar", label: "Business calendar" }, { id: "privacy", label: "Privacy requests" }, { id: "admins", label: "Administrators" }, { id: "outcomes", label: "Outcomes" }];
 
 /** The internal console (docs/16). Every read is audited server-side with the reason header. */
 export function Admin() {
   const [tab, setTab] = useState<Tab>("customers");
   return (
     <div className="stack" style={{ gap: 18 }}>
-      <div className="page-head"><div><h1>Admin console</h1><p>Customers, workflows, AI runs, failures, and cost. Reads are audited.</p></div></div>
-      <Segmented value={tab} onChange={setTab} ariaLabel="Admin sections" options={[{ value: "customers", label: "Customers" }, { value: "runs", label: "Workflows" }, { value: "ai", label: "AI runs" }, { value: "failures", label: "Failures" }, { value: "costs", label: "Costs" }, { value: "queue", label: "Queue" }, { value: "calendar", label: "Business calendar" }, { value: "privacy", label: "Privacy requests" }, { value: "admins", label: "Administrators" }, { value: "outcomes", label: "Outcomes" }]} />
-      {tab === "customers" ? <Customers /> : tab === "runs" ? <Runs /> : tab === "ai" ? <AiRuns /> : tab === "failures" ? <Failures /> : tab === "costs" ? <Costs /> : tab === "calendar" ? <CalendarAdmin /> : tab === "privacy" ? <PrivacyRequests /> : tab === "admins" ? <Administrators /> : tab === "outcomes" ? <Outcomes /> : <Queue />}
+      <PageHeader eyebrow="ITS" title="Admin console" sub="Customers, workflows, AI runs, failures, and cost. Reads are audited." />
+      <Tabs label="Admin sections" value={tab} onChange={(v) => setTab(v as Tab)} items={SECTIONS}>
+        {tab === "customers" ? <Customers /> : tab === "runs" ? <Runs /> : tab === "ai" ? <AiRuns /> : tab === "failures" ? <Failures /> : tab === "costs" ? <Costs /> : tab === "calendar" ? <CalendarAdmin /> : tab === "privacy" ? <PrivacyRequests /> : tab === "admins" ? <Administrators /> : tab === "outcomes" ? <Outcomes /> : <Queue />}
+      </Tabs>
     </div>
   );
 }

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Alert, Button, Field, Sheet } from "@ros/ui";
+import { Alert, Button, Field, Segmented, Sheet } from "@ros/ui";
 import { api, ApiError, type RoleSummary } from "../api/client";
 import { ACCESS_LIMITS, accessWords, scopeOf } from "../recruiter-access";
 import { toast } from "../toast";
@@ -43,7 +43,7 @@ export function AskRecruiter(props: { roleId?: string; applicationId?: string; l
   const close = () => { setOpen(false); setDone(null); setAbout(""); };
   return (
     <>
-      <Button variant="secondary" size={props.size ?? "md"} onClick={() => setOpen(true)}>{props.label ?? "Bring in a recruiter"}</Button>
+      <Button variant="secondary" size={props.size ?? "md"} icon="people" onClick={() => setOpen(true)}>{props.label ?? "Bring in a recruiter"}</Button>
       <Sheet open={open} onClose={close} title="Bring in a recruiter">
         {done ? (
           <div className="stack"><Alert tone="info">{done}</Alert><Button onClick={close}>Done</Button></div>
@@ -59,16 +59,12 @@ export function AskRecruiter(props: { roleId?: string; applicationId?: string; l
               </Field>
             ) : null}
             {scope ? <p className="small muted">The recruiter will see {accessWords(scope)}. {ACCESS_LIMITS}</p> : null}
+            {/* One choice of three: pressed buttons, so a screen reader hears which one is chosen. */}
             <Field label="What do you want help with?">
-              <div className="row">
-                {QUICK.map(([k, l]) => <Button key={k} size="sm" variant={kind === k ? "primary" : "secondary"} onClick={() => setKind(k)}>{l}</Button>)}
-              </div>
+              <Segmented value={kind} onChange={setKind} ariaLabel="What do you want help with?" options={QUICK.map(([value, label]) => ({ value, label }))} />
             </Field>
             <Field label="How urgent is it?" hint="Urgent requests are marked urgent for the recruiter. The reply-by time stays the same.">
-              <div className="row">
-                <Button size="sm" variant={urgency === "normal" ? "primary" : "secondary"} onClick={() => setUrgency("normal")}>Normal</Button>
-                <Button size="sm" variant={urgency === "high" ? "primary" : "secondary"} onClick={() => setUrgency("high")}>Urgent</Button>
-              </div>
+              <Segmented value={urgency} onChange={setUrgency} ariaLabel="How urgent is it?" options={[{ value: "normal", label: "Normal" }, { value: "high", label: "Urgent" }]} />
             </Field>
             <Field label={picks ? "In one line, what do you need?" : "Anything specific?"} htmlFor="q"><textarea id="q" className="textarea" value={question} onChange={(e) => setQuestion(e.target.value)} placeholder={picks ? "For example: help me set the pay for a second hygienist." : "Optional. For example: is Maria worth a working interview?"} /></Field>
             {send.error ? <Alert tone="critical">{send.error instanceof ApiError ? send.error.message : "Could not send."}</Alert> : null}

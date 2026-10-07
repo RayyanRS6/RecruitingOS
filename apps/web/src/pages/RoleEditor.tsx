@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Field, Segmented, Sheet } from "@ros/ui";
+import { Alert, Button, Drawer, Field, Segmented } from "@ros/ui";
 import { api, ApiError, type EvidenceSource, type Requirement, type RolePacket } from "../api/client";
 import { toast } from "../toast";
 
@@ -135,6 +135,7 @@ export function EditPacket({ open, onClose, roleId, packet, version, proposed, c
       await qc.invalidateQueries({ queryKey: ["role", roleId] });
       await qc.invalidateQueries({ queryKey: ["interview-plan", roleId] });
       await qc.invalidateQueries({ queryKey: ["brief"] });
+      await qc.invalidateQueries({ queryKey: ["roles"] });
     },
   });
   const submit = () => {
@@ -149,7 +150,7 @@ export function EditPacket({ open, onClose, roleId, packet, version, proposed, c
     save.mutate();
   };
   return (
-    <Sheet open={open} onClose={onClose} title="Edit the role">
+    <Drawer open={open} onClose={onClose} title="Edit the role" sub={`Editing version ${version}`}>
       <div className="stack">
         <p className="small muted" style={{ margin: 0 }}>
           {proposed
@@ -188,6 +189,6 @@ export function EditPacket({ open, onClose, roleId, packet, version, proposed, c
         {save.error ? <Alert tone="critical">{save.error instanceof ApiError ? save.error.message : "Could not save."}</Alert> : null}
         <Button variant="primary" loading={save.isPending} onClick={submit}>Save as a new version</Button>
       </div>
-    </Sheet>
+    </Drawer>
   );
 }

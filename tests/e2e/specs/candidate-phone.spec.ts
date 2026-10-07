@@ -57,6 +57,13 @@ test.describe("candidate journey on a phone", () => {
     await expectAccessible(page, "job page");
     await noHorizontalOverflow(page, "job page");
     await expect(page.getByRole("link", { name: "Apply now" })).toBeVisible();
+    // the Apply button stays on a phone's screen while the job is read, and the job's facts are pills that name themselves to a screen reader
+    const applyNow = page.getByRole("link", { name: "Apply now" });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await expect(applyNow).toBeInViewport();
+    await page.evaluate(() => window.scrollTo(0, Math.floor(document.documentElement.scrollHeight / 3)));
+    await expect(applyNow).toBeInViewport();
+    await expect(page.getByRole("listitem").filter({ hasText: "Pay: $45–$55 an hour" })).toBeVisible();
 
     // the candidate arrives the way a board sends them: the tracked apply link from the board's posting package is served
     // by the deployed app (never Next.js's not-found page), counts the visit and lands on the form with the source remembered
@@ -122,6 +129,8 @@ test.describe("candidate journey on a phone", () => {
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     await expectAccessible(page, "status page");
     await noHorizontalOverflow(page, "status page");
+    // withdrawing is an outlined secondary button here too, not the near-black main action
+    await expect(page.getByRole("button", { name: "Withdraw my application" })).toHaveCSS("background-color", "rgb(255, 255, 255)");
     // "Future roles" is one click either way, and the page says which way it stands (Wave 0 item 0.11)
     await page.getByRole("button", { name: "Don't keep me for future roles" }).click();
     await expect(page.getByText(/you asked us not to keep your details for future roles/)).toBeVisible();
