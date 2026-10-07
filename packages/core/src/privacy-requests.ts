@@ -1,13 +1,15 @@
 import { randomBytes } from "node:crypto";
-import { and, desc, eq, inArray, lte } from "drizzle-orm";
+import { and, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { applications, candidates, communications, dataRequests, documents, events, notifications, recruiterEscalations, screens, type Queryable } from "@ros/db";
+import { applicationMarks, applications, approvalRequests, candidates, communications, dataRequests, documents, events, interviewParticipants, interviews, jobs, notifications, recruiterEscalations, screens, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { emit } from "./events";
 import { raiseAlert, resolveAlertsFor } from "./alerts";
 import { createEscalation } from "./escalations";
 import { normalizeEmail } from "./auth";
+import { notify } from "./notifications";
 import { openingQuestionsOf, screenAnswersOf, withoutFocusAnswers } from "./screen-answers";
+import { DECISION_STAGES, canTransition, transition } from "./stages";
 
 /**
  * Candidate privacy requests (correction 7, docs/runbooks/privacy-requests.md). Everything here is the recorded,
@@ -82,7 +84,8 @@ export async function exportCandidateData(q: Queryable, companyId: string, candi
   return {
     exportedAt: new Date().toISOString(),
     person: { firstName: cand.firstName, lastName: cand.lastName, email: cand.email, phone: cand.phone, location: cand.locationText, consent: cand.consent, preferences: cand.preferences, createdAt: cand.createdAt },
-    applications: apps.map((a) => ({ id: a.id, roleId: a.roleId, stage: a.stage, source: a.source, answers: a.answers, eligibility: a.eligibility ? { passed: a.eligibility.passed, failedRules: a.eligibility.failedRules } : null, appliedAt: a.createdAt, rejectReason: a.rejectReason ?? null })),
+    // A decision is in the export whether or not the person was told it yet (plan G1), with whether and when they were.
+    applications: apps.map((a) => ({ id: a.id, roleId: a.roleId, stage: a.stage, source: a.source, answers: a.answers, eligibility: a.eligibility ? { passed: a.eligibility.passed, failedRules: a.eligibility.failedRules } : null, appliedAt: a.createdAt, rejectReason: a.rejectReason ?? null, ...(DECISION_STAGES.includes(a.stage) ? { decisionTold: a.toldState, decisionToldAt: a.candidateToldAt ?? null } : {}) })),
     documents: docs,
     screens: scr,
     messagesWeSent: comms.filter((c) => c.direction === "outbound"),
@@ -108,11 +111,51 @@ export async function fulfilCorrectionRequest(q: Queryable, row: DataRequestRow,
   return resolve(q, { ...row, notes: [...row.notes, { at: (input.now ?? new Date()).toISOString(), by: input.actor.name ?? input.actor.id, text: `corrected ${input.field}` }] }, input.resolution, input.actor, "fulfilled", input.now);
 }
 
+const DELETION_REASON = "the candidate asked for their information to be deleted";
+
+/**
+ * A deletion ends the person's part in every process (plan A9): their interviews still to come are cancelled (the
+ * interviewers are told, the calendar events are queued for removal; nobody writes to the candidate, whose address goes
+ * in the same transaction), their open screens close, the assistant's waiting suggestions and any decision message
+ * waiting for approval are withdrawn, and an application still in the process is withdrawn. Private marks lose their
+ * notes. The scheduling and screening runs end on their own at their next step, since what they wait on is gone.
+ */
+async function closeProcessOnDeletion(q: Queryable, input: { companyId: string; appIds: string[]; actor: Actor; now: Date }): Promise<void> {
+  const { companyId, appIds, actor, now } = input;
+  if (!appIds.length) return;
+  const open = await q.select().from(interviews).where(and(inArray(interviews.applicationId, appIds), inArray(interviews.status, ["proposed", "scheduling", "scheduled"])));
+  for (const iv of open) {
+    if (iv.status === "scheduled" && iv.startsAt && Date.parse(iv.startsAt) <= now.getTime()) continue; // it took place, or is taking place
+    const hadEvents = Object.keys((iv.calendarRefs ?? {}) as Record<string, unknown>).length > 0;
+    await q.update(interviews).set({ status: "cancelled", cancelReason: DELETION_REASON, attempt: iv.attempt + 1 }).where(eq(interviews.id, iv.id));
+    await emit(q, { type: "interview.cancelled", companyId, actor, subject: { type: "interview", id: iv.id }, payload: { reason: "deletion_request", byCandidate: false, hadEvents, candidateTold: false, cause: "deletion_request" } });
+    const parts = await q.select({ userId: interviewParticipants.userId }).from(interviewParticipants).where(eq(interviewParticipants.interviewId, iv.id));
+    if (parts.length) await notify(q, { companyId, kind: "interview.cancelled", title: `Interview cancelled: ${iv.title}`, body: "The candidate asked for their information to be deleted, so this interview is off.", action: { label: "Open interviews", href: "/interviews" }, userIds: parts.map((p) => p.userId) });
+    if (hadEvents) await q.insert(jobs).values({ kind: "interview.cancel_events", payload: { interviewId: iv.id, companyId, actor }, runAt: now.toISOString(), maxAttempts: 5 });
+  }
+  const scr = await q.select({ id: screens.id }).from(screens).where(and(inArray(screens.applicationId, appIds), inArray(screens.status, ["invited", "reminded", "in_progress"])));
+  for (const s of scr) {
+    await q.update(screens).set({ status: "cancelled" }).where(eq(screens.id, s.id));
+    await emit(q, { type: "screen.cancelled", companyId, actor, subject: { type: "screen", id: s.id }, payload: { reason: "deletion_request" } });
+  }
+  const waiting = await q.select({ id: approvalRequests.id, actionType: approvalRequests.actionType, applicationId: approvalRequests.applicationId }).from(approvalRequests).where(and(inArray(approvalRequests.applicationId, appIds), inArray(approvalRequests.actionType, ["application.invite_screen", "application.recommend_interview", "disposition.send"]), eq(approvalRequests.status, "pending")));
+  for (const p of waiting) {
+    await q.update(approvalRequests).set({ status: "cancelled", decidedAt: now.toISOString(), decisionNote: DELETION_REASON }).where(eq(approvalRequests.id, p.id));
+    await emit(q, { type: "approval.cancelled", companyId, actor, subject: { type: "approval_request", id: p.id }, payload: { actionType: p.actionType, applicationId: p.applicationId, by: "deletion_request" } });
+  }
+  const apps = await q.select({ id: applications.id, stage: applications.stage }).from(applications).where(inArray(applications.id, appIds));
+  for (const a of apps) if (canTransition(a.stage, "withdrawn", "system")) await transition(q, { applicationId: a.id, companyId, to: "withdrawn", by: "system", actor, reason: DELETION_REASON });
+  await q.update(applicationMarks).set({ note: null }).where(inArray(applicationMarks.applicationId, appIds));
+  // The team's free-text notes were copied into the history as it happened (a mark, a decline, "I told them myself", a
+  // decision after an interview): they are blanked there too. What happened, who did it and when stay.
+  await q.update(events).set({ payload: sql`jsonb_set(${events.payload}, '{note}', 'null'::jsonb)` }).where(and(eq(events.subjectType, "application"), inArray(events.subjectId, appIds), sql`${events.payload}->>'note' is not null`));
+}
+
 /**
  * Anonymization in place of deletion (runbook step 5): identity fields become tokens; resumes and their text, screening
  * transcripts and answers (the answers to a screen's opening questions included), and message bodies are removed, and so
  * is everything about them in a recruiter's copy and in requests and notices that name them; stage history, audit
- * records and aggregate counts stay.
+ * records and aggregate counts stay. The person's part in every process ends first (`closeProcessOnDeletion`).
  * Refused unless counsel recorded an approval on this request and the administrator confirmed.
  */
 export async function anonymizeCandidate(
@@ -132,6 +175,7 @@ export async function anonymizeCandidate(
   }
   const apps = await q.select({ id: applications.id }).from(applications).where(eq(applications.candidateId, cand.id));
   const appIds = apps.map((a) => a.id);
+  await closeProcessOnDeletion(q, { companyId: input.companyId, appIds, actor: input.actor, now });
   let scrCount = 0;
   if (appIds.length) {
     const scr = await q.select({ id: screens.id, progress: screens.progress }).from(screens).where(inArray(screens.applicationId, appIds));

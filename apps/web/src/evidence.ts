@@ -21,17 +21,68 @@ export function resumeUnreadable(a: ApplicationDetail): boolean {
   return !a.extraction && a.documents.some((d) => d.kind === "resume" && d.status === "clean" && !d.hasText);
 }
 
-export function closerLook(a: ApplicationDetail): { needsCloserLook: boolean; assessmentUnavailable: boolean; reason: string | null } {
+type Reading = ApplicationDetail["assessments"][number];
+const OVERALL_WORDS: Record<string, string> = { strong: "Strong match", potential: "Potential match", weak: "Weak match", unknown: "Insufficient evidence" };
+
+/**
+ * The must-have findings that show, with a checked quote from the candidate's own words, that a must-have is not met.
+ * `mustHaves` limits them to the role's must-haves when known. Mirrors `provenMisses` in packages/core.
+ */
+export function provenMisses(reading: Pick<Reading, "result">, mustHaves?: ReadonlyArray<{ key: string }> | null): NonNullable<Reading["result"]["requirementFindings"]> {
+  const keys = mustHaves?.length ? new Set(mustHaves.map((m) => m.key)) : null;
+  return (reading.result.requirementFindings ?? []).filter((f) => f.met === "no" && !!f.evidence?.quote?.trim() && !f.evidence.unquoted && (!keys || keys.has(f.requirementKey)));
+}
+
+/**
+ * The software check before an automatic step (plan A8), as in `readingConsistency` in packages/core: the reading must
+ * agree with its own must-have findings. Inconsistent when it says Strong or Potential while a must-have is shown not met
+ * by a checked quote, or when it suggests a step (a screen, an interview) for a Weak or Insufficient reading.
+ */
+export function readingConsistency(reading: Pick<Reading, "kind" | "overall" | "result">, mustHaves?: ReadonlyArray<{ key: string; text: string }> | null): { consistent: boolean; reason: string | null } {
+  const misses = provenMisses(reading, mustHaves);
+  const words = OVERALL_WORDS[reading.overall] ?? reading.overall;
+  if ((reading.overall === "strong" || reading.overall === "potential") && misses.length) {
+    const miss = misses[0];
+    const name = mustHaves?.find((m) => m.key === miss.requirementKey)?.text;
+    return { consistent: false, reason: `The reading says ${words}, but the candidate's own words show a must-have is not met${name ? ` (${name})` : ""}: "${miss.evidence!.quote!.trim()}". Read it yourself before anything else happens.` };
+  }
+  const rec = reading.result.recommendation;
+  const step = reading.kind === "triage" ? (rec === "screen" ? "a screen" : null) : rec === "strong_interview" || rec === "interview" ? "an interview" : null;
+  if (step && (reading.overall === "weak" || reading.overall === "unknown")) return { consistent: false, reason: `The assistant suggested ${step} for a reading of ${words}, which does not add up. Read it yourself before anything else happens.` };
+  return { consistent: true, reason: null };
+}
+
+/**
+ * Whether the application needs a closer look, and why, by the same rule as `evidenceView` in packages/core: while it
+ * waits on the owner and the résumé reading could not say enough (or there is none), or when the reading checked at this
+ * step (the résumé's at "Ready for your review", the screen's at "Screen complete") disagrees with its own must-have
+ * findings (plan A8). `checkedId` is the reading the check was made on, so its card can carry the mark.
+ * `lowConfidence` is separate: the assistant did say something, but with low confidence, so the page asks the reader to
+ * read this one themselves. It never changes the stage or the list order.
+ */
+export function closerLook(a: ApplicationDetail): { needsCloserLook: boolean; assessmentUnavailable: boolean; inconsistent: boolean; lowConfidence: boolean; reason: string | null; checkedId: string | null } {
   const waiting = a.stage === "triaged";
   const triage = latestTriage(a);
+  const latest = a.assessments[0] ?? null;
   const assessmentUnavailable = waiting && a.assessments.length === 0;
   const insufficient = !!triage && (triage.result.recommendation === "review_manually" || triage.overall === "unknown");
-  const needsCloserLook = waiting && (assessmentUnavailable || insufficient);
+  const checked = latest && ((waiting && latest.kind === "triage") || (a.stage === "screen_complete" && latest.kind === "screen")) ? latest : null;
+  const consistency = checked ? readingConsistency(checked, a.packetLabels?.mustHaves) : { consistent: true, reason: null };
+  const needsCloserLook = (waiting && (assessmentUnavailable || insufficient)) || !consistency.consistent;
   const parts: string[] = [];
   if (assessmentUnavailable) parts.push(ASSESSMENT_UNAVAILABLE_TEXT);
+  if (!consistency.consistent && consistency.reason) parts.push(consistency.reason);
   if (needsCloserLook && resumeUnreadable(a)) parts.push(RESUME_UNREADABLE_TEXT);
-  if (needsCloserLook && triage) parts.push(triage.result.unknowns.length ? `Open questions: ${triage.result.unknowns.map((u) => u.question).join(" ")}` : triage.result.summary);
-  return { needsCloserLook, assessmentUnavailable, reason: parts.length ? parts.join(" ") : null };
+  if (needsCloserLook && latest && consistency.consistent) parts.push(latest.result.unknowns.length ? `Open questions: ${latest.result.unknowns.map((u) => u.question).join(" ")}` : latest.result.summary);
+  return { needsCloserLook, assessmentUnavailable, inconsistent: !consistency.consistent, lowConfidence: lowConfidence(latest), reason: parts.length ? parts.join(" ") : null, checkedId: needsCloserLook ? (checked ?? triage)?.id ?? null : null };
+}
+
+export const LOW_CONFIDENCE_LABEL = "Read this one yourself";
+export const LOW_CONFIDENCE_TEXT = "The assistant was not confident about this reading. Read the résumé and answers yourself before you decide.";
+
+/** The latest reading (the screen's scorecard once there is one, else the résumé's) was made with low confidence. */
+export function lowConfidence(reading: { confidence: string } | null | undefined): boolean {
+  return reading?.confidence === "low";
 }
 
 export function openScreenOf(a: ApplicationDetail): ApplicationDetail["screens"][number] | null {

@@ -60,13 +60,15 @@ test.describe("owner and candidate journey", () => {
 
     // the owner opens the candidate and approves an interview
     await page.goto(`/roles/${seeded.roleId}/talent`);
+    await page.getByRole("tab", { name: /^All/ }).click();
     await expect(page.getByRole("button", { name: "Maria Reyes" })).toBeVisible({ timeout: 30_000 });
     await expectAccessible(page, "talent");
     await page.getByRole("button", { name: "Maria Reyes" }).click();
     const sheet = page.getByRole("dialog", { name: "Maria Reyes" });
     await expect(sheet).toBeVisible();
-    await expectAccessible(page, "candidate sheet");
-    await sheet.getByRole("button", { name: "Interview", exact: true }).click();
+    await expectAccessible(page, "candidate panel");
+    await sheet.getByRole("button", { name: /^Stage: / }).click();
+    await sheet.getByRole("menuitemradio", { name: /^Interviewing/ }).click();
     await expect(sheet.getByRole("heading", { name: "Approve an interview" })).toBeVisible();
     await sheet.getByRole("checkbox").first().check();
     await sheet.getByRole("button", { name: "Approve and offer times" }).click();

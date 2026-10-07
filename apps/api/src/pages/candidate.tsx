@@ -2,14 +2,14 @@
 /** @jsxImportSource hono/jsx */
 import { Hono, type Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { ApplyRequest, CandidateSmsPreference, MAX_RESUME_BYTES, inspectResumeFile, type RolePacket } from "@ros/contracts";
+import { ApplyRequest, CANDIDATE_STEP_LABEL, CandidateSmsPreference, CandidateStep, MAX_RESUME_BYTES, inspectResumeFile, type ApplicationStage, type RolePacket } from "@ros/contracts";
 import { answerWithdrawPrompt, answersOf, focusedPacket, openScreen, requestHuman, runScreenTurn, withdrawPending } from "@ros/agents";
-import { STAGE_LABEL, audit, candidateNotices, createDataRequest, emit, fulfilSmsOptOut, fulfilWithdrawal, humanResponseExpectation, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, openHumanReview, openPayload, sealPayload, transition, type Notice } from "@ros/core";
+import { DECISION_STAGES, audit, candidateNotices, candidateStep, createDataRequest, decisionTold, emit, fulfilSmsOptOut, fulfilWithdrawal, humanResponseExpectation, jobNoticesFor, loadBusinessCalendar, mayWithdraw, noticesFor, notify, openHumanReview, openPayload, sealPayload, transition, type Notice } from "@ros/core";
 import { CandidatePrivacyRequest } from "@ros/contracts";
 import { sendPrivacyAcknowledgment, sendPrivacyCompletion } from "@ros/agents";
-import { applications, candidates, communications, companies, dataRequests, interviews, rolePackets, roles, screens, uuidv7, withPlatform, withTenant } from "@ros/db";
+import { applications, candidates, communications, companies, dataRequests, events, interviews, rolePackets, roles, screens, uuidv7, withPlatform, withTenant } from "@ros/db";
 import { jobPostingJsonLd, refFor } from "@ros/integrations";
 import { randomToken } from "@ros/db";
 import { UPLOAD_GRANT_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS, checkUploadIntent, quarantineKey } from "../uploads";
@@ -18,6 +18,7 @@ import type { Container } from "../container";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { createApplication, markUploadUsed, queueLinkRequest, uploadAlreadyUsed, type ResumeInput } from "../services/applications";
 import { jobUrls } from "../services/job-urls";
+import { exitCleanup } from "../services/exit-cleanup";
 import { screenDeps } from "../services/screens";
 import { optBackIntoTalentPool, optOutOfTalentPool } from "../services/talent-pool";
 import { Icon } from "./icons";
@@ -580,61 +581,107 @@ candidatePages.post("/c/link-request", rateLimit(POLICIES.linkRequest), async (c
   return c.redirect("/c/link-request?sent=1", 303);
 });
 
+/** The candidate's four steps (plan A1), drawn as a quiet bar under each word; the current one is announced as such. */
+export const STATUS_CSS = `
+.track { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 20px 0 4px; padding: 0; list-style: none; }
+.track li { position: relative; padding-top: 14px; color: var(--ink-3); font-size: 14px; font-weight: 600; line-height: 1.3; }
+.track li::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px; border-radius: var(--r-pill); background: var(--surface-2); }
+.track li.done::before, .track li.current::before { background: var(--ink); }
+.track li.current { color: var(--ink); }
+`;
+
+/**
+ * What the candidate may see of a decision (founder decision B6): a decline or a move to the talent pool shows only once
+ * they were told. Until then the page stands where they last saw it: the stage the decision was made from, and the
+ * date that stage began. Read off the stage history, never off marks or holds, which the candidate never sees.
+ */
+async function visibleStage(container: Container, app: typeof applications.$inferSelect): Promise<{ hidden: boolean; before: ApplicationStage | null; since: string }> {
+  if (!DECISION_STAGES.includes(app.stage) || decisionTold(app.toldState)) return { hidden: false, before: null, since: app.stageChangedAt };
+  const moves = await withTenant(container.db, app.companyId, (tx) => tx.select({ payload: events.payload, at: events.occurredAt }).from(events).where(and(eq(events.subjectType, "application"), eq(events.subjectId, app.id), eq(events.type, "application.stage_changed"))).orderBy(asc(events.id)));
+  let i = moves.length - 1;
+  while (i >= 0 && DECISION_STAGES.includes(moves[i].payload.to as ApplicationStage)) i -= 1;
+  const before = i >= 0 ? (moves[i].payload.to as ApplicationStage) : ((moves[0]?.payload.from as ApplicationStage | undefined) ?? null);
+  return { hidden: true, before, since: i >= 0 ? moves[i].at : app.createdAt };
+}
+
+/** The line under the steps, in the candidate's words: what is happening now and what they can do. */
+function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOptOut: boolean; screen: { status: string } | null; interview: "booked" | "offered" | null }): string {
+  const { step, stage, poolOptOut } = input;
+  if (step === "received") return stage === "applied" ? "We are confirming your application now." : "Your application is in. We are checking the basics.";
+  if (step === "under_review") {
+    if (input.screen) return input.screen.status === "in_progress" ? "Finish the screening conversation whenever you are ready. The link is below." : "We sent you a short screening conversation to complete when convenient. The link is below.";
+    if (stage === "screen_complete") return "Thanks for completing the screening conversation. The team is reviewing your answers.";
+    return "The hiring team is reviewing your application. You will hear from them either way.";
+  }
+  if (step === "interview") {
+    if (input.interview === "booked") return "Your interview is booked. The details are below and in your email.";
+    if (input.interview === "offered") return "The team would like to interview you. Pick a time below.";
+    if (stage === "interview_complete" || stage === "debrief") return "Thanks for interviewing. The team is deciding, and you will hear from them either way.";
+    return "The hiring team will be in touch about next steps.";
+  }
+  if (stage === "hired") return "You are on the team.";
+  if (stage === "accepted" || stage === "onboarding") return "Welcome aboard.";
+  if (stage === "offer_sent" || stage === "negotiation") return "Check your messages for the offer.";
+  if (stage === "declined") return "You turned down the offer. Thank you for your time with us.";
+  if (stage === "withdrawn") return "You withdrew this application. Thank you for your time.";
+  if (stage === "talent_pool") return poolOptOut ? "This role is not moving forward for you. As you asked, nobody will contact you about future openings." : "This role is not moving forward for you. We are keeping you in mind for future openings.";
+  return poolOptOut ? "Thank you for applying. This role did not work out." : "Thank you for applying. This role did not work out, and we will keep you in mind for future openings unless you ask us not to.";
+}
+
+/**
+ * The candidate's status page (plan A1). It speaks in four candidate steps (Received, Under review, Interview,
+ * Decision), never the team's stage names: the assistant's suggestions, an eligibility hold and "finalist" read as Under
+ * review. A decision shows only once the candidate was told (founder decision B6); until then the page stands where it
+ * was and withdrawing stays open. Only messages that actually left are listed. A line says a person decides.
+ */
 candidatePages.get("/c/status/:token", async (c) => {
-  const db = c.get("container").db;
+  const container = c.get("container");
+  const db = container.db;
   const [app] = await db.select().from(applications).where(eq(applications.statusToken, c.req.param("token"))).limit(1);
-  if (app && (await anonymizedFor(c.get("container"), app.candidateId))) return linkGone(c);
+  if (app && (await anonymizedFor(container, app.candidateId))) return linkGone(c);
   if (!app) return c.notFound();
   const [cand] = await db.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
   const [role] = await db.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
   const [company] = await db.select().from(companies).where(eq(companies.id, app.companyId)).limit(1);
-  const msgs = await db.select().from(communications).where(and(eq(communications.applicationId, app.id), eq(communications.direction, "outbound"))).orderBy(desc(communications.createdAt)).limit(5);
-  const openScreen_ = (await db.select().from(screens).where(eq(screens.applicationId, app.id)).orderBy(desc(screens.createdAt)).limit(1)).find((s) => ["invited", "reminded", "in_progress"].includes(s.status));
-  const [iv] = await db.select().from(interviews).where(eq(interviews.applicationId, app.id)).orderBy(desc(interviews.createdAt)).limit(1);
+  const msgs = await db.select().from(communications).where(and(eq(communications.applicationId, app.id), eq(communications.direction, "outbound"), inArray(communications.status, ["sent", "delivered"]))).orderBy(desc(communications.createdAt)).limit(5);
+  const view = await visibleStage(container, app);
+  // Nothing about a private decision shows, and nothing it closed is offered (its screens and interviews were cancelled with it).
+  const openScreen_ = view.hidden ? undefined : (await db.select().from(screens).where(eq(screens.applicationId, app.id)).orderBy(desc(screens.createdAt)).limit(1)).find((s) => ["invited", "reminded", "in_progress"].includes(s.status));
+  const iv = view.hidden ? undefined : (await db.select().from(interviews).where(eq(interviews.applicationId, app.id)).orderBy(desc(interviews.createdAt)).limit(1))[0];
+  const offered = !!iv && iv.status === "scheduling" && !!iv.scheduleToken && iv.offeredSlots.length > 0;
+  const booked = !!iv && iv.status === "scheduled" && !!iv.startsAt && !!iv.scheduleToken && Date.parse(iv.endsAt ?? iv.startsAt) > Date.now();
   const ivTz = iv?.schedulingWindow.candidateTimezone ?? cand?.location?.timezone ?? company?.timezone ?? "America/Los_Angeles";
   // What to prepare (D15): the purpose of the booked round, from the packet version this application runs on.
-  const prepare = iv && iv.status === "scheduled" ? await withTenant(c.get("container").db, app.companyId, async (tx) => (await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1))[0]?.packet.interviews.plan.find((r) => r.key === iv.roundKey)?.purpose ?? null) : null;
-  const smsEnabled = c.get("container").env.SMS_ENABLED;
+  const prepare = booked ? await withTenant(container.db, app.companyId, async (tx) => (await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1))[0]?.packet.interviews.plan.find((r) => r.key === iv!.roundKey)?.purpose ?? null) : null;
+  const smsEnabled = container.env.SMS_ENABLED;
   const smsOn = !!cand?.consent.sms?.granted && !cand?.preferences.smsOptOut;
   const poolOptOut = !!cand?.preferences.talentPoolOptOut;
-  const next: Record<string, string> = {
-    applied: "We are confirming your application now.",
-    received: "Your application is in. We are checking the basics.",
-    eligible: "The hiring team is reviewing your application. You will hear from them either way.",
-    ineligible: "One of the eligibility answers did not match what this role needs. If that was a mistake, reply to our email and a person will look.",
-    triaged: "The hiring team is reviewing your application. You will hear from them either way.",
-    screen_invited: "We sent you a short screening conversation to complete when convenient. The link is below.",
-    screening: "Finish the screening conversation whenever you are ready. The link is below.",
-    screen_complete: "Thanks for completing the screen. The team is reviewing.",
-    interview_recommended: "The team would like to talk with you. They will contact you about a time.",
-    interview_scheduled: "Your interview is scheduled. Details were sent to you.",
-    interview_complete: "Thanks for interviewing. The team is deciding.",
-    debrief: "The team is deciding.",
-    finalist: "You are a finalist. We will be in touch soon.",
-    offer_sent: "Check your messages for the offer.",
-    accepted: "Welcome aboard.",
-    hired: "You are on the team.",
-    rejected: poolOptOut ? "Thank you for applying. This role did not work out." : "Thank you for applying. This role did not work out, and we will keep you in mind for future openings unless you ask us not to.",
-    withdrawn: "You withdrew this application. Reply to any of our emails to reactivate it.",
-    talent_pool: poolOptOut ? "This role is not moving forward for you. As you asked, nobody will contact you about future openings." : "We are keeping you in mind for future openings.",
-  };
+  const shownStage = view.hidden ? view.before ?? "triaged" : app.stage;
+  // Times a person approved and offered are an interview to the candidate, whatever the team's own stage says.
+  const baseStep = candidateStep(app.stage, app.toldState, view.before);
+  const step: CandidateStep = baseStep === "under_review" && (offered || booked) ? "interview" : baseStep;
+  const steps = CandidateStep.options;
   return c.html(
-    <Layout title={`Your application at ${company?.name ?? ""}`}>
+    <Layout title={`Your application at ${company?.name ?? ""}`} extraCss={STATUS_CSS}>
       <p class="eyebrow">{company?.name ? `${company.name} · ` : ""}Your application</p>
       <h1>{role?.title}</h1>
+      <ol class="track" aria-label="Where your application is">
+        {steps.map((s, i) => <li class={s === step ? "current" : i < steps.indexOf(step) ? "done" : undefined} aria-current={s === step ? "step" : undefined}>{CANDIDATE_STEP_LABEL[s]}</li>)}
+      </ol>
       <div class="card status">
-        <div><span>Status</span><strong>{STAGE_LABEL[app.stage]}</strong></div>
+        <div><span>Status</span><strong>{CANDIDATE_STEP_LABEL[step]}</strong></div>
         <div><span>Applied</span><span>{new Date(app.createdAt).toLocaleDateString()}</span></div>
-        <div><span>Last update</span><span>{new Date(app.stageChangedAt).toLocaleDateString()}</span></div>
+        <div><span>Last update</span><span>{new Date(view.since).toLocaleDateString()}</span></div>
       </div>
       <h2>What happens next</h2>
-      <p>{next[app.stage] ?? "We will keep you posted."}</p>
+      <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? null, interview: booked ? "booked" : offered ? "offered" : null })}</p>
+      <p class="meta">People on the hiring team at {company?.name ?? "the company"} make every decision about your application. An AI assistant reads applications and runs the screening conversation for them; who is interviewed, hired or turned down is always a person's decision.</p>
       {openScreen_ ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue the screening conversation" : "Start the screening conversation"}</a> : null}
-      {iv && iv.status === "scheduling" && iv.scheduleToken && iv.offeredSlots.length ? <div class="card"><strong>Pick a time for your {iv.title.toLowerCase()}.</strong><p>{company?.name} would like to interview you.</p><a class="btn" href={`/c/schedule/${iv.scheduleToken}`}><Icon name="calendar" />Choose a time</a></div> : null}
-      {iv && iv.status === "scheduled" && iv.startsAt && iv.scheduleToken ? <div class="card"><strong>Your interview: {iv.title}</strong><p>{new Intl.DateTimeFormat("en-US", { timeZone: ivTz, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(iv.startsAt))}{iv.meetingUrl ? <span> · <a href={iv.meetingUrl}>Join link</a></span> : null}</p>{prepare ? <p><strong>What to prepare:</strong> {prepare} Bring examples from your own work, and any questions you have for the team.</p> : null}<p><a href={`/c/schedule/${iv.scheduleToken}/confirmed`}>Details, calendar file, reschedule or cancel</a></p></div> : null}
+      {offered ? <div class="card"><strong>Pick a time for your {iv!.title.toLowerCase()}.</strong><p>{company?.name} would like to interview you.</p><a class="btn" href={`/c/schedule/${iv!.scheduleToken}`}><Icon name="calendar" />Choose a time</a></div> : null}
+      {booked ? <div class="card"><strong>Your interview: {iv!.title}</strong><p>{new Intl.DateTimeFormat("en-US", { timeZone: ivTz, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(iv!.startsAt!))}{iv!.meetingUrl ? <span> · <a href={iv!.meetingUrl}>Join link</a></span> : null}</p>{prepare ? <p><strong>What to prepare:</strong> {prepare} Bring examples from your own work, and any questions you have for the team.</p> : null}<p><a href={`/c/schedule/${iv!.scheduleToken}/confirmed`}>Details, calendar file, reschedule or cancel</a></p></div> : null}
       {msgs.length ? <h2>Messages we sent you</h2> : null}
       {msgs.map((m) => <div class="card"><strong>{m.subject}</strong><p class="pre">{m.bodyText}</p></div>)}
-      {c.req.query("withdrawn") === "1" ? <div class="card"><strong>Your application is withdrawn.</strong><p>Thank you for your time. Reply to any of our emails if you change your mind.</p></div> : null}
+      {c.req.query("withdrawn") === "1" ? <div class="card" role="status"><strong>Your application is withdrawn.</strong><p>Thank you for your time. If you have a question, reply to any of our emails.</p></div> : null}
       <h2>Your choices</h2>
       {smsEnabled || smsOn ? (
         <div class="card">
@@ -647,7 +694,8 @@ candidatePages.get("/c/status/:token", async (c) => {
           ) : null}
         </div>
       ) : null}
-      {!["hired", "withdrawn", "rejected", "talent_pool", "declined"].includes(app.stage) ? (
+      {/* Open to anyone still in the process, and to anyone whose decision they have not been told (plan A1). */}
+      {mayWithdraw(app.stage, app.toldState) ? (
         <form method="post" action={`/c/status/${app.statusToken}/withdraw`} class="card">
           <p><strong>No longer interested?</strong> One click withdraws your application; we will confirm by email and keep your information only as long as the law requires.</p>
           <label class="check"><input type="checkbox" name="confirm" value="yes" required /> Yes, withdraw my application.</label>
@@ -786,7 +834,9 @@ candidatePages.get("/c/screen/:token", async (c) => {
       {screen.status === "expired" ? <div class="err">This screening link has expired. Reply to any of our emails and a person will pick it up with you.</div> : null}
       {screen.status === "human_requested" ? <div class="card"><strong>A person will follow up.</strong><p>Someone from {company.name}'s hiring team has your conversation and will reach out {humanResponseExpectation(new Date(), calendar)}.</p></div> : null}
       {screen.status === "completed" ? <div class="card"><strong>Thanks, that is everything.</strong><p>The hiring team reviews your answers and you hear back within a few days. <a href={`/c/status/${app.statusToken}`}>Check your status</a> any time.</p></div> : null}
-      {screen.status === "abandoned" ? <div class="card">This application was withdrawn. Reply to any of our emails if you change your mind.</div> : null}
+      {screen.status === "abandoned" ? <div class="card">This application was withdrawn. Thank you for your time.</div> : null}
+      {/* Stopped by the team before it started (plan A7), or closed with the application (A9): the old link says so, and nothing about why. */}
+      {screen.status === "cancelled" ? <div class="card" role="status"><strong>This screening conversation is closed.</strong><p>Nothing more is needed from you here. If you have a question, reply to any of our emails. <a href={`/c/status/${app.statusToken}`}>Check your status</a> any time.</p></div> : null}
       <div class="thread">
         {screen.transcript.map((t) => <div class={`msg ${t.role}`}>{t.content}</div>)}
       </div>
@@ -858,7 +908,11 @@ candidatePages.post("/c/screen/:token/withdraw", rateLimit(POLICIES.withdraw), a
   if (await anonymizedFor(container, b.candidate.id)) return linkGone(c);
   const body = await c.req.parseBody();
   if (body.confirm === "yes" || body.confirm === "no") {
-    await withTenant(container.db, b.company.id, (tx) => answerWithdrawPrompt(tx, screenDeps(container), { screenId: b.screen.id, confirm: body.confirm === "yes", channel: "web", actor: { kind: "candidate", id: b.candidate.id } }));
+    await withTenant(container.db, b.company.id, async (tx) => {
+      const actor = { kind: "candidate" as const, id: b.candidate.id };
+      // Withdrawing here leaves the process like the status page's button does (plan A9): `screenDeps` cleans up.
+      await answerWithdrawPrompt(tx, screenDeps(container), { screenId: b.screen.id, confirm: body.confirm === "yes", channel: "web", actor });
+    });
     await container.kick();
   }
   return c.redirect(`/c/screen/${b.screen.token}`);
@@ -917,18 +971,15 @@ candidatePages.post("/c/status/:token/withdraw", rateLimit(POLICIES.withdraw), a
   if (await anonymizedFor(container, app.candidateId)) return linkGone(c);
   const body = await c.req.parseBody();
   if (body.confirm !== "yes") return c.redirect(`/c/status/${app.statusToken}?confirm=withdraw`);
-  const active = !["hired", "withdrawn", "rejected", "talent_pool", "declined"].includes(app.stage);
-  if (active) {
+  // Anyone still in the process may withdraw, and so may someone whose decision they were never told: for them nothing
+  // has been decided yet (plan A1). Leaving cleans up: their screens close, and an interview they knew about is called
+  // off with a short note confirming it (plan A9).
+  if (mayWithdraw(app.stage, app.toldState)) {
     await withTenant(container.db, app.companyId, async (tx) => {
       const actor = { kind: "candidate" as const, id: app.candidateId };
       await transition(tx, { applicationId: app.id, companyId: app.companyId, to: "withdrawn", by: "candidate", actor, reason: "withdrawn from the status page" });
-      await emit(tx, { type: "application.withdrawn", companyId: app.companyId, actor, subject: { type: "application", id: app.id }, payload: { via: "status_page" } });
-      const open = await tx.select().from(screens).where(and(eq(screens.applicationId, app.id), inArray(screens.status, ["invited", "reminded", "in_progress"])));
-      for (const s of open) {
-        await tx.update(screens).set({ status: "abandoned" }).where(eq(screens.id, s.id));
-        await emit(tx, { type: "screen.abandoned", companyId: app.companyId, actor, subject: { type: "screen", id: s.id }, payload: { reason: "withdrawn" } });
-        await container.engine.signal(tx, { companyId: app.companyId, key: `screen:${s.id}:completed`, payload: { withdrawn: true } });
-      }
+      await emit(tx, { type: "application.withdrawn", companyId: app.companyId, actor, subject: { type: "application", id: app.id }, payload: { via: "status_page", fromStage: app.stage } });
+      await exitCleanup(tx, container, { companyId: app.companyId, applicationId: app.id, reason: "the candidate withdrew", actor, candidateEmail: "send_cancellation" });
       const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
       const [role] = await tx.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
       await notify(tx, { companyId: app.companyId, kind: "candidate.withdrawn", title: `${cand.firstName} ${cand.lastName} withdrew`, body: `They withdrew from ${role.title} using the link on their status page.`, action: { label: "See talent", href: `/roles/${app.roleId}/talent?open=${app.id}` } });

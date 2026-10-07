@@ -43,14 +43,14 @@ Two words we use throughout: **ITS** is Identified Talent Solutions, the company
 - It compares the application with your must-haves and what you said you look for, and writes a short assessment: an overall reading (Strong match, Potential match, Weak match, or Insufficient evidence), a summary, strengths, concerns, what is still unknown, and how confident it is and why. Every strength and concern points to its evidence.
 - The list of candidates shows each person's top strength, top concern and how many questions are still open, so you can see at a glance where to look.
 - When the assistant cannot say enough about someone, the candidate is marked **Needs a closer look** and the card says what is missing. You can filter the list to just those people. One click, **Ask about this in a screen**, invites the candidate to a short web conversation that starts with exactly those questions. It never starts on its own.
-- Eligibility questions are the only automatic holds. If a candidate answers no to a required question, the application is held for your decision. You are reminded every day. If nobody has decided after three days, an ITS recruiter is brought in. Nothing is sent to the candidate unless you decline.
+- Eligibility questions are the only automatic holds. If a candidate answers no to a required question, the application is held for your decision. You are reminded every day. If nobody has decided after three days, an ITS recruiter is brought in. Nothing is sent to the candidate, even if you decline, until someone on your team sends the decision message.
 - Nothing is scored, ranked or rejected by software. If the assistant cannot produce an assessment, the application is shown to you without one.
 - If an assessment looks wrong, one click flags it for ITS to review.
 
 ### Decisions
 
 - A person on your team makes every decision to invite a candidate to a screen, hold, interview or decline.
-- Declining requires a reason from a fixed list. The candidate receives a respectful message only after you decide.
+- Declining requires a reason from a fixed list. A decision is private: the candidate gets a respectful message only when someone on your team sends it (or you record that you told them yourself). Anyone not told after two working days is listed on Today and you are reminded; nothing is sent by itself.
 - After an interview, a person records the decision on the candidate's page: next round, finalist, or not moving forward. The candidate waits on you until someone does, and the **Interviews** page shows each decision.
 - You can put up to five candidates side by side and see how each one stands on your must-haves and what you look for. Nothing is ranked or scored.
 - Every decision is recorded with the name of the person who made it.
@@ -135,7 +135,7 @@ Two words we use throughout: **ITS** is Identified Talent Solutions, the company
 - It never changes your eligibility rules, your notices, or the settings that say what it may do.
 - It never deletes or exports candidate data.
 - It never starts an interview without a person's approval.
-- It never sends a decline message before a person has decided.
+- It never sends a decline message by itself: a person decides, and a person presses Send.
 
 ## Honest statements about where the product stands
 

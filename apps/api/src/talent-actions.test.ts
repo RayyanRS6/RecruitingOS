@@ -1,18 +1,19 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq } from "drizzle-orm";
+import { and, eq, like } from "drizzle-orm";
 import type { ApplicationStage, MembershipRole } from "@ros/contracts";
 import { entitlements } from "@ros/core";
 import { applications, candidates, communications, events, policies, randomToken, recruiterEscalations, screens, users, withTenant, workflowRuns } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { applicationActionState, type ApplicationFacts } from "./services/application-actions";
+import { applicationActionState, settlesSuggestions, stageMoves, type ApplicationFacts } from "./services/application-actions";
 import { signInAs } from "./test-helpers";
 
 /**
  * The Talent page's choices and what it says after them (plan 0.5, 0.6 and 0.9's scorecard card; founder decision B6:
  * decisions are private and the words say exactly whether the candidate was told). Every role sees only the choices its
- * permissions allow, with a plain reason on the rest; a decline reports what became of its message under the company's
- * settings; and a screen whose scorecard could not be written says so.
+ * permissions allow, with a plain reason on the rest (the stage button included); a decline is filed privately and the
+ * later Send reports what became of its message under the company's settings; and a screen whose scorecard could not be
+ * written says so.
  */
 describe("the Talent page's actions: who may, why not, and what the candidate heard", () => {
   const facts = (over: Partial<ApplicationFacts> = {}): ApplicationFacts => ({ stage: "triaged", rejectReason: null, hasOpenScreen: false, hasActiveInterview: false, hasUndecidedInterview: false, role: "owner", openUnknowns: 0, ...over });
@@ -20,12 +21,13 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
   describe("the rule itself", () => {
     it("gives each tenant role only the choices its permissions allow, and names who can do the rest", () => {
       const owner = applicationActionState(facts());
-      expect(owner.allowed).toEqual(["invite_screen", "interview", "advance_to_interview", "hold", "move_to_talent_pool", "reject", "record_outcome"]);
-      // HR may act on applications and record outcomes, but neither decline nor approve interviews
+      expect(owner.allowed).toEqual(["invite_screen", "interview", "advance_to_interview", "hold", "move_to_talent_pool", "reject", "record_outcome", "set_mark"]);
+      // HR may act on applications, sort them and record outcomes, but neither decline nor approve interviews, nor tell a decision
       const hr = applicationActionState(facts({ role: "hr" }));
-      expect(hr.allowed).toEqual(["invite_screen", "advance_to_interview", "hold", "move_to_talent_pool", "record_outcome"]);
+      expect(hr.allowed).toEqual(["invite_screen", "advance_to_interview", "hold", "move_to_talent_pool", "record_outcome", "set_mark"]);
       expect(hr.blockedReasons.reject).toBe("Your role can't decline candidates; ask an owner, an admin, a hiring manager or a recruiter.");
       expect(hr.blockedReasons.interview).toBe("Your role can't approve interviews; ask an owner, an admin, a hiring manager or a recruiter.");
+      expect(applicationActionState(facts({ role: "hr", stage: "rejected" })).blockedReasons.send_decision).toBe("Your role can't tell candidates about a decision; ask an owner, an admin, a hiring manager or a recruiter.");
       // a recruiter declines and interviews, but recording a hiring outcome is the customer's
       const recruiter = applicationActionState(facts({ role: "recruiter" }));
       expect(recruiter.allowed).toContain("reject");
@@ -34,11 +36,11 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       // an interviewer is offered nothing, and told why on each
       const interviewer = applicationActionState(facts({ role: "interviewer" }));
       expect(interviewer.allowed).toEqual([]);
-      expect(Object.keys(interviewer.blockedReasons)).toHaveLength(11);
+      expect(Object.keys(interviewer.blockedReasons)).toHaveLength(16);
       // every choice not allowed has a reason, for every role
       for (const role of ["owner", "admin", "hiring_manager", "hr", "recruiter", "interviewer"] as MembershipRole[]) {
         const s = applicationActionState(facts({ role }));
-        expect(s.allowed.length + Object.keys(s.blockedReasons).length, role).toBe(11);
+        expect(s.allowed.length + Object.keys(s.blockedReasons).length, role).toBe(16);
         for (const reason of Object.values(s.blockedReasons)) expect(reason, role).not.toMatch(/_|undefined/);
       }
     });
@@ -51,12 +53,79 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect(applicationActionState(facts()).blockedReasons.ask_in_screen).toBe("The assessment left no open questions to ask about.");
       expect(applicationActionState(facts()).blockedReasons.record_decision).toBe("No finished interview is waiting for a decision.");
       expect(applicationActionState(facts()).blockedReasons.review_anyway).toBe("Only for someone declined on an eligibility answer.");
+      // someone held on an eligibility answer is decided first: no hold, no mark (plan A4)
+      expect(applicationActionState(facts({ stage: "ineligible" })).blockedReasons.hold).toBe("Check their eligibility answer first: keep them in or decline.");
+      expect(applicationActionState(facts({ stage: "ineligible" })).blockedReasons.set_mark).toBe("Check their eligibility answer first: keep them in or decline.");
+      expect(applicationActionState(facts()).blockedReasons.clear_mark).toBe("There is no mark to take off.");
+      expect(applicationActionState(facts({ mark: "shortlist" })).allowed).toContain("clear_mark");
+      // telling a decision: only after one, once, and not while a message waits for approval
+      expect(applicationActionState(facts()).blockedReasons.send_decision).toBe("Only after a decision not to move forward.");
+      expect(applicationActionState(facts({ stage: "rejected" })).allowed).toEqual(expect.arrayContaining(["send_decision", "told_in_person"]));
+      expect(applicationActionState(facts({ stage: "talent_pool" })).allowed).toEqual(expect.arrayContaining(["send_decision", "told_in_person"]));
+      expect(applicationActionState(facts({ stage: "rejected", decisionMessagePending: true })).blockedReasons.send_decision).toBe("The decision message is waiting for approval.");
+      expect(applicationActionState(facts({ stage: "rejected", decisionMessagePending: true })).allowed).toContain("told_in_person");
+      expect(applicationActionState(facts({ stage: "rejected", toldState: "queued" })).blockedReasons.send_decision).toBe("The decision message is on its way.");
+      expect(applicationActionState(facts({ stage: "rejected", toldState: "sent" })).blockedReasons.told_in_person).toBe("They have been sent the decision message.");
+      expect(applicationActionState(facts({ stage: "rejected", toldState: "told_in_person" })).blockedReasons.send_decision).toBe("Someone recorded telling them in person.");
+      // a message on its way can still be settled by "I told them myself"; a decision from before told-tracking is told
+      expect(applicationActionState(facts({ stage: "rejected", toldState: "queued" })).allowed).toContain("told_in_person");
+      expect(applicationActionState(facts({ stage: "rejected", toldState: "before_tracking" })).allowed).not.toEqual(expect.arrayContaining(["send_decision"]));
+      expect(applicationActionState(facts({ stage: "rejected", toldState: "before_tracking" })).blockedReasons.told_in_person).toMatch(/before decisions became private/);
       // the role comes first: it holds whatever the state
       expect(applicationActionState(facts({ role: "hr", stage: "rejected" })).blockedReasons.reject).toMatch(/^Your role can't decline candidates/);
+      // "Stop this screen invitation" (plan A7): only before they start, and only for those who may write to candidates about decisions
+      expect(applicationActionState(facts({ stage: "screen_invited", hasOpenScreen: true, hasUnstartedScreen: true })).allowed).toContain("cancel_screen");
+      expect(applicationActionState(facts({ stage: "screening", hasOpenScreen: true })).blockedReasons.cancel_screen).toBe("They have started the screening conversation, so it can't be stopped now.");
+      expect(applicationActionState(facts()).blockedReasons.cancel_screen).toBe("No screening invitation is waiting for them.");
+      expect(applicationActionState(facts({ role: "hr", stage: "screen_invited", hasOpenScreen: true, hasUnstartedScreen: true })).blockedReasons.cancel_screen).toBe("Your role can't stop a screening invitation; ask an owner, an admin, a hiring manager or a recruiter.");
+    });
+
+    it("builds the stage button from the same rule: every stage, how it is reached, and why not", () => {
+      const moves = (over: Partial<ApplicationFacts> = {}) => Object.fromEntries(stageMoves(facts(over)).map((m) => [m.to, m]));
+      const owner = moves();
+      expect(Object.keys(owner)).toEqual(["new", "longlist", "shortlist", "interviewing", "on_hold", "offer", "hired", "not_moving_forward"]);
+      expect(owner.new).toMatchObject({ current: true, allowed: false, via: "none" });
+      expect(owner.shortlist).toMatchObject({ allowed: true, via: "set_mark", mark: "shortlist", label: "Shortlist" });
+      expect(owner.on_hold).toMatchObject({ allowed: true, via: "set_mark", mark: "on_hold" });
+      expect(owner.interviewing).toMatchObject({ allowed: true, via: "interview" });
+      expect(owner.hired).toMatchObject({ allowed: true, via: "record_hire" });
+      expect(owner.not_moving_forward).toMatchObject({ allowed: true, via: "decline" });
+      expect(owner.offer).toMatchObject({ allowed: false, via: "offer", blockedReason: "Offers are made outside the app for now; when they accept, choose Hired." });
+      // on the shortlist, choosing New takes the mark off
+      const listed = moves({ mark: "shortlist" });
+      expect(listed.shortlist.current).toBe(true);
+      expect(listed.new).toMatchObject({ allowed: true, via: "clear_mark" });
+      // interviewing and on hold: Interviewing releases the hold; the longlist is behind them
+      const held = moves({ stage: "interview_scheduled", hasActiveInterview: true, mark: "on_hold", markRemindAt: "2026-11-01T15:00:00Z" });
+      expect(held.on_hold.current).toBe(true);
+      expect(held.interviewing).toMatchObject({ allowed: true, via: "clear_mark" });
+      expect(held.longlist).toMatchObject({ allowed: false, blockedReason: "They are interviewing already." });
+      expect(held.new).toMatchObject({ allowed: false, blockedReason: "They are past this step." });
+      // HR sees the stages it cannot reach, with the reason
+      expect(moves({ role: "hr" }).not_moving_forward).toMatchObject({ allowed: false, blockedReason: expect.stringMatching(/^Your role can't decline candidates/) });
+      expect(moves({ role: "interviewer" }).shortlist).toMatchObject({ allowed: false, blockedReason: expect.stringMatching(/^Your role can't sort candidates/) });
+      // held on an eligibility answer: decided first, and declined from that answer's own card (plan A2), never the general decline
+      expect(moves({ stage: "ineligible" }).longlist).toMatchObject({ allowed: false, blockedReason: "Check their eligibility answer first: keep them in or decline." });
+      expect(moves({ stage: "ineligible" }).not_moving_forward).toMatchObject({ allowed: false, via: "decline", blockedReason: "Check their eligibility answer first: keep them in or decline." });
+      // the eligibility card's own decline is still allowed
+      expect(applicationActionState(facts({ stage: "ineligible" })).allowed).toContain("reject");
+      // set aside as not a fit for now: shown as Not moving forward, and a decline is still a separate choice
+      expect(moves({ mark: "not_a_fit_for_now" }).not_moving_forward).toMatchObject({ current: true, allowed: true, via: "decline" });
+      expect(moves({ mark: "not_a_fit_for_now" }).new).toMatchObject({ allowed: true, via: "clear_mark" });
     });
 
     it("without a known role (a system caller) only the state counts", () => {
       expect(applicationActionState(facts({ role: null })).allowed).toContain("reject");
+    });
+
+    it("settles the assistant's waiting suggestions only on a decline, a hold or a person's own invitation or move (plan A6)", () => {
+      for (const action of ["reject", "move_to_talent_pool", "hold", "invite_screen", "ask_in_screen", "advance_to_interview"] as const) expect(settlesSuggestions({ action }), action).toBe(true);
+      expect(settlesSuggestions({ action: "set_mark", mark: "on_hold" })).toBe(true);
+      expect(settlesSuggestions({ action: "set_mark", mark: "not_a_fit_for_now" })).toBe(true);
+      // sorting and telling leave the suggestion waiting for its own Yes or Not now
+      expect(settlesSuggestions({ action: "set_mark", mark: "shortlist" })).toBe(false);
+      expect(settlesSuggestions({ action: "set_mark", mark: "longlist" })).toBe(false);
+      for (const action of ["clear_mark", "send_decision", "told_in_person", "cancel_screen", "override_eligibility", "review_anyway"] as const) expect(settlesSuggestions({ action }), action).toBe(false);
     });
   });
 
@@ -125,35 +194,47 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect(asOwner.declineMessage).toBe("sends");
     });
 
-    it("a decline says exactly what became of the message, under each setting; a hold says the candidate was not told", async () => {
-      const decline = async (id: string) => (await (await act(owner, id, { action: "reject", reason: "not_a_match_experience", note: "Not this time." })).json()) as { stage: string; dispositionSent: boolean; candidateNotice: string };
-      // the default: the message goes
-      const sent = await decline(await seed("Sam"));
-      expect(sent).toMatchObject({ stage: "rejected", dispositionSent: true, candidateNotice: "queued" });
+    it("a decline is private under every setting; the Send says exactly what became of the message; a hold says the candidate was not told", async () => {
+      type Result = { stage: string; dispositionSent: boolean; candidateNotice: string; toldState: string };
+      const decline = async (id: string) => (await (await act(owner, id, { action: "reject", reason: "not_a_match_experience", note: "Not this time." })).json()) as Result;
+      const send = async (id: string) => (await (await act(owner, id, { action: "send_decision" })).json()) as Result;
+      const messages = (id: string) => container.db.select().from(communications).where(and(eq(communications.applicationId, id), eq(communications.templateKey, "disposition:human")));
+      // the default: declining sends nothing (founder decision B6); the Send queues the message
+      const sam = await seed("Sam");
+      expect(await decline(sam)).toMatchObject({ stage: "rejected", dispositionSent: false, candidateNotice: "not_told", toldState: "not_told" });
+      expect(await messages(sam)).toHaveLength(0);
+      expect(await send(sam)).toMatchObject({ dispositionSent: true, candidateNotice: "queued", toldState: "queued" });
+      expect(await messages(sam)).toHaveLength(1);
       // no address on file: nothing can go, and the page says so
-      expect(await decline(await seed("Noel", { email: null }))).toMatchObject({ dispositionSent: false, candidateNotice: "not_sent_no_email" });
-      // "ask me first": it waits for an approver
+      const noel = await seed("Noel", { email: null });
+      expect(await decline(noel)).toMatchObject({ candidateNotice: "not_told" });
+      expect(await send(noel)).toMatchObject({ dispositionSent: false, candidateNotice: "not_sent_no_email", toldState: "not_told" });
+      // "ask me first": the Send waits for an approver
       await setDeclinePolicy("approval");
       const waiting = await seed("Wren");
       expect((await detail(owner, waiting)).declineMessage).toBe("needs_approval");
-      expect(await decline(waiting)).toMatchObject({ dispositionSent: false, candidateNotice: "pending_approval" });
-      // "only a person": nothing is sent and the candidate is not told
+      expect(await decline(waiting)).toMatchObject({ dispositionSent: false, candidateNotice: "not_told" });
+      expect(await send(waiting)).toMatchObject({ dispositionSent: false, candidateNotice: "waiting_approval", toldState: "not_told" });
+      // "only a person": nothing is ever sent and the candidate is not told
       await setDeclinePolicy("human_only");
       const held = await seed("Hal");
       expect((await detail(owner, held)).declineMessage).toBe("not_sent");
-      expect(await decline(held)).toMatchObject({ dispositionSent: false, candidateNotice: "not_sent_settings" });
-      expect(await container.db.select().from(communications).where(and(eq(communications.applicationId, held), eq(communications.templateKey, "disposition:human")))).toHaveLength(0);
+      expect(await decline(held)).toMatchObject({ dispositionSent: false, candidateNotice: "not_told" });
+      expect(await send(held)).toMatchObject({ dispositionSent: false, candidateNotice: "not_sent_settings" });
+      expect(await messages(held)).toHaveLength(0);
       await setDeclinePolicy(null);
       // a hold and a mark for interview never reach the candidate
       const kept = await seed("Kit");
-      expect(await (await act(owner, kept, { action: "hold", note: "Holding for now" })).json()).toMatchObject({ candidateNotice: "not_told" });
+      expect(await (await act(owner, kept, { action: "hold", note: "Holding for now" })).json()).toMatchObject({ candidateNotice: "not_told", mark: { mark: "on_hold" }, ownerStage: "on_hold" });
       expect(await (await act(owner, kept, { action: "advance_to_interview" })).json()).toMatchObject({ stage: "interview_recommended", candidateNotice: "not_told" });
     });
 
-    it("declining someone held on an eligibility answer sends the eligibility wording and reports it the same way", async () => {
+    it("declining someone held on an eligibility answer is private too; the Send uses the eligibility wording", async () => {
       const id = await seed("Ena", { stage: "ineligible" });
       const r = (await (await act(owner, id, { action: "reject", reason: "eligibility", note: "Confirmed after the eligibility hold" })).json()) as { candidateNotice: string };
-      expect(r.candidateNotice).toBe("queued");
+      expect(r.candidateNotice).toBe("not_told");
+      expect(await container.db.select().from(communications).where(and(eq(communications.applicationId, id), like(communications.templateKey, "disposition:%")))).toHaveLength(0);
+      expect(await (await act(owner, id, { action: "send_decision" })).json()).toMatchObject({ candidateNotice: "queued" });
       expect(await container.db.select().from(communications).where(and(eq(communications.applicationId, id), eq(communications.templateKey, "disposition:eligibility")))).toHaveLength(1);
     });
 
@@ -181,10 +262,14 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect(report.outcomes.talentPool).toBe(1);
     });
 
-    it("recording 'we declined the candidate' as an outcome reports the message too", async () => {
+    it("recording 'we declined the candidate' as an outcome is private like the Decline button, and says so", async () => {
       const id = await seed("Oli");
       const r = (await (await json(owner, "POST", `/api/v1/applications/${id}/outcome`, { outcome: "employer_declined", confirm: true, reason: "Went with someone closer" })).json()) as { dispositionSent: boolean; candidateNotice: string };
-      expect(r).toMatchObject({ dispositionSent: true, candidateNotice: "queued" });
+      expect(r).toMatchObject({ dispositionSent: false, candidateNotice: "not_told" });
+      expect(await container.db.select().from(communications).where(and(eq(communications.applicationId, id), like(communications.templateKey, "disposition:%")))).toHaveLength(0);
+      expect((await detail(owner, id)).allowedActions).toContain("send_decision");
+      const noHire = await seed("Nia");
+      expect(await (await json(owner, "POST", `/api/v1/applications/${noHire}/outcome`, { outcome: "no_hire", confirm: true })).json()).toMatchObject({ candidateNotice: "not_told" });
       const withdrew = await seed("Wil");
       expect(await (await json(owner, "POST", `/api/v1/applications/${withdrew}/outcome`, { outcome: "candidate_withdrew", confirm: true })).json()).not.toHaveProperty("candidateNotice");
     });

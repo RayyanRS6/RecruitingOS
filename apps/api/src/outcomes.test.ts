@@ -158,8 +158,8 @@ describe("human-recorded hiring outcomes", () => {
     expect(rehire.status).toBe(201);
     expect(((await rehire.json()) as { stage: string }).stage).toBe("hired");
     expect((await json(owner, "POST", `/api/v1/applications/${fifth}/outcome`, { outcome: "hired_externally", confirm: true, hireDate: "2026-11-02" })).status).toBe(409);
-    // the employer's decline sends the candidate the same respectful message as the Decline button, after the human decision
-    expect(email().sent.some((m) => m.to === "cara.nguyen@example.com")).toBe(true);
+    // the employer's decline is private like the Decline button's (founder decision B6): no decline message until a person sends it
+    expect(email().sent.some((m) => m.to === "cara.nguyen@example.com" && m.subject.startsWith("Your application to"))).toBe(false);
     // an impossible date is a field error, not a server error
     const sixth = await apply("Finn", "Ola", "finn.ola@example.com");
     applicationIds.push(sixth);

@@ -8,6 +8,7 @@ import { activeCompanyOf } from "../rail";
 import { canSeeTalent, canStartHire } from "../roles";
 import { roleStatus } from "../role-status";
 import { START_HIRE_HREF } from "../start-hire";
+import { stageSummary } from "../talent-list";
 
 export function Roles() {
   const roles = useQuery({ queryKey: ["roles"], queryFn: () => api.get<RoleSummary[]>("/api/v1/roles") });
@@ -54,6 +55,13 @@ export function Roles() {
                   )}
                 </div>
                 {r.countsHidden ? null : <PipelineBar counts={r.counts} total={r.counts.total} />}
+                {!r.countsHidden && stageSummary(r.stageCounts).length ? (
+                  <ul className="row small tabular" style={{ listStyle: "none", margin: "10px 0 0", padding: 0, gap: "4px 14px" }} aria-label={`Where the applicants for ${r.title} are`}>
+                    {stageSummary(r.stageCounts).map((s) => (
+                      <li key={s.id}>{talent ? <Link to={`/roles/${r.id}/talent?ownerStage=${s.id}`}>{s.count} {s.label}</Link> : <span>{s.count} {s.label}</span>}</li>
+                    ))}
+                  </ul>
+                ) : null}
                 <div className="row" style={{ marginTop: 12 }}>
                   <Link to={`/roles/${r.id}`} className="btn secondary sm">Open</Link>
                   {talent ? <Link to={`/roles/${r.id}/talent`} className="btn secondary sm">Talent</Link> : null}

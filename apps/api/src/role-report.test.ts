@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq, gte, inArray } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { createApplicationLink, entitlements, findPostingLink, ownerGroup } from "@ros/core";
-import { applications, approvalRequests, assessments, auditRecords, communications, events, interviews, postings, recruiterEscalations, users, withTenant } from "@ros/db";
+import { createApplicationLink, entitlements, findPostingLink, groupFor, ownerGroup } from "@ros/core";
+import { applicationMarks, applications, approvalRequests, assessments, auditRecords, communications, events, interviews, postings, recruiterEscalations, users, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { localDays } from "@ros/workflows";
 import { createApp } from "./app";
@@ -85,10 +85,17 @@ describe("role report", () => {
     return `ros_src=${sealed}`;
   };
   const roleApps = () => container.db.select().from(applications).where(eq(applications.roleId, roleId));
-  const groupCounts = (rows: Array<{ stage: string }>) => {
+  /** The active private mark of each application: a running hold waits on nobody (plan A4). */
+  const activeMarks = async () => new Map((await container.db.select().from(applicationMarks).where(isNull(applicationMarks.clearedAt))).map((m) => [m.applicationId, m]));
+  const groupCounts = async (rows: Array<{ id: string; stage: string }>) => {
+    const marks = await activeMarks();
     const out: Record<string, number> = { waiting_on_you: 0, in_process: 0, not_moving_forward: 0, hired: 0 };
-    for (const a of rows) out[ownerGroup(a.stage as never)] += 1;
+    for (const a of rows) out[groupFor({ stage: a.stage as never }, marks.get(a.id), new Date(BASE))] += 1;
     return out;
+  };
+  const waitsOnYou = async (rows: Array<{ id: string; stage: string }>) => {
+    const marks = await activeMarks();
+    return rows.filter((a) => groupFor({ stage: a.stage as never }, marks.get(a.id), new Date(BASE)) === "waiting_on_you");
   };
 
   beforeAll(async () => {
@@ -170,15 +177,18 @@ describe("role report", () => {
     await container.db.update(recruiterEscalations).set({ createdAt: at(-5 * HOUR), slaDueAt: at(-HOUR) }).where(eq(recruiterEscalations.id, e2.id));
     await container.db.update(recruiterEscalations).set({ createdAt: at(-6 * HOUR), firstResponseAt: at(-2 * HOUR), slaDueAt: at(DAY) }).where(eq(recruiterEscalations.id, e3.id));
 
-    // Gia is declined while the email provider is down for good: the decline is retried by the outbox and ends failed.
-    fake().failNext(20);
+    // Gia is declined privately (founder decision B6), then the decision message is sent while the email provider is down
+    // for good: the outbox retries it, it ends failed, and Gia counts as not told.
     const declined = await json(owner, "POST", `/api/v1/applications/${ids.gia}/actions`, { action: "reject", reason: "not_a_match_experience", note: "Wants weekends off." });
     expect(declined.status).toBe(200);
+    fake().failNext(20);
+    expect((await json(owner, "POST", `/api/v1/applications/${ids.gia}/actions`, { action: "send_decision" })).status).toBe(200);
     for (let i = 1; i <= 10; i++) { setClock(i * 70_000); await container.drain(); }
     fake().failNext(0);
     setClock(0);
     const giaMessages = await container.db.select().from(communications).where(and(eq(communications.applicationId, ids.gia), eq(communications.templateKey, "disposition:human")));
     expect(giaMessages.map((m) => m.status)).toEqual(["failed"]);
+    expect((await container.db.select().from(applications).where(eq(applications.id, ids.gia)))[0].toldState).toBe("not_told");
 
     // Eve has been waiting on the owner for three days.
     await container.db.update(applications).set({ stageChangedAt: at(-3 * DAY) }).where(eq(applications.id, ids.eve));
@@ -213,7 +223,12 @@ describe("role report", () => {
   it("counts every stage with its plain label and the four owner groups, exactly as the applications stand", async () => {
     const rows = await roleApps();
     expect(report.stages.total).toBe(8);
-    expect(report.stages.byGroup).toEqual(groupCounts(rows));
+    expect(report.stages.byGroup).toEqual(await groupCounts(rows));
+    // the stage strip: Ana is on hold (privately, until a date), Gia was declined and has not been told
+    expect(report.stages.byOwnerStage).toMatchObject({ on_hold: 1, hired: 1 });
+    expect(Object.values(report.stages.byOwnerStage).reduce((a, b) => a + b, 0)).toBe(8);
+    expect(report.stages.marks).toMatchObject({ onHold: 1, holdsEnded: 0, longlist: 0, shortlist: 0, notAFitForNow: 0, holdsEverSet: 1 });
+    expect(report.stages.told).toEqual({ decisions: 1, notTold: 1, queued: 0, sent: 0, toldInPerson: 0, beforeTracking: 0 });
     const byStage: Record<string, number> = {};
     for (const a of rows) byStage[a.stage] = (byStage[a.stage] ?? 0) + 1;
     expect(Object.fromEntries(report.stages.byStage.map((s) => [s.stage, s.count]))).toEqual(byStage);
@@ -250,7 +265,10 @@ describe("role report", () => {
 
   it("lists the decisions only a person can make, oldest first, and agrees with the roles list", async () => {
     const rows = await roleApps();
-    const waiting = rows.filter((a) => ownerGroup(a.stage) === "waiting_on_you" || a.stage === "ineligible");
+    // held on an eligibility answer is waiting on you (plan A2); a running hold is not (A4)
+    const waiting = await waitsOnYou(rows);
+    expect(waiting.some((a) => a.id === ids.finn)).toBe(true);
+    expect(waiting.some((a) => a.id === ids.ana)).toBe(false);
     const pending = await container.db.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, roleId), eq(approvalRequests.status, "pending")));
     const waitingIds = new Set(waiting.map((a) => a.id));
     expect(report.pendingDecisions.candidates).toBe(waiting.length);
@@ -274,19 +292,19 @@ describe("role report", () => {
     const expectedTotals: Record<string, number> = {};
     for (const a of asmts) expectedTotals[a.result.recommendation] = (expectedTotals[a.result.recommendation] ?? 0) + 1;
     expect(Object.fromEntries(report.recommendationsVsDecisions.rows.map((r) => [r.recommendation, r.total]))).toEqual(expectedTotals);
-    const sum = (k: "invited" | "interviewed" | "declined" | "held" | "noActionYet") => report.recommendationsVsDecisions.rows.reduce((n, r) => n + r[k], 0);
-    // Ben went to interview, Ana was held, Gia was declined; Eve's override came before her assessment and Hal's outcome is not a decision about the suggestion
-    expect({ invited: sum("invited"), interviewed: sum("interviewed"), declined: sum("declined"), held: sum("held") }).toEqual({ invited: 0, interviewed: 1, declined: 1, held: 1 });
+    const sum = (k: "invited" | "interviewed" | "shortlisted" | "declined" | "held" | "noActionYet") => report.recommendationsVsDecisions.rows.reduce((n, r) => n + r[k], 0);
+    // Ben went to interview, Ana was put on hold, Gia was declined; Eve's override came before her assessment and Hal's outcome is not a decision about the suggestion
+    expect({ invited: sum("invited"), interviewed: sum("interviewed"), shortlisted: sum("shortlisted"), declined: sum("declined"), held: sum("held") }).toEqual({ invited: 0, interviewed: 1, shortlisted: 0, declined: 1, held: 1 });
     expect(sum("noActionYet")).toBe(latest.length - 3);
     for (const r of report.recommendationsVsDecisions.rows) {
       expect(r.label).not.toMatch(/_/);
-      expect(r.invited + r.interviewed + r.declined + r.held + r.noActionYet).toBe(r.total);
+      expect(r.invited + r.interviewed + r.shortlisted + r.declined + r.held + r.noActionYet).toBe(r.total);
     }
   });
 
-  it("counts the times a person overruled the system", () => {
+  it("counts the times a person overruled the system; holds read the marks", () => {
     expect(report.overrides).toMatchObject({ eligibilityOverrides: 1, reviewAnyway: 0, holds: 1, flaggedAssessments: 1 });
-    expect(report.overrides.byAction).toMatchObject({ override_eligibility: 1, hold: 1, flag_assessment: 1, reject: 1, advance_to_interview: 1, outcome: 1 });
+    expect(report.overrides.byAction).toMatchObject({ override_eligibility: 1, set_mark: 1, flag_assessment: 1, reject: 1, advance_to_interview: 1, outcome: 1 });
   });
 
   it("counts recruiter requests: open, resolved, past the promised time, and the typical first response", () => {
@@ -318,20 +336,24 @@ describe("role report", () => {
     const mine = list.find((r) => r.id === roleId)!;
     expect(mine.counts.total).toBe(8);
     for (const g of ["waiting_on_you", "in_process", "not_moving_forward", "hired"] as const) expect(mine.counts[g] ?? 0, g).toBe(report.stages.byGroup[g]);
+    expect((mine as unknown as { stageCounts: Record<string, number> }).stageCounts).toEqual(report.stages.byOwnerStage);
     // the brief's four numbers, from the same facts
     const brief = (await (await json(owner, "GET", "/api/v1/brief")).json()) as { summary: string; cards: Array<{ kind: string }> };
     const m = brief.summary.match(/^(\d+) things? needs? you · (\d+) strong candidates? ready · (\d+) at risk · (\d+) handled for you since yesterday\.$/);
     expect(m, brief.summary).toBeTruthy();
     const pendingAll = await container.db.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, companyId), eq(approvalRequests.status, "pending")));
+    const marks = await activeMarks();
     let needsMe = pendingAll.length;
     for (const rid of [roleId, role2Id]) {
       const rows = await container.db.select().from(applications).where(eq(applications.roleId, rid));
-      if (rows.some((a) => ownerGroup(a.stage) === "waiting_on_you" || a.stage === "eligible")) needsMe += 1;
+      // waiting on you (a hold or a set-aside parks them; eligibility holds have their own card), held on eligibility, and decisions not told yet
+      if (rows.some((a) => !marks.has(a.id) && ((ownerGroup(a.stage) === "waiting_on_you" && a.stage !== "ineligible" && a.stage !== "interview_complete") || a.stage === "eligible"))) needsMe += 1;
       if (rows.some((a) => a.stage === "ineligible")) needsMe += 1;
+      if (rows.some((a) => ["rejected", "talent_pool"].includes(a.stage) && a.toldState === "not_told")) needsMe += 1;
     }
     expect(Number(m![1])).toBe(needsMe);
     const strongIds = new Set((await container.db.select().from(assessments).where(and(eq(assessments.companyId, companyId), eq(assessments.overall, "strong")))).map((a) => a.applicationId));
-    const strong = (await container.db.select().from(applications).where(eq(applications.companyId, companyId))).filter((a) => strongIds.has(a.id) && ownerGroup(a.stage) === "waiting_on_you").length;
+    const strong = (await waitsOnYou(await container.db.select().from(applications).where(eq(applications.companyId, companyId)))).filter((a) => strongIds.has(a.id)).length;
     expect(Number(m![2])).toBe(strong);
     expect(Number(m![3])).toBe(brief.cards.filter((c) => c.kind === "stuck").length + report.escalations.open);
     const AUTOMATED = new Set(["application.acknowledged", "resume.ingested", "eligibility.evaluated", "application.triaged", "screen.invited", "screen.assessed", "candidate.recommended", "posting.published", "message.sent", "intervention.sent"]);
@@ -358,7 +380,14 @@ describe("role report", () => {
     expect(col("Dev Patel", "Source detail")).toBe("LinkedIn campaign");
     expect(col("Gia Ruiz", "Decision")).toBe("Declined");
     expect(col("Gia Ruiz", "Stage")).toBe("Not moving forward");
+    expect(col("Gia Ruiz", "Candidate told")).toBe("Not yet");
     expect(col("Hal Ng", "Outcome")).toBe("Hired");
+    expect(col("Hal Ng", "Candidate told")).toBe("");
+    // the private marks are in the file: Ana is on hold until a date
+    expect(col("Ana Lopez", "Pipeline stage")).toBe("On hold");
+    expect(col("Ana Lopez", "Mark")).toBe("On hold");
+    expect(col("Ana Lopez", "Hold ends")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(col("Ben Osei", "Pipeline stage")).toBe("Interviewing");
     expect(col("Ana Lopez", "Interviews")).toBe("2");
     expect(col("Ana Lopez", "Interviews completed")).toBe("1");
     expect(col("Ana Lopez", "Decision")).toBe("Assessment flagged");
@@ -388,7 +417,10 @@ describe("role report", () => {
     expect(lines).toContain("Recruiter help,Typical first response (hours),3");
     expect(lines).toContain("Outcomes,Hired,1");
     expect(lines).toContain("Decline reasons,Experience not a match,1");
-    expect(lines.filter((l) => l.startsWith("Suggestions vs decisions,")).length).toBe(report.recommendationsVsDecisions.rows.length * 6);
+    expect(lines.filter((l) => l.startsWith("Suggestions vs decisions,")).length).toBe(report.recommendationsVsDecisions.rows.length * 7);
+    expect(lines).toContain("Pipeline stages,On hold,1");
+    expect(lines).toContain("Marks,On hold now,1");
+    expect(lines).toContain("Decisions told,Not told yet,1");
     expect(lines.length).toBe(summaryRows(report).length + 1);
     expect((await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "report.exported")))).length).toBe(2);
   });
@@ -447,7 +479,7 @@ describe("role report", () => {
     expect(agg.applicants.bySource.find((s) => s.source === "careers_page")!.count).toBe(6);
     expect(agg.stages.total).toBe(9);
     const all = await container.db.select().from(applications).where(eq(applications.companyId, companyId));
-    expect(agg.stages.byGroup).toEqual(groupCounts(all));
+    expect(agg.stages.byGroup).toEqual(await groupCounts(all));
     expect(agg.interviews.total).toBe(5);
     expect(agg.escalations).toEqual(report.escalations);
     expect(agg.overrides).toEqual(report.overrides);
@@ -507,9 +539,10 @@ describe("role report arithmetic on hand-made rows", () => {
     expect(r.pendingDecisions).toMatchObject({ count: 2, approvals: 1, candidates: 1, oldestDays: 6 });
     expect(r.pendingDecisions.list.map((p) => p.kind)).toEqual(["approval", "candidate"]);
     expect(r.pendingDecisions.list[0]).toMatchObject({ label: "Invite to a screen?", days: 6, approvalRequestId: "p1" });
+    // the assistant's "hold" reading is named apart from the On hold mark a person sets
     expect(r.recommendationsVsDecisions.rows).toEqual([
-      { recommendation: "screen", label: "Screen suggested", total: 1, invited: 0, interviewed: 0, declined: 1, held: 0, noActionYet: 0 },
-      { recommendation: "hold", label: "Hold suggested", total: 1, invited: 0, interviewed: 0, declined: 0, held: 0, noActionYet: 1 },
+      { recommendation: "screen", label: "Screen suggested", total: 1, invited: 0, interviewed: 0, shortlisted: 0, declined: 1, held: 0, noActionYet: 0 },
+      { recommendation: "hold", label: "Thin evidence: your call", total: 1, invited: 0, interviewed: 0, shortlisted: 0, declined: 0, held: 0, noActionYet: 1 },
     ]);
     expect(r.overrides).toEqual({ eligibilityOverrides: 0, reviewAnyway: 0, holds: 0, flaggedAssessments: 0, byAction: { reject: 1 } });
     expect(r.messages).toEqual(data.messages);
@@ -524,11 +557,40 @@ describe("role report arithmetic on hand-made rows", () => {
       assessments: [{ id: "s2", applicationId: "a2", createdAt: d(-3), recommendation: "interview" }],
       overrides: [{ subjectId: "a2", occurredAt: d(-1), payload: { action: "interview.decision", decision } }],
     }, new Date(BASE)).recommendationsVsDecisions.rows;
-    expect(after("not_moving_forward")).toEqual([{ recommendation: "interview", label: "Interview suggested", total: 1, invited: 0, interviewed: 0, declined: 1, held: 0, noActionYet: 0 }]);
+    expect(after("not_moving_forward")).toEqual([{ recommendation: "interview", label: "Interview suggested", total: 1, invited: 0, interviewed: 0, shortlisted: 0, declined: 1, held: 0, noActionYet: 0 }]);
     expect(after("next_round")[0]).toMatchObject({ interviewed: 1, declined: 0, noActionYet: 0 });
     expect(after("finalist")[0]).toMatchObject({ interviewed: 1, noActionYet: 0 });
     // an override that is not a decision about the suggestion still leaves the candidate undecided
     expect(after("something_else")[0]).toMatchObject({ interviewed: 0, declined: 0, noActionYet: 1 });
+  });
+
+  it("reads the private marks: a running hold waits on nobody, an ended one is back on you, the strip and the told state are counted", () => {
+    const mark = (applicationId: string, kind: "longlist" | "shortlist" | "on_hold" | "not_a_fit_for_now", remindAt: string | null, clearedAt: string | null = null) => ({ applicationId, mark: kind, remindAt, createdAt: d(-1), clearedAt });
+    const withMarks = (marks: NonNullable<ReportData["marks"]>, apps = data.apps) => composeRoleReport({ ...data, apps, marks }, new Date(BASE));
+    // a1 (ready for review) on hold until next week: nothing waits on you, and the strip says On hold
+    const running = withMarks([mark("a1", "on_hold", d(7)), mark("a1", "shortlist", null, d(-2))]);
+    expect(running.stages.byGroup).toEqual({ waiting_on_you: 0, in_process: 2, not_moving_forward: 1, hired: 0 });
+    expect(running.stages.byOwnerStage).toMatchObject({ new: 1, on_hold: 1, not_moving_forward: 1 });
+    expect(running.stages.marks).toEqual({ longlist: 0, shortlist: 0, onHold: 1, holdsEnded: 0, notAFitForNow: 0, holdsEverSet: 1 });
+    expect(running.timeInStage.waitingOnYou.count).toBe(0);
+    expect(running.pendingDecisions.candidates).toBe(0);
+    expect(running.overrides.holds).toBe(1);
+    // its date passed: back on you, labelled so
+    const ended = withMarks([mark("a1", "on_hold", d(-1))]);
+    expect(ended.stages.byGroup.waiting_on_you).toBe(1);
+    expect(ended.stages.marks.holdsEnded).toBe(1);
+    expect(ended.pendingDecisions.list.find((p) => p.applicationId === "a1")?.label).toBe("Hold ended");
+    // a2 on the shortlist (still in process), a3 declined and told by message
+    const sorted = withMarks([mark("a2", "shortlist", null)], data.apps.map((a) => (a.id === "a3" ? { ...a, toldState: "sent" as const } : a)));
+    expect(sorted.stages.byOwnerStage).toMatchObject({ new: 1, shortlist: 1, not_moving_forward: 1 });
+    expect(sorted.stages.told).toEqual({ decisions: 1, notTold: 0, queued: 0, sent: 1, toldInPerson: 0, beforeTracking: 0 });
+    // a shortlist after a suggestion is a decision about it; so is a hold
+    const decided = composeRoleReport({ ...data, assessments: [{ id: "s2", applicationId: "a2", createdAt: d(-3), recommendation: "interview" }], overrides: [{ subjectId: "a2", occurredAt: d(-1), payload: { action: "set_mark", mark: "shortlist" } }] }, new Date(BASE));
+    expect(decided.recommendationsVsDecisions.rows[0]).toMatchObject({ shortlisted: 1, noActionYet: 0 });
+    const rows = summaryRows(running);
+    expect(rows).toContainEqual(["Pipeline stages", "On hold", 1]);
+    expect(rows).toContainEqual(["Marks", "On hold now", 1]);
+    expect(rows).toContainEqual(["Decisions told", "Not told yet", 1]);
   });
 
   it("names every pending approval and the role's status in plain words, never a key", () => {

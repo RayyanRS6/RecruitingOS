@@ -77,7 +77,13 @@ export const DEFAULT_POLICIES: Record<ActionType, { level: PolicyLevel; approver
   "offer.send": { level: "approval", approverRoles: ["owner", "admin"] },
   "offer.negotiate": { level: "human_only", approverRoles: [] },
   "offer.revise": { level: "approval", approverRoles: ["owner", "admin"] },
-  "disposition.send": { level: "auto_notify", approverRoles: [] },
+  /**
+   * The decision message (founder decision B6). Declining never sends anything by itself: a decision is private until a
+   * person presses Send. This policy says what that Send does: "auto" (the default) sends it then; "approval" holds it
+   * for a second person; "human_only" means the product sends no decision messages and the team tells candidates
+   * themselves. Saved settings moved to the new default in migration 0026, except "only a person".
+   */
+  "disposition.send": { level: "auto", approverRoles: [] },
   "reference.request": { level: "auto_notify", approverRoles: [] },
   "background_check.order": { level: "approval", approverRoles: ["owner", "admin", "hr"] },
   "background_check.adverse_action": { level: "human_only", approverRoles: [] },

@@ -1,7 +1,7 @@
 import { and, eq, lt, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { emit, notify, raiseAlert } from "@ros/core";
-import { communications, jobs, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
+import { applications, communications, jobs, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations, SendResult } from "@ros/integrations";
 
 /**
@@ -116,7 +116,16 @@ export async function sendQueuedCommunication(db: Db, integrations: Integrations
       .returning();
     return row ?? null;
   });
-  if (!claimed?.toAddress) return "skipped";
+  if (!claimed) return "skipped";
+  if (!claimed.toAddress) {
+    // Nothing to send it to (a row written without an address): failed for good, never left half-claimed in "sending".
+    await withTenant(db, input.companyId, async (tx) => {
+      await tx.update(communications).set({ status: "failed", error: "no address to send to", sendingAt: null }).where(eq(communications.id, claimed.id));
+      await emit(tx, { type: "message.failed", companyId: claimed.companyId, actor: claimed.sentBy, subject: { type: "communication", id: claimed.id }, payload: { template: claimed.templateKey, channel: claimed.channel, applicationId: claimed.applicationId, error: "no address" }, correlationId: claimed.correlationId });
+      await settleDecisionTold(tx, claimed, "failed", ctx.now);
+    });
+    return "failed";
+  }
 
   let result: SendResult;
   try {
@@ -144,6 +153,7 @@ export async function sendQueuedCommunication(db: Db, integrations: Integrations
     if (result.status === "sent") {
       await tx.update(communications).set({ status: "sent", providerMessageId: result.providerMessageId, error: null, sendingAt: null }).where(eq(communications.id, claimed.id));
       await emit(tx, { type: "message.sent", companyId: claimed.companyId, actor, subject: { type: "communication", id: claimed.id }, payload, correlationId: claimed.correlationId });
+      await settleDecisionTold(tx, claimed, "sent", ctx.now);
       return "sent";
     }
     const retryable = result.status === "failed" ? result.retryable : false;
@@ -155,6 +165,7 @@ export async function sendQueuedCommunication(db: Db, integrations: Integrations
     }
     await tx.update(communications).set({ status: "failed", error, sendingAt: null }).where(eq(communications.id, claimed.id));
     await emit(tx, { type: "message.failed", companyId: claimed.companyId, actor, subject: { type: "communication", id: claimed.id }, payload: { ...payload, error }, correlationId: claimed.correlationId });
+    await settleDecisionTold(tx, claimed, "failed", ctx.now);
     if (claimed.candidateId && claimed.applicationId) {
       await notify(tx, { companyId: claimed.companyId, kind: "candidate.unreachable", title: `A message to a candidate could not be sent`, body: `${claimed.subject ?? claimed.templateKey ?? "A message"}: ${error}. Please reach them another way.`, action: { label: "Open the candidate", href: "/talent" } });
     }
@@ -166,6 +177,24 @@ export async function sendQueuedCommunication(db: Db, integrations: Integrations
   }
   if (outcome === "retry") throw new Error(`delivery failed (attempt ${ctx.attempt} of ${ctx.maxAttempts}): ${describeFailure(result)}`);
   return outcome;
+}
+
+/**
+ * The decision message's half of the told state (founder decision B6): a queued decision becomes "sent" when its message
+ * leaves, and goes back to "not told" when it could not be delivered, or when nobody can say whether it was (`unknown`:
+ * the send was interrupted), so the team sees the candidate may not have heard and can send it again or record telling
+ * them; nothing is ever left waiting at "queued" with no way out. Only a decision still waiting on this message moves.
+ */
+export async function settleDecisionTold(tx: Queryable, row: Pick<CommunicationRow, "id" | "companyId" | "applicationId" | "templateKey" | "sentBy">, outcome: "sent" | "failed" | "unknown", now: Date): Promise<void> {
+  if (!row.applicationId || !row.templateKey?.startsWith("disposition:")) return;
+  const where = and(eq(applications.id, row.applicationId), eq(applications.toldState, "queued"));
+  if (outcome !== "sent") {
+    const [back] = await tx.update(applications).set({ toldState: "not_told" }).where(where).returning({ id: applications.id, roleId: applications.roleId });
+    if (back && outcome === "unknown") await notify(tx, { companyId: row.companyId, kind: "candidate.unreachable", title: "A decision message may not have reached a candidate", body: "Sending it was interrupted, so we cannot tell whether it arrived. They show as not told yet: check with them, or record that you told them yourself, before sending it again.", action: { label: "Open the candidate", href: `/roles/${back.roleId}/talent?open=${back.id}` } });
+    return;
+  }
+  const [told] = await tx.update(applications).set({ toldState: "sent", candidateToldAt: now.toISOString() }).where(where).returning({ id: applications.id });
+  if (told) await emit(tx, { type: "application.told", companyId: row.companyId, actor: row.sentBy, subject: { type: "application", id: told.id }, payload: { how: "message", communicationId: row.id } });
 }
 
 /** The provider's reason a message did not go out, in one line. */
@@ -181,7 +210,12 @@ function describeFailure(result: SendResult): string {
  */
 export async function sweepStaleSending(db: Db, now: Date = new Date()): Promise<number> {
   const cutoff = new Date(now.getTime() - SENDING_STALE_MS).toISOString();
-  const rows = await withPlatform(db, (tx) => tx.update(communications).set({ status: "unknown", error: "interrupted while sending; delivery could not be confirmed", sendingAt: null }).where(and(eq(communications.status, "sending"), lt(communications.sendingAt, cutoff))).returning({ id: communications.id, companyId: communications.companyId, channel: communications.channel, templateKey: communications.templateKey }));
+  const rows = await withPlatform(db, async (tx) => {
+    const stale = await tx.update(communications).set({ status: "unknown", error: "interrupted while sending; delivery could not be confirmed", sendingAt: null }).where(and(eq(communications.status, "sending"), lt(communications.sendingAt, cutoff))).returning({ id: communications.id, companyId: communications.companyId, channel: communications.channel, templateKey: communications.templateKey, applicationId: communications.applicationId, sentBy: communications.sentBy });
+    // A decision message among them: the decision goes back to not told, and the team is asked to check (founder decision B6).
+    for (const r of stale) await settleDecisionTold(tx, r, "unknown", now);
+    return stale;
+  });
   for (const r of rows) {
     await raiseAlert(db, { kind: "message.delivery_unknown", severity: "high", title: `A ${r.channel} may or may not have been delivered`, body: `The process was interrupted while sending ${r.templateKey ?? "a message"}. Check the provider's activity log before sending it again by hand; it was not re-sent automatically.`, companyId: r.companyId, target: { type: "communication", id: r.id }, details: { channel: r.channel, template: r.templateKey } });
   }

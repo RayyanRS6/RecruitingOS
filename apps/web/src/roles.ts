@@ -40,5 +40,12 @@ export const canEditPacket = (role: string | null | undefined): boolean => !!rol
 const OUTCOME_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin", "hiring_manager", "hr"]);
 export const canRecordOutcome = (role: string | null | undefined): boolean => !!role && OUTCOME_ROLES.has(role);
 
+/**
+ * application.reject: move someone to Not moving forward, and tell candidates a decision (send the decision message, or
+ * record telling them in person). HR and interviewers do not hold it.
+ */
+const DECLINE_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin", "hiring_manager", "recruiter"]);
+export const canDecline = (role: string | null | undefined): boolean => !!role && DECLINE_ROLES.has(role);
+
 /** events.read: the role's Activity tab. Everyone but an interviewer. */
 export const canSeeActivity = (role: string | null | undefined): boolean => !!role && role !== "interviewer";

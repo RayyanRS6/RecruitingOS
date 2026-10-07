@@ -1,6 +1,6 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { Actor, MembershipRole } from "@ros/contracts";
-import { STAGE_LABEL, audit, can, ownerGroup } from "@ros/core";
+import { STAGE_LABEL, audit, baseOwnerStage, can, ownerGroup } from "@ros/core";
 import { composeInterviewerBrief, redactBriefPay, type InterviewerBrief } from "@ros/agents";
 import { applications, candidates, interviewParticipants, interviews, rolePackets, type Tx } from "@ros/db";
 import { HttpError } from "../middleware/errors";
@@ -47,6 +47,8 @@ export async function interviewerApplicationView(tx: Tx, input: { app: App; tena
     stage: input.app.stage,
     stageLabel: STAGE_LABEL[input.app.stage],
     group: ownerGroup(input.app.stage),
+    // The step on the stage strip without the team's private marks: those are for people who read applications.
+    ownerStage: baseOwnerStage(input.app.stage),
     createdAt: input.app.createdAt,
     viewer: "interviewer" as const,
     allowedActions: [] as string[],

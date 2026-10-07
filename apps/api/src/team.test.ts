@@ -405,7 +405,7 @@ describe("team invitations, members and roles", () => {
     expect(told).toHaveLength(1);
     expect(told[0].title).toBe("Wes Leaving was removed; an interview was cancelled");
     expect(told[0].body).toContain("Working interview: Wes Leaving was the only interviewer, so that interview was cancelled.");
-    expect(told[0].body).toContain("The candidate who had a booked time was told");
+    expect(told[0].body).toContain("The candidate was told the interview is off.");
     expect(told[0].body).toContain("approve a new interview with another interviewer");
     expect(told[0].body).toContain("Chairside interview: goes ahead with the other interviewers.");
     expect(told[0].body).not.toContain("add an interviewer");

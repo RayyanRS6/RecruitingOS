@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { Location } from "../domain/common";
 import { RolePacket } from "../domain/role-packet";
-import { ApplicationStage, RejectReason } from "../domain/stages";
+import { ApplicationStage, MarkKind, OwnerStage, RejectReason, ToldState } from "../domain/stages";
 import { ActionType, PolicyLevel } from "../domain/policy";
 
 /** Slice 1 API request and response schemas. docs/12 is the map. */
@@ -113,16 +113,34 @@ export const RequestRoleApproval = z.object({ version: z.number().int().min(1).o
 export type RequestRoleApproval = z.infer<typeof RequestRoleApproval>;
 
 // Applications
+/** A date ("2026-10-22") or a full time; checked against today and the longest hold on the server. */
+const RemindAt = z.string().trim().max(40).refine((v) => !Number.isNaN(Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(v) ? `${v}T00:00:00Z` : v)), { message: "Use a date like 2026-10-22." });
 export const ApplicationAction = z.object({
-  /** ask_in_screen: invite_screen with `focus: "unknowns"`, the one-click follow-up on an assessment that needs a closer look. */
-  action: z.enum(["invite_screen", "ask_in_screen", "advance_to_interview", "reject", "hold", "move_to_talent_pool", "override_eligibility", "review_anyway"]),
+  /**
+   * ask_in_screen: invite_screen with `focus: "unknowns"`, the one-click follow-up on an assessment that needs a closer look.
+   * reject: files a private decision (founder decision B6); nothing is sent. set_mark / clear_mark: the private Longlist,
+   * Shortlist, On hold and Not a fit for now marks; hold is set_mark with on_hold. send_decision: a person sends the
+   * standard decision message (or asks for its approval, under the company's settings). told_in_person: records that
+   * someone told the candidate themselves, so nothing more is sent. cancel_screen: "Stop this screen invitation" before
+   * the candidate starts; they get a short, polite note and go back to waiting on the team.
+   */
+  action: z.enum(["invite_screen", "ask_in_screen", "advance_to_interview", "reject", "hold", "move_to_talent_pool", "override_eligibility", "review_anyway", "set_mark", "clear_mark", "send_decision", "told_in_person", "cancel_screen"]),
   reason: RejectReason.optional(),
   note: z.string().max(2000).optional(),
   /** invite_screen: preferred channel; defaults to SMS with consent, else web chat by email. */
   channel: z.enum(["web", "sms"]).optional(),
   /** invite_screen: "unknowns" opens the screen with the résumé assessment's open questions before the packet's own. */
   focus: z.enum(["unknowns"]).optional(),
+  /** set_mark: which mark. */
+  mark: MarkKind.optional(),
+  /** set_mark on_hold and hold: when the hold ends and they come back to Today; 14 days when left out, 56 at most. */
+  remindAt: RemindAt.optional(),
 });
+export type ApplicationAction = z.infer<typeof ApplicationAction>;
+
+/** POST /roles/:id/decision-messages: send the decision message to several people at once; each gets its own result. */
+export const SendDecisionMessages = z.object({ applicationIds: z.array(z.string().min(1)).min(1).max(100) });
+export type SendDecisionMessages = z.infer<typeof SendDecisionMessages>;
 
 /** POST /applications/:id/messages: a message a person writes to a candidate (F11). The product adds the sending name and the footer; no disclosure line, since no AI wrote it. */
 export const SendCandidateMessage = z.object({ subject: z.string().trim().max(200).optional(), text: z.string().trim().min(1, "Write the message first.").max(5000) });
@@ -147,9 +165,18 @@ export const RecordRoleOutcome = z.object({ outcome: RoleOutcome, confirm: z.lit
 export const CorrectOutcome = z.object({ confirm: z.literal(true), reason: z.string().min(5).max(1000), outcome: z.enum([...ApplicationOutcome.options, ...RoleOutcome.options, "voided"]).optional(), hireDate: OutcomeDate.optional(), offerAcceptedAt: OutcomeDate.optional() }).strict()
   .refine((v) => v.outcome !== "hired_externally" || !!v.hireDate, { message: "A corrected hire needs the hire date.", path: ["hireDate"] });
 
+/**
+ * GET /roles/:id/applications. `ownerStage` narrows to one column of the stage strip and `told` to decisions in that told
+ * state; `order` is newest first (default), waiting longest, or by name; never by an AI reading. `counts=1` answers
+ * `{ applications, counts }` with the strip's counts over every visible applicant instead of the bare list.
+ */
 export const OwnerGroupQuery = z.object({
   group: z.enum(["waiting_on_you", "in_process", "not_moving_forward", "hired"]).optional(),
   stage: ApplicationStage.optional(),
+  ownerStage: OwnerStage.optional(),
+  told: ToldState.optional(),
+  order: z.enum(["newest", "waiting", "name"]).optional(),
+  counts: z.enum(["1", "true"]).optional(),
 });
 
 // Public apply (candidate)

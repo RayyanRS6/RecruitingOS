@@ -25,13 +25,15 @@ test.describe("decision after an interview", () => {
     await page.getByRole("button", { name: "Save availability" }).click();
     await expect(page.getByRole("status").filter({ hasText: /Availability saved/ })).toBeVisible();
 
-    // the owner opens the candidate and approves an interview
+    // the owner opens the candidate and moves them to Interviewing, which opens the interview approval
     await page.goto(`/roles/${seeded.roleId}/talent`);
+    await page.getByRole("tab", { name: /^All/ }).click();
     await expect(page.getByRole("button", { name: "Maria Reyes" })).toBeVisible({ timeout: 30_000 });
     await page.getByRole("button", { name: "Maria Reyes" }).click();
     const sheet = page.getByRole("dialog", { name: "Maria Reyes" });
     await expect(sheet).toBeVisible();
-    await sheet.getByRole("button", { name: "Interview", exact: true }).click();
+    await sheet.getByRole("button", { name: /^Stage: / }).click();
+    await sheet.getByRole("menuitemradio", { name: /^Interviewing/ }).click();
     await expect(sheet.getByRole("heading", { name: "Approve an interview" })).toBeVisible();
     await sheet.getByRole("checkbox").first().check();
     await sheet.getByRole("button", { name: "Approve and offer times" }).click();
@@ -72,15 +74,21 @@ test.describe("decision after an interview", () => {
     const candidate = page.getByRole("dialog", { name: "Maria Reyes" });
     await expect(candidate).toBeVisible({ timeout: 30_000 });
     await expect(candidate.getByRole("heading", { name: "How did the interview go?" })).toBeVisible();
-    await expect(candidate.getByText("Interview done: decision needed").first()).toBeVisible();
-    await expectAccessible(page, "candidate sheet with the decision card");
+    // the stage button says where they are on the strip
+    await expect(candidate.getByRole("button", { name: /^Stage: Interviewing/ })).toBeVisible();
+    await expectAccessible(page, "candidate panel with the decision card");
     await candidate.getByRole("button", { name: "Finalist", exact: true }).click();
     await candidate.getByLabel(/What stood out/).fill("Calm, precise, asked good questions.");
     await candidate.getByRole("button", { name: "Confirm finalist" }).click();
     await expect(page.getByRole("status").filter({ hasText: /Marked as a finalist/ })).toBeVisible();
-    await expect(candidate.getByText("Finalist").first()).toBeVisible();
+    await expect(candidate.getByText(/Finalist/).first()).toBeVisible();
     await expect(candidate.getByRole("heading", { name: "How did the interview go?" })).toHaveCount(0);
-    await expect(candidate.getByText(/Decision after the interview: finalist/)).toBeVisible();
+    await expect(candidate.getByText(/Decision after the interview: finalist/).first()).toBeVisible();
+    // the whole story is on the History tab, with who did each thing
+    await candidate.getByRole("tab", { name: "History" }).click();
+    await expect(page).toHaveURL(/tab=history/);
+    await expect(candidate.getByText("Dana Whitfield").first()).toBeVisible();
+    await expectAccessible(page, "candidate panel history");
 
     // closing the sheet clears the deep link from the address
     await page.keyboard.press("Escape");

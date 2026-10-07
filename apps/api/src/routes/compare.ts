@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { and, desc, eq, inArray } from "drizzle-orm";
-import type { EvidenceAssessment, ScreenAssessment } from "@ros/contracts";
-import { STAGE_LABEL, assertCan, audit, ownerGroup } from "@ros/core";
+import type { EvidenceAssessment, OwnerStage, ScreenAssessment } from "@ros/contracts";
+import { STAGE_LABEL, activeMarksFor, assertCan, audit, groupFor, ownerStage, ownerStageLabel } from "@ros/core";
 import { applications, assessments, candidates, rolePackets, roles, withTenant } from "@ros/db";
 import { actorOf, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
@@ -27,6 +27,9 @@ export type CompareCandidate = {
   stage: string;
   stageLabel: string;
   group: string;
+  /** Where they sit on the stage strip, private marks included (founder decision B3). */
+  ownerStage: OwnerStage;
+  ownerStageLabel: string;
   mustHaves: Record<string, { met: string; quote: string | null }>;
   competencies: Record<string, { finding: string; note: string | null }>;
   screen: { recommendation: string; summary: string } | null;
@@ -55,6 +58,8 @@ compareRoutes.get("/:id/compare", requireTenant, async (c) => {
     const competencies = packet?.competencies.map((x) => ({ key: x.key, name: x.name, definition: x.definition })) ?? [];
     const cands = apps.length ? await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, apps.map((a) => a.candidateId))) : [];
     const asmts = apps.length ? await tx.select().from(assessments).where(inArray(assessments.applicationId, apps.map((a) => a.id))).orderBy(desc(assessments.createdAt)) : [];
+    const marks = await activeMarksFor(tx, apps.map((a) => a.id));
+    const now = c.get("container").engine.clock();
     const rows: CompareCandidate[] = [];
     for (const id of ids) {
       const a = apps.find((x) => x.id === id);
@@ -76,12 +81,16 @@ compareRoutes.get("/:id/compare", requireTenant, async (c) => {
       }
       const unknownCount = mustHaves.filter((m) => !mh[m.key] || mh[m.key].met === "unknown").length + competencies.filter((x) => !comp[x.key]).length + (newest?.result.unknowns.length ?? 0);
       await audit(tx, { companyId: t.companyId, actor: actorOf(c), action: "candidate.viewed", target: { type: "application", id: a.id }, reason: "comparison view" });
+      const mark = marks.get(a.id) ?? null;
+      const strip = ownerStage(a, mark);
       rows.push({
         applicationId: a.id,
         name: `${cand?.firstName ?? ""} ${cand?.lastName ?? ""}`.trim() || "Unknown",
         stage: a.stage,
         stageLabel: STAGE_LABEL[a.stage],
-        group: ownerGroup(a.stage),
+        group: groupFor(a, mark, now),
+        ownerStage: strip,
+        ownerStageLabel: ownerStageLabel(strip, mark),
         mustHaves: mh,
         competencies: comp,
         screen: screen ? { recommendation: screen.result.recommendation, summary: screen.result.summary } : null,

@@ -208,14 +208,22 @@ describe("candidate cancels an interview", () => {
     await container.drain();
   });
 
-  it("a dead link is refused: an unknown token, and the token of an interview the team cancelled", async () => {
+  it("an unknown token is refused; the link of an interview the team cancelled says so kindly and changes nothing (plan A9)", async () => {
     expect((await post(`/c/schedule/${"x".repeat(32)}/cancel`, { confirm: "yes" })).status).toBe(404);
     const booked = await book("Chloe", "Nguyen");
-    expect((await json(owner, "POST", `/api/v1/interviews/${booked.id}/cancel`, { reason: "The interviewer is out this week." })).status).toBe(200);
+    const r = await json(owner, "POST", `/api/v1/interviews/${booked.id}/cancel`, { reason: "The interviewer is out this week." });
+    expect(r.status).toBe(200);
+    // the page's confirmation can say exactly who was told
+    expect(await r.json()).toMatchObject({ status: "cancelled", candidateTold: true, interviewersTold: true });
     await container.drain();
-    expect((await interview(booked.id)).scheduleToken).toBeNull();
-    expect((await post(`/c/schedule/${booked.token}/cancel`, { confirm: "yes" })).status).toBe(404);
-    expect((await app.request(`/c/schedule/${booked.token}/confirmed`)).status).toBe(404);
+    expect((await interview(booked.id)).scheduleToken).toBe(booked.token);
+    const again = await post(`/c/schedule/${booked.token}/cancel`, { confirm: "yes" });
+    expect(again.status).toBe(302);
+    expect(again.headers.get("location")).toBe(`/c/schedule/${booked.token}/confirmed`);
+    const page = await app.request(`/c/schedule/${booked.token}/confirmed`);
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("This interview was cancelled");
+    expect((await app.request(`/c/schedule/${booked.token}`)).status).toBe(410);
     expect(await container.db.select().from(events).where(and(eq(events.type, "interview.cancelled"), eq(events.subjectId, booked.id)))).toHaveLength(1);
   });
 });

@@ -318,8 +318,9 @@ describe("repeat applications, lost links and the talent-pool opt-out", () => {
     const [ownerUser] = await container.db.select().from(users).where(eq(users.email, "owner@repeat.test"));
     const told = await container.db.select().from(notifications).where(and(eq(notifications.userId, ownerUser.id), eq(notifications.kind, "message.received")));
     expect(told.some((n) => n.body.includes("\"No thanks\". This may mean they do not want to go ahead with this step. Nothing was changed"))).toBe(true);
-    // the decline email makes the offer; a "no thanks" to it is the opt-out
+    // the decline email (sent when a person sends the decision message) makes the offer; a "no thanks" to it is the opt-out
     expect((await json("POST", `/api/v1/applications/${noorApp.id}/actions`, { action: "reject", reason: "not_a_match_experience" })).status).toBe(200);
+    expect((await json("POST", `/api/v1/applications/${noorApp.id}/actions`, { action: "send_decision" })).status).toBe(200);
     await container.drain();
     const decline = outbox().find((m) => m.to === "noor.haddad@example.com" && m.subject === "Your application to Repeat Dental")!;
     expect(decline.text).toContain("reply \"no thanks\"");
@@ -373,6 +374,7 @@ describe("repeat applications, lost links and the talent-pool opt-out", () => {
 
     // a decline after the opt-out does not offer the talent pool again: it says the choice stands
     expect((await json("POST", `/api/v1/applications/${tessApp.id}/actions`, { action: "reject", reason: "not_a_match_experience" })).status).toBe(200);
+    expect((await json("POST", `/api/v1/applications/${tessApp.id}/actions`, { action: "send_decision" })).status).toBe(200);
     await container.drain();
     const tessDecline = outbox().find((m) => m.to === "tess.ward@example.com" && m.subject === "Your application to Repeat Dental")!;
     expect(tessDecline.text).toContain("As you asked, we will not keep your details for future roles.");

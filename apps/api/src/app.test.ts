@@ -279,13 +279,16 @@ describe("Slice 1 API", () => {
     const held = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, ana.id));
     expect(held.some((e) => e.kind === "review")).toBe(true);
     expect((await container.db.select().from(applications).where(eq(applications.id, ana.id)))[0].stage).toBe("ineligible");
-    // only a person declines, and the decline message goes out only then
+    // only a person declines; the decision is private (founder decision B6) and the message goes only when a person sends it
     const decline = await json("POST", `/api/v1/applications/${ana.id}/actions`, { action: "reject", reason: "eligibility", note: "No active license." });
     expect(decline.status).toBe(200);
-    expect(((await decline.json()) as { dispositionSent: boolean }).dispositionSent).toBe(true);
+    expect(await decline.json()).toMatchObject({ dispositionSent: false, candidateNotice: "not_told" });
     const [anaRow] = await container.db.select().from(applications).where(eq(applications.id, ana.id));
     expect(anaRow.stage).toBe("rejected");
     expect(anaRow.rejectReason).toBe("eligibility");
+    outbox = (container.integrations.email as FakeEmailAdapter).sent;
+    expect(outbox.find((m) => m.to === "ana@example.com" && /Your application to/.test(m.subject))).toBeFalsy();
+    expect(await (await json("POST", `/api/v1/applications/${ana.id}/actions`, { action: "send_decision" })).json()).toMatchObject({ dispositionSent: true, candidateNotice: "queued" });
     outbox = (container.integrations.email as FakeEmailAdapter).sent;
     expect(outbox.find((m) => m.to === "ana@example.com" && /Your application to/.test(m.subject))).toBeTruthy();
     expect(outbox.find((m) => m.to === "jon@example.com" && /Your application to/.test(m.subject))).toBeFalsy();

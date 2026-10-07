@@ -1,13 +1,14 @@
 import { and, eq } from "drizzle-orm";
 import type { EvidenceAssessment, ResumeExtraction } from "@ros/contracts";
 import type { RunOutcome } from "@ros/ai";
-import { ASSESSMENT_UNAVAILABLE_TEXT, RESUME_UNREADABLE_TEXT, createEscalation, evaluateEligibility, emit, gate, notify, resolvePolicy, transition } from "@ros/core";
+import { ASSESSMENT_UNAVAILABLE_TEXT, RESUME_UNREADABLE_TEXT, audit, createEscalation, evaluateEligibility, emit, gate, notify, readingConsistency, resolvePolicy, transition } from "@ros/core";
 import { applications, assessments, candidates, companies, documents, rolePackets, roles, type Tx } from "@ros/db";
 import { assessApplication, extractResume, sendAcknowledgment } from "@ros/agents";
 import { twoPhase, type WorkflowDefinition } from "../types";
 import { examineQuarantinedDocument, queueObjectDiscard, recordQuarantineVerdict, type QuarantineExamination } from "../documents";
+import { SUGGESTION_WINDOW_HOURS, settleSuggestion, waitForSuggestion, type SuggestionState } from "../suggestions";
 
-type State = { applicationId: string; roleId: string; ineligibleUntil?: string; heldAt?: string; remindersSent?: number };
+type State = { applicationId: string; roleId: string; ineligibleUntil?: string; heldAt?: string; remindersSent?: number } & SuggestionState;
 
 /**
  * From "application received" to "ready for the owner" (docs/06 `application_intake`).
@@ -144,7 +145,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
       });
       const { candidate, role } = loaded;
       const name = `${candidate.firstName} ${candidate.lastName}`;
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "application.ineligible_hold", title: `${name} answered no to an eligibility question`, body: `Held for your decision (${result.failedRules.map((f) => f.reason).join("; ")}). Nothing is sent to them unless you decline. Override if the answer was a mistake.`, action: { label: "Review", href: `/roles/${role.id}/talent?stage=ineligible&open=${app.id}` } });
+      await notify(ctx.q, { companyId: ctx.companyId, kind: "application.ineligible_hold", title: `${name} answered no to an eligibility question`, body: `Held for your decision (${result.failedRules.map((f) => f.reason).join("; ")}). Nothing is sent to them, even if you decline, until someone sends the decision message. Override if the answer was a mistake.`, action: { label: "Review", href: `/roles/${role.id}/talent?stage=ineligible&open=${app.id}` } });
       if (g.outcome === "human_only") return { kind: "next", step: "ready" }; // reminders disabled by policy; the hold stays visible in Today
       if (g.outcome === "wait_for_approval") return { kind: "wait", wait: { kind: "human", approvalRequestId: g.approvalRequestId }, resumeStep: "ineligible_review" };
       const hours = Number(g.decision.params.reviewWindowHours ?? 24);
@@ -165,7 +166,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
       const hoursHeld = Math.round((ctx.now.getTime() - Date.parse(heldAt)) / 3600_000);
       const remindersSent = (ctx.state.remindersSent ?? 0) + 1;
       const name = `${candidate.firstName} ${candidate.lastName}`;
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "application.ineligible_review_due", title: `${name} has waited ${hoursHeld} hours for your decision`, body: "They answered no to an eligibility question. Decline with a reason, or override if the answer was a mistake. Nothing is sent to them until you decide.", action: { label: "Decide", href: `/roles/${role.id}/talent?stage=ineligible&open=${app.id}` } });
+      await notify(ctx.q, { companyId: ctx.companyId, kind: "application.ineligible_review_due", title: `${name} has waited ${hoursHeld} hours for your decision`, body: "They answered no to an eligibility question. Decline with a reason, or override if the answer was a mistake. Nothing is sent to them, even if you decline, until someone sends the decision message.", action: { label: "Decide", href: `/roles/${role.id}/talent?stage=ineligible&open=${app.id}` } });
       await emit(ctx.q, { type: "application.hold_reminded", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { hoursHeld, remindersSent }, correlationId: ctx.run.id });
       if (hoursHeld >= escalateAfter) {
         await createEscalation(ctx.q, { companyId: ctx.companyId, roleId: role.id, applicationId: app.id, kind: "review", question: `${name} answered no to an eligibility question for ${role.title} and has waited ${hoursHeld} hours for a decision. Please review it with the customer; only they can decline.`, requestedBy: ctx.actor, workflowRunId: ctx.run.id, now: ctx.now });
@@ -230,11 +231,17 @@ export const applicationIntake: WorkflowDefinition<State> = {
       },
     }),
 
-    /** Policy `application.invite_screen` (default auto_notify): a "screen" recommendation starts the screen workflow; anything else waits for the owner. */
+    /**
+     * Policy `application.invite_screen` (default auto_notify): a "screen" recommendation starts the screen workflow;
+     * anything else waits for the owner. The software check comes first (plan A8): a reading that disagrees with its own
+     * must-have findings holds the step for a person, with the reason, and the candidate shows as "Needs a closer look".
+     * Low confidence alone holds nothing; the page asks the reader to read that one themselves. A suggestion that waits
+     * for approval expires after a week (plan A6).
+     */
     async after_triage(ctx) {
       const loaded = await load(ctx.q, ctx.state.applicationId);
       if (!loaded) return { kind: "fail", error: "application not found", retryable: false };
-      const { app, candidate, role } = loaded;
+      const { app, candidate, role, packet } = loaded;
       if (app.stage !== "triaged" || !app.latestAssessmentId) return { kind: "complete" };
       const [asmt] = await ctx.q.select().from(assessments).where(eq(assessments.id, app.latestAssessmentId)).limit(1);
       const rec = (asmt?.result as { recommendation?: string } | undefined)?.recommendation;
@@ -255,20 +262,28 @@ export const applicationIntake: WorkflowDefinition<State> = {
         await notify(ctx.q, { companyId: ctx.companyId, kind: "application.needs_review", title: `${name} needs a closer look`, body, action: { label: "Take a closer look", href: `/roles/${role.id}/talent?open=${app.id}` } });
         return { kind: "complete" };
       }
-      const g = await gate(ctx.q, { companyId: ctx.companyId, roleId: role.id, applicationId: app.id, actionType: "application.invite_screen", subject: { type: "application", id: app.id }, proposal: { assessmentId: asmt.id, recommendation: rec }, rationale: `${name} looks like a fit for ${role.title}: ${asmt.result.summary}`, requestedBy: { kind: "agent", id: "triage", runId: asmt.aiRunId ?? undefined }, workflowRunId: ctx.run.id, expiresInHours: 24 * 7 });
+      const check = readingConsistency(asmt, packet);
+      if (!check.consistent) {
+        await audit(ctx.q, { companyId: ctx.companyId, actor: ctx.actor, action: "assessment.flagged", target: { type: "application", id: app.id }, reason: check.reason ?? "the reading disagrees with its must-have findings", details: { assessmentId: asmt.id, held: "application.invite_screen" } });
+        await notify(ctx.q, { companyId: ctx.companyId, kind: "application.needs_review", title: `${name} needs a closer look`, body: `${check.reason} No screening invitation was sent.`, action: { label: "Take a closer look", href: `/roles/${role.id}/talent?open=${app.id}` } });
+        return { kind: "complete" };
+      }
+      const g = await gate(ctx.q, { companyId: ctx.companyId, roleId: role.id, applicationId: app.id, actionType: "application.invite_screen", subject: { type: "application", id: app.id }, proposal: { assessmentId: asmt.id, recommendation: rec }, rationale: `${name} looks like a fit for ${role.title}: ${asmt.result.summary}`, requestedBy: { kind: "agent", id: "triage", runId: asmt.aiRunId ?? undefined }, workflowRunId: ctx.run.id, expiresInHours: SUGGESTION_WINDOW_HOURS });
       if (g.outcome === "human_only") {
         await notify(ctx.q, { companyId: ctx.companyId, kind: "application.ready", title: `${name} is ready for a screen`, body: asmt.result.summary, action: { label: "Invite to a screen", href: `/roles/${role.id}/talent?open=${app.id}` } });
         return { kind: "complete" };
       }
-      if (g.outcome === "wait_for_approval") return { kind: "wait", wait: { kind: "human", approvalRequestId: g.approvalRequestId }, resumeStep: "after_triage_decision" };
+      if (g.outcome === "wait_for_approval") return waitForSuggestion(ctx, g.approvalRequestId, "after_triage_decision");
       await ctx.services.engine.start(ctx.q, { workflowKey: "screen", companyId: ctx.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: role.id, invitedBy: "triage" }, idempotencyKey: `screen:${app.id}`, actor: ctx.actor });
-      if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.invited", title: `Inviting ${name} to a screen`, body: `${asmt.result.summary} You can stop this from the candidate's page.`, action: { label: "See candidate", href: `/roles/${role.id}/talent?open=${app.id}` } });
+      // "Stop this screen invitation" on the candidate's page takes it back until they start (plan A7).
+      if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.invited", title: `Inviting ${name} to a screen`, body: `${asmt.result.summary} Until ${candidate.firstName} starts, you can stop the invitation from their page; they get a short, polite note.`, action: { label: "See candidate", href: `/roles/${role.id}/talent?open=${app.id}` } });
       return { kind: "complete" };
     },
 
-    async after_triage_decision() {
-      // Approval is decided in the approvals route: approving starts the screen; declining leaves the candidate with the owner.
-      return { kind: "complete" };
+    async after_triage_decision(ctx) {
+      // Approval is decided in the approvals route: approving starts the screen; declining leaves the candidate with the
+      // owner. A suggestion nobody answered within the week lapses here, and nothing is sent.
+      return (await settleSuggestion(ctx, "after_triage_decision")) ?? { kind: "complete" };
     },
   },
 };

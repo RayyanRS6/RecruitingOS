@@ -11,6 +11,7 @@ import { AskRecruiter } from "../components/AskRecruiter";
 import { canEditPacket, canManageRole, canRecordOutcome, canSeeActivity, canSeeTalent } from "../roles";
 import { payShownLabel } from "../role-words";
 import { roleStatus } from "../role-status";
+import { closeRoleToast } from "../talent-actions";
 import { AcceptingSwitch, ClosedBanner, PostingTab, StillUpAlert } from "./RolePosting";
 import { ActivityTab, InterviewPlanTab, PacketApprovalCard, PreferencesCard, RequirementList, workModelLabel } from "./RolePlan";
 import { EditPacket } from "./RoleEditor";
@@ -54,8 +55,9 @@ export function RoleDetail() {
   });
   const [closing, setClosing] = useState<{ outcome: string; reason: string } | null>(null);
   const closeWithOutcome = useMutation({
-    mutationFn: (body: { outcome: string; reason: string }) => api.post(`/api/v1/roles/${id}/outcome`, { outcome: body.outcome, confirm: true, reason: body.reason || undefined }),
-    onSuccess: async () => { toast("Role closed; the outcome is recorded with your name."); setClosing(null); await qc.invalidateQueries({ queryKey: ["role", id] }); await qc.invalidateQueries({ queryKey: ["roles"] }); },
+    mutationFn: (body: { outcome: string; reason: string }) => api.post<{ movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number }>(`/api/v1/roles/${id}/outcome`, { outcome: body.outcome, confirm: true, reason: body.reason || undefined }),
+    // says who moved to the talent pool privately and which interviews ended (founder decision B6)
+    onSuccess: async (res) => { const t = closeRoleToast(res, "Role closed; the outcome is recorded with your name."); toast(t.title, t.detail); setClosing(null); await qc.invalidateQueries({ queryKey: ["role", id] }); await qc.invalidateQueries({ queryKey: ["roles"] }); },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not close the role."),
   });
   if (role.isLoading) return <Skeleton lines={5} />;
@@ -163,7 +165,7 @@ export function RoleDetail() {
                 <Card title="Must-haves"><RequirementList items={p.requirements.mustHaves} empty="None listed." /><p className="small muted" style={{ marginTop: 8 }}>"Evidenced in" says where each one is checked; a must-have marked "screen" is asked about in the screening conversation.</p></Card>
                 <Card title="Nice-to-haves"><RequirementList items={p.requirements.niceToHaves} empty="None listed." /></Card>
                 <Card title="Eligibility questions (the only automatic holds)">
-                  <p className="small muted" style={{ marginBottom: 8 }}>Candidates answer these when they apply. A "no" on a required one holds the application for your decision: you are reminded, and nothing is sent to the candidate unless you decline. Nothing is ever declined automatically.</p>
+                  <p className="small muted" style={{ marginBottom: 8 }}>Candidates answer these when they apply. A "no" on a required one holds the application for your decision: you are reminded, and nothing is sent to the candidate, even if you decline, until someone sends the decision message. Nothing is ever declined automatically.</p>
                   <ul style={{ paddingLeft: 18, margin: 0 }}>{p.requirements.eligibility.map((e) => <li key={e.key}>{e.question} <Chip tone={e.knockout ? "needs" : "neutral"}>{e.knockout ? "required" : "asked"}</Chip><br /><span className="small muted">{e.rationale}</span></li>)}</ul>
                 </Card>
                 <Card title="Notices candidates see"><div className="row">{p.compliance.notices.map((n) => <Chip key={n}>{n.replace(/_/g, " ")}</Chip>)}</div><p className="small muted" style={{ marginTop: 8 }}>Jurisdictions: {p.compliance.jurisdictions.join(", ") || "none"}</p></Card>

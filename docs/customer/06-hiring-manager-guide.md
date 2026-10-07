@@ -8,7 +8,7 @@ Screen names and button labels in **bold** are the ones you will see in the prod
 
 ## 1. Your job in one paragraph
 
-You describe who you need in a conversation. The assistant drafts a role packet. You read it, fix it and approve it. ITS posts the job. Candidates apply. The assistant reads each application and shows you the evidence. You decide who to screen, interview and decline, and you record what happened. Nothing is sent to a candidate that says no until you say so. Whenever you want a human recruiter's opinion, press **Bring in a recruiter**.
+You describe who you need in a conversation. The assistant drafts a role packet. You read it, fix it and approve it. ITS posts the job. Candidates apply. The assistant reads each application and shows you the evidence. You decide who to screen, interview and decline, and you record what happened. A decision is private: nothing that says no is sent to a candidate until someone on your team sends the decision message. Whenever you want a human recruiter's opinion, press **Bring in a recruiter**.
 
 ## 2. The intake conversation
 
@@ -142,7 +142,7 @@ Press **Review** (or the name) to open the candidate.
 When a candidate answers no to a required eligibility question, the card reads **Held on an eligibility answer** with the question and the answer. Nothing is sent to the candidate. You are reminded daily, and an ITS recruiter is brought in after three days if nobody decides.
 
 - If the answer was a mistake or you want to keep them anyway, type why under **Why keep them in?** and press **Keep them in**. Your reason is recorded.
-- If you agree they do not meet the requirement, press **Decline now**, read what the candidate will get under your settings, and press **Confirm decline**. Nothing happens on the first press. The message afterwards says exactly what happened: a short, courteous email is on its way, it is waiting for approval, or nothing was sent and the candidate has not been told.
+- If you agree they do not meet the requirement, press **Decline now**, read what follows, and press **Confirm decline**. Nothing happens on the first press. The decision is private: nothing is sent to the candidate until someone sends the decision message (section 13), which then explains it was their eligibility answer.
 
 A candidate declined this way shows **Declined on an eligibility answer** with a **Review anyway** button in case you change your mind.
 
@@ -217,7 +217,7 @@ Once the interview is over, the candidate waits on you: they appear under **Wait
 
 - **Next round**: the candidate moves on. The page opens the interview approval for the next round with its interviewers; check them and approve, and times go out from there.
 - **Finalist**: write what stood out under **What stood out (kept internally)** and press **Confirm finalist**.
-- **Not moving forward**: pick a reason, add a note if you like, and press **Confirm decline**. Nothing reaches the candidate before you confirm; the confirm step says what they will get under your settings, and the message afterwards says what happened.
+- **Not moving forward**: pick a reason, add a note if you like, and press **Confirm: not moving forward**. The decision is private: nothing reaches the candidate until someone sends the decision message (section 13).
 
 Release 1 has no interviewer scorecards. Record what matters in the note. The decision shows on the interview page too.
 
@@ -225,7 +225,7 @@ Owners, admins and hiring managers record these decisions (and an ITS recruiter 
 
 ## 13. Declining with a reason
 
-At any stage, open the candidate and press **Decline**. A caution reminds you that declining is your decision and is recorded with your reason. Pick a **Reason**:
+At any stage, open the candidate, press the stage button and choose **Not moving forward**. (Someone held on an eligibility answer is declined from that answer's own card instead, section 7.) A caution reminds you that declining is your decision and is recorded with your reason. Pick a **Reason**:
 
 - **Experience isn't the right fit**
 - **Missing skills we need**
@@ -234,9 +234,11 @@ At any stage, open the candidate and press **Decline**. A caution reminds you th
 - **Position filled**
 - **Other**
 
-Add a **Note (kept internally)** if you like and press **Confirm decline**. The candidate receives a courteous message. Declined candidates appear under **Not moving forward**, and the reason is on their timeline. A candidate is never declined by software, and no decline message is ever sent before you confirm.
+Add a **Note (kept internally)** if you like and press **Confirm: not moving forward**. The decision is private: nothing is sent to the candidate, and their status page still shows the step they were at. If they had an interview booked or times offered, it is cancelled now, without a word to them; the decision message says it is off. Declined candidates appear under **Not moving forward** with **Not told yet**, and the reason is on their timeline. A candidate is never declined by software.
 
-**Hold** keeps a candidate where they are while you think. It sends nothing.
+**Telling the candidate.** Telling is a separate step, by a person. On the candidate's page, **Send message** shows the exact standard message first; **Send** sends it (under **Ask me first** it waits for a second person to approve it; under **Only a person** the product sends no decision messages). To tell several people at once, use **Not told yet** on the Talent page, then **Review and send**: each person gets their own message, and you see what happened for each. If you told them yourself (by phone, say), press **I told them myself** and nothing more is sent. Only once they were told does their status page show the decision. Anyone not told after two working days is listed on **Today** and you get a reminder; nothing goes out by itself.
+
+**On hold** keeps a candidate where they are while you think, until a date you choose (two weeks unless you change it); they come back to **Today** then. It sends nothing.
 
 ## 14. Recording the outcome
 
@@ -245,7 +247,7 @@ The product never makes or sends an offer, and it asks for no pay, tax, identity
 - **Hired (offer accepted outside the platform)**: add the hire date, and the date the offer was accepted if you know it
 - **Declined an offer made outside the platform**
 - **The candidate withdrew**
-- **We declined the candidate**: add a reason. The step says what the candidate will get under your settings. Shown only to people who may decline candidates.
+- **We declined the candidate**: add a reason. Like any decline it is private until someone sends the decision message (section 13). Shown only to people who may decline candidates.
 - **No hire for this candidate**
 
 Press **Continue**, then **Yes, record it**. The record carries your name and can only be corrected by an ITS administrator, with the original kept. After a hire, the product asks **Close the role too?**. Closing the role is a separate decision, made from the role page, and candidates who were still active stay in your talent pool.

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { can, type Permission } from "../../packages/core/src/permissions";
 import { defaultInterviewers } from "../../apps/web/src/interview-defaults";
 import { actorWords, describeRoleEvent, payShownLabel, roleWords } from "../../apps/web/src/role-words";
-import { canDecideInterviews, canEditPacket, canManageInterviews, canManageRole, canRecordOutcome, canRequestInterviews, canSeeActivity, canSeeTalent, canStartHire } from "../../apps/web/src/roles";
+import { canDecideInterviews, canDecline, canEditPacket, canManageInterviews, canManageRole, canRecordOutcome, canRequestInterviews, canSeeActivity, canSeeTalent, canStartHire } from "../../apps/web/src/roles";
 
 /**
  * The signed-in pages decide what to show from apps/web/src/roles.ts, a copy of the permission matrix (the pages do not
@@ -21,6 +21,7 @@ const MIRRORS: Array<[string, (role: string) => boolean, Permission]> = [
   ["canRequestInterviews", canRequestInterviews, "interview.request"],
   ["canManageInterviews", canManageInterviews, "interview.manage"],
   ["canDecideInterviews", canDecideInterviews, "interview.decide"],
+  ["canDecline", canDecline, "application.reject"],
 ];
 
 describe("the web pages' copy of the permission matrix", () => {
@@ -83,6 +84,14 @@ describe("the role page's Activity words", () => {
       expect(said, type).toBe(words);
       expect(said, type).not.toMatch(/_|posting\./);
     }
+  });
+
+  it("says how long an approval had before it ran out, and why a screen was closed", () => {
+    expect(describeRoleEvent(ev("approval.expired", { actionType: "application.invite_screen", windowDays: 7 }))).toBe("The approval ran out of time (7 days)");
+    expect(describeRoleEvent(ev("approval.expired", { actionType: "role_packet.approve" }))).toBe("The approval ran out of time (14 days)");
+    expect(describeRoleEvent(ev("screen.cancelled", { reason: "stopped_by_team" }))).toBe("A screening invitation was stopped by the team");
+    expect(describeRoleEvent(ev("screen.cancelled", { reason: "left_process" }))).toBe("A screen was closed: the candidate is no longer in the process");
+    expect(describeRoleEvent(ev("screen.cancelled", { reason: "deletion_request" }))).toBe("A screen was closed: the candidate's information was deleted");
   });
 
   it("shows an AI step as the assistant, never its internal id; people by name", () => {

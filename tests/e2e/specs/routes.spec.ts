@@ -50,8 +50,9 @@ test.describe("route inventory", () => {
       ["/", /Good (morning|afternoon|evening)/],
       ["/roles", "Roles"],
       [`/roles/${seeded.roleId}`, /Hygienist/i],
-      [`/roles/${seeded.roleId}/talent`, /Talent/],
-      ["/talent", /Talent/],
+      // the Talent page is headed by the role it shows (Wave A: "JOB · <company>" above the role's title)
+      [`/roles/${seeded.roleId}/talent`, /Hygienist/i],
+      ["/talent", /Hygienist/i],
       ["/interviews", "Interviews"],
       ["/setup", "Setup"],
     ];

@@ -41,6 +41,7 @@ Every workflow definition declares: trigger, preconditions, steps (actions), suc
 - **Preconditions:** candidate has a reachable channel; SMS requires consent, else web chat via email link; `text_screens` entitlement.
 - **Steps:** `invite` (message with disclosure and the human alternative; stage `screen_invited`) → `wait(event: screen.started | timer 48h)` → on timer: `remind` once, then after 72h more `expire` (stage `screen_invited` with `screens.status = expired`, brief shows "no response") → `conduct` (Screening agent loop; each candidate message is `wait(event: message.received)`; stage `screening`) → `assess` (ScreenAssessment; stage `screen_complete`) → `recommend` (if strong_interview or interview and policy `application.recommend_interview` = auto_notify: stage `interview_recommended`, brief; decline_recommended never changes the stage).
 - **Failure:** channel failure → switch channel; candidate replies HUMAN → `screen.human_requested`, stage stays, escalation `candidate_issue` with a 4-hour SLA; AI failure → retry, then human.
+- **Checks and expiry (plan A6, A7, A8):** before `gate()`, the triage step and `recommend` run `readingConsistency` (packages/core/src/evidence.ts): a Strong or Potential reading with a must-have shown not met by a verified quote, or a step suggested for a Weak or Insufficient reading, holds the step for a person (notification `application.needs_review`, audit `assessment.flagged`, "Needs a closer look" with the reason). Low confidence alone holds nothing. A suggestion waiting for approval expires after 7 days (`approval.expired`, nothing sent). Until the candidate starts, a person may stop the invitation (`cancel_screen`): `screens.status = cancelled`, the run cancelled, stage back to `triaged`, a short note to the candidate.
 - **Events:** `screen.*`, `assessment.created`, `application.stage_changed`, `candidate.recommended`.
 
 ### `schedule_interview` (Slice 3)
@@ -81,6 +82,8 @@ Every workflow definition declares: trigger, preconditions, steps (actions), suc
 | Email bounce | Mark communication `bounced`; try SMS if consented; flag the candidate record; ask the candidate for another address via any working channel |
 | Candidate response (any time) | Inbound message matched to the candidate and application; if a workflow is waiting on `message.received` it resumes; otherwise the Coordinator classifies (question, reschedule, withdraw, opt-out, complaint) and routes |
 | Candidate withdrawal | Stage `withdrawn`, reason captured, all waiting runs for that application cancelled, interviews cancelled and calendars cleaned, owner notified, candidate thanked |
+| Leaving the process (plan A9) | Every exit (decline, talent pool, withdrawal, an outcome, closing the role, a deletion) runs `exitCleanup` (apps/api/src/services/exit-cleanup.ts): interviews still to come and open screens are cancelled and the assistant's waiting suggestions withdrawn. After a private decision nothing is sent (plan-adjustments §4): the decision message, when a person sends it, says a booked interview or offered times are off, so the candidate gets one message. The candidate's own exits (a withdrawal on the status page or inside the screening conversation, an offer they declined) are confirmed with a short note. Old links show a friendly page; the scheduling run stops at its next step. Leaving a decision before they were told (a withdrawal, review anyway, a corrected outcome) withdraws a decision message still queued |
+| Untold decisions (founder decision B6, Q27) | A decision nobody has told the candidate about for two working days or more (open or closed role, no message waiting for approval) raises the `decisions_untold` reminder: one in-app notification to owners, admins and hiring managers, never an email or a recruiter, and the role's "not told yet" card on Today until they are told. Nothing is sent by itself; the five-day automatic fallback is Wave G (G3). A decision message whose send was interrupted (`unknown`) or that bounced for good puts the decision back to not told, so it shows again |
 | Duplicate candidates | Dedupe on normalized email and phone at intake; fuzzy matches flagged for recruiter merge; the same person applying to the same role updates the application rather than creating a second |
 | Missing information | Steps declare required facts; missing facts produce a targeted request to the candidate or owner and a `wait`, never an invented value |
 | AI uncertainty | Confidence low or unknowns critical → the workflow routes to "needs review" instead of acting; refusals are treated as "needs human" |
@@ -120,7 +123,7 @@ Resolution order: role policy → company policy → platform default. Takeover 
 | `offer.send` | approval (never lower) | owner, admin |
 | `offer.negotiate` | human_only | |
 | `offer.revise` | approval (never lower) | owner, admin |
-| `disposition.send` (rejection after a human decision) | auto_notify | |
+| `disposition.send` (the decision message a person sends after a private decision; founder decision B6) | auto | Declining never sends anything by itself. Auto: the message goes when a person presses Send; approval: it waits for a second person; human_only: the product sends none and the team tells candidates themselves |
 | `reference.request` | auto_notify | |
 | `background_check.order` | approval | owner, admin, hr |
 | `background_check.adverse_action` | human_only | |
@@ -148,6 +151,7 @@ States: `applied`, `received`, `ineligible`, `eligible`, `triaged`, `screen_invi
 | `eligible` → `triaged` | system (assessment created) | | `application.triaged` |
 | `triaged` → `screen_invited` | system (policy `application.invite_screen`) or owner/hiring_manager/recruiter | channel and consent | `screen.invited` |
 | `screen_invited` → `screening` | system on first candidate reply | | `screen.started` |
+| `screen_invited` → `triaged` | owner, admin, hiring_manager, recruiter ("Stop this screen invitation", plan A7) | the candidate has not started; they get a short, polite note | `screen.cancelled` |
 | `screening` → `screen_complete` | system | | `screen.completed`, `screen.assessed` |
 | `screen_complete` → `interview_recommended` | system (recommendation) or human | | `candidate.recommended` |
 | `triaged`/`screen_complete`/`interview_recommended` → `interview_scheduled` | owner, hiring_manager, recruiter approve `interview.request`; system books | approval | `interview.requested`, `interview.scheduled` |
@@ -166,6 +170,7 @@ States: `applied`, `received`, `ineligible`, `eligible`, `triaged`, `screen_invi
 | `accepted` → `onboarding` | system (onboarding started) | | `onboarding.started` |
 | `onboarding` → `hired` | manager confirms start | human confirmation (or auto after start date + 2 days with no no-show report, policy) | `start.confirmed` |
 | any active → `withdrawn` | candidate, or human on the candidate's behalf | | `application.withdrawn` |
+| `rejected`/`talent_pool` → `withdrawn` | candidate only (status page) | the decision was never told to them (plan A1) | `application.withdrawn` |
 | any active → `rejected` | owner, hiring_manager, recruiter (human decision) | human (except the eligibility path) | `application.rejected` with reason code |
 | `rejected`/`declined`/`withdrawn`/(role closed) → `talent_pool` | system per packet policy, or human | candidate not opted out | `application.moved_to_talent_pool` |
 
@@ -173,7 +178,7 @@ States: `applied`, `received`, `ineligible`, `eligible`, `triaged`, `screen_invi
 
 **Withdrawal.** Cancels all waiting runs and interviews for the application, sends a courteous confirmation, records the reason if given, keeps the record for retention purposes, and offers the talent pool.
 
-**Role closed or filled.** Active applications receive a disposition (policy `disposition.send` = auto_notify after the owner confirms the close), and move to `talent_pool` unless opted out.
+**Role closed or filled.** Active applications move to `talent_pool` (kept unless opted out), privately: their interviews and screens end and nobody is told until a person sends the decision message (founder decision B6; policy `disposition.send`).
 
 ## Implementation notes (kept in sync with code)
 

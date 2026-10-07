@@ -7,7 +7,8 @@ import { EvidenceAssessment, Finding } from "./assessment";
 export const ScreenChannel = z.enum(["web", "sms"]);
 export type ScreenChannel = z.infer<typeof ScreenChannel>;
 
-export const ScreenStatus = z.enum(["invited", "reminded", "in_progress", "completed", "expired", "abandoned", "human_requested"]);
+/** `cancelled`: a person stopped the invitation before the candidate started, or the application left the process (plan A7, A9). */
+export const ScreenStatus = z.enum(["invited", "reminded", "in_progress", "completed", "expired", "abandoned", "human_requested", "cancelled"]);
 export type ScreenStatus = z.infer<typeof ScreenStatus>;
 
 export const ScreenTranscriptEntry = z.object({

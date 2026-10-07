@@ -22,7 +22,9 @@ export const EventType = z.enum([
   "resume.ingested", "resume.extraction_failed", "document.upload_authorized", "document.upload_used", "document.uploaded", "document.validated", "document.rejected", "document.deleted", "eligibility.evaluated", "application.ineligible", "application.hold_reminded", "application.triaged",
   "assessment.created", "application.stage_changed", "application.inactive", "application.withdrawn", "application.rejected",
   "application.moved_to_talent_pool",
-  "screen.invited", "screen.started", "screen.completed", "screen.abandoned", "screen.expired", "screen.human_requested", "screen.assessed",
+  // Private marks (Longlist, Shortlist, On hold, Not a fit for now) and the candidate being told a decision (founder decisions B3, B6).
+  "application.marked", "application.mark_cleared", "application.told",
+  "screen.invited", "screen.started", "screen.completed", "screen.abandoned", "screen.expired", "screen.human_requested", "screen.assessed", "screen.cancelled",
   "candidate.recommended", "interview.requested", "interview.scheduling_started", "interview.slots_offered", "interview.scheduled",
   "interview.rescheduled", "interview.cancelled", "interview.no_show", "interview.brief_sent", "interview.recording_consented",
   "interview.recording_declined", "interview.completed", "interview.transcribed", "scorecard.drafted", "scorecard.submitted",
@@ -32,6 +34,8 @@ export const EventType = z.enum([
   "onboarding.started", "handoff.packet_sent", "employee.created", "employee.creation_failed", "onboarding.task_completed",
   "onboarding.completed", "start.confirmed", "start.no_show", "outcome.recorded", "outcome.corrected",
   "message.queued", "message.sent", "message.delivered", "message.bounced", "message.complained", "message.retried", "message.suppressed", "message.failed", "message.received",
+  // A decision message withdrawn from the outbox before it left: the decision it carried no longer applies.
+  "message.cancelled",
   "consent.granted", "consent.revoked", "candidate.opted_out", "candidate.data_request", "candidate.data_request_fulfilled", "candidate.anonymized", "candidate.complaint",
   "workflow.started", "workflow.step_completed", "workflow.waiting", "workflow.resumed", "workflow.retried", "workflow.failed", "workflow.completed",
   "workflow.escalated", "workflow.cancelled", "approval.requested", "approval.granted", "approval.denied", "approval.expired",

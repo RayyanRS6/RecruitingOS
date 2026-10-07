@@ -118,31 +118,54 @@ export function reminderClosingLine(candidate: { preferences: { talentPoolOptOut
     : "If you are no longer interested, no reply is needed; we will close the application in a few days and keep you in mind for future openings.";
 }
 
-/** A respectful, specific disposition after a human decision or an owner-authored eligibility rule. */
-export async function sendDisposition(q: Queryable, integrations: Integrations, input: MessageInput & { reason: string }): Promise<SendResult> {
-  const { application, candidate, company, packet } = input;
+/**
+ * An interview the candidate knew about that is cancelled with the decision; the decision message says so (one message,
+ * not two). A booked one has its time; one whose times were only offered has none (`startsAt` null).
+ */
+export type CancelledInterview = { title: string; startsAt: string | null; timezone: string | null };
+
+/**
+ * The decision message: respectful and specific, after a human decision or an owner-authored eligibility rule. A
+ * decision is private until a person sends this (founder decision B6), so it also carries the cancellation of any
+ * interview the decision called off. Pure, so the page can preview exactly what will go.
+ */
+export function dispositionMessage(input: Pick<MessageInput, "candidate" | "company" | "packet"> & { reason: string; cancelledInterviews?: CancelledInterview[] }): { subject: string; text: string; templateKey: string } {
+  const { candidate, company, packet } = input;
   const why =
     input.reason === "eligibility"
       ? "Based on your answers to the eligibility questions, this particular role requires something you indicated you do not currently have (for example a license, certification, or schedule availability). If that has changed or you answered in error, reply to this email and a person will take a look."
       : "After reviewing your background against what this role needs, the team has decided not to move forward at this time.";
+  const when = (startsAt: string, timezone: string | null) => new Date(startsAt).toLocaleString("en-US", { timeZone: timezone ?? "UTC", weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+  const cancelled = (input.cancelledInterviews ?? []).map((iv) => (iv.startsAt ? `The ${iv.title} on ${when(iv.startsAt, iv.timezone)} is cancelled, so there is no need to attend.` : `The times we offered you for the ${iv.title} are no longer available, so there is no need to pick one.`)).join(" ");
   const text = `Hi ${candidate.firstName},
 
 Thank you for your interest in the ${packet.identity.title} position at ${company.name}.
 
-${why}
+${why}${cancelled ? `\n\n${cancelled}` : ""}
 
 ${futureRolesLine(candidate)}
 
 ${signature(packet, company)}
 
 ${packet.communication.disclosureText || disclosureLine(company.name)}`;
+  return { subject: `Your application to ${company.name}`, text, templateKey: `disposition:${input.reason}` };
+}
+
+/**
+ * Queues the decision message. One per decision: the key carries when the decision was made, so a second Send for the
+ * same decision finds the first message, while a later decision (after "review anyway") gets a message of its own.
+ * `attempt` counts earlier messages for this decision that could not be delivered: sending again is a new message.
+ */
+export async function sendDisposition(q: Queryable, integrations: Integrations, input: MessageInput & { reason: string; cancelledInterviews?: CancelledInterview[]; attempt?: number }): Promise<SendResult> {
+  const { application, candidate } = input;
+  const message = dispositionMessage(input);
   return deliver(q, integrations, {
     ...input,
     channel: "email",
-    templateKey: `disposition:${input.reason}`,
-    subject: `Your application to ${company.name}`,
-    text,
-    idempotencyKey: `disposition:${application.id}`,
+    templateKey: message.templateKey,
+    subject: message.subject,
+    text: message.text,
+    idempotencyKey: `disposition:${application.id}:${application.rejectedAt ?? application.stageChangedAt}${input.attempt ? `:${input.attempt}` : ""}`,
     eventOnSent: "message.sent",
     to: candidate.email,
   });

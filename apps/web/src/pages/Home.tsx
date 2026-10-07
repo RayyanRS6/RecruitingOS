@@ -9,6 +9,7 @@ import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
 import { canStartHire } from "../roles";
 import { requestSentText } from "../recruiter-access";
+import { briefDecisionToast } from "../talent-actions";
 
 type Turn = { role: "assistant" | "user" | "system"; content: string };
 
@@ -219,10 +220,13 @@ function BriefCardView({ card, onSentToRecruiter }: { card: BriefCard; onSentToR
   const act = useMutation({
     mutationFn: (a: BriefCard["actions"][number]) => api.post<unknown>(a.path, { ...(a.body ?? {}), question: (a.body as { question?: string } | undefined)?.question ?? `Please review: ${card.title}` }),
     // A request to a recruiter answers with what they will see and until when (Q31); the page keeps those words on screen.
+    // An answer to an approval ("Yes", "Not now", "Do not send") says exactly what it did.
     onSuccess: (r, a) => {
       if (a.path.includes("/escalations")) { toast("Sent to a recruiter."); onSentToRecruiter(requestSentText(r)); }
-      else toast("Done.");
+      else { const t = briefDecisionToast(a, r); toast(t.title, t.detail); }
       qc.invalidateQueries({ queryKey: ["brief"] }); qc.invalidateQueries({ queryKey: ["notifications"] });
+      if (card.roleId) { qc.invalidateQueries({ queryKey: ["applications", card.roleId] }); qc.invalidateQueries({ queryKey: ["roles"] }); }
+      if (card.applicationId) qc.invalidateQueries({ queryKey: ["application", card.applicationId] });
     },
     onError: (err) => toast(err instanceof ApiError ? err.message : "That didn't work."),
   });
@@ -239,7 +243,7 @@ function BriefCardView({ card, onSentToRecruiter }: { card: BriefCard; onSentToR
             a.method === "GET" ? (
               <Link key={i} to={a.path} className={`btn ${i === 0 ? "primary" : "secondary"} sm`}>{a.label}</Link>
             ) : (
-              <Button key={i} size="sm" variant={i === 0 ? "primary" : "secondary"} loading={act.isPending} onClick={() => act.mutate(a)}>{a.label}</Button>
+              <Button key={i} size="sm" variant={i === 0 ? "primary" : "secondary"} loading={act.isPending && act.variables === a} disabled={act.isPending} onClick={() => act.mutate(a)}>{a.label}</Button>
             ),
           )}
         </div>

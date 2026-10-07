@@ -8,12 +8,15 @@ import type {
   IntakeFacts,
   IntakeMessage,
   Location,
+  MarkKind,
+  MarkSource,
   Playbook,
   ResumeExtraction,
   RolePacket,
   ScreenAssessment,
   ScreenProgress,
   ScreenTranscriptEntry,
+  ToldState,
 } from "@ros/contracts";
 import { createdAt, id, ts, updatedAt } from "./columns";
 import { companies, users } from "./tenancy";
@@ -269,6 +272,12 @@ export const applications = pgTable(
     rejectedAt: ts("rejected_at"),
     rejectReason: text("reject_reason"),
     rejectNote: text("reject_note"),
+    /**
+     * Whether the candidate was told a decision (migration 0026; founder decision B6): not_told until a person sends
+     * the message (queued, then sent once the outbox delivers it) or records that they told them (told_in_person).
+     */
+    toldState: text("told_state").$type<ToldState>().notNull().default("not_told"),
+    candidateToldAt: ts("candidate_told_at"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -278,6 +287,33 @@ export const applications = pgTable(
     index("applications_company_candidate_idx").on(t.companyId, t.candidateId),
     uniqueIndex("applications_status_token_idx").on(t.statusToken),
     uniqueIndex("applications_reply_token_idx").on(t.replyToken),
+  ],
+);
+
+/**
+ * A person's private mark on an application (migration 0026; founder decision B3): longlist, shortlist, on_hold or
+ * not_a_fit_for_now. At most one is active (cleared_at null); a hold carries the date it ends. Cleared, never deleted.
+ */
+export const applicationMarks = pgTable(
+  "application_marks",
+  {
+    id: id(),
+    companyId: uuid("company_id").notNull().references(() => companies.id),
+    applicationId: uuid("application_id").notNull().references(() => applications.id),
+    mark: text("mark").$type<MarkKind>().notNull(),
+    remindAt: ts("remind_at"),
+    note: text("note"),
+    setBy: jsonb("set_by").$type<Actor>().notNull(),
+    source: text("source").$type<MarkSource>().notNull().default("manual"),
+    createdAt: createdAt(),
+    clearedAt: ts("cleared_at"),
+    clearedBy: jsonb("cleared_by").$type<Actor | null>(),
+    clearReason: text("clear_reason"),
+  },
+  (t) => [
+    uniqueIndex("application_marks_active_idx").on(t.companyId, t.applicationId).where(sql`${t.clearedAt} is null`),
+    index("application_marks_hold_due_idx").on(t.companyId, t.remindAt).where(sql`${t.clearedAt} is null and ${t.mark} = 'on_hold'`),
+    index("application_marks_application_idx").on(t.applicationId, t.createdAt),
   ],
 );
 

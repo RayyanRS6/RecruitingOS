@@ -224,7 +224,8 @@ function removalNotice(who: string, cancelled: Array<{ title: string; candidateT
   if (cancelled.length) {
     const one = cancelled.length === 1;
     const told = cancelled.filter((x) => x.candidateTold).length;
-    const toldLine = told ? ` ${told === 1 ? "The candidate who had a booked time was" : `The ${told} candidates who had a booked time were`} told it is cancelled.` : "";
+    // A candidate hears about it when they knew of it: a booked time, or times they were offered to pick from.
+    const toldLine = told ? ` ${told === 1 ? "The candidate was" : `The ${told} candidates were`} told the interview is off.` : "";
     parts.push(`${list(cancelled.map((x) => x.title))}: ${who} was the only interviewer, so ${one ? "that interview was" : `those ${cancelled.length} interviews were`} cancelled.${toldLine} To go on with ${one ? "the candidate" : "those candidates"}, approve a new interview with another interviewer from ${one ? "their" : "each candidate's"} page.`);
   }
   if (continuing.length) parts.push(`${list(continuing)}: ${continuing.length === 1 ? "goes" : "go"} ahead with the other interviewers.`);

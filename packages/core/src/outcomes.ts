@@ -4,7 +4,7 @@ import { applications, hiringOutcomes, postings, recruiterEscalations, roles, ty
 import { audit } from "./audit";
 import { emit } from "./events";
 import { BOARD_UP_STATES, isBoardChannel, transitionPosting, type PostingState } from "./postings";
-import { transition } from "./stages";
+import { DECISION_STAGES, transition, withdrawQueuedDecision } from "./stages";
 
 const ACTIVE_STAGES = new Set<ApplicationStage>(["applied", "received", "ineligible", "eligible", "triaged", "screen_invited", "screening", "screen_complete", "interview_recommended", "interview_scheduled", "interview_complete", "debrief", "finalist", "reference_check", "offer_draft", "offer_approval", "offer_sent", "negotiation", "accepted", "onboarding"]);
 
@@ -78,7 +78,7 @@ export type ClosureRequired = { postingId: string; channel: string; externalUrl:
 export async function recordRoleOutcome(
   q: Queryable,
   input: { companyId: string; roleId: string; outcome: RoleOutcome; by: Mover; actor: Actor; reason?: string; now?: Date },
-): Promise<{ row: OutcomeRow; role: typeof roles.$inferSelect; movedToTalentPool: number; closureRequired: ClosureRequired[] }> {
+): Promise<{ row: OutcomeRow; role: typeof roles.$inferSelect; movedToTalentPool: number; movedApplicationIds: string[]; closureRequired: ClosureRequired[] }> {
   const now = input.now ?? new Date();
   const [role] = await q.select().from(roles).where(and(eq(roles.id, input.roleId), eq(roles.companyId, input.companyId))).limit(1);
   if (!role) throw new OutcomeError("not_found", "Role not found.");
@@ -86,14 +86,16 @@ export async function recordRoleOutcome(
   const closed = await q.update(roles).set({ status: "closed", closedAt: now.toISOString(), closeReason: input.outcome }).where(and(eq(roles.id, role.id), sql`${roles.status} <> 'closed'`)).returning();
   if (!closed.length) throw new OutcomeError("already_closed", "This role was closed a moment ago by someone else.");
   const updated = closed[0];
-  // active candidates are kept in the talent pool, as the page promises; hired and closed candidates are untouched
+  // active candidates are kept in the talent pool, as the page promises; hired and closed candidates are untouched. The
+  // move is a private decision like any other (founder decision B6): nobody is told until a person sends the message.
   const open = await q.select({ id: applications.id, stage: applications.stage }).from(applications).where(eq(applications.roleId, role.id));
-  let movedToTalentPool = 0;
+  const movedApplicationIds: string[] = [];
   for (const a of open) {
     if (!ACTIVE_STAGES.has(a.stage)) continue;
     await transition(q, { applicationId: a.id, companyId: input.companyId, to: "talent_pool", by: input.by, actor: input.actor, reason: `role closed: ${input.outcome}` });
-    movedToTalentPool += 1;
+    movedApplicationIds.push(a.id);
   }
+  const movedToTalentPool = movedApplicationIds.length;
   // every posting closes with the role; a board that is up on the outside is named for manual removal
   const closureRequired: ClosureRequired[] = [];
   const posts = await q.select().from(postings).where(eq(postings.roleId, role.id));
@@ -110,7 +112,7 @@ export async function recordRoleOutcome(
   await audit(q, { companyId: input.companyId, actor: input.actor, action: "role.outcome_recorded", target: { type: "role", id: role.id }, reason: input.reason ?? input.outcome, details: { outcomeId: row.id, outcome: input.outcome, previousStatus: role.status, closureRequired: closureRequired.map((c) => c.channel) } });
   await emit(q, { type: "role.closed", companyId: input.companyId, actor: input.actor, subject: { type: "role", id: role.id }, payload: { reason: input.outcome, closureRequired: closureRequired.map((c) => c.channel) } });
   await emit(q, { type: "outcome.recorded", companyId: input.companyId, actor: input.actor, subject: { type: "role", id: role.id }, payload: { outcome: input.outcome, level: "role", outcomeId: row.id, roleId: role.id, movedToTalentPool } });
-  return { row, role: updated, movedToTalentPool, closureRequired };
+  return { row, role: updated, movedToTalentPool, movedApplicationIds, closureRequired };
 }
 
 /**
@@ -141,10 +143,18 @@ export async function correctOutcome(
     const from = (original.details as { stageFrom?: ApplicationStage }).stageFrom;
     stageTo = Object.hasOwn(OUTCOME_STAGE, newOutcome) ? OUTCOME_STAGE[newOutcome as ApplicationOutcome] : from ?? "talent_pool";
     const stamp = now.toISOString();
+    const [current] = await q.select({ stage: applications.stage }).from(applications).where(eq(applications.id, original.applicationId)).limit(1);
+    // A corrected record that now says "declined" or "talent pool" is a decision the candidate has not been told. One that
+    // only moves between those two keeps the told state, as `transition` does: they were told a decision either way, and
+    // a second Send would write to them twice. One that leaves a decision withdraws its message still in the outbox.
+    const wasDecision = !!current && DECISION_STAGES.includes(current.stage);
+    const newDecision = DECISION_STAGES.includes(stageTo) && !wasDecision;
+    if (wasDecision && !DECISION_STAGES.includes(stageTo)) await withdrawQueuedDecision(q, { applicationId: original.applicationId, companyId: original.companyId, actor: input.actor, reason: "the recorded outcome was corrected" });
     await q.update(applications).set({
       stage: stageTo, stageChangedAt: stamp,
       rejectedAt: stageTo === "rejected" ? stamp : null, rejectReason: stageTo === "rejected" ? "employer_declined" : null,
       withdrawnAt: stageTo === "withdrawn" ? stamp : null, withdrawReason: stageTo === "withdrawn" ? "candidate_withdrew" : null,
+      ...(newDecision ? { toldState: "not_told" as const, candidateToldAt: null } : {}),
     }).where(eq(applications.id, original.applicationId));
     await emit(q, { type: "human.override", companyId: original.companyId, actor: input.actor, subject: { type: "application", id: original.applicationId }, payload: { action: "outcome_corrected", outcome: newOutcome, stageTo } });
   } else if (original.roleId) {

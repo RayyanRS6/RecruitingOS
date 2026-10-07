@@ -127,6 +127,10 @@ test.describe("candidate journey on a phone", () => {
     const statusPath = await statusPathFromEmail(page.request, baseURL!, seeded.roleId, email);
     await page.goto(statusPath);
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    // the candidate's own steps (plan A1), the current one marked; the team's stage names and private marks never show
+    await expect(page.locator('ol.track [aria-current="step"]')).toHaveCount(1);
+    await expect(page.locator('ol.track [aria-current="step"]')).toHaveText(/^(Received|Under review)$/);
+    await expect(page.getByText(/who is interviewed, hired or turned down is always a person's decision/)).toBeVisible();
     await expectAccessible(page, "status page");
     await noHorizontalOverflow(page, "status page");
     // withdrawing is an outlined secondary button here too, not the near-black main action
@@ -178,6 +182,7 @@ test.describe("candidate journey on a phone", () => {
     await page.goto(statusPath);
     // the status card's label, not the confirmation message further down that also mentions it
     await expect(page.getByText("What to prepare:", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('ol.track [aria-current="step"]')).toHaveText("Interview");
     await expectAccessible(page, "status page with a booked interview");
   });
 });

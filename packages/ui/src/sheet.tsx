@@ -42,8 +42,10 @@ function keepTabInside(e: globalThis.KeyboardEvent, root: HTMLElement) {
  * document, so the key closes it wherever the focus is. When an action removes the button that had focus (a decision
  * card that disappears once recorded), focus falls back to the page, outside the dialog, and Escape must still work.
  * Tab stays inside the drawer, the page behind does not scroll, and closing puts focus back where it was.
+ * `banner` sits in the sticky header under the title row: a question that has to be answered before anything else
+ * ("You have text you have not sent").
  */
-export function Drawer(props: { open: boolean; onClose: () => void; title: string; sub?: ReactNode; leading?: ReactNode; actions?: ReactNode; tabs?: ReactNode; size?: "md" | "lg"; children: ReactNode }) {
+export function Drawer(props: { open: boolean; onClose: () => void; title: string; sub?: ReactNode; leading?: ReactNode; actions?: ReactNode; tabs?: ReactNode; banner?: ReactNode; size?: "md" | "lg"; children: ReactNode }) {
   const { open, onClose } = props;
   const panel = useRef<HTMLDivElement>(null);
   const token = useRef({});
@@ -92,6 +94,7 @@ export function Drawer(props: { open: boolean; onClose: () => void; title: strin
               <Icon name="x" />
             </button>
           </div>
+          {props.banner ? <div className="drawer-banner">{props.banner}</div> : null}
           {props.tabs}
         </div>
         <div className="drawer-body">{props.children}</div>

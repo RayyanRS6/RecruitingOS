@@ -136,21 +136,23 @@ export function Menu(props: { label: ReactNode; items: MenuItem[]; onSelect: (id
  * The stage button on a candidate's row and panel (plan adjustments §2): a pill with the stage's dot and word that opens
  * "Move to stage". Every stage is listed; one that cannot be chosen now stays visible, greyed, with its reason from
  * `blocked`. The page decides what a choice does (set a mark, open the interview card, the private decline) in `onMove`.
+ * `label` replaces the stage's own word on the button when the page knows a closer one ("Not a fit for now").
  */
-export function StageButton(props: { stage: string; onMove: (stage: OwnerStage) => void; blocked?: Partial<Record<OwnerStage, string>>; disabled?: boolean; align?: "start" | "end" }) {
+export function StageButton(props: { stage: string; onMove: (stage: OwnerStage) => void; blocked?: Partial<Record<OwnerStage, string>>; disabled?: boolean; align?: "start" | "end"; label?: string }) {
   const current = ownerStage(props.stage);
+  const word = props.label ?? current.label;
   return (
     <Menu
       label={
         <>
           <span className="dot" aria-hidden="true" />
-          {current.label}
+          {word}
         </>
       }
       items={stageMenuItems(current.id, props.blocked)}
       onSelect={(id) => props.onMove(id as OwnerStage)}
       heading="Move to stage"
-      ariaLabel={`Stage: ${current.label}. Move to another stage`}
+      ariaLabel={`Stage: ${word}. Move to another stage`}
       buttonClassName={cx("pill-button", current.tone)}
       currentLabel="Now"
       align={props.align}

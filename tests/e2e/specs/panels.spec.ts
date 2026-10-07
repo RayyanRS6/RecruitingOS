@@ -20,6 +20,7 @@ test.describe("a sheet opened from a candidate's drawer", () => {
     await page.goto("/");
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible({ timeout: 30_000 });
     await page.goto(`/roles/${seeded.roleId}/talent`);
+    await page.getByRole("tab", { name: /^All/ }).click();
     await expect(page.getByRole("button", { name: "Maria Reyes" })).toBeVisible({ timeout: 30_000 });
     await page.getByRole("button", { name: "Maria Reyes" }).click();
     const maria = page.getByRole("dialog", { name: "Maria Reyes" });

@@ -482,5 +482,65 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
 .toast-title { display: block; font-weight: 600; }
 .toast-detail { display: block; margin-top: 1px; font-size: 13px; opacity: 0.8; }
 
+/* A dot on a tab with something new in it (the candidate panel's unread markers). */
+.tab .tab-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--caution-dot); }
+.drawer-banner { padding-bottom: 12px; }
+
+/* The applicant list (Talent): one calm row per person. The name is the row's button and its click area stretches over
+   the row; the stage button sits above it, so two controls never nest. No overflow clipping, so a row's menu can open
+   over the rows below. */
+.talent-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.talent-toolbar .input, .talent-toolbar .select { width: auto; padding: 7px 10px; font-size: 13.5px; }
+.talent-toolbar .talent-search { flex: 1 1 200px; min-width: 160px; }
+.toggle-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: var(--r-pill); border: 1px solid var(--line-2); background: var(--surface); color: var(--ink-2); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.toggle-chip:hover { border-color: var(--ink-3); }
+.toggle-chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--ground); }
+.toggle-chip .count { font-variant-numeric: tabular-nums; font-weight: 500; opacity: 0.85; }
+.talent-list { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); }
+.talent-row { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; grid-template-areas: "avatar main chips score stage"; align-items: center; gap: 14px; padding: 14px 20px; }
+.talent-row > .avatar { grid-area: avatar; }
+.talent-row > .talent-row-main { grid-area: main; }
+.talent-row > .talent-row-chips { grid-area: chips; }
+.talent-row > .score-slot { grid-area: score; }
+.talent-row > .menu-wrap { grid-area: stage; justify-self: end; }
+.talent-row + .talent-row { border-top: 1px solid var(--line); }
+.talent-row:hover { background: var(--surface-2); }
+.talent-row:first-child { border-radius: var(--r-card) var(--r-card) 0 0; }
+.talent-row:last-child { border-radius: 0 0 var(--r-card) var(--r-card); }
+.talent-row:only-child { border-radius: var(--r-card); }
+.talent-row-main { min-width: 0; display: grid; gap: 1px; }
+.talent-name { justify-self: start; padding: 0; border: 0; background: none; color: var(--ink); font: 600 15px/1.3 var(--ui); text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.talent-name::after { content: ""; position: absolute; inset: 0; }
+.talent-name:focus-visible { outline: none; }
+.talent-name:focus-visible::after { border-radius: inherit; box-shadow: inset 0 0 0 2px var(--focus); }
+.talent-row-sub { display: flex; flex-wrap: wrap; gap: 2px 8px; color: var(--ink-3); font-size: 13px; }
+.talent-row-sub .waiting { color: var(--caution); font-weight: 600; }
+.talent-row-chips { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.talent-row .menu-wrap { position: relative; z-index: 1; }
+/* an open menu sits over the rows below it (two rules: a browser without :has() still keeps the first) */
+.talent-row .menu-wrap:focus-within { z-index: 3; }
+.talent-row .menu-wrap:has(.menu) { z-index: 3; }
+/* Room kept for the match score (Wave F), so the rows do not shift when it arrives. */
+.score-slot { display: inline-block; min-width: 64px; }
+@media (max-width: 640px) {
+  .talent-row { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "avatar main stage" ". chips chips"; gap: 8px 12px; padding: 12px 14px; }
+  .talent-row > .talent-row-chips { justify-content: flex-start; }
+  .talent-row > .talent-row-chips:empty { display: none; }
+  .score-slot { display: none; }
+}
+
+/* The candidate panel: what needs you sits under the header, then the sections. */
+.needs-area { display: grid; gap: 12px; margin-bottom: 18px; }
+.panel-nav { display: inline-flex; align-items: center; gap: 2px; color: var(--ink-3); font-size: 13px; font-variant-numeric: tabular-nums; }
+.history { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.history li { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 4px 12px; padding: 10px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+.history li:first-child { border-top: 0; }
+.history .when { color: var(--ink-3); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.history .who { color: var(--ink-3); font-size: 12.5px; }
+.history .why { color: var(--ink-2); font-size: 13px; }
+@media (max-width: 640px) {
+  .history li { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* Visually hidden, still read by assistive technology. */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }

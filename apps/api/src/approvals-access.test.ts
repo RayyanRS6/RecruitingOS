@@ -54,7 +54,11 @@ describe("approvals: sending the held decline, who sees and decides what", () =>
       await tx.insert(interviewParticipants).values({ companyId, interviewId: iv.id, userId: ownerId, role: "interviewer", status: "invited" });
       return iv.id;
     });
-  const decline = (applicationId: string) => json(owner, "POST", `/api/v1/applications/${applicationId}/actions`, { action: "reject", reason: "not_a_match_experience", note: "Not enough chairside time." });
+  /** A decline is private (founder decision B6); its message is a person's later Send, which these settings hold for approval. */
+  const decline = async (applicationId: string) => {
+    expect((await json(owner, "POST", `/api/v1/applications/${applicationId}/actions`, { action: "reject", reason: "not_a_match_experience", note: "Not enough chairside time." })).status).toBe(200);
+    return json(owner, "POST", `/api/v1/applications/${applicationId}/actions`, { action: "send_decision" });
+  };
   const pendingFor = async (applicationId: string, actionType: string) => (await container.db.select().from(approvalRequests).where(and(eq(approvalRequests.applicationId, applicationId), eq(approvalRequests.actionType, actionType), eq(approvalRequests.status, "pending"))))[0] ?? null;
 
   beforeAll(async () => {
@@ -82,14 +86,14 @@ describe("approvals: sending the held decline, who sees and decides what", () =>
     const pat = await seedApplication(roleA, "Pat", "Lee");
     const r = await decline(pat);
     expect(r.status).toBe(200);
-    expect(await r.json()).toMatchObject({ stage: "rejected", dispositionSent: false });
+    expect(await r.json()).toMatchObject({ stage: "rejected", dispositionSent: false, candidateNotice: "waiting_approval" });
     const req = await pendingFor(pat, "disposition.send");
     expect(req).toBeTruthy();
     expect(req!.requiredRoles).toEqual([]);
     expect(emails().filter((m) => m.to === "pat.lee@example.com")).toHaveLength(0);
     // the owner's brief asks in plain words, naming the person; HR, who cannot decide it, gets no card
     const card = (await brief(owner)).find((c) => c.approvalRequestId === req!.id);
-    expect(card?.title).toBe("Send the decline message to Pat Lee?");
+    expect(card?.title).toBe("Send the decision message to Pat Lee?");
     expect(card?.title).not.toMatch(/disposition|Decision needed/);
     expect(card?.actions.map((a) => a.label)).toEqual(["Yes, send it", "Do not send", "Review first"]);
     expect((await brief(hr)).some((c) => c.approvalRequestId === req!.id)).toBe(false);
@@ -114,7 +118,7 @@ describe("approvals: sending the held decline, who sees and decides what", () =>
   it("the brief's posting card opens the Posting tab, and a decision reserved for the takeover recruiter is not offered to the owner", async () => {
     const posting = (await brief(owner)).find((c) => c.kind === "posting_action" && c.title.includes("post it on"));
     expect(posting?.actions[0]).toMatchObject({ label: "See instructions", method: "GET", path: `/roles/${roleA}?tab=posting` });
-    // during a recruiter takeover every automatic decline waits for the recruiter; the owner's Approve would be refused, so no card
+    // during a recruiter takeover every decision message waits for the recruiter; the owner's Approve would be refused, so no card
     const [recruiterUser] = await container.db.insert(users).values({ email: "takeover@its.test", name: "Takeover Recruiter" }).returning();
     const [takeover] = await container.db.insert(takeovers).values({ companyId, roleId: roleA, recruiterUserId: recruiterUser.id, status: "active" }).returning();
     const lou = await seedApplication(roleA, "Lou", "Park");

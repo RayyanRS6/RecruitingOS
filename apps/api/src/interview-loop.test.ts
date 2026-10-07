@@ -1,12 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq, like } from "drizzle-orm";
-import type { MembershipRole } from "@ros/contracts";
-import { STAGE_LABEL, can, canTransition, entitlements, ownerGroup, type Permission } from "@ros/core";
+import type { ApplicationStage, MembershipRole } from "@ros/contracts";
+import { STAGE_LABEL, anonymizeCandidate, can, canTransition, entitlements, ownerGroup, transition, type Permission } from "@ros/core";
 import { detectStuckRoles } from "@ros/agents";
-import { applications, communications, events, interviewParticipants, interviews, notifications, users } from "@ros/db";
+import { applications, candidates, communications, events, interviewParticipants, interviews, notifications, randomToken, screens, users, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { sendDecisionMessage } from "./services/application-actions";
+import { exitCleanup } from "./services/exit-cleanup";
 import { signInAs } from "./test-helpers";
 
 /**
@@ -189,7 +191,7 @@ describe("the loop after an interview", () => {
     expect((await brief(owner)).cards.find((c) => c.applicationId === cand.id)).toBeUndefined();
   });
 
-  it("declining after an interview sends the respectful message through the outbox and says so", async () => {
+  it("declining after an interview is private: nothing goes until a person sends the decision message, through the outbox", async () => {
     const cand = await apply("Ben", "Okafor");
     const iv = await requestInterview(cand.id);
     await book(iv.id);
@@ -197,17 +199,27 @@ describe("the loop after an interview", () => {
     const before = outbox().filter((m) => m.to === cand.email).length;
     const r = await json(owner, "POST", `/api/v1/applications/${cand.id}/decision`, { decision: "not_moving_forward", reason: "not_a_match_experience", note: "Needs more perio experience." });
     expect(r.status, await r.clone().text()).toBe(200);
-    expect(await r.json()).toMatchObject({ ok: true, stage: "rejected", dispositionSent: true });
-    expect(await application(cand.id)).toMatchObject({ stage: "rejected", rejectReason: "not_a_match_experience", rejectNote: "Needs more perio experience." });
-    const queued = await container.db.select().from(communications).where(and(eq(communications.applicationId, cand.id), like(communications.templateKey, "disposition:%")));
+    expect(await r.json()).toMatchObject({ ok: true, stage: "rejected", dispositionSent: false, candidateNotice: "not_told" });
+    expect(await application(cand.id)).toMatchObject({ stage: "rejected", rejectReason: "not_a_match_experience", rejectNote: "Needs more perio experience.", toldState: "not_told" });
+    await container.drain();
+    expect(outbox().filter((m) => m.to === cand.email).slice(before)).toHaveLength(0);
+    const decisionRows = () => container.db.select().from(communications).where(and(eq(communications.applicationId, cand.id), like(communications.templateKey, "disposition:%")));
+    expect(await decisionRows()).toHaveLength(0);
+    // a person sends it: one respectful message, and the interview that already took place is not called off in it
+    expect(await (await json(owner, "POST", `/api/v1/applications/${cand.id}/actions`, { action: "send_decision" })).json()).toMatchObject({ candidateNotice: "queued" });
+    const queued = await decisionRows();
     expect(queued).toHaveLength(1);
     expect(queued[0].templateKey).toBe("disposition:human");
     await container.drain();
     const mail = outbox().filter((m) => m.to === cand.email).slice(before);
-    expect(mail.some((m) => m.subject === "Your application to Smile Bright Dental" && /decided not to move forward/.test(m.text))).toBe(true);
+    expect(mail).toHaveLength(1);
+    expect(mail[0].subject).toBe("Your application to Smile Bright Dental");
+    expect(mail[0].text).toMatch(/decided not to move forward/);
+    expect(mail[0].text).not.toMatch(/cancelled/);
+    expect((await application(cand.id)).toldState).toBe("sent");
     expect((await interview(iv.id)).decision).toBe("not_moving_forward");
     const rejected = await container.db.select().from(events).where(and(eq(events.type, "application.rejected"), eq(events.subjectId, cand.id)));
-    expect(rejected[0].payload).toMatchObject({ byHuman: true, afterInterview: true });
+    expect(rejected[0].payload).toMatchObject({ byHuman: true, afterInterview: true, candidateTold: false });
   });
 
   it("the decision is recorded on the undecided interview, not on the newest finished one", async () => {
@@ -360,5 +372,258 @@ describe("the loop after an interview", () => {
     for (const role of ["owner", "admin", "hiring_manager", "recruiter"] as MembershipRole[]) expect(canTransition("interview_complete", "finalist", role), `${role} finalist`).toBe(true);
     for (const role of ["hr", "interviewer"] as MembershipRole[]) expect(canTransition("interview_complete", "finalist", role), `${role} finalist`).toBe(false);
     for (const role of ["owner", "admin", "hiring_manager", "hr", "recruiter", "interviewer"] as MembershipRole[]) expect(canTransition("interview_scheduled", "interview_complete", role), `${role} ends an interview`).toBe(true);
+  });
+
+  /* ---------------------------------------------------------------------------------------------------------------- */
+  /* Leaving the process cleans up (plan A9), and the candidate's status page (plan A1).                                */
+  /* ---------------------------------------------------------------------------------------------------------------- */
+
+  const sentTo = (email: string) => outbox().filter((m) => m.to === email).length;
+  const mailTo = (email: string, from: number) => outbox().filter((m) => m.to === email).slice(from);
+  const reminders = (email: string) => outbox().filter((m) => m.to === email && /^(Tomorrow|Soon|Reminder):/.test(m.subject)).length;
+  const act = (id: string, body: Record<string, unknown>, cookie = owner) => json(cookie, "POST", `/api/v1/applications/${id}/actions`, body);
+  const statusPage = async (id: string) => (await app.request(`/c/status/${(await application(id)).statusToken}`)).text();
+  const statusWord = (html: string) => html.match(/<span>Status<\/span><strong>([^<]+)<\/strong>/)?.[1] ?? null;
+  const withdraw = async (id: string) => app.request(`/c/status/${(await application(id)).statusToken}/withdraw`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ confirm: "yes" }).toString() });
+  /** Moves the clock on from wherever it is now, and lets every timer that came due run. */
+  const advance = async (ms: number) => { setClock(container.engine.clock().getTime() + ms - BASE); await container.drain(); };
+  const seed = (stage: ApplicationStage) =>
+    withTenant(container.db, companyId, async (tx) => {
+      const [cand] = await tx.insert(candidates).values({ companyId, firstName: "Sam", lastName: stage, email: `${stage}.${randomToken(4)}@seeded.test`, firstSource: "direct" }).returning();
+      const [a] = await tx.insert(applications).values({ companyId, roleId, candidateId: cand.id, packetVersion: 1, source: "direct", stage, statusToken: randomToken(16) }).returning();
+      return a.id;
+    });
+
+  it("a private decline calls off a booked interview without a word to the candidate; the decision message, sent later, says it is off; one message, not two; no reminder follows", async () => {
+    const cand = await apply("Hana", "Kim");
+    const iv = await requestInterview(cand.id);
+    await book(iv.id);
+    const booked = await interview(iv.id);
+    const before = sentTo(cand.email);
+    const remindedBefore = reminders(cand.email);
+    const r = await act(cand.id, { action: "reject", reason: "not_a_match_experience", note: "Wants a front-desk role." });
+    expect(r.status, await r.clone().text()).toBe(200);
+    expect(await r.json()).toMatchObject({ stage: "rejected", candidateNotice: "not_told", dispositionSent: false, interviewsCancelled: 1 });
+    await container.drain();
+    expect(await interview(iv.id)).toMatchObject({ status: "cancelled", attempt: booked.attempt + 1, scheduleToken: booked.scheduleToken });
+    // plan-adjustments §4: nothing reaches the candidate when the decision is made, not even the cancellation
+    expect(mailTo(cand.email, before)).toHaveLength(0);
+    expect((await container.db.select().from(events).where(and(eq(events.type, "interview.cancelled"), eq(events.subjectId, iv.id))))[0].payload).toMatchObject({ candidateTold: false, cause: "left_process" });
+    // the interviewer is told in a sentence, not a reason code
+    expect((await told("interview.cancelled", ownerId)).some((n) => n.title === `Interview cancelled: ${booked.title}` && n.body === "The candidate is no longer in the process, so this interview is off.")).toBe(true);
+    // the old link is refused with a page that says the interview is off, and nothing about why
+    const confirmed = await app.request(`/c/schedule/${booked.scheduleToken}/confirmed`);
+    expect(confirmed.status).toBe(200);
+    expect(await confirmed.text()).toContain("This interview was cancelled");
+    expect((await app.request(`/c/schedule/${booked.scheduleToken}`)).status).toBe(410);
+    // the preview shows it, and the decision message a person sends is the one message that says both
+    const preview = (await (await json(owner, "GET", `/api/v1/applications/${cand.id}/decision-message`)).json()) as { text: string };
+    expect(preview.text).toMatch(/is cancelled, so there is no need to attend\./);
+    expect(await (await act(cand.id, { action: "send_decision" })).json()).toMatchObject({ candidateNotice: "queued" });
+    await container.drain();
+    const mail = mailTo(cand.email, before);
+    expect(mail).toHaveLength(1);
+    expect(mail[0].text).toMatch(/decided not to move forward/);
+    expect(mail[0].text).toContain(`The ${booked.title} on `);
+    expect(mail[0].text).toMatch(/is cancelled, so there is no need to attend\./);
+    expect(mail[0].text).not.toMatch(/front-desk|not_a_match/);
+    // the scheduling run is stale: past the interview's time, no reminder reached them
+    setClock(Date.parse(booked.startsAt!) + H - BASE);
+    await container.drain();
+    expect(reminders(cand.email)).toBe(remindedBefore);
+    expect(mailTo(cand.email, before)).toHaveLength(1);
+  });
+
+  it("moving someone with times on offer to the talent pool withdraws the times quietly: nothing is sent, the link says they are gone, no reminder follows; the decision message says so", async () => {
+    const cand = await apply("Ivo", "Novak");
+    const iv = await requestInterview(cand.id);
+    const offered = await interview(iv.id);
+    expect(offered.status).toBe("scheduling");
+    const before = sentTo(cand.email);
+    expect((await act(cand.id, { action: "move_to_talent_pool", note: "Better for the autumn opening." })).status).toBe(200);
+    await container.drain();
+    expect((await interview(iv.id)).status).toBe("cancelled");
+    expect(mailTo(cand.email, before)).toHaveLength(0);
+    const page = await app.request(`/c/schedule/${offered.scheduleToken}`);
+    expect(page.status).toBe(410);
+    expect(await page.text()).toContain("These interview times are no longer available");
+    const pick = await app.request(`/c/schedule/${offered.scheduleToken}`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ slotId: offered.offeredSlots[0].id, timezone: "America/New_York" }).toString() });
+    expect(pick.status).toBe(410);
+    expect((await interview(iv.id)).selectedSlot).toBeNull();
+    // the offer's reminder never goes
+    await advance(3 * DAY);
+    expect(mailTo(cand.email, before)).toHaveLength(0);
+    // the decision message, when someone sends it, says the times they were offered are gone
+    const preview = (await (await json(owner, "GET", `/api/v1/applications/${cand.id}/decision-message`)).json()) as { text: string };
+    expect(preview.text).toContain(`The times we offered you for the ${offered.title} are no longer available, so there is no need to pick one.`);
+  });
+
+  it("a candidate who withdraws on the status page has the booked interview called off, with a note confirming it", async () => {
+    const cand = await apply("Jon", "Park");
+    const iv = await requestInterview(cand.id);
+    await book(iv.id);
+    const before = sentTo(cand.email);
+    expect((await withdraw(cand.id)).status).toBe(302);
+    await container.drain();
+    expect((await application(cand.id)).stage).toBe("withdrawn");
+    expect((await interview(iv.id)).status).toBe("cancelled");
+    const mail = mailTo(cand.email, before);
+    const cancelled = mail.filter((m) => /^Cancelled:/.test(m.subject));
+    expect(cancelled).toHaveLength(1);
+    expect(cancelled[0].text).toContain("As requested");
+    expect(mail.some((m) => /withdrawal/i.test(m.text))).toBe(true);
+    const html = await statusPage(cand.id);
+    expect(statusWord(html)).toBe("Decision");
+    expect(html).toContain("You withdrew this application.");
+    expect(html).not.toMatch(/reactivate|change your mind/i);
+  });
+
+  it("an outcome the team records (the candidate withdrew by phone) calls off the booked interview with a plain note", async () => {
+    const cand = await apply("Kim", "Adler");
+    const iv = await requestInterview(cand.id);
+    await book(iv.id);
+    const before = sentTo(cand.email);
+    const r = await json(owner, "POST", `/api/v1/applications/${cand.id}/outcome`, { outcome: "candidate_withdrew", confirm: true, reason: "Took another job." });
+    expect(r.status, await r.clone().text()).toBe(201);
+    await container.drain();
+    expect((await interview(iv.id)).status).toBe("cancelled");
+    const mail = mailTo(cand.email, before);
+    expect(mail).toHaveLength(1);
+    expect(mail[0].text).toMatch(/is cancelled, so there is no need to attend\./);
+    expect(mail[0].text).not.toContain("Took another job");
+  });
+
+  it("when the decision message goes in the same transaction as the cancellation, the candidate gets one message that says both", async () => {
+    const cand = await apply("Noa", "Weiss");
+    const iv = await requestInterview(cand.id);
+    await book(iv.id);
+    const before = sentTo(cand.email);
+    const actor = { kind: "user" as const, id: ownerId, name: "Dana Whitfield" };
+    await withTenant(container.db, companyId, async (tx) => {
+      await transition(tx, { applicationId: cand.id, companyId, to: "rejected", by: "owner", actor, reason: "position_filled" });
+      expect(await exitCleanup(tx, container, { companyId, applicationId: cand.id, reason: "declined: position_filled", actor, candidateEmail: "with_decision_message" })).toMatchObject({ interviewsCancelled: 1, candidateNotes: 0 });
+      const [row] = await tx.select().from(applications).where(eq(applications.id, cand.id));
+      expect((await sendDecisionMessage(tx, container, { app: row, actor })).notice).toBe("queued");
+    });
+    await container.drain();
+    expect((await interview(iv.id)).status).toBe("cancelled");
+    const mail = mailTo(cand.email, before);
+    expect(mail).toHaveLength(1);
+    expect(mail[0].text).toMatch(/decided not to move forward/);
+    expect(mail[0].text).toMatch(/is cancelled, so there is no need to attend\./);
+  });
+
+  it("withdrawing inside the screening conversation (WITHDRAW, then CONFIRM) leaves the process like every exit: offered times are called off with a note, and nothing promises a way back", async () => {
+    const cand = await apply("Rui", "Costa");
+    const [scr] = await container.db.select().from(screens).where(eq(screens.applicationId, cand.id)).orderBy(desc(screens.createdAt)).limit(1);
+    expect(scr, "applying opens a screen in this role").toBeTruthy();
+    const iv = await requestInterview(cand.id);
+    expect((await interview(iv.id)).status).toBe("scheduling");
+    const before = sentTo(cand.email);
+    const say = (message: string) => app.request(`/c/screen/${scr.token}`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ message }).toString() });
+    expect((await say("WITHDRAW")).status).toBe(302);
+    expect((await say("CONFIRM")).status).toBe(302);
+    await container.drain();
+    expect((await application(cand.id)).stage).toBe("withdrawn");
+    expect((await interview(iv.id)).status).toBe("cancelled");
+    expect(mailTo(cand.email, before).filter((m) => /^Cancelled:/.test(m.subject))).toHaveLength(1);
+    const [after] = await container.db.select().from(screens).where(eq(screens.id, scr.id));
+    const last = after.transcript.at(-1)?.content ?? "";
+    expect(last).toMatch(/^Understood, we have withdrawn your application for .*\. Thank you for your time\.$/);
+    expect(last).not.toMatch(/change your mind|reply to any of our emails/);
+  });
+
+  it("a deletion ends the person's part in the process: the interviewers are told the booked interview is off, nothing is written to the candidate, the application is withdrawn", async () => {
+    const cand = await apply("Mia", "Rossi");
+    const iv = await requestInterview(cand.id);
+    await book(iv.id);
+    const before = sentTo(cand.email);
+    const { candidateId } = await application(cand.id);
+    await withTenant(container.db, companyId, (tx) => anonymizeCandidate(tx, { companyId, candidateId, actor: { kind: "system", id: "interview-loop.test" }, deleteFile: async () => undefined, now: container.engine.clock() }));
+    await container.drain();
+    expect(await interview(iv.id)).toMatchObject({ status: "cancelled", cancelReason: "the candidate asked for their information to be deleted" });
+    expect(mailTo(cand.email, before)).toHaveLength(0);
+    expect((await application(cand.id)).stage).toBe("withdrawn");
+    expect((await told("interview.cancelled", ownerId)).some((n) => n.body === "The candidate asked for their information to be deleted, so this interview is off.")).toBe(true);
+  });
+
+  it("the status page speaks in the candidate's four steps, never the team's stage names", async () => {
+    const cases: Array<[ApplicationStage, string]> = [["applied", "Received"], ["received", "Received"], ["ineligible", "Under review"], ["triaged", "Under review"], ["screen_complete", "Under review"], ["interview_recommended", "Under review"], ["interview_complete", "Interview"], ["finalist", "Under review"], ["offer_sent", "Decision"], ["hired", "Decision"], ["withdrawn", "Decision"]];
+    for (const [stage, word] of cases) {
+      const html = await statusPage(await seed(stage));
+      expect(statusWord(html), stage).toBe(word);
+      expect(html, stage).toContain('aria-current="step"');
+      expect(html, stage).toContain("make every decision about your application");
+      expect(html, stage).not.toMatch(/Recommended for interview|Finalist|eligibility answers did not match|reactivate/i);
+    }
+  });
+
+  it("a decision shows only once the candidate was told: until then the page stands where it was and withdrawing stays open; only messages that left are listed", async () => {
+    const cand = await apply("Lia", "Moreau");
+    const token = (await application(cand.id)).statusToken;
+    let html = await statusPage(cand.id);
+    expect(statusWord(html)).toBe("Under review");
+    expect(html).toContain("Start the screening conversation");
+    expect((await act(cand.id, { action: "reject", reason: "not_a_match_experience" })).status).toBe(200);
+    await container.drain();
+    html = await statusPage(cand.id);
+    expect(statusWord(html)).toBe("Under review");
+    expect(html).not.toMatch(/did not work out|not moving forward/i);
+    expect(html).not.toContain("Start the screening conversation"); // the screen closed with the decision
+    expect(html).toContain(`/c/status/${token}/withdraw`);
+    // a message still in the outbox is not shown as sent
+    const { candidateId } = await application(cand.id);
+    await withTenant(container.db, companyId, (tx) => tx.insert(communications).values({ companyId, candidateId, applicationId: cand.id, direction: "outbound", channel: "email", subject: "Still waiting to go", bodyText: "not sent yet", status: "queued", sentBy: { kind: "system", id: "test" } }));
+    expect(await statusPage(cand.id)).not.toContain("Still waiting to go");
+    expect(html).toContain("We received your application");
+    // she withdraws before anyone told her: allowed, and recorded as hers
+    expect((await withdraw(cand.id)).status).toBe(302);
+    expect((await application(cand.id)).stage).toBe("withdrawn");
+    const moves = await container.db.select().from(events).where(and(eq(events.type, "application.stage_changed"), eq(events.subjectId, cand.id)));
+    expect(moves.at(-1)!.payload).toMatchObject({ from: "rejected", to: "withdrawn" });
+    expect(moves.at(-1)!.actor).toMatchObject({ kind: "candidate" });
+    expect(statusWord(await statusPage(cand.id))).toBe("Decision");
+
+    // someone who was told sees the decision and the message, and can no longer withdraw
+    const other = await apply("Ola", "Berg");
+    expect((await act(other.id, { action: "reject", reason: "not_a_match_experience" })).status).toBe(200);
+    expect((await act(other.id, { action: "send_decision" })).status).toBe(200);
+    await container.drain();
+    html = await statusPage(other.id);
+    expect(statusWord(html)).toBe("Decision");
+    expect(html).toContain("This role did not work out");
+    expect(html).toContain("Your application to Smile Bright Dental");
+    expect(html).not.toContain("/withdraw");
+    expect((await withdraw(other.id)).status).toBe(302);
+    expect((await application(other.id)).stage).toBe("rejected");
+  });
+
+  // Last: it closes the role.
+  it("closing the role ends every interview still to come, privately: nobody is written to until someone sends the decision message, which says the interview is off", async () => {
+    const a = await apply("Oli", "Grant");
+    const ivA = await requestInterview(a.id);
+    await book(ivA.id);
+    const b = await apply("Pia", "Sato");
+    const ivB = await requestInterview(b.id);
+    const offeredB = await interview(ivB.id);
+    const beforeA = sentTo(a.email);
+    const beforeB = sentTo(b.email);
+    const r = await json(owner, "POST", `/api/v1/roles/${roleId}/outcome`, { outcome: "role_cancelled", confirm: true, reason: "Budget pulled." });
+    expect(r.status, await r.clone().text()).toBe(200);
+    expect(await r.json()).toMatchObject({ interviewsCancelled: 2 });
+    await container.drain();
+    expect((await interview(ivA.id)).status).toBe("cancelled");
+    expect((await interview(ivB.id)).status).toBe("cancelled");
+    expect((await application(a.id)).stage).toBe("talent_pool");
+    expect(mailTo(a.email, beforeA)).toHaveLength(0);
+    expect(mailTo(b.email, beforeB)).toHaveLength(0);
+    expect((await app.request(`/c/schedule/${offeredB.scheduleToken}`)).status).toBe(410);
+    // one message when they are told: the decision, and the booked interview is off
+    expect(await (await act(a.id, { action: "send_decision" })).json()).toMatchObject({ candidateNotice: "queued" });
+    await container.drain();
+    const mailA = mailTo(a.email, beforeA);
+    expect(mailA).toHaveLength(1);
+    expect(mailA[0].text).toMatch(/is cancelled, so there is no need to attend\./);
+    expect(mailA[0].text).not.toContain("Budget");
   });
 });

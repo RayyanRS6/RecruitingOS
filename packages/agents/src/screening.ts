@@ -23,6 +23,11 @@ export type ScreenDeps = {
   appBaseUrl: string;
   /** Wakes the `screen` workflow (`screen:<id>:started`, `screen:<id>:completed`, `screen:<id>:human`). */
   signal?: (q: Queryable, input: { companyId: string; key: string; payload?: Record<string, unknown> }) => Promise<unknown>;
+  /**
+   * Called in the same transaction once a candidate withdraws from inside the conversation (a CONFIRM by text or on the
+   * web page): the app ends the rest of their part in the process, as every exit does (plan A9).
+   */
+  onWithdrawn?: (q: Queryable, input: { companyId: string; applicationId: string; actor: Actor }) => Promise<unknown>;
 };
 
 export type ScreenRow = typeof screens.$inferSelect;
@@ -258,11 +263,13 @@ export async function answerWithdrawPrompt(q: Queryable, deps: ScreenDeps, input
     if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: msg, idempotencyKey: `screen_withdraw_kept:${screen.id}:${screen.transcript.length}`, templateKey: "screen_withdraw_kept", disclosureIncluded: false });
     return msg;
   }
-  const msg = `Understood, we have withdrawn your application for ${packet.identity.title}. Thank you for your time, and reply to any of our emails if you change your mind.`;
+  // A withdrawn application cannot be reopened, so the reply promises nothing about changing their mind (plan A1).
+  const msg = `Understood, we have withdrawn your application for ${packet.identity.title}. Thank you for your time.`;
   await q.update(screens).set({ status: "abandoned", transcript: [...screen.transcript, { role: "assistant", content: msg, at, channel: input.channel }] }).where(eq(screens.id, screen.id));
   await emit(q, { type: "screen.abandoned", companyId: company.id, actor: candidateActor, subject: { type: "screen", id: screen.id }, payload: { reason: "withdrawn" }, correlationId: screen.workflowRunId });
   await transition(q, { applicationId: app.id, companyId: company.id, to: "withdrawn", by: "candidate", actor: candidateActor, reason: "candidate withdrew during screening", correlationId: screen.workflowRunId });
   await emit(q, { type: "application.withdrawn", companyId: company.id, actor: candidateActor, subject: { type: "application", id: app.id }, payload: { during: "screen", channel: input.channel }, correlationId: screen.workflowRunId });
+  await deps.onWithdrawn?.(q, { companyId: company.id, applicationId: app.id, actor: candidateActor });
   await notify(q, { companyId: company.id, kind: "candidate.withdrawn", title: `${candidate.firstName} ${candidate.lastName} withdrew`, body: `They withdrew from ${packet.identity.title} during the screening conversation, and confirmed it.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
   if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: msg, idempotencyKey: `screen_withdrawn:${screen.id}`, templateKey: "screen_withdrawn", disclosureIncluded: false });
   await deps.signal?.(q, { companyId: company.id, key: `screen:${screen.id}:completed`, payload: { withdrawn: true } });

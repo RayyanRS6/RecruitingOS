@@ -4,7 +4,8 @@ import { type KeyboardEvent, type ReactNode, useId, useRef, useState } from "rea
 import { cx, domId, type Move, nextIndex, tabIds } from "./helpers";
 import { Icon, type IconName } from "./icons";
 
-export type TabItem = { id: string; label: string; count?: number; icon?: IconName; disabled?: boolean };
+/** `marker`: something new in this tab since the reader last opened it; a dot, announced as "new". */
+export type TabItem = { id: string; label: string; count?: number; icon?: IconName; disabled?: boolean; marker?: boolean };
 
 const KEY_MOVES: Record<string, Move> = { ArrowRight: "next", ArrowLeft: "prev", Home: "first", End: "last" };
 
@@ -66,7 +67,14 @@ export function Tabs(props: { items: TabItem[]; label: string; value?: string; d
             >
               {t.icon ? <Icon name={t.icon} size={16} /> : null}
               <span>{t.label}</span>
-              {t.count !== undefined ? <span className="count">{t.count}</span> : null}
+              {/* the space keeps "New 2" two words for a screen reader; flex layout drops it on screen */}
+              {t.count !== undefined ? <>{" "}<span className="count">{t.count}</span></> : null}
+              {t.marker ? (
+                <>
+                  <span className="tab-dot" aria-hidden="true" />
+                  <span className="sr-only"> (new)</span>
+                </>
+              ) : null}
             </button>
           );
         })}

@@ -4,13 +4,13 @@ import { and, eq } from "drizzle-orm";
 import type { RolePacket } from "@ros/contracts";
 import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, RESUME_UNREADABLE_TEXT, anonymizeCandidate, buildEscalationContext, exportCandidateData } from "@ros/core";
 import { composeInterviewerBrief } from "@ros/agents";
-import { applications, assessments, candidates, events, screens, withTenant } from "@ros/db";
+import { applications, assessments, auditRecords, candidates, events, screens, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 
 type Finding = { claim: string; evidence: { source: string; quote?: string } };
-type Evidence = { needsCloserLook: boolean; reason: string | null; assessmentUnavailable: boolean; resumeUnreadable: boolean; unknowns: string[]; unknownCount: number; topStrength: Finding | null; topConcern: Finding | null; confidenceReasons: string[] };
+type Evidence = { needsCloserLook: boolean; reason: string | null; assessmentUnavailable: boolean; resumeUnreadable: boolean; inconsistent: boolean; lowConfidence: boolean; hasProvenMiss: boolean; unknowns: string[]; unknownCount: number; topStrength: Finding | null; topConcern: Finding | null; confidenceReasons: string[] };
 type Row = { id: string; stage: string; stageLabel: string; group: string; evidence: Evidence; assessment: { overall: string; summary: string } | null };
 type Detail = { stage: string; allowedActions: string[]; assessments: Array<{ kind: string; overall: string; result: { recommendation: string; concerns: Finding[]; unknowns: Array<{ question: string }>; confidenceReasons?: string[] } }>; screens: Array<{ status: string; progress: { focusQuestions?: Array<{ key: string; question: string; answer?: string }> } }> };
 type Note = { kind: string; title: string; body: string; action: { label: string; href: string } | null };
@@ -104,6 +104,9 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     expect(row.evidence.confidenceReasons).toEqual(asmt.result.confidenceReasons);
     expect(row.evidence.needsCloserLook).toBe(false); // a screen is on its way; nobody is waiting on the owner
     expect(row.stageLabel).toBe("Invited to a screen");
+    // no must-have shown in full: a low-confidence reading. That alone holds nothing (plan A8); it asks the reader to read it themselves
+    expect(asmt.confidence).toBe("low");
+    expect(row.evidence).toMatchObject({ lowConfidence: true, inconsistent: false });
     const d = await detail(a.id);
     expect(d.assessments[0].result.concerns.map((c) => c.claim)).toContain(concern.claim);
     expect(d.assessments[0].result.unknowns.map((u) => u.question)).toContain(unknown.question);
@@ -119,6 +122,9 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     expect(row.evidence.unknownCount).toBe(0);
     // "perio experience" can only ever be partly shown to the fake (it matches on "perio"); the reason says so instead of pretending certainty
     expect(row.evidence.confidenceReasons).toEqual(["one must-have is only partly shown"]);
+    expect(row.evidence.lowConfidence).toBe(false);
+    // the licence is shown, so the "Missing a must-have" filter does not catch her
+    expect(row.evidence.hasProvenMiss).toBe(false);
   });
 
   let rileyId = "";
@@ -272,6 +278,32 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     expect(d.allowedActions).toEqual(expect.arrayContaining(["invite_screen", "interview", "reject"]));
     container.fake!.clearScripts();
     void taylorId;
+  });
+
+  it("a reading that disagrees with its own must-have findings holds the screen for a person, with the reason (plan A8)", async () => {
+    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: RolePacket } };
+    const licence = role.currentPacket.packet.requirements.mustHaves.find((m) => /licen/i.test(m.text))!;
+    const lapsed = "RDH license CA expired in 2021";
+    // a Potential reading whose own finding, quoted from the résumé, says the licence must-have is not met
+    container.fake!.scriptNext("triage.assess", { overall: "potential", confidence: "medium", confidenceReasons: [], summary: "Relevant hygiene work; the licence has lapsed.", strengths: [{ claim: "Works as a dental hygienist", evidence: { source: "resume", quote: "Dental Hygienist at Harbor Dental 2016 - present" } }], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: [{ requirementKey: licence.key, met: "no", evidence: { source: "resume", quote: lapsed } }], anomalies: [], recommendation: "screen", rationale: "Scripted for the consistency check." });
+    const a = await apply({ first: "Uma", last: "Patel", email: "uma@example.com", resume: `Uma Patel\nDental Hygienist at Harbor Dental 2016 - present\n${lapsed}\nPeriodontal charting, Dentrix` });
+    container.fake!.clearScripts();
+    expect(a.stage).toBe("triaged");
+    expect(await container.db.select().from(screens).where(eq(screens.applicationId, a.id))).toHaveLength(0);
+    expect(emailOutbox().filter((m) => m.to === "uma@example.com" && /screening conversation/.test(m.subject))).toHaveLength(0);
+    const note = (await notes()).find((n) => n.kind === "application.needs_review" && /Uma Patel/.test(n.title))!;
+    expect(note.title).toBe("Uma Patel needs a closer look");
+    expect(note.body).toContain(`a must-have is not met (${licence.text}): "${lapsed}"`);
+    expect(note.body).toMatch(/No screening invitation was sent\.$/);
+    const flagged = await container.db.select().from(auditRecords).where(eq(auditRecords.action, "assessment.flagged"));
+    expect(flagged.some((r) => (r.target as { id: string } | null)?.id === a.id && (r.details as { held: string }).held === "application.invite_screen")).toBe(true);
+    // the list says the same, read off the same assessment
+    const row = (await list()).find((r) => r.id === a.id)!;
+    expect(row.group).toBe("waiting_on_you");
+    expect(row.stageLabel).toBe(CLOSER_LOOK_LABEL);
+    // and the 'Missing a must-have' filter catches her, on the same checked quote (plan A3)
+    expect(row.evidence).toMatchObject({ needsCloserLook: true, inconsistent: true, lowConfidence: false, hasProvenMiss: true });
+    expect(row.evidence.reason).toContain(`"${lapsed}"`);
   });
 
   it("the answers to the open questions are what a person reads, what an access request exports, and what an anonymization removes", async () => {

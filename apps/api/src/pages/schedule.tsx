@@ -31,7 +31,9 @@ async function loadByToken(db: Db, token: string) {
   const [company] = await db.select().from(companies).where(eq(companies.id, iv.companyId)).limit(1);
   const [pv] = await db.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
   const participants = await participantsOf(db, iv.id);
-  return { iv, app, candidate, role, company, packet: pv?.packet ?? null, participants, expired: !!iv.scheduleTokenExpiresAt && Date.parse(iv.scheduleTokenExpiresAt) < Date.now() };
+  // The application left the process (declined, withdrew, hired, talent pool) or the role closed (plan A9): nothing here can be booked or changed.
+  const closed = ["hired", "withdrawn", "rejected", "declined", "talent_pool"].includes(app.stage) || ["closed", "filled"].includes(role.status);
+  return { iv, app, candidate, role, company, packet: pv?.packet ?? null, participants, closed, expired: !!iv.scheduleTokenExpiresAt && Date.parse(iv.scheduleTokenExpiresAt) < Date.now() };
 }
 type Bundle = NonNullable<Awaited<ReturnType<typeof loadByToken>>>;
 
@@ -45,12 +47,30 @@ const Expired = (props: { b: Bundle }) => (
     <p>Reply to any email from {props.b.company.name}'s hiring team and a person will send fresh times.</p>
   </Layout>
 );
+/**
+ * The page an old link shows once the interview is off, instead of a bare "not found" (plan A9). It says what is true
+ * for the candidate (there is nothing to attend or pick) and nothing about why: a decision is told by a person.
+ */
+const NoLongerOn = (props: { b: Bundle }) => props.b.iv.startsAt ? (
+  <Layout title="Interview cancelled">
+    <h1>This interview was cancelled</h1>
+    <p>There is no need to attend. If you have a question, reply to any email from {props.b.company.name}'s hiring team.</p>
+  </Layout>
+) : (
+  <Layout title="No longer available">
+    <h1>These interview times are no longer available</h1>
+    <p>There is nothing to pick here now. If you have a question, reply to any email from {props.b.company.name}'s hiring team.</p>
+  </Layout>
+);
+/** Nothing can be picked, asked for or moved on an interview that is off or for someone no longer in the process. */
+const isOff = (b: Bundle) => b.iv.status === "cancelled" || b.closed;
 
 schedulePages.get("/c/schedule/:token", async (c) => {
   const container = c.get("container");
   const b = await loadByToken(container.db, c.req.param("token") ?? "");
   if (!b) return c.notFound();
   if (b.iv.status === "scheduled") return c.redirect(`/c/schedule/${b.iv.scheduleToken}/confirmed`);
+  if (isOff(b)) return c.html(<NoLongerOn b={b} />, 410);
   if (b.expired || !["scheduling"].includes(b.iv.status) || !b.iv.offeredSlots.length) return c.html(<Expired b={b} />, 410);
   const tz = tzOf(b, c.req.query("tz"));
   const groups = groupSlotsByDay(b.iv.offeredSlots, tz);
@@ -100,6 +120,7 @@ schedulePages.post("/c/schedule/:token", rateLimit(POLICIES.schedule), async (c)
   const b = await loadByToken(container.db, c.req.param("token") ?? "");
   if (!b) return c.notFound();
   if (b.iv.status === "scheduled") return c.redirect(`/c/schedule/${b.iv.scheduleToken}/confirmed`);
+  if (isOff(b)) return c.html(<NoLongerOn b={b} />, 410);
   if (b.expired || b.iv.status !== "scheduling") return c.html(<Expired b={b} />, 410);
   const form = await c.req.parseBody();
   const parsed = SelectSlot.safeParse({ slotId: form.slotId, timezone: form.timezone || undefined, accessibilityNote: form.accessibilityNote || undefined });
@@ -120,6 +141,7 @@ schedulePages.post("/c/schedule/:token/none-work", rateLimit(POLICIES.scheduleNo
   const container = c.get("container");
   const b = await loadByToken(container.db, c.req.param("token") ?? "");
   if (!b) return c.notFound();
+  if (isOff(b)) return c.html(<NoLongerOn b={b} />, 410);
   if (b.expired || b.iv.status !== "scheduling") return c.html(<Expired b={b} />, 410);
   const form = await c.req.parseBody();
   const parsed = CandidateAvailability.safeParse({ timezone: form.timezone || undefined, note: form.note || undefined, preferred: [] });
@@ -143,7 +165,8 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
   const b = await loadByToken(container.db, c.req.param("token") ?? "");
   if (!b) return c.notFound();
   const tz = tzOf(b, c.req.query("tz"));
-  if (b.iv.status === "cancelled") return c.html(<Layout title="Interview cancelled"><h1>This interview was cancelled</h1><p>Reply to any email from {b.company.name}'s hiring team if you have questions.</p></Layout>);
+  if (b.iv.status === "cancelled") return c.html(<NoLongerOn b={b} />);
+  if (b.closed && b.iv.status !== "scheduled") return c.html(<NoLongerOn b={b} />, 410);
   if (b.iv.status !== "scheduled" || !b.iv.startsAt) {
     return c.html(
       <Layout title="Booking your time">
@@ -165,8 +188,9 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
         {b.iv.meetingUrl && /^https?:\/\//i.test(b.iv.meetingUrl) ? <div><span>Join</span><a href={b.iv.meetingUrl} rel="noopener">{b.iv.meetingUrl}</a></div> : <div><span>Format</span><span>{b.iv.format.replace("_", " ")}</span></div>}
       </div>
       <a class="btn" href={`/c/schedule/${b.iv.scheduleToken}/ics`}><Icon name="calendar" />Add to my calendar</a>
-      <h2>Need to change it?</h2>
-      {b.iv.rescheduleCountCandidate < MAX_CANDIDATE_RESCHEDULES ? (
+      {/* The time stays on record for someone no longer in the process (it had already started); it can no longer be moved. */}
+      {b.closed ? null : <h2>Need to change it?</h2>}
+      {b.closed ? null : b.iv.rescheduleCountCandidate < MAX_CANDIDATE_RESCHEDULES ? (
         <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/reschedule`} class="card">
           <p>We will send new times. You can do this {MAX_CANDIDATE_RESCHEDULES - b.iv.rescheduleCountCandidate === 1 ? "one more time" : "twice"}.</p>
           <button class="btn secondary" type="submit">Ask for a different time</button>
@@ -174,13 +198,13 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
       ) : (
         <div class="card"><p>You have rescheduled twice. Reply to any of our emails and a person will arrange a time with you.</p></div>
       )}
-      <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/cancel`} class="card">
+      {b.closed ? null : <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/cancel`} class="card">
         <p>No longer interested in this interview?</p>
         <label for="cancel-reason">Tell us why, if you like (optional)</label>
         <input type="text" id="cancel-reason" name="reason" maxlength={500} placeholder="For example: I accepted another offer" />
         <label class="check"><input type="checkbox" name="confirm" value="yes" required /> Yes, cancel this interview.</label>
         <button class="btn secondary" type="submit">Cancel the interview</button>
-      </form>
+      </form>}
     </Layout>,
   );
 });
@@ -198,6 +222,7 @@ schedulePages.post("/c/schedule/:token/reschedule", rateLimit(POLICIES.reschedul
   const container = c.get("container");
   const b = await loadByToken(container.db, c.req.param("token") ?? "");
   if (!b) return c.notFound();
+  if (b.closed) return c.redirect(`/c/schedule/${b.iv.scheduleToken}/confirmed`); // nothing can be moved for someone no longer in the process
   if (b.iv.status !== "scheduled") return c.redirect(`/c/schedule/${b.iv.scheduleToken}`);
   if (b.iv.rescheduleCountCandidate >= MAX_CANDIDATE_RESCHEDULES) {
     await withTenant(container.db, b.company.id, (tx) => notify(tx, { companyId: b.company.id, kind: "interview.reschedule_limit", title: `${b.candidate.firstName} wants to reschedule again`, body: "They have used both self-service reschedules; please arrange a time with them directly.", action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } }));

@@ -123,12 +123,15 @@ describe("email failure handling", () => {
     expect(r.status).toBe("failed");
     expect(r.status === "failed" && r.retryable).toBe(false);
     expect(fake().sent.length).toBe(before);
-    // a decline after a human decision goes through the same guard and shows up as a failed communication with the reason
+    // the decision message a person sends after a decline goes through the same guard and shows up as a failed
+    // communication with the reason; the candidate still counts as not told (founder decision B6)
     const decline = await json(owner, "POST", `/api/v1/applications/${applicationId}/actions`, { action: "reject", reason: "not_a_match_experience", note: "Not this time." });
     expect(decline.status).toBe(200);
+    expect((await json(owner, "POST", `/api/v1/applications/${applicationId}/actions`, { action: "send_decision" })).status).toBe(200);
     const [failed] = await container.db.select().from(communications).where(and(eq(communications.applicationId, applicationId), eq(communications.templateKey, "disposition:human"))).orderBy(desc(communications.createdAt)).limit(1);
     expect(failed.status).toBe("failed");
     expect(failed.error).toMatch(/suppressed/);
+    expect((await container.db.select().from(applications).where(eq(applications.id, applicationId)))[0].toldState).toBe("not_told");
   });
 
   it("an administrator releases a suppression with a reason; email flows again; a spam complaint suppresses for good and alerts", async () => {

@@ -3,58 +3,116 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "../nav";
-import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, EvidenceChip, Field, PageHeader, Segmented, Skeleton, StatusChip, Table, Timeline } from "@ros/ui";
-import { api, ApiError, type ActionResult, type ApplicationCapability, type ApplicationDetail, type ApplicationSummary, type AssessmentResult, type CompareResponse, type InterviewPlanView, type Me, type MessagePreview, type RoleSummary, type Screen, type SendMessageResult } from "../api/client";
+import { Alert, Avatar, Button, Card, Chip, EmptyState, ErrorState, Icon, PageHeader, Pill, Sheet, Skeleton, StageButton, StatusChip, TabPanel, Table, Tabs, type OwnerStage } from "@ros/ui";
+import { api, ApiError, type ActionResult, type ApplicationSummary, type ApplicationsWithCounts, type CompareResponse, type DecisionMessagePreview, type DecisionMessagesResponse, type Me, type RoleSummary } from "../api/client";
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
-import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, NO_QUOTE_LABEL, RESUME_UNREADABLE_TEXT, SCORECARD_UNAVAILABLE_TEXT, closerLook, competencyUnquoted, isUnquoted, openScreenOf, requirementUnquoted, resumeUnreadable, scorecardUnavailable, screenQuestionText } from "../evidence";
-import { defaultInterviewers } from "../interview-defaults";
+import { LOW_CONFIDENCE_LABEL } from "../evidence";
 import { activeCompanyOf } from "../rail";
-import { actionToast, declineConfirmText, decisionToast, outcomeToast } from "../talent-actions";
+import { canDecline } from "../roles";
+import { roleStatus } from "../role-status";
+import { actionToast, batches, bulkSendToast, holdDay, mergeDecisionResults, noticeText, stageBlocked, stageIntent, type PanelStep } from "../talent-actions";
+import { ORDERS, READING, READING_FILTERS, appliedWhen, applyView, defaultView, emptyText, readingCounts, readingOf, stripItems, waitingText, type Order, type ReadingFilter, type TalentView } from "../talent-list";
+import { CandidatePanel } from "./candidate-panel/CandidatePanel";
+import { MET_TONE, overallLabel } from "./candidate-panel/assessment";
+import { REC_LABEL, STAGE_LABEL, panelSearch, panelTabFrom, type PanelTab } from "./candidate-panel/helpers";
+import type { ActionBody } from "./candidate-panel/hooks";
 
-type Group = "all" | "waiting_on_you" | "in_process" | "not_moving_forward" | "hired";
-type EvidenceFilter = "everyone" | "closer_look";
+/** Where the candidate panel stands: who, which section, a step a stage choice opened, and the list it was opened from. */
+type PanelState = { id: string; tab: PanelTab; step: PanelStep | null; roundKey?: string; ids: string[] | null; compose: boolean };
 
-/** People: candidates grouped in plain language, evidence first, decisions as buttons, and "Ask a recruiter" on every one. */
+/** The link filters (`?ownerStage=`, `?stage=`, `?told=`) as one key: when a link changes them, the view starts again from it. */
+const linkKey = (p: URLSearchParams) => ["ownerStage", "stage", "told"].map((k) => p.get(k) ?? "").join("|");
+
+/**
+ * Talent (plan A3; founder decisions B3 and B6): one role's applicants as a calm list. The stage strip counts everyone
+ * at each stage and filters by a click; each row has the person's initials, name, when they applied, how long they have
+ * waited on you, the latest reading and the stage button. Readings only filter; nothing is ordered by them. A row opens
+ * the candidate panel, whose place is kept in the address (`?open=<id>&tab=…`).
+ */
 export function People() {
   const params = useParams();
   const nav = useNavigate();
   const [search] = useSearchParams();
+  const qc = useQueryClient();
   const roles = useQuery({ queryKey: ["roles"], queryFn: () => api.get<RoleSummary[]>("/api/v1/roles") });
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
-  const companyName = activeCompanyOf(me.data).name;
+  const company = activeCompanyOf(me.data);
+  const myRole = company.role ?? (me.data?.staffAccess ? "recruiter" : null);
   const roleId = params.id ?? roles.data?.find((r) => r.status === "open")?.id ?? roles.data?.[0]?.id;
-  const [group, setGroup] = useState<Group>("all");
-  // Compare mode (F10): tick up to five people and see the must-haves and competencies side by side; nothing is ranked.
-  const [compareOpen, setCompareOpen] = useState(false);
-  const stage = search.get("stage");
-  const apps = useQuery({ queryKey: ["applications", roleId, stage], queryFn: () => api.get<ApplicationSummary[]>(`/api/v1/roles/${roleId}/applications${stage ? `?stage=${stage}` : ""}`), enabled: !!roleId });
-  // A deep link (`?open=<applicationId>`, used by every notification and brief card about one candidate) opens that sheet.
-  const openParam = search.get("open");
-  const [openId, setOpenId] = useState<string | null>(openParam);
-  useEffect(() => { if (openParam) setOpenId(openParam); }, [openParam]);
-  const closeSheet = () => {
-    setOpenId(null);
-    // `?message=1` goes with the deep link it came in on; left in the address, every sheet opened next would start with the text box open.
-    if (!openParam && !search.get("message")) return;
-    const rest = new URLSearchParams(search);
-    rest.delete("open");
-    rest.delete("message");
-    const qs = rest.toString();
+  const role = roles.data?.find((r) => r.id === roleId);
+  const apps = useQuery({ queryKey: ["applications", roleId], queryFn: () => api.get<ApplicationsWithCounts>(`/api/v1/roles/${roleId}/applications?counts=1`), enabled: !!roleId });
+  const rows = apps.data?.applications ?? [];
+  const counts = apps.data?.counts;
+
+  // The view: what a link asked for, otherwise "waiting on you" when anyone does; changed by the strip and the filters.
+  const key = linkKey(search);
+  const [viewState, setViewState] = useState<{ key: string; view: TalentView } | null>(null);
+  const view = viewState?.key === key ? viewState.view : defaultView(search, counts);
+  const setView = (patch: Partial<TalentView>) => setViewState({ key, view: { ...view, ...patch } });
+  /** Takes the link's step filter (`?stage=`) off, from the address too, so a reload does not bring it back. */
+  const clearStageLink = () => {
+    const next = new URLSearchParams(search);
+    next.delete("stage");
+    setViewState({ key: linkKey(next), view: { ...view, internalStage: null } });
+    const qs = next.toString();
     nav(`${window.location.pathname}${qs ? `?${qs}` : ""}`, { replace: true });
   };
-  const role = roles.data?.find((r) => r.id === roleId);
-  // "Needs a closer look": the assistant could not say enough about them (insufficient evidence); a chip filters to just those.
-  const [evidenceFilter, setEvidenceFilter] = useState<EvidenceFilter>("everyone");
-  const closerLookCount = (apps.data ?? []).filter((a) => a.evidence?.needsCloserLook).length;
-  const list = (apps.data ?? []).filter((a) => (group === "all" || a.group === group) && (evidenceFilter === "everyone" || a.evidence?.needsCloserLook));
+  const shown = applyView(rows, view);
+  const shownIds = shown.map((a) => a.id);
+  const byReading = readingCounts(rows, view);
+  const provenMissKnown = rows.some((a) => a.evidence?.hasProvenMiss !== undefined);
+  const waitingCount = counts?.byGroup.waiting_on_you ?? 0;
+  const notTold = rows.filter((a) => a.toldState === "not_told" && !a.decisionMessageWaiting);
+  const mayTell = canDecline(myRole);
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [telling, setTelling] = useState(false);
+
+  // The candidate panel, mirrored in the address with replace, so Back leaves the page as before.
+  const openParam = search.get("open");
+  const fromLink = (): PanelState | null => (openParam ? { id: openParam, tab: search.get("message") === "1" ? "messages" : panelTabFrom(search.get("tab")), step: null, ids: null, compose: search.get("message") === "1" } : null);
+  const [panel, setPanel] = useState<PanelState | null>(fromLink);
+  // A notification or a Today card followed while this page is open changes only the address: follow it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only a new `?open=` in the address re-reads it
+  useEffect(() => { if (openParam && openParam !== panel?.id) setPanel(fromLink()); }, [openParam]);
+  const showPanel = (next: PanelState | null) => {
+    setPanel(next);
+    nav(`${window.location.pathname}${panelSearch(search, next ? { open: next.id, tab: next.tab } : { open: null })}`, { replace: true });
+  };
+  const openPanel = (id: string, step: PanelStep | null = null) => showPanel({ id, tab: "overview", step, ids: shownIds, compose: false });
+  // Opened from a link, the panel steps through the list on screen when the person is in it.
+  const panelIds = panel ? (panel.ids ?? (shownIds.includes(panel.id) ? shownIds : null)) : null;
+
+  // A stage choice on a row: a mark in one click; anything that needs more opens that step in the panel.
+  const rowAct = useMutation({
+    mutationFn: (input: { id: string; body: ActionBody }) => api.post<ActionResult>(`/api/v1/applications/${input.id}/actions`, input.body),
+    onSuccess: async (r, input) => {
+      const t = actionToast(input.body.action, r);
+      toast(t.title, t.detail);
+      await Promise.all([qc.invalidateQueries({ queryKey: ["applications", roleId] }), qc.invalidateQueries({ queryKey: ["application", input.id] }), qc.invalidateQueries({ queryKey: ["brief"] }), qc.invalidateQueries({ queryKey: ["roles"] })]);
+    },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "That did not go through. Try again."),
+  });
+  const onRowMove = (a: ApplicationSummary, to: OwnerStage) => {
+    const move = a.stageMoves.find((m) => m.to === to);
+    if (!move) return;
+    const intent = stageIntent(move);
+    if (intent.kind === "action") rowAct.mutate({ id: a.id, body: intent.body });
+    else if (intent.kind === "step") openPanel(a.id, intent.step);
+  };
+
+  const status = role ? (role.status === "open" ? { label: "Live", tone: "good" as const } : roleStatus(role.status)) : null;
+  const total = counts?.total ?? rows.length;
+  const empty = emptyText(view, total);
+  const filtersOn = view.reading !== "any" || view.query.trim() !== "" || view.waiting || view.stage !== "all" || !!view.internalStage || !!view.told;
 
   return (
     <div className="stack" style={{ gap: 18 }}>
       <PageHeader
-        eyebrow={companyName ?? undefined}
-        title={`Talent${role ? ` · ${role.title}` : ""}`}
-        sub="Who applied, what the evidence says, and what needs you. Nobody is declined automatically on judgment."
+        eyebrow={company.name ? `Job · ${company.name}` : "Job"}
+        title={role?.title ?? "Talent"}
+        status={status ? <Pill tone={status.tone} pulse={role?.status === "open"}>{status.label}</Pill> : undefined}
+        sub={roleId && apps.data ? `${total} ${total === 1 ? "applicant" : "applicants"}${waitingCount ? ` · ${waitingCount} waiting on you` : ""}` : undefined}
         actions={
           <>
             {roles.data && roles.data.length > 1 ? (
@@ -62,674 +120,163 @@ export function People() {
                 {roles.data.map((r) => <option key={r.id} value={r.id}>{r.title}</option>)}
               </select>
             ) : null}
-            {roleId && (apps.data?.length ?? 0) > 1 ? <Button variant={compareOpen ? "primary" : "secondary"} onClick={() => setCompareOpen((v) => !v)}>{compareOpen ? "Done comparing" : "Compare"}</Button> : null}
+            {roleId && rows.length > 1 ? <Button variant={compareOpen ? "primary" : "secondary"} onClick={() => setCompareOpen((v) => !v)}>{compareOpen ? "Done comparing" : "Compare"}</Button> : null}
             {roleId ? <AskRecruiter roleId={roleId} /> : null}
           </>
         }
       />
-      {!roleId ? <EmptyState icon="talent" title="No roles yet" body="Open a role first." action={<Link to="/" className="btn primary">Go to Today</Link>} /> : (
+      {!roleId ? (
+        roles.isLoading ? <Skeleton lines={4} /> : <EmptyState icon="talent" title="No roles yet" body="Open a role first; its applicants show here." action={<Link to="/" className="btn primary">Go to Today</Link>} />
+      ) : (
         <>
-          <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
-            <Segmented value={group} onChange={setGroup} ariaLabel="Group" options={[{ value: "all", label: `All (${apps.data?.length ?? 0})` }, { value: "waiting_on_you", label: "Waiting on you" }, { value: "in_process", label: "In process" }, { value: "not_moving_forward", label: "Not moving forward" }, { value: "hired", label: "Hired" }]} />
-            <Segmented value={evidenceFilter} onChange={setEvidenceFilter} ariaLabel="Evidence" options={[{ value: "everyone", label: "Everyone" }, { value: "closer_look", label: `${CLOSER_LOOK_LABEL} (${closerLookCount})` }]} />
+          <Tabs idBase="talent-strip" label="Stages" variant="counts" value={view.stage} onChange={(v) => setView({ stage: v as TalentView["stage"], waiting: false })} items={stripItems(counts)} />
+          <div className="talent-toolbar">
+            {waitingCount ? <button type="button" className="toggle-chip" aria-pressed={view.waiting} onClick={() => setView({ waiting: !view.waiting, order: view.waiting ? view.order : "waiting" })}>Waiting on you <span className="count">{waitingCount}</span></button> : null}
+            {mayTell && (counts?.notTold ?? 0) > 0 ? <button type="button" className="toggle-chip" aria-pressed={view.told === "not_told"} onClick={() => setView(view.told === "not_told" ? { told: null } : { told: "not_told", stage: "not_moving_forward", waiting: false })}>Not told yet <span className="count">{counts?.notTold}</span></button> : null}
+            {view.internalStage ? <button type="button" className="toggle-chip" aria-pressed="true" aria-label={`Showing only: ${STAGE_LABEL[view.internalStage] ?? view.internalStage}. Remove this filter`} onClick={clearStageLink}>{STAGE_LABEL[view.internalStage] ?? view.internalStage.replace(/_/g, " ")} <Icon name="x" size={14} /></button> : null}
+            <select className="select" aria-label="Reading" value={view.reading} onChange={(e) => setView({ reading: e.target.value as ReadingFilter })}>
+              {READING_FILTERS.filter((f) => f.id !== "missing_must_have" || provenMissKnown).map((f) => <option key={f.id} value={f.id}>{f.label}{f.id === "any" ? "" : ` (${byReading[f.id]})`}</option>)}
+            </select>
+            <input className="input talent-search" type="search" value={view.query} onChange={(e) => setView({ query: e.target.value })} placeholder="Search name, email or source" aria-label="Search applicants" />
+            <select className="select" aria-label="Order" value={view.order} onChange={(e) => setView({ order: e.target.value as Order })}>
+              {ORDERS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </select>
           </div>
-          {compareOpen && roleId ? <ComparePanel roleId={roleId} candidates={list.map((a) => ({ id: a.id, name: a.candidate?.name ?? "Unknown", stageLabel: a.stageLabel }))} /> : null}
-          {apps.isLoading ? <Skeleton lines={4} /> : apps.error ? <ErrorState message="Could not load candidates." onRetry={() => apps.refetch()} /> : list.length === 0 ? (
-            <EmptyState icon="talent" title="Nobody here yet" body={evidenceFilter === "closer_look" ? "Nobody needs a closer look right now: the assistant had enough to say about everyone here." : group === "all" ? "Applicants appear here as soon as they apply. Share your careers page or forward applications to the role's intake address." : "Nothing in this group."} />
-          ) : (
-            <div className="stack">
-              {list.map((a) => (
-                <Card key={a.id} needsYou={a.group === "waiting_on_you"}>
-                  <div className="card-title">
-                    <div className="row" style={{ flexWrap: "nowrap", minWidth: 0 }}>
-                      <Avatar name={a.candidate?.name} />
-                      <h2 style={{ fontSize: 16 }}><button type="button" className="btn quiet" style={{ padding: 0, fontFamily: "var(--display)", fontSize: 16 }} onClick={() => setOpenId(a.id)}>{a.candidate?.name ?? "Unknown"}</button></h2>
-                    </div>
-                    <div className="row"><Chip tone="source">{a.source.replace("_", " ")}</Chip><StatusChip stage={a.stage} label={a.stageLabel} group={a.group} /></div>
-                  </div>
-                  <div className="row small" style={{ color: "var(--ink-2)" }}>
-                    {a.extractionSummary?.positions.slice(0, 2).map((p, i) => <span key={i}>{p}</span>)}
-                    {a.extractionSummary?.years ? <Chip>{a.extractionSummary.years} yrs</Chip> : null}
-                    {a.extractionSummary?.licenses.map((l) => <Chip key={l} tone="good">{l}</Chip>)}
-                    {a.extractionSummary?.anomalies.map((an, i) => <Chip key={i} tone="caution">{an.kind.replace(/_/g, " ")}</Chip>)}
-                    {a.candidate?.locationText ? <span className="muted">{a.candidate.locationText}</span> : null}
-                  </div>
-                  {a.eligibility && !a.eligibility.passed ? <p className="small" style={{ color: "var(--needs-you)", marginTop: 6 }}>Did not meet: {a.eligibility.failedRules.map((f) => f.question).join("; ")}</p> : null}
-                  {a.eligibility?.unverifiable.length ? <p className="small muted" style={{ marginTop: 6 }}>Not yet answered: {a.eligibility.unverifiable.map((u) => u.question).join("; ")}</p> : null}
-                  {a.assessment ? (
-                    <div className="small" style={{ marginTop: 8 }}>
-                      <strong>{overallLabel(a.assessment.overall)}</strong> <span className="muted">({a.assessment.confidence} confidence)</span> · {a.assessment.summary}
-                    </div>
-                  ) : null}
-                  {a.evidence?.assessmentUnavailable ? <p className="small" style={{ color: "var(--needs-you)", marginTop: 6 }}>{ASSESSMENT_UNAVAILABLE_TEXT}</p> : null}
-                  {a.evidence?.resumeUnreadable ? <p className="small" style={{ color: "var(--needs-you)", marginTop: 6 }}>{RESUME_UNREADABLE_TEXT}</p> : null}
-                  {a.evidence && (a.evidence.topStrength || a.evidence.topConcern || a.evidence.unknownCount) ? (
-                    <div className="stack small" style={{ gap: 2, marginTop: 6 }}>
-                      {a.evidence.topStrength ? <span><span className="muted">Strength:</span> {a.evidence.topStrength.claim} <EvidenceChip source={a.evidence.topStrength.evidence.source} />{isUnquoted(a.evidence.topStrength.evidence) ? <span className="muted"> ({NO_QUOTE_LABEL})</span> : null}</span> : null}
-                      {a.evidence.topConcern ? <span><span className="muted">Concern:</span> {a.evidence.topConcern.claim}{isUnquoted(a.evidence.topConcern.evidence) ? <span className="muted"> ({NO_QUOTE_LABEL})</span> : null}</span> : null}
-                      {a.evidence.unknownCount ? <span className="muted">{a.evidence.unknownCount === 1 ? "1 question open" : `${a.evidence.unknownCount} questions open`}</span> : null}
-                    </div>
-                  ) : null}
-                  <div className="row" style={{ marginTop: 10 }}>
-                    <Button size="sm" variant="primary" onClick={() => setOpenId(a.id)}>{a.evidence?.needsCloserLook ? "Take a closer look" : "Review"}</Button>
-                    <AskRecruiter roleId={roleId} applicationId={a.id} size="sm" />
-                  </div>
-                </Card>
-              ))}
-            </div>
-          )}
+          {mayTell && notTold.length && (view.told === "not_told" || view.stage === "not_moving_forward") ? (
+            <Alert tone="info">
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <span>{notTold.length === 1 ? "1 person has" : `${notTold.length} people have`} not been told your decision. Decisions stay private until someone sends the decision message or records telling them.</span>
+                <Button size="sm" variant="primary" icon="send" onClick={() => setTelling(true)}>Review and send</Button>
+              </div>
+            </Alert>
+          ) : null}
+          {compareOpen ? <ComparePanel roleId={roleId} candidates={shown.map((a) => ({ id: a.id, name: a.candidate?.name ?? "Unknown", stageLabel: a.ownerStageLabel }))} /> : null}
+          <TabPanel idBase="talent-strip" value={view.stage}>
+            {apps.isLoading ? <Skeleton lines={5} /> : apps.error ? <ErrorState message="Could not load the applicants." onRetry={() => apps.refetch()} /> : shown.length === 0 ? (
+              <EmptyState icon="talent" title={empty.title} body={empty.body} action={filtersOn && total > 0 ? <Button size="sm" onClick={() => setViewState({ key, view: { ...defaultView(new URLSearchParams(), null), waiting: false } })}>Show everyone</Button> : undefined} />
+            ) : (
+              <div className="talent-list">
+                {shown.map((a) => <TalentRow key={a.id} a={a} busy={rowAct.isPending && rowAct.variables?.id === a.id} onOpen={() => openPanel(a.id)} onMove={(to) => onRowMove(a, to)} />)}
+              </div>
+            )}
+          </TabPanel>
         </>
       )}
-      {openId && roleId ? <ApplicationSheet id={openId} roleId={roleId} onClose={closeSheet} openMessage={search.get("message") === "1"} /> : null}
+      {panel && roleId ? (
+        <CandidatePanel
+          id={panel.id}
+          roleId={roleId}
+          roleTitle={role?.title ?? null}
+          tab={panel.tab}
+          onTab={(tab) => showPanel({ ...panel, tab })}
+          step={panel.step}
+          roundKey={panel.roundKey}
+          onStep={(step, opts) => setPanel((p) => (p ? { ...p, step, roundKey: opts?.roundKey } : p))}
+          ids={panelIds}
+          onGo={(id) => showPanel({ ...panel, id, step: null, roundKey: undefined, compose: false, ids: panelIds })}
+          onClose={() => showPanel(null)}
+          composeOnOpen={panel.compose}
+        />
+      ) : null}
+      {telling && roleId ? <TellSheet roleId={roleId} people={notTold} onClose={() => setTelling(false)} /> : null}
     </div>
   );
 }
 
-function overallLabel(o: string): string {
-  return { strong: "Strong match", potential: "Potential match", weak: "Weak match", unknown: "Insufficient evidence" }[o] ?? o;
-}
-
-const REJECT_REASONS: Array<[string, string]> = [
-  ["not_a_match_experience", "Experience isn't the right fit"],
-  ["not_a_match_skills", "Missing skills we need"],
-  ["compensation_mismatch", "Pay expectations don't match"],
-  ["location_or_schedule", "Location or schedule"],
-  ["position_filled", "Position filled"],
-  ["other", "Other"],
-];
-
-function ApplicationSheet({ id, roleId, onClose, openMessage = false }: { id: string; roleId: string; onClose: () => void; /** `?message=1` (the interview page's "Message the candidate") opens the Message card's text box at once. */ openMessage?: boolean }) {
-  const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["application", id], queryFn: () => api.get<ApplicationDetail>(`/api/v1/applications/${id}`) });
-  const [reason, setReason] = useState("not_a_match_experience");
-  const [note, setNote] = useState("");
-  const [overrideNote, setOverrideNote] = useState("");
-  const [confirmReject, setConfirmReject] = useState(false);
-  // "Decline now" on an eligibility hold gets the same confirm step as Decline, with the reason fixed to the eligibility answer.
-  const [confirmEligibilityDecline, setConfirmEligibilityDecline] = useState(false);
-  const [eligibilityNote, setEligibilityNote] = useState("");
-  const [outcomeOpen, setOutcomeOpen] = useState(false);
-  const [outcome, setOutcome] = useState<{ outcome: string; hireDate: string; offerAcceptedAt: string; reason: string; note: string; confirming: boolean }>({ outcome: "hired_externally", hireDate: "", offerAcceptedAt: "", reason: "", note: "", confirming: false });
-  const [closeRolePrompt, setCloseRolePrompt] = useState<{ roleId: string } | null>(null);
-  const recordOutcome = useMutation({
-    mutationFn: () => api.post<{ roleStillOpen: boolean; roleId: string } & Pick<ActionResult, "candidateNotice" | "dispositionSent">>(`/api/v1/applications/${id}/outcome`, { outcome: outcome.outcome, confirm: true, hireDate: outcome.hireDate || undefined, offerAcceptedAt: outcome.offerAcceptedAt || undefined, reason: outcome.reason || undefined, note: outcome.note || undefined }),
-    onSuccess: async (r) => { toast(outcomeToast(outcome.outcome, r)); setOutcomeOpen(false); setOutcome({ outcome: "hired_externally", hireDate: "", offerAcceptedAt: "", reason: "", note: "", confirming: false }); if (r.roleStillOpen && outcome.outcome === "hired_externally") setCloseRolePrompt({ roleId: r.roleId }); await qc.invalidateQueries({ queryKey: ["application", id] }); await qc.invalidateQueries({ queryKey: ["applications", roleId] }); await qc.invalidateQueries({ queryKey: ["brief"] }); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record the outcome."),
-  });
-  const closeRole = useMutation({
-    mutationFn: (rid: string) => api.post(`/api/v1/roles/${rid}/outcome`, { outcome: "filled", confirm: true }),
-    onSuccess: async () => { toast("Role closed as filled."); setCloseRolePrompt(null); await qc.invalidateQueries({ queryKey: ["role", roleId] }); await qc.invalidateQueries({ queryKey: ["roles"] }); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not close the role."),
-  });
-  const act = useMutation({
-    mutationFn: (body: { action: string; reason?: string; note?: string; channel?: string }) => api.post<ActionResult>(`/api/v1/applications/${id}/actions`, body),
-    // The toast says exactly what happened, including whether the candidate was told (founder decision B6).
-    onSuccess: async (r, body) => { toast(actionToast(body.action, r)); await qc.invalidateQueries({ queryKey: ["application", id] }); await qc.invalidateQueries({ queryKey: ["applications", roleId] }); await qc.invalidateQueries({ queryKey: ["brief"] }); await qc.invalidateQueries({ queryKey: ["notifications"] }); setConfirmReject(false); setConfirmEligibilityDecline(false); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "That didn't work."),
-  });
-  const decide = useMutation({
-    mutationFn: (approvalId: string) => api.post(`/api/v1/approvals/${approvalId}/decide`, { decision: "approve" }),
-    onSuccess: async () => { toast("Done."); await qc.invalidateQueries({ queryKey: ["application", id] }); await qc.invalidateQueries({ queryKey: ["applications", roleId] }); await qc.invalidateQueries({ queryKey: ["brief"] }); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "That didn't work."),
-  });
-  const a = q.data;
-  const latestScreen = a?.screens[0] ?? null;
-  /** The API decides what may be done right now; the page only shows it. */
-  const can = (action: ApplicationCapability) => !!a && a.allowedActions.includes(action);
-  /** Why a choice is not available right now, also from the API: every disabled button carries it. */
-  const blocked = (action: ApplicationCapability) => a?.blockedReasons?.[action] ?? "Not available at this step.";
-  // A title is not read out reliably on a disabled button and phones never show one, so the main card also writes them out.
-  const disabledReasons = a ? [...new Set((["invite_screen", "interview", "hold", "reject"] as const).filter((x) => !can(x)).map(blocked))] : [];
-  const canInvite = can("invite_screen");
-  const canInterview = can("interview");
-  const refresh = async () => { await qc.invalidateQueries({ queryKey: ["application", id] }); await qc.invalidateQueries({ queryKey: ["applications", roleId] }); await qc.invalidateQueries({ queryKey: ["interviews"] }); await qc.invalidateQueries({ queryKey: ["brief"] }); };
-  const [interviewOpen, setInterviewOpen] = useState(false);
-  const members = useQuery({ queryKey: ["members"], queryFn: () => api.get<Array<{ userId: string; name: string | null; email: string; role: string; status: string; schedulable: boolean }>>("/api/v1/companies/current/members"), enabled: interviewOpen });
-  const nextRound = a ? a.interviewPlan.find((r) => !a.interviews.some((i) => i.roundKey === r.key && ["completed"].includes(i.status))) ?? a.interviewPlan[0] : undefined;
-  const [roundKey, setRoundKey] = useState<string | null>(null);
-  const [interviewers, setInterviewers] = useState<string[] | null>(null);
-  const [linkSource, setLinkSource] = useState<"calendar" | "pasted">("calendar");
-  const [meetingUrl, setMeetingUrl] = useState("");
-  // The role's current plan names who interviews in each round now, so assignments made on the Interview plan tab reach candidates who applied before them.
-  const currentPlan = useQuery({ queryKey: ["interview-plan", roleId], queryFn: () => api.get<InterviewPlanView>(`/api/v1/roles/${roleId}/interview-plan`), enabled: interviewOpen });
-  const activeMembers = (members.data ?? []).filter((m) => m.status === "active");
-  const chosenRoundKey = roundKey ?? nextRound?.key;
-  const chosenInterviewers = defaultInterviewers({
-    roundKey: chosenRoundKey,
-    applicationPlan: a?.interviewPlan ?? [],
-    currentPlan: currentPlan.data?.rounds.map((r) => ({ key: r.key, interviewerUserIds: r.interviewers.map((i) => i.userId) })) ?? null,
-    picked: interviewers,
-    activeMemberIds: members.data && !currentPlan.isLoading ? new Set(activeMembers.map((m) => m.userId)) : null,
-  });
-  const requestInterview = useMutation({
-    mutationFn: () => api.post(`/api/v1/applications/${id}/interviews`, { roundKey: chosenRoundKey, interviewerUserIds: chosenInterviewers, linkSource, meetingUrl: linkSource === "pasted" ? meetingUrl : undefined }),
-    onSuccess: async () => { toast("Interview approved. Times go out to the candidate as soon as they exist."); setInterviewOpen(false); await qc.invalidateQueries({ queryKey: ["application", id] }); await qc.invalidateQueries({ queryKey: ["applications", roleId] }); await qc.invalidateQueries({ queryKey: ["interviews"] }); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not start the interview."),
-  });
+/** One applicant: initials, name, when they applied, the wait, the reading, the room kept for the match score, the stage button. */
+function TalentRow({ a, busy, onOpen, onMove }: { a: ApplicationSummary; busy: boolean; onOpen: () => void; onMove: (to: OwnerStage) => void }) {
+  const name = a.candidate?.name ?? "Unknown";
+  const reading = readingOf(a);
+  const waiting = waitingText(a);
   return (
-    <Drawer open onClose={onClose} title={a ? `${a.candidate.firstName} ${a.candidate.lastName}` : "Candidate"} leading={a ? <Avatar name={`${a.candidate.firstName} ${a.candidate.lastName}`} size="lg" /> : undefined}>
-      {q.isLoading || !a ? <Skeleton lines={6} /> : (
-        <div className="stack" style={{ gap: 14 }}>
-          <div className="row"><StatusChip stage={a.stage} label={a.stageLabel} group={a.group} /><Chip tone="source">{a.source.replace("_", " ")}</Chip><span className="small muted">applied {new Date(a.createdAt).toLocaleDateString()}</span></div>
-
-          {a.pendingApprovals.filter((p) => ["application.invite_screen", "application.recommend_interview"].includes(p.actionType)).map((p) => (
-            <Card key={p.id} needsYou lift title={p.actionType === "application.invite_screen" ? "The assistant suggests a screen" : "The assistant suggests an interview"}>
-              <p className="small" style={{ color: "var(--ink-2)" }}>{p.rationale}</p>
-              <div className="row" style={{ marginTop: 10 }}>
-                <Button variant="primary" size="sm" loading={decide.isPending} onClick={() => decide.mutate(p.id)}>{p.actionType === "application.invite_screen" ? "Yes, invite to a screen" : "Yes, interview"}</Button>
-                <AskRecruiter roleId={roleId} applicationId={a.id} size="sm" />
-              </div>
-            </Card>
-          ))}
-          {a.interviews.length ? (
-            <Card title="Interviews">
-              {a.interviews.map((i) => <p key={i.id} className="small"><Link to={`/interviews/${i.id}`}>{i.title}</Link> · {i.status.replace(/_/g, " ")}{i.startsAt ? ` · ${new Date(i.startsAt).toLocaleString("en-US", { timeZone: i.timezone ?? undefined, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : i.status === "scheduling" ? ` · ${i.offeredSlots.length} times offered` : ""}{i.decision ? ` · decision: ${i.decision.replace(/_/g, " ")}` : ""}</p>)}
-            </Card>
-          ) : null}
-          {can("record_decision") ? <DecisionCard a={a} roleId={roleId} onDone={refresh} onNextRound={(key) => { setRoundKey(key); setInterviewers(null); setInterviewOpen(true); }} /> : null}
-          {interviewOpen ? (
-            <Card needsYou lift title="Approve an interview">
-              <p className="small" style={{ color: "var(--ink-2)" }}>Your approval is what starts scheduling; the assistant never does this on its own. Times are offered to the candidate from the interviewers' calendars or declared hours.</p>
-              <Field label="Round" htmlFor="iv-round"><select id="iv-round" className="select" value={roundKey ?? nextRound?.key ?? ""} onChange={(e) => { setRoundKey(e.target.value); setInterviewers(null); }}>{a.interviewPlan.map((r) => <option key={r.key} value={r.key}>{r.title} · {r.durationMinutes} min · {r.format.replace("_", " ")}</option>)}</select></Field>
-              <fieldset style={{ border: 0, padding: 0, margin: "10px 0" }}>
-                <legend className="small muted">Interviewers</legend>
-                {members.isLoading || currentPlan.isLoading ? <Skeleton lines={2} /> : members.error ? <ErrorState message="Could not load your team, so nobody can be picked yet." onRetry={() => members.refetch()} /> : activeMembers.map((m) => (
-                  <label key={m.userId} className="row small" style={{ gap: 8 }}>
-                    <input type="checkbox" checked={chosenInterviewers.includes(m.userId)} onChange={(e) => setInterviewers(e.target.checked ? [...chosenInterviewers, m.userId] : chosenInterviewers.filter((x) => x !== m.userId))} />
-                    {m.name ?? m.email} <Chip tone={m.schedulable ? "good" : "caution"}>{m.schedulable ? "availability known" : "no calendar or hours yet"}</Chip>
-                  </label>
-                ))}
-              </fieldset>
-              {chosenInterviewers.length && (members.data ?? []).some((m) => chosenInterviewers.includes(m.userId) && !m.schedulable) ? <Alert tone="caution">An interviewer has neither a connected calendar nor declared hours. Times cannot be offered until they add one in Setup; they will be asked.</Alert> : null}
-              <Field label="Meeting link" htmlFor="iv-link"><select id="iv-link" className="select" value={linkSource} onChange={(e) => setLinkSource(e.target.value as "calendar" | "pasted")}><option value="calendar">Create it with the calendar event</option><option value="pasted">I'll paste a link</option></select></Field>
-              {linkSource === "pasted" ? <Field label="Link" htmlFor="iv-url"><input id="iv-url" className="input" type="url" value={meetingUrl} onChange={(e) => setMeetingUrl(e.target.value)} placeholder="https://" /></Field> : null}
-              <div className="row" style={{ marginTop: 10 }}>
-                <Button variant="primary" size="sm" loading={requestInterview.isPending} disabled={!chosenInterviewers.length || (linkSource === "pasted" && !meetingUrl)} onClick={() => requestInterview.mutate()}>Approve and offer times</Button>
-                <Button size="sm" variant="quiet" onClick={() => setInterviewOpen(false)}>Not now</Button>
-              </div>
-            </Card>
-          ) : null}
-          {a.group === "waiting_on_you" || a.stage === "eligible" || canInterview || canInvite ? (
-            <Card needsYou={a.group === "waiting_on_you" || a.stage === "eligible"} title="What would you like to do?">
-              <div className="row">
-                <Button variant="primary" size="sm" disabled={!canInvite} loading={act.isPending && act.variables?.action === "invite_screen"} title={canInvite ? (a.candidate.consent.sms?.granted && a.candidate.phone ? "By text and email" : "By email, answered on the web") : blocked("invite_screen")} onClick={() => act.mutate({ action: "invite_screen" })}>Invite to a screen</Button>
-                <Button size="sm" disabled={!canInterview} title={canInterview ? "Approve an interview round and pick the interviewers; times go out to the candidate" : blocked("interview")} onClick={() => setInterviewOpen(true)}>Interview</Button>
-                <Button size="sm" disabled={!can("hold")} title={can("hold") ? "Keep them where they are for now; the candidate is not told" : blocked("hold")} onClick={() => act.mutate({ action: "hold", note: "Holding for now" })}>Hold</Button>
-                <Button size="sm" variant="destructive" disabled={!can("reject")} title={can("reject") ? "Not moving forward: you choose the reason next" : blocked("reject")} onClick={() => setConfirmReject(true)}>Decline</Button>
-                <AskRecruiter roleId={roleId} applicationId={a.id} size="sm" />
-              </div>
-              {disabledReasons.length ? <p className="small muted" style={{ marginTop: 8 }}>{disabledReasons.join(" ")}</p> : null}
-              {confirmReject ? (
-                <div className="stack" style={{ marginTop: 12 }}>
-                  <Alert tone="caution">{declineConfirmText(a.declineMessage, { hasEmail: !!a.candidate.email })}</Alert>
-                  <Field label="Reason" htmlFor="reason"><select id="reason" className="select" value={reason} onChange={(e) => setReason(e.target.value)}>{REJECT_REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field>
-                  <Field label="Note (kept internally)" htmlFor="note"><input id="note" className="input" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
-                  <div className="row"><Button variant="destructive" loading={act.isPending} onClick={() => act.mutate({ action: "reject", reason, note })}>Confirm decline</Button><Button onClick={() => setConfirmReject(false)}>Cancel</Button></div>
-                </div>
-              ) : null}
-            </Card>
-          ) : null}
-          {closeRolePrompt ? (
-            <Card needsYou title="Close the role too?">
-              <p className="small" style={{ color: "var(--ink-2)" }}>The hire is recorded. The role is still open; closing it is a separate decision. Other active candidates are kept in your talent pool.</p>
-              <div className="row" style={{ marginTop: 10 }}><Button variant="primary" size="sm" loading={closeRole.isPending} onClick={() => closeRole.mutate(closeRolePrompt.roleId)}>Yes, close it as filled</Button><Button size="sm" variant="quiet" onClick={() => setCloseRolePrompt(null)}>Keep it open</Button></div>
-            </Card>
-          ) : null}
-          {["hired", "withdrawn", "rejected", "talent_pool", "declined"].includes(a.stage) ? <RecordedOutcome id={a.id} /> : null}
-          {can("record_outcome") ? (
-            <Card title="Record what happened">
-              <p className="small muted">Hired, withdrew, declined, or no hire. You record it; the platform never makes or sends an offer, and it asks for no pay, tax, identity or banking details.</p>
-              {!outcomeOpen ? <div className="row" style={{ marginTop: 8 }}><Button size="sm" onClick={() => setOutcomeOpen(true)}>Record an outcome</Button></div> : (
-                <div className="stack" style={{ gap: 8, marginTop: 8 }}>
-                  <Field label="What happened" htmlFor="oc-outcome"><select id="oc-outcome" className="select" value={outcome.outcome} onChange={(e) => setOutcome({ ...outcome, outcome: e.target.value, confirming: false })}>
-                    <option value="hired_externally">Hired (offer accepted outside the platform)</option>
-                    {a.stage !== "talent_pool" ? <>
-                      <option value="offer_declined_externally">Declined an offer made outside the platform</option>
-                      <option value="candidate_withdrew">The candidate withdrew</option>
-                      {/* A decline is a decline, whoever records it: only roles that may decline see it (the route refuses the rest). */}
-                      {can("reject") ? <option value="employer_declined">We declined the candidate</option> : null}
-                      <option value="no_hire">No hire for this candidate</option>
-                    </> : null}
-                  </select></Field>
-                  {outcome.outcome === "hired_externally" ? <>
-                    <Field label="Hire date (start date agreed)" htmlFor="oc-date"><input id="oc-date" className="input" type="date" value={outcome.hireDate} onChange={(e) => setOutcome({ ...outcome, hireDate: e.target.value })} /></Field>
-                    <Field label="Date the offer was accepted (optional)" htmlFor="oc-acc"><input id="oc-acc" className="input" type="date" value={outcome.offerAcceptedAt} onChange={(e) => setOutcome({ ...outcome, offerAcceptedAt: e.target.value })} /></Field>
-                  </> : null}
-                  {outcome.outcome === "employer_declined" ? <>
-                    <Field label="Reason (recorded with your name)" htmlFor="oc-reason"><input id="oc-reason" className="input" value={outcome.reason} onChange={(e) => setOutcome({ ...outcome, reason: e.target.value })} /></Field>
-                    <p className="small muted" style={{ margin: 0 }}>{declineConfirmText(a.declineMessage, { hasEmail: !!a.candidate.email })}</p>
-                  </> : null}
-                  <Field label="Note (kept internally, optional)" htmlFor="oc-note"><input id="oc-note" className="input" value={outcome.note} onChange={(e) => setOutcome({ ...outcome, note: e.target.value })} /></Field>
-                  {outcome.confirming ? (
-                    <Alert tone="caution"><div className="row" style={{ justifyContent: "space-between" }}><span>Record this outcome under your name? It is audited and can only be corrected by an administrator.</span><span className="row"><Button size="sm" variant="primary" loading={recordOutcome.isPending} onClick={() => recordOutcome.mutate()}>Yes, record it</Button><Button size="sm" variant="quiet" onClick={() => setOutcome({ ...outcome, confirming: false })}>No</Button></span></div></Alert>
-                  ) : <div className="row"><Button size="sm" variant="primary" disabled={(outcome.outcome === "hired_externally" && !outcome.hireDate) || (outcome.outcome === "employer_declined" && !outcome.reason.trim())} onClick={() => setOutcome({ ...outcome, confirming: true })}>Continue</Button><Button size="sm" variant="quiet" onClick={() => setOutcomeOpen(false)}>Cancel</Button></div>}
-                </div>
-              )}
-            </Card>
-          ) : null}
-          {a.stage === "ineligible" ? (
-            <Card needsYou title="Held on an eligibility answer">
-              <p className="small" style={{ color: "var(--ink-2)" }}>{a.eligibility?.failedRules.map((f) => `${f.question} → ${f.reason}`).join("; ")}</p>
-              <p className="small muted" style={{ marginTop: 6 }}>Held for your decision; nothing has been sent to them about it. Override if the answer was a mistake. You are reminded daily, and an ITS recruiter is brought in after three days. Say why if you keep them in; it is recorded and the system learns from it.</p>
-              <Field label="Why keep them in?" htmlFor="ovnote"><input id="ovnote" className="input" value={overrideNote} onChange={(e) => setOverrideNote(e.target.value)} placeholder="e.g. Sitting the licensing exam next week" /></Field>
-              <div className="row" style={{ marginTop: 10 }}>
-                <Button variant="primary" size="sm" disabled={!overrideNote.trim() || !can("override_eligibility")} title={can("override_eligibility") ? (overrideNote.trim() ? "Keeps them in the process with your reason" : "Say why first") : blocked("override_eligibility")} loading={act.isPending && act.variables?.action === "override_eligibility"} onClick={() => act.mutate({ action: "override_eligibility", note: overrideNote })}>Keep them in</Button>
-                <Button size="sm" variant="destructive" disabled={!can("reject")} title={can("reject") ? "Not moving forward on this answer: you confirm next" : blocked("reject")} onClick={() => setConfirmEligibilityDecline(true)}>Decline now</Button>
-              </div>
-              {confirmEligibilityDecline ? (
-                <div className="stack" style={{ marginTop: 12 }}>
-                  <Alert tone="caution">{declineConfirmText(a.declineMessage, { hasEmail: !!a.candidate.email, eligibility: true })} The reason recorded is the eligibility answer above.</Alert>
-                  <Field label="Note (kept internally, optional)" htmlFor="elig-note"><input id="elig-note" className="input" value={eligibilityNote} onChange={(e) => setEligibilityNote(e.target.value)} /></Field>
-                  <div className="row"><Button variant="destructive" loading={act.isPending && act.variables?.action === "reject"} onClick={() => act.mutate({ action: "reject", reason: "eligibility", note: eligibilityNote.trim() || "Confirmed after the eligibility hold" })}>Confirm decline</Button><Button onClick={() => setConfirmEligibilityDecline(false)}>Cancel</Button></div>
-                </div>
-              ) : null}
-            </Card>
-          ) : null}
-          {a.stage === "rejected" && a.rejectReason === "eligibility" ? (
-            <Card title="Declined on an eligibility answer">
-              <p className="small" style={{ color: "var(--ink-2)" }}>{a.eligibility?.failedRules.map((f) => `${f.question} → ${f.reason}`).join("; ") || "An eligibility rule you authored was not met."}</p>
-              <div className="row" style={{ marginTop: 10 }}><Button size="sm" variant="primary" disabled={!can("review_anyway")} title={can("review_anyway") ? "Reopens the application so it is looked at again" : blocked("review_anyway")} loading={act.isPending && act.variables?.action === "review_anyway"} onClick={() => act.mutate({ action: "review_anyway", note: "Reopened by the owner" })}>Review anyway</Button></div>
-            </Card>
-          ) : null}
-
-          <Card title="Contact and consent">
-            <dl className="kv">
-              <dt>Email</dt><dd>{a.candidate.email ?? "none"}</dd>
-              <dt>Phone</dt><dd>{a.candidate.phone ?? "none"}</dd>
-              <dt>Location</dt><dd>{a.candidate.locationText ?? "not given"}</dd>
-              <dt>Text messages</dt><dd>{a.candidate.consent.sms?.granted ? `Consented (${a.candidate.consent.sms.source})` : "No consent; email only"}</dd>
-              <dt>AI notice</dt><dd>{a.candidate.consent.ai_notice ? `Shown ${new Date(a.candidate.consent.ai_notice.at).toLocaleDateString()}` : "not recorded"}</dd>
-              {a.candidate.preferences?.talentPoolOptOut ? <><dt>Future roles</dt><dd>Asked not to be kept for future roles; nobody contacts them about other openings</dd></> : null}
-            </dl>
-          </Card>
-
-          {latestScreen ? <ScreenCard screen={latestScreen} /> : null}
-          <ScorecardUnavailableCard detail={a} roleId={roleId} />
-          {a.assessments.length ? a.assessments.map((as) => <AssessmentCard key={as.id} applicationId={a.id} assessmentId={as.id} kind={as.kind} overall={as.overall} confidence={as.confidence} result={as.result} createdAt={as.createdAt} labels={a.packetLabels} detail={a} roleId={roleId} />) : <NoAssessmentCard detail={a} />}
-
-          <Card title="What the resume says">
-            {a.extraction ? (
-              <div className="stack" style={{ gap: 8 }}>
-                {a.extraction.positions.map((p, i) => <div key={i} className="small"><strong>{p.title}</strong>{p.employer ? ` at ${p.employer}` : ""}{p.startDate ? ` · ${p.startDate}–${p.endDate ?? "present"}` : ""}{p.quote ? <><br /><span className="muted">"{p.quote}"</span> <EvidenceChip source="resume" /></> : null}</div>)}
-                {a.extraction.licenses.length ? <div className="row">{a.extraction.licenses.map((l, i) => <Chip key={i} tone="good">{l.name}{l.jurisdiction ? ` (${l.jurisdiction})` : ""}</Chip>)}</div> : null}
-                {a.extraction.skills.length ? <p className="small muted">Skills mentioned: {a.extraction.skills.join(", ")}</p> : null}
-                {a.extraction.anomalies.length ? <Alert tone="caution">{a.extraction.anomalies.map((an) => `${an.kind.replace(/_/g, " ")}: ${an.detail}`).join("; ")} — flagged for a human look, never used to decline.</Alert> : null}
-              </div>
-            ) : a.answers.noResume?.summary ? <p className="small" style={{ whiteSpace: "pre-wrap" }}>{a.answers.noResume.summary}</p> : <p className="muted small">No resume text available{a.documents.some((d) => d.status === "clean") ? " (the file could not be read; open it below)" : ""}.</p>}
-            {a.documents.length ? (
-              <ul className="small" style={{ margin: "10px 0 0", paddingLeft: 18 }}>
-                {a.documents.map((d) => (
-                  <li key={d.id}>
-                    {d.status === "clean" ? (
-                      <><a href={`/api/v1/applications/${a.id}/documents/${d.id}/file`} target="_blank" rel="noopener noreferrer">Open {d.filename}</a> <span className="muted">({Math.max(1, Math.round(d.sizeBytes / 1024))} KB; this open is recorded)</span></>
-                    ) : d.status === "quarantined" ? (
-                      <span className="muted">{d.filename}: being checked and scanned before anyone can open it.</span>
-                    ) : d.status === "rejected" ? (
-                      <span className="muted">{d.filename}: refused ({(d.rejectedReason ?? "unknown").replace(/_/g, " ")}) and removed. The candidate can send another.</span>
-                    ) : (
-                      <span className="muted">{d.filename}: removed.</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </Card>
-
-          <Card title="Eligibility answers">
-            {a.eligibility ? (
-              <div className="small">
-                <p>{a.eligibility.passed ? "Met every required answer." : "Did not meet a required answer."}</p>
-                {a.eligibility.failedRules.map((f) => <p key={f.key} style={{ color: "var(--needs-you)" }}>{f.question}: {f.reason}</p>)}
-                {a.eligibility.unverifiable.map((u) => <p key={u.key} className="muted">{u.question}: not answered</p>)}
-              </div>
-            ) : <p className="muted small">Not evaluated yet.</p>}
-          </Card>
-
-          <MessageCard a={a} initiallyOpen={openMessage} onSent={refresh} />
-
-          <Card title="Messages">
-            {a.communications.length ? a.communications.map((m) => <div key={m.id} className="small" style={{ borderTop: "1px solid var(--line)", padding: "8px 0" }}><strong>{m.direction === "outbound" ? "We sent" : "They wrote"}: {m.subject ?? (m.direction === "inbound" ? `"${m.bodyText.slice(0, 90)}${m.bodyText.length > 90 ? "…" : ""}"` : m.templateKey)}</strong> <Chip tone={m.status === "sent" || m.status === "received" ? "good" : m.status === "failed" ? "critical" : "neutral"}>{m.channel}{m.status === "failed" ? " · failed" : ""}</Chip><br /><span className="muted">{new Date(m.createdAt).toLocaleString()}</span></div>) : <p className="muted small">No messages yet.</p>}
-          </Card>
-
-          <Card title="What happened">
-            <Timeline items={a.timeline.slice().reverse().map((e) => ({ when: e.occurredAt, what: describeEvent(e.type, e.payload), who: e.actor.name ?? (e.actor.kind === "agent" ? `AI (${e.actor.id})` : e.actor.kind) }))} />
-          </Card>
-        </div>
-      )}
-    </Drawer>
-  );
-}
-
-/**
- * The decision after an interview is a person's (docs/06; release 1 records it, scorecards and debriefs come later).
- * Shown when the last interview is over and nobody has decided yet: next round, finalist, or not moving forward with a reason.
- * "Next round" hands the round key to the sheet, which opens the interview approval with that round and its interviewers.
- */
-function DecisionCard({ a, roleId, onDone, onNextRound }: { a: ApplicationDetail; roleId: string; onDone: () => Promise<void>; onNextRound: (roundKey: string) => void }) {
-  const [decision, setDecision] = useState<"finalist" | "not_moving_forward" | null>(null);
-  const [reason, setReason] = useState("not_a_match_experience");
-  const [note, setNote] = useState("");
-  const record = useMutation({
-    mutationFn: (body: { decision: "next_round" | "finalist" | "not_moving_forward"; reason?: string; note?: string }) => api.post<{ stage: string; nextRoundKey: string | null } & Pick<ActionResult, "candidateNotice" | "dispositionSent">>(`/api/v1/applications/${a.id}/decision`, body),
-    onSuccess: async (r, body) => {
-      toast(decisionToast(body.decision, r));
-      setDecision(null);
-      setNote("");
-      if (body.decision === "next_round" && r.nextRoundKey) onNextRound(r.nextRoundKey);
-      await onDone();
-    },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record the decision."),
-  });
-  const last = a.interviews.find((i) => ["completed", "no_show"].includes(i.status) && !i.decision);
-  const idx = last ? a.interviewPlan.findIndex((r) => r.key === last.roundKey) : -1;
-  const hasNextRound = idx >= 0 && idx + 1 < a.interviewPlan.length;
-  return (
-    <Card needsYou lift title="How did the interview go?">
-      <p className="small" style={{ color: "var(--ink-2)" }}>{last ? `${last.title}${last.outcome === "no_show_candidate" ? " (the candidate did not attend)" : last.outcome === "no_show_interviewer" ? " (the interviewer did not attend)" : ""}. ` : ""}The decision is yours and is recorded with your name; nothing here is scored by software.</p>
-      {!decision ? (
-        <div className="row" style={{ marginTop: 10 }}>
-          {hasNextRound ? <Button size="sm" variant="primary" loading={record.isPending} onClick={() => record.mutate({ decision: "next_round" })}>Next round</Button> : null}
-          <Button size="sm" variant={hasNextRound ? undefined : "primary"} onClick={() => setDecision("finalist")}>Finalist</Button>
-          <Button size="sm" variant="destructive" onClick={() => setDecision("not_moving_forward")}>Not moving forward</Button>
-          <AskRecruiter roleId={roleId} applicationId={a.id} size="sm" />
-        </div>
-      ) : (
-        <div className="stack" style={{ marginTop: 12 }}>
-          {decision === "not_moving_forward" ? (
-            <>
-              <Alert tone="caution">{declineConfirmText(a.declineMessage, { hasEmail: !!a.candidate.email })}</Alert>
-              <Field label="Reason" htmlFor="decision-reason"><select id="decision-reason" className="select" value={reason} onChange={(e) => setReason(e.target.value)}>{REJECT_REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field>
-            </>
-          ) : null}
-          <Field label={decision === "finalist" ? "What stood out (kept internally)" : "Note (kept internally)"} htmlFor="decision-note"><input id="decision-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
-          <div className="row">
-            <Button variant={decision === "finalist" ? "primary" : "destructive"} loading={record.isPending} onClick={() => record.mutate({ decision, reason: decision === "not_moving_forward" ? reason : undefined, note: note.trim() || undefined })}>{decision === "finalist" ? "Confirm finalist" : "Confirm decline"}</Button>
-            <Button variant="quiet" onClick={() => setDecision(null)}>Cancel</Button>
-          </div>
-        </div>
-      )}
-    </Card>
-  );
-}
-
-/** Owner Mode never shows raw stage names (docs/07); mirrors STAGE_LABEL in packages/core. */
-const STAGE_LABEL: Record<string, string> = { applied: "Just applied", received: "Received", ineligible: "Doesn't meet eligibility", eligible: "Eligible", triaged: "Ready for your review", screen_invited: "Invited to a screen", screening: "Being screened", screen_complete: "Screen complete", interview_recommended: "Recommended for interview", interview_scheduled: "Interviewing", interview_complete: "Interview done: decision needed", debrief: "Deciding", finalist: "Finalist", reference_check: "Checking references", offer_draft: "Offer being prepared", offer_approval: "Offer needs your approval", offer_sent: "Offer out", negotiation: "Negotiating", accepted: "Accepted", declined: "Declined the offer", hired: "Hired", onboarding: "Starting soon", withdrawn: "Withdrew", rejected: "Not moving forward", talent_pool: "In your talent pool" };
-
-const SCREEN_STATUS: Record<string, string> = { invited: "Invited", reminded: "Reminded", in_progress: "Answering", completed: "Completed", expired: "No response", abandoned: "Withdrawn", human_requested: "Asked for a person" };
-
-function ScreenCard({ screen }: { screen: Screen }) {
-  // A screen that opened with the open questions keeps their answers beside the questions; they count, and they are shown first.
-  const focusAnswered = (screen.progress.focusQuestions ?? []).filter((f) => f.answer);
-  const answered = Object.keys(screen.answers).length + focusAnswered.length;
-  const asked = screen.progress.askedKeys.length;
-  return (
-    <Card title="Screening conversation" aside={<div className="row"><Chip>{screen.channel === "sms" ? "text + web" : "web chat"}</Chip><Chip tone={screen.status === "completed" ? "good" : screen.status === "human_requested" ? "needs" : screen.status === "expired" ? "caution" : "accent"}>{SCREEN_STATUS[screen.status] ?? screen.status}</Chip></div>}>
-      <p className="small muted">{screen.invitedAt ? `Invited ${new Date(screen.invitedAt).toLocaleDateString()}` : ""}{screen.remindedAt ? ` · reminded ${new Date(screen.remindedAt).toLocaleDateString()}` : ""}{screen.completedAt ? ` · completed ${new Date(screen.completedAt).toLocaleDateString()}` : ""} · {answered} answered{asked > answered ? `, ${asked - answered} asked` : ""}</p>
-      {focusAnswered.length ? (
-        <div style={{ marginTop: 8 }}>
-          <p className="small muted">What they said about the open questions:</p>
-          <dl className="kv small" style={{ marginTop: 4 }}>{focusAnswered.map((f) => <div key={f.key}><dt>{f.question}</dt><dd style={{ whiteSpace: "pre-wrap" }}>{f.answer}</dd></div>)}</dl>
-        </div>
-      ) : null}
-      {screen.transcript.length ? (
-        <details style={{ marginTop: 8 }}>
-          <summary className="small">Read the conversation ({screen.transcript.length} messages)</summary>
-          <div className="stack" style={{ gap: 6, marginTop: 8 }}>
-            {screen.transcript.map((t, i) => <div key={i} className={`bubble ${t.role === "candidate" ? "user" : t.role === "assistant" ? "assistant" : "system"}`} style={{ whiteSpace: "pre-wrap" }}>{t.content}</div>)}
-          </div>
-        </details>
-      ) : <p className="small muted" style={{ marginTop: 6 }}>They have not opened it yet.</p>}
-    </Card>
-  );
-}
-
-const REC_LABEL: Record<string, string> = { screen: "Worth a screen", hold: "Hold", review_manually: "Needs a closer look", strong_interview: "Strong: interview", interview: "Interview", decline_recommended: "Concern raised" };
-const MET_TONE: Record<string, "good" | "accent" | "neutral" | "caution"> = { yes: "good", partially: "accent", no: "caution", unknown: "neutral", evidenced: "good", partially_evidenced: "accent", not_evidenced: "neutral", contradicted: "caution" };
-
-type PacketLabels = ApplicationDetail["packetLabels"];
-
-const FLAG_KINDS: Array<[string, string]> = [
-  ["wrong_evidence", "Cited the wrong evidence"],
-  ["hallucination", "Made something up"],
-  ["policy_error", "Broke a rule we set"],
-  ["bias_concern", "Bias concern"],
-  ["poor_communication", "Poorly worded"],
-  ["wrong_workflow_action", "Took the wrong next step"],
-  ["false_negative", "Missed a good candidate"],
-  ["false_positive", "Overrated this candidate"],
-  ["missing_context", "Missed context we gave"],
-];
-
-/** One-click flag with the founder context's taxonomy (§23). It records; it never retrains anything on its own. */
-function FlagAssessment({ applicationId, assessmentId }: { applicationId: string; assessmentId: string }) {
-  const [kind, setKind] = useState("");
-  const [done, setDone] = useState(false);
-  const flag = useMutation({
-    mutationFn: (k: string) => api.post(`/api/v1/applications/${applicationId}/assessments/${assessmentId}/flag`, { kind: k }),
-    onSuccess: () => { setDone(true); toast("Flagged. A person reviews these and they improve the system."); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not flag this."),
-  });
-  if (done) return <span className="small muted">Flagged, thank you.</span>;
-  return (
-    <span className="row" style={{ gap: 6 }}>
-      <select className="select" style={{ width: "auto", padding: "4px 8px", fontSize: 12.5 }} value={kind} onChange={(e) => { setKind(e.target.value); if (e.target.value) flag.mutate(e.target.value); }} aria-label="Something wrong with this assessment?">
-        <option value="">Something wrong?</option>
-        {FLAG_KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-      </select>
-    </span>
-  );
-}
-
-/**
- * "Ask about this in a screen" (docs/spec/21, P1): the one-click follow-up on a résumé assessment with open questions.
- * The API's `invite_screen` capability gates it (the route refuses `ask_in_screen` under the same rule); when a screen is
- * already open the button gives way to a sentence, since the invitation cannot be sent twice.
- */
-function AskInScreen({ detail, roleId, unknowns }: { detail: ApplicationDetail; roleId: string; unknowns: number }) {
-  const qc = useQueryClient();
-  const ask = useMutation({
-    mutationFn: () => api.post<{ next?: string }>(`/api/v1/applications/${detail.id}/actions`, { action: "ask_in_screen" }),
-    onSuccess: async (r) => { toast(r.next ?? "Invitation on its way. The screen starts with these questions."); await qc.invalidateQueries({ queryKey: ["application", detail.id] }); await qc.invalidateQueries({ queryKey: ["applications", roleId] }); await qc.invalidateQueries({ queryKey: ["brief"] }); await qc.invalidateQueries({ queryKey: ["notifications"] }); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send the invitation."),
-  });
-  if (!unknowns) return null;
-  const open = openScreenOf(detail);
-  if (open) return <p className="small muted" style={{ marginTop: 6 }}>{open.progress.focusQuestions?.length ? "A screen that starts with these questions is already open; the answers appear here as they come in." : "A screen is already open; these questions are part of its follow-ups, so there is nothing more to send."}</p>;
-  if (!detail.allowedActions.includes("invite_screen")) return null;
-  return (
-    <div className="row" style={{ marginTop: 8 }}>
-      <Button size="sm" variant="primary" loading={ask.isPending} onClick={() => ask.mutate()} title="Invites them to a short web screen that starts with these questions">Ask about this in a screen</Button>
-      <span className="small muted">A short web screen, by email, that opens with {unknowns === 1 ? "this question" : "these questions"}.</span>
+    <div className="talent-row">
+      <Avatar name={name} />
+      <div className="talent-row-main">
+        <button type="button" className="talent-name" onClick={onOpen}>{name}</button>
+        <span className="talent-row-sub">
+          <span>{appliedWhen(a.appliedAt ?? a.createdAt)}</span>
+          <span>{a.source.replace(/_/g, " ")}</span>
+          {waiting ? <span className="waiting">{waiting}</span> : null}
+          {a.mark?.mark === "on_hold" && a.mark.remindAt && !a.tags.includes("Hold ended") ? <span>On hold until {holdDay(a.mark.remindAt)}</span> : null}
+        </span>
+      </div>
+      <div className="talent-row-chips">
+        {reading !== "none" ? <Pill size="sm" tone={READING[reading].tone}>{READING[reading].label}</Pill> : null}
+        {a.evidence?.lowConfidence && reading !== "closer_look" ? <Chip tone="caution">{LOW_CONFIDENCE_LABEL}</Chip> : null}
+        {a.tags.map((t) => <Chip key={t} tone="caution">{t}</Chip>)}
+        {a.toldState === "not_told" ? <Chip>{a.decisionMessageWaiting ? "Message waiting for approval" : "Not told yet"}</Chip> : null}
+        {a.toldState === "queued" ? <Chip>Message on its way</Chip> : null}
+      </div>
+      {/* the match score (Wave F) goes here; the room is kept so the rows do not move when it arrives */}
+      <span className="score-slot" aria-hidden="true" />
+      <StageButton stage={a.ownerStage} label={a.ownerStageLabel} blocked={stageBlocked(a.stageMoves)} disabled={busy} onMove={onMove} align="end" />
     </div>
   );
 }
 
-/** While the assistant could not produce an assessment at all (its answer was unusable twice), the page says so instead of showing nothing. */
-function NoAssessmentCard({ detail }: { detail: ApplicationDetail }) {
-  const look = closerLook(detail);
-  if (!look.assessmentUnavailable) return null;
-  return (
-    <Card needsYou title="Resume assessment" className="assessment">
-      <div className="row"><Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip></div>
-      <p style={{ marginTop: 8 }}>{ASSESSMENT_UNAVAILABLE_TEXT}</p>
-      <p className="small muted" style={{ marginTop: 6 }}>Nothing is hidden: the résumé, the answers and the messages are on this page. The assistant's answer was not usable after two tries; ITS has the details.</p>
-      {resumeUnreadable(detail) ? <p className="small" style={{ color: "var(--needs-you)", marginTop: 6 }}>{RESUME_UNREADABLE_TEXT}</p> : null}
-    </Card>
-  );
-}
-
-/** A claim about the candidate with nothing quoted from them: shown, never passed off as evidence (plan 0.9). */
-function NoQuote() {
-  return <span className="small muted" title="Nothing from the candidate's own words backs this up yet"> ({NO_QUOTE_LABEL})</span>;
-}
-
 /**
- * The screen is finished but its scorecard could not be written (plan 0.9): the run gave up after two unusable answers
- * and asked ITS to look. The page says so, so a finished screen never sits there looking unread.
+ * "Not told yet" for several people at once (founder decision B6): the standard wording shown first, each person ticked
+ * by default, then one Send that sends to each of them separately, with every person's own result.
  */
-function ScorecardUnavailableCard({ detail, roleId }: { detail: ApplicationDetail; roleId: string }) {
-  const state = scorecardUnavailable(detail);
-  if (!state.unavailable) return null;
-  return (
-    <Card needsYou title="Screen scorecard" className="assessment">
-      <div className="row"><Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip></div>
-      <p style={{ marginTop: 8 }}>{SCORECARD_UNAVAILABLE_TEXT}</p>
-      <p className="small muted" style={{ marginTop: 6 }}>Nothing is hidden: the whole conversation is in the card above. {state.recruiterAsked ? "An ITS recruiter has been asked to look into it." : "ITS has the details."}</p>
-      <div className="row" style={{ marginTop: 10 }}><AskRecruiter roleId={roleId} applicationId={detail.id} size="sm" /></div>
-    </Card>
-  );
-}
-
-function AssessmentCard({ applicationId, assessmentId, kind, overall, confidence, result, createdAt, labels, detail, roleId }: { applicationId: string; assessmentId: string; kind: string; overall: string; confidence: string; result: AssessmentResult; createdAt: string; labels: PacketLabels; detail: ApplicationDetail; roleId: string }) {
-  const mustHave = (key: string) => labels.mustHaves.find((m) => m.key === key)?.text ?? key.replace(/^mh_\d+_/, "").replace(/_/g, " ");
-  const competency = (key: string) => labels.competencies.find((c) => c.key === key)?.name ?? key.replace(/_/g, " ");
-  const question = (key: string) => screenQuestionText(detail, key) ?? key.replace(/_/g, " ");
-  // The résumé assessment carries the "closer look" state; a screen scorecard has its own vocabulary.
-  const triage = kind === "triage";
-  const look = triage && detail.assessments.find((x) => x.kind === "triage")?.id === assessmentId ? closerLook(detail) : null;
-  const reasons = result.confidenceReasons ?? [];
-  return (
-    <Card title={kind === "screen" ? "Screen scorecard" : "Resume assessment"} className="assessment" needsYou={!!look?.needsCloserLook} aside={<span className="row"><span className="small muted">{new Date(createdAt).toLocaleDateString()}</span><FlagAssessment applicationId={applicationId} assessmentId={assessmentId} /></span>}>
-      <div className="row"><Chip tone={overall === "strong" ? "good" : overall === "weak" ? "caution" : "accent"}>{overallLabel(overall)}</Chip><Chip tone={result.recommendation === "decline_recommended" ? "caution" : "neutral"}>{REC_LABEL[result.recommendation] ?? result.recommendation}</Chip><Chip>{confidence} confidence</Chip>{look?.needsCloserLook ? <Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip> : null}</div>
-      <p style={{ marginTop: 8 }}>{result.summary}</p>
-      {reasons.length ? <p className="small muted" style={{ marginTop: 4 }}>Confidence is {confidence} because {reasons.join("; ")}.</p> : null}
-      {triage && resumeUnreadable(detail) ? <Alert tone="caution">{RESUME_UNREADABLE_TEXT}</Alert> : null}
-      {kind === "screen" && (result.compensationExpectation?.stated || result.availability?.stated) ? (
-        <dl className="kv" style={{ marginTop: 8 }}>
-          {result.compensationExpectation?.stated ? <><dt>Pay expectation</dt><dd>{result.compensationExpectation.stated} <Chip tone={result.compensationExpectation.withinRange === "yes" ? "good" : result.compensationExpectation.withinRange === "above" ? "caution" : "neutral"}>{result.compensationExpectation.withinRange === "yes" ? "within range" : result.compensationExpectation.withinRange}</Chip></dd></> : null}
-          {result.availability?.stated ? <><dt>Availability</dt><dd>{result.availability.stated} <Chip tone={MET_TONE[result.availability.matchesSchedule] ?? "neutral"}>{result.availability.matchesSchedule.replace("_", " ")}</Chip></dd></> : null}
-        </dl>
-      ) : null}
-      {result.requirementFindings?.length ? <div className="block"><h3>Must-haves</h3><ul>{result.requirementFindings.map((r, j) => <li key={j}>{mustHave(r.requirementKey)} <Chip tone={MET_TONE[r.met] ?? "neutral"}>{r.met}</Chip>{r.evidence?.quote ? <span className="small muted"> "{r.evidence.quote}"</span> : requirementUnquoted(r) ? <NoQuote /> : null}</li>)}</ul></div> : null}
-      {result.questionFindings?.length ? <div className="block"><h3>Answers</h3><ul>{result.questionFindings.map((f, j) => <li key={j}><span className="muted small">{question(f.questionKey)}</span><br />{f.finding} {f.answered ? <Chip tone={MET_TONE[f.meetsModelAnswer] ?? "neutral"}>{f.meetsModelAnswer === "unknown" ? "recorded" : f.meetsModelAnswer}</Chip> : null}</li>)}</ul></div> : null}
-      {result.competencyFindings?.length ? <div className="block"><h3>Competencies</h3><div className="row">{result.competencyFindings.map((c, j) => <Chip key={j} tone={MET_TONE[c.finding] ?? "neutral"}>{competency(c.competencyKey)}: {c.finding.replace(/_/g, " ")}{competencyUnquoted(c) ? ` (${NO_QUOTE_LABEL})` : ""}</Chip>)}</div></div> : null}
-      <div className="block"><h3>Strengths</h3>{result.strengths.length ? <ul>{result.strengths.map((s, j) => <li key={j}>{s.claim} <EvidenceChip source={s.evidence.source} />{s.evidence.quote ? <span className="small muted"> "{s.evidence.quote}"</span> : isUnquoted(s.evidence) ? <NoQuote /> : null}</li>)}</ul> : <p className="muted small">None recorded.</p>}</div>
-      <div className="block"><h3>Concerns</h3>{result.concerns.length ? <ul>{result.concerns.map((s, j) => <li key={j}>{s.claim} <EvidenceChip source={s.evidence.source} />{s.evidence.quote ? <span className="small muted"> "{s.evidence.quote}"</span> : isUnquoted(s.evidence) ? <NoQuote /> : null}</li>)}</ul> : <p className="muted small">None recorded.</p>}</div>
-      <div className="block"><h3>Unknown</h3>{result.unknowns.length ? <ul>{result.unknowns.map((u, j) => <li key={j}>{u.question} <span className="muted small">— {u.whyItMatters}</span></li>)}</ul> : <p className="muted small">Nothing outstanding.</p>}{triage ? <AskInScreen detail={detail} roleId={roleId} unknowns={result.unknowns.length} /> : null}</div>
-      {result.anomalies?.length ? <p className="small muted" style={{ marginTop: 8 }}>Flags (never used to decline): {result.anomalies.map((an) => `${an.kind.replace(/_/g, " ")}: ${an.detail}`).join("; ")}</p> : null}
-      <p className="small muted" style={{ marginTop: 8 }}>{result.rationale}</p>
-    </Card>
-  );
-}
-
-function describeEvent(type: string, payload: Record<string, unknown>): string {
-  const p = payload as Record<string, string | undefined>;
-  return ({
-    "application.triaged": `Assessed: ${REC_LABEL[p.recommendation ?? ""] ?? p.recommendation ?? "done"}`,
-    "assessment.created": p.kind === "screen" ? "Screen scorecard written" : "Resume assessment written",
-    "screen.invited": p.focus === "unknowns" ? `Invited to a screen that starts with the open questions (${p.channel})` : `Invited to a screen (${p.channel})`,
-    "screen.started": "Started the screening conversation",
-    "screen.completed": "Completed the screen",
-    "screen.assessed": "Screen scorecard ready",
-    "screen.expired": "Did not respond to the screen",
-    "screen.human_requested": "Asked for a person during the screen",
-    "screen.abandoned": "Left the screen",
-    "candidate.recommended": p.by === "human" ? "Marked for interview by you" : "Recommended for interview",
-    "application.withdrawn": "Withdrew",
-    "message.received": "Wrote to us",
-    "message.sent": "Message sent",
-    "application.received": "Application received",
-    "application.acknowledged": "Confirmation sent to the candidate",
-    "resume.ingested": "Resume read",
-    "resume.extraction_failed": "Resume could not be read",
-    "eligibility.evaluated": `Eligibility checked (${(payload.passed as boolean) ? "met" : "not met"})`,
-    "application.ineligible": "Held on an eligibility answer",
-    "application.stage_changed": `Now "${STAGE_LABEL[p.to ?? ""] ?? p.to}"${p.reason ? ` (${p.reason})` : ""}`,
-    "application.rejected": `Declined${p.reason ? `: ${p.reason.replace(/_/g, " ")}` : ""}${payload.afterInterview ? " (after the interview)" : ""}`,
-    "interview.decision_recorded": `Decision after the interview: ${(p.decision ?? "").replace(/_/g, " ")}${p.note ? ` — ${p.note}` : ""}`,
-    "application.duplicate_detected": "Applied again (kept the original)",
-    "human.override": `Human decision: ${(p.action ?? "").replace(/_/g, " ")}${p.note ? ` — ${p.note}` : ""}`,
-    "recruiter.requested": "Sent to a recruiter",
-    "recruiter.claimed": "An ITS recruiter picked this up",
-    "recruiter.resolved": `ITS recruiter responded${p.resolution ? `: ${p.resolution}` : ""}`,
-    "recruiter.access_granted": `ITS recruiter ${p.recruiter ?? ""} given access (${p.purpose ?? ""}) until ${p.expiresAt ? new Date(p.expiresAt).toLocaleDateString() : ""}`,
-    "recruiter.access_ended": "ITS recruiter access ended",
-    "application.moved_to_talent_pool": "Added to the talent pool",
-  } as Record<string, string>)[type] ?? type.replace(/[._]/g, " ");
-}
-
-type OutcomeRecord = { id: string; outcome: string; hireDate: string | null; offerAcceptedAt: string | null; recordedBy: { name?: string; id: string }; recordedAt: string; correctedAt: string | null; correctionReason: string | null; correctionOf: string | null };
-
-/** What was recorded, by whom, with the sentence that keeps it honest about where the offer happened. */
-function RecordedOutcome({ id }: { id: string }) {
-  const q = useQuery({ queryKey: ["outcomes", id], queryFn: () => api.get<{ statement: string; outcomes: OutcomeRecord[] }>(`/api/v1/applications/${id}/outcomes`) });
-  const latest = q.data?.outcomes.find((o) => !o.correctedAt);
-  if (!latest) return null;
-  return (
-    <Card title="Recorded outcome">
-      <p><strong>{latest.outcome.replace(/_/g, " ")}</strong>{latest.hireDate ? ` · hire date ${latest.hireDate}` : ""}{latest.offerAcceptedAt ? ` · offer accepted ${latest.offerAcceptedAt}` : ""}</p>
-      <p className="small muted">Recorded by {latest.recordedBy.name ?? "a team member"} on {new Date(latest.recordedAt).toLocaleDateString()}{latest.correctionOf ? " (a correction by an ITS administrator)" : ""}.</p>
-      <p className="small muted" style={{ marginTop: 6 }}>{q.data!.statement}</p>
-    </Card>
-  );
-}
-
-type WaitingMessage = { id: string; requiredRoles: string[]; proposal: { subject?: string | null; text?: string; senderName?: string; senderUserId?: string } };
-
-const ROLE_WORDS: Record<string, string> = { owner: "an owner", admin: "an admin", hiring_manager: "a hiring manager", recruiter: "a recruiter", hr: "HR", interviewer: "an interviewer" };
-/** "an owner or an admin": who a waiting message is waiting for, in the reader's words. */
-const whoDecides = (roles: string[]) => (roles.length ? roles.map((r) => ROLE_WORDS[r] ?? r.replace(/_/g, " ")).join(" or ") : "an owner or an admin");
-
-/**
- * "Message <first name>" (F11): the person's own words, sent under the hiring team's name with theirs in the footer
- * and no AI disclosure line. Under an approval rule the message waits for an owner or admin, who sees it here (and on
- * Today) with the text and decides; the writer is told either way. The buttons appear only for a reader whose role
- * may decide; everyone else, the writer included, sees the text and who it waits for.
- */
-function MessageCard({ a, initiallyOpen, onSent }: { a: ApplicationDetail; initiallyOpen: boolean; onSent: () => Promise<void> }) {
+function TellSheet({ roleId, people, onClose }: { roleId: string; people: ApplicationSummary[]; onClose: () => void }) {
   const qc = useQueryClient();
-  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
-  const myRole = me.data?.memberships.find((m) => m.companyId === me.data?.activeCompanyId)?.role ?? null;
-  const myId = me.data?.user.id ?? null;
-  const [open, setOpen] = useState(initiallyOpen);
-  const [subject, setSubject] = useState("");
-  const [text, setText] = useState("");
-  const preview = useQuery({ queryKey: ["message-preview", a.id], queryFn: () => api.get<MessagePreview>(`/api/v1/applications/${a.id}/messages/preview`), enabled: open });
+  const [picked, setPicked] = useState<string[]>(people.map((p) => p.id));
+  const [results, setResults] = useState<DecisionMessagesResponse | null>(null);
+  const sample = picked[0] ?? null;
+  const preview = useQuery({ queryKey: ["decision-message", sample], queryFn: () => api.get<DecisionMessagePreview>(`/api/v1/applications/${sample}/decision-message`), enabled: !!sample && !results });
   const send = useMutation({
-    mutationFn: () => api.post<SendMessageResult>(`/api/v1/applications/${a.id}/messages`, { subject: subject.trim() || undefined, text }),
-    onSuccess: async (r) => { toast(r.status === "queued" ? `Sent to ${a.candidate.firstName}. It is on its way.` : "Saved. An owner or admin reads it before it goes out; you will be told."); setText(""); setSubject(""); setOpen(false); await onSent(); await qc.invalidateQueries({ queryKey: ["brief"] }); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send the message."),
+    // in requests of at most a hundred people each, one after the other, so a long list after a role close goes out whole
+    mutationFn: async () => {
+      const parts: DecisionMessagesResponse[] = [];
+      for (const ids of batches(picked)) parts.push(await api.post<DecisionMessagesResponse>(`/api/v1/roles/${roleId}/decision-messages`, { applicationIds: ids }));
+      return mergeDecisionResults(parts);
+    },
+    onSuccess: async (r) => {
+      setResults(r);
+      const t = bulkSendToast(r);
+      toast(t.title, t.detail);
+      await Promise.all([qc.invalidateQueries({ queryKey: ["applications", roleId] }), qc.invalidateQueries({ queryKey: ["brief"] }), qc.invalidateQueries({ queryKey: ["application"] })]);
+    },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send the messages."),
   });
-  const decide = useMutation({
-    mutationFn: (input: { id: string; decision: "approve" | "reject" }) => api.post(`/api/v1/approvals/${input.id}/decide`, { decision: input.decision }),
-    onSuccess: async (_r, input) => { toast(input.decision === "approve" ? "Sent under the writer's name." : "Not sent. The writer has been told."); await onSent(); await qc.invalidateQueries({ queryKey: ["brief"] }); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "That didn't work."),
-  });
-  const waiting: WaitingMessage[] = a.pendingApprovals.filter((p) => p.actionType === "message.send_freeform").map((p) => ({ id: p.id, requiredRoles: p.requiredRoles ?? [], proposal: (p.proposal ?? {}) as WaitingMessage["proposal"] }));
-  const mayDecide = (p: WaitingMessage) => !!myRole && p.requiredRoles.includes(myRole);
-  const first = a.candidate.firstName;
+  const nameOf = (id: string) => people.find((p) => p.id === id)?.candidate?.name ?? "A candidate";
+  const policy = preview.data?.policy;
   return (
-    <Card title={`Message ${first}`} needsYou={waiting.some(mayDecide)}>
-      {waiting.map((p) => (
-        <div key={p.id} className="stack" style={{ gap: 6, marginBottom: 12 }}>
-          {mayDecide(p) ? (
-            <Alert tone="caution">Send this message to {first} {a.candidate.lastName}? {p.proposal.senderName ?? "A team member"} wrote it; nothing goes out until you say yes.</Alert>
-          ) : (
-            <Alert tone="neutral">{myId && p.proposal.senderUserId === myId ? "You wrote" : `${p.proposal.senderName ?? "A team member"} wrote`} this to {first} {a.candidate.lastName}. It is waiting for {whoDecides(p.requiredRoles)} to read it; nothing goes out until they say yes.</Alert>
-          )}
-          {p.proposal.subject ? <p className="small" style={{ margin: 0 }}><strong>{p.proposal.subject}</strong></p> : null}
-          <p className="small" style={{ margin: 0, whiteSpace: "pre-wrap" }}>{p.proposal.text}</p>
-          {mayDecide(p) ? <div className="row"><Button size="sm" variant="primary" loading={decide.isPending} onClick={() => decide.mutate({ id: p.id, decision: "approve" })}>Yes, send it</Button><Button size="sm" variant="quiet" loading={decide.isPending} onClick={() => decide.mutate({ id: p.id, decision: "reject" })}>Do not send</Button></div> : null}
-        </div>
-      ))}
-      {!open ? (
-        <div className="row">
-          <Button size="sm" disabled={!a.candidate.email} title={a.candidate.email ? "Your own words, sent under the hiring team's name with yours in the footer" : "No email address on file"} onClick={() => setOpen(true)}>Write to {first}</Button>
-          {!a.candidate.email ? <span className="small muted">No email address on file.</span> : null}
+    <Sheet open onClose={onClose} title="Send the decision message">
+      {results ? (
+        <div className="stack">
+          <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+            {results.results.map((r) => <li key={r.applicationId}><strong>{nameOf(r.applicationId)}</strong>: {r.ok && r.candidateNotice ? noticeText(r.candidateNotice) : r.message ?? "Not sent."}</li>)}
+          </ul>
+          <Button onClick={onClose}>Done</Button>
         </div>
       ) : (
-        <div className="stack" style={{ gap: 8 }}>
-          <p className="small muted" style={{ margin: 0 }}>Your own words, sent as {preview.data?.fromName ?? "the hiring team"} to {preview.data?.to ?? a.candidate.email}. {preview.data ? (preview.data.repliesComeBack ? "Replies come back to this page." : "Replies reach the ITS mailbox, where a person reads them.") : ""}{preview.data?.needsApproval ? " An owner or admin reads your message before it goes out." : ""}</p>
-          <Field label="Subject (optional)" htmlFor="msg-subject"><input id="msg-subject" className="input" value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={200} /></Field>
-          <Field label="Message" htmlFor="msg-text"><textarea id="msg-text" className="input" rows={6} value={text} onChange={(e) => setText(e.target.value)} maxLength={5000} placeholder={`Hi ${first},`} /></Field>
-          {preview.data ? <div className="small muted" style={{ whiteSpace: "pre-wrap", borderTop: "1px solid var(--line)", paddingTop: 8 }}>{preview.data.footer}</div> : null}
-          <div className="row">
-            <Button size="sm" variant="primary" loading={send.isPending} disabled={!text.trim()} onClick={() => send.mutate()}>{preview.data?.needsApproval ? "Send for approval" : "Send"}</Button>
-            <Button size="sm" variant="quiet" onClick={() => setOpen(false)}>Cancel</Button>
-          </div>
+        <div className="stack">
+          <p className="small" style={{ margin: 0 }}>Each person gets the standard decision message on its own, with their own name. Untick anyone you would rather tell yourself.</p>
+          <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+            <legend className="small muted">Who gets it</legend>
+            {people.map((p) => (
+              <label key={p.id} className="row small" style={{ gap: 8 }}>
+                <input type="checkbox" checked={picked.includes(p.id)} onChange={(e) => setPicked((now) => (e.target.checked ? [...now, p.id] : now.filter((x) => x !== p.id)))} />
+                {p.candidate?.name ?? "Unknown"}{p.candidate?.email ? "" : <span className="muted"> (no email address on file)</span>}
+              </label>
+            ))}
+          </fieldset>
+          {sample ? (
+            preview.isLoading ? <Skeleton lines={4} /> : preview.data ? (
+              <Card title={`What ${nameOf(sample).split(" ")[0]} will get`}>
+                <p className="small" style={{ margin: 0 }}><strong>{preview.data.subject}</strong></p>
+                <p className="small" style={{ margin: "6px 0 0", whiteSpace: "pre-wrap" }}>{preview.data.text}</p>
+                <p className="small muted" style={{ marginTop: 8 }}>People declined on an eligibility answer get the version about their answers.</p>
+              </Card>
+            ) : <ErrorState message="Could not load the message." onRetry={() => preview.refetch()} />
+          ) : null}
+          {policy === "not_sent" ? <Alert tone="caution">Under your settings no decision messages are sent. Tell each person yourself, then record it on their page.</Alert> : null}
+          {policy === "needs_approval" ? <p className="small muted" style={{ margin: 0 }}>Under your settings each message waits for approval before it goes out.</p> : null}
+          <Button variant="primary" icon="send" disabled={!picked.length || policy === "not_sent"} loading={send.isPending} onClick={() => send.mutate()}>{policy === "needs_approval" ? `Send ${picked.length} for approval` : `Send to ${picked.length} ${picked.length === 1 ? "person" : "people"}`}</Button>
         </div>
       )}
-    </Card>
+    </Sheet>
   );
 }
 
@@ -744,7 +291,7 @@ function ComparePanel({ roleId, candidates }: { roleId: string; candidates: Arra
   const q = useQuery({ queryKey: ["compare", roleId, (ids ?? []).join(",")], queryFn: () => api.get<CompareResponse>(`/api/v1/roles/${roleId}/compare?ids=${(ids ?? []).join(",")}`), enabled: !!ids?.length });
   return (
     <Card title="Compare candidates" aside={<span className="small muted">{picked.length} of {COMPARE_MAX} chosen</span>}>
-      <p className="small muted" style={{ margin: 0 }}>Tick up to five people, then compare. People decide; nothing here is ranked or scored.</p>
+      <p className="small muted" style={{ margin: 0 }}>Tick up to five people, then compare. People decide; nothing here is ranked.</p>
       <div className="row" style={{ flexWrap: "wrap", gap: 12, marginTop: 8 }}>
         {candidates.map((c) => (
           <label key={c.id} className="row small" style={{ gap: 6 }}>
@@ -762,20 +309,20 @@ function ComparePanel({ roleId, candidates }: { roleId: string; candidates: Arra
   );
 }
 
-/** Candidates as columns, must-haves and competencies as rows, findings as chips; a link back to each sheet. */
+/** Candidates as columns, must-haves and competencies as rows, findings as chips; a link back to each panel. */
 function CompareTable({ data }: { data: CompareResponse }) {
   const chip = (v: string | undefined) => (v ? <Chip tone={MET_TONE[v] ?? "neutral"}>{COMPARE_LABEL[v] ?? v.replace(/_/g, " ")}</Chip> : <span className="small muted">no evidence yet</span>);
   const cands = data.candidates;
   return (
     <div style={{ marginTop: 12 }}>
       <Table head={["What we checked", ...cands.map((c) => c.name)]} label="Candidates compared">
-        <tr><td className="small muted">Where they are</td>{cands.map((c) => <td key={c.applicationId}><StatusChip stage={c.stage} label={c.stageLabel} group={c.group} /></td>)}</tr>
+        <tr><td className="small muted">Where they are</td>{cands.map((c) => <td key={c.applicationId}><StatusChip stage={c.stage} label={c.ownerStageLabel ?? c.stageLabel} group={c.group} /></td>)}</tr>
         {data.mustHaves.map((m) => <tr key={m.key}><td className="small"><strong>Must-have:</strong> {m.text}</td>{cands.map((c) => <td key={c.applicationId}>{chip(c.mustHaves[m.key]?.met)}</td>)}</tr>)}
         {data.competencies.map((x) => <tr key={x.key}><td className="small" title={x.definition}>{x.name}</td>{cands.map((c) => <td key={c.applicationId}>{chip(c.competencies[x.key]?.finding)}</td>)}</tr>)}
         <tr><td className="small muted">Screen</td>{cands.map((c) => <td key={c.applicationId} className="small">{c.screen ? REC_LABEL[c.screen.recommendation] ?? c.screen.recommendation.replace(/_/g, " ") : <span className="muted">no screen yet</span>}</td>)}</tr>
-        <tr><td className="small muted">Resume</td>{cands.map((c) => <td key={c.applicationId} className="small">{c.resume ? overallLabel(c.resume.overall) : <span className="muted">not assessed yet</span>}</td>)}</tr>
+        <tr><td className="small muted">Résumé</td>{cands.map((c) => <td key={c.applicationId} className="small">{c.resume ? overallLabel(c.resume.overall) : <span className="muted">not assessed yet</span>}</td>)}</tr>
         <tr><td className="small muted">Still unknown</td>{cands.map((c) => <td key={c.applicationId} className="small">{c.unknownCount}</td>)}</tr>
-        <tr><td className="small muted">Their page</td>{cands.map((c) => <td key={c.applicationId}><Link to={c.open} className="btn quiet sm">Open</Link></td>)}</tr>
+        <tr><td className="small muted">Their panel</td>{cands.map((c) => <td key={c.applicationId}><Link to={c.open} className="btn quiet sm">Open</Link></td>)}</tr>
       </Table>
       <p className="small muted" style={{ marginTop: 8 }}>{data.reminder}</p>
     </div>

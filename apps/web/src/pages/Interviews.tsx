@@ -8,6 +8,7 @@ import { api, ApiError, type InterviewDetail, type InterviewSummary, type Interv
 import { toast } from "../toast";
 import { activeCompanyOf } from "../rail";
 import { canDecideInterviews, canManageInterviews, canSeeTalent } from "../roles";
+import { interviewCancelToast } from "../talent-actions";
 
 const STATUS_LABEL: Record<string, string> = { proposed: "Preparing times", scheduling: "Waiting on the candidate", scheduled: "Scheduled", completed: "Completed", cancelled: "Cancelled", no_show: "No-show", offer_expired: "Times expired" };
 const DECISION_LABEL: Record<string, string> = { next_round: "Next round", finalist: "Finalist", not_moving_forward: "Not moving forward", hired: "Hired" };
@@ -97,7 +98,7 @@ function InterviewSheet({ id, role, userId }: { id: string; role: string | null;
   const [confirmCancel, setConfirmCancel] = useState(false);
   const refresh = async () => { await qc.invalidateQueries({ queryKey: ["interview", id] }); await qc.invalidateQueries({ queryKey: ["interviews"] }); await qc.invalidateQueries({ queryKey: ["brief"] }); };
   const reschedule = useMutation({ mutationFn: () => api.post(`/api/v1/interviews/${id}/reschedule`, { reason: reason || undefined }), onSuccess: async () => { toast("New times are going out."); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not reschedule.") });
-  const cancel = useMutation({ mutationFn: () => api.post(`/api/v1/interviews/${id}/cancel`, { reason }), onSuccess: async () => { toast("Cancelled. The candidate and interviewers are told."); setConfirmCancel(false); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not cancel.") });
+  const cancel = useMutation({ mutationFn: () => api.post<{ candidateTold?: boolean; interviewersTold?: boolean }>(`/api/v1/interviews/${id}/cancel`, { reason }), onSuccess: async (r) => { const t = interviewCancelToast(r); toast(t.title, t.detail); setConfirmCancel(false); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not cancel.") });
   const outcome = useMutation({ mutationFn: (o: string) => api.post(`/api/v1/interviews/${id}/outcome`, { outcome: o }), onSuccess: async () => { toast("Recorded."); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record.") });
   const book = useMutation({ mutationFn: (slotId: string) => api.post(`/api/v1/interviews/${id}/book-on-behalf`, { slotId, note: "chosen with the candidate by phone" }), onSuccess: async () => { toast("Booked on the candidate's behalf."); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not book.") });
   const i = q.data;
@@ -153,7 +154,7 @@ function InterviewSheet({ id, role, userId }: { id: string; role: string | null;
           ) : null}
           {manage && ["proposed", "scheduling", "scheduled"].includes(i.status) ? (
             <Card title="Change it">
-              <Field label="Reason (the candidate sees it when you cancel)" htmlFor="iv-reason"><input id="iv-reason" className="input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
+              <Field label="Reason (the candidate sees it if they had a time booked or offered)" htmlFor="iv-reason"><input id="iv-reason" className="input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
               <div className="row" style={{ marginTop: 10 }}>
                 <Button size="sm" loading={reschedule.isPending} onClick={() => reschedule.mutate()}>Offer new times</Button>
                 {confirmCancel ? <Button size="sm" variant="destructive" loading={cancel.isPending} disabled={!reason.trim()} onClick={() => cancel.mutate()}>Confirm cancel</Button> : <Button size="sm" variant="destructive" onClick={() => setConfirmCancel(true)}>Cancel interview</Button>}

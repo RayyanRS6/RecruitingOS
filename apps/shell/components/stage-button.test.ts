@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { StageButton } from "@ros/ui";
+import { Drawer, StageButton, Tabs } from "@ros/ui";
 
 /**
  * The design system's stage button (plan adjustments §2 and §5) as the shell first draws it: a pill in the stage's
@@ -26,5 +26,25 @@ describe("the stage button", () => {
 
   it("can be shown switched off while a move is under way", () => {
     expect(html("new", true)).toMatch(/<button[^>]*disabled=""/);
+  });
+
+  it("takes the page's closer word for the stage when it has one (Wave A)", () => {
+    const out = renderToStaticMarkup(createElement(StageButton, { stage: "not_moving_forward", label: "Not a fit for now", onMove: () => undefined }));
+    expect(out).toContain('aria-label="Stage: Not a fit for now. Move to another stage"');
+    expect(out).toContain('<span class="dot" aria-hidden="true"></span>Not a fit for now');
+  });
+});
+
+describe("the candidate panel's pieces (Wave A)", () => {
+  it("marks a tab with something new with a dot a screen reader hears as new", () => {
+    const out = renderToStaticMarkup(createElement(Tabs, { label: "Candidate sections", value: "overview", items: [{ id: "overview", label: "Overview" }, { id: "messages", label: "Messages", marker: true }] }));
+    expect(out).toContain('<span>Messages</span><span class="tab-dot" aria-hidden="true"></span><span class="sr-only"> (new)</span>');
+    expect(out.match(/tab-dot/g)).toHaveLength(1);
+  });
+
+  it("puts a drawer's banner in the sticky header, under the title row", () => {
+    const out = renderToStaticMarkup(createElement(Drawer, { open: true, onClose: () => undefined, title: "Maria Reyes", banner: "You have text here that is not sent or saved.", children: "body" }));
+    expect(out).toMatch(/<div class="drawer-head">.*<div class="drawer-banner">You have text here that is not sent or saved\.<\/div>.*<\/div><div class="drawer-body">body<\/div>/);
+    expect(renderToStaticMarkup(createElement(Drawer, { open: true, onClose: () => undefined, title: "Maria Reyes", children: "body" }))).not.toContain("drawer-banner");
   });
 });

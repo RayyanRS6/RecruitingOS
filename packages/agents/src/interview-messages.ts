@@ -115,11 +115,23 @@ ${footer(packet, company)}`;
   return deliver(q, integrations, { ...input, channel: "email", templateKey: `interview_reminder_${input.which}`, subject: `${input.which === "before24h" ? "Tomorrow" : "Soon"}: ${interview.title} at ${company.name}`, text, idempotencyKey: `iv_reminder:${interview.id}:${interview.attempt}:${input.which}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
-export async function sendInterviewCancelled(q: Queryable, integrations: Integrations, input: InterviewMessageInput & { byCandidate: boolean; reason?: string | null }): Promise<SendResult> {
+/**
+ * The interview is off. Three wordings: the candidate's own cancellation ("As requested"); the team's, with the reason
+ * the team gave; and `leftProcess`, an interview called off because the application left the process (plan A9). That
+ * last one gives no reason and promises nothing: a decision is private until a person tells the candidate (founder
+ * decision B6), but someone holding a time must know not to come.
+ */
+export async function sendInterviewCancelled(q: Queryable, integrations: Integrations, input: InterviewMessageInput & { byCandidate: boolean; reason?: string | null; leftProcess?: boolean }): Promise<SendResult> {
   const { candidate, company, packet, interview } = input;
+  const when = interview.startsAt ? `, ${formatInZone(interview.startsAt, input.candidateTimezone)},` : "";
+  const what = input.byCandidate
+    ? `As requested, your interview (${interview.title}) at ${company.name} is cancelled.`
+    : input.leftProcess
+      ? interview.startsAt ? `Your interview (${interview.title}) at ${company.name}${when} is cancelled, so there is no need to attend.` : `The interview times ${company.name} offered you for ${interview.title} are no longer available, so there is no need to pick one.`
+      : `${company.name} had to cancel your interview (${interview.title})${input.reason ? `: ${input.reason}` : "."} They will be in touch about next steps.`;
   const text = `Hi ${candidate.firstName},
 
-${input.byCandidate ? `As requested, your interview (${interview.title}) at ${company.name} is cancelled.` : `${company.name} had to cancel your interview (${interview.title})${input.reason ? `: ${input.reason}` : "."} They will be in touch about next steps.`}
+${what}
 
 ${footer(packet, company)}`;
   const ics = interview.startsAt ? interviewIcs({ interview, company, packet, candidate, fromAddress: integrations.env.fromAddress, method: "CANCEL", appBaseUrl: input.appBaseUrl }) : null;

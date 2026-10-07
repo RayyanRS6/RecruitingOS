@@ -1,4 +1,4 @@
-import { and, desc, eq, gte } from "drizzle-orm";
+import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { RETRY_DELAYS_MS, SOFT_BOUNCE_LIMIT, SOFT_BOUNCE_WINDOW_MS, emit, nextContactWindow, notify, raiseAlert, suppressAddress } from "@ros/core";
 import { applications, candidates, communications, companies, jobs, rolePackets, roles, users, type Queryable } from "@ros/db";
@@ -30,6 +30,9 @@ export async function handleEmailEvent(q: Queryable, integrations: Integrations,
   if (comm) {
     await q.update(communications).set({ status: event.complaint ? "complained" : "bounced", error: `${event.type}: ${event.description}`.slice(0, 500), failureType }).where(eq(communications.id, comm.id));
     await emit(q, { type: event.complaint ? "message.complained" : "message.bounced", companyId: comm.companyId, actor, subject: { type: "communication", id: comm.id }, payload: { type: event.type, failureType, template: comm.templateKey, address } });
+    // A decision message that bounced for good never reached them: the decision is not told after all (founder decision
+    // B6), so it shows on Today again and the team can tell them another way. A spam complaint means it arrived.
+    if (event.hard && !event.complaint && comm.applicationId && comm.templateKey?.startsWith("disposition:")) await q.update(applications).set({ toldState: "not_told", candidateToldAt: null }).where(and(eq(applications.id, comm.applicationId), inArray(applications.toldState, ["queued", "sent"])));
   }
   const companyId = comm?.companyId ?? null;
   // Who is behind the address: a candidate, or a person on a customer's team (or ITS)?

@@ -1,12 +1,12 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { and, desc, eq, gte, inArray, isNull, lte } from "drizzle-orm";
-import { BookOnBehalf, CancelInterview, InterviewOutcome, InterviewerAvailabilityInput, RecordDecision, RequestInterview, RescheduleInterview } from "@ros/contracts";
-import { STAGE_LABEL, assertCan, audit, availabilityFor, calendarConnectionFor, can, defaultSchedulingWindow, emit, notify, publicConnection, scopeAllows, transition, upsertAvailability } from "@ros/core";
+import { BookOnBehalf, CancelInterview, InterviewOutcome, InterviewerAvailabilityInput, RecordDecision, RequestInterview, RescheduleInterview, type CandidateNotice } from "@ros/contracts";
+import { STAGE_LABEL, assertCan, audit, availabilityFor, calendarConnectionFor, can, defaultSchedulingWindow, emit, endMarkOnMove, notify, publicConnection, scopeAllows, transition, upsertAvailability } from "@ros/core";
 import { applications, approvalRequests, candidates, companies, events, interviewParticipants, interviews, jobs, memberships, rolePackets, roles, users, withTenant } from "@ros/db";
 import { actorOf, applicationScopeGuard, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
-import { declineAfterHumanDecision, declineSent, type DeclineNotice } from "../services/application-actions";
 import { cancelInterviewInTx } from "../services/interview-cancel";
+import { exitCleanup } from "../services/exit-cleanup";
 import { interviewBriefFor } from "../services/interviewer-view";
 
 /**
@@ -47,9 +47,10 @@ async function supersede(c: Context<Vars>, input: { interviewId: string; mode: "
     const [app] = await tx.select().from(applications).where(eq(applications.id, iv.applicationId)).limit(1);
     const actor = actorOf(c);
     if (input.mode === "cancel") {
-      // The one cancellation path (services/interview-cancel.ts): it also queues the calendar events' removal.
-      await cancelInterviewInTx(tx, container, { companyId: t.companyId, interview: iv, actor, by: t.role, reason: input.reason, byCandidate: input.byCandidate, now });
-      return iv.id;
+      // The one cancellation path (services/interview-cancel.ts): it also queues the calendar events' removal, and says
+      // whether the candidate was told (only someone who had a booked time or times to pick from is).
+      const done = await cancelInterviewInTx(tx, container, { companyId: t.companyId, interview: iv, actor, by: t.role, reason: input.reason, byCandidate: input.byCandidate, now });
+      return { id: iv.id, candidateTold: done.candidateTold };
     }
     const window = { ...iv.schedulingWindow, ...(input.window ?? {}) };
     if (!window.fromDate || !window.toDate) Object.assign(window, defaultSchedulingWindow(now, (await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, t.companyId)).limit(1))[0].timezone));
@@ -60,7 +61,7 @@ async function supersede(c: Context<Vars>, input: { interviewId: string; mode: "
     if (app.stage === "interview_scheduled") await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "interview_recommended", by: t.role, actor, reason: "interview being rescheduled" });
     await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: t.companyId, subject: { type: "interview", id: iv.id }, state: { interviewId: iv.id, applicationId: iv.applicationId, roleId: app.roleId, roundKey: iv.roundKey, attempt: iv.attempt + 1 }, idempotencyKey: `schedule:${iv.id}:${iv.attempt + 1}`, actor });
     if (hadEvents) await tx.insert(jobs).values({ kind: "interview.cancel_events", payload: { interviewId: iv.id, companyId: t.companyId, actor }, runAt: now.toISOString(), maxAttempts: 5 });
-    return iv.id;
+    return { id: iv.id, candidateTold: null };
   });
   await container.kick();
   return result;
@@ -143,18 +144,19 @@ interviewRoutes.post("/:id/reschedule", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "interview.manage");
   const body = RescheduleInterview.parse(await c.req.json().catch(() => ({})));
-  const id = await supersede(c, { interviewId: c.req.param("id"), mode: "reschedule", reason: body.reason ?? null, window: body.window ?? null });
+  const { id } = await supersede(c, { interviewId: c.req.param("id"), mode: "reschedule", reason: body.reason ?? null, window: body.window ?? null });
   const row = await withTenant(c.get("container").db, t.companyId, async (tx) => summary(tx, (await tx.select().from(interviews).where(eq(interviews.id, id)))[0]));
   return c.json(row);
 });
 
+/** `candidateTold` says whether the candidate was sent the cancellation, so the page's confirmation says exactly that. */
 interviewRoutes.post("/:id/cancel", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "interview.manage");
   const body = CancelInterview.parse(await c.req.json());
-  const id = await supersede(c, { interviewId: c.req.param("id"), mode: "cancel", reason: body.reason });
+  const { id, candidateTold } = await supersede(c, { interviewId: c.req.param("id"), mode: "cancel", reason: body.reason });
   const row = await withTenant(c.get("container").db, t.companyId, async (tx) => summary(tx, (await tx.select().from(interviews).where(eq(interviews.id, id)))[0]));
-  return c.json(row);
+  return c.json({ ...row, candidateTold: !!candidateTold, interviewersTold: row.participants.length > 0 });
 });
 
 /**
@@ -250,6 +252,9 @@ applicationInterviewRoutes.post("/:id/interviews", requireTenant, async (c) => {
     const pending = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.applicationId, app.id), eq(approvalRequests.actionType, "application.recommend_interview"), eq(approvalRequests.status, "pending")));
     for (const p of pending) await tx.update(approvalRequests).set({ status: "approved", decidedBy: t.userId, decidedAt: now.toISOString(), decisionNote: body.note ?? "interview requested" }).where(eq(approvalRequests.id, p.id));
     if (app.stage !== "interview_recommended" && app.stage !== "interview_complete") await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "interview_recommended", by: t.role, actor, reason: body.note ?? "interview approved" });
+    // Already at the interview step there is no move, but a person approving an interview still moves them on: a hold
+    // (or any other private mark) ends here, as it would with the move (founder decision B3).
+    else await endMarkOnMove(tx, { applicationId: app.id, companyId: t.companyId, actor, to: app.stage });
     await emit(tx, { type: "interview.requested", companyId: t.companyId, actor, subject: { type: "interview", id: iv.id }, payload: { applicationId: app.id, roundKey: round.key, interviewers: body.interviewerUserIds, linkSource: body.linkSource, window, approvedBy: t.userId } });
     await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "interview.request", roundKey: round.key, note: body.note ?? null } });
     await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: t.companyId, subject: { type: "interview", id: iv.id }, state: { interviewId: iv.id, applicationId: app.id, roleId: app.roleId, roundKey: round.key, attempt: 1 }, idempotencyKey: `schedule:${iv.id}:1`, actor });
@@ -263,9 +268,8 @@ applicationInterviewRoutes.post("/:id/interviews", requireTenant, async (c) => {
 /**
  * The human decision after an interview (HARD human-only in spirit: there is no automated path to any of these). It is
  * recorded on the newest interview that is over and still undecided, so a second decision never overwrites the first
- * one's, and a "not moving forward" sends the respectful message through the same gate as the actions route
- * (founder correction 6: candidate-facing decline only after the human decision). `dispositionSent` says whether it went,
- * and `candidateNotice` what became of it, word for word on the page (sent, waiting for approval, not sent and why).
+ * one's, and a "not moving forward" is filed privately like every decline (founder decision B6): nothing is sent until a
+ * person sends the decision message. `candidateNotice` ("not_told") and `dispositionSent` (false) say so on the page.
  */
 applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -281,15 +285,17 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
     let stage = app.stage;
     let nextRoundKey: string | null = null;
     let dispositionSent: boolean | undefined;
-    let candidateNotice: DeclineNotice | undefined;
+    let candidateNotice: CandidateNotice | undefined;
+    let interviewsCancelled = 0;
     if (body.decision === "not_moving_forward") {
       if (!body.reason) throw new HttpError(400, "reason_required", "A reason is required to decline a candidate.");
       assertCan(t.role, "application.reject");
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "rejected", by: t.role, actor, reason: body.reason, payload: { note: body.note ?? null } });
       await tx.update(applications).set({ rejectNote: body.note ?? null }).where(eq(applications.id, app.id));
-      await emit(tx, { type: "application.rejected", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { reason: body.reason, byHuman: true, afterInterview: true } });
-      candidateNotice = await declineAfterHumanDecision(tx, container, { companyId: t.companyId, app, actor, reason: body.reason });
-      dispositionSent = declineSent(candidateNotice);
+      await emit(tx, { type: "application.rejected", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { reason: body.reason, byHuman: true, afterInterview: true, candidateTold: false } });
+      interviewsCancelled = (await exitCleanup(tx, container, { companyId: t.companyId, applicationId: app.id, reason: `declined after an interview: ${body.reason}`, actor, candidateEmail: "private_decision" })).interviewsCancelled;
+      candidateNotice = "not_told";
+      dispositionSent = false;
       stage = "rejected";
     } else if (body.decision === "finalist") {
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "finalist", by: t.role, actor, reason: body.note ?? "finalist after interview" });
@@ -305,7 +311,7 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
     }
     await emit(tx, { type: "interview.decision_recorded", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { decision: body.decision, interviewId: last?.id ?? null, note: body.note ?? null, nextRoundKey } });
     await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "interview.decision", decision: body.decision } });
-    return { ok: true, stage, nextRoundKey, ...(dispositionSent === undefined ? {} : { dispositionSent, candidateNotice }) };
+    return { ok: true, stage, nextRoundKey, ...(dispositionSent === undefined ? {} : { dispositionSent, candidateNotice, interviewsCancelled }) };
   });
   await container.kick();
   return c.json(result);

@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, isNull, like } from "drizzle-orm";
-import { CreateEscalation, DecideApproval, ResolveEscalation, type EscalationScope } from "@ros/contracts";
+import { CreateEscalation, DecideApproval, ResolveEscalation, type CandidateNotice, type EscalationScope } from "@ros/contracts";
 import { ESCALATION_ACCESS_DAYS, activeStaffGrant, assertCan, audit, businessMinutesBetween, createEscalation, describeHours, emit, endStaffGrant, grantStaffAccess, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, recordStaffAccess, scopeAllows, toEscalationPreview, transition, type EscalationPreview } from "@ros/core";
 import { applications, approvalRequests, companies, events, recruiterEscalations, rolePackets, roles, staffAccessGrants, withPlatform, withTenant, type Tx } from "@ros/db";
 import { actorOf, clientIp, requireRecruiterOrAdmin, requireTenant, type Vars } from "../middleware/session";
@@ -59,14 +59,16 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
       }
     } else if (!mayDecideByRole(req.requiredRoles, t.role)) throw new HttpError(403, "forbidden", `This decision needs one of: ${approverRolesOf(req.requiredRoles).join(", ")}.`);
     await tx.update(approvalRequests).set({ status, decidedBy: t.userId, decidedAt, decisionNote: body.note ?? null, decisionEdits: body.edits ?? null }).where(eq(approvalRequests.id, req.id));
-    await emit(tx, { type: body.decision === "approve" ? "approval.granted" : "approval.denied", companyId: t.companyId, actor: actorOf(c), subject: { type: "approval_request", id: req.id }, payload: { actionType: req.actionType, roleId: req.roleId, version: Number.isFinite(proposedVersion) ? proposedVersion : null, note: body.note ?? null }, correlationId: req.workflowRunId });
+    await emit(tx, { type: body.decision === "approve" ? "approval.granted" : "approval.denied", companyId: t.companyId, actor: actorOf(c), subject: { type: "approval_request", id: req.id }, payload: { actionType: req.actionType, roleId: req.roleId, applicationId: req.applicationId ?? null, version: Number.isFinite(proposedVersion) ? proposedVersion : null, note: body.note ?? null }, correlationId: req.workflowRunId });
     await container.engine.signal(tx, { companyId: t.companyId, key: `approval:${req.id}`, payload: { decision: status } });
     // A message a team member wrote to a candidate (F11): approved, it goes out under their name; declined, they are told.
     if (req.actionType === "message.send_freeform") await settleMessageApproval(tx, container, { req, status, actor: actorOf(c), tenant: t, note: body.note ?? null });
-    // A decline message held for approval (disposition.send under "approval"): no workflow waits on it, so approving it sends it here.
-    let dispositionSent: boolean | undefined;
+    // A decision message held for approval (a Send under "ask me first"): no workflow waits on it, so approving it sends
+    // it here; "Do not send" leaves the candidate not told, and the team can send it again or tell them themselves.
+    let decisionMessage: { dispositionSent: boolean; candidateNotice: CandidateNotice } | undefined;
     if (req.actionType === "disposition.send" && status === "approved" && req.applicationId) {
-      dispositionSent = await sendApprovedDecline(tx, container, { companyId: t.companyId, applicationId: req.applicationId, actor: actorOf(c), reason: String((req.proposal as { reason?: string }).reason ?? "") });
+      const sent = await sendApprovedDecline(tx, container, { applicationId: req.applicationId, actor: actorOf(c) });
+      decisionMessage = sent ? { dispositionSent: sent.notice === "queued", candidateNotice: sent.notice } : { dispositionSent: false, candidateNotice: "not_told" };
     }
     if (status === "approved" && req.applicationId) {
       const [app] = await tx.select().from(applications).where(eq(applications.id, req.applicationId)).limit(1);
@@ -78,7 +80,7 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
         await emit(tx, { type: "candidate.recommended", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { by: "approval", approvalRequestId: req.id } });
       }
     }
-    return { ok: true, status, ...(dispositionSent === undefined ? {} : { dispositionSent }) };
+    return { ok: true, status, ...(decisionMessage ?? {}) };
   });
   await container.kick();
   return c.json(result);

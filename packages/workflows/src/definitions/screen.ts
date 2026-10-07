@@ -1,13 +1,17 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { ScreenAssessment, ScreenChannel, ScreenTurn } from "@ros/contracts";
 import type { RunOutcome } from "@ros/ai";
-import { emit, entitlements, gate, nextContactWindow, notify, transition } from "@ros/core";
+import { audit, emit, entitlements, gate, nextContactWindow, notify, readingConsistency, transition } from "@ros/core";
 import { applications, assessments, candidates, companies, rolePackets, roles, screens, type Tx } from "@ros/db";
 import { applyScreenOpening, assessScreen, createScreen, focusQuestionsFrom, packetForFocusedInvite, prepareScreenOpening, sendScreenInvite, sendScreenReminder, type FocusQuestion } from "@ros/agents";
 import { twoPhase, type WorkflowDefinition } from "../types";
+import { SUGGESTION_WINDOW_HOURS, settleSuggestion, waitForSuggestion, type SuggestionState } from "../suggestions";
 
 /** `focus: "unknowns"` ("Ask about this in a screen"): the screen opens with the résumé assessment's open questions before the packet's own. */
-type State = { applicationId: string; roleId: string; screenId?: string; channel?: "web" | "sms"; invitedBy?: string; remindedAt?: string; focus?: "unknowns" };
+type State = { applicationId: string; roleId: string; screenId?: string; channel?: "web" | "sms"; invitedBy?: string; remindedAt?: string; focus?: "unknowns" } & SuggestionState;
+
+/** A screen that is over without a scorecard: handed to a person, left, stopped by the team or closed with the application. Nothing more is sent. */
+const ENDED = ["human_requested", "abandoned", "cancelled", "expired"];
 
 const INVITE_WAIT_HOURS = 48;
 const REMIND_WAIT_HOURS = 72;
@@ -96,8 +100,7 @@ export const screen: WorkflowDefinition<State> = {
       // Woken by the candidate starting (event) or by the 48h timer; the engine hands us either.
       const [scr] = await ctx.q.select().from(screens).where(eq(screens.id, ctx.state.screenId!)).limit(1);
       if (!scr) return { kind: "fail", error: "screen missing", retryable: false };
-      if (scr.status === "human_requested") return { kind: "complete" };
-      if (scr.status === "abandoned") return { kind: "complete" };
+      if (ENDED.includes(scr.status)) return { kind: "complete" };
       if (scr.status === "completed") return { kind: "next", step: "assess" };
       if (scr.status === "in_progress") return { kind: "wait", wait: { kind: "event", eventTypes: ["completed", "human"], subjectId: `screen:${scr.id}`, until: new Date(ctx.now.getTime() + REMIND_WAIT_HOURS * 3600_000).toISOString(), reason: "conversation under way" }, resumeStep: "after_invite" };
       if (ctx.wake?.kind !== "timer") return { kind: "wait", wait: { kind: "event", eventTypes: ["started", "completed", "human"], subjectId: `screen:${scr.id}`, until: scr.expiresAt ?? new Date(ctx.now.getTime() + INVITE_WAIT_HOURS * 3600_000).toISOString() }, resumeStep: "after_invite" };
@@ -109,7 +112,8 @@ export const screen: WorkflowDefinition<State> = {
       const b = await load(ctx.q, ctx.state.applicationId);
       if (!b) return { kind: "fail", error: "application not found", retryable: false };
       const [scr] = await ctx.q.select().from(screens).where(eq(screens.id, ctx.state.screenId!)).limit(1);
-      if (scr?.status !== "invited") return { kind: "next", step: "after_invite" };
+      if (!scr || ENDED.includes(scr.status)) return { kind: "complete" };
+      if (scr.status !== "invited") return { kind: "next", step: "after_invite" };
       if (scr.channel === "sms") {
         const allowed = nextContactWindow(ctx.now, b.company.timezone, b.company.settings.businessHours);
         if (allowed.getTime() > ctx.now.getTime()) return { kind: "wait", wait: { kind: "timer", until: allowed.toISOString(), reason: "quiet hours" }, resumeStep: "remind" };
@@ -127,7 +131,7 @@ export const screen: WorkflowDefinition<State> = {
       if (!scr) return { kind: "fail", error: "screen missing", retryable: false };
       if (scr.status === "completed") return { kind: "next", step: "assess" };
       if (scr.status === "in_progress") return { kind: "wait", wait: { kind: "event", eventTypes: ["completed", "human"], subjectId: `screen:${scr.id}`, until: new Date(ctx.now.getTime() + REMIND_WAIT_HOURS * 3600_000).toISOString(), reason: "conversation under way" }, resumeStep: "after_invite" };
-      if (scr.status === "human_requested" || scr.status === "abandoned") return { kind: "complete" };
+      if (ENDED.includes(scr.status)) return { kind: "complete" };
       if (ctx.wake?.kind !== "timer") return { kind: "wait", wait: { kind: "event", eventTypes: ["started", "completed", "human"], subjectId: `screen:${scr.id}`, until: scr.expiresAt ?? new Date(ctx.now.getTime() + REMIND_WAIT_HOURS * 3600_000).toISOString() }, resumeStep: "after_remind" };
       return { kind: "next", step: "expire" };
     },
@@ -178,22 +182,35 @@ export const screen: WorkflowDefinition<State> = {
       },
     }),
 
+    /**
+     * The scorecard's suggestion, under policy `application.recommend_interview`. The software check comes first (plan
+     * A8): a scorecard that disagrees with its own must-have findings holds the step for a person, with the reason. A
+     * suggestion that waits for approval expires after a week (plan A6).
+     */
     async recommend(ctx) {
       const b = await load(ctx.q, ctx.state.applicationId);
       const [scr] = await ctx.q.select().from(screens).where(eq(screens.id, ctx.state.screenId!)).limit(1);
       if (!b || !scr?.assessmentId) return { kind: "fail", error: "assessment missing", retryable: false };
       const [asmt] = await ctx.q.select().from(assessments).where(eq(assessments.id, scr.assessmentId)).limit(1);
       const rec = (asmt.result as { recommendation: string }).recommendation;
-      const { app, candidate, role } = b;
+      const { app, candidate, role, packet } = b;
       const name = `${candidate.firstName} ${candidate.lastName}`;
+      // They left the process while the scorecard was being written: nothing to suggest or announce.
+      if (["hired", "withdrawn", "rejected", "declined", "talent_pool"].includes(app.stage)) return { kind: "complete" };
+      const check = readingConsistency(asmt, packet);
+      if (!check.consistent) {
+        await audit(ctx.q, { companyId: ctx.companyId, actor: ctx.actor, action: "assessment.flagged", target: { type: "application", id: app.id }, reason: check.reason ?? "the scorecard disagrees with its must-have findings", details: { assessmentId: asmt.id, held: "application.recommend_interview" } });
+        await notify(ctx.q, { companyId: ctx.companyId, kind: "application.needs_review", title: `${name} needs a closer look`, body: `${name} completed the screen. ${check.reason}`, action: { label: "Take a closer look", href: `/roles/${role.id}/talent?open=${app.id}` } });
+        return { kind: "complete" };
+      }
       if (rec === "strong_interview" || rec === "interview") {
-        const g = await gate(ctx.q, { companyId: ctx.companyId, roleId: role.id, applicationId: app.id, actionType: "application.recommend_interview", subject: { type: "application", id: app.id }, proposal: { recommendation: rec, assessmentId: asmt.id }, rationale: `${name} completed the screen: ${asmt.result.summary}`, requestedBy: { kind: "agent", id: "screening", runId: asmt.aiRunId ?? undefined }, workflowRunId: ctx.run.id, expiresInHours: 24 * 7 });
+        const g = await gate(ctx.q, { companyId: ctx.companyId, roleId: role.id, applicationId: app.id, actionType: "application.recommend_interview", subject: { type: "application", id: app.id }, proposal: { recommendation: rec, assessmentId: asmt.id }, rationale: `${name} completed the screen: ${asmt.result.summary}`, requestedBy: { kind: "agent", id: "screening", runId: asmt.aiRunId ?? undefined }, workflowRunId: ctx.run.id, expiresInHours: SUGGESTION_WINDOW_HOURS });
         if (g.outcome === "execute") {
           if (app.stage === "screen_complete") await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "interview_recommended", by: "system", actor: ctx.actor, correlationId: ctx.run.id });
           await emit(ctx.q, { type: "candidate.recommended", companyId: ctx.companyId, actor: { kind: "agent", id: "screening", runId: asmt.aiRunId ?? undefined }, subject: { type: "application", id: app.id }, payload: { recommendation: rec, assessmentId: asmt.id }, correlationId: ctx.run.id });
           if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, kind: "candidate.recommended", title: `${name} is ready to interview`, body: `${rec === "strong_interview" ? "Strong screen. " : ""}${asmt.result.summary}`, action: { label: "Review and decide", href: `/roles/${role.id}/talent?open=${app.id}` } });
         } else if (g.outcome === "wait_for_approval") {
-          return { kind: "wait", wait: { kind: "human", approvalRequestId: g.approvalRequestId }, resumeStep: "on_decision" };
+          return waitForSuggestion(ctx, g.approvalRequestId, "on_decision");
         }
         return { kind: "complete" };
       }
@@ -202,9 +219,10 @@ export const screen: WorkflowDefinition<State> = {
       return { kind: "complete" };
     },
 
-    async on_decision() {
-      // The owner (or a policy approver) decided on the recommendation; the application actions route already moved the stage when approving.
-      return { kind: "complete" };
+    async on_decision(ctx) {
+      // The owner (or a policy approver) decided on the recommendation; the application actions route already moved the
+      // stage when approving. A suggestion nobody answered within the week lapses here, and nothing is sent.
+      return (await settleSuggestion(ctx, "on_decision")) ?? { kind: "complete" };
     },
   },
 };

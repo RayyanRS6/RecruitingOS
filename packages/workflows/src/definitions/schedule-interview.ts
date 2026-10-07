@@ -34,8 +34,16 @@ async function load(ctx: StepContext<State>) {
 }
 type Bundle = NonNullable<Awaited<ReturnType<typeof load>>>;
 
-function stale(b: Bundle, ctx: StepContext<State>): boolean {
+/** A newer attempt took over, or the interview is over or cancelled: this run has nothing more to do. */
+function superseded(b: Bundle, ctx: StepContext<State>): boolean {
   return b.iv.attempt !== ctx.state.attempt || ["cancelled", "completed", "no_show"].includes(b.iv.status);
+}
+/** The candidate left the process (declined, withdrew, hired, talent pool) or the role closed (plan A9): nothing more goes to them. */
+function leftProcess(b: Bundle): boolean {
+  return ["hired", "withdrawn", "rejected", "declined", "talent_pool"].includes(b.app.stage) || ["closed", "filled"].includes(b.role.status);
+}
+function stale(b: Bundle, ctx: StepContext<State>): boolean {
+  return superseded(b, ctx) || leftProcess(b);
 }
 function candidateTz(b: Bundle): string {
   return b.iv.schedulingWindow.candidateTimezone ?? b.candidate.location?.timezone ?? b.company.timezone;
@@ -202,10 +210,17 @@ export const scheduleInterview: WorkflowDefinition<State> = {
 
     async on_timer(ctx) {
       const b = await load(ctx);
-      if (!b || stale(b, ctx) || b.iv.status !== "scheduled" || !b.iv.startsAt || !b.iv.endsAt) return { kind: "complete" };
+      if (!b || superseded(b, ctx) || b.iv.status !== "scheduled" || !b.iv.startsAt || !b.iv.endsAt) return { kind: "complete" };
       const start = Date.parse(b.iv.startsAt);
       const end = Date.parse(b.iv.endsAt);
       const checkpoints: Array<{ key: "before24h" | "before2h" | "close"; at: number }> = [{ key: "before24h", at: start - 24 * 3600_000 }, { key: "before2h", at: start - 2 * 3600_000 }, { key: "close", at: end + 3600_000 }];
+      // Someone who left the process gets no reminder. An interview still to come was cancelled when they left; one that
+      // had already started is only closed, so the record says it ended.
+      if (leftProcess(b)) {
+        if (start > ctx.now.getTime()) return { kind: "complete" };
+        const close = checkpoints[2].at;
+        return close <= ctx.now.getTime() ? { kind: "next", step: "close" } : { kind: "wait", wait: { kind: "timer", until: new Date(close).toISOString(), reason: "next: close" }, resumeStep: "on_timer" };
+      }
       const reminders = { ...(b.iv.reminders ?? {}) };
       for (const cp of checkpoints) {
         if (cp.at > ctx.now.getTime() || reminders[cp.key]) continue;
@@ -226,12 +241,13 @@ export const scheduleInterview: WorkflowDefinition<State> = {
 
     async close(ctx) {
       const b = await load(ctx);
-      if (!b || stale(b, ctx) || b.iv.status !== "scheduled") return { kind: "complete" };
+      if (!b || superseded(b, ctx) || b.iv.status !== "scheduled") return { kind: "complete" };
       await ctx.q.update(interviews).set({ status: "completed" }).where(eq(interviews.id, b.iv.id));
       if (b.app.stage === "interview_scheduled") await transition(ctx.q, { applicationId: b.app.id, companyId: ctx.companyId, to: "interview_complete", by: "system", actor: ctx.actor, reason: "interview ended", correlationId: ctx.run.id });
       await emit(ctx.q, { type: "interview.completed", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { attempt: ctx.state.attempt }, correlationId: ctx.run.id });
       await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.outcome", title: `Did the interview with ${b.candidate.firstName} ${b.candidate.lastName} take place?`, body: "Tell us if it happened or someone did not show; it keeps the record straight.", action: { label: "Record what happened", href: `/interviews/${b.iv.id}` }, userIds: b.participants.map((p) => p.userId) });
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.decision", title: `How did it go with ${b.candidate.firstName} ${b.candidate.lastName}?`, body: `${b.iv.title} is over. Next round, finalist, or not moving forward: your call, recorded with your reason.`, action: { label: "Decide", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
+      // Someone already out of the process needs no decision.
+      if (!leftProcess(b)) await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.decision", title: `How did it go with ${b.candidate.firstName} ${b.candidate.lastName}?`, body: `${b.iv.title} is over. Next round, finalist, or not moving forward: your call, recorded with your reason.`, action: { label: "Decide", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
       return { kind: "complete" };
     },
   },

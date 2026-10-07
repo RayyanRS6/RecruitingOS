@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Card, EmptyState, ErrorState, PipelineBar, Pill, Skeleton, Table } from "@ros/ui";
+import { Alert, Card, EmptyState, ErrorState, OWNER_STAGES, PipelineBar, Pill, Skeleton, Table } from "@ros/ui";
 import { Link } from "../nav";
 import { api } from "../api/client";
 
@@ -10,11 +10,16 @@ export type RoleReport = {
   generatedAt: string;
   role: { id: string; title: string; status: string; openedAt: string | null; closedAt: string | null; daysOpen: number | null } | null;
   applicants: { total: number; last30Days: number; timeZone: string; bySource: Array<{ source: string; label: string; sourceDetail: string | null; count: number }>; byDay: Array<{ day: string; count: number }> };
-  stages: { total: number; byStage: Array<{ stage: string; label: string; group: string; count: number }>; byGroup: Record<string, number> };
+  /**
+   * `byOwnerStage` is the stage strip (private marks included); `marks` counts who carries each mark now and every hold
+   * ever set; `told` counts decisions by whether the candidate was told (founder decisions B3 and B6). Optional: an
+   * older answer has none of them.
+   */
+  stages: { total: number; byStage: Array<{ stage: string; label: string; group: string; count: number }>; byGroup: Record<string, number>; byOwnerStage?: Record<string, number>; marks?: { longlist: number; shortlist: number; onHold: number; holdsEnded: number; notAFitForNow: number; holdsEverSet: number }; told?: { decisions: number; notTold: number; queued: number; sent: number; toldInPerson: number; beforeTracking?: number } };
   timeInStage: { byStage: Array<{ stage: string; label: string; group: string; completed: number; medianDays: number | null; averageDays: number | null; nowHere: number; longestDays: number | null }>; waitingOnYou: { count: number; averageDays: number | null; medianDays: number | null; longestDays: number | null } };
   interviews: { total: number; requested: number; scheduled: number; completed: number; noShow: number; noShowCandidate: number; noShowInterviewer: number; cancelled: number; offerExpired: number; rescheduledByCandidate: number; awaitingDecision: number; byRound: Array<{ roundKey: string; title: string; total: number; scheduled: number; completed: number; noShow: number; noShowCandidate: number; noShowInterviewer: number; cancelled: number }> };
   pendingDecisions: { count: number; approvals: number; candidates: number; oldestDays: number | null; list: Array<{ kind: "approval" | "candidate"; label: string; days: number; applicationId: string | null; approvalRequestId: string | null }> };
-  recommendationsVsDecisions: { assessed: number; rows: Array<{ recommendation: string; label: string; total: number; invited: number; interviewed: number; declined: number; held: number; noActionYet: number }> };
+  recommendationsVsDecisions: { assessed: number; rows: Array<{ recommendation: string; label: string; total: number; invited: number; interviewed: number; shortlisted?: number; declined: number; held: number; noActionYet: number }> };
   overrides: { eligibilityOverrides: number; reviewAnyway: number; holds: number; flaggedAssessments: number; byAction: Record<string, number> };
   escalations: { total: number; open: number; resolved: number; overdue: number; medianResponseHours: number | null };
   messages: { total: number; sent: number; failed: number; bounced: number; unknown: number; pending: number; candidatesAffected: number };
@@ -76,14 +81,35 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
         <div className="row" style={{ marginTop: 8 }}>
           {(["waiting_on_you", "in_process", "not_moving_forward", "hired"] as const).map((g) => <Pill key={g} size="sm" tone={g === "waiting_on_you" ? "caution" : g === "hired" ? "good" : g === "in_process" ? "accent" : "neutral"}>{GROUP_LABEL[g]}: <span className="tabular">{r.stages.byGroup[g] ?? 0}</span></Pill>)}
         </div>
-        {r.stages.byStage.length ? (
+        {r.stages.byOwnerStage ? (
           <div style={{ marginTop: 10 }}>
-            <Table head={["Step", "People"]} label="People by step">
-              {r.stages.byStage.map((s) => <tr key={s.stage}><td>{s.label} <span className="small muted">({GROUP_LABEL[s.group] ?? s.group})</span></td><td>{s.count}</td></tr>)}
+            <Table head={["Stage", "People"]} label="People by stage">
+              {OWNER_STAGES.map((s) => <tr key={s.id}><td>{talentHref && (r.stages.byOwnerStage?.[s.id] ?? 0) > 0 ? <Link to={`${talentHref}?ownerStage=${s.id}`}>{s.label}</Link> : s.label}</td><td>{r.stages.byOwnerStage?.[s.id] ?? 0}</td></tr>)}
             </Table>
           </div>
         ) : null}
-        {talent("See the people")}
+        {r.stages.marks || r.stages.told ? (
+          <dl className="kv" style={{ marginTop: 10 }}>
+            {r.stages.marks ? <><dt>Holds that have ended</dt><dd>{r.stages.marks.holdsEnded}</dd></> : null}
+            {r.stages.marks?.notAFitForNow ? <><dt>Set aside as not a fit for now</dt><dd>{r.stages.marks.notAFitForNow}</dd></> : null}
+            {r.stages.told ? <><dt>Decisions not told yet</dt><dd>{r.stages.told.notTold}</dd><dt>Told by message</dt><dd>{r.stages.told.sent}{r.stages.told.queued ? ` (${r.stages.told.queued} on the way)` : ""}</dd><dt>Told in person</dt><dd>{r.stages.told.toldInPerson}</dd></> : null}
+            {r.stages.told?.beforeTracking ? <><dt>Decided before decisions were private (shown on their status page)</dt><dd>{r.stages.told.beforeTracking}</dd></> : null}
+          </dl>
+        ) : null}
+        {r.stages.byStage.length ? (
+          <details style={{ marginTop: 10 }}>
+            <summary className="small">The steps underneath</summary>
+            <div style={{ marginTop: 8 }}>
+              <Table head={["Step", "People"]} label="People by step">
+                {r.stages.byStage.map((s) => <tr key={s.stage}><td>{s.label} <span className="small muted">({GROUP_LABEL[s.group] ?? s.group})</span></td><td>{s.count}</td></tr>)}
+              </Table>
+            </div>
+          </details>
+        ) : null}
+        <div className="row">
+          {talent("See the people")}
+          {r.stages.told?.notTold ? talent("Tell them your decision", "?ownerStage=not_moving_forward&told=not_told") : null}
+        </div>
       </Card>
 
       <Card title="How long each step takes">
@@ -136,8 +162,8 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
 
       <Card title="What the assistant suggested, and what you decided">
         {r.recommendationsVsDecisions.rows.length ? (
-          <Table head={["Suggestion", "Candidates", "Invited to a screen", "Moved to interview", "Declined", "Put on hold", "No decision yet"]} label="Suggestions and decisions">
-            {r.recommendationsVsDecisions.rows.map((x) => <tr key={x.recommendation}><td>{x.label}</td><td>{x.total}</td><td>{x.invited}</td><td>{x.interviewed}</td><td>{x.declined}</td><td>{x.held}</td><td>{x.noActionYet}</td></tr>)}
+          <Table head={["Suggestion", "Candidates", "Invited to a screen", "Moved to interview", "Longlist or shortlist", "Not moving forward", "Put on hold", "No decision yet"]} label="Suggestions and decisions">
+            {r.recommendationsVsDecisions.rows.map((x) => <tr key={x.recommendation}><td>{x.label}</td><td>{x.total}</td><td>{x.invited}</td><td>{x.interviewed}</td><td>{x.shortlisted ?? 0}</td><td>{x.declined}</td><td>{x.held}</td><td>{x.noActionYet}</td></tr>)}
           </Table>
         ) : <p className="small muted">No assessments yet.</p>}
         <p className="small muted" style={{ marginTop: 8 }}>{r.recommendationsVsDecisions.assessed} {r.recommendationsVsDecisions.assessed === 1 ? "candidate has" : "candidates have"} an assessment. The decision counted is the first thing a person did after the suggestion. People make every decision; the assistant only suggests.</p>
@@ -147,7 +173,7 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
         <dl className="kv">
           <dt>Kept someone the eligibility rules would have held</dt><dd>{r.overrides.eligibilityOverrides}</dd>
           <dt>Reviewed someone anyway after an eligibility decline</dt><dd>{r.overrides.reviewAnyway}</dd>
-          <dt>Put on hold</dt><dd>{r.overrides.holds}</dd>
+          <dt>Put on hold (every hold, ended or not)</dt><dd>{r.overrides.holds}</dd>
           <dt>Assessments you flagged as wrong</dt><dd>{r.overrides.flaggedAssessments}</dd>
         </dl>
         <p className="small muted" style={{ marginTop: 8 }}>Every one of these is recorded with the person's name and reason, so the system can be checked and improved.</p>
@@ -216,11 +242,11 @@ export function ReportDefinitions() {
     <Card title="What these figures mean">
       <dl className="kv">
         <dt>Who applied</dt><dd>Every application to this role, by where the person came from (the careers page, a job board's own link, a referral link, email) and by day in your time zone. A person who applies twice counts once.</dd>
-        <dt>Where everyone is</dt><dd>How many people are at each step right now, grouped into waiting on you, in process, not moving forward, and hired.</dd>
+        <dt>Where everyone is</dt><dd>How many people are at each stage right now (New, Longlist, Shortlist, Interviewing, On hold, Offer, Hired, Not moving forward), grouped into waiting on you, in process, not moving forward, and hired. Someone on hold waits on nobody until the hold ends. Longlist, Shortlist and On hold are your team's private marks; candidates never see them. "Not told yet" counts decisions nobody has told the candidate about.</dd>
         <dt>How long each step takes</dt><dd>For each step: how many people are there now and the longest anyone has been there; how many have finished the step and the typical and average number of days they spent in it.</dd>
         <dt>Interviews</dt><dd>Interviews requested (times not yet picked), on the calendar, held, missed by the candidate, cancelled, rescheduled by the candidate, and held but not yet decided.</dd>
         <dt>Decisions waiting for you</dt><dd>Everything only a person can decide: candidates waiting on you, anyone held on an eligibility answer, and approvals nobody has answered.</dd>
-        <dt>Suggestions and decisions</dt><dd>What the assistant suggested for each assessed candidate and the first thing a person did afterwards. The assistant never decides.</dd>
+        <dt>Suggestions and decisions</dt><dd>What the assistant suggested for each assessed candidate and the first thing a person did afterwards, putting them on the longlist or shortlist included. The assistant never decides.</dd>
         <dt>Overruled</dt><dd>Times a person kept someone the rules would have held, reviewed someone anyway, put someone on hold, or flagged an assessment as wrong.</dd>
         <dt>Recruiter help</dt><dd>Your requests for an ITS recruiter on this role: open, resolved, past the promised response time, and the typical hours until a recruiter picked one up.</dd>
         <dt>Messages</dt><dd>Emails and texts to candidates about this role: sent, could not be sent, bounced, delivery unknown, waiting to go out; and how many candidates were affected.</dd>

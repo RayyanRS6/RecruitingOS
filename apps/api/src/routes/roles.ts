@@ -1,17 +1,18 @@
 import { Hono } from "hono";
-import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
-import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome } from "@ros/contracts";
-import { CLOSER_LOOK_LABEL, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, assertCan, audit, can, emit, evidenceView, jobNoticesFor, listOutcomes, openEscalationsFor, ownerGroup, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows } from "@ros/core";
+import { and, count, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome, OwnerGroup, OwnerStage, SendDecisionMessages, type ActiveMark, type CandidateNotice } from "@ros/contracts";
+import { CLOSER_LOOK_LABEL, DECISION_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeMarksFor, assertCan, audit, can, emit, evidenceView, groupFor, holdEnded, jobNoticesFor, listOutcomes, openEscalationsFor, ownerStage, ownerStageLabel, ownerTags, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows } from "@ros/core";
 import { withEmptyPay, withoutPay } from "../services/pay-redaction";
 import { users } from "@ros/db";
 import { assertMayApprovePacket, packetApprovalView } from "../services/packet-approval";
 import { createPacketVersion, currentVersionOf } from "../services/packet-versions";
-import { aiRuns, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviewParticipants, interviews, postings, rolePackets, roles, screens, withTenant } from "@ros/db";
+import { aiRuns, applicationMarks, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviewParticipants, interviews, postings, rolePackets, roles, screens, withTenant } from "@ros/db";
 import { actorOf, applicationScopeGuard, clientIp, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { DOWNLOAD_URL_TTL_SECONDS, safeFilename } from "../uploads";
 import type { Container } from "../container";
-import { applicationActionState, applicationFactsFrom, declineAfterHumanDecision, declineMessagePolicy, declineSent, performApplicationAction } from "../services/application-actions";
+import { applicationActionState, applicationFactsFrom, declineMessagePolicy, decisionMessagePreview, pendingDecisionMessages, performApplicationAction, sendDecisionMessages, stageMoves } from "../services/application-actions";
+import { exitCleanup, type ExitCandidateEmail } from "../services/exit-cleanup";
 import { screenScorecards } from "../services/screen-scorecards";
 import { replayHeldEmails, settleHeldEmailsOnClose } from "../webhooks/postmark";
 import { interviewerApplicationView } from "../services/interviewer-view";
@@ -35,21 +36,27 @@ roleRoutes.get("/", requireTenant, async (c) => {
       const ids = new Set(mine.map((m) => m.roleId));
       return visible.filter((r) => ids.has(r.id)).map((r) => ({ ...r, counts: { total: 0 }, countsHidden: true, needsYou: 0, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null }));
     }
-    // Three queries for the whole list, whatever its length: the roles, their applicants by stage, their open decisions.
+    // Three queries for the whole list, whatever its length: the roles, their applicants by stage and private mark (a
+    // running hold does not wait on you; `stageCounts` is the stage strip), their open decisions.
     const roleIds = visible.map((r) => r.id);
-    const stageCounts = await tx.select({ roleId: applications.roleId, stage: applications.stage, n: count() }).from(applications).where(inArray(applications.roleId, roleIds)).groupBy(applications.roleId, applications.stage);
+    const stageCounts = await tx.select({ roleId: applications.roleId, stage: applications.stage, mark: applicationMarks.mark, remindAt: applicationMarks.remindAt, n: count() }).from(applications).leftJoin(applicationMarks, and(eq(applicationMarks.applicationId, applications.id), isNull(applicationMarks.clearedAt))).where(inArray(applications.roleId, roleIds)).groupBy(applications.roleId, applications.stage, applicationMarks.mark, applicationMarks.remindAt);
     const pendingCounts = await tx.select({ roleId: approvalRequests.roleId, n: count() }).from(approvalRequests).where(and(inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending"))).groupBy(approvalRequests.roleId);
+    const now = c.get("container").engine.clock();
     return visible.map((r) => {
       const counts: Record<string, number> = {};
+      const stageStrip: Record<string, number> = Object.fromEntries(OwnerStage.options.map((s) => [s, 0]));
       let total = 0;
       for (const row of stageCounts) {
         if (row.roleId !== r.id) continue;
         const n = Number(row.n);
+        const mark = row.mark ? { mark: row.mark, remindAt: row.remindAt } : null;
         total += n;
-        counts[ownerGroup(row.stage)] = (counts[ownerGroup(row.stage)] ?? 0) + n;
+        const g = groupFor({ stage: row.stage }, mark, now);
+        counts[g] = (counts[g] ?? 0) + n;
+        stageStrip[ownerStage({ stage: row.stage }, mark)] += n;
       }
       const needsYou = Number(pendingCounts.find((p) => p.roleId === r.id)?.n ?? 0);
-      return { ...r, counts: { total, ...counts }, needsYou, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null };
+      return { ...r, counts: { total, ...counts }, stageCounts: stageStrip, needsYou, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null };
     });
   });
   return c.json(rows);
@@ -186,43 +193,103 @@ for (const action of ["pause", "resume"] as const) {
 
 // The posting routes (GET /:id/postings, the per-channel actions, links, volume, the accepting switch) live in routes/postings.ts.
 
+/** A time in ISO form whatever the driver hands back, so the page can sort and compare it as text. */
+const iso = (value: string) => new Date(value).toISOString();
+
+/** The stage strip's counts over every applicant the caller may see (founder decision B3). */
+export type StageStripCounts = { total: number; byOwnerStage: Record<OwnerStage, number>; byGroup: Record<OwnerGroup, number>; notTold: number; holdsEnded: number };
+
+/**
+ * The role's applicants. Each row carries, beside the evidence view: where the person sits on the stage strip
+ * (`ownerStage`, `ownerStageLabel`), their active private mark (`mark`: kind, label, `remindAt`, note, who set it),
+ * small `tags` ("Check eligibility", "Hold ended"), `stageChangedAt` and `appliedAt` with `daysInStage`, the told state
+ * of a decision (`toldState`, `candidateToldAt`, `decisionMessageWaiting`), and the stage button (`stageMoves`). One
+ * query per kind of fact for the whole list, never one per row. Ordered newest first, by the longest wait or by name;
+ * never by an AI reading. `?counts=1` answers `{ applications, counts }`, the counts covering every visible applicant
+ * whatever the filters.
+ */
 roleRoutes.get("/:id/applications", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "application.read");
-  const q = OwnerGroupQuery.parse({ group: c.req.query("group"), stage: c.req.query("stage") });
-  const rows = await withTenant(c.get("container").db, t.companyId, async (tx) => {
+  const q = OwnerGroupQuery.parse({ group: c.req.query("group"), stage: c.req.query("stage"), ownerStage: c.req.query("ownerStage"), told: c.req.query("told"), order: c.req.query("order"), counts: c.req.query("counts") });
+  const now = c.get("container").engine.clock();
+  const result = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const apps = (await tx.select().from(applications).where(eq(applications.roleId, c.req.param("id"))).orderBy(desc(applications.createdAt))).filter((a) => !t.staff?.scope.applicationId || a.id === t.staff.scope.applicationId);
     const ids = apps.map((a) => a.candidateId);
+    const appIds = apps.map((a) => a.id);
     const cands = ids.length ? await tx.select().from(candidates).where(inArray(candidates.id, ids)) : [];
     const latest = apps.filter((a) => a.latestAssessmentId).map((a) => a.latestAssessmentId!);
     const asmts = latest.length ? await tx.select().from(assessments).where(inArray(assessments.id, latest)) : [];
     // Whether each résumé file had text to read (a clean scan without a text layer has none): one query, no text pulled.
     const docIds = apps.filter((a) => a.resumeDocumentId).map((a) => a.resumeDocumentId!);
     const docs = docIds.length ? await tx.select({ id: documents.id, status: documents.status, hasText: sql<boolean>`${documents.textExtracted} is not null` }).from(documents).where(inArray(documents.id, docIds)) : [];
-    return apps
-      .filter((a) => (!q.group || ownerGroup(a.stage) === q.group) && (!q.stage || a.stage === q.stage))
-      .map((a) => {
-        const cand = cands.find((x) => x.id === a.candidateId);
-        const asmt = asmts.find((x) => x.id === a.latestAssessmentId);
-        const doc = docs.find((d) => d.id === a.resumeDocumentId);
-        // Insufficient evidence as a state the owner can see: derived here and on the candidate page from the same assessment, never stored.
-        const evidence = evidenceView({ stage: a.stage, latest: asmt ?? null, resumeUnreadable: !!doc && doc.status === "clean" && !doc.hasText && !a.extraction });
-        return {
-          id: a.id,
-          stage: a.stage,
-          stageLabel: evidence.needsCloserLook ? CLOSER_LOOK_LABEL : STAGE_LABEL[a.stage],
-          group: ownerGroup(a.stage),
-          source: a.source,
-          createdAt: a.createdAt,
-          candidate: cand ? { id: cand.id, name: `${cand.firstName} ${cand.lastName}`, email: cand.email, phone: cand.phone, locationText: cand.locationText } : null,
-          eligibility: a.eligibility,
-          extractionSummary: a.extraction ? { positions: a.extraction.positions.slice(0, 3).map((p) => `${p.title}${p.employer ? ` at ${p.employer}` : ""}`), licenses: a.extraction.licenses.map((l) => l.name), years: a.extraction.yearsOfExperienceEstimate ?? null, anomalies: a.extraction.anomalies } : null,
-          assessment: asmt ? { overall: asmt.overall, confidence: asmt.confidence, summary: asmt.result.summary, strengths: asmt.result.strengths.slice(0, 2), concerns: asmt.result.concerns.slice(0, 1) } : null,
-          evidence,
-        };
-      });
+    // What the stage button needs, for every row at once: marks, screens, interviews, decision messages waiting for approval.
+    const marks = await activeMarksFor(tx, appIds);
+    const scr = appIds.length ? await tx.select({ applicationId: screens.applicationId, status: screens.status }).from(screens).where(inArray(screens.applicationId, appIds)) : [];
+    const ivs = appIds.length ? await tx.select({ applicationId: interviews.applicationId, status: interviews.status, decision: interviews.decision }).from(interviews).where(inArray(interviews.applicationId, appIds)) : [];
+    const waitingToTell = await pendingDecisionMessages(tx, appIds);
+    const rows = apps.map((a) => {
+      const cand = cands.find((x) => x.id === a.candidateId);
+      const asmt = asmts.find((x) => x.id === a.latestAssessmentId);
+      const doc = docs.find((d) => d.id === a.resumeDocumentId);
+      const mark: ActiveMark | null = marks.get(a.id) ?? null;
+      // Insufficient evidence as a state the owner can see: derived here and on the candidate page from the same assessment, never stored.
+      const evidence = evidenceView({ stage: a.stage, latest: asmt ?? null, resumeUnreadable: !!doc && doc.status === "clean" && !doc.hasText && !a.extraction });
+      const strip = ownerStage(a, mark);
+      const facts = applicationFactsFrom(a, scr.filter((s) => s.applicationId === a.id).map((s) => s.status), ivs.filter((i) => i.applicationId === a.id), t.role, asmt?.kind === "triage" ? asmt : null, { mark, decisionMessagePending: waitingToTell.has(a.id) });
+      return {
+        id: a.id,
+        stage: a.stage,
+        stageLabel: evidence.needsCloserLook ? CLOSER_LOOK_LABEL : STAGE_LABEL[a.stage],
+        group: groupFor(a, mark, now),
+        ownerStage: strip,
+        ownerStageLabel: ownerStageLabel(strip, mark),
+        mark,
+        tags: ownerTags(a, mark, now),
+        source: a.source,
+        createdAt: a.createdAt,
+        appliedAt: iso(a.createdAt),
+        stageChangedAt: iso(a.stageChangedAt),
+        daysInStage: Math.max(0, Math.floor((now.getTime() - Date.parse(a.stageChangedAt)) / 86_400_000)),
+        toldState: DECISION_STAGES.includes(a.stage) ? a.toldState : null,
+        candidateToldAt: a.candidateToldAt ? iso(a.candidateToldAt) : null,
+        decisionMessageWaiting: waitingToTell.has(a.id),
+        candidate: cand ? { id: cand.id, name: `${cand.firstName} ${cand.lastName}`, email: cand.email, phone: cand.phone, locationText: cand.locationText } : null,
+        eligibility: a.eligibility,
+        extractionSummary: a.extraction ? { positions: a.extraction.positions.slice(0, 3).map((p) => `${p.title}${p.employer ? ` at ${p.employer}` : ""}`), licenses: a.extraction.licenses.map((l) => l.name), years: a.extraction.yearsOfExperienceEstimate ?? null, anomalies: a.extraction.anomalies } : null,
+        assessment: asmt ? { overall: asmt.overall, confidence: asmt.confidence, summary: asmt.result.summary, strengths: asmt.result.strengths.slice(0, 2), concerns: asmt.result.concerns.slice(0, 1) } : null,
+        evidence,
+        stageMoves: stageMoves(facts),
+      };
+    });
+    const counts: StageStripCounts = { total: rows.length, byOwnerStage: Object.fromEntries(OwnerStage.options.map((s) => [s, 0])) as Record<OwnerStage, number>, byGroup: Object.fromEntries(OwnerGroup.options.map((g) => [g, 0])) as Record<OwnerGroup, number>, notTold: 0, holdsEnded: 0 };
+    for (const r of rows) {
+      counts.byOwnerStage[r.ownerStage] += 1;
+      counts.byGroup[r.group] += 1;
+      if (r.toldState === "not_told") counts.notTold += 1;
+      if (holdEnded(r.mark, now)) counts.holdsEnded += 1;
+    }
+    const nameOf = (r: (typeof rows)[number]) => r.candidate?.name.toLowerCase() ?? "";
+    const ordered = q.order === "waiting" ? [...rows].sort((x, y) => Date.parse(x.stageChangedAt) - Date.parse(y.stageChangedAt)) : q.order === "name" ? [...rows].sort((x, y) => nameOf(x).localeCompare(nameOf(y))) : rows;
+    const shown = ordered.filter((r) => (!q.group || r.group === q.group) && (!q.stage || r.stage === q.stage) && (!q.ownerStage || r.ownerStage === q.ownerStage) && (!q.told || r.toldState === q.told));
+    return { shown, counts };
   });
-  return c.json(rows);
+  return c.json(q.counts ? { applications: result.shown, counts: result.counts } : result.shown);
+});
+
+/**
+ * "Send the decision message" to several people of this role at once (the Talent page's and Today's "not told yet"):
+ * the same Send as on each person's page, one result per person, so one refusal never blocks the rest.
+ */
+roleRoutes.post("/:id/decision-messages", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  assertCan(t.role, "application.reject");
+  const body = SendDecisionMessages.parse(await c.req.json());
+  const container = c.get("container");
+  const results = await withTenant(container.db, t.companyId, (tx) => sendDecisionMessages(tx, container, { roleId: c.req.param("id") ?? "", applicationIds: body.applicationIds, tenant: t, actor: actorOf(c) }));
+  await container.kick();
+  const tally = (n: CandidateNotice) => results.filter((r) => r.candidateNotice === n).length;
+  return c.json({ results, queued: tally("queued"), waitingApproval: tally("waiting_approval"), notSent: results.length - tally("queued") - tally("waiting_approval") });
 });
 
 /** Application detail and actions live here too, keyed by application id. */
@@ -244,8 +311,13 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const docs = await tx.select({ id: documents.id, kind: documents.kind, filename: documents.filename, mime: documents.mime, sizeBytes: documents.sizeBytes, hasText: documents.textExtracted, status: documents.status, uploadedVia: documents.uploadedVia, rejectedReason: documents.rejectedReason, validatedAt: documents.validatedAt }).from(documents).where(eq(documents.applicationId, app.id));
     const asmts = await tx.select().from(assessments).where(eq(assessments.applicationId, app.id)).orderBy(desc(assessments.createdAt));
     const comms = await tx.select().from(communications).where(eq(communications.applicationId, app.id)).orderBy(desc(communications.createdAt));
-    const timeline = await tx.select().from(events).where(and(eq(events.subjectType, "application"), eq(events.subjectId, app.id))).orderBy(desc(events.occurredAt)).limit(100);
+    const own = await tx.select().from(events).where(and(eq(events.subjectType, "application"), eq(events.subjectId, app.id))).orderBy(desc(events.occurredAt)).limit(100);
     const scr = await tx.select().from(screens).where(eq(screens.applicationId, app.id)).orderBy(desc(screens.createdAt));
+    // History (plan A10) also tells what happened to the assistant's suggestions about them (asked, approved by whom,
+    // "Not now", closed) and to their screens, which are recorded on the request and the screen, not the application.
+    const requestIds = (await tx.select({ id: approvalRequests.id }).from(approvalRequests).where(eq(approvalRequests.applicationId, app.id))).map((r) => r.id);
+    const related = requestIds.length || scr.length ? await tx.select().from(events).where(or(and(eq(events.subjectType, "approval_request"), inArray(events.subjectId, requestIds.length ? requestIds : [""])), and(eq(events.subjectType, "screen"), inArray(events.subjectId, scr.length ? scr.map((s) => s.id) : [""])))).orderBy(desc(events.occurredAt)).limit(100) : [];
+    const timeline = [...own, ...related].sort((x, y) => Date.parse(y.occurredAt) - Date.parse(x.occurredAt));
     const ivs = await tx.select({ id: interviews.id, roundKey: interviews.roundKey, title: interviews.title, status: interviews.status, startsAt: interviews.startsAt, endsAt: interviews.endsAt, timezone: interviews.timezone, meetingUrl: interviews.meetingUrl, attempt: interviews.attempt, outcome: interviews.outcome, decision: interviews.decision, offeredSlots: interviews.offeredSlots, createdAt: interviews.createdAt }).from(interviews).where(eq(interviews.applicationId, app.id)).orderBy(desc(interviews.createdAt));
     const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
     const packetLabels = pv ? { mustHaves: pv.packet.requirements.mustHaves.map((m) => ({ key: m.key, text: m.text })), competencies: pv.packet.competencies.map((c) => ({ key: c.key, name: c.name })), questions: pv.packet.screening.questions.map((q) => ({ key: q.key, question: q.question })) } : { mustHaves: [], competencies: [], questions: [] };
@@ -254,15 +326,38 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     await audit(tx, { companyId: t.companyId, actor: actorOf(c), action: "candidate.viewed", target: { type: "application", id: app.id } });
     // The latest résumé assessment (rows are newest first) is what offers "ask about this in a screen", the same rule the action route applies.
     // Every choice the page shows but cannot take comes with the reason (plan 0.5), and the decline step says before the click what the candidate will get.
-    const { allowed: allowedActions, blockedReasons } = applicationActionState(applicationFactsFrom(app, scr.map((s) => s.status), ivs, t.role, asmts.find((x) => x.kind === "triage") ?? null));
+    // The private mark and the stage button (founder decision B3), and whether a decision was told (B6).
+    const mark = (await activeMarksFor(tx, [app.id])).get(app.id) ?? null;
+    const facts = applicationFactsFrom(app, scr.map((s) => s.status), ivs, t.role, asmts.find((x) => x.kind === "triage") ?? null, { mark, decisionMessagePending: pendingApprovals.some((p) => p.actionType === "disposition.send") });
+    const { allowed: allowedActions, blockedReasons } = applicationActionState(facts);
+    // What a Send of the decision message does under the company's settings: it goes, waits for approval, or is not sent.
     const declineMessage = await declineMessagePolicy(tx, { companyId: t.companyId, roleId: app.roleId });
     const scorecards = await screenScorecards(tx, scr);
+    const now = c.get("container").engine.clock();
+    const strip = ownerStage(app, mark);
     // The status token opens the candidate's status page and the reply token is all that authenticates a reply, so neither leaves the server.
     const { statusToken: _statusToken, replyToken: _replyToken, ...appOut } = app;
-    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: ownerGroup(app.stage), allowedActions, blockedReasons, declineMessage, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: comms, timeline, screens: scr.map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, assessmentId: s.assessmentId, ...scorecards.get(s.id) })), pendingApprovals, packetLabels };
+    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: groupFor(app, mark, now), ownerStage: strip, ownerStageLabel: ownerStageLabel(strip, mark), mark, tags: ownerTags(app, mark, now), stageMoves: stageMoves(facts), toldState: DECISION_STAGES.includes(app.stage) ? app.toldState : null, allowedActions, blockedReasons, declineMessage, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: comms, timeline, screens: scr.map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, assessmentId: s.assessmentId, ...scorecards.get(s.id) })), pendingApprovals, packetLabels };
   });
   if (!row) throw new HttpError(404, "not_found", "Application not found.");
   return c.json(row);
+});
+
+/**
+ * The preview before "Send the decision message" (founder decision B6): the exact words the candidate will get, the
+ * address, and what the Send does under the company's settings (`policy`: sends, needs_approval, not_sent). 404 when
+ * there is no decision to tell (they are still in the process).
+ */
+applicationRoutes.get("/:id/decision-message", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  assertCan(t.role, "application.reject");
+  const container = c.get("container");
+  const preview = await withTenant(container.db, t.companyId, async (tx) => {
+    const [app] = await tx.select().from(applications).where(eq(applications.id, c.req.param("id"))).limit(1);
+    return app ? decisionMessagePreview(tx, container, app) : null;
+  });
+  if (!preview) throw new HttpError(404, "not_found", "There is no decision to tell this candidate about.");
+  return c.json(preview);
 });
 
 /**
@@ -291,7 +386,9 @@ applicationRoutes.post("/:id/actions", requireTenant, async (c) => {
   const body = ApplicationAction.parse(await c.req.json());
   const container = c.get("container");
   const result = await withTenant(container.db, t.companyId, async (tx) => {
-    const [app] = await tx.select().from(applications).where(eq(applications.id, c.req.param("id"))).limit(1);
+    // The row is locked for the decision, so two people acting on the same candidate at once take turns: the second
+    // sees what the first did (a mark already replaced, a decision already told) instead of colliding with it.
+    const [app] = await tx.select().from(applications).where(eq(applications.id, c.req.param("id"))).limit(1).for("update");
     if (!app) throw new HttpError(404, "not_found", "Application not found.");
     return performApplicationAction(tx, container, { app, body, tenant: t, actor: actorOf(c) });
   });
@@ -358,15 +455,20 @@ applicationRoutes.post("/:id/outcome", requireTenant, async (c) => {
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     try {
       const r = await recordApplicationOutcome(tx, { companyId: t.companyId, applicationId: c.req.param("id") ?? "", outcome: body.outcome, by: t.role, actor, hireDate: body.hireDate, offerAcceptedAt: body.offerAcceptedAt, reason: body.reason, note: body.note, now: container.engine.clock() });
-      // the candidate hears about a decline the same way as from the Decline button: after the human decision, gated
-      const candidateNotice = body.outcome === "employer_declined" ? await declineAfterHumanDecision(tx, container, { companyId: t.companyId, app: r.app, actor, reason: body.reason ?? "employer_declined" }) : null;
-      return { ...r, dispositionSent: !!candidateNotice && declineSent(candidateNotice), candidateNotice };
+      // The candidate's own news (a withdrawal, a hire, an offer they declined) may be confirmed with the cancellation; the
+      // team's decisions (declined, no hire) are private like the Decline button's (founder decision B6): nothing is sent,
+      // and the decision message, when someone sends it, says an interview is off (plan-adjustments §4).
+      const privateDecision = body.outcome === "employer_declined" || body.outcome === "no_hire";
+      const candidateEmail: ExitCandidateEmail = privateDecision ? "private_decision" : "send_cancellation";
+      const cleaned = r.to !== "hired" ? await exitCleanup(tx, container, { companyId: t.companyId, applicationId: r.app.id, reason: `outcome: ${body.outcome}`, actor, candidateEmail }) : null;
+      const candidateNotice: CandidateNotice | null = privateDecision ? "not_told" : null;
+      return { ...r, dispositionSent: false, candidateNotice, interviewsCancelled: cleaned?.interviewsCancelled ?? 0 };
     } catch (e) { outcomeHttpError(e); }
   });
   const label: Record<string, string> = { hired_externally: "recorded a hire (offer accepted outside the platform)", candidate_withdrew: "recorded that the candidate withdrew", employer_declined: "declined the candidate", offer_declined_externally: "recorded that the candidate declined an offer made outside the platform", no_hire: "closed the process for this candidate without a hire" };
   await tellRecruiterAboutOutcome(container, t.companyId, result.roleId, c.req.param("id") ?? null, `${actor.name ?? "The customer"} ${label[body.outcome]}.`, `outcome:${result.row.id}`);
   await container.kick();
-  return c.json({ ok: true, outcomeId: result.row.id, stage: result.to, roleId: result.roleId, roleStillOpen: result.roleStillOpen, dispositionSent: result.dispositionSent, ...(result.candidateNotice ? { candidateNotice: result.candidateNotice } : {}), movedToTalentPool: 0, statement: OUTCOME_STATEMENT, next: result.roleStillOpen ? "The role is still open. Close it with its outcome when you are ready; that is a separate confirmation." : null }, 201);
+  return c.json({ ok: true, outcomeId: result.row.id, stage: result.to, roleId: result.roleId, roleStillOpen: result.roleStillOpen, dispositionSent: result.dispositionSent, ...(result.candidateNotice ? { candidateNotice: result.candidateNotice, interviewsCancelled: result.interviewsCancelled } : {}), movedToTalentPool: 0, statement: OUTCOME_STATEMENT, next: result.roleStillOpen ? "The role is still open. Close it with its outcome when you are ready; that is a separate confirmation." : null }, 201);
 });
 
 roleRoutes.post("/:id/outcome", requireTenant, async (c) => {
@@ -377,7 +479,12 @@ roleRoutes.post("/:id/outcome", requireTenant, async (c) => {
   const actor = actorOf(c);
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     try {
-      return await recordRoleOutcome(tx, { companyId: t.companyId, roleId: c.req.param("id") ?? "", outcome: body.outcome, by: t.role, actor, reason: body.reason, now: container.engine.clock() });
+      const closed = await recordRoleOutcome(tx, { companyId: t.companyId, roleId: c.req.param("id") ?? "", outcome: body.outcome, by: t.role, actor, reason: body.reason, now: container.engine.clock() });
+      // Everyone still in the process left it with the role: their interviews and screens end, privately (founder decision
+      // B6); the decision message, when someone sends it, says an interview is off.
+      let interviewsCancelled = 0;
+      for (const applicationId of closed.movedApplicationIds) interviewsCancelled += (await exitCleanup(tx, container, { companyId: t.companyId, applicationId, reason: `role closed: ${body.outcome}`, actor, candidateEmail: "private_decision" })).interviewsCancelled;
+      return { ...closed, interviewsCancelled };
     } catch (e) { outcomeHttpError(e); }
   });
   const label: Record<string, string> = { filled: "closed the role as filled", filled_outside_platform: "closed the role: filled outside the platform", role_cancelled: "cancelled the role", no_hire: "closed the role without a hire" };
@@ -385,5 +492,5 @@ roleRoutes.post("/:id/outcome", requireTenant, async (c) => {
   // Applications emailed while the role was paused or closed to applications were held with a promise to add them (C19); a close keeps it by putting them in the talent pool.
   const held = await settleHeldEmailsOnClose(container, { companyId: t.companyId, roleId: result.role.id });
   await container.kick();
-  return c.json({ ok: true, outcomeId: result.row.id, role: result.role, movedToTalentPool: result.movedToTalentPool + held.addedToTalentPool, heldEmailsAddedToTalentPool: held.addedToTalentPool, statement: OUTCOME_STATEMENT });
+  return c.json({ ok: true, outcomeId: result.row.id, role: result.role, movedToTalentPool: result.movedToTalentPool + held.addedToTalentPool, heldEmailsAddedToTalentPool: held.addedToTalentPool, interviewsCancelled: result.interviewsCancelled, statement: OUTCOME_STATEMENT });
 });
