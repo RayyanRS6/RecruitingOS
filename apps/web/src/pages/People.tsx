@@ -8,10 +8,11 @@ import { api, ApiError, type ActionResult, type ApplicationSummary, type Applica
 import { toast } from "../toast";
 import { messageOnItsWayChip } from "../company-check";
 import { AskRecruiter } from "../components/AskRecruiter";
+import { ShareJob } from "../components/ShareJob";
 import { useCompanyCheck } from "../components/use-company-check";
 import { LOW_CONFIDENCE_LABEL } from "../evidence";
 import { activeCompanyOf } from "../rail";
-import { canDecline } from "../roles";
+import { canDecline, canShareJob } from "../roles";
 import { roleStatus } from "../role-status";
 import { actionToast, batches, bulkSendToast, holdDay, mergeDecisionResults, noticeText, stageBlocked, stageIntent, type PanelStep } from "../talent-actions";
 import { ORDERS, READING, READING_FILTERS, appliedWhen, applyView, defaultView, emptyText, readingCounts, readingOf, stripItems, waitingText, type Order, type ReadingFilter, type TalentView } from "../talent-list";
@@ -154,7 +155,14 @@ export function People() {
           ) : null}
           {compareOpen ? <ComparePanel roleId={roleId} candidates={shown.map((a) => ({ id: a.id, name: a.candidate?.name ?? "Unknown", stageLabel: a.ownerStageLabel }))} /> : null}
           <TabPanel idBase="talent-strip" value={view.stage}>
-            {apps.isLoading ? <Skeleton lines={5} /> : apps.error ? <ErrorState message="Could not load the applicants." onRetry={() => apps.refetch()} /> : shown.length === 0 ? (
+            {apps.isLoading ? <Skeleton lines={5} /> : apps.error ? <ErrorState message="Could not load the applicants." onRetry={() => apps.refetch()} /> : shown.length === 0 && total === 0 && role?.status === "open" && canShareJob(myRole) ? (
+              // Nobody yet on a live job (plan D8): the empty list is the place to share it from.
+              <div className="empty" style={{ justifyItems: "stretch", textAlign: "left" }}>
+                <h2 style={{ textAlign: "center" }}>Nobody has applied yet</h2>
+                <p style={{ textAlign: "center", justifySelf: "center" }}>Share the job to bring in the first applicants. Each place gets its own link, so you can see here where people came from.</p>
+                <ShareJob roleId={roleId} roleTitle={role.title} companyName={company.name} compact />
+              </div>
+            ) : shown.length === 0 ? (
               <EmptyState icon="talent" title={empty.title} body={empty.body} action={filtersOn && total > 0 ? <Button size="sm" onClick={() => setViewState({ key, view: { ...defaultView(new URLSearchParams(), null), waiting: false } })}>Show everyone</Button> : undefined} />
             ) : (
               <div className="talent-list">

@@ -122,20 +122,25 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     expect(pv.status).toBe("approved");
   });
 
-  it("Step 4, Posting: the careers page is live only after its URL was checked; Google for Jobs is submitted; email-in is failed in development (no inbound domain); Indeed, LinkedIn and ZipRecruiter wait at ready to post with their own tracked links; policy role.publish = auto", async () => {
+  it("Step 4, Posting: the careers page is live only after its URL was checked; Google for Jobs is submitted; email-in is failed in development (no inbound domain); the board the role plan names (Indeed) waits at ready to post with its own tracked link, and an ITS recruiter has the task of posting it; policy role.publish = auto", async () => {
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { postings: Array<{ channel: string; status: string; instructions: string | null; steps: string[]; error: string | null }> };
     const s = Object.fromEntries(role.postings.map((p) => [p.channel, p.status]));
-    expect(s).toMatchObject({ careers_page: "live_verified", google_jobs: "submitted_integration", email_in: "failed", linkedin_basic: "ready_to_post", indeed: "ready_to_post", ziprecruiter: "ready_to_post" });
+    // only the boards the role plan names are prepared (founder decision Q11): the dental playbook names Indeed
+    expect(s).toEqual({ careers_page: "live_verified", google_jobs: "submitted_integration", email_in: "failed", indeed: "ready_to_post" });
     expect(role.postings.find((p) => p.channel === "indeed")!.instructions).toMatch(/own account/i);
     expect(role.postings.find((p) => p.channel === "indeed")!.steps.join(" ")).toMatch(/\/a\/[a-z0-9]{12}/);
     expect(role.postings.find((p) => p.channel === "email_in")!.error).toMatch(/inbound mail domain/i);
     // the careers page went ready to post, then posted (its URL is known), then live once the check answered with the title
-    expect((await eventsOf("posting.ready_to_post")).length).toBe(4);
+    expect((await eventsOf("posting.ready_to_post")).length).toBe(2);
     expect((await eventsOf("posting.posted_manually")).length).toBe(1);
     expect((await eventsOf("posting.live_verified")).length).toBe(1);
     expect((await eventsOf("posting.submitted_integration")).length).toBe(1);
     expect((await eventsOf("posting.failed")).length).toBe(1);
-    expect((await eventsOf("application_link.created")).length).toBe(3);
+    expect((await eventsOf("application_link.created")).length).toBe(1);
+    // ITS posts it from the company's own account (plan D3): one task in the ITS queue, with no access to candidates
+    const tasks = await container.db.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.roleId, roleId), eq(recruiterEscalations.kind, "post_job")));
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].contextSnapshot).not.toHaveProperty("candidate");
     const page = await app.request(`/careers/${slug}/jobs/${roleId}`);
     expect(page.status).toBe(200);
     expect(await page.text()).toContain("JobPosting");
@@ -203,7 +208,8 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     const brief = (await (await json("GET", "/api/v1/brief")).json()) as { cards: Array<{ kind: string; title: string }> };
     expect(brief.cards.some((c) => c.kind === "new_applicants")).toBe(true);
     expect(brief.cards.some((c) => c.kind === "screening")).toBe(true);
-    expect(brief.cards.some((c) => c.kind === "posting_action")).toBe(true);
+    // ITS posts the board (plan D3), so the owner is not told to post it from their own account
+    expect(brief.cards.some((c) => c.kind === "posting_action")).toBe(false);
     // "do it and tell me": the auto_notify invitations are in the owner's updates
     const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
     expect(notes.some((n) => n.kind === "screen.invited")).toBe(true);
@@ -213,7 +219,7 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
     const r = await json("POST", "/api/v1/escalations", { kind: "review", roleId, applicationId: a.id, question: "Is Maria worth a working interview?" });
     expect(r.status).toBe(201);
-    const [esc] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.roleId, roleId));
+    const [esc] = await container.db.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.roleId, roleId), eq(recruiterEscalations.kind, "review")));
     const ctx = esc.contextSnapshot as { company: { name: string }; role: { title: string }; packet: { version: number }; candidate: { name: string }; resumeText: string; timeline: unknown[] };
     expect(ctx.company.name).toBe("Brightline Dental Group");
     expect(ctx.role.title).toBe("Registered Dental Hygienist");
@@ -221,7 +227,8 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     expect(ctx.candidate.name).toBe("Maria Reyes");
     expect(ctx.resumeText).toMatch(/Smile Bright/);
     expect(ctx.timeline.length).toBeGreaterThan(3);
-    expect(await eventsOf("recruiter.requested")).toHaveLength(1);
+    // this request, beside the ITS task of posting the job on Indeed (Step 4)
+    expect((await eventsOf("recruiter.requested")).map((e) => (e.payload as { kind: string }).kind).sort()).toEqual(["post_job", "review"]);
   });
 
   it("Step 9, Human decisions are human and audited: declining needs a reason; viewing a candidate is audited", async () => {

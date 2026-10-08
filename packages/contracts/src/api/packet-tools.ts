@@ -58,8 +58,8 @@ export type PacketFieldEdit = z.infer<typeof PacketFieldEdit>;
 /**
  * What the candidate-view preview of a draft or a version renders (C9; the authenticated job-page preview of Wave D reads
  * the same): the job page and the apply form's questions, as candidates would see them, with what is still missing. Never
- * served on a public page. Only what the public job page itself shows (apps/api/src/pages/candidate.tsx): the must-haves
- * and the benefits are not listed there, so they are not in the preview either.
+ * served on a public page. Only what the public job page itself shows (apps/api/src/pages/job-page.tsx), which since
+ * plan D10 lists the must-haves and nice-to-haves (their words only), the benefits and the company's approved text.
  */
 export type JobPreviewFact = { key: "location" | "workplace" | "job_type" | "pay" | "schedule"; label: string; text: string };
 export type JobPreview = {
@@ -67,12 +67,18 @@ export type JobPreview = {
   /** True unless this is the live version of an open role at a company ITS has checked. */
   notPublicYet: boolean;
   banner: string;
-  company: { name: string; slug: string; website: string | null; logoUrl: string | null; verified: boolean };
+  /** `about`: the text about the company a person approved in Setup; never the packet's unapproved blurb. */
+  company: { name: string; slug: string; website: string | null; logoUrl: string | null; verified: boolean; about: string | null };
   job: {
     title: string;
     facts: JobPreviewFact[];
     locations: string[];
     description: string;
+    /** "What we're looking for" and "Nice to have", in the words the job page lists them. */
+    mustHaves: string[];
+    niceToHaves: string[];
+    /** The benefits block: the role's own description, else the company's from Setup; null when neither is written. */
+    benefits: string | null;
     /** "What to expect": applying, the screening conversation, each interview step, the decision. */
     steps: string[];
     notices: Array<{ key: string; text: string }>;

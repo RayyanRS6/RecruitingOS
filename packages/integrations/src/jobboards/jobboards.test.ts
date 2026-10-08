@@ -34,6 +34,15 @@ describe("JobPosting structured data (docs/spec/20 item 4)", () => {
     // the closing day wins over everything; a stop wins over a planned date
     expect(jobValidThrough({ closedAt: "2026-09-20T15:04:05.000Z", stoppedAt: "2026-09-18T08:00:00.000Z", closesOn: "2026-10-15" })).toBe("2026-09-20");
     expect(jobValidThrough({ stoppedAt: "2026-09-18T08:00:00.000Z", closesOn: "2026-10-15" })).toBe("2026-09-18");
+    // applications stopped by the closing date itself stop at the midnight after it, already the next day in UTC: the date is the last day (plan D7)
+    expect(jobValidThrough({ stoppedAt: "2026-10-16T07:00:00.000Z", closesOn: "2026-10-15" })).toBe("2026-10-15");
+  });
+
+  it("an open job with a closing date tells Google that date (plan D7)", () => {
+    const ld = jobPostingJsonLd({ ...input, datePosted: "2026-09-01", closesOn: "2026-10-31" });
+    expect(ld.validThrough).toBe("2026-10-31");
+    const stopped = jobPostingJsonLd({ ...input, datePosted: "2026-09-01", closesOn: "2026-10-31", stoppedAt: "2026-11-01T07:00:00.000Z" });
+    expect(stopped.validThrough).toBe("2026-10-31");
   });
 
   it("names the client company as the employer with its website and logo when known, and never emits CONTRACT or INTERNSHIP", () => {
@@ -113,7 +122,9 @@ describe("board adapters (items 9, 10 and 12)", () => {
     expect(careers).toMatchObject({ status: "ready_to_post", externalUrl: input.jobUrl });
     const google = await new GoogleJobsAdapter().publish(input);
     expect(google).toMatchObject({ status: "submitted_integration", externalUrl: input.jobUrl });
-    expect(google.status === "submitted_integration" && google.instructions).toMatch(/Search Console/);
+    // Marked found once someone sees it in Google (plan D2): the pages live on ITS's domain, so no Search Console is offered, and no time is promised.
+    expect(google.status === "submitted_integration" && google.instructions).toMatch(/marked found once someone sees it in a Google search/);
+    expect(google.status === "submitted_integration" && google.instructions).not.toMatch(/Search Console|hours|days/);
   });
 
   it("email-in is verified only with an inbound domain, and failed with its reason otherwise", async () => {
@@ -137,8 +148,10 @@ describe("board adapters (items 9, 10 and 12)", () => {
       expect(all).toContain("Registered Dental Hygienist");
       expect(all).toContain(input.applyUrl);
       expect(all).toContain("apply-x@intake.example.com");
-      expect(all).toMatch(new RegExp(`billed by ${name}`));
-      expect(all).toMatch(/Record the public URL/);
+      // whose account and whose bill, in the company's name, so the steps read the same for ITS and for the team (plan D3)
+      expect(all).toContain(`billed by ${name} to Brightline Dental Group's own account`);
+      expect(all).not.toMatch(/your own account/);
+      expect(all).toMatch(/record the listing's public address/);
       expect(all).not.toMatch(/api|scrape/i);
     }
   });

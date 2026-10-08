@@ -165,7 +165,7 @@ export function waitingText(a: Pick<ApplicationSummary, "group" | "daysInStage">
 
 /** The empty list's sentence for the view the person chose. */
 export function emptyText(view: TalentView, total: number): { title: string; body: string } {
-  if (total === 0) return { title: "Nobody has applied yet", body: "Applicants appear here as soon as they apply. Share your careers page or forward applications to the role's intake address." };
+  if (total === 0) return { title: "Nobody has applied yet", body: "Applicants appear here as soon as they apply. The role's Posting tab has the links to share once it is live." };
   if (view.query.trim()) return { title: "Nobody matches", body: `Nobody here matches "${view.query.trim()}". Search looks at names, email addresses and where people came from.` };
   if (view.waiting && view.stage === "all" && view.reading === "any") return { title: "Nobody is waiting on you", body: "Everyone has a next step under way. Choose All to see them." };
   return { title: "Nobody here", body: "Nobody fits these filters right now. Clear one to see more people." };

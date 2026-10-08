@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, EvidenceChip, Field, Skeleton } from "@ros/ui";
 import { api, ApiError, type ApplicationDetail, type MessagePreview, type SendMessageResult, type TimelineEvent } from "../../api/client";
@@ -153,6 +153,23 @@ export function ScreenTab({ a, roleId }: { a: ApplicationDetail; roleId: string 
   );
 }
 
+/** The four guided questions of the apply form (plan D10), in the order the form asks them, with the panel's labels. */
+const GUIDED_ANSWERS: ReadonlyArray<[key: string, label: string]> = [["recentWork", "Most recent work"], ["dayToDay", "Day to day"], ["skills", "Skills, licenses or tools"], ["lookingFor", "Looking for"]];
+
+/**
+ * What someone without a résumé told us: each guided answer on its own labelled line; an application from the older
+ * one-box form (or by email) shows its summary as before.
+ */
+export function NoResumeAnswers({ answers }: { answers: Record<string, string> }) {
+  const lines = GUIDED_ANSWERS.filter(([key]) => answers[key]?.trim());
+  if (!lines.length) return <p className="small" style={{ whiteSpace: "pre-wrap" }}>{answers.summary}</p>;
+  return (
+    <dl className="kv small">
+      {lines.map(([key, label]) => <Fragment key={key}><dt>{label}</dt><dd style={{ whiteSpace: "pre-wrap" }}>{answers[key]}</dd></Fragment>)}
+    </dl>
+  );
+}
+
 /** Résumé: what the résumé says, the files (each opening is recorded), and any earlier résumé readings. */
 export function ResumeTab({ a, roleId }: { a: ApplicationDetail; roleId: string }) {
   const readings = a.assessments.filter((x) => x.kind === "triage" && x.id !== a.assessments[0]?.id);
@@ -166,7 +183,7 @@ export function ResumeTab({ a, roleId }: { a: ApplicationDetail; roleId: string 
             {a.extraction.skills.length ? <p className="small muted">Skills mentioned: {a.extraction.skills.join(", ")}</p> : null}
             {a.extraction.anomalies.length ? <Alert tone="caution">{a.extraction.anomalies.map((an) => `${an.kind.replace(/_/g, " ")}: ${an.detail}`).join("; ")}. Flagged for a person to look at; never used to decline.</Alert> : null}
           </div>
-        ) : a.answers.noResume?.summary ? <p className="small" style={{ whiteSpace: "pre-wrap" }}>{a.answers.noResume.summary}</p> : <p className="muted small">No résumé text available{a.documents.some((d) => d.status === "clean") ? " (the file could not be read; open it below)" : ""}.</p>}
+        ) : a.answers.noResume?.summary ? <NoResumeAnswers answers={a.answers.noResume} /> : <p className="muted small">No résumé text available{a.documents.some((d) => d.status === "clean") ? " (the file could not be read; open it below)" : ""}.</p>}
         {a.documents.length ? (
           <ul className="small" style={{ margin: "10px 0 0", paddingLeft: 18 }}>
             {a.documents.map((d) => (

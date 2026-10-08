@@ -19,7 +19,7 @@ export const publicFeeds = new Hono<Vars>();
 
 export const PUBLIC_FEED_CACHE_MS = 5 * 60_000;
 
-type Listing = { roleId: string; title: string; updatedAt: string; datePosted: string; companyName: string; slug: string; vertical: string; packet: typeof rolePackets.$inferSelect.packet; /** The pay range is listed, by the same rule as the job page (pages/job-facts.tsx). */ showPay: boolean };
+type Listing = { roleId: string; title: string; updatedAt: string; datePosted: string; companyName: string; slug: string; vertical: string; packet: typeof rolePackets.$inferSelect.packet; /** The pay range is listed, by the same rule as the job page (pages/job-facts.tsx). */ showPay: boolean; /** The role's closing date (plan D7), when it has one. */ closesOn: string | null };
 
 type Cached = { at: number; body: string };
 const caches = new WeakMap<Container, Map<string, Cached>>();
@@ -51,7 +51,7 @@ async function cached(container: Container, key: string, build: () => Promise<st
 async function listings(container: Container): Promise<Listing[]> {
   const rows = await withPlatform(container.db, (tx) =>
     tx
-      .select({ roleId: roles.id, title: roles.title, updatedAt: roles.updatedAt, openedAt: roles.openedAt, createdAt: roles.createdAt, companyName: companies.name, slug: companies.slug, vertical: companies.vertical, companyLocations: companies.locations, companySettings: companies.settings, packet: rolePackets.packet })
+      .select({ roleId: roles.id, title: roles.title, updatedAt: roles.updatedAt, openedAt: roles.openedAt, createdAt: roles.createdAt, closesOn: roles.applicationsCloseOn, companyName: companies.name, slug: companies.slug, vertical: companies.vertical, companyLocations: companies.locations, companySettings: companies.settings, packet: rolePackets.packet })
       .from(roles)
       .innerJoin(companies, eq(companies.id, roles.companyId))
       .innerJoin(rolePackets, and(eq(rolePackets.roleId, roles.id), eq(rolePackets.version, roles.currentPacketVersion)))
@@ -60,7 +60,7 @@ async function listings(container: Container): Promise<Listing[]> {
   );
   return rows.map((r) => {
     const notices = jobNoticesFor({ jobLocations: r.packet.identity.locations, companyLocations: r.companyLocations, overrides: r.companySettings.notices });
-    return { roleId: r.roleId, title: r.title, updatedAt: r.updatedAt, datePosted: (r.openedAt ?? r.createdAt).slice(0, 10), companyName: r.companyName, slug: r.slug, vertical: r.vertical, packet: r.packet, showPay: payShown(r.packet, notices) };
+    return { roleId: r.roleId, title: r.title, updatedAt: r.updatedAt, datePosted: (r.openedAt ?? r.createdAt).slice(0, 10), companyName: r.companyName, slug: r.slug, vertical: r.vertical, packet: r.packet, showPay: payShown(r.packet, notices), closesOn: r.closesOn ?? null };
   });
 }
 
@@ -102,9 +102,9 @@ function feedJob(env: Container["env"], r: Listing): FeedJob {
     postalCode: loc?.postalCode,
     description: p.description.publicJobDescription,
     datePosted: r.datePosted,
-    // A listed role is open and taking applications, so it has no stop date; with no closing date set either, the
-    // feed carries no expiration date rather than an invented one (Wave 0 item 0.8).
-    validThrough: jobValidThrough({}),
+    // A listed role is open and taking applications, so it has no stop date: the feed carries its closing date when it
+    // has one (plan D7), and otherwise no expiration date rather than an invented one (Wave 0 item 0.8).
+    validThrough: jobValidThrough({ closesOn: r.closesOn }),
     employmentType: schemaEmploymentType(p.identity.employmentType),
     salary: r.showPay ? { min: comp.min, max: comp.max, currency: comp.currency, basis: comp.basis } : null,
     category: r.vertical,

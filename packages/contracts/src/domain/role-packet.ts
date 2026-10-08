@@ -275,8 +275,9 @@ export type DraftRolePacket = z.infer<typeof DraftRolePacket>;
 /**
  * Who sees each part of a packet (C15): "public" is on the job page, "asked" is put to candidates (the apply form's
  * eligibility questions, the screening conversation, the lines on every message), "reviewed" is what applications are
- * read against (the must-haves: not listed on the job page, but a person may explain them to a candidate), "internal"
- * stays with the team. Keys are dotted paths; the longest matching prefix wins (`packetVisibility`).
+ * read against and is never on the job page, "internal" stays with the team. The must-haves and nice-to-haves are
+ * listed on the job page in their own words (plan D10), so they are public; why each matters and how it is checked
+ * stay "reviewed". Keys are dotted paths; the longest matching prefix wins (`packetVisibility`).
  */
 export type PacketVisibility = "public" | "asked" | "reviewed" | "internal";
 export const PACKET_VISIBILITY: Readonly<Record<string, PacketVisibility>> = {
@@ -293,8 +294,14 @@ export const PACKET_VISIBILITY: Readonly<Record<string, PacketVisibility>> = {
   "compensation.benefitsSummary": "public",
   "description.publicJobDescription": "public",
   "description.internalNotes": "internal",
-  "requirements.mustHaves": "reviewed",
-  "requirements.niceToHaves": "reviewed",
+  "requirements.mustHaves": "public",
+  "requirements.mustHaves.text": "public",
+  "requirements.mustHaves.rationale": "reviewed",
+  "requirements.mustHaves.evidencedBy": "reviewed",
+  "requirements.niceToHaves": "public",
+  "requirements.niceToHaves.text": "public",
+  "requirements.niceToHaves.rationale": "reviewed",
+  "requirements.niceToHaves.evidencedBy": "reviewed",
   "requirements.eligibility": "asked",
   competencies: "internal",
   evaluation: "internal",

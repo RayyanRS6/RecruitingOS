@@ -32,6 +32,7 @@ import { appHealthWatch } from "./maintenance";
 import { redactString } from "@ros/core";
 import { twilioWebhook } from "./webhooks/twilio";
 import { candidatePages } from "./pages/candidate";
+import { draftPreviewPages, rolePreviewPages } from "./pages/preview";
 import { linkPages } from "./pages/links";
 import { publicFeeds } from "./pages/public-feeds";
 import { fileRoutes } from "./routes/files";
@@ -70,6 +71,8 @@ export function createApp(container: Container) {
   app.use("/api/v1/auth/consume", candidateCsp);
   app.use("/api/v1/auth/invite", candidateCsp);
   app.use("/api/v1/auth/invite/*", candidateCsp);
+  // The authenticated job-page preview (plan D1, pages/preview.tsx) is a candidate page drawn for the team: same policy, same nonce.
+  for (const p of ["/api/v1/roles/:id/preview", "/api/v1/roles/:id/preview/page", "/api/v1/intake/sessions/:id/preview", "/api/v1/intake/sessions/:id/preview/page"]) app.use(p, candidateCsp);
   // Browsers post policy violations here (both report formats). Paths and origins only; never a token or a query string.
   app.post("/api/csp-report", rateLimit(POLICIES.cspReport), async (c) => {
     let body: unknown = null;
@@ -103,9 +106,12 @@ export function createApp(container: Container) {
   app.route("/api/v1/companies", companyRoutes);
   app.route("/api/v1/companies", companySettingsRoutes);
   app.route("/api/v1/intake", intakeRoutes);
+  // Before the data routes: a browser tab asking for the preview gets the page, the app's own requests the data.
+  app.route("/api/v1/intake", draftPreviewPages);
   app.route("/api/v1/intake", draftPacketRoutes);
   app.route("/api/v1/roles", roleRoutes);
   app.route("/api/v1/roles", postingRoutes);
+  app.route("/api/v1/roles", rolePreviewPages);
   app.route("/api/v1/roles", rolePacketRoutes);
   app.route("/api/v1/roles", reportRoutes);
   app.route("/api/v1/roles", compareRoutes);

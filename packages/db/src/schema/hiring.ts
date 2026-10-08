@@ -61,6 +61,13 @@ export const roles = pgTable(
     applicationsClosedReason: text("applications_closed_reason"),
     /** Applications per day above which the owner is told once a day; null means the default of 100. */
     volumeAlertPerDay: integer("volume_alert_per_day"),
+    /**
+     * The job boards a person ticked (Q11, migration 0031); null until someone chooses, and then the role plan's boards
+     * are used (packages/core/src/postings.ts, `publishChannelsFor`). The careers page, Google and email are never listed.
+     */
+    publishChannels: text("publish_channels").array(),
+    /** The last day new applications are taken, in the company's time zone (Q12); null when the role has no closing date. */
+    applicationsCloseOn: date("applications_close_on", { mode: "string" }),
     createdBy: jsonb("created_by").$type<Actor>().notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -149,6 +156,8 @@ export const postings = pgTable(
     closureRequired: boolean("closure_required").notNull().default(false),
     closureConfirmedAt: ts("closure_confirmed_at"),
     closureConfirmedBy: jsonb("closure_confirmed_by").$type<Actor | null>(),
+    /** The packet version a board listing was posted (or last updated) with; null when not known (migration 0031). */
+    boardVersion: integer("board_version"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -176,6 +185,8 @@ export const applicationLinks = pgTable(
     label: text("label").notNull(),
     visits: integer("visits").notNull().default(0),
     lastVisitedAt: ts("last_visited_at"),
+    /** "job": a shared link opens the job page first; "apply": a board's link goes straight to the form (migration 0032). */
+    landing: text("landing").notNull().default("job"),
     createdBy: jsonb("created_by").$type<Actor>().notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

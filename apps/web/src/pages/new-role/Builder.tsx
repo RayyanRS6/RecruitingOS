@@ -6,7 +6,10 @@ import type { IntakeAnswer, IntakeFactsPatch, IntakeSessionView, PacketRevisionP
 import { Alert, Button, EmptyState, ErrorState, Eyebrow, Icon, Menu, Pill, ProgressSteps, Skeleton, SplitView } from "@ros/ui";
 import { api, ApiError, type IntakeApprovalResponse, type IntakeTurnReply, type IntakeTurnResponse, type Me } from "../../api/client";
 import { Link, useNavigate } from "../../nav";
+import { closingDateRequiredFor, readDraftClosingDate, writeDraftClosingDate } from "../../publishing";
 import { activeCompanyOf } from "../../rail";
+import { canManageRole } from "../../roles";
+import { browserStorage } from "../../start-hire";
 import { toast } from "../../toast";
 import { AskRecruiter } from "../../components/AskRecruiter";
 import { presetOf } from "../../recruiter-access";
@@ -72,6 +75,11 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
   const [blockers, setBlockers] = useState<string[] | null>(null);
   const [room, setRoom] = useState<{ room: PlanRoom | null; ask: RecruiterAction | null } | null>(null);
   const [patchDone, setPatchDone] = useState(0);
+  // The closing date (plan D7) belongs to the role, which does not exist yet: kept on this draft in this browser and set
+  // on the role the moment "Ask for approval" creates it.
+  const [closesOn, setClosesOnState] = useState("");
+  useEffect(() => { setClosesOnState(readDraftClosingDate(browserStorage(), sessionId)); }, [sessionId]);
+  const setClosesOn = (value: string) => { setClosesOnState(value); writeDraftClosingDate(browserStorage(), sessionId, value); };
 
   // A section that changed lights up for a moment (plan: "a brief highlight as they change").
   const [changed, setChanged] = useState<SectionId[]>([]);
@@ -148,8 +156,19 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
   const approve = useMutation({
     mutationFn: () => api.post<IntakeApprovalResponse>(`${base}/request-approval`),
     onMutate: () => { setPolling(true); setBlockers(null); setProblem(null); setRoom(null); },
-    onSuccess: (r) => {
-      toast("Sent for approval.", "The role is created. Nothing is posted until it is approved.");
+    onSuccess: async (r) => {
+      // The chosen closing date goes on the new role; if that fails the role is still waiting for approval, and the
+      // Posting tab can set the date.
+      let dateProblem: string | null = null;
+      if (closesOn && mayManage) {
+        try {
+          await api.post(`/api/v1/roles/${r.roleId}/closing-date`, { closesOn });
+          writeDraftClosingDate(browserStorage(), sessionId, "");
+        } catch (e) {
+          dateProblem = e instanceof ApiError ? e.message : "The closing date could not be set.";
+        }
+      }
+      toast("Sent for approval.", dateProblem ? `The role is created, but the closing date was not set: ${dateProblem} Set it on the role's Posting tab.` : "The role is created. Nothing is posted until it is approved.");
       for (const k of [["roles"], ["brief"], ["intake", "mine"]]) qc.invalidateQueries({ queryKey: k });
       nav(`/roles/${r.roleId}`);
     },
@@ -191,6 +210,8 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
   // Only owners and admins may take a draft over (an ITS recruiter helping with it may not).
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
   const mayTakeOver = mayTakeOverDrafts(activeCompanyOf(me.data).role);
+  // Setting the closing date needs role.manage, so the builder offers it only to those who hold it.
+  const mayManage = canManageRole(activeCompanyOf(me.data).role);
 
   // "Change it by asking" (C10): a proposed change, shown field by field; saved only on Confirm. The request and what
   // became of it stay in the conversation for this visit; the server records both on the draft's history.
@@ -426,6 +447,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
             onRedraft={() => draft.mutate()}
             drafting={draft.isPending}
             onPreview={() => setPreviewOpen(true)}
+            closing={mayManage ? { value: closesOn, onChange: setClosesOn, required: closingDateRequiredFor({ locations: view.draft?.identity.locations, remotePolicy: view.draft?.identity.remotePolicy ?? view.facts.remotePolicy, locationText: view.facts.locationText }) } : null}
           />
         }
       />

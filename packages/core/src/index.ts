@@ -35,6 +35,8 @@ export * from "./sealed";
 export * from "./invitations";
 export * from "./html";
 export * from "./postings";
+export * from "./posting-tasks";
+export * from "./closing-date";
 export * from "./application-links";
 export * from "./job-urls";
 export * from "./approval-deciders";

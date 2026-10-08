@@ -38,7 +38,8 @@ describe("repeat applications, lost links and the talent-pool opt-out", () => {
   const storage = () => container.integrations.storage as MemoryStorageAdapter;
   const decodeEntities = (html: string) => html.replace(/&#39;/g, "'").replace(/&quot;/g, "\"").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
   /** The page without the per-request nonce, so two renders of the same page compare equal. */
-  const stable = (html: string) => html.replace(/nonce="[^"]*"/g, "");
+  // the nonce and the form's sealed opening time (plan D7) change with every render, whoever applies
+  const stable = (html: string) => html.replace(/nonce="[^"]*"/g, "").replace(/name="formOpened" value="[^"]*"/g, "");
   const form = (path: string, fields: Record<string, string>, headers: Record<string, string> = {}) => app.request(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...headers }, body: new URLSearchParams(fields).toString() });
   const inbound = (payload: Record<string, unknown>) => app.request("/webhooks/postmark/inbound", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
 

@@ -26,7 +26,7 @@ describe("Setup's section menu", () => {
     expect(ids("interviewer")).not.toContain("setup-shortcut");
     expect(ids("interviewer")).not.toContain("setup-audit");
     // the cards everyone has stay in every menu
-    for (const role of ["owner", "hr", "interviewer"]) expect(ids(role).slice(0, 5)).toEqual(["setup-company", "setup-team", "setup-recruiters", "setup-sessions", "setup-availability"]);
+    for (const role of ["owner", "hr", "interviewer"]) expect(ids(role).slice(0, 7)).toEqual(["setup-company", "setup-team", "setup-profile", "setup-boards", "setup-recruiters", "setup-sessions", "setup-availability"]);
   });
 
   it("uses plain names, never an id", () => {

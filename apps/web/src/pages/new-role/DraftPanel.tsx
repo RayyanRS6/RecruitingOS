@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { PACKET_VISIBILITY_LABEL, type DraftRolePacket, type IntakeFactsPatch, type IntakeSessionView, type PacketFlag, type PacketVisibility } from "@ros/contracts";
 import { Alert, Avatar, Button, Eyebrow, Field, Icon, IconButton, Segmented } from "@ros/ui";
+import { DraftClosingDate } from "../../components/ClosingDate";
 import { FactsEditor, type TeamPick } from "./FactsEditor";
 import { PayCard } from "./PayCard";
 import {
@@ -47,6 +48,8 @@ export function DraftPanel(props: {
   onRedraft: () => void;
   drafting: boolean;
   onPreview: () => void;
+  /** The closing date (plan D7), kept on the draft until the role exists; null for someone who may not set it. */
+  closing?: { value: string; onChange: (value: string) => void; required: boolean } | null;
 }) {
   const { view } = props;
   const [mode, setMode] = useState<"preview" | "edit">("preview");
@@ -143,6 +146,16 @@ export function DraftPanel(props: {
               </div>
               <PayCard key={JSON.stringify([view.pay.basis, view.pay.stated, !!view.pay.confirmed])} card={view.pay} onSave={props.onPay} saving={props.paying} error={props.payError} />
             </section>
+
+            {props.closing ? (
+              <section className="draft-section" aria-labelledby="draft-closes-h">
+                <div className="draft-section-head">
+                  <h3 id="draft-closes-h">When applications close</h3>
+                  <SeenBy v="public" />
+                </div>
+                <DraftClosingDate value={props.closing.value} onChange={props.closing.onChange} required={props.closing.required} />
+              </section>
+            ) : null}
 
             {sections.filter((s) => s.id !== "basics").map((s) => (
               <SectionView

@@ -85,9 +85,10 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body { margin: 0; background: var(--ground); color: var(--ink); font: 16px/1.55 var(--ui); -webkit-font-smoothing: antialiased; }
 main { width: min(680px, calc(100% - 32px)); margin: 40px auto 64px; padding: 36px 40px 40px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-panel); }
 main.wide { width: auto; max-width: 1080px; margin: 0 auto; padding: 40px 24px 72px; background: none; border: 0; border-radius: 0; }
-h1, h2 { color: var(--ink); font-family: var(--display); font-weight: 700; text-wrap: balance; overflow-wrap: anywhere; }
+h1, h2, h3 { color: var(--ink); font-family: var(--display); font-weight: 700; text-wrap: balance; overflow-wrap: anywhere; }
 h1 { margin: 0 0 8px; font-size: 32px; line-height: 1.12; letter-spacing: -0.02em; }
 h2 { margin: 32px 0 10px; font-size: 19px; line-height: 1.3; letter-spacing: -0.01em; }
+h3 { margin: 22px 0 8px; font-size: 17px; line-height: 1.35; }
 .card > h2:first-child, .card > label:first-child { margin-top: 0; }
 p { margin: 0 0 12px; color: var(--ink-2); }
 p:last-child { margin-bottom: 0; }
@@ -155,7 +156,7 @@ input[type=checkbox], input[type=radio] { accent-color: var(--ink); }
 .slot:has(input:checked) { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
 .slot input { margin: 0; }
 .code { max-width: 240px; font-family: var(--mono); font-size: 22px; letter-spacing: 0.3em; font-variant-numeric: tabular-nums; }
-form small { display: block; margin-top: 6px; }
+form small, .form-preview small { display: block; margin-top: 6px; }
 fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 legend { padding: 0; color: var(--ink-3); font-size: 14.5px; }
 /* A QR code needs a light background in both themes to scan. */
@@ -181,41 +182,93 @@ ul.steps li { margin: 6px 0; }
 .status > div > :last-child { min-width: 0; text-align: right; overflow-wrap: anywhere; }
 .status > div > span:last-child { color: var(--ink); }
 
-/* The careers list */
-.roles { display: grid; gap: 12px; margin: 24px 0; padding: 0; list-style: none; }
-.role { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; margin: 0; }
-.role h2 { margin: 0; font-size: 18px; }
-.role .meta { margin: 4px 0 0; }
-.role .btn { margin: 0; }
+/* The company on its own pages: the logo (or its initials) beside its name */
+.company { display: flex; align-items: center; gap: 14px; margin: 0 0 18px; }
+.company > div { min-width: 0; overflow-wrap: anywhere; }
+.company .eyebrow { margin: 0; }
+.logo { flex: none; display: grid; place-items: center; width: 56px; height: 56px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); color: var(--ink); font: 700 20px/1 var(--display); }
+.logo img { display: block; width: 100%; height: 100%; object-fit: contain; }
 
-/* The job page: the heading on the open ground, the description on a white card, and the apply panel beside it;
-   on a phone the panel's button stays at the bottom of the screen while the job is read */
+/* The careers page: who the company is, then each open job as a card with its facts and its first lines */
+.careers { max-width: 860px; margin: 0 auto; }
+.careers-head { margin: 0 0 8px; }
+.roles { display: grid; gap: 12px; margin: 16px 0 24px; padding: 0; list-style: none; }
+.role { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 24px; margin: 0; }
+.role-main { flex: 1 1 420px; min-width: 0; }
+.role h3 { margin: 0; font-size: 19px; }
+.role .facts { margin-top: 10px; }
+.role .meta { margin: 8px 0 0; }
+.role .btn { margin: 0; }
+.excerpt { margin: 10px 0 0; color: var(--ink-2); font-size: 15px; }
+.facts.small .fact { min-height: 28px; padding: 3px 10px; font-size: 13.5px; }
+
+/* The job page: the heading on the open ground with a second Apply button, the description in headed sections on a
+   white card, and the apply panel beside it; on a phone the panel becomes a bar held at the bottom of the screen */
 .job-head { margin: 0 0 28px; }
 .job-head h1 { font-size: 40px; line-height: 1.08; }
-.job-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; align-items: start; }
+.head-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-top: 20px; }
+.head-actions .btn { margin: 0; }
+.apply-by { display: inline-flex; align-items: center; gap: 7px; margin: 0; color: var(--ink); font-size: 15px; font-weight: 600; }
+.apply-by .icon { color: var(--ink-3); }
+.job-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; }
 .job-layout.solo { grid-template-columns: minmax(0, 760px); }
+.job-main { min-width: 0; }
 .job-body { margin: 0; padding: 32px 36px; }
-.desc { color: var(--ink); font-size: 16.5px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.job-body > h2:first-child { margin-top: 0; }
+.desc { color: var(--ink); font-size: 16.5px; line-height: 1.65; overflow-wrap: anywhere; }
+.desc p { margin: 0 0 14px; color: var(--ink); white-space: pre-line; }
+.desc ul, .desc ol { margin: 6px 0 16px; padding-left: 22px; }
+.desc li { margin: 6px 0; }
+ul.checks { display: grid; gap: 10px; margin: 12px 0 8px; padding: 0; list-style: none; }
+ul.checks li { display: flex; align-items: flex-start; gap: 10px; color: var(--ink); }
+ul.checks .icon { margin-top: 4px; color: var(--ink-2); }
+.about { margin: 16px 0 0; padding: 28px 36px; }
+.about > h2:first-child { margin-top: 0; }
+.about .pre { color: var(--ink); }
+.site { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; font-weight: 600; }
 .apply-panel { position: sticky; top: 24px; z-index: 5; }
 .apply-card { margin: 0; padding: 20px; }
 .apply-card .btn { display: flex; width: 100%; margin-top: 14px; }
+.apply-card .apply-by { margin-top: 6px; font-size: 14.5px; }
 .apply-title { margin: 0 0 4px; color: var(--ink); font: 700 18px/1.3 var(--display); }
+.points { display: grid; gap: 10px; margin: 16px 0 0; padding: 14px 0 0; border-top: 1px solid var(--line); list-style: none; }
+.points li { display: flex; align-items: flex-start; gap: 10px; color: var(--ink-2); font-size: 14.5px; line-height: 1.45; }
+.points .icon { margin-top: 2px; color: var(--ink-3); }
+.points li > span { min-width: 0; overflow-wrap: anywhere; }
+.help-line { margin: 14px 0 0; color: var(--ink-3); font-size: 14px; overflow-wrap: anywhere; }
+.points-card { display: none; }
 @media (max-width: 899px) {
   html:has(.apply-panel) { scroll-padding-bottom: 104px; }
   .job-layout, .job-layout.solo { display: block; }
   .job-body { margin-bottom: 16px; }
+  .head-apply { display: none; }
+  .points-card { display: block; margin: 0 0 16px; }
+  .points-card .points { margin: 0; padding: 0; border: 0; }
   .apply-panel { top: auto; bottom: 12px; }
   .apply-card { padding: 10px; border-color: var(--line-2); box-shadow: var(--shadow-float); }
-  .apply-card > p { display: none; }
+  .apply-card > p, .apply-card > .points { display: none; }
   .apply-card .btn { margin: 0; }
 }
+
+/* The authenticated preview (plan D1): a plain note that the page is not public, and a form that sends nothing */
+.preview-note { margin: 0 0 24px; padding: 14px 16px; border: 1px solid var(--caution-line); border-radius: var(--r-card); background: var(--caution-soft); color: var(--caution); }
+.preview-note strong, .preview-note a { color: inherit; }
+.preview-note ul { margin: 8px 0 0; padding-left: 20px; }
+.preview-note p { color: inherit; }
+
+/* Applying without a resume: four short questions behind a disclosure that works without script */
+details.no-resume { margin: 20px 0 0; padding: 14px 16px; border: 1px solid var(--line-2); border-radius: var(--r-card); background: var(--surface); }
+details.no-resume > summary { color: var(--ink); font-weight: 600; cursor: pointer; }
+details.no-resume > p { margin: 10px 0 0; }
+details.no-resume label { margin-top: 16px; }
 @media (max-width: 600px) {
   main { width: auto; margin: 12px; padding: 24px 18px 28px; border-radius: var(--r-card); }
   main.wide { margin: 0 auto; padding: 24px 16px 48px; }
   h1 { font-size: 27px; }
   .job-head h1 { font-size: 30px; }
   .card { padding: 16px; }
-  .job-body { padding: 22px 18px; }
+  .job-body, .about { padding: 22px 18px; }
+  .logo { width: 48px; height: 48px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 `;
@@ -226,18 +279,38 @@ export function safeJsonLd(value: unknown): string {
 }
 
 /**
- * `wide` lays the page on the open ground at full width (the job page) instead of the narrow white sheet; `extraCss` is a
- * page's own styles (the screening conversation), in the head with the same nonce.
+ * What a link to a public page shows when it is pasted into a chat or a post (plan D8/D10): the job and the employer,
+ * the first words of the description, and the logo when there is one. Plain meta tags read by the app the link is pasted
+ * into; nothing is loaded from those apps.
  */
-export const Layout: FC<{ title: string; children?: unknown; jsonLd?: Record<string, unknown>; nonce?: string; wide?: boolean; extraCss?: string }> = (props) => {
+export type ShareTags = { title: string; description: string; url: string; siteName: string; image?: string | null };
+
+/**
+ * `wide` lays the page on the open ground at full width (the job page) instead of the narrow white sheet; `extraCss` is a
+ * page's own styles (the screening conversation), in the head with the same nonce. `description` and `share` are for
+ * search engines and link previews on public pages; `noindex` keeps a page out of search results (the authenticated
+ * preview of a job that is not public yet).
+ */
+export const Layout: FC<{ title: string; children?: unknown; jsonLd?: Record<string, unknown>; nonce?: string; wide?: boolean; extraCss?: string; description?: string; share?: ShareTags; noindex?: boolean }> = (props) => {
   const nonce = props.nonce ?? currentNonce();
+  const share = props.share;
   return (
   <html lang="en">
     <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <meta name="color-scheme" content="light dark" />
+      {props.noindex ? <meta name="robots" content="noindex, nofollow" /> : null}
       <title>{props.title}</title>
+      {props.description ? <meta name="description" content={props.description} /> : null}
+      {share ? <link rel="canonical" href={share.url} /> : null}
+      {share ? <meta property="og:type" content="website" /> : null}
+      {share ? <meta property="og:title" content={share.title} /> : null}
+      {share ? <meta property="og:description" content={share.description} /> : null}
+      {share ? <meta property="og:url" content={share.url} /> : null}
+      {share ? <meta property="og:site_name" content={share.siteName} /> : null}
+      {share?.image ? <meta property="og:image" content={share.image} /> : null}
+      {share ? <meta name="twitter:card" content="summary" /> : null}
       <style nonce={nonce} dangerouslySetInnerHTML={{ __html: CSS }} />
       {props.extraCss ? <style nonce={nonce} dangerouslySetInnerHTML={{ __html: props.extraCss }} /> : null}
       {props.jsonLd ? <script type="application/ld+json" nonce={nonce} dangerouslySetInnerHTML={{ __html: safeJsonLd(props.jsonLd) }} /> : null}

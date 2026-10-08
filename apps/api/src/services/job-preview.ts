@@ -1,13 +1,15 @@
 import { formatPayRange, isCompanyVerified, type DraftRolePacket, type JobPreview, type JobPreviewFact } from "@ros/contracts";
-import { candidateNotices, jobNoticesFor, payShown, payTransparencyApplies } from "@ros/core";
+import { benefitsDescriptionFor, candidateNotices, jobNoticesFor, payShown, payTransparencyApplies } from "@ros/core";
 import type { companies } from "@ros/db";
+import { approvedAbout, logoMemberPath, profileOf } from "./company-settings-profile";
 
 /**
  * The candidate's view of a job before it is public (plan C9): what the job page and the apply form would show for a
  * draft or for a saved version, built from the same rules as the public pages (apps/api/src/pages/candidate.tsx: the
- * notices for the job's places, pay shown by `payShown`, the steps, the eligibility questions). Exactly the sections the
- * job page renders, nothing more: it does not list the must-haves or the benefits, so neither does this. Data only: the
- * job builder draws it beside the conversation, and Wave D's authenticated preview page reads the same. Never served
+ * notices for the job's places, pay shown by `payShown`, the steps, the eligibility questions). Data only: the job
+ * builder draws it beside the conversation, and Wave D's authenticated preview page (pages/preview.tsx) takes its banner
+ * and its gaps, then draws the real job page. Like that page (plan D10) it carries the must-haves and nice-to-haves (their
+ * words only), the benefits and the company's approved text, so the in-app preview and the page agree. Never served
  * under /careers and never indexed.
  */
 
@@ -24,6 +26,7 @@ export function jobPreview(input: { packet: DraftRolePacket; company: Company; s
   const notices = jobNoticesFor({ jobLocations: packet.identity.locations, companyLocations: company.locations, overrides: company.settings.notices });
   const shown = candidateNotices(notices);
   const verified = isCompanyVerified(company.settings);
+  const storedLogo = profileOf(company.settings).logo;
   const comp = packet.compensation;
   const payVisible = comp ? payShown(comp, notices) : false;
   const payText = comp && payVisible ? formatPayRange(comp) : "";
@@ -53,12 +56,17 @@ export function jobPreview(input: { packet: DraftRolePacket; company: Company; s
     source: source.kind === "draft" ? source : { kind: "version", roleId: source.roleId, version: source.version, status: source.status, current: source.current },
     notPublicYet: !live,
     banner,
-    company: { name: company.name, slug: company.slug, website: company.settings.website ?? null, logoUrl: company.settings.logoUrl ?? null, verified },
+    // The stored logo from the team's own address (plan D10): its public address answers only once the company is public.
+    company: { name: company.name, slug: company.slug, website: company.settings.website ?? null, logoUrl: storedLogo ? logoMemberPath(storedLogo) : company.settings.logoUrl ?? null, verified, about: approvedAbout(company.settings) },
     job: {
       title: packet.identity.title,
       facts,
       locations: places,
       description: packet.description.publicJobDescription,
+      // The words only, as the job page lists them; why each matters stays with the team.
+      mustHaves: packet.requirements.mustHaves.map((m) => m.text),
+      niceToHaves: packet.requirements.niceToHaves.map((m) => m.text),
+      benefits: benefitsDescriptionFor(packet.compensation, company.settings),
       // The same steps the job page lists under "What to expect".
       steps: [
         "Apply in about three minutes. We confirm by email.",

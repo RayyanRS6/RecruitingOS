@@ -1,8 +1,9 @@
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import type { Actor, ApplicationStage } from "@ros/contracts";
 import { applications, hiringOutcomes, postings, recruiterEscalations, roles, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { emit } from "./events";
+import { POSTING_TASK_KINDS } from "./posting-tasks";
 import { BOARD_UP_STATES, isBoardChannel, transitionPosting, type PostingState } from "./postings";
 import { DECISION_STAGES, transition, withdrawQueuedDecision } from "./stages";
 
@@ -178,9 +179,13 @@ export async function listOutcomes(q: Queryable, where: { companyId: string; app
   return q.select().from(hiringOutcomes).where(and(...conds)).orderBy(desc(hiringOutcomes.recordedAt)).limit(limit);
 }
 
-/** Open or claimed recruiter requests about this role or candidate, so the ITS recruiter hears about the outcome. */
+/**
+ * Open or claimed recruiter requests about this role or candidate, so the ITS recruiter hears about the outcome. Job
+ * board posting tasks are left out: they carry nothing about candidates and give no access, so whoever holds one is
+ * not told about the team's decisions (founder decision B6), and a closed role already gives them a take-down task.
+ */
 export async function openEscalationsFor(q: Queryable, companyId: string, roleId: string, applicationId?: string | null) {
-  const rows = await q.select({ id: recruiterEscalations.id, assignedToUserId: recruiterEscalations.assignedToUserId, roleId: recruiterEscalations.roleId, applicationId: recruiterEscalations.applicationId }).from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), inArray(recruiterEscalations.status, ["open", "claimed"])));
+  const rows = await q.select({ id: recruiterEscalations.id, assignedToUserId: recruiterEscalations.assignedToUserId, roleId: recruiterEscalations.roleId, applicationId: recruiterEscalations.applicationId }).from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), inArray(recruiterEscalations.status, ["open", "claimed"]), notInArray(recruiterEscalations.kind, [...POSTING_TASK_KINDS])));
   const onRole = new Set((await q.select({ id: applications.id }).from(applications).where(eq(applications.roleId, roleId))).map((a) => a.id));
   return rows.filter((e) => e.roleId === roleId || (applicationId && e.applicationId === applicationId) || (!applicationId && e.applicationId && onRole.has(e.applicationId)));
 }

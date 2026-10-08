@@ -64,6 +64,9 @@ const EXPERTISE: Record<string, string> = {
   stuck_role: "pipeline recovery",
   data_request: "privacy requests",
   platform_blocking: "platform support",
+  post_job: "job board posting",
+  update_job: "job board posting",
+  take_down_job: "job board posting",
 };
 
 /** What the assignment needs from the recruiter, plus the customer's industry so the right person picks it up. */
@@ -87,6 +90,10 @@ export function genericSummary(kind: string, opts: { hasRole?: boolean; hasAppli
     case "stuck_role": return `This role has stalled; the hiring team has not acted on reminders.`;
     case "data_request": return `A privacy request needs handling under the privacy runbook.`;
     case "platform_blocking": return `Something in the product is blocking the customer's hiring process.`;
+    // ITS posting tasks (plan D3): the board's name, from a fixed list, is added by packages/core/src/posting-tasks.ts.
+    case "post_job": return `Post this role on a job board from the customer's own account.`;
+    case "update_job": return `Bring this role's job board listing up to date with the approved version.`;
+    case "take_down_job": return `Take this role's listing down from a job board; the role or the listing was closed.`;
     default: return `The customer needs a recruiter ${role}.`;
   }
 }

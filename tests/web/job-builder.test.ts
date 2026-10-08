@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { presetOf } from "../../apps/web/src/recruiter-access";
-import { INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, IntakeAnswer, IntakeFactsPatch, RolePacket as RolePacketSchema, type IntakeFacts, type IntakeQuestion, type IntakeServerState, type IntakeSessionView } from "../../packages/contracts/src/index";
+import { INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, IntakeAnswer, IntakeFactsPatch, RolePacket as RolePacketSchema, packetVisibility, type IntakeFacts, type IntakeQuestion, type IntakeServerState, type IntakeSessionView } from "../../packages/contracts/src/index";
 import { SOMEONE_NEW as CORE_SOMEONE_NEW, applyAnswers, applyFactsPatch, draftFactsKey, intakeReadiness, normalizeFacts } from "../../packages/core/src/intake-builder";
 import { VERTICAL_TO_PLAYBOOK, findPlaybook, matchPlaybookRole } from "../../packages/playbooks/src/index";
 import { samplePacket } from "../../packages/agents/src/fixtures/sample-packet";
@@ -174,9 +174,12 @@ describe("the draft beside the conversation", () => {
     const s = draftSections(view);
     const by = (id: string) => s.find((x) => x.id === id)!;
     expect(by("about").items).toEqual(["Run the hygiene schedule"]);
-    // the must-haves are not on the job page: applications are reviewed against them, and the panel says exactly that
-    expect(by("must")).toMatchObject({ items: ["Active RDH license"], seenBy: "Used to review applications; not on the job page", visibility: "reviewed" });
-    expect(by("nice")).toMatchObject({ visibility: "reviewed" });
+    // the must-haves and nice-to-haves are listed on the job page in their own words (plan D10), and the panel says so;
+    // why each matters stays with the team
+    expect(by("must")).toMatchObject({ items: ["Active RDH license"], seenBy: "Candidates see this", visibility: "public" });
+    expect(by("nice")).toMatchObject({ visibility: "public" });
+    expect(packetVisibility("requirements.mustHaves[0].text")).toBe("public");
+    expect(packetVisibility("requirements.mustHaves[0].rationale")).toBe("reviewed");
     expect(by("about")).toMatchObject({ seenBy: "Candidates see this", visibility: "public" });
     expect(by("screening")).toMatchObject({ seenBy: "Candidates are asked this" });
     expect(by("why")).toMatchObject({ text: "Replacing someone who left", seenBy: "Only your team sees this" });

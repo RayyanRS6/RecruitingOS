@@ -177,6 +177,8 @@ export const recruiterEscalations = pgTable(
     /** When the recruiter's scoped access to this customer's data ends. */
     accessExpiresAt: ts("access_expires_at"),
     billing: jsonb("billing").$type<Record<string, unknown>>().notNull().default({}),
+    /** The posting an ITS posting task is about (post_job, update_job, take_down_job; migration 0031); null otherwise. */
+    postingId: uuid("posting_id"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

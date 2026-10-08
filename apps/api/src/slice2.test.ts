@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { addBusinessHours } from "@ros/core";
+import { addBusinessHours, isPostingTask } from "@ros/core";
 import { and, eq } from "drizzle-orm";
 import { aiRuns, applications, approvalRequests, assessments, auditRecords, candidates, entitlements, events, interventions, recruiterEscalations, screens, workflowRuns, companies } from "@ros/db";
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
@@ -276,7 +276,8 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(await eventsOf("entitlement.exceeded")).toHaveLength(1);
     const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string }>;
     expect(notes.some((n) => n.kind === "entitlement.text_screens")).toBe(true);
-    expect((await container.db.select().from(recruiterEscalations)).filter((e) => e.kind !== "candidate_issue")).toHaveLength(0);
+    // (ITS's job-board posting tasks, plan D3, are not a recruiter being paged)
+    expect((await container.db.select().from(recruiterEscalations)).filter((e) => e.kind !== "candidate_issue" && !isPostingTask(e.kind))).toHaveLength(0);
     expect((await container.db.select().from(workflowRuns).where(eq(workflowRuns.status, "failed")))).toHaveLength(0);
     await container.db.update(entitlements).set({ used: 0 }).where(eq(entitlements.id, ent.id));
   });
@@ -358,7 +359,7 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(await container.db.select().from(screens).where(eq(screens.applicationId, a.id))).toHaveLength(1);
     const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
     expect(notes.some((n) => n.kind === "entitlement.text_screens" && /pilot/.test(n.title))).toBe(true);
-    expect((await container.db.select().from(recruiterEscalations)).filter((e) => e.kind !== "candidate_issue" && e.kind !== "stuck_role")).toHaveLength(0);
+    expect((await container.db.select().from(recruiterEscalations)).filter((e) => e.kind !== "candidate_issue" && e.kind !== "stuck_role" && !isPostingTask(e.kind))).toHaveLength(0);
     const current = (await (await json("GET", "/api/v1/companies/current")).json()) as { plan: { name: string }; usage: Record<string, { used: number; limit: number | null }> };
     expect(current.plan.name).toBe("Design Partner");
     expect(current.usage.text_screens.used).toBeGreaterThan(current.usage.text_screens.limit!);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "../nav";
 import { Alert, Button, Card, Chip, ErrorState, Field, PageHeader, Pill, Skeleton, TabPanel, Tabs } from "@ros/ui";
@@ -10,12 +10,14 @@ import { toast } from "../toast";
 import { ROLE_WAITS_FOR_CHECK } from "../company-check";
 import { AskRecruiter } from "../components/AskRecruiter";
 import { useCompanyCheck } from "../components/use-company-check";
-import { canEditPacket, canEditPacketJson, canManageRole, canRecordOutcome, canSeeActivity, canSeeTalent, canStartHire } from "../roles";
+import { canApproveRole, canEditPacket, canEditPacketJson, canManageRole, canRecordOutcome, canSeeActivity, canSeePay, canSeeTalent, canShareJob, canStartHire } from "../roles";
+import { outdatedBoardsLine } from "../publishing";
 import { payShownLabel } from "../role-words";
 import { roleStatus } from "../role-status";
 import { closeRoleToast } from "../talent-actions";
+import { AfterApproval } from "./AfterApproval";
 import { AcceptingSwitch, ClosedBanner, PostingTab, StillUpAlert } from "./RolePosting";
-import { ActivityTab, InterviewPlanTab, PacketApprovalCard, PreferencesCard, RequirementList, workModelLabel } from "./RolePlan";
+import { ActivityTab, CandidatesSeeThis, InterviewPlanTab, PacketApprovalCard, PreferencesCard, RequirementList, workModelLabel } from "./RolePlan";
 import { EditPacket } from "./RoleEditor";
 import { ReportTab } from "./RoleReport";
 import { CandidatePreview } from "./new-role/CandidatePreview";
@@ -61,6 +63,8 @@ export function RoleDetail() {
   // "See what candidates will see" (plan C9) and "Hire for this role again" (C14).
   const [previewOpen, setPreviewOpen] = useState(false);
   const again = useStartDraft();
+  // The screen right after approval (plan D2): where the job is going, opened by the approval card.
+  const [afterApproval, setAfterApproval] = useState<{ editWhileOpen: boolean } | null>(null);
 
   const status = useMutation({
     mutationFn: (action: "pause" | "resume") => api.post(`/api/v1/roles/${id}/${action}`, {}),
@@ -69,6 +73,15 @@ export function RoleDetail() {
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not change the role."),
   });
   const [closing, setClosing] = useState<{ outcome: string; reason: string } | null>(null);
+  // "Close the role" on Today's closing-date card links here with `?close=1`: the close form opens, nothing is closed yet.
+  const wantsClose = search.get("close") === "1";
+  const closeAsked = useRef(false);
+  useEffect(() => {
+    if (!wantsClose || closeAsked.current || !role.data || !me.data) return;
+    closeAsked.current = true;
+    const mine = me.data.memberships.find((m) => m.companyId === me.data?.activeCompanyId)?.role ?? null;
+    if (canRecordOutcome(mine) && ["open", "paused"].includes(role.data.status)) setClosing({ outcome: "no_hire", reason: "" });
+  }, [wantsClose, role.data, me.data]);
   const closeWithOutcome = useMutation({
     mutationFn: (body: { outcome: string; reason: string }) => api.post<{ movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number }>(`/api/v1/roles/${id}/outcome`, { outcome: body.outcome, confirm: true, reason: body.reason || undefined }),
     // says who moved to the talent pool privately, which interviews ended, and who was told only that theirs is off (founder decision B6)
@@ -90,6 +103,9 @@ export function RoleDetail() {
   const editSource = proposed ?? current;
   const newestVersion = Math.max(0, ...r.packetVersions.map((v) => v.version));
   const openEditor = () => { if (editSource) setEditBase({ version: editSource.version, packet: editSource.packet, proposed: !!proposed && editSource === proposed, newestAtOpen: newestVersion }); };
+  const share = canShareJob(myRole);
+  // "Apply by …" (plan D7): the line the job and careers pages show, beside the role's facts.
+  const applyBy = r.closingDate?.closesOn && r.status !== "closed" ? r.closingDate.applyBy : null;
   const tabOptions = ([{ value: "overview", label: "Overview" }, { value: "requirements", label: "Requirements" }, { value: "evaluation", label: "How we'll evaluate" }, { value: "plan", label: "Interview plan" }, { value: "posting", label: "Posting" }, { value: "activity", label: "Activity" }, { value: "history", label: "History" }, { value: "report", label: "Report" }] as Array<{ value: Tab; label: string }>).filter((o) => (o.value !== "report" || talent) && (o.value !== "activity" || activity));
   const visibleTab: Tab = tabOptions.some((o) => o.value === tab) ? tab : "overview";
   const shownStatus = roleStatus(r.status);
@@ -100,7 +116,7 @@ export function RoleDetail() {
         eyebrow={companyName ? `Job · ${companyName}` : "Job"}
         title={r.title}
         status={<Pill tone={shownStatus.tone} pulse={r.status === "open" && r.acceptingApplications}>{shownStatus.label}</Pill>}
-        sub={head ? `${[head.identity.locations[0]?.city, head.identity.locations[0]?.region].filter(Boolean).join(", ")} · ${head.identity.employmentType.replace("_", " ")} · ${workModelLabel(head.identity.remotePolicy)} · ${money(head)}` : "No packet yet."}
+        sub={head ? `${[head.identity.locations[0]?.city, head.identity.locations[0]?.region].filter(Boolean).join(", ")} · ${head.identity.employmentType.replace("_", " ")} · ${workModelLabel(head.identity.remotePolicy)} · ${money(head)}${applyBy ? ` · ${applyBy}` : ""}` : "No packet yet."}
         actions={
           <>
             <AskRecruiter roleId={r.id} />
@@ -115,8 +131,10 @@ export function RoleDetail() {
 
       {again.limit?.room && !again.limit.room.ok ? <RoomAlert room={again.limit.room} ask={again.limit.ask} /> : null}
       {again.problem ? <Alert tone="critical">{again.problem}</Alert> : null}
-      <StillUpAlert channels={r.boardsStillUp ?? []} roleStatus={r.status} onOpen={() => pickTab("posting")} canManage={manage} />
-      <ClosedBanner role={r} canManage={manage} />
+      <StillUpAlert channels={r.boardsStillUp ?? []} roleStatus={r.status} onOpen={() => pickTab("posting")} canManage={manage} whoPosts={r.whoPosts} />
+      {/* An approved change is live on the job page; the boards posted by hand still show the earlier version (plan D4). */}
+      {(r.status === "open" || r.status === "paused") && r.boardsShowingOldVersion?.length ? <Alert tone="caution">{outdatedBoardsLine(r.boardsShowingOldVersion, r.whoPosts)} <Button size="sm" onClick={() => pickTab("posting")}>Go to the Posting tab</Button></Alert> : null}
+      <ClosedBanner role={r} canManage={manage} onOpenPosting={() => pickTab("posting")} />
       {check === "waiting" && ["open", "paused"].includes(r.status) ? <Alert tone="caution">{ROLE_WAITS_FOR_CHECK}</Alert> : null}
 
       {closing ? (
@@ -135,7 +153,7 @@ export function RoleDetail() {
         </Card>
       ) : null}
 
-      {p ? <PacketApprovalCard role={r} onEdit={openEditor} canEdit={editPacket} showingProposed={shown === proposed && !!proposed} onShowProposed={setShowProposed} /> : null}
+      {p ? <PacketApprovalCard role={r} onEdit={openEditor} canEdit={editPacket} canManage={manage} canSeePay={canSeePay(myRole)} showingProposed={shown === proposed && !!proposed} onShowProposed={setShowProposed} onApproved={(info) => { setShowProposed(false); setAfterApproval(info); }} /> : null}
 
       {p ? (
         <>
@@ -157,7 +175,7 @@ export function RoleDetail() {
               <div className="grid-2">
                 <div className="stack">
                   <Card title="Public description"><p style={{ whiteSpace: "pre-wrap", color: "var(--ink-2)" }}>{p.description.publicJobDescription}</p></Card>
-                  {editPacket && REFINABLE.includes(r.status) ? <RoleRefine roleId={r.id} packet={editSource?.packet ?? p} /> : null}
+                  {editPacket && REFINABLE.includes(r.status) ? <RoleRefine roleId={r.id} packet={editSource?.packet ?? p} whoPosts={r.whoPosts} /> : null}
                 </div>
                 <div className="stack">
                   <Card title="Pay">
@@ -185,8 +203,8 @@ export function RoleDetail() {
 
             {visibleTab === "requirements" ? (
               <div className="grid-2">
-                <Card title="Must-haves"><RequirementList items={p.requirements.mustHaves} empty="None listed." /><p className="small muted" style={{ marginTop: 8 }}>"Evidenced in" says where each one is checked; a must-have marked "screen" is asked about in the screening conversation.</p></Card>
-                <Card title="Nice-to-haves"><RequirementList items={p.requirements.niceToHaves} empty="None listed." /></Card>
+                <Card title="Must-haves" aside={<CandidatesSeeThis />}><RequirementList items={p.requirements.mustHaves} empty="None listed." /><p className="small muted" style={{ marginTop: 8 }}>The job page lists each one in these words; why it matters and where it is checked stay with your team. "Evidenced in" says where each one is checked; a must-have marked "screen" is asked about in the screening conversation.</p></Card>
+                <Card title="Nice-to-haves" aside={<CandidatesSeeThis />}><RequirementList items={p.requirements.niceToHaves} empty="None listed." /></Card>
                 <Card title="Eligibility questions (the only automatic holds)">
                   <p className="small muted" style={{ marginBottom: 8 }}>Candidates answer these when they apply. A "no" on a required one holds the application for your decision: you are reminded, and nothing is sent to the candidate, even if you decline, until someone sends the decision message. Nothing is ever declined automatically.</p>
                   <ul style={{ paddingLeft: 18, margin: 0 }}>{p.requirements.eligibility.map((e) => <li key={e.key}>{e.question} <Chip tone={e.knockout ? "needs" : "neutral"}>{e.knockout ? "required" : "asked"}</Chip><br /><span className="small muted">{e.rationale}</span></li>)}</ul>
@@ -210,7 +228,7 @@ export function RoleDetail() {
 
             {visibleTab === "plan" ? <InterviewPlanTab roleId={r.id} canEdit={editPacket} /> : null}
 
-            {visibleTab === "posting" ? <PostingTab roleId={r.id} roleStatus={r.status} canManage={manage} /> : null}
+            {visibleTab === "posting" ? <PostingTab roleId={r.id} roleStatus={r.status} canManage={manage} canShare={share} roleTitle={r.title} companyName={companyName} /> : null}
 
             {visibleTab === "activity" ? <ActivityTab roleId={r.id} /> : null}
 
@@ -228,7 +246,8 @@ export function RoleDetail() {
         </>
       ) : null}
 
-      {editBase ? <EditPacket key={editBase.version} open onClose={() => setEditBase(null)} roleId={r.id} packet={editBase.packet} version={editBase.version} proposed={editBase.proposed} currentVersion={current?.version ?? null} newerVersion={newestVersion > editBase.newestAtOpen ? newestVersion : null} advanced={canEditPacketJson(myRole)} /> : null}
+      {editBase ? <EditPacket key={editBase.version} open onClose={() => setEditBase(null)} roleId={r.id} packet={editBase.packet} version={editBase.version} proposed={editBase.proposed} currentVersion={current?.version ?? null} newerVersion={newestVersion > editBase.newestAtOpen ? newestVersion : null} advanced={canEditPacketJson(myRole)} roleStatus={r.status} mayApprove={canApproveRole(myRole)} whoPosts={r.whoPosts} closingDate={r.closingDate ?? null} canManage={manage} /> : null}
+      {afterApproval ? <AfterApproval open onClose={() => setAfterApproval(null)} roleId={r.id} roleTitle={r.title} companyName={companyName} editWhileOpen={afterApproval.editWhileOpen} canManage={manage} canShare={share} canEditPacket={editPacket} onOpenTab={(t) => pickTab(t)} /> : null}
       {/* The preview shows pay, so it is offered to the roles that see pay (everyone but an interviewer). */}
       {shown && talent ? <CandidatePreview open={previewOpen} onClose={() => setPreviewOpen(false)} path={`/api/v1/roles/${r.id}/preview?version=${shown.version}`} /> : null}
     </div>

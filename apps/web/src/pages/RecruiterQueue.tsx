@@ -5,13 +5,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useRefresh } from "../nav";
 import { Alert, Button, Card, Chip, EmptyState, ErrorState, Field, PageHeader, Pill, Skeleton, type Tone } from "@ros/ui";
 import type { EscalationThreadEntry } from "@ros/contracts";
-import { api, ApiError } from "../api/client";
+import { api, ApiError, type PostingTaskDetail } from "../api/client";
+import { POSTING_TASK_BEFORE_ACCEPT, isPostingTaskKind, queueKindLabel } from "../publishing";
 import { draftFactLines, queueThreadHeading, workspaceHref, type HandedOverDraft } from "../recruiter-requests";
 import { toast } from "../toast";
 
 /** Exactly what a recruiter sees before accepting (correction 11): no customer words, nothing from a candidate record. */
 type Preview = { id: string; status: string; kind: string; urgency: "low" | "normal" | "high" | "critical"; requiredExpertise: string; summary: string; companyName: string; roleTitle: string | null; slaDueAt: string | null; slaRemainingMinutes: number | null; businessMinutesRemaining: number | null; overdue: boolean; createdAt: string; claimedByMe: boolean; claimed: boolean };
-type Detail = Preview & { accessGranted: boolean; why?: string | null; companyId?: string; roleId?: string | null; applicationId?: string | null; question?: string; contextSnapshot?: Record<string, unknown>; resolution?: string | null; minutesSpent?: number | null; firstResponseAt?: string | null; thread?: EscalationThreadEntry[]; reopenedCount?: number; grant?: { id: string; purpose: string; expiresAt: string; scope: { roleId: string | null; applicationId: string | null } } };
+/** `postingTask`: an accepted ITS posting task (plan D3), the job ad and the board only; it never opens anything about candidates. */
+type Detail = Preview & { accessGranted: boolean; why?: string | null; companyId?: string; roleId?: string | null; applicationId?: string | null; question?: string; contextSnapshot?: Record<string, unknown>; resolution?: string | null; minutesSpent?: number | null; firstResponseAt?: string | null; thread?: EscalationThreadEntry[]; reopenedCount?: number; grant?: { id: string; purpose: string; expiresAt: string; scope: { roleId: string | null; applicationId: string | null } }; postingTask?: PostingTaskDetail };
 
 const URGENCY_TONE: Record<Preview["urgency"], Tone> = { low: "neutral", normal: "accent", high: "caution", critical: "critical" };
 
@@ -28,6 +30,10 @@ function remainingText(e: Preview): string {
  * role, the category, urgency, the expertise needed, the remaining service-level time and a generic summary. Accepting
  * creates a scoped, time-limited grant; the customer's own words and the full context open under it; every page is
  * recorded for the customer; releasing or resolving ends the access.
+ *
+ * ITS posting tasks (plan D3: post a job on a board, update a listing, take one down) sit in the same queue. Accepting
+ * one grants nothing: it opens the job ad as the board will show it, the board's own apply link and the steps, and the
+ * recruiter records the work right there. The task closes on its own once the listing is checked.
  */
 export function RecruiterQueue() {
   const { id } = useParams();
@@ -39,7 +45,7 @@ export function RecruiterQueue() {
         <div className="stack">
           {list.isLoading ? <Skeleton lines={4} /> : list.error ? <ErrorState message="Could not load the queue." onRetry={() => list.refetch()} /> : list.data!.length === 0 ? <EmptyState icon="grid" title="Queue is empty" body="Customer requests appear here." /> : list.data!.map((e) => (
             <Card key={e.id} needsYou={e.status === "open"}>
-              <div className="card-title"><h2 style={{ fontSize: 15 }}><Link to={`/recruiter/queue/${e.id}`} style={{ textDecoration: "none", color: "inherit" }}>{e.kind.replace(/_/g, " ")} · {e.companyName}</Link></h2><div className="row"><Pill size="sm" tone={URGENCY_TONE[e.urgency]}>{e.urgency}</Pill><Pill size="sm" tone={e.status === "open" ? "caution" : "accent"}>{e.claimedByMe ? "yours" : e.status}</Pill></div></div>
+              <div className="card-title"><h2 style={{ fontSize: 15 }}><Link to={`/recruiter/queue/${e.id}`} style={{ textDecoration: "none", color: "inherit" }}>{queueKindLabel(e.kind)} · {e.companyName}</Link></h2><div className="row"><Pill size="sm" tone={URGENCY_TONE[e.urgency]}>{e.urgency}</Pill><Pill size="sm" tone={e.status === "open" ? "caution" : "accent"}>{e.claimedByMe ? "yours" : e.status}</Pill></div></div>
               <p className="small" style={{ color: "var(--ink-2)" }}>{e.roleTitle ? `${e.roleTitle}: ` : ""}{e.summary}</p>
               <p className="small muted" style={{ marginTop: 6 }}>Needs {e.requiredExpertise} · {remainingText(e)}{e.slaDueAt ? ` · respond by ${new Date(e.slaDueAt).toLocaleString()}` : ""}</p>
             </Card>
@@ -82,6 +88,89 @@ function DraftHandover({ draft, onOpen, opening }: { draft: HandedOverDraft; onO
   );
 }
 
+const POSTING_STATE_TONE: Record<string, Tone> = { ready_to_post: "caution", posted_manually: "accent", live_verified: "good", failed: "critical", paused: "caution", closed: "neutral" };
+
+function copy(text: string, what: string) {
+  navigator.clipboard.writeText(text).then(() => toast(`Copied ${what}.`), () => toast("Could not copy. Select the text and copy it by hand."));
+}
+
+/**
+ * An accepted ITS posting task (plan D3): what to do, the job ad as the board will show it (the posting package, to
+ * paste), the board's own apply link, the steps, and where the listing stands. The recruiter records the listing's
+ * public address (the worker checks it, and the task closes once it is found), says they checked it themselves, says
+ * the listing now shows the approved version, or that it is taken down. Nothing about candidates is on this card.
+ */
+function PostingTaskPanel({ id, task, status, onChanged }: { id: string; task: PostingTaskDetail; status: string; onChanged: () => void }) {
+  const [url, setUrl] = useState("");
+  const [note, setNote] = useState("");
+  const step = useMutation({
+    mutationFn: (input: { path: "url" | "verify" | "updated" | "removed"; body?: Record<string, unknown>; done: string }) => api.post<{ status: string }>(`/api/v1/escalations/${id}/posting/${input.path}`, input.body ?? {}),
+    onSuccess: (r, input) => { toast(input.done, r.status === "resolved" ? "The task is done and closed." : undefined); setUrl(""); setNote(""); onChanged(); },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "That did not go through. Try again."),
+  });
+  const p = task.posting;
+  const open = status !== "resolved" && status !== "cancelled";
+  const board = task.board.name;
+  return (
+    <Card title={task.label} aside={<Pill size="sm" tone={POSTING_STATE_TONE[p.status] ?? "neutral"}>{p.stateLabel}</Pill>}>
+      <p className="small muted">{task.companyName} · {task.role.title}{task.role.currentPacketVersion ? ` · version ${task.role.currentPacketVersion}` : ""}</p>
+      <p style={{ whiteSpace: "pre-wrap", marginTop: 6 }}>{task.whatToDo}</p>
+      {p.externalUrl ? <p className="small" style={{ marginTop: 6 }}>On {board}: <a href={p.externalUrl} target="_blank" rel="noreferrer">{p.externalUrl}</a></p> : null}
+      {p.verificationError ? <p className="small" style={{ color: "var(--critical)", marginTop: 6 }}>The last check of the address did not pass: {p.verificationError}</p> : null}
+      {p.showsOldVersion ? <p className="small" style={{ color: "var(--caution)", marginTop: 6 }}>The listing shows an earlier version{p.boardVersion ? ` (version ${p.boardVersion})` : ""}.</p> : null}
+      {task.applyUrl ? (
+        <div className="row" style={{ marginTop: 8 }}>
+          <span className="small">{board}'s own apply link: <code>{task.applyUrl}</code></span>
+          <Button size="sm" icon="copy" onClick={() => copy(task.applyUrl!, "the apply link")}>Copy</Button>
+        </div>
+      ) : null}
+      {task.package ? (
+        <details style={{ marginTop: 8 }} open={task.kind !== "take_down_job"}>
+          <summary className="small">The posting package (the job ad to paste)</summary>
+          <pre style={{ whiteSpace: "pre-wrap", marginTop: 6 }}>{task.package.text}</pre>
+          <Button size="sm" icon="copy" onClick={() => copy(task.package!.text, "the posting package")}>Copy the package</Button>
+        </details>
+      ) : null}
+      {task.steps.length ? <ol className="small" style={{ paddingLeft: 18, margin: "10px 0 0" }}>{task.steps.map((s, i) => <li key={`${id}-step-${i}`}>{s}</li>)}</ol> : null}
+      {!open ? <Alert tone="info">This task is {status === "cancelled" ? "withdrawn: the work no longer applies" : "done"}.</Alert> : (
+        <div className="stack" style={{ gap: 10, marginTop: 12 }}>
+          {task.kind === "post_job" || task.kind === "update_job" ? (
+            <div className="row" style={{ alignItems: "flex-end" }}>
+              <div style={{ flex: "1 1 320px" }}>
+                <Field label={p.externalUrl ? "A different public address for the listing" : "The listing's public address"} htmlFor={`task-url-${id}`} hint="The full https:// link to the job on the board. It is checked before anything is called live.">
+                  <input id={`task-url-${id}`} className="input" inputMode="url" value={url} onChange={(ev) => setUrl(ev.target.value)} placeholder="https://" />
+                </Field>
+              </div>
+              <Button variant="primary" disabled={!url.trim()} loading={step.isPending && step.variables?.path === "url"} onClick={() => step.mutate({ path: "url", body: { url: url.trim() }, done: "Address recorded. Checking the link now." })}>Record the address</Button>
+            </div>
+          ) : null}
+          {task.kind === "post_job" && p.externalUrl && ["posted_manually", "failed"].includes(p.status) ? (
+            <div className="row" style={{ alignItems: "flex-end" }}>
+              <div style={{ flex: "1 1 320px" }}>
+                <Field label="Seen it live yourself? Say what you checked" htmlFor={`task-note-${id}`}><input id={`task-note-${id}`} className="input" value={note} onChange={(ev) => setNote(ev.target.value)} placeholder={`e.g. Opened the listing on ${board}; the title and apply link are right`} /></Field>
+              </div>
+              <Button disabled={note.trim().length < 3} loading={step.isPending && step.variables?.path === "verify"} onClick={() => step.mutate({ path: "verify", body: { note: note.trim() }, done: `${board} listing confirmed live, with your note.` })}>I checked it myself</Button>
+            </div>
+          ) : null}
+          {task.kind === "update_job" ? (
+            <div className="row" style={{ alignItems: "flex-end" }}>
+              <div style={{ flex: "1 1 320px" }}>
+                <Field label="What you updated (optional)" htmlFor={`task-upd-${id}`}><input id={`task-upd-${id}`} className="input" value={note} onChange={(ev) => setNote(ev.target.value)} placeholder="e.g. Pasted the new package" /></Field>
+              </div>
+              <Button variant="primary" loading={step.isPending && step.variables?.path === "updated"} onClick={() => step.mutate({ path: "updated", body: note.trim() ? { note: note.trim() } : {}, done: `${board} listing shows the new version. Checking the link again.` })}>It shows the new version</Button>
+            </div>
+          ) : null}
+          {task.kind === "take_down_job" ? (
+            <div className="row">
+              <Button variant="primary" loading={step.isPending && step.variables?.path === "removed"} onClick={() => step.mutate({ path: "removed", done: `Recorded: the job is off ${board}.` })}>It is taken down</Button>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function EscalationDetail({ id }: { id: string }) {
   const qc = useQueryClient();
   const nav = useNavigate();
@@ -90,9 +179,11 @@ function EscalationDetail({ id }: { id: string }) {
   const [minutes, setMinutes] = useState("");
   const [reply, setReply] = useState("");
   const refresh = () => { qc.invalidateQueries({ queryKey: ["escalation", id] }); qc.invalidateQueries({ queryKey: ["escalations"] }); qc.invalidateQueries({ queryKey: ["me"] }); };
-  const claim = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/claim`), onSuccess: () => { toast("Accepted. Your access to this customer is now active."); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not accept.") });
-  const release = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/release`), onSuccess: () => { toast("Released. Your access ended."); refresh(); } });
-  const resolve = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/resolve`, { resolution, minutesSpent: minutes ? Number(minutes) : undefined }), onSuccess: () => { toast("Resolved. The customer has your answer in full; your access ends in 24 hours."); setResolution(""); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not resolve.") });
+  // A posting task grants nothing (plan D3): accepting it opens the job ad and the board's link only.
+  const claim = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/claim`), onSuccess: () => { toast(isPostingTaskKind(q.data?.kind ?? "") ? "Accepted. The job ad and the board's apply link are open; nothing about candidates is." : "Accepted. Your access to this customer is now active."); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not accept.") });
+  const task = isPostingTaskKind(q.data?.kind ?? "");
+  const release = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/release`), onSuccess: () => { toast(task ? "Given back to the queue for another recruiter." : "Released. Your access ended."); refresh(); } });
+  const resolve = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/resolve`, { resolution, minutesSpent: minutes ? Number(minutes) : undefined }), onSuccess: () => { toast(task ? "Task closed with your note. The customer sees it on the role's Posting tab." : "Resolved. The customer has your answer in full; your access ends in 24 hours."); setResolution(""); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not resolve.") });
   // A message without resolving (plan B5): a question back, or progress. The person who asked and the owners read it in full.
   const write = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/messages`, { body: reply.trim() }), onSuccess: () => { toast("Sent to the customer."); setReply(""); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send.") });
   const refreshFrame = useRefresh();
@@ -109,7 +200,7 @@ function EscalationDetail({ id }: { id: string }) {
   const ctx = (e.contextSnapshot ?? {}) as { company?: { name: string; vertical: string; sizeBand: string }; role?: { title: string; status: string }; packet?: { version: number; packet: { compensation: { basis: string; min: number; max: number; ceiling: number }; requirements: { mustHaves: Array<{ text: string }>; eligibility: Array<{ question: string }> }; description: { publicJobDescription: string } } }; candidate?: { name: string; email: string | null; phone: string | null }; application?: { stage: string }; resumeText?: string | null; assessments?: Array<{ kind: string; overall: string; result: { summary: string } }>; communications?: Array<{ direction: string; subject: string | null; at: string }>; timeline?: Array<{ type: string; at: string }>; intakeSession?: HandedOverDraft | null };
   return (
     <div className="stack">
-      <Card title={`${e.kind.replace(/_/g, " ")} · ${e.companyName}${e.roleTitle ? ` · ${e.roleTitle}` : ""}`} aside={<div className="row"><Pill size="sm" tone={URGENCY_TONE[e.urgency]}>{e.urgency}</Pill>{e.status === "open" ? <Button size="sm" variant="primary" loading={claim.isPending} onClick={() => claim.mutate()}>Accept this request</Button> : null}</div>}>
+      <Card title={`${queueKindLabel(e.kind)} · ${e.companyName}${e.roleTitle ? ` · ${e.roleTitle}` : ""}`} aside={<div className="row"><Pill size="sm" tone={URGENCY_TONE[e.urgency]}>{e.urgency}</Pill>{e.status === "open" ? <Button size="sm" variant="primary" loading={claim.isPending} onClick={() => claim.mutate()}>{isPostingTaskKind(e.kind) ? "Accept this task" : "Accept this request"}</Button> : null}</div>}>
         <p>{e.summary}</p>
         <p className="small muted">Needs {e.requiredExpertise} · {remainingText(e)}{e.slaDueAt ? ` · respond by ${new Date(e.slaDueAt).toLocaleString()}` : ""}{e.firstResponseAt ? ` · first response ${new Date(e.firstResponseAt).toLocaleString()}` : ""}</p>
         {e.reopenedCount ? <p className="small" style={{ marginTop: 6 }}><Chip tone="caution">Reopened{e.reopenedCount > 1 ? ` ${e.reopenedCount} times` : ""}</Chip> The customer said an earlier answer did not solve it; their reason is in the conversation below.</p> : null}
@@ -123,8 +214,21 @@ function EscalationDetail({ id }: { id: string }) {
         ) : e.accessGranted && e.question ? <div style={{ marginTop: 10 }}><p className="small muted">The customer's request</p><p style={{ whiteSpace: "pre-wrap" }}>{e.question}</p></div> : null}
         {e.resolution ? <Alert tone="info">Resolved: {e.resolution}{e.minutesSpent != null ? ` (${e.minutesSpent} min)` : ""}</Alert> : null}
       </Card>
-      {!e.accessGranted ? (
-        <Alert tone="neutral">{e.why === "claim it to open the full context" ? "Accept the request to open the customer's own words and context. Access is limited to what the request covers (one candidate, one role, or all of their hiring when they chose that), ends a day after the request is resolved, and every page you open is recorded for the customer." : e.why}</Alert>
+      {e.postingTask ? (
+        <>
+          <PostingTaskPanel id={e.id} task={e.postingTask} status={e.status} onChanged={refresh} />
+          {e.status !== "resolved" && e.status !== "cancelled" ? (
+            <Card title="Cannot do it?">
+              <Field label="Say why, and what the customer should know" hint="The customer's owners and admins read this in full, on the role's Posting tab and in their updates; the board stays as it is and is theirs to post or to ask ITS again." htmlFor="task-res"><textarea id="task-res" className="textarea" value={resolution} onChange={(ev) => setResolution(ev.target.value)} placeholder="e.g. The company's LinkedIn page has no job slots left; they need to buy one first." /></Field>
+              <div className="row" style={{ marginTop: 10 }}>
+                <Button loading={resolve.isPending} disabled={!resolution.trim()} onClick={() => resolve.mutate()}>Close the task with this note</Button>
+                <Button variant="quiet" loading={release.isPending} onClick={() => release.mutate()}>Give it back to the queue</Button>
+              </div>
+            </Card>
+          ) : null}
+        </>
+      ) : !e.accessGranted ? (
+        <Alert tone="neutral">{isPostingTaskKind(e.kind) ? POSTING_TASK_BEFORE_ACCEPT : e.why === "claim it to open the full context" ? "Accept the request to open the customer's own words and context. Access is limited to what the request covers (one candidate, one role, or all of their hiring when they chose that), ends a day after the request is resolved, and every page you open is recorded for the customer." : e.why}</Alert>
       ) : (
         <>
           {e.grant ? <Alert tone="info">Your access covers {e.grant.scope.applicationId ? "this candidate" : e.grant.scope.roleId ? "this role" : "this customer"} and ends {new Date(e.grant.expiresAt).toLocaleString()}. <Button size="sm" variant="secondary" loading={enter.isPending} onClick={() => enter.mutate(e)}>Open in the customer's workspace</Button> <Button size="sm" variant="quiet" loading={release.isPending} onClick={() => release.mutate()}>Release</Button></Alert> : null}

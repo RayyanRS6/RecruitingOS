@@ -63,7 +63,7 @@ function postingWords(type: string, p: Record<string, unknown>): string {
   switch (what) {
     case "draft": return "waiting for the role to be approved";
     case "approved": return "approved, being prepared";
-    case "ready_to_post": return p.channel === "careers_page" || p.channel === "google_jobs" ? "prepared" : "ready for you to post";
+    case "ready_to_post": return p.channel === "careers_page" || p.channel === "google_jobs" ? "prepared" : "ready to post";
     case "posted_manually": return p.corrected ? "a different address recorded, being checked" : "address recorded, being checked";
     case "submitted_integration": return "submitted, waiting to be listed";
     case "live_verified": return "checked and live";
@@ -73,6 +73,8 @@ function postingWords(type: string, p: Record<string, unknown>): string {
     case "verification_failed": return p.final ? "the last check did not pass" : "the check did not pass; it is checked again shortly";
     case "closure_required": return "still to be taken down";
     case "closure_confirmed": return "confirmed taken down";
+    case "update_required": return "still shows the earlier version, to be updated";
+    case "updated": return "brought up to date with the new version";
     default: return "posting updated";
   }
 }
@@ -107,6 +109,8 @@ export function describeRoleEvent(e: RoleEvent): string {
     "role.applications_closed": "Stopped accepting applications",
     "role.applications_reopened": "Accepting applications again",
     "role.volume_high": "Unusually many applications in a day",
+    "role.boards_chosen": Array.isArray(e.payload.channels) && e.payload.channels.length ? `Job boards chosen: ${boardNames(e.payload.channels as string[])}` : "No job boards chosen",
+    "role.closing_date_set": typeof p.closesOn === "string" ? `Closing date set: last day to apply ${new Date(`${p.closesOn}T12:00:00Z`).toLocaleDateString("en-US", { timeZone: "UTC", month: "long", day: "numeric", year: "numeric" })}` : "Closing date taken off",
     "role.outcome_recorded": "Outcome recorded",
     "application.received": "An application arrived",
     "application.acknowledged": "An applicant was acknowledged",

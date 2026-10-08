@@ -14,8 +14,8 @@ const NEW = "__someone_new";
 
 const LISTS: Array<{ field: ListField; label: string; hint: string; seen: PacketVisibility; max: number; placeholder: string }> = [
   { field: "responsibilities", label: "What they would own", hint: "One line each; the draft's description is written from these.", seen: "public", max: 10, placeholder: "e.g. Keep the schedule full and patients reminded" },
-  { field: "mustHaves", label: "Must-haves (up to 6)", hint: "The few things you would not hire without.", seen: "reviewed", max: 6, placeholder: "e.g. Active California RDH license" },
-  { field: "niceToHaves", label: "Nice to have", hint: "Helpful, never a reason to turn anyone away.", seen: "reviewed", max: 10, placeholder: "e.g. Experience with Dentrix" },
+  { field: "mustHaves", label: "Must-haves (up to 6)", hint: "The few things you would not hire without. Listed on the job page, and applications are reviewed against them.", seen: "public", max: 6, placeholder: "e.g. Active California RDH license" },
+  { field: "niceToHaves", label: "Nice to have", hint: "Helpful, never a reason to turn anyone away. Listed on the job page.", seen: "public", max: 10, placeholder: "e.g. Experience with Dentrix" },
   { field: "screeningQuestions", label: "Screening questions", hint: "Asked in a short conversation marked as AI, with a person available.", seen: "asked", max: 12, placeholder: "e.g. Which days can you work?" },
   { field: "dealBreakers", label: "Deal-breakers, in your words", hint: "Used only once they are turned into visible must-haves.", seen: "internal", max: 10, placeholder: "e.g. Cannot work Saturdays" },
 ];

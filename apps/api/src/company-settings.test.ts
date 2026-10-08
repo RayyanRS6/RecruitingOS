@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import { NoticeKey } from "@ros/contracts";
-import { DEFAULT_NOTICES, hashToken, maskTokenPath, nextContactWindow, redactString, sealPayload, withinContactHours } from "@ros/core";
+import { DEFAULT_NOTICES, boardPostingOf, hashToken, maskTokenPath, nextContactWindow, redactString, sealPayload, withinContactHours, zipRecruiterOffered } from "@ros/core";
 import { applications, auditRecords, candidates, communications, companies, dataRequests, events, randomToken, sessions, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
@@ -59,19 +59,24 @@ describe("company preferences, audit history, sessions, re-authentication and th
     it("accepts a typed update, records which keys changed, and emits the change", async () => {
       const r = await json(owner, "PATCH", "/api/v1/companies/current", {
         name: "Settings Dental Group", website: "settingsdental.com", timezone: "America/Chicago", sizeBand: "50-99", locations: [{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }],
-        settings: { careersPage: { intro: "A small team that answers every applicant." }, benefitsSummary: "Health, dental, 401k match.", logoUrl: "https://settingsdental.com/logo.png", businessHours: { days: [1, 2, 3, 4, 5], start: "09:00", end: "17:00" } },
+        settings: { careersPage: { intro: "A small team that answers every applicant." }, benefitsSummary: "Health, dental, 401k match.", logoUrl: "", businessHours: { days: [1, 2, 3, 4, 5], start: "09:00", end: "17:00" } },
       });
       expect(r.status).toBe(200);
       const body = (await r.json()) as { name: string; timezone: string; sizeBand: string; changed: string[]; settings: { website?: string; careersPage?: { intro?: string; enabled: boolean }; businessHours?: { days: number[]; start: string; end: string }; logoUrl?: string } };
       expect(body.name).toBe("Settings Dental Group");
       expect(body.timezone).toBe("America/Chicago");
-      expect(body.changed.sort()).toEqual(["benefitsSummary", "businessHours", "careersPage", "locations", "logoUrl", "name", "sizeBand", "timezone", "website"].sort());
+      // an empty logo address where there is none changes nothing
+      expect(body.changed.sort()).toEqual(["benefitsSummary", "businessHours", "careersPage", "locations", "name", "sizeBand", "timezone", "website"].sort());
       expect(body.settings.website).toBe("settingsdental.com");
       expect(body.settings.careersPage).toEqual({ enabled: true, intro: "A small team that answers every applicant." });
       expect(body.settings.businessHours).toEqual({ days: [1, 2, 3, 4, 5], start: "09:00", end: "17:00" });
       const current = (await (await json(owner, "GET", "/api/v1/companies/current")).json()) as { name: string; settings: { logoUrl?: string } };
       expect(current.name).toBe("Settings Dental Group");
-      expect(current.settings.logoUrl).toBe("https://settingsdental.com/logo.png");
+      expect(current.settings.logoUrl).toBeUndefined();
+      // the logo is uploaded and served by us (plan D10): a typed address is refused with a plain way forward
+      const typed = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { logoUrl: "https://settingsdental.com/logo.png" } });
+      expect(typed.status).toBe(400);
+      expect(await errorCode(typed)).toBe("logo_upload_only");
       const audited = await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "company.updated")));
       expect(audited).toHaveLength(1);
       expect((audited[0].details as { fields: string[] }).fields).toContain("businessHours");
@@ -99,10 +104,42 @@ describe("company preferences, audit history, sessions, re-authentication and th
       expect(badHours.status).toBe(400);
       const badLogo = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { logoUrl: "http://insecure.example/logo.png" } });
       expect(badLogo.status).toBe(400);
+      // what the job pages say about the company has its own routes, where a person approves it (plan D10)
+      for (const settings of [{ about: { text: "We are great." } }, { logo: { file: "x.png" } }, { hiringContact: { email: "jobs@settings.test" } }]) {
+        const r = await json(owner, "PATCH", "/api/v1/companies/current", { settings });
+        expect(r.status, JSON.stringify(settings)).toBe(400);
+        expect(await errorCode(r)).toBe("use_its_own_page");
+      }
       // no company.update for a hiring manager
       const hm = await signInAs(container, app, { companyId, role: "hiring_manager" });
       expect((await json(hm, "PATCH", "/api/v1/companies/current", { name: "Nope" })).status).toBe(403);
       expect((await container.db.select({ name: companies.name }).from(companies).where(eq(companies.id, companyId)))[0].name).toBe("Settings Dental Group");
+    });
+
+    it("saves who posts on the job boards and the company's own ZipRecruiter plan (plan D3, Q11)", async () => {
+      const stored = async () => (await container.db.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId)))[0].settings;
+      expect(boardPostingOf(await stored())).toBe("its");
+      expect(zipRecruiterOffered(await stored())).toBe(false);
+      const self = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { boardPosting: "self" } });
+      expect(self.status).toBe(200);
+      expect(((await self.json()) as { changed: string[] }).changed).toEqual(["boardPosting"]);
+      expect(boardPostingOf(await stored())).toBe("self");
+      const plan = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { zipRecruiterPlan: true } });
+      expect(((await plan.json()) as { changed: string[] }).changed).toEqual(["zipRecruiterPlan"]);
+      expect(zipRecruiterOffered(await stored())).toBe(true);
+      // the same choice again changes nothing
+      const same = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { boardPosting: "self", zipRecruiterPlan: true } });
+      expect(((await same.json()) as { changed: string[] }).changed).toEqual([]);
+      // and back: ITS posts, no plan (the key is dropped rather than kept as false)
+      const back = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { boardPosting: "its", zipRecruiterPlan: false } });
+      expect(((await back.json()) as { changed: string[] }).changed.sort()).toEqual(["boardPosting", "zipRecruiterPlan"]);
+      const after = await stored();
+      expect(boardPostingOf(after)).toBe("its");
+      expect(after).not.toHaveProperty("zipRecruiterPlan");
+      const audited = await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "company.updated"))).orderBy(desc(auditRecords.createdAt), desc(auditRecords.id));
+      expect((audited[0].details as { fields: string[] }).fields.sort()).toEqual(["boardPosting", "zipRecruiterPlan"]);
+      const bad = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { boardPosting: "someone" } });
+      expect(bad.status).toBe(400);
     });
 
     it("rewords a notice with a new version (the date) that the job page and the apply form show from then on", async () => {

@@ -1,5 +1,6 @@
 import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
-import { DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeMarksFor, can, groupFor, isBoardChannel, mayDecideApproval, openFlagsMessage, ownerGroup, selfApprovalCheck, unresolvedFlags } from "@ros/core";
+import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeMarksFor, addCalendarDays, boardPostingOf, can, closingDayWords, companyToday, groupFor, isBoardChannel, isPostingTask, mayDecideApproval, openFlagsMessage, ownerGroup, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unresolvedFlags } from "@ros/core";
+import { legalCheckFor, legalCheckMessage } from "./packet-approval";
 import { HELD_STATUS, detectStuckRoles } from "@ros/agents";
 import { companyOnboarding, companyVerifiedAt, type CompanyOnboarding, type GettingStarted, type GettingStartedStep, type MembershipRole } from "@ros/contracts";
 import { applications, approvalRequests, assessments, candidates, communications, companies, events, intakeSessions, integrations, interviewParticipants, interviewerAvailability, interviews, invitations, memberships, postings, recruiterEscalations, rolePackets, roles, screens, type Tx } from "@ros/db";
@@ -24,8 +25,12 @@ function approvalCardWords(actionType: string, ctx: { who: string; roleTitle: st
 
 const CHANNEL_NAME: Record<string, string> = { careers_page: "your careers page", google_jobs: "Google for Jobs", email_in: "email-in capture", linkedin_basic: "LinkedIn", indeed: "Indeed", ziprecruiter: "ZipRecruiter" };
 
+/**
+ * `closing_date`: a role's closing date stopped applications, or stops them tonight or tomorrow night (plan D7), with
+ * "Extend by two weeks" (a POST), another date, or closing the role. `share`: the day a job opens, the moment to share it (D8).
+ */
 export type BriefCard = {
-  kind: "new_applicants" | "needs_review" | "decision" | "posting_action" | "escalation" | "stuck" | "screening" | "interviews" | "empty" | "getting_started" | "draft";
+  kind: "new_applicants" | "needs_review" | "decision" | "posting_action" | "escalation" | "stuck" | "screening" | "interviews" | "empty" | "getting_started" | "draft" | "closing_date" | "share";
   title: string;
   body: string;
   roleId?: string;
@@ -70,6 +75,7 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   const mayAskAboutRole = (roleId: string) => staffMayAsk(scope, { roleId, applicationId: null });
   const openRoles = (await tx.select().from(roles).where(and(eq(roles.companyId, companyId), inArray(roles.status, ["open", "paused", "pending_approval"])))).filter((r) => inStaffScope(scope, { roleId: r.id }));
 
+  const now = new Date();
   const pending = (await tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, companyId), eq(approvalRequests.status, "pending"))).orderBy(desc(approvalRequests.createdAt))).filter((p) => inStaffScope(scope, { roleId: p.roleId, applicationId: p.applicationId }));
   // The candidates the waiting requests are about, in one query, so a card can name the person instead of an action key.
   const pendingAppIds = [...new Set(pending.map((p) => p.applicationId).filter((x): x is string => !!x))];
@@ -84,9 +90,13 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
       // A version proposed while the role runs is a different decision from opening a new role: the card says which.
       const proposal = p.proposal as { version?: number; editWhileOpen?: boolean };
       const editWhileOpen = !!proposal.editWhileOpen && role?.status !== "pending_approval";
+      // What the law of the job's places asks of the ad comes next (plan D5): the approve route refuses while it is missing.
+      const [pv] = !may.openFlags && p.roleId && Number.isFinite(Number(proposal.version)) ? await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, p.roleId), eq(rolePackets.version, Number(proposal.version)))).limit(1) : [];
+      const [legalRole] = pv && p.roleId ? await tx.select().from(roles).where(eq(roles.id, p.roleId)).limit(1) : [];
+      const legal = pv && legalRole ? await legalCheckFor(tx, { role: legalRole, packet: pv.packet, now }) : null;
       // Open wording flags come first (the approve route refuses until each is changed or kept with a reason): the card says so instead of offering approval.
-      const body = may.openFlags ? `${openFlagsMessage(may.openFlags)} It can be approved after that.` : p.rationale ?? (editWhileOpen ? "The role keeps running on its approved version until you decide." : "Review the role packet and approve it to start posting.");
-      const label = may.openFlags ? "Review the wording" : editWhileOpen ? "Review the change" : "Review and approve";
+      const body = may.openFlags ? `${openFlagsMessage(may.openFlags)} It can be approved after that.` : legal?.missing.length ? `${legalCheckMessage(legal.missing)} It can be approved after that.` : p.rationale ?? (editWhileOpen ? "The role keeps running on its approved version until you decide." : "Review the role packet and approve it to start posting.");
+      const label = may.openFlags ? "Review the wording" : legal?.missing.length ? "See what is missing" : editWhileOpen ? "Review the change" : "Review and approve";
       cards.push({ kind: "decision", title: editWhileOpen ? `Approve packet v${proposal.version ?? "?"} of ${role?.title ?? "the role"}` : `Approve the role: ${role?.title ?? "new role"}`, body, roleId: p.roleId ?? undefined, approvalRequestId: p.id, actions: [{ label, method: "GET", path: `/roles/${p.roleId}` }] });
     } else if (p.actionType === "application.invite_screen" || p.actionType === "application.recommend_interview") {
       // The card's "Yes" posts to the decide route, which refuses anyone outside the request's approver roles (during a recruiter takeover, everyone but the recruiter).
@@ -115,8 +125,20 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
 
   // Telling candidates a private decision (founder decision B6) is offered to those who may decline.
   const tells = !viewer || can(viewer.role, "application.reject");
-  const now = new Date();
+  // Who posts on the boards (plan D3): when ITS does, the posting and taking-down work is ITS's, not a card for the team.
+  const [company] = await tx.select({ settings: companies.settings, timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId)).limit(1);
+  const teamPosts = boardPostingOf(company?.settings) === "self";
+  // Sharing a job is open to those who manage postings and those who approve roles (routes/postings.ts, share-links).
+  const shares = !viewer || can(viewer.role, "role.manage") || can(viewer.role, "role.approve");
+  for (const card of closingDateCards(openRoles, company?.timezone ?? null, now, managesPostings)) cards.push(card);
+  // Nothing is public before the ITS company check (founder decision B7), so a job goes public at the later of its opening and that check.
+  const verifiedAt = companyVerifiedAt(company?.settings);
   for (const role of openRoles.filter((r) => r.status === "open")) {
+    // The day the job goes public (plan D8): the moment to share it, before anyone has applied.
+    const publicSince = verifiedAt && role.openedAt ? Math.max(Date.parse(role.openedAt), Date.parse(verifiedAt)) : null;
+    if (shares && publicSince !== null && publicSince >= Date.parse(since)) {
+      cards.push({ kind: "share", title: `${role.title} is live. Share it now`, body: "Send it to people you know, a school or a local group. Each place gets its own link, so you can see where applicants come from.", roleId: role.id, actions: [{ label: "Share the job", method: "GET", path: `/roles/${role.id}?tab=posting#share` }] });
+    }
     // A recruiter given one candidate counts and names only that candidate, never the rest of the role's applicants.
     const apps = (await tx.select().from(applications).where(and(eq(applications.roleId, role.id)))).filter((a) => inStaffScope(scope, { roleId: role.id, applicationId: a.id }));
     const marks = await activeMarksFor(tx, apps.map((a) => a.id));
@@ -141,8 +163,9 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     }
     const told = await notToldCard(tx, role, notTold);
     if (told) cards.push(told);
-    // Boards waiting to be posted by hand (docs/spec/20): ready to post means the package and the tracked link exist and nothing is on the board yet.
-    const manualPostings = managesPostings ? (await tx.select().from(postings).where(and(eq(postings.roleId, role.id), eq(postings.status, "ready_to_post")))).filter((p) => isBoardChannel(p.channel)) : [];
+    // Boards waiting to be posted by hand (docs/spec/20): ready to post means the package and the tracked link exist and
+    // nothing is on the board yet. Only for a company that posts itself; otherwise ITS has a task per board (plan D3).
+    const manualPostings = managesPostings && teamPosts ? (await tx.select().from(postings).where(and(eq(postings.roleId, role.id), eq(postings.status, "ready_to_post")))).filter((p) => isBoardChannel(p.channel)) : [];
     if (manualPostings.length) {
       cards.push({ kind: "posting_action", title: `${role.title}: post it on ${manualPostings.map((p) => CHANNEL_NAME[p.channel] ?? p.channel).join(", ")} from your own account`, body: "These boards are not connected to the product. The role's Posting tab has the posting package, each board's own apply link and the steps; record the public URL there once it is up.", roleId: role.id, actions: [{ label: "See instructions", method: "GET", path: `/roles/${role.id}?tab=posting` }] });
     }
@@ -168,7 +191,8 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   // Boards still up after a posting closed (docs/spec/20 item 15): the checklist lives on the role's Posting tab. The
   // whole role may be closed, or a person closed one board's posting while the role stays open; the card says which.
   const channelOrder = (channel: string) => (POSTING_CHANNELS as readonly string[]).indexOf(channel);
-  const stillUp: Array<{ roleId: string; channel: string }> = !managesPostings ? [] : (await tx.select({ roleId: postings.roleId, channel: postings.channel }).from(postings).where(and(eq(postings.companyId, companyId), eq(postings.closureRequired, true), isNull(postings.closureConfirmedAt)))).filter((p) => isBoardChannel(p.channel) && inStaffScope(scope, { roleId: p.roleId })).sort((a, b) => channelOrder(a.channel) - channelOrder(b.channel));
+  // When ITS posts for the company, taking a board down is ITS's task (plan D3), so the team gets no card for it.
+  const stillUp: Array<{ roleId: string; channel: string }> = !managesPostings || !teamPosts ? [] : (await tx.select({ roleId: postings.roleId, channel: postings.channel }).from(postings).where(and(eq(postings.companyId, companyId), eq(postings.closureRequired, true), isNull(postings.closureConfirmedAt)))).filter((p) => isBoardChannel(p.channel) && inStaffScope(scope, { roleId: p.roleId })).sort((a, b) => channelOrder(a.channel) - channelOrder(b.channel));
   if (stillUp.length) {
     const affectedRoles = await tx.select({ id: roles.id, title: roles.title, status: roles.status }).from(roles).where(inArray(roles.id, [...new Set(stillUp.map((p) => p.roleId))]));
     for (const role of affectedRoles) {
@@ -178,6 +202,15 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
         ? `${role.title} is closed, but ${one ? "this board still shows" : "these boards still show"} it. Take the posting down from your own account, then tick it off on the Posting tab so nobody keeps applying to a closed role.`
         : `The ${role.title} posting on ${boards.join(", ")} was closed here, but ${one ? "the board still shows" : "the boards still show"} the job. Take it down from your own account, then tick it off on the Posting tab.`;
       cards.push({ kind: "posting_action", title: `Still posted on ${boards.join(", ")}`, body, roleId: role.id, actions: [{ label: "Open the Posting tab", method: "GET", path: `/roles/${role.id}?tab=posting` }] });
+    }
+  }
+  // A board task ITS could not do (plan D3) comes back to the team, with the recruiter's words, until it is done or asked again.
+  const unfinished = managesPostings && !teamPosts ? (await unfinishedPostingTasks(tx, { companyId })).filter((u) => inStaffScope(scope, { roleId: u.roleId })) : [];
+  if (unfinished.length) {
+    const titles = await tx.select({ id: roles.id, title: roles.title }).from(roles).where(inArray(roles.id, [...new Set(unfinished.map((u) => u.roleId))]));
+    for (const u of unfinished) {
+      const label = postingTaskLabel(u.kind, CHANNEL_NAME[u.channel] ?? u.channel);
+      cards.push({ kind: "posting_action", title: `${titles.find((r) => r.id === u.roleId)?.title ?? "A role"}: ITS could not ${label.charAt(0).toLowerCase()}${label.slice(1)}`, body: `${u.note ? `ITS wrote: "${u.note}" ` : ""}Ask ITS again from the Posting tab once that is sorted out, or do it from your company's own account and record it there.`, roleId: u.roleId, actions: [{ label: "Open the Posting tab", method: "GET", path: `/roles/${u.roleId}?tab=posting` }] });
     }
   }
   for (const d of await detectStuckRoles(tx, companyId, now)) {
@@ -198,7 +231,8 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
 
   for (const card of await draftCards(tx, companyId, viewer)) cards.push(card);
 
-  const escalations = (await tx.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), inArray(recruiterEscalations.status, ["open", "claimed", "in_progress"])))).filter((e) => escalationInScope(scope, e));
+  // ITS posting tasks are ITS's own work, shown with each board on the Posting tab, not as the team's requests (plan D3).
+  const escalations = (await tx.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), inArray(recruiterEscalations.status, ["open", "claimed", "in_progress"])))).filter((e) => escalationInScope(scope, e) && !isPostingTask(e.kind));
   // Each open request leads to itself in "Your recruiter requests" on Today, where its thread, notes and (once it comes)
   // the answer in full are; answered requests are shown there for two weeks, so the brief needs no card of its own.
   const readsRequests = !viewer || can(viewer.role, "escalation.create");
@@ -229,6 +263,40 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   const handled = recent.filter((e) => AUTOMATED.has(e.type) && (e.actor.kind === "system" || e.actor.kind === "agent") && (!inScopeSubjects || inScopeSubjects.has(e.subjectId))).length;
   const summary = `${needsMe} ${needsMe === 1 ? "thing needs" : "things need"} you · ${strongWaiting} strong ${strongWaiting === 1 ? "candidate" : "candidates"} ready · ${atRisk} at risk · ${handled} handled for you since yesterday.`;
   return { generatedAt: new Date().toISOString(), cards: setup ? [setup, ...cards] : cards, summary };
+}
+
+/**
+ * The closing-date cards (founder decision Q12, plan D7), for those who manage postings: a role whose date stopped
+ * applications (extend it, choose another date, or close the role, which stays a person's decision), and a role whose
+ * date ends tonight or tomorrow night. "Extend by two weeks" posts the new date straight to the closing-date route.
+ */
+function closingDateCards(list: ReadonlyArray<typeof roles.$inferSelect>, timeZone: string | null, now: Date, manages: boolean): BriefCard[] {
+  if (!manages) return [];
+  const out: BriefCard[] = [];
+  const today = companyToday(now, timeZone);
+  for (const role of list) {
+    if (role.status !== "open" && role.status !== "paused") continue;
+    const closesOn = role.applicationsCloseOn ? role.applicationsCloseOn.slice(0, 10) : null;
+    const pickDate = { label: "Choose another date", method: "GET" as const, path: `/roles/${role.id}?tab=posting#closing-date` };
+    if (!role.acceptingApplications && role.applicationsClosedReason === CLOSING_DATE_REASON) {
+      out.push({
+        kind: "closing_date",
+        title: `${role.title} stopped taking applications`,
+        body: `Its closing date${closesOn ? `, ${closingDayWords(closesOn)},` : ""} has passed. Nobody was turned away: people who had started could finish, and everyone who applied is where they were. Extend the date to take applications again, or close the role when you are ready.`,
+        roleId: role.id,
+        actions: [{ label: "Extend by two weeks", method: "POST", path: `/api/v1/roles/${role.id}/closing-date`, body: { closesOn: addCalendarDays(today, 14) } }, pickDate, { label: "Close the role", method: "GET", path: `/roles/${role.id}?close=1` }],
+      });
+    } else if (closesOn && role.acceptingApplications && closesOn >= today && closesOn <= addCalendarDays(today, 1)) {
+      out.push({
+        kind: "closing_date",
+        title: `${role.title} stops taking applications ${closesOn === today ? "tonight" : "tomorrow night"}`,
+        body: `Its closing date is ${closingDayWords(closesOn)}. New applications stop at the end of that day; anyone already applying can finish.`,
+        roleId: role.id,
+        actions: [{ label: "Extend by two weeks", method: "POST", path: `/api/v1/roles/${role.id}/closing-date`, body: { closesOn: addCalendarDays(closesOn, 14) } }, pickDate],
+      });
+    }
+  }
+  return out;
 }
 
 /**

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { inspectResumeFile, type Actor } from "@ros/contracts";
 import { sendRepeatApplicationNotice, sendStatusLinks } from "@ros/agents";
-import { audit, dedupeKey, emit, normalizeEmailForDedupe, normalizePhone, transition } from "@ros/core";
+import { CLOSING_DATE_REASON, audit, dedupeKey, emit, normalizeEmailForDedupe, normalizePhone, transition } from "@ros/core";
 import { applications, candidates, companies, documents, events, lowercaseToken, randomToken, rolePackets, roles, uuidv7, withPlatform, withTenant, type ApplicationAcknowledgment, type Db, type Tx } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import type { Container } from "../container";
@@ -66,10 +66,11 @@ export type ResumeInput =
  * acknowledged as if the role were still hiring (the intake workflow only acknowledges a fresh application); its
  * résumé is still scanned and read so the person can be found for a later opening.
  */
-export async function createApplication(tx: Tx, container: Container, input: NewApplication, actor: Actor, opts: { intoTalentPool?: boolean } = {}) {
+export async function createApplication(tx: Tx, container: Container, input: NewApplication, actor: Actor, opts: { intoTalentPool?: boolean; closingGrace?: boolean } = {}) {
   const [role] = await tx.select().from(roles).where(eq(roles.id, input.roleId)).limit(1);
   if (!role) throw new Error("role not found");
-  const admits = (role.status === "open" && role.acceptingApplications) || (!!opts.intoTalentPool && role.status === "closed");
+  // `closingGrace`: a form opened before the role's closing date passed may still be sent (plan D7; services/closing-date.ts).
+  const admits = (role.status === "open" && role.acceptingApplications) || (!!opts.intoTalentPool && role.status === "closed") || (!!opts.closingGrace && role.status === "open" && role.applicationsClosedReason === CLOSING_DATE_REASON);
   if (!admits || !role.currentPacketVersion) throw new Error("role is not accepting applications");
 
   const email = input.email ? input.email.trim().toLowerCase() : null;

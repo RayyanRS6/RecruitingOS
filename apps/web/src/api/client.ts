@@ -1,7 +1,8 @@
-import type { ActiveMark, CandidateNotice, GettingStarted, IntakeSessionView, MeResponse, OwnerGroup, OwnerStage, PacketFlag, StageMove, ToldState } from "@ros/contracts";
+import type { ActiveMark, AutoActionsOnOpen, BoardChoiceView, CandidateNotice, ClosingDateView, GettingStarted, IntakeSessionView, LegalCheck, MeResponse, OwnerGroup, OwnerStage, PacketFlag, PostingTaskKind, PostingTaskView, PublishingState, ShareTarget, ShareView, StageMove, ToldState } from "@ros/contracts";
 
 export type { ActiveMark, CandidateNotice, OwnerStage, StageMove, ToldState };
-
+// Approving and publishing (plan Wave D): the shapes live in @ros/contracts (api/publishing.ts).
+export type { AutoActionsOnOpen, BoardChoiceView, ClosingDateView, LegalCheck, LegalCheckItem, PostingTaskKind, PostingTaskView, PublishingState, SharePlace, SharePlaceView, ShareTarget, ShareView } from "@ros/contracts";
 /** Typed-enough fetch wrapper. The API is served by the same deployment as the pages, so every path is relative. */
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string, public details?: unknown) {
@@ -41,7 +42,7 @@ export type Brief = { generatedAt: string; cards: BriefCard[]; summary: string }
  */
 export type RoleSummary = { id: string; title: string; status: string; openedAt: string | null; createdAt?: string; counts: Record<string, number> & { total: number }; stageCounts?: Record<OwnerStage, number>; countsHidden?: boolean; needsYou: number; daysOpen: number | null };
 /** One role on one channel, with the nine-state fields (docs/spec/20). `status` is one of the nine posting states; `stateLabel` on PostingView is the owner's word for it. */
-export type Posting = { id: string; channel: string; status: string; externalUrl: string | null; intakeToken: string | null; instructions: string | null; steps: string[]; error: string | null; publishedAt: string | null; publicUrlRecordedAt: string | null; verifiedAt: string | null; verifiedBy: { kind: string; id: string; name?: string } | null; verificationNote: string | null; verificationError: string | null; verificationAttempts: number; pausedAt: string | null; closedAt: string | null; closureRequired: boolean; closureConfirmedAt: string | null; closureConfirmedBy: { kind: string; id: string; name?: string } | null };
+export type Posting = { id: string; channel: string; status: string; externalUrl: string | null; intakeToken: string | null; instructions: string | null; steps: string[]; error: string | null; publishedAt: string | null; publicUrlRecordedAt: string | null; verifiedAt: string | null; verifiedBy: { kind: string; id: string; name?: string } | null; verificationNote: string | null; verificationError: string | null; verificationAttempts: number; pausedAt: string | null; closedAt: string | null; closureRequired: boolean; closureConfirmedAt: string | null; closureConfirmedBy: { kind: string; id: string; name?: string } | null; /** The packet version a board listing shows (plan D4); null until it is posted. */ boardVersion?: number | null };
 /** A team member as the decision maker of a role packet (matched from the packet's preferences to an active approver). */
 export type DecisionMaker = { userId: string; name: string | null; email: string };
 /** Whether candidates see a packet's pay range by the public pages' rule, and whether a pay transparency law is why. */
@@ -52,10 +53,17 @@ export type PacketPayView = { payShown?: boolean; payRequiredByLaw?: boolean };
  * reason); sending back is never held up by them (`maySendBack`).
  */
 export type PacketApproval = {
-  pending: { id: string; version: number; rationale: string | null; requestedBy: { kind: string; id: string; name?: string }; requiredRoles: string[]; requiredUserIds: string[]; decisionMaker: DecisionMaker | null; createdAt: string; expiresAt: string | null; editWhileOpen: boolean; flags: PacketFlag[]; viewer: { mayDecide: boolean; maySendBack: boolean; reason: string | null } } | null;
+  /** `legalCheck`: what the law of the job's places asks of the ad (plan D5); approving waits while `missing` has anything. */
+  pending: { id: string; version: number; rationale: string | null; requestedBy: { kind: string; id: string; name?: string }; requiredRoles: string[]; requiredUserIds: string[]; decisionMaker: DecisionMaker | null; createdAt: string; expiresAt: string | null; editWhileOpen: boolean; flags: PacketFlag[]; legalCheck?: LegalCheck | null; viewer: { mayDecide: boolean; maySendBack: boolean; reason: string | null } } | null;
   latest: { id: string; status: string; version: number; decisionNote: string | null; decidedAt: string | null; decidedBy: { id: string; name: string } | null } | null;
 };
-export type RoleDetail = RoleSummary & { currentPacketVersion: number | null; currentPacket: ({ version: number; status: string; packet: RolePacket } & PacketPayView) | null; proposedPacket: ({ version: number; status: string; changeSummary: string | null; createdAt: string; createdBy: { kind: string; id: string; name?: string }; packet: RolePacket } & PacketPayView) | null; packetVersions: Array<{ version: number; status: string; source: string; changeSummary: string | null; createdAt: string; createdBy: { kind: string; name?: string } }>; postings: Posting[]; boardsStillUp: string[]; acceptingApplications: boolean; applicationsClosedAt: string | null; applicationsClosedReason: string | null; volumeAlertPerDay: number | null; pendingApprovals: Array<{ id: string; actionType: string; rationale: string | null; proposal?: Record<string, unknown> }>; counts: Record<string, number>; packetApproval: PacketApproval; decisionMaker: DecisionMaker | null };
+/**
+ * Wave D adds what starts on its own once the job is live (`autoActionsOnOpen`, D9), the board ticks and who posts them
+ * (`boards`, `whoPosts`, D3 and D6), the closing date (`closingDate`, D7) and the boards still showing an earlier version.
+ */
+export type RoleDetail = RoleSummary & { currentPacketVersion: number | null; currentPacket: ({ version: number; status: string; packet: RolePacket } & PacketPayView) | null; proposedPacket: ({ version: number; status: string; changeSummary: string | null; createdAt: string; createdBy: { kind: string; id: string; name?: string }; packet: RolePacket } & PacketPayView) | null; packetVersions: Array<{ version: number; status: string; source: string; changeSummary: string | null; createdAt: string; createdBy: { kind: string; name?: string } }>; postings: Posting[]; boardsStillUp: string[]; acceptingApplications: boolean; applicationsClosedAt: string | null; applicationsClosedReason: string | null; volumeAlertPerDay: number | null; pendingApprovals: Array<{ id: string; actionType: string; rationale: string | null; proposal?: Record<string, unknown> }>; counts: Record<string, number>; packetApproval: PacketApproval; decisionMaker: DecisionMaker | null; autoActionsOnOpen: AutoActionsOnOpen; boards: BoardChoiceView[]; whoPosts: WhoPosts; closingDate: ClosingDateView; boardsShowingOldVersion: string[] };
+/** Who posts the job on the boards: an ITS recruiter from the company's own accounts (the default), or the team itself. */
+export type WhoPosts = "its" | "self";
 /** Where a requirement is checked; the contract's `evidencedBy` values. */
 export type EvidenceSource = "resume" | "application" | "screen" | "interview";
 export type Requirement = { key: string; text: string; rationale: string; evidencedBy: EvidenceSource[] };
@@ -174,10 +182,58 @@ export type InterviewSummary = {
   calendarRefs: Record<string, { provider: string; eventId: string; htmlLink: string | null; meetingUrl: string | null }>;
 };
 // Postings (docs/spec/20): what the Posting tab reads and writes (apps/api/src/routes/postings.ts).
-export type ApplicationLink = { id: string; url: string; source: string; sourceLabel: string; sourceDetail: string | null; label: string; postingId: string | null; visits: number; lastVisitedAt: string | null; createdAt: string; disabledAt: string | null };
+/** `landing`: a shared link opens the job page first ("job"), a board's own link the form ("apply"), plan D8. */
+export type ApplicationLink = { id: string; url: string; source: string; sourceLabel: string; sourceDetail: string | null; label: string; postingId: string | null; visits: number; lastVisitedAt: string | null; createdAt: string; disabledAt: string | null; landing?: string };
 export type PostingPackage = { text: string; fields: Record<string, string> };
-export type PostingView = Posting & { name: string; stateLabel: string; isBoard: boolean; link: ApplicationLink | null; package: PostingPackage | null; stillUp: boolean };
-export type PostingsResponse = { role: { id: string; title: string; status: string; acceptingApplications: boolean; applicationsClosedAt: string | null; applicationsClosedReason: string | null; volumeAlertPerDay: number }; urls: { careers: string; job: string; apply: string }; emailIn: { address: string | null; connected: boolean; status: string | null; error: string | null }; postings: PostingView[]; links: ApplicationLink[]; boardsStillUp: string[] };
+/**
+ * One channel on the Posting tab and the screen right after approval (plan D2). For a board: `chosen` (still ticked for
+ * the role), `postedBy` ("its" when an ITS recruiter posts it from the company's own account), the latest ITS posting
+ * `task`, and `showsOldVersion` once an approved edit left the listing behind.
+ */
+export type PostingView = Posting & { name: string; stateLabel: string; isBoard: boolean; link: ApplicationLink | null; package: PostingPackage | null; stillUp: boolean; chosen: boolean; postedBy: "its" | "you" | null; task: PostingTaskView | null; showsOldVersion: boolean };
+/**
+ * GET /roles/:id/postings. Besides the channels and links: where publishing stands (`publishing`; ask again while
+ * `pollAfterSeconds` is a number), who posts and the board ticks, the closing date, the share block, and whether every
+ * interview round has someone on it. `emailIn.shown` is true only while applications by email actually work.
+ */
+export type PostingsResponse = {
+  role: { id: string; title: string; status: string; acceptingApplications: boolean; applicationsClosedAt: string | null; applicationsClosedReason: string | null; volumeAlertPerDay: number; applicationsCloseOn: string | null; openedAt: string | null; currentPacketVersion: number | null };
+  urls: { careers: string; job: string; apply: string };
+  emailIn: { address: string | null; connected: boolean; shown: boolean; status: string | null; error: string | null };
+  postings: PostingView[];
+  links: ApplicationLink[];
+  boardsStillUp: string[];
+  publishing: PublishingState;
+  whoPosts: WhoPosts;
+  boards: BoardChoiceView[];
+  closingDate: ClosingDateView;
+  share: ShareView;
+  interviewers: { rounds: number; roundsWithoutInterviewers: number };
+};
+/** POST /roles/:id/share-links: the place's own tracked link (the same one on every tap), the text a share starts with, and each share button's address. */
+export type ShareLinkResponse = { created: boolean; link: ApplicationLink; text: string; targets: ShareTarget[] };
+/** POST /roles/:id/closing-date. `reopened`: a later date took applications again ("Extend the date"). */
+export type ClosingDateResponse = { ok: boolean; reopened: boolean; closingDate: ClosingDateView };
+/** Saving a packet version (POST /roles/:id/packets): what became of it, and on a live job why it waits (Q10) or which boards still show the earlier version (D4). */
+export type NewVersionResponse = { version: number; outcome?: "approved_current" | "proposed_pending_approval" | "proposed"; guardChanges?: string[]; needsApproval?: { changes: string[]; words: string; youMayConfirm: boolean } | null; boardsShowingOldVersion?: string[] };
+/**
+ * An ITS posting task as its recruiter sees it once accepted (plan D3): the job ad as the board will show it, the
+ * board's own apply link, the numbered steps and where the posting stands. Nothing about applicants.
+ */
+export type PostingTaskDetail = {
+  question: string;
+  kind: PostingTaskKind;
+  label: string;
+  companyName: string;
+  role: { id: string; title: string; status: string; currentPacketVersion: number | null };
+  board: { channel: string; name: string };
+  posting: { id: string; status: string; stateLabel: string; externalUrl: string | null; verifiedAt: string | null; verificationError: string | null; error: string | null; closureRequired: boolean; closureConfirmedAt: string | null; boardVersion: number | null; showsOldVersion: boolean };
+  package: PostingPackage | null;
+  steps: string[];
+  applyUrl: string | null;
+  boardAccessConfirmed: boolean;
+  whatToDo: string;
+};
 export type VolumeDay = { day: string; total: number; bySource: Record<string, number> };
 export type VolumeReport = { from: string; to: string; timeZone: string; days: VolumeDay[]; totals: { total: number; bySource: Record<string, number> }; sources: Array<{ source: string; label: string; total: number }>; threshold: number; yesterday: { day: string; total: number }; today: { day: string; total: number }; acceptingApplications: boolean; applicationsClosedAt: string | null; applicationsClosedReason: string | null };
 

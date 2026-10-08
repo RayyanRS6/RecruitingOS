@@ -16,7 +16,7 @@ import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "
 import { jobPreview } from "../services/job-preview";
 import { diffPackets } from "../services/packet-diff";
 import { applyFieldEdit } from "../services/packet-fields";
-import { cancelPendingPacketApprovals, createPacketVersion, currentVersionOf, startPacketApproval, type PacketRow, type RoleRow } from "../services/packet-versions";
+import { cancelPendingPacketApprovals, createPacketVersion, currentVersionOf, materialChanges, startPacketApproval, type PacketRow, type RoleRow } from "../services/packet-versions";
 import type { Container } from "../container";
 import { loadDraft } from "./intake";
 
@@ -205,9 +205,9 @@ function guardedChange(base: DraftRolePacket, next: DraftRolePacket, ctx: { comp
   return { ok: true, packet: parsed.data, flags, newFlags: flags.filter((f) => !before.has(f.id)), changes: guarded.changes };
 }
 
-/** What confirming a change does to a role, by the same rule as `createPacketVersion`. */
-function takesEffect(role: RoleRow, t: Tenant, openFlags: number): PacketRevisionProposal["takesEffect"] {
-  if (role.status === "open" && can(t.role, "role.approve") && openFlags === 0) return "now";
+/** What confirming a change does to a role, by the same rule as `createPacketVersion` (Q10: pay, title, place or eligibility on a live job wait for approval). */
+function takesEffect(role: RoleRow, t: Tenant, openFlags: number, material = false): PacketRevisionProposal["takesEffect"] {
+  if (role.status === "open" && can(t.role, "role.approve") && openFlags === 0 && !material) return "now";
   return role.status === "open" || role.status === "pending_approval" ? "after_approval" : "with_the_role";
 }
 
@@ -274,7 +274,9 @@ rolePacketRoutes.post("/:id/revisions", requireTenant, async (c) => {
   const merged = mergeRevision<DraftRolePacket>(base.packet, out.output, "role");
   const guarded = guardedChange(base.packet, merged.packet, { company: loaded.company, actor, declined, full: true });
   if (!guarded.ok) return revisionInvalid(container, t.companyId, subject, out.runId, guarded.problem);
-  const proposal = proposalOf({ runId: out.runId, target: { kind: "role", roleId: loaded.role.id, baseVersion: base.version }, base: base.packet, merged, guarded, question: out.output.question, summary: out.output.summary, takesEffect: takesEffect(loaded.role, t, guarded.flags.length), from: base.version });
+  const live = currentVersionOf(loaded.role, loaded.versions);
+  const material = loaded.role.status === "open" && !!live && materialChanges(live.packet, guarded.packet as RolePacket).length > 0;
+  const proposal = proposalOf({ runId: out.runId, target: { kind: "role", roleId: loaded.role.id, baseVersion: base.version }, base: base.packet, merged, guarded, question: out.output.question, summary: out.output.summary, takesEffect: takesEffect(loaded.role, t, guarded.flags.length, material), from: base.version });
   await withTenant(container.db, t.companyId, (tx) => emit(tx, { type: "packet.revision_proposed", companyId: t.companyId, actor, subject, payload: { roleId: loaded.role.id, baseVersion: base.version, revisionId: out.runId, sections: merged.sections, notChanged: merged.notChanged.length, asked: !!out.output.question, newFlags: guarded.newFlags.length } }));
   return c.json(proposal);
 });
@@ -310,7 +312,7 @@ rolePacketRoutes.post("/:id/revisions/:revisionId/apply", requireTenant, async (
     if (!(await decideRevision(tx, stored.runId, { decision: "applied", at: now, by: actor, version: base.version + 1 }))) throw new HttpError(409, "already_decided", "This change was already saved.");
     const made = await createPacketVersion(tx, container, { tenant: t, actor, role, packet, changeSummary: `Changed by chat: ${stored.revision.summary}`.slice(0, 500), source: "agent_revision" });
     await emit(tx, { type: "packet.revision_applied", companyId: t.companyId, actor, subject: { type: "role_packet", id: `${role.id}:${made.version.version}` }, payload: { roleId: role.id, version: made.version.version, baseVersion: base.version, revisionId: stored.runId, sections: merged.sections } });
-    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId, guardChanges: made.guardChanges, sections: merged.sections, diff: diffPackets(base.packet, made.version.packet, { from: base.version, to: made.version.version }) };
+    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId, guardChanges: made.guardChanges, needsApproval: made.needsApproval, boardsShowingOldVersion: made.boardsShowingOldVersion, sections: merged.sections, diff: diffPackets(base.packet, made.version.packet, { from: base.version, to: made.version.version }) };
   });
   await container.kick();
   return c.json(result, 201);
@@ -409,7 +411,7 @@ rolePacketRoutes.post("/:id/requirements-check/apply", requireTenant, async (c) 
     }
     const made = await createPacketVersion(tx, container, { tenant: t, actor, role, packet: fixed.packet, changeSummary: `Requirements check: ${fixed.applied.join(" ")}`.slice(0, 500) });
     await emit(tx, { type: "packet.check_applied", companyId: t.companyId, actor, subject: { type: "role_packet", id: `${role.id}:${made.version.version}` }, payload: { roleId: role.id, version: made.version.version, applied: fixed.applied.length, skipped: fixed.skipped.length } });
-    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId, guardChanges: made.guardChanges, applied: fixed.applied, skipped: fixed.skipped, diff: diffPackets(base.packet, made.version.packet, { from: base.version, to: made.version.version }), check: checkRequirements(made.version.packet, `v${made.version.version}`, made.version.version) };
+    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId, guardChanges: made.guardChanges, needsApproval: made.needsApproval, boardsShowingOldVersion: made.boardsShowingOldVersion, applied: fixed.applied, skipped: fixed.skipped, diff: diffPackets(base.packet, made.version.packet, { from: base.version, to: made.version.version }), check: checkRequirements(made.version.packet, `v${made.version.version}`, made.version.version) };
   });
   await container.kick();
   return c.json(result, 201);
@@ -468,7 +470,7 @@ rolePacketRoutes.patch("/:id/packet", requireTenant, async (c) => {
     const edit = applyFieldEdit(base.packet, body, { team, actor, now: container.engine.clock().toISOString() });
     if (!edit.fields.length) throw new HttpError(400, "nothing_changed", "Nothing was changed.");
     const made = await createPacketVersion(tx, container, { tenant: t, actor, role, packet: edit.packet, changeSummary: body.changeSummary ?? edit.summary });
-    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId, guardChanges: made.guardChanges, fields: edit.fields, notes: edit.notes, diff: diffPackets(base.packet, made.version.packet, { from: base.version, to: made.version.version }) };
+    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId, guardChanges: made.guardChanges, needsApproval: made.needsApproval, boardsShowingOldVersion: made.boardsShowingOldVersion, fields: edit.fields, notes: edit.notes, diff: diffPackets(base.packet, made.version.packet, { from: base.version, to: made.version.version }) };
   });
   await container.kick();
   return c.json(result);

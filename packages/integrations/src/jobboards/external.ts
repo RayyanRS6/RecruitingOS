@@ -1,33 +1,35 @@
 import type { JobBoardAdapter, PostingInput, PublishResult } from "../types";
 
 /**
- * External boards in release 1 are manual (docs/spec/20; founder decision F4): ITS posts the job by hand under the
- * customer's own account, points the board at the board's own tracked apply link, verifies the public URL and records
- * it here. No adapter posts anything, reads a board's API or claims a live connection. Partner integrations (Indeed
- * Job Sync, ZipRecruiter partner API, LinkedIn Apply Connect) arrive as separate, verified adapters if approved.
+ * External boards in release 1 are manual (docs/spec/20; founder decision F4): an ITS recruiter (or the company's own
+ * team, when it posts itself) posts the job by hand from the company's own account, points the board at the board's own
+ * tracked apply link, and records the listing's public address, which is checked before anything is called live. No
+ * adapter posts anything, reads a board's API or claims a live connection. Partner integrations (Indeed Job Sync,
+ * ZipRecruiter partner API, LinkedIn Apply Connect) arrive as separate, verified adapters if approved. The steps say
+ * whose account and whose bill in the company's name, so they read the same whoever follows them.
  */
 type BoardText = {
   name: string;
   signIn: string;
   applyMethod: string;
-  billing: string;
+  billing: (company: string) => string;
 };
 
 function boardSteps(board: BoardText, input: PostingInput): string[] {
   const intake = input.intakeAddress ? ` If ${board.name} insists on sending applications by email instead, use ${input.intakeAddress} so each one still lands here.` : "";
   return [
     `${board.signIn} Post the job from ${input.companyName}'s own account: ${input.companyName} is the hiring employer.`,
-    `Paste the posting package from the role's Posting tab: the title "${input.packet.identity.title}", the location, the pay range, the employment type and the description. Add the screening questions only if the board insists on its own.`,
+    `Paste the posting package: the title "${input.packet.identity.title}", the location, the pay range, the employment type and the description. Add the screening questions only if the board insists on its own.`,
     `${board.applyMethod} ${input.applyUrl}${intake}`,
-    `${board.billing} Recruiting OS never spends on your behalf.`,
-    `When the listing is public, copy its URL from the browser and record it here under "Record the public URL". The posting is shown as "Live and verified" only after the link has been checked.`,
+    `${board.billing(input.companyName)} Recruiting OS never spends on ${input.companyName}'s behalf.`,
+    `When the listing is public, copy its address from the browser and record the listing's public address. It is shown as "Live and verified" only after that address has been checked.`,
   ];
 }
 
 function manual(board: BoardText, input: PostingInput): PublishResult {
   return {
     status: "ready_to_post",
-    instructions: `Post this job on ${board.name} from ${input.companyName}'s own account with ${board.name}'s apply link ${input.applyUrl}, then record the public URL here.`,
+    instructions: `Post this job on ${board.name} from ${input.companyName}'s own account with ${board.name}'s apply link ${input.applyUrl}, then record the listing's public address.`,
     steps: boardSteps(board, input),
   };
 }
@@ -36,21 +38,21 @@ const INDEED: BoardText = {
   name: "Indeed",
   signIn: "Sign in to Indeed for Employers (employers.indeed.com) and choose \"Post a job\".",
   applyMethod: "Under how you want to receive applications, choose to direct applicants to an external site and paste this apply link:",
-  billing: "Sponsoring the post is optional and is billed by Indeed to your own account.",
+  billing: (company) => `Sponsoring the post is optional and is billed by Indeed to ${company}'s own account.`,
 };
 
 const ZIPRECRUITER: BoardText = {
   name: "ZipRecruiter",
   signIn: "Sign in to ZipRecruiter for Employers and choose \"Post a job\".",
   applyMethod: "Under how candidates apply, choose your own application URL (a custom apply URL) and paste this apply link:",
-  billing: "The listing runs on your ZipRecruiter plan; any promotion is billed by ZipRecruiter to your own account.",
+  billing: (company) => `The listing runs on ${company}'s ZipRecruiter plan; any promotion is billed by ZipRecruiter to ${company}'s own account.`,
 };
 
 const LINKEDIN: BoardText = {
   name: "LinkedIn",
   signIn: "Sign in to LinkedIn as an administrator of the company page and choose \"Post a free job\" (Jobs, then Post a job).",
   applyMethod: "Under how you want to receive applicants, choose \"External website\" and paste this apply link:",
-  billing: "The free listing costs nothing; promoting it is optional and is billed by LinkedIn to your own account.",
+  billing: (company) => `The free listing costs nothing; promoting it is optional and is billed by LinkedIn to ${company}'s own account.`,
 };
 
 export class IndeedAdapter implements JobBoardAdapter {

@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { RolePacket as RolePacketSchema, type Actor, type PacketFlag, type RolePacket } from "@ros/contracts";
 import { payChanged } from "@ros/agents";
-import { can, emit, guardPacket, unresolvedFlags } from "@ros/core";
+import { can, emit, guardPacket, isSoleOwner, markBoardsOutdated, unresolvedFlags } from "@ros/core";
 import { approvalRequests, companies, rolePackets, roles, workflowRuns, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import type { Tenant } from "../middleware/session";
@@ -11,15 +11,47 @@ import type { Tenant } from "../middleware/session";
  * nothing is overwritten. Whether the new version takes effect at once or waits for an approver depends on the role's
  * state and on who is editing:
  * - a pending role: the older approval and its workflow run are cancelled and a new run asks for approval of the new version;
- * - an open role, edited by someone who may approve: the version is approved and becomes current (as before);
+ * - an open role, edited by someone who may approve: a wording change is approved and becomes current, after the preview
+ *   the page shows first; a change to the pay, the title, the places or the eligibility questions follows the same
+ *   approval as a new role (founder decision Q10 = B, plan D4), and a company's only owner confirms their own change;
  * - an open role, edited by someone who may not: the version is proposed and waits; the role keeps running on the old one;
  * - a draft (sent back) role: the version is proposed; the person asks for approval again from the role page;
  * - a paused or closed role: the version is kept as proposed.
+ * Once a version of a running role becomes current, the boards posted by hand still show the old one (plan D4,
+ * `markBoardsOutdated`): ITS gets an update task per board, or the team is told which boards to update.
  */
 export type RoleRow = typeof roles.$inferSelect;
 export type PacketRow = typeof rolePackets.$inferSelect;
 
 export type NewVersionOutcome = "approved_current" | "proposed_pending_approval" | "proposed";
+
+/** What an edit to a live job changes that needs the same approval as a new role (Q10 = B), in plain words. */
+export type MaterialChange = "pay" | "title" | "location" | "eligibility";
+export const MATERIAL_CHANGE_LABEL: Record<MaterialChange, string> = { pay: "the pay", title: "the job title", location: "where the job is", eligibility: "the eligibility questions" };
+
+/** Deep equality that ignores key order (a stored packet's keys come back from the database in their own order). */
+function stable(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(stable);
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v as Record<string, unknown>).filter(([, x]) => x !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([k, x]) => [k, stable(x)]));
+  return v;
+}
+const same = (a: unknown, b: unknown) => JSON.stringify(stable(a ?? null)) === JSON.stringify(stable(b ?? null));
+
+/**
+ * The changes between two packets that need approval when the job is live: anything in the pay (the range, the basis,
+ * the currency, the private ceiling, the bonus and benefits text), the title, the places or the work model (a remote job
+ * answers to other laws), and the eligibility questions. Wording elsewhere is not on the list.
+ */
+export function materialChanges(before: RolePacket, after: RolePacket): MaterialChange[] {
+  const out: MaterialChange[] = [];
+  const a = before.compensation;
+  const b = after.compensation;
+  if (a.basis !== b.basis || a.currency !== b.currency || a.min !== b.min || a.max !== b.max || a.ceiling !== b.ceiling || (a.mid ?? null) !== (b.mid ?? null) || (a.bonus ?? "") !== (b.bonus ?? "") || (a.benefitsSummary ?? "") !== (b.benefitsSummary ?? "") || a.discloseRange !== b.discloseRange) out.push("pay");
+  if (before.identity.title.trim() !== after.identity.title.trim()) out.push("title");
+  if (!same(before.identity.locations, after.identity.locations) || before.identity.remotePolicy !== after.identity.remotePolicy) out.push("location");
+  if (!same(before.requirements.eligibility, after.requirements.eligibility)) out.push("eligibility");
+  return out;
+}
 
 /** The version the role runs on: the current one when it has been opened, otherwise the newest. */
 export function currentVersionOf(role: Pick<RoleRow, "currentPacketVersion">, versions: PacketRow[]): PacketRow | null {
@@ -103,15 +135,18 @@ export async function createPacketVersion(
   tx: Tx,
   container: Container,
   input: { tenant: Tenant; actor: Actor; role: RoleRow; packet: RolePacket; changeSummary: string; source?: "human_edit" | "playbook" | "import" | "agent_revision" },
-): Promise<{ version: PacketRow; outcome: NewVersionOutcome; approvalRunId: string | null; guardChanges: string[] }> {
+): Promise<{ version: PacketRow; outcome: NewVersionOutcome; approvalRunId: string | null; guardChanges: string[]; needsApproval: NeedsApproval | null; boardsShowingOldVersion: string[] }> {
   const { tenant: t, actor, role } = input;
   const versions = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
   const next = (versions[0]?.version ?? 0) + 1;
   const editorMayApprove = can(t.role, "role.approve");
   const now = container.engine.clock().toISOString();
   const { packet, newlyKept, changes: guardChanges } = await guardPacketVersion(tx, { companyId: t.companyId, actor, packet: input.packet, previous: versions[0] ?? null, now });
+  // Q10 = B: on a live job, the pay, the title, the places and the eligibility questions need the same approval as a new role.
+  const live = role.status === "open" ? currentVersionOf(role, versions) : null;
+  const material = live ? materialChanges(live.packet, packet) : [];
   // A version with a flag nobody has dealt with waits for approval even from an approver: the approval card shows it.
-  const approvesNow = role.status === "open" && editorMayApprove && unresolvedFlags(packet).length === 0;
+  const approvesNow = role.status === "open" && editorMayApprove && unresolvedFlags(packet).length === 0 && material.length === 0;
   const [pv] = await tx
     .insert(rolePackets)
     .values({ companyId: t.companyId, roleId: role.id, version: next, packet, status: approvesNow ? "approved" : "proposed", source: input.source ?? "human_edit", changeSummary: input.changeSummary, createdBy: actor, approvedBy: approvesNow ? t.userId : null, approvedAt: approvesNow ? now : null })
@@ -125,18 +160,31 @@ export async function createPacketVersion(
     for (const v of versions) if (v.status === "approved") await tx.update(rolePackets).set({ status: "superseded" }).where(eq(rolePackets.id, v.id));
     await tx.update(roles).set({ currentPacketVersion: next, title: input.packet.identity.title }).where(eq(roles.id, role.id));
     await emit(tx, { type: "role_packet.approved", companyId: t.companyId, actor, subject: { type: "role_packet", id: `${role.id}:${next}` }, payload: { roleId: role.id, version: next, via: "edit_while_open" } });
-    return { version: pv, outcome: "approved_current", approvalRunId: null, guardChanges };
+    const outdated = await markBoardsOutdated(tx, { companyId: t.companyId, roleId: role.id, previousVersion: role.currentPacketVersion, newVersion: next, actor, now: container.engine.clock() });
+    return { version: pv, outcome: "approved_current", approvalRunId: null, guardChanges, needsApproval: null, boardsShowingOldVersion: outdated };
   }
   if (role.status === "open" || role.status === "pending_approval") {
     // Whoever was asked to approve the older version is no longer needed; the new version gets its own request.
     await cancelPendingPacketApprovals(tx, container, { companyId: t.companyId, roleId: role.id, actor, reason: `superseded by version ${next}` });
     if (role.status === "pending_approval") await tx.update(roles).set({ title: input.packet.identity.title }).where(eq(roles.id, role.id));
+    const labels = material.map((m) => MATERIAL_CHANGE_LABEL[m]);
+    const changed = labels.length > 1 ? `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}` : labels.join("");
     const rationale = role.status === "open"
-      ? `${editorName} changed the packet of an open role: ${input.changeSummary}. Approve to make version ${next} current; until then the role keeps running on version ${role.currentPacketVersion ?? "the approved one"}.`
+      ? material.length && editorMayApprove
+        ? `${editorName} changed ${changed} of the live job: ${input.changeSummary}. A change to the pay, the title, the place or the eligibility questions needs the same approval as a new role. Until it is approved the job keeps running on version ${role.currentPacketVersion ?? "the approved one"}.`
+        : `${editorName} changed the packet of an open role: ${input.changeSummary}. Approve to make version ${next} current; until then the role keeps running on version ${role.currentPacketVersion ?? "the approved one"}.`
       : `${editorName} edited the packet: ${input.changeSummary}. Approve version ${next} to open the role and start posting.`;
     const { runId } = await startPacketApproval(tx, container, { companyId: t.companyId, role, version: next, actor, rationale, wasOpen: role.status === "open" });
-    return { version: pv, outcome: "proposed_pending_approval", approvalRunId: runId, guardChanges };
+    // The company's only owner approves their own change: the page offers "Confirm this change" at once (Q10).
+    const needsApproval: NeedsApproval | null = material.length && editorMayApprove ? { changes: material, words: `This changes ${changed}, so it needs the same approval as a new role before it goes live.`, youMayConfirm: await isSoleOwner(tx, t.companyId, t.userId) } : null;
+    return { version: pv, outcome: "proposed_pending_approval", approvalRunId: runId, guardChanges, needsApproval, boardsShowingOldVersion: [] };
   }
   // Draft (sent back), paused or closed: the version is kept; a draft is sent for approval again from the role page.
-  return { version: pv, outcome: "proposed", approvalRunId: null, guardChanges };
+  return { version: pv, outcome: "proposed", approvalRunId: null, guardChanges, needsApproval: null, boardsShowingOldVersion: [] };
 }
+
+/**
+ * Why an approver's own edit to a live job waits (Q10 = B): which of the pay, the title, the place or the eligibility
+ * questions changed, in a sentence, and whether the editor may confirm it themselves (a company's only owner).
+ */
+export type NeedsApproval = { changes: MaterialChange[]; words: string; youMayConfirm: boolean };

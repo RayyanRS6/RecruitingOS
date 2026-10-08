@@ -74,6 +74,9 @@ export type AuditAction =
   | "posting.changed"
   | "application_link.changed"
   | "role.applications_toggled"
+  /** Publishing (plan Wave D): the boards a role uses, and its closing date. */
+  | "role.boards_chosen"
+  | "role.closing_date_changed"
   /** Team invitations (docs/spec/21, area A): sent, sent again, withdrawn, accepted at sign-in. Never the token. */
   | "invitation.sent"
   | "invitation.resent"

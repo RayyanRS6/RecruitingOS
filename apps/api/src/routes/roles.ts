@@ -1,7 +1,9 @@
 import { Hono } from "hono";
 import { and, count, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome, OwnerGroup, OwnerStage, SendDecisionMessages, type ActiveMark, type CandidateNotice } from "@ros/contracts";
-import { CLOSER_LOOK_LABEL, DECISION_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeMarksFor, assertCan, audit, can, emit, evidenceView, groupFor, holdEnded, jobNoticesFor, listOutcomes, openEscalationsFor, ownerStage, ownerStageLabel, ownerTags, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows } from "@ros/core";
+import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome, OwnerGroup, OwnerStage, SendDecisionMessages, SetClosingDate, type ActiveMark, type CandidateNotice } from "@ros/contracts";
+import { CLOSER_LOOK_LABEL, CLOSING_DATE_REASON, DECISION_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeMarksFor, assertCan, audit, boardPostingOf, can, closingDateProblem, closingDateRequired, closingDayWords, closingMoment, emit, evidenceView, groupFor, holdEnded, jobNoticesFor, listOutcomes, notify, openEscalationsFor, ownerStage, ownerStageLabel, ownerTags, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows, showsOldVersion } from "@ros/core";
+import { armClosingDate } from "@ros/workflows";
+import { autoActionsOnOpen, boardChoices, closingDateFor } from "../services/publishing";
 import { withEmptyPay, withoutPay } from "../services/pay-redaction";
 import { users } from "@ros/db";
 import { assertMayApprovePacket, packetApprovalView } from "../services/packet-approval";
@@ -79,7 +81,7 @@ roleRoutes.get("/:id", requireTenant, async (c) => {
     // Without compensation.read the pay section keeps its shape but carries no figure anywhere (services/pay-redaction.ts).
     const redact = (p: typeof current) => (p && !canSeeComp ? withEmptyPay(p) : p);
     // Whether candidates see the range, by the public pages' rule: the owner's choice, or a pay transparency law where the job is (plan 0.8).
-    const [company] = await tx.select({ locations: companies.locations, settings: companies.settings }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
+    const [company] = await tx.select({ name: companies.name, locations: companies.locations, settings: companies.settings, timezone: companies.timezone }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
     const withPayView = (p: typeof current) => {
       const shown = redact(p);
       if (!p || !shown) return shown;
@@ -92,8 +94,17 @@ roleRoutes.get("/:id", requireTenant, async (c) => {
     const visiblePending = !can(t.role, "application.read") ? [] : scope ? pending.filter((p) => scopeAllows(scope, { roleId: p.roleId, applicationId: p.applicationId })) : pending;
     // A version proposed while the role runs (an edit waiting for approval): shown beside the current one, never in its place.
     const proposed = current && ["open", "paused"].includes(role.status) ? packets.find((p) => p.status === "proposed" && p.version > current.version) ?? null : null;
-    const approval = await packetApprovalView(tx, { tenant: t, role, packets, pending });
-    return { ...role, currentPacket: withPayView(current), proposedPacket: withPayView(proposed), packetVersions: packets.map((p) => ({ id: p.id, version: p.version, status: p.status, source: p.source, changeSummary: p.changeSummary, createdAt: p.createdAt, createdBy: p.createdBy })), postings: posts, boardsStillUp: posts.filter((p) => p.closureRequired && !p.closureConfirmedAt).map((p) => p.channel), counts, pendingApprovals: visiblePending, packetApproval: approval.packetApproval, decisionMaker: approval.decisionMaker };
+    const now = c.get("container").engine.clock();
+    const approval = await packetApprovalView(tx, { tenant: t, role, packets, pending, now });
+    // Wave D: what starts on its own once the job is live (D9), the board ticks and who posts them (D3, D6), the closing date (D7).
+    const publishing = {
+      autoActionsOnOpen: await autoActionsOnOpen(tx, role.companyId, role.id),
+      boards: boardChoices(role, current?.packet ?? null, company?.settings),
+      whoPosts: boardPostingOf(company?.settings),
+      closingDate: closingDateFor(role, company ?? null, current?.packet ?? null, now),
+      boardsShowingOldVersion: posts.filter((p) => showsOldVersion(p, role.currentPacketVersion)).map((p) => p.channel),
+    };
+    return { ...role, currentPacket: withPayView(current), proposedPacket: withPayView(proposed), packetVersions: packets.map((p) => ({ id: p.id, version: p.version, status: p.status, source: p.source, changeSummary: p.changeSummary, createdAt: p.createdAt, createdBy: p.createdBy })), postings: posts, boardsStillUp: posts.filter((p) => p.closureRequired && !p.closureConfirmedAt).map((p) => p.channel), counts, pendingApprovals: visiblePending, packetApproval: approval.packetApproval, decisionMaker: approval.decisionMaker, ...publishing };
   });
   if (!row) throw new HttpError(404, "not_found", "Role not found.");
   return c.json(row);
@@ -124,7 +135,9 @@ roleRoutes.post("/:id/packets", requireTenant, async (c) => {
     if (!role) throw new HttpError(404, "not_found", "Role not found.");
     const made = await createPacketVersion(tx, container, { tenant: t, actor: actorOf(c), role, packet: body.packet, changeSummary: body.changeSummary });
     // `guardChanges` says what the packet guard changed on its own (a must-have it took out, the ceiling it raised), so the page can tell the person.
-    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId, guardChanges: made.guardChanges };
+    // `needsApproval` says why an approver's change to a live job waits (Q10) and whether they may confirm it themselves;
+    // `boardsShowingOldVersion` names the boards still showing the earlier version once a change is live (D4).
+    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId, guardChanges: made.guardChanges, needsApproval: made.needsApproval, boardsShowingOldVersion: made.boardsShowingOldVersion };
   });
   await container.kick();
   return c.json(result, 201);
@@ -134,6 +147,8 @@ roleRoutes.post("/:id/packets", requireTenant, async (c) => {
  * Approving resolves the pending approval request; the role_approval workflow opens and publishes the role (or, for a
  * version proposed while the role was open, makes it current). Refused for the person who started the role or wrote
  * the version unless they are the company's only owner, and reserved for the named decision maker when there is one.
+ * Refused with 409 `legal_check` while the law of the job's places asks for something the version lacks (plan D5:
+ * `details.missing` lists each item with what to do).
  */
 roleRoutes.post("/:id/approve", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -148,7 +163,7 @@ roleRoutes.post("/:id/approve", requireTenant, async (c) => {
     const proposedVersion = Number((req.proposal as { version?: number }).version);
     if (proposedVersion !== body.version) throw new HttpError(409, "version_mismatch", `The pending approval is for version ${proposedVersion}.`);
     const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, body.version))).limit(1);
-    await assertMayApprovePacket(tx, { tenant: t, req, role, version: pv ?? null });
+    await assertMayApprovePacket(tx, { tenant: t, req, role, version: pv ?? null, now: container.engine.clock() });
     // On the engine's clock, like POST /approvals/:id/decide: the waiting workflow judges expiry on that clock.
     const decidedAt = container.engine.clock().toISOString();
     await tx.update(approvalRequests).set({ status: "approved", decidedBy: t.userId, decidedAt, decisionNote: body.note ?? null }).where(eq(approvalRequests.id, req.id));
@@ -191,6 +206,55 @@ for (const action of ["pause", "resume"] as const) {
     return c.json(row);
   });
 }
+
+/**
+ * The closing date (founder decision Q12, plan D7): the last day new applications are taken, in the company's time
+ * zone, or null to take it off. For an open or paused role the timer is set again (packages/workflows closing-date.ts);
+ * a draft or pending role gets its timer when it opens. A later date on a role whose date already stopped applications
+ * takes applications again ("Extend the date"), and the emails held meanwhile are added. Colorado (and remote) roles
+ * keep a date: 409 `closing_date_required`. Answers `{ ok, closingDate, reopened }`.
+ */
+roleRoutes.post("/:id/closing-date", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  assertCan(t.role, "role.manage");
+  const body = SetClosingDate.parse(await c.req.json());
+  const container = c.get("container");
+  const actor = actorOf(c);
+  const result = await withTenant(container.db, t.companyId, async (tx) => {
+    const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
+    if (!role) throw new HttpError(404, "not_found", "Role not found.");
+    if (role.status === "closed") throw new HttpError(409, "role_closed", "The role is closed, so it has no closing date to change.");
+    const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
+    const packets = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
+    const packet = currentVersionOf(role, packets)?.packet ?? null;
+    const now = container.engine.clock();
+    if (body.closesOn) {
+      const problem = closingDateProblem(body.closesOn, now, company?.timezone);
+      if (problem) throw new HttpError(400, "bad_closing_date", problem);
+    } else if (packet && closingDateRequired({ jobLocations: packet.identity.locations, remotePolicy: packet.identity.remotePolicy })) {
+      throw new HttpError(409, "closing_date_required", "The law in Colorado asks the job ad to say when applications close, and this job is there (or remote). Choose a later date instead of taking it off.");
+    }
+    const previous = role.applicationsCloseOn ? role.applicationsCloseOn.slice(0, 10) : null;
+    const [updated] = await tx.update(roles).set({ applicationsCloseOn: body.closesOn }).where(eq(roles.id, role.id)).returning();
+    await emit(tx, { type: "role.closing_date_set", companyId: t.companyId, actor, subject: { type: "role", id: role.id }, payload: { closesOn: body.closesOn, previous } });
+    await audit(tx, { companyId: t.companyId, actor, action: "role.closing_date_changed", target: { type: "role", id: role.id }, reason: body.closesOn ? `closes on ${body.closesOn}` : "closing date removed", details: { closesOn: body.closesOn, previous } });
+    if (["open", "paused"].includes(role.status)) await armClosingDate(tx, container.engine, { companyId: t.companyId, roleId: role.id, closesOn: body.closesOn, actor });
+    // "Extend the date": applications the old date stopped open again when the new date is still ahead.
+    let reopened = false;
+    let row = updated;
+    if (body.closesOn && !role.acceptingApplications && role.applicationsClosedReason === CLOSING_DATE_REASON && closingMoment(body.closesOn, company?.timezone).getTime() > now.getTime()) {
+      [row] = await tx.update(roles).set({ acceptingApplications: true, applicationsClosedAt: null, applicationsClosedReason: null }).where(eq(roles.id, role.id)).returning();
+      await emit(tx, { type: "role.applications_reopened", companyId: t.companyId, actor, subject: { type: "role", id: role.id }, payload: { reason: "closing date extended", closesOn: body.closesOn } });
+      await notify(tx, { companyId: t.companyId, kind: "applications.reopened", title: `${role.title} is taking applications again`, body: `${actor.name ?? "A team member"} moved the closing date to ${closingDayWords(body.closesOn)}. The job page shows the apply button again.`, action: { label: "Open the Posting tab", href: `/roles/${role.id}?tab=posting` } });
+      reopened = true;
+    }
+    return { ok: true, reopened, roleId: role.id, closingDate: closingDateFor(row, company ?? null, packet, now) };
+  });
+  await container.kick();
+  // Applications that arrived by email while applications were stopped were held (C19); reopening adds them to the role.
+  if (result.reopened) await replayHeldEmails(container, { companyId: t.companyId, roleId: result.roleId });
+  return c.json({ ok: result.ok, reopened: result.reopened, closingDate: result.closingDate });
+});
 
 // The posting routes (GET /:id/postings, the per-channel actions, links, volume, the accepting switch) live in routes/postings.ts.
 

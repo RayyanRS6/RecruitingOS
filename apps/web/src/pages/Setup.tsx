@@ -2,14 +2,15 @@
 
 import { type ReactNode, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, ErrorState, Field, PageHeader, Pill, Segmented, Skeleton, Table, type Tone } from "@ros/ui";
+import { Alert, Avatar, Button, Card, Chip, ErrorState, Field, PageHeader, Pill, Segmented, Skeleton, Table, type Tone } from "@ros/ui";
 import { api, ApiError, type MyCalendar } from "../api/client";
 import { useSearchParams } from "../nav";
 import { hasChoice, loosens, looseningQuestion, splitRules } from "../ai-rules";
 import { CAREERS_PAGE_WAITS, companyCheckOf } from "../company-check";
+import { ABOUT_MAX, LOGO_TYPES, aboutCheckOf, aboutDraftOf, aboutProblem, logoProblem, logoUrlOf } from "../publishing";
 import { LEVELS, allowedLevels, type PolicyLevel } from "../policy-levels";
 import { ACCESS_DAYS, accessChip } from "../recruiter-access";
-import { canSeeActivity, canStartHire } from "../roles";
+import { canChangeCompany, canSeeActivity, canStartHire } from "../roles";
 import { setupSections } from "../setup-sections";
 import { browserStorage, SHORTCUT_CHANGED_EVENT, START_HIRE_KEY, setStartHireShortcut, startHireShortcutOn } from "../start-hire";
 import { toast } from "../toast";
@@ -17,7 +18,13 @@ import { NotificationsCard } from "./NotificationsCard";
 import { TeamCard } from "./TeamCard";
 
 type BusinessHours = { days: number[]; start: string; end: string };
-type CompanySettings = { website?: string; logoUrl?: string; benefitsSummary?: string; careersPage?: { enabled: boolean; intro?: string }; businessHours?: BusinessHours; notices?: Record<string, { version: string; text: string }>; pilot?: { startedAt: string; endsAt: string; extendedUntil?: string } };
+/**
+ * `about`: the short "about the company" text candidates read on the careers page and every job page, once a person
+ * approved it (founder decision Q13); `boardPosting`: who posts on the job boards (plan D3); `zipRecruiterPlan`: the
+ * company has its own paid ZipRecruiter plan, the only way ZipRecruiter is offered (Q11).
+ */
+type CompanySettings = { website?: string; logoUrl?: string; benefitsSummary?: string; careersPage?: { enabled: boolean; intro?: string }; businessHours?: BusinessHours; notices?: Record<string, { version: string; text: string }>; pilot?: { startedAt: string; endsAt: string; extendedUntil?: string }; about?: CompanyAbout | null; boardPosting?: "its" | "self"; zipRecruiterPlan?: boolean };
+type CompanyAbout = { text: string; approvedAt: string; approvedBy?: { id?: string; name?: string | null } | null };
 type Company ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; timezone: string; planKey: string; status: string; plan?: { key: string; name: string; limits: Record<string, number | null> } | null; usage?: Record<string, { used: number; limit: number | null }>; locations: Array<{ city?: string; region?: string; country?: string }>; settings: CompanySettings; integrations: Array<{ kind: string; provider: string; status: string }>; ai: { provider: string } };
 /**
  * minLevel and maxLevel: the floor and ceiling the API holds the action to; only the levels between them are offered.
@@ -78,6 +85,11 @@ export function Setup() {
             <Section id="setup-team"><TeamCard myRole={myRole} myUserId={me.data?.user.id ?? ""} onReauthRequired={() => setReauthNeeded(true)} /></Section>
           </div>
 
+          <div className="grid-2">
+            <Section id="setup-profile"><CompanyProfileCard company={c} canEdit={canChangeCompany(myRole)} /></Section>
+            <Section id="setup-boards"><JobBoardsCard company={c} canEdit={canChangeCompany(myRole)} /></Section>
+          </div>
+
           <Section id="setup-recruiters"><RecruiterAccess canRevoke={["owner", "admin"].includes(myRole)} /></Section>
 
           <Section id="setup-sessions"><YourSessions /></Section>
@@ -96,7 +108,7 @@ export function Setup() {
                     <td>{i.kind}</td>
                     <td>{i.provider}</td>
                     <td><Pill size="sm" tone={SERVICE_STATE_TONE[i.status] ?? "neutral"}>{SERVICE_STATE_LABEL[i.status] ?? i.status.replace(/_/g, " ")}</Pill></td>
-                    <td className="small muted">{explainStatus(i)}</td>
+                    <td className="small muted">{explainStatus(i, c.settings.boardPosting === "self" ? "self" : "its")}</td>
                   </tr>
                 ))}
               </Table>
@@ -216,11 +228,16 @@ function ShortcutCard() {
 const SERVICE_STATE_LABEL: Record<string, string> = { live: "Connected and working", awaiting_verification: "Submitted, awaiting verification", manual_action_required: "Manual action required", not_connected: "Not connected", fake: "Development stand-in", disabled: "Disabled" };
 const SERVICE_STATE_TONE: Record<string, Tone> = { live: "good", awaiting_verification: "accent", manual_action_required: "caution", fake: "caution" };
 
-function explainStatus(i: { kind: string; provider: string; status: string }): string {
+/**
+ * What each connected service takes, in a line. The job boards are not connected to the product: ITS posts on them from
+ * the company's own accounts (plan D3), or the team does when it chose to post itself (`whoPosts`).
+ */
+function explainStatus(i: { kind: string; provider: string; status: string }, whoPosts: "its" | "self" = "its"): string {
   if (i.status === "fake") return "Development stand-in: records what it would send. Never used in production.";
   if (i.provider === "careers_page") return "Served by the product; every open role has a public page and apply form.";
-  if (i.provider === "google_jobs") return "Valid JobPosting data is on every job page. Google indexes it on its own schedule; confirm in Search Console.";
+  if (i.provider === "google_jobs") return "Every job page carries the details Google reads. Google lists jobs on its own schedule; a job is marked found once someone sees it in a Google search.";
   if (i.provider === "email_in") return i.status === "live" ? "Forward application emails to each role's intake address." : "The inbound mail domain is not configured yet, so forwarded applications cannot arrive. Share the apply link directly.";
+  if (["indeed", "ziprecruiter", "linkedin_basic"].includes(i.provider) && whoPosts === "its") return "Not connected to the product: ITS posts your jobs here from your company's own account, with each job's own apply link, and nothing is called up until its address is checked.";
   if (i.provider === "indeed") return "Not connected to Indeed. Post from your own Indeed account with the apply link, or forward applications to the intake address once email-in is connected.";
   if (i.provider === "ziprecruiter") return "Not connected to ZipRecruiter. Post from your own account with the apply link.";
   if (i.provider === "linkedin_basic") return "Not connected to LinkedIn. Post a free listing from your company page with the apply link.";
@@ -468,12 +485,15 @@ const SIZE_BANDS = ["1-19", "20-49", "50-99", "100-199", "200-499", "500+"];
 const USAGE_LABEL: Record<string, string> = { active_roles: "active roles", text_screens: "text screens", voice_minutes: "voice minutes", sourcing_contacts: "sourcing contacts", recruiter_asks: "recruiter requests", seats: "seats" };
 const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-/** What the company card sends: only what the person may change; the plan, pilot and allowances are never in it. */
-type CompanyForm = { name: string; website: string; logoUrl: string; timezone: string; sizeBand: string; locations: string; intro: string; benefits: string; hoursOn: boolean; days: number[]; start: string; end: string; notices: Record<string, string> };
+/**
+ * What the company card sends: only what the person may change; the plan, pilot and allowances are never in it. The
+ * logo and the "about" text have a card of their own (CompanyProfileCard): an uploaded picture, and words a person approved.
+ */
+type CompanyForm = { name: string; website: string; timezone: string; sizeBand: string; locations: string; intro: string; benefits: string; hoursOn: boolean; days: number[]; start: string; end: string; notices: Record<string, string> };
 
 function formOf(c: Company, notices: NoticeView[]): CompanyForm {
   return {
-    name: c.name, website: c.settings.website ?? "", logoUrl: c.settings.logoUrl ?? "", timezone: c.timezone, sizeBand: c.sizeBand,
+    name: c.name, website: c.settings.website ?? "", timezone: c.timezone, sizeBand: c.sizeBand,
     locations: c.locations.map((l) => [l.city, l.region].filter(Boolean).join(", ")).join("\n"),
     intro: c.settings.careersPage?.intro ?? "", benefits: c.settings.benefitsSummary ?? "",
     hoursOn: !!c.settings.businessHours, days: c.settings.businessHours?.days ?? [1, 2, 3, 4, 5], start: c.settings.businessHours?.start ?? "09:00", end: c.settings.businessHours?.end ?? "17:00",
@@ -506,7 +526,7 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
       }
       return api.patch<Company & { changed: string[] }>("/api/v1/companies/current", {
         name: f.name.trim(), timezone: f.timezone, sizeBand: f.sizeBand, locations: parseLocations(f.locations),
-        settings: { website: f.website.trim(), logoUrl: f.logoUrl.trim(), benefitsSummary: f.benefits.trim(), careersPage: { intro: f.intro.trim() }, businessHours: f.hoursOn ? { days: f.days, start: f.start, end: f.end } : null, ...(Object.keys(changedNotices).length ? { notices: changedNotices } : {}) },
+        settings: { website: f.website.trim(), benefitsSummary: f.benefits.trim(), careersPage: { intro: f.intro.trim() }, businessHours: f.hoursOn ? { days: f.days, start: f.start, end: f.end } : null, ...(Object.keys(changedNotices).length ? { notices: changedNotices } : {}) },
       });
     },
     onSuccess: async (r) => {
@@ -541,13 +561,12 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
           <Field label="Company name" htmlFor="co-name"><input id="co-name" className="input" value={f.name} onChange={(e) => set({ name: e.target.value })} /></Field>
           <div className="grid-2">
             <Field label="Website" htmlFor="co-web" hint="Shown to candidates and search engines"><input id="co-web" className="input" placeholder="acme.com" value={f.website} onChange={(e) => set({ website: e.target.value })} /></Field>
-            <Field label="Logo address (https)" htmlFor="co-logo" hint="Optional; used on job pages"><input id="co-logo" className="input" placeholder="https://acme.com/logo.png" value={f.logoUrl} onChange={(e) => set({ logoUrl: e.target.value })} /></Field>
-            <Field label="Time zone" htmlFor="co-tz"><select id="co-tz" className="select" value={f.timezone} onChange={(e) => set({ timezone: e.target.value })}>{[...new Set([f.timezone, ...ZONES])].map((z) => <option key={z} value={z}>{z}</option>)}</select></Field>
+            <Field label="Time zone" htmlFor="co-tz" hint="Closing dates end at midnight here"><select id="co-tz" className="select" value={f.timezone} onChange={(e) => set({ timezone: e.target.value })}>{[...new Set([f.timezone, ...ZONES])].map((z) => <option key={z} value={z}>{z}</option>)}</select></Field>
             <Field label="Size" htmlFor="co-size"><select id="co-size" className="select" value={f.sizeBand} onChange={(e) => set({ sizeBand: e.target.value })}>{SIZE_BANDS.map((s) => <option key={s} value={s}>{s} employees</option>)}</select></Field>
           </div>
           <Field label="Locations (one per line, as City, ST)" htmlFor="co-loc"><textarea id="co-loc" className="input" rows={2} value={f.locations} onChange={(e) => set({ locations: e.target.value })} /></Field>
           <Field label="Careers page introduction" htmlFor="co-intro" hint="The first line candidates read on your careers page"><textarea id="co-intro" className="input" rows={2} maxLength={1000} value={f.intro} onChange={(e) => set({ intro: e.target.value })} /></Field>
-          <Field label="Benefits summary" htmlFor="co-ben" hint="Used when drafting job descriptions"><textarea id="co-ben" className="input" rows={2} maxLength={2000} value={f.benefits} onChange={(e) => set({ benefits: e.target.value })} /></Field>
+          <Field label="Benefits summary" htmlFor="co-ben" hint="Shown on job pages where a role describes none of its own; some states ask for it on every job ad"><textarea id="co-ben" className="input" rows={2} maxLength={2000} value={f.benefits} onChange={(e) => set({ benefits: e.target.value })} /></Field>
           <div>
             <h3 style={{ marginBottom: 6 }}>Contact hours</h3>
             <p className="small muted">When candidates may be texted. The law already keeps texts between 8:00 and 21:00 local time; your hours can only narrow that.</p>
@@ -579,5 +598,264 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
 }
 
 function fieldLabel(f: string): string {
-  return ({ name: "name", website: "website", timezone: "time zone", sizeBand: "size", locations: "locations", logoUrl: "logo", benefitsSummary: "benefits summary", careersPage: "careers page intro", businessHours: "contact hours", notices: "candidate notices" } as Record<string, string>)[f] ?? f;
+  return ({ name: "name", website: "website", timezone: "time zone", sizeBand: "size", locations: "locations", logoUrl: "logo", benefitsSummary: "benefits summary", careersPage: "careers page intro", businessHours: "contact hours", notices: "candidate notices", boardPosting: "who posts on job boards", zipRecruiterPlan: "ZipRecruiter plan", about: "about the company" } as Record<string, string>)[f] ?? f;
+}
+
+/*
+ * How candidates see the company (founder decision Q13, plan D10): the logo and a short "about the company" text, both
+ * shown on the careers page and every job page. The server owns these routes (apps/api routes/company-settings.ts):
+ *   POST /companies/current/about/draft   the assistant drafts the text from what the company told us; nothing is saved
+ *   POST /companies/current/about         { text } approves it as it stands (who and when are recorded); { text: null } takes it off
+ *   POST /companies/current/logo          the picture itself (multipart, field "file"), stored and served by us
+ * The text the assistant writes while drafting a role (its "company blurb") is never shown: only words a person approved.
+ */
+const ABOUT_DRAFT_PATH = "/api/v1/companies/current/about/draft";
+const ABOUT_PATH = "/api/v1/companies/current/about";
+const LOGO_PATH = "/api/v1/companies/current/logo";
+/* GET: what candidates see (`contactShown`: the company's own contact or the ITS inbox). PUT { email | null, name? }. */
+const PUBLIC_PROFILE_PATH = "/api/v1/companies/current/public-profile";
+const HIRING_CONTACT_PATH = "/api/v1/companies/current/hiring-contact";
+type PublicProfile = { hiringContact: { email: string; name: string | null } | null; contactShown: { email: string; name: string | null; kind: "company" | "its" } };
+
+function CompanyProfileCard({ company: c, canEdit }: { company: Company; canEdit: boolean }) {
+  return (
+    <Card title="How candidates see you">
+      <p className="small muted" style={{ marginBottom: 10 }}>Your logo, a few words about the company and who candidates can write to, on your careers page and every job page.</p>
+      <div className="stack" style={{ gap: 18 }}>
+        <LogoPicker company={c} canEdit={canEdit} />
+        <AboutText company={c} canEdit={canEdit} />
+        <HiringContactField canEdit={canEdit} />
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * Who candidates can write to before they apply (plan D10): for help, or a change to how they apply because of a
+ * disability. The company's own address once it sets one; until then, the ITS inbox that answers for the company. The
+ * line shows on the careers page, every job page and the apply form.
+ */
+function HiringContactField({ canEdit }: { canEdit: boolean }) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["public-profile"], queryFn: () => api.get<PublicProfile>(PUBLIC_PROFILE_PATH) });
+  const [form, setForm] = useState<{ email: string; name: string } | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: (body: { email: string | null; name?: string | null }) => api.put<PublicProfile>(HIRING_CONTACT_PATH, body),
+    onSuccess: async (_r, body) => {
+      toast(body.email ? "Contact saved." : "Back to the ITS inbox.", body.email ? "Candidates see it on your careers page, job pages and the apply form." : "Candidates write to the ITS inbox that answers for you.");
+      setForm(null);
+      setProblem(null);
+      await qc.invalidateQueries({ queryKey: ["public-profile"] });
+      await qc.invalidateQueries({ queryKey: ["audit-history"] });
+    },
+    onError: (e) => setProblem(e instanceof ApiError ? e.message : "Could not save the contact."),
+  });
+  const shown = q.data?.contactShown ?? null;
+  const own = q.data?.hiringContact ?? null;
+  const submit = () => {
+    const email = form?.email.trim() ?? "";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setProblem("Use an email address like jobs@yourcompany.com."); return; }
+    save.mutate({ email, name: form?.name.trim() || null });
+  };
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      <h3 style={{ fontSize: 14 }}>Who candidates can write to before they apply</h3>
+      {q.isLoading ? <Skeleton lines={1} /> : shown ? (
+        <p className="small" style={{ color: "var(--ink-2)", margin: 0 }}>
+          Candidates see: {shown.name ? `${shown.name}, ` : ""}{shown.email}. {shown.kind === "its" ? "This is the ITS inbox that answers for your company; set your own address to have them write to you." : "Your own address, set here."}
+        </p>
+      ) : null}
+      {canEdit ? (form ? (
+        <>
+          <Field label="Email address" htmlFor="co-contact-email" hint="For help with applying, or a change to how someone applies because of a disability.">
+            <input id="co-contact-email" className="input" type="email" autoComplete="off" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="e.g. jobs@yourcompany.com" />
+          </Field>
+          <Field label="Name to show (optional)" htmlFor="co-contact-name">
+            <input id="co-contact-name" className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Dana at the front desk" />
+          </Field>
+          <div className="row">
+            <Button variant="primary" size="sm" loading={save.isPending} onClick={submit}>Save the contact</Button>
+            <Button size="sm" variant="ghost" disabled={save.isPending} onClick={() => { setForm(null); setProblem(null); }}>Cancel</Button>
+          </div>
+        </>
+      ) : (
+        <div className="row">
+          <Button size="sm" onClick={() => setForm({ email: own?.email ?? "", name: own?.name ?? "" })}>{own ? "Change the contact" : "Set your own contact"}</Button>
+          {own ? <Button size="sm" variant="ghost" loading={save.isPending} onClick={() => save.mutate({ email: null })}>Use the ITS inbox</Button> : null}
+        </div>
+      )) : <p className="small muted" style={{ margin: 0 }}>An owner or an admin sets it.</p>}
+      {problem ? <Alert tone="caution">{problem}</Alert> : null}
+    </div>
+  );
+}
+
+/** The logo: a picture uploaded here, previewed before it is used, stored and served by us (never a link to another site). */
+function LogoPicker({ company: c, canEdit }: { company: Company; canEdit: boolean }) {
+  const qc = useQueryClient();
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  // The chosen picture is shown from the browser's own copy until it is uploaded; that copy is let go when replaced.
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
+  const choose = (f: File | null) => {
+    setProblem(null);
+    if (!f) { setFile(null); setPreview(null); return; }
+    const p = logoProblem(f);
+    if (p) { setProblem(p); setFile(null); setPreview(null); return; }
+    setFile(f);
+    setPreview(URL.createObjectURL(f));
+  };
+  const done = async () => { setFile(null); setPreview(null); await qc.invalidateQueries({ queryKey: ["company"] }); await qc.invalidateQueries({ queryKey: ["audit-history"] }); };
+  const upload = useMutation({
+    mutationFn: (f: File) => { const form = new FormData(); form.append("file", f); return api.post<unknown>(LOGO_PATH, form); },
+    onSuccess: async (r) => { toast("Logo saved.", logoUrlOf(r) ? "It shows on your careers page and job pages." : undefined); await done(); },
+    onError: (e) => setProblem(e instanceof ApiError ? e.message : "Could not upload the logo. Try again."),
+  });
+  const remove = useMutation({
+    mutationFn: () => api.patch("/api/v1/companies/current", { settings: { logoUrl: "" } }),
+    onSuccess: async () => { toast("Logo taken off.", "Job pages show your company's name instead."); await done(); },
+    onError: (e) => setProblem(e instanceof ApiError ? e.message : "Could not take the logo off."),
+  });
+  const shown = preview ?? c.settings.logoUrl ?? null;
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      <h3 style={{ fontSize: 14 }}>Logo</h3>
+      <div className="row" style={{ alignItems: "center", gap: 14 }}>
+        <span className="logo-preview">{shown ? <img src={shown} alt={preview ? "The logo you chose, not saved yet" : `${c.name} logo`} /> : <Avatar name={c.name} tone="ink" shape="square" size="xl" letters={1} />}</span>
+        <span className="small muted" style={{ flex: "1 1 200px" }}>{preview ? "This is how it will look. Save it to use it." : shown ? "Shown at the top of your careers page and job pages." : "No logo yet: job pages show your company's name."}</span>
+      </div>
+      {canEdit ? (
+        <>
+          <Field label={shown && !preview ? "Choose a different picture" : "Choose a picture"} htmlFor="co-logo-file" hint="PNG, JPG or WebP, up to 2 MB. A wide logo on a plain background looks best.">
+            <input id="co-logo-file" className="input" type="file" accept={LOGO_TYPES.join(",")} onChange={(e) => choose(e.target.files?.[0] ?? null)} />
+          </Field>
+          <div className="row">
+            {file ? <Button variant="primary" size="sm" icon="upload" loading={upload.isPending} onClick={() => upload.mutate(file)}>Use this logo</Button> : null}
+            {file ? <Button size="sm" variant="ghost" disabled={upload.isPending} onClick={() => choose(null)}>Cancel</Button> : null}
+            {!file && c.settings.logoUrl ? <Button size="sm" variant="ghost" loading={remove.isPending} onClick={() => remove.mutate()}>Take the logo off</Button> : null}
+          </div>
+        </>
+      ) : null}
+      {problem ? <Alert tone="caution">{problem}</Alert> : null}
+    </div>
+  );
+}
+
+/**
+ * "About the company": the assistant drafts a short text, a person edits it and approves it once; only then does it
+ * appear. A change is approved again. The draft is marked as written by the assistant until a person approves it.
+ */
+function AboutText({ company: c, canEdit }: { company: Company; canEdit: boolean }) {
+  const qc = useQueryClient();
+  const approved = c.settings.about ?? null;
+  const [editing, setEditing] = useState<{ text: string; drafted: boolean } | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  // A phrase in the assistant's draft that can stand in for a protected trait, with a fairer way to say it.
+  const [wording, setWording] = useState<ReturnType<typeof aboutCheckOf>>(null);
+  const draft = useMutation({
+    mutationFn: () => api.post<unknown>(ABOUT_DRAFT_PATH, {}),
+    onSuccess: (r) => {
+      const text = aboutDraftOf(r);
+      setProblem(text ? null : "The assistant did not write anything. Write it yourself, or try again.");
+      setWording(aboutCheckOf(r));
+      setEditing({ text, drafted: !!text });
+    },
+    onError: (e) => setProblem(e instanceof ApiError ? e.message : "The assistant could not write a draft. Write it yourself, or try again."),
+  });
+  const save = useMutation({
+    mutationFn: (text: string | null) => api.post(ABOUT_PATH, { text }),
+    onSuccess: async (_r, text) => {
+      toast(text ? "Approved." : "Taken off.", text ? "It shows on your careers page and job pages, as you approved it." : "Job pages no longer show an \"about\" text.");
+      setEditing(null);
+      setProblem(null);
+      setWording(null);
+      await qc.invalidateQueries({ queryKey: ["company"] });
+      await qc.invalidateQueries({ queryKey: ["audit-history"] });
+    },
+    onError: (e) => setProblem(e instanceof ApiError ? e.message : "Could not save it."),
+  });
+  const approve = () => {
+    const p = aboutProblem(editing?.text ?? "");
+    setProblem(p);
+    if (!p && editing) save.mutate(editing.text.trim());
+  };
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      <h3 style={{ fontSize: 14 }}>About the company</h3>
+      {editing ? (
+        <>
+          {editing.drafted ? <Alert tone="info">Drafted by the assistant (AI) from what you told us about the company. Read every word and change anything that is not right: nothing shows on job pages until you approve it.</Alert> : null}
+          {wording && editing.text.includes(wording.text) ? <Alert tone="caution">Check this wording: "{wording.text}". {wording.reason} {wording.alternative}</Alert> : null}
+          <Field label="What candidates read about the company" htmlFor="co-about" hint={`A few sentences: what you do, who you serve, what it is like to work there. Up to ${ABOUT_MAX} characters.`}>
+            <textarea id="co-about" className="textarea" rows={6} maxLength={ABOUT_MAX + 200} value={editing.text} onChange={(e) => setEditing({ ...editing, text: e.target.value })} />
+          </Field>
+          <div className="row">
+            <Button variant="primary" size="sm" loading={save.isPending} onClick={approve}>Approve and show it</Button>
+            <Button size="sm" variant="ghost" disabled={save.isPending} onClick={() => { setEditing(null); setProblem(null); }}>Cancel</Button>
+          </div>
+        </>
+      ) : approved ? (
+        <>
+          <p style={{ whiteSpace: "pre-wrap", color: "var(--ink-2)", margin: 0 }}>{approved.text}</p>
+          <p className="small muted" style={{ margin: 0 }}>Approved{approved.approvedBy?.name ? ` by ${approved.approvedBy.name}` : ""} on {new Date(approved.approvedAt).toLocaleDateString()}. Shown on your careers page and every job page.</p>
+          {canEdit ? (
+            <div className="row">
+              <Button size="sm" onClick={() => setEditing({ text: approved.text, drafted: false })}>Change it</Button>
+              <Button size="sm" variant="ghost" loading={save.isPending} onClick={() => save.mutate(null)}>Take it off job pages</Button>
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <>
+          <p className="small muted" style={{ margin: 0 }}>Nothing yet. Job pages show the job without an "about the company" part until someone approves one.</p>
+          {canEdit ? (
+            <div className="row">
+              <Button size="sm" variant="primary" icon="sparkle" loading={draft.isPending} onClick={() => draft.mutate()}>Draft it with the assistant</Button>
+              <Button size="sm" disabled={draft.isPending} onClick={() => setEditing({ text: "", drafted: false })}>Write it yourself</Button>
+            </div>
+          ) : <p className="small muted" style={{ margin: 0 }}>An owner or an admin writes and approves it.</p>}
+        </>
+      )}
+      {problem ? <Alert tone="caution">{problem}</Alert> : null}
+    </div>
+  );
+}
+
+/**
+ * Job boards (plan D3, founder decision Q11): who posts the company's jobs on LinkedIn, Indeed and ZipRecruiter (ITS by
+ * default, from the company's own accounts, or the team itself), and whether the company has its own paid ZipRecruiter
+ * plan, the only way ZipRecruiter is offered. Each role's boards are ticked on the role itself.
+ */
+function JobBoardsCard({ company: c, canEdit }: { company: Company; canEdit: boolean }) {
+  const qc = useQueryClient();
+  const whoPosts = c.settings.boardPosting === "self" ? "self" : "its";
+  const save = useMutation({
+    mutationFn: (settings: { boardPosting?: "its" | "self"; zipRecruiterPlan?: boolean }) => api.patch<{ changed: string[] }>("/api/v1/companies/current", { settings }),
+    onSuccess: async (r) => {
+      toast(r.changed?.length ? `Saved: ${r.changed.map(fieldLabel).join(", ")}.` : "Nothing changed.");
+      await qc.invalidateQueries({ queryKey: ["company"] });
+      await qc.invalidateQueries({ queryKey: ["audit-history"] });
+    },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not save."),
+  });
+  return (
+    <Card title="Job boards">
+      <p className="small muted" style={{ marginBottom: 10 }}>Every job goes on your careers page and Google. LinkedIn, Indeed and ZipRecruiter are ticked per role, and nothing is called up on a board until its address has been checked.</p>
+      <div className="stack" style={{ gap: 12 }}>
+        <Field label="Who posts your jobs on the boards">
+          {canEdit ? (
+            <Segmented value={whoPosts} onChange={(v) => save.mutate({ boardPosting: v })} ariaLabel="Who posts your jobs on the boards" options={[{ value: "its", label: "ITS posts them for us" }, { value: "self", label: "Our team posts them" }]} />
+          ) : <Chip>{whoPosts === "its" ? "ITS posts them for you" : "Your team posts them"}</Chip>}
+        </Field>
+        <p className="small" style={{ color: "var(--ink-2)", margin: 0 }}>{whoPosts === "its" ? "An ITS recruiter posts each job from your company's own board accounts and takes it down when the job closes. You see who has it on the role's Posting tab." : "Each role's Posting tab has the words to paste, the board's own apply link and the steps. You record the listing's address there once it is up."}</p>
+        <label className="row small" style={{ gap: 8 }}>
+          <input type="checkbox" checked={!!c.settings.zipRecruiterPlan} disabled={!canEdit || save.isPending} onChange={(e) => save.mutate({ zipRecruiterPlan: e.target.checked })} />
+          We have our own paid ZipRecruiter plan
+        </label>
+        <p className="small muted" style={{ margin: 0 }}>Posting on ZipRecruiter needs a paid plan of your own, so it is offered on a role only once you say you have one.</p>
+        {!canEdit ? <p className="small muted" style={{ margin: 0 }}>Only owners and admins change these.</p> : null}
+      </div>
+    </Card>
+  );
 }

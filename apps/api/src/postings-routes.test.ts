@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { findLinkByToken } from "@ros/core";
-import { applications, auditRecords, candidates, events, memberships, notifications, postings, randomToken, roles, users, withPlatform } from "@ros/db";
+import { applications, auditRecords, candidates, companies, events, memberships, notifications, postings, randomToken, roles, users, withPlatform } from "@ros/db";
 import type { FakeUrlVerifier } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -66,6 +66,11 @@ describe("posting routes: the owner's Posting tab API", () => {
     companySlug = co.slug;
     const s = await body<{ session: { id: string } }>(await post(owner, "/api/v1/intake/sessions", { initialMessage: "I need a bookkeeper in Irvine, $60,000 to $70,000, in the office. It's growth. Ceiling $72,000. I decide. Must-haves: QuickBooks. Just draft it." }));
     roleId = (await body<{ roleId: string }>(await post(owner, `/api/v1/intake/sessions/${s.session.id}/compile`))).roleId;
+    // This suite covers every board, posted by the team itself: the company has its own ZipRecruiter plan and posts on
+    // the boards itself, and the role uses all three (plan D3, D6; ITS posting is covered by publishing.test.ts).
+    const [co0] = await container.db.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId));
+    await container.db.update(companies).set({ settings: { ...co0.settings, boardPosting: "self", zipRecruiterPlan: true } }).where(eq(companies.id, companyId));
+    expect((await post(owner, `/api/v1/roles/${roleId}/channels`, { channels: ["linkedin_basic", "indeed", "ziprecruiter"] })).status).toBe(200);
     await post(owner, `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" });
     await container.drain();
     roleTitle = (await container.db.select({ title: roles.title }).from(roles).where(eq(roles.id, roleId)))[0].title;
@@ -151,15 +156,17 @@ describe("posting routes: the owner's Posting tab API", () => {
     const audited = (await container.db.select().from(auditRecords).where(eq(auditRecords.action, "posting.changed"))).filter((a) => a.target?.id === row.id);
     expect(audited).toHaveLength(1);
     expect(audited[0].actor).toMatchObject({ kind: "user", id: ownerId });
-    // a live posting does not take a new address: the state table refuses, and the answer names both states
-    const refused = await post(owner, P("indeed", "url"), { url: "https://www.indeed.com/viewjob?jk=other" });
-    expect(refused.status).toBe(409);
-    const err = await body<ErrorBody>(refused);
-    expect(err.error.code).toBe("posting_transition");
-    expect(err.error.message).toContain("Live and verified");
-    expect(err.error.message).toContain("Posted");
-    expect(err.error.details).toEqual({ from: "live_verified", to: "posted_manually" });
-    expect((await posting("indeed")).externalUrl).toBe(url);
+    // a live listing that moved takes its new address, but is not live there until that address is checked: it is
+    // "Posted" again and nothing of the earlier check is kept
+    const other = "https://www.indeed.com/viewjob?jk=other";
+    verifier().set(other, { pageText: "<h1>Page not found</h1>" });
+    const moved = await body<PostingView>(await post(owner, P("indeed", "url"), { url: other }));
+    expect(moved).toMatchObject({ status: "posted_manually", stateLabel: "Posted", externalUrl: other, verifiedAt: null, verifiedBy: null, verificationNote: null, verificationAttempts: 0 });
+    expect((await eventsOf("posting.posted_manually")).filter((e) => e.subjectId === row.id).at(-1)?.payload).toMatchObject({ from: "live_verified", to: "posted_manually", url: other });
+    // back to the right address, which is checked again and live again
+    expect((await post(owner, P("indeed", "url"), { url })).status).toBe(200);
+    await container.drain();
+    expect(await posting("indeed")).toMatchObject({ status: "live_verified", externalUrl: url });
   });
 
   it("a page that does not name the job fails after three checks; pausing and resuming in between restarts the checks; a person's own confirmation with a note recovers it", async () => {

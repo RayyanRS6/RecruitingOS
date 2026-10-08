@@ -1,8 +1,9 @@
 import { Hono, type Context } from "hono";
-import { and, desc, eq, inArray, isNull, like } from "drizzle-orm";
-import { CreateEscalation, DecideApproval, EscalationEstimateQuery, EscalationReply, ReopenEscalation, ResolveEscalation, type Actor, type CandidateNotice, type EscalationScope, type RecruiterRequestView } from "@ros/contracts";
-import { ESCALATION_ACCESS_DAYS, activeStaffGrant, addEscalationReply, assertCan, audit, raiseAlert, businessMinutesBetween, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, scopeAllows, slaBusinessHours, toEscalationPreview, transition, type EscalationPreview, type EscalationRow } from "@ros/core";
-import { applications, approvalRequests, candidates, companies, escalationMessages, events, memberships, recruiterEscalations, rolePackets, roles, staffAccessGrants, users, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
+import { and, desc, eq, inArray, isNull, like, notInArray } from "drizzle-orm";
+import { ConfirmBoardUpdated, CreateEscalation, DecideApproval, EscalationEstimateQuery, EscalationReply, RecordPostingUrl, ReopenEscalation, ResolveEscalation, VerifyPosting, type Actor, type CandidateNotice, type EscalationScope, type RecruiterRequestView } from "@ros/contracts";
+import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, assertCan, audit, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, isBoardChannel, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, scopeAllows, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
+import { applications, approvalRequests, candidates, companies, escalationMessages, events, memberships, postings, recruiterEscalations, rolePackets, roles, staffAccessGrants, users, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
+import { confirmPostingByHand, postingTaskDetail, queuePostingCheck, recordBoardAddress } from "./postings";
 import { actorOf, clientIp, requireRecruiterOrAdmin, requireTenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { briefViewerOf, composeBrief } from "../services/brief";
@@ -47,7 +48,7 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
       const [role] = req.roleId ? await tx.select().from(roles).where(eq(roles.id, req.roleId)).limit(1) : [];
       if (!role) throw new HttpError(404, "not_found", "Role not found.");
       const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, proposedVersion))).limit(1);
-      if (status === "approved") await assertMayApprovePacket(tx, { tenant: t, req, role, version: pv ?? null });
+      if (status === "approved") await assertMayApprovePacket(tx, { tenant: t, req, role, version: pv ?? null, now: container.engine.clock() });
       else {
         // Sending back is reserved the same way as approving (the named decision maker, or an owner); only the self-approval rule is waived.
         const decide = mayDecideApproval(req, { userId: t.userId, role: t.role });
@@ -205,8 +206,9 @@ escalationRoutes.get("/mine", requireTenant, async (c) => {
   const scope = staffScopeOf(t);
   const container = c.get("container");
   const found = await withTenant(container.db, t.companyId, async (tx) => {
+    // ITS posting tasks (plan D3) are ITS's own work, shown with each board on the role's Posting tab, not as the team's requests.
     const rows = (await tx.select({ id: recruiterEscalations.id, kind: recruiterEscalations.kind, status: recruiterEscalations.status, urgency: recruiterEscalations.urgency, summary: recruiterEscalations.summary, question: recruiterEscalations.question, requestedBy: recruiterEscalations.requestedBy, assignedToUserId: recruiterEscalations.assignedToUserId, createdAt: recruiterEscalations.createdAt, resolvedAt: recruiterEscalations.resolvedAt, resolution: recruiterEscalations.resolution, slaDueAt: recruiterEscalations.slaDueAt, firstResponseAt: recruiterEscalations.firstResponseAt, accessExpiresAt: recruiterEscalations.accessExpiresAt, roleId: recruiterEscalations.roleId, applicationId: recruiterEscalations.applicationId })
-      .from(recruiterEscalations).where(eq(recruiterEscalations.companyId, t.companyId)).orderBy(desc(recruiterEscalations.createdAt))).filter((r) => escalationInScope(scope, r));
+      .from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, t.companyId), notInArray(recruiterEscalations.kind, [...POSTING_TASK_KINDS]))).orderBy(desc(recruiterEscalations.createdAt))).filter((r) => escalationInScope(scope, r));
     const ids = rows.map((r) => r.id);
     const messages = ids.length ? await tx.select().from(escalationMessages).where(inArray(escalationMessages.escalationId, ids)) : [];
     const roleIds = [...new Set(rows.map((r) => r.roleId).filter((x): x is string => !!x))];
@@ -253,7 +255,9 @@ async function ownRequest(c: Context<Vars>): Promise<EscalationRow> {
   if (t.staff) throw new HttpError(403, "staff_reply", "Reply to the customer from the recruiter queue.");
   const id = c.req.param("id") ?? "";
   const [e] = UUID.test(id) ? await withTenant(c.get("container").db, t.companyId, (tx) => tx.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.id, id), eq(recruiterEscalations.companyId, t.companyId))).limit(1)) : [];
-  if (!e) throw new HttpError(404, "not_found", "That request is not in your company.");
+  // An ITS posting task (plan D3) is not one of the team's requests: it carries no thread, and reopening it must never
+  // give anyone access to the company's records.
+  if (!e || isPostingTask(e.kind)) throw new HttpError(404, "not_found", "That request is not in your company.");
   return e;
 }
 
@@ -388,6 +392,8 @@ escalationRoutes.get("/:id", requireRecruiterOrAdmin, async (c) => {
     const role = e.roleId ? (await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, e.roleId)).limit(1))[0] : null;
     const previewRow: PreviewRow = { id: e.id, companyId: e.companyId, companyName: co?.name ?? "", roleTitle: role?.title ?? null, kind: e.kind, status: e.status, urgency: e.urgency, requiredExpertise: e.requiredExpertise, summary: e.summary, slaDueAt: e.slaDueAt, createdAt: e.createdAt, assignedToUserId: e.assignedToUserId };
     if (e.assignedToUserId !== s.user.id) return { previewRow, full: null as null | Record<string, unknown>, why: e.assignedToUserId ? "claimed by another recruiter" : "claim it to open the full context" };
+    // A posting task (plan D3) opens the job ad and the posting only, read below in the customer's own scope; no grant.
+    if (isPostingTask(e.kind)) return { previewRow, full: null as null | Record<string, unknown>, why: null as string | null, task: e };
     const grant = await activeStaffGrant(tx, s.user.id, e.companyId);
     if (!grant) return { previewRow, full: null as null | Record<string, unknown>, why: "your access to this customer has ended" };
     const actor = { kind: "recruiter" as const, id: s.user.id, name: s.user.name ?? s.user.email };
@@ -400,6 +406,10 @@ escalationRoutes.get("/:id", requireRecruiterOrAdmin, async (c) => {
     return { previewRow, full, why: null as string | null };
   });
   if (!row) throw new HttpError(404, "not_found", "Escalation not found.");
+  if ("task" in row && row.task) {
+    const [preview] = await previewRows(c, [row.previewRow], "recruiter queue detail");
+    return c.json({ ...preview, accessGranted: false, why: null, postingTask: await openPostingTaskDetail(c, row.task, "GET") });
+  }
   if (!row.full) {
     const [preview] = await previewRows(c, [row.previewRow], "recruiter queue detail");
     return c.json({ ...preview, accessGranted: false, why: row.why });
@@ -423,6 +433,14 @@ escalationRoutes.post("/:id/claim", requireRecruiterOrAdmin, async (c) => {
     // 21 Sep, item 1: when the customer ended this recruiter's access to this request, the same recruiter cannot take it back.
     const removedByCustomer = await tx.select({ id: staffAccessGrants.id }).from(staffAccessGrants).where(and(eq(staffAccessGrants.escalationId, e.id), eq(staffAccessGrants.userId, s.user.id), like(staffAccessGrants.revokeReason, "revoked by the customer:%"))).limit(1);
     if (removedByCustomer.length) throw new HttpError(403, "revoked_by_customer", "The customer ended your access to this request. Another recruiter must take it.");
+    // A posting task (plan D3) needs the job ad, never the customer's records: taking it gives no access at all, so
+    // there is no grant to record and nothing to tell the customer about who can see their hiring.
+    if (isPostingTask(e.kind)) {
+      const recruiter = { kind: "recruiter" as const, id: s.user.id, name: s.user.name ?? s.user.email };
+      const [u] = await tx.update(recruiterEscalations).set({ status: "claimed", assignedToUserId: s.user.id, claimedAt: e.claimedAt ?? now.toISOString(), firstResponseAt: e.firstResponseAt ?? now.toISOString() }).where(eq(recruiterEscalations.id, e.id)).returning();
+      await emit(tx, { type: "recruiter.claimed", companyId: e.companyId, actor: recruiter, subject: { type: "escalation", id: e.id }, payload: { grantId: null, postingTask: e.kind, postingId: e.postingId } });
+      return { escalation: u, grant: null };
+    }
     // All of a company's hiring is shared only when someone at the company chose it (Q31). A request that names no role
     // and no candidate and was raised by anyone else (made before that rule, or by ITS staff) grants nothing; an ITS
     // administrator resolves it from the console without opening the company's records.
@@ -470,9 +488,30 @@ async function aboutWords(tx: Tx, e: Pick<EscalationRow, "roleId" | "application
   return role ? role.title : "all of your hiring";
 }
 
+/** Where a posting task's work stands as it is closed: the board, the role, and whether the work still waits. */
+async function postingTaskState(tx: Tx, e: EscalationRow): Promise<{ notDone: boolean; board: string; roleId: string; roleTitle: string } | null> {
+  if (!e.postingId) return null;
+  const [p] = await tx.select().from(postings).where(eq(postings.id, e.postingId)).limit(1);
+  if (!p || !isBoardChannel(p.channel)) return null;
+  const [role] = await tx.select({ title: roles.title, version: roles.currentPacketVersion }).from(roles).where(eq(roles.id, p.roleId)).limit(1);
+  return { notDone: !postingTaskWorkDone(e.kind, p, role?.version ?? null), board: BOARD_NAME[p.channel], roleId: p.roleId, roleTitle: role?.title ?? "A role" };
+}
+
+/** What the team does when ITS could not do a posting task, after the recruiter's own words. */
+const POSTING_NOT_DONE_NEXT: Record<string, (board: string) => string> = {
+  post_job: (board) => `Nothing is on ${board} yet. Ask ITS again from the Posting tab once that is sorted out, or post it from your company's own account and record the address there.`,
+  update_job: (board) => `${board} still shows the earlier version. Ask ITS again from the Posting tab, or update the listing from your company's own account and confirm it there.`,
+  take_down_job: (board) => `${board} may still show the job. Ask ITS again from the Posting tab, or take it down from your company's own account and tick it off there.`,
+};
+
 /**
  * Resolution records the recruiter's effort and shortens the grant to a day after resolution. The answer is kept on the
  * thread too, and reaches the person who asked and the owners in full, with a link to the request (plan B4).
+ *
+ * A job board posting task (plan D3) settles on its own once the work shows on the posting; closing one here ("Cannot
+ * do it?" in the queue) while the work still waits means ITS could not do it. The posting stays exactly as it is, the
+ * fact is recorded (`notDone` on the event), and the owners and admins are told with the recruiter's words and a link to
+ * the role's Posting tab, where the board says so; never a link to a request they cannot open.
  */
 escalationRoutes.post("/:id/resolve", requireRecruiterOrAdmin, async (c) => {
   const s = c.get("session")!;
@@ -489,8 +528,14 @@ escalationRoutes.post("/:id/resolve", requireRecruiterOrAdmin, async (c) => {
     const [u] = await tx.update(recruiterEscalations).set({ status: "resolved", resolvedAt: now.toISOString(), resolution: body.resolution, minutesSpent: body.minutesSpent ?? e.minutesSpent ?? null, firstResponseAt: e.firstResponseAt ?? now.toISOString(), accessExpiresAt: accessUntil ?? e.accessExpiresAt }).where(eq(recruiterEscalations.id, e.id)).returning();
     const actor = { kind: "recruiter" as const, id: s.user.id, name: s.user.name ?? s.user.email };
     await recordEscalationAnswer(tx, { escalation: e, author: actor, body: body.resolution, now });
-    await emit(tx, { type: "recruiter.resolved", companyId: e.companyId, actor, subject: { type: "escalation", id: e.id }, payload: { resolution: body.resolution, minutesSpent: body.minutesSpent ?? null, responseMinutes: e.firstResponseAt ? Math.round((Date.parse(e.firstResponseAt) - Date.parse(e.createdAt)) / 60_000) : null } });
-    await notify(tx, { companyId: e.companyId, kind: "recruiter.resolved", title: `${actor.name} (ITS recruiter) answered the request about ${await aboutWords(tx, e)}`, body: body.resolution, action: { label: "Read the answer", href: requestLink(e.id) }, userIds: await requestReaders(tx, e) });
+    const task = isPostingTask(e.kind) ? await postingTaskState(tx, e) : null;
+    await emit(tx, { type: "recruiter.resolved", companyId: e.companyId, actor, subject: { type: "escalation", id: e.id }, payload: { resolution: body.resolution, minutesSpent: body.minutesSpent ?? null, responseMinutes: e.firstResponseAt ? Math.round((Date.parse(e.firstResponseAt) - Date.parse(e.createdAt)) / 60_000) : null, ...(task ? { postingTask: e.kind, postingId: e.postingId, notDone: task.notDone } : {}) } });
+    if (!isPostingTask(e.kind)) {
+      await notify(tx, { companyId: e.companyId, kind: "recruiter.resolved", title: `${actor.name} (ITS recruiter) answered the request about ${await aboutWords(tx, e)}`, body: body.resolution, action: { label: "Read the answer", href: requestLink(e.id) }, userIds: await requestReaders(tx, e) });
+    } else if (task?.notDone) {
+      const label = postingTaskLabel(e.kind, task.board);
+      await notify(tx, { companyId: e.companyId, kind: "recruiter.posting_not_done", title: `${task.roleTitle}: ITS could not ${label.charAt(0).toLowerCase()}${label.slice(1)}`, body: `${actor.name} at ITS wrote: "${body.resolution}" ${POSTING_NOT_DONE_NEXT[e.kind](task.board)}`, action: { label: "Open the Posting tab", href: `/roles/${task.roleId}?tab=posting` }, roles: ["owner", "admin"] });
+    }
     await container.engine.signal(tx, { companyId: e.companyId, key: `escalation:${e.id}`, payload: { resolved: true } });
     return u;
   });
@@ -512,6 +557,7 @@ escalationRoutes.post("/:id/messages", requireRecruiterOrAdmin, async (c) => {
     if (!e) throw new HttpError(404, "not_found", "Escalation not found.");
     if (e.assignedToUserId !== s.user.id) throw new HttpError(403, "not_assigned", "Accept the request before writing to the customer.");
     if (e.status === "resolved" || e.status === "cancelled") throw new HttpError(409, "closed", `This request is already ${e.status}.`);
+    if (isPostingTask(e.kind)) throw new HttpError(409, "posting_task", "A posting task has no conversation with the customer. Record the work on the task; if it cannot be done, resolve it and say why.");
     const grant = await activeStaffGrant(tx, s.user.id, e.companyId, now);
     if (!grant) throw new HttpError(403, "no_access", "Your access to this customer has ended.");
     const actor = { kind: "recruiter" as const, id: s.user.id, name: s.user.name ?? s.user.email };
@@ -539,6 +585,92 @@ escalationRoutes.post("/:id/release", requireRecruiterOrAdmin, async (c) => {
     return u;
   });
   return c.json(row);
+});
+
+/* ------------------------------------------------------------------------------------------------------------ */
+/* ITS posting tasks (plan D3): post the job on a board, bring it up to date, take it down. No access grant.      */
+/* ------------------------------------------------------------------------------------------------------------ */
+
+/**
+ * The posting task as its recruiter sees it, read in the customer's own scope. Each opening is recorded where the
+ * customer sees ITS's activity, like any other look at their company, though only the job ad is in it.
+ */
+async function openPostingTaskDetail(c: Context<Vars>, task: EscalationRow, method: string) {
+  const s = c.get("session")!;
+  const container = c.get("container");
+  const actor = { kind: "recruiter" as const, id: s.user.id, name: s.user.name ?? s.user.email };
+  return withTenant(container.db, task.companyId, async (tx) => {
+    await audit(tx, { companyId: task.companyId, actor, action: "escalation.context_viewed", target: { type: "escalation", id: task.id }, reason: "posting task", ip: clientIp(c), details: { postingId: task.postingId, kind: task.kind, method, grant: null } });
+    return { question: task.question, ...(await postingTaskDetail(tx, container, task)) };
+  });
+}
+
+/** The posting task the signed-in recruiter holds, still open; refused otherwise, in plain words. */
+async function heldPostingTask(c: Context<Vars>, kinds: readonly string[]): Promise<EscalationRow> {
+  const s = c.get("session")!;
+  const id = c.req.param("id") ?? "";
+  const [e] = UUID.test(id) ? await withPlatform(c.get("container").db, (tx) => tx.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, id)).limit(1)) : [];
+  if (!e) throw new HttpError(404, "not_found", "Escalation not found.");
+  if (!isPostingTask(e.kind) || !e.postingId) throw new HttpError(409, "not_a_posting_task", "This request is not a job board posting task.");
+  if (!kinds.includes(e.kind)) throw new HttpError(409, "wrong_task", "That step does not belong to this kind of posting task.");
+  if (e.assignedToUserId !== s.user.id) throw new HttpError(403, "not_assigned", "Accept the task before working on it.");
+  if (e.status === "resolved" || e.status === "cancelled") throw new HttpError(409, "closed", `This task is already ${e.status}.`);
+  return e;
+}
+
+/** Runs one step of a posting task in the customer's scope, on the posting the task names, then answers with the task as it now stands. */
+async function postingTaskStep(c: Context<Vars>, kinds: readonly string[], step: (tx: Tx, posting: typeof postings.$inferSelect, actor: { kind: "recruiter"; id: string; name: string }) => Promise<void>) {
+  const e = await heldPostingTask(c, kinds);
+  const s = c.get("session")!;
+  const container = c.get("container");
+  const actor = { kind: "recruiter" as const, id: s.user.id, name: s.user.name ?? s.user.email };
+  await withTenant(container.db, e.companyId, async (tx) => {
+    const [posting] = await tx.select().from(postings).where(eq(postings.id, e.postingId!)).limit(1);
+    if (!posting) throw new HttpError(404, "not_found", "The posting this task is about no longer exists.");
+    await step(tx, posting, actor);
+  });
+  await container.kick();
+  const [fresh] = await withPlatform(container.db, (tx) => tx.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, e.id)).limit(1));
+  return c.json({ status: fresh?.status ?? e.status, postingTask: await openPostingTaskDetail(c, fresh ?? e, "POST") });
+}
+
+/** The listing is up: its public address, checked by the worker; the task closes once the check finds the job. */
+escalationRoutes.post("/:id/posting/url", requireRecruiterOrAdmin, async (c) => {
+  const body = RecordPostingUrl.parse(await c.req.json());
+  return postingTaskStep(c, ["post_job", "update_job"], async (tx, posting, actor) => {
+    if (!["ready_to_post", "posted_manually", "failed", "live_verified"].includes(posting.status)) throw new HttpError(409, "not_postable", `The listing is "${POSTING_STATE_LABEL[posting.status as PostingState] ?? posting.status}", so no address can be recorded now.`);
+    // The same step as the team's own (routes/postings.ts): a listing already live that moved (an update gave it a new
+    // address) is "Posted" again, nothing of the earlier check is kept, and it is live again only once the new address
+    // is checked.
+    await recordBoardAddress(tx, c.get("container"), { posting, url: body.url, actor });
+  });
+});
+
+/** "I checked it myself": the recruiter saw the listing live; the task closes with their note. */
+escalationRoutes.post("/:id/posting/verify", requireRecruiterOrAdmin, async (c) => {
+  const body = VerifyPosting.parse(await c.req.json());
+  return postingTaskStep(c, ["post_job"], async (tx, posting, actor) => {
+    await confirmPostingByHand(tx, c.get("container"), { posting, note: body.note, actor });
+  });
+});
+
+/** The listing now shows the approved version; the address is checked again, since the title may have changed. */
+escalationRoutes.post("/:id/posting/updated", requireRecruiterOrAdmin, async (c) => {
+  const body = ConfirmBoardUpdated.parse(await c.req.json().catch(() => ({})));
+  return postingTaskStep(c, ["update_job"], async (tx, posting, actor) => {
+    const [role] = await tx.select({ version: roles.currentPacketVersion }).from(roles).where(eq(roles.id, posting.roleId)).limit(1);
+    if (!role?.version || !showsOldVersion(posting, role.version)) throw new HttpError(409, "up_to_date", "This listing does not show an earlier version of the job.");
+    const row = await confirmBoardUpdated(tx, { posting, version: role.version, actor, note: body.note ?? null, now: c.get("container").engine.clock() });
+    if (row.externalUrl && ["posted_manually", "live_verified"].includes(row.status)) await queuePostingCheck(tx, c.get("container"), row);
+  });
+});
+
+/** The listing is gone from the board; the take-down task closes. */
+escalationRoutes.post("/:id/posting/removed", requireRecruiterOrAdmin, async (c) => {
+  return postingTaskStep(c, ["take_down_job"], async (tx, posting, actor) => {
+    if (!posting.closureRequired) throw new HttpError(409, "not_required", "This listing was not up when it closed, so there is nothing to take down.");
+    await confirmBoardRemoved(tx, { posting, actor, now: c.get("container").engine.clock() });
+  });
 });
 
 export const eventRoutes = new Hono<Vars>();

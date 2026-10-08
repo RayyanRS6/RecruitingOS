@@ -53,8 +53,9 @@ test.describe("the job builder", () => {
     await expect(page.getByText("What we know")).toBeVisible();
     await expect(page.getByText("Candidates see this").first()).toBeVisible();
     await expect(page.getByText("Only your team sees this").first()).toBeVisible();
-    // the must-haves are not on the job page: the panel says what they are used for instead
-    await expect(page.getByText("Used to review applications; not on the job page").first()).toBeVisible();
+    // the must-haves are listed on the job page (plan D10): the panel says candidates see them
+    await expect(page.getByText("What we're looking for").first()).toBeVisible();
+    await expect(page.getByText("Used to review applications; not on the job page")).toHaveCount(0);
 
     // Edit: name who has the final say from the team, quietly
     await page.getByRole("button", { name: "Edit", exact: true }).click();

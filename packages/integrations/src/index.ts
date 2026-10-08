@@ -10,6 +10,7 @@ export { BlsOewsAdapter } from "./comp/bls";
 export { LocalStorageAdapter, MemoryStorageAdapter } from "./storage/local";
 export { GrantSigner, type GrantPayload } from "./storage/grants";
 export { SupabaseStorageAdapter, StorageError } from "./storage/supabase";
+export { LOGO_FILE, LOGO_MAX_BYTES, LOGO_MAX_SIDE, LOGO_MIME_BY_EXTENSION, LOGO_MIN_SIDE, inspectLogo, logoFileName, logoKey, type LogoExtension, type LogoInspection, type LogoMime } from "./storage/logo";
 export { FakeMalwareScanner, EICAR_TEST_STRING } from "./scanning/fake";
 export { ClamAvScanner, parseClamdReply, CLAMAV_DEFAULT_PORT, CLAMAV_DEFAULT_TIMEOUT_MS, type ClamAvOptions } from "./scanning/clamav";
 export type { MalwareScanner, ScanResult } from "./scanning/types";

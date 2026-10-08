@@ -2,10 +2,15 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Avatar, Button, Card, Chip, EmptyState, ErrorState, Field, Pill, Skeleton, Timeline } from "@ros/ui";
-import { api, ApiError, type DecisionMaker, type InterviewPlanView, type PacketFlag, type Requirement, type RoleDetail, type RoleEvent, type RolePacket } from "../api/client";
+import { PACKET_VISIBILITY_LABEL } from "@ros/contracts";
+import { Alert, Avatar, Button, Card, Chip, EmptyState, ErrorState, Field, Icon, Pill, Skeleton, Timeline } from "@ros/ui";
+import { api, ApiError, type DecisionMaker, type InterviewPlanView, type LegalCheck, type PacketFlag, type Requirement, type RoleDetail, type RoleEvent, type RolePacket } from "../api/client";
 import { APPROVE_WAITS_FOR_CHECK, approvedToast } from "../company-check";
+import { BoardTicks } from "../components/BoardTicks";
+import { ClosingDateField } from "../components/ClosingDate";
 import { useCompanyCheck } from "../components/use-company-check";
+import { Link } from "../nav";
+import { autoActionsLine, isLegalReason, legalLines, previewHref, wordsList } from "../publishing";
 import { toast } from "../toast";
 import { actorWords, describeRoleEvent, roleWords } from "../role-words";
 
@@ -21,6 +26,11 @@ export function workModelLabel(policy: string | undefined): string {
 
 const EVIDENCE_LABEL: Record<string, string> = { resume: "résumé", application: "application", screen: "screen", interview: "interview" };
 const ROUND_FORMAT: Record<string, string> = { video: "video call", phone: "phone", onsite: "on site", working_session: "working session" };
+
+/** The mark on a part of the role that is on the job page (plan D10), in the same words as the job builder's panel. */
+export function CandidatesSeeThis() {
+  return <span className="seen-by"><Icon name="eye" size={13} />{PACKET_VISIBILITY_LABEL.public}</span>;
+}
 
 /** Must-haves and nice-to-haves with why they matter and where each is checked. */
 export function RequirementList({ items, empty }: { items: Requirement[]; empty: string }) {
@@ -70,11 +80,17 @@ export function PreferencesCard({ packet, decisionMaker }: { packet: RolePacket;
  * signed-in person may do comes from the API (the self-approval rule and the named decision maker live there); Edit
  * and "Request approval again" need packet.edit, so they are left out for anyone without it (`canEdit`).
  * `onShowProposed` switches the role page's tabs to the version waiting for approval, and back.
+ *
+ * Wave D: the card opens the job page preview of the version waiting in a new tab (D1, for those who see pay), says
+ * where the job goes once approved with the board ticks (D6), lists what the law of the job's places still asks for
+ * (D5; approving waits for it) and says in one line what starts on its own once the job is live (D9). After approving,
+ * `onApproved` opens the screen that shows where the job is going (D2).
  */
-export function PacketApprovalCard({ role, onEdit, canEdit, showingProposed, onShowProposed }: { role: RoleDetail; onEdit: () => void; canEdit: boolean; showingProposed: boolean; onShowProposed: (show: boolean) => void }) {
+export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay, showingProposed, onShowProposed, onApproved }: { role: RoleDetail; onEdit: () => void; canEdit: boolean; canManage: boolean; canSeePay: boolean; showingProposed: boolean; onShowProposed: (show: boolean) => void; onApproved: (info: { editWhileOpen: boolean }) => void }) {
   const qc = useQueryClient();
   const refresh = async () => {
     await qc.invalidateQueries({ queryKey: ["role", role.id] });
+    await qc.invalidateQueries({ queryKey: ["postings", role.id] });
     await qc.invalidateQueries({ queryKey: ["brief"] });
     await qc.invalidateQueries({ queryKey: ["roles"] });
     await qc.invalidateQueries({ queryKey: ["notifications"] });
@@ -86,9 +102,10 @@ export function PacketApprovalCard({ role, onEdit, canEdit, showingProposed, onS
   // Until ITS confirms the company (founder decision B7) an approved role waits to go public; the toast says so.
   const check = useCompanyCheck();
   const approve = useMutation({
-    mutationFn: () => api.post(`/api/v1/roles/${role.id}/approve`, { version: pending!.version }),
-    onSuccess: async () => { toast(approvedToast({ editWhileOpen: !!pending?.editWhileOpen, check })); await refresh(); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not approve."),
+    mutationFn: (_editWhileOpen: boolean) => api.post(`/api/v1/roles/${role.id}/approve`, { version: pending!.version }),
+    onSuccess: async (_r, editWhileOpen) => { toast(approvedToast({ editWhileOpen: !!pending?.editWhileOpen, check })); onApproved({ editWhileOpen }); await refresh(); },
+    // A refusal by the legal check (D5) names what is missing; the card lists it once the role is read again.
+    onError: async (e) => { toast(e instanceof ApiError ? e.message : "Could not approve."); if (e instanceof ApiError && e.code === "legal_check") await refresh(); },
   });
   const sendBack = useMutation({
     mutationFn: () => api.post(`/api/v1/approvals/${pending!.id}/decide`, { decision: "reject", ...(note.trim() ? { note: note.trim() } : {}) }),
@@ -124,10 +141,30 @@ export function PacketApprovalCard({ role, onEdit, canEdit, showingProposed, onS
   const packet = pending.editWhileOpen ? role.proposedPacket?.packet ?? null : role.currentPacket?.packet ?? null;
   const assumptions = packet?.provenance.assumptions ?? [];
   const expires = pending.expiresAt ? new Date(pending.expiresAt).toLocaleDateString() : null;
+  const legal = legalLines(pending.legalCheck);
+  const autoLine = autoActionsLine(role.autoActionsOnOpen);
+  const musts = packet?.requirements?.mustHaves ?? [];
+  const nices = packet?.requirements?.niceToHaves ?? [];
   return (
     <Card needsYou lift title={pending.editWhileOpen ? `Approve packet v${pending.version} of ${role.title}` : "Approve this role packet"}>
-      <p style={{ color: "var(--ink-2)" }}>{pending.rationale ?? (pending.editWhileOpen ? "The role keeps running on its approved version until you decide." : "Review the packet, edit anything, then approve. Approval opens the role and posts it.")}</p>
+      <p style={{ color: "var(--ink-2)" }}>{pending.rationale ?? (pending.editWhileOpen ? "The role keeps running on its approved version until you decide." : "Review the packet, edit anything, then approve. Approval opens the role: your careers page and Google come first, and each job board follows once the job is posted there and its address checked.")}</p>
       {!pending.editWhileOpen && check === "waiting" ? <Alert tone="info">{APPROVE_WAITS_FOR_CHECK}</Alert> : null}
+      {canSeePay ? (
+        <div className="row" style={{ marginTop: 8 }}>
+          <a className="btn secondary sm" href={previewHref(role.id, pending.version)} target="_blank" rel="noopener noreferrer"><Icon name="eye" />Preview the job page<span className="sr-only"> (opens in a new tab)</span></a>
+          <span className="small muted">Version {pending.version} exactly as candidates will see it. The preview is not public and search engines never see it.</span>
+        </div>
+      ) : null}
+      {!pending.editWhileOpen ? <WhereItGoes role={role} canManage={canManage} /> : null}
+      {musts.length || nices.length ? (
+        // The job page lists them (plan D10), so the approver sees them as candidates will.
+        <p className="small" style={{ color: "var(--ink-2)", marginTop: 8 }}>
+          <CandidatesSeeThis /> The job page lists what you are looking for: {musts.map((m) => m.text).join("; ") || "nothing yet"}.
+          {nices.length ? ` Nice to have: ${nices.map((m) => m.text).join("; ")}.` : ""} Why each one matters stays with your team.
+        </p>
+      ) : null}
+      {legal.missing.length || legal.inOrder.length ? <LegalCheckList role={role} check={pending.legalCheck ?? null} canEdit={canEdit} canManage={canManage} onEdit={onEdit} /> : null}
+      {autoLine ? <p className="small muted" style={{ marginTop: 8 }}>{autoLine} <Link to={role.autoActionsOnOpen.changeHref}>Change these rules</Link></p> : null}
       {pending.editWhileOpen && role.proposedPacket ? (
         <div className="row" style={{ marginTop: 6, flexWrap: "wrap" }}>
           <p className="small" style={{ color: "var(--ink-2)", margin: 0 }}>What changed: {role.proposedPacket.changeSummary ?? "edited"} · by {role.proposedPacket.createdBy.name ?? "a team member"} on {new Date(role.proposedPacket.createdAt).toLocaleDateString()}. Current version: v{role.currentPacket?.version ?? "?"}.</p>
@@ -145,7 +182,7 @@ export function PacketApprovalCard({ role, onEdit, canEdit, showingProposed, onS
         </div>
       ) : null}
       {pending.flags.length ? <ApprovalFlags roleId={role.id} version={pending.version} flags={pending.flags} canKeep={canEdit} onEdit={onEdit} onKept={refresh} /> : null}
-      {!pending.viewer.mayDecide ? <Alert tone="info">{pending.viewer.reason ?? "Someone else on your team decides this one."}</Alert> : null}
+      {!pending.viewer.mayDecide && !(legal.missing.length && isLegalReason(pending.viewer.reason)) ? <Alert tone="info">{pending.viewer.reason ?? "Someone else on your team decides this one."}</Alert> : null}
       {sendingBack ? (
         <div className="stack" style={{ gap: 8, marginTop: 12, maxWidth: 520 }}>
           <Field label="What should change? (the note goes back with the packet)" htmlFor="sendback-note"><input id="sendback-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Raise the ceiling before we post this" /></Field>
@@ -156,12 +193,73 @@ export function PacketApprovalCard({ role, onEdit, canEdit, showingProposed, onS
         </div>
       ) : (
         <div className="row" style={{ marginTop: 12 }}>
-          {pending.viewer.mayDecide ? <Button variant="primary" loading={approve.isPending} onClick={() => approve.mutate()}>{pending.editWhileOpen ? "Approve this version" : "Approve and post"}</Button> : null}
+          {pending.viewer.mayDecide ? <Button variant="primary" loading={approve.isPending} onClick={() => approve.mutate(!!pending.editWhileOpen)}>{pending.editWhileOpen ? "Approve this version" : "Approve and publish"}</Button> : null}
           {pending.viewer.maySendBack ? <Button onClick={() => setSendingBack(true)}>Send back with a note</Button> : null}
           {canEdit ? <Button onClick={onEdit}>{pending.viewer.mayDecide ? "Edit first" : "Edit"}</Button> : null}
         </div>
       )}
     </Card>
+  );
+}
+
+/**
+ * Where the job goes once approved (plan D6): the careers page, Google and the ticked boards, and who posts on the
+ * boards. Those who manage postings change the ticks here, before approving; they can change them after too.
+ */
+function WhereItGoes({ role, canManage }: { role: RoleDetail; canManage: boolean }) {
+  const [changing, setChanging] = useState(false);
+  const boards = role.boards.filter((b) => b.chosen).map((b) => b.name);
+  const places = wordsList(["your careers page", "Google", ...boards]);
+  return (
+    <div className="stack" style={{ gap: 6, marginTop: 10 }}>
+      <p className="small" style={{ color: "var(--ink-2)", margin: 0 }}>
+        Once approved it goes to {places}. {boards.length ? (role.whoPosts === "its" ? "ITS posts it on the job boards from your company's own accounts." : "You post it on the job boards from your own accounts.") : ""}
+        {canManage && !changing ? <> <button type="button" className="link-btn" onClick={() => setChanging(true)}>Change the boards</button></> : null}
+      </p>
+      {changing ? <BoardTicks roleId={role.id} boards={role.boards} roleStatus={role.status} whoPosts={role.whoPosts} canManage={canManage} onDone={() => setChanging(false)} /> : null}
+    </div>
+  );
+}
+
+/**
+ * What the law of the job's places asks of the ad (plan D5): what is still missing, each with how to put it right
+ * (approving waits for these), then what is in order. Places our lawyer has not confirmed yet are named as a note and
+ * never hold approval. A Colorado role's closing date can be set right here.
+ */
+function LegalCheckList({ role, check, canEdit, canManage, onEdit }: { role: RoleDetail; check: LegalCheck | null; canEdit: boolean; canManage: boolean; onEdit: () => void }) {
+  const { missing, inOrder } = legalLines(check);
+  return (
+    <section aria-label="What the law asks of this job ad" className="stack" style={{ gap: 8, marginTop: 10 }}>
+      {missing.length ? (
+        <div className="alert caution">
+          <strong>Before this job can go live</strong>
+          <ul style={{ margin: "6px 0 0", paddingLeft: 18 }} className="stack">
+            {missing.map((i) => (
+              <li key={i.key}>
+                <strong>{i.label}.</strong> {i.detail}{i.fix ? ` ${i.fix}` : ""}
+                {i.key === "pay_range" && canEdit ? <div className="row" style={{ marginTop: 6 }}><Button size="sm" onClick={onEdit}>Edit the pay</Button></div> : null}
+                {i.key === "benefits" ? <div className="row" style={{ marginTop: 6 }}><Link to="/setup#setup-company" className="btn secondary sm">Describe the benefits in Setup</Link>{canEdit ? <Button size="sm" variant="ghost" onClick={onEdit}>Or only for this role</Button> : null}</div> : null}
+                {i.key === "closing_date" ? <div style={{ marginTop: 6 }}><ClosingDateField roleId={role.id} closingDate={role.closingDate} canEdit={canManage} roleStatus={role.status} idBase="legal" /></div> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {inOrder.length ? (
+        // What is already in order stays folded away, so a busy owner reads only what needs them (side-by-side, step 4).
+        <details className="small">
+          <summary style={{ color: "var(--ink-2)" }}>What the law asks of this job ad is in order ({inOrder.length})</summary>
+          <ul style={{ listStyle: "none", margin: "6px 0 0", padding: 0 }} className="stack" aria-label="Already in order">
+            {inOrder.map((i) => (
+              <li key={i.key} style={{ display: "flex", gap: 8, alignItems: "flex-start", color: "var(--ink-2)" }}>
+                <span style={{ color: "var(--good-dot)", flex: "none" }}><Icon name="check-circle" size={16} label="In order" /></span>
+                <span><strong>{i.label}:</strong> {i.detail}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </section>
   );
 }
 

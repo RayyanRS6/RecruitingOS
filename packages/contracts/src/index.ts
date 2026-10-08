@@ -14,6 +14,7 @@ export * from "./domain/packet-revision";
 export * from "./api";
 export * from "./api/notifications";
 export * from "./api/packet-tools";
+export * from "./api/publishing";
 export * from "./security/redact";
 export * from "./security/file-inspection";
 export * from "./security/observability";

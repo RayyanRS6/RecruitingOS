@@ -4,7 +4,7 @@ import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { eq } from "drizzle-orm";
 import { isCompanyVerified } from "@ros/contracts";
-import { findLinkByToken, isSource, openPayload, recordLinkVisit, sealPayload, type ApplicationSource } from "@ros/core";
+import { findLinkByToken, isLinkPreviewBot, isSource, openPayload, recordLinkVisit, sealPayload, type ApplicationSource } from "@ros/core";
 import { companies, roles, withPlatform } from "@ros/db";
 import type { Vars } from "../middleware/session";
 import { jobUrls } from "../services/job-urls";
@@ -13,7 +13,7 @@ import { Layout } from "./layout";
 /**
  * Tracked application links (docs/spec/20 items 7, 8 and 19). A board, a referrer or a campaign gets a short random
  * token; `/a/:token` counts the visit, seals the link's source into a cookie the browser cannot read, and sends the
- * person to the ordinary apply page. The token never reaches a candidate-facing record: the apply page resolves the
+ * person to the job page (a shared link) or the apply page (a board's link). The token never reaches a candidate-facing record: the apply page resolves the
  * cookie into a source, a detail and the link's id, and clears it once the application is in.
  */
 export const linkPages = new Hono<Vars>();
@@ -57,6 +57,9 @@ linkPages.get("/a/:token", async (c) => {
   const container = c.get("container");
   const token = c.req.param("token") ?? "";
   const now = container.engine.clock();
+  // A link pasted into a chat or a post is fetched by that app for its preview card before anyone clicks it (plan D8):
+  // such fetches are sent to the job page, never counted and never given the cookie.
+  const bot = isLinkPreviewBot(c.req.header("user-agent"));
   // The redirect knows no tenant yet: the token is looked up through the platform role and the visit counted there.
   const found = await withPlatform(container.db, async (tx) => {
     const link = await findLinkByToken(tx, token);
@@ -65,14 +68,16 @@ linkPages.get("/a/:token", async (c) => {
     const [role] = await tx.select({ status: roles.status, acceptingApplications: roles.acceptingApplications }).from(roles).where(eq(roles.id, link.roleId)).limit(1);
     // A company ITS has not confirmed has no public pages (founder decision B7): its links lead nowhere and count nothing.
     if (!company || !role || !isCompanyVerified(company.settings)) return null;
-    await recordLinkVisit(tx, link.id, now);
+    if (!bot && c.req.method === "GET") await recordLinkVisit(tx, link.id, now);
     return { link, slug: company.slug, accepting: role.status === "open" && role.acceptingApplications };
   });
   if (!found) return c.html(<NotActive />, 404);
   const { link } = found;
+  const urls = jobUrls(container.env, { slug: found.slug, roleId: link.roleId });
+  if (bot) return c.redirect(urls.job, 302);
   const payload: ApplicationSourcePayload = { v: 1, linkId: link.id, source: link.source as ApplicationSource, sourceDetail: link.sourceDetail, roleId: link.roleId, exp: now.getTime() + SOURCE_COOKIE_TTL_MS };
   setCookie(c, SOURCE_COOKIE, sealPayload(SOURCE_PURPOSE, payload, container.env.SESSION_SECRET), sourceCookieOptions(c));
-  const urls = jobUrls(container.env, { slug: found.slug, roleId: link.roleId });
-  // A role that is not taking applications sends the person to the job page, which says so, instead of a 404 on the form.
-  return c.redirect(found.accepting ? urls.apply : urls.job, 302);
+  // A shared link opens the job page first; a board's link goes straight to the form, since the board already showed the
+  // job. A role that is not taking applications sends everyone to the job page, which says so, instead of a 404 on the form.
+  return c.redirect(found.accepting && link.landing === "apply" ? urls.apply : urls.job, 302);
 });

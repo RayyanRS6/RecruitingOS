@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { entitlements } from "@ros/core";
-import { applications, approvalRequests, candidates, communications, interviewParticipants, interviews, memberships, policies, randomToken, takeovers, users, withTenant } from "@ros/db";
+import { applications, approvalRequests, candidates, communications, companies, interviewParticipants, interviews, memberships, policies, randomToken, takeovers, users, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -116,6 +116,10 @@ describe("approvals: sending the held decline, who sees and decides what", () =>
   });
 
   it("the brief's posting card opens the Posting tab, and a decision reserved for the takeover recruiter is not offered to the owner", async () => {
+    // the card goes to a company that posts on the boards itself; with ITS posting (the default) the boards are ITS's tasks (plan D3)
+    expect((await brief(owner)).some((c) => c.kind === "posting_action" && c.title.includes("post it on"))).toBe(false);
+    const [co] = await container.db.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId));
+    await container.db.update(companies).set({ settings: { ...co.settings, boardPosting: "self" } }).where(eq(companies.id, companyId));
     const posting = (await brief(owner)).find((c) => c.kind === "posting_action" && c.title.includes("post it on"));
     expect(posting?.actions[0]).toMatchObject({ label: "See instructions", method: "GET", path: `/roles/${roleA}?tab=posting` });
     // during a recruiter takeover every decision message waits for the recruiter; the owner's Approve would be refused, so no card

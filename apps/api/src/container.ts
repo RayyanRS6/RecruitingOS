@@ -19,6 +19,7 @@ import { reportError } from "./observability";
 import { jobFailureReport, stepFailureReport } from "./failure-reports";
 import { DAILY_MS, recurring } from "./recurring-jobs";
 import { LINK_REQUEST_JOB_KIND, emailStatusLinks } from "./services/applications";
+import { PUBLISHING_BACKFILL_JOB_KIND, backfillPublishing } from "./services/publishing-backfill";
 
 const PRIVACY_DEADLINE_JOB_KIND = "privacy.deadline_check";
 
@@ -250,9 +251,15 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     if (retry) throw new Error(`verification of posting ${postingId} failed (${result.ok ? "" : result.reason}); retrying`);
   });
 
+  // Roles already open when the publishing rules arrived (plan Wave D): their missing ITS posting tasks and Colorado
+  // closing dates. Queued once per boot; a run changes only what is still missing (services/publishing-backfill.ts).
+  engine.registerJob(PUBLISHING_BACKFILL_JOB_KIND, async () => {
+    await backfillPublishing({ db: handle.db, integrations, env, engine });
+  });
+
   // The recurring jobs exist from the first boot of any process; tests arm them explicitly so a moved clock never runs a sweep by surprise.
   if (env.NODE_ENV !== "test") {
-    for (const kind of [PRIVACY_DEADLINE_JOB_KIND, MAINTENANCE_JOB_KIND, HEALTH_CHECK_JOB_KIND]) await engine.ensureQueued(handle.db, { kind });
+    for (const kind of [PRIVACY_DEADLINE_JOB_KIND, MAINTENANCE_JOB_KIND, HEALTH_CHECK_JOB_KIND, PUBLISHING_BACKFILL_JOB_KIND]) await engine.ensureQueued(handle.db, { kind });
   }
 
   let draining: Promise<void> | null = null;

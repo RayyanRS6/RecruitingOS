@@ -43,6 +43,23 @@ export const canEditPacket = (role: string | null | undefined): boolean => !!rol
 const PACKET_JSON_ROLES: ReadonlySet<string> = new Set<TenantRole>(["admin", "recruiter"]);
 export const canEditPacketJson = (role: string | null | undefined): boolean => !!role && PACKET_JSON_ROLES.has(role);
 
+/** role.approve: approve a role packet (owners, admins and hiring managers; never a recruiter, so a person at the company decides). */
+const APPROVE_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin", "hiring_manager"]);
+export const canApproveRole = (role: string | null | undefined): boolean => !!role && APPROVE_ROLES.has(role);
+
+/** compensation.read: the pay, and so the job page preview that shows it (plan D1). Everyone but an interviewer. */
+export const canSeePay = (role: string | null | undefined): boolean => !!role && role !== "interviewer";
+
+/**
+ * Sharing a job (plan D8): POST /roles/:id/share-links is open to those who manage postings and to those who approve
+ * roles, so whoever approved the job can share it straight away.
+ */
+export const canShareJob = (role: string | null | undefined): boolean => canManageRole(role) || canApproveRole(role);
+
+/** company.update: the company's own details in Setup, its "about" text and logo, and who posts on the boards. Owners and admins. */
+const COMPANY_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin"]);
+export const canChangeCompany = (role: string | null | undefined): boolean => !!role && COMPANY_ROLES.has(role);
+
 /** outcome.record: close a role with its outcome (the decision-makers and HR; not a recruiter, not an interviewer). */
 const OUTCOME_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin", "hiring_manager", "hr"]);
 export const canRecordOutcome = (role: string | null | undefined): boolean => !!role && OUTCOME_ROLES.has(role);

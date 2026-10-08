@@ -57,7 +57,7 @@ Examples of how business hours count:
 ## 4. What support covers
 
 - Using the product: sign-in, inviting your team, Setup, roles, Talent, Interviews, the Posting and Report tabs.
-- The manual posting of your approved job to LinkedIn, Indeed and ZipRecruiter under your accounts, recording and checking each posting's address, and taking postings down when a role closes.
+- The manual posting of your approved job on the boards ticked for it (LinkedIn and Indeed; ZipRecruiter only with your own paid ZipRecruiter plan) under your accounts, recording and checking each posting's address, updating a listing after an approved change, and taking postings down when a role closes. If you choose in **Setup** to post on the boards yourself, this part is yours, and ITS takes no posting tasks for your company.
 - Recruiting help through Bring in a recruiter: reviewing candidates, advice on a decision, and agreeing with you how ITS would run a hire.
 - Candidates who ask for a person, cannot be reached, or have a problem with a screening or scheduling link.
 - Privacy requests from candidates.

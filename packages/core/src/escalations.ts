@@ -23,10 +23,18 @@ export async function createEscalation(
     urgency?: EscalationUrgency; summaryOrigin?: "customer" | "system" | "candidate";
     /** A role still being drafted (C12): its whole conversation and the current draft go into the context. The caller checked access. */
     intakeSessionId?: string | null;
+    /**
+     * An ITS posting task (plan D3, packages/core/src/posting-tasks.ts): the posting it is about, its template summary
+     * (a board's name from a fixed list, never a person's words) and the little context it needs in place of the whole
+     * role record, since posting a job needs the job ad and nothing about candidates.
+     */
+    postingId?: string | null;
+    summary?: string;
+    context?: Record<string, unknown>;
   },
 ): Promise<{ id: string; slaDueAt: string }> {
   const now = input.now ?? new Date();
-  const snapshot = await buildEscalationContext(q, input.companyId, input.roleId ?? null, input.applicationId ?? null, input.intakeSessionId ?? null);
+  const snapshot = input.context ?? await buildEscalationContext(q, input.companyId, input.roleId ?? null, input.applicationId ?? null, input.intakeSessionId ?? null);
   // Founder decision F12: SLAs count business hours on the ITS calendar (correction 12: the calendar is editable and versioned).
   const calendar = await loadBusinessCalendar(q, now);
   const slaDueAt = escalationReplyBy(input.kind, now, calendar).toISOString();
@@ -41,10 +49,11 @@ export async function createEscalation(
       question: input.question,
       urgency: input.urgency ?? defaultUrgency(input.kind),
       requiredExpertise: requiredExpertise(input.kind, company?.vertical ?? null),
-      summary: genericSummary(input.kind, { hasRole: !!input.roleId, hasApplication: !!input.applicationId, origin: input.summaryOrigin ?? (input.requestedBy.kind === "system" ? "system" : input.requestedBy.kind === "candidate" ? "candidate" : "customer") }),
+      summary: input.summary ?? genericSummary(input.kind, { hasRole: !!input.roleId, hasApplication: !!input.applicationId, origin: input.summaryOrigin ?? (input.requestedBy.kind === "system" ? "system" : input.requestedBy.kind === "candidate" ? "candidate" : "customer") }),
       requestedBy: input.requestedBy,
       contextSnapshot: snapshot,
       slaDueAt,
+      postingId: input.postingId ?? null,
     })
     .returning({ id: recruiterEscalations.id });
   await emit(q, {
@@ -52,7 +61,7 @@ export async function createEscalation(
     companyId: input.companyId,
     actor: input.requestedBy,
     subject: { type: "escalation", id: row.id },
-    payload: { kind: input.kind, roleId: input.roleId ?? null, applicationId: input.applicationId ?? null, ...(input.intakeSessionId ? { intakeSessionId: input.intakeSessionId } : {}) },
+    payload: { kind: input.kind, roleId: input.roleId ?? null, applicationId: input.applicationId ?? null, ...(input.intakeSessionId ? { intakeSessionId: input.intakeSessionId } : {}), ...(input.postingId ? { postingId: input.postingId } : {}) },
     correlationId: input.workflowRunId ?? null,
   });
   return { id: row.id, slaDueAt };

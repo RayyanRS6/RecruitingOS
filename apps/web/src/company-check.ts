@@ -15,10 +15,13 @@ export function companyCheckOf(company: { settings?: unknown } | null | undefine
   return isCompanyVerified(company.settings) ? "confirmed" : "waiting";
 }
 
-/** The toast after a role is approved. */
+/**
+ * The toast after a role is approved. The screen that opens with it says where the job is going; nothing is promised as
+ * posted before its address has been checked (plan D2), so the toast never says "posting now".
+ */
 export function approvedToast(input: { editWhileOpen: boolean; check: CompanyCheck }): string {
   if (input.editWhileOpen) return "Approved. The role now runs on the new version.";
-  return input.check === "waiting" ? "Approved. It goes public as soon as ITS confirms your company." : "Approved. Posting now.";
+  return input.check === "waiting" ? "Approved. It goes public as soon as ITS confirms your company." : "Approved. Getting it ready on its channels.";
 }
 
 /** On the approval card, before anyone approves while the company waits. */

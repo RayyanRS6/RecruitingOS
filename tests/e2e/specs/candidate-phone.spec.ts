@@ -56,9 +56,11 @@ test.describe("candidate journey on a phone", () => {
     await expect(page.locator('script[type="application/ld+json"]')).toHaveCount(1);
     await expectAccessible(page, "job page");
     await noHorizontalOverflow(page, "job page");
-    await expect(page.getByRole("link", { name: "Apply now" })).toBeVisible();
+    // the job page has two Apply buttons (plan D10): one by the title, hidden under 900px, and the sticky one; the last is
+    // the one that stays on screen on any width
+    const applyNow = page.getByRole("link", { name: "Apply now" }).last();
+    await expect(applyNow).toBeVisible();
     // the Apply button stays on a phone's screen while the job is read, and the job's facts are pills that name themselves to a screen reader
-    const applyNow = page.getByRole("link", { name: "Apply now" });
     await page.evaluate(() => window.scrollTo(0, 0));
     await expect(applyNow).toBeInViewport();
     await page.evaluate(() => window.scrollTo(0, Math.floor(document.documentElement.scrollHeight / 3)));
@@ -86,7 +88,10 @@ test.describe("candidate journey on a phone", () => {
     await page.getByLabel("Last name").fill("Reyes");
     await page.getByLabel("Email").fill(email);
     await page.getByLabel(/Where are you based/).fill("Tustin, CA");
-    await page.getByLabel(/No resume\?/).fill("Registered Dental Hygienist at Coastal Family Dentistry since 2019. Active CA RDH license, Dentrix, periodontal charting.");
+    // no resume: four short guided questions behind a disclosure (plan D10); one answer is enough
+    await page.getByText("No resume? Answer four short questions instead").click();
+    await page.getByLabel("Your most recent job or work").fill("Registered Dental Hygienist at Coastal Family Dentistry since 2019.");
+    await page.getByLabel("Skills, licenses or tools that fit this job").fill("Active CA RDH license, Dentrix, periodontal charting.");
     for (const rule of seeded.eligibility) {
       const field = page.locator(`[name="elig_${rule.key}"]`).first();
       if ((await field.evaluate((el) => el.tagName)) === "SELECT") await field.selectOption("yes");

@@ -72,7 +72,7 @@ function roleWords(role: string | null): string {
 }
 
 function fieldWords(f: unknown): string {
-  return ({ name: "name", website: "website", timezone: "time zone", sizeBand: "size", locations: "locations", logoUrl: "logo", benefitsSummary: "benefits summary", careersPage: "careers page intro", businessHours: "contact hours", notices: "candidate notices", aiRulesReviewed: "the AI rules marked as reviewed", jobBoardAccess: "job-board access, confirmed by ITS", jobBoardAccessRemoved: "job-board access, no longer confirmed by ITS" } as Record<string, string>)[String(f)] ?? String(f);
+  return ({ name: "name", website: "website", timezone: "time zone", sizeBand: "size", locations: "locations", logoUrl: "logo", benefitsSummary: "benefits summary", careersPage: "careers page intro", businessHours: "contact hours", notices: "candidate notices", about: "the text about the company on job pages", aboutDraft: "a draft of the text about the company", logo: "logo", hiringContact: "the contact candidates can reach before applying", boardPosting: "who posts the jobs on the job boards", zipRecruiterPlan: "the company's own ZipRecruiter plan", aiRulesReviewed: "the AI rules marked as reviewed", jobBoardAccess: "job-board access, confirmed by ITS", jobBoardAccessRemoved: "job-board access, no longer confirmed by ITS" } as Record<string, string>)[String(f)] ?? String(f);
 }
 
 /** A timestamp as ISO 8601 whatever the driver returned (Postgres writes "2026-09-30 16:05:10.123+00"). */

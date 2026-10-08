@@ -1,8 +1,8 @@
 "use client";
 
-import { type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, type RefObject, useEffect, useRef } from "react";
 import { cx, holdPageScroll } from "./helpers";
-import { Icon } from "./icons";
+import { Icon, type IconName } from "./icons";
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), summary, iframe, [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
 
@@ -48,33 +48,7 @@ function keepTabInside(e: globalThis.KeyboardEvent, root: HTMLElement) {
 export function Drawer(props: { open: boolean; onClose: () => void; title: string; sub?: ReactNode; leading?: ReactNode; actions?: ReactNode; tabs?: ReactNode; banner?: ReactNode; size?: "md" | "lg"; children: ReactNode }) {
   const { open, onClose } = props;
   const panel = useRef<HTMLDivElement>(null);
-  const token = useRef({});
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      // A menu inside the drawer that handled the key itself (Escape closing the menu) marks it as used.
-      if (e.defaultPrevented || openPanels[openPanels.length - 1] !== token.current) return;
-      if (e.key === "Escape") onClose();
-      else if (e.key === "Tab" && panel.current) keepTabInside(e, panel.current);
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-  useEffect(() => {
-    if (!open) return;
-    const mine = token.current;
-    openPanels.push(mine);
-    const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    // Focus moves into the drawer unless something inside already took it (a field that focuses itself).
-    if (panel.current && !panel.current.contains(document.activeElement)) panel.current.focus({ preventScroll: true });
-    const releaseScroll = holdPageScroll(document.body);
-    return () => {
-      const at = openPanels.lastIndexOf(mine);
-      if (at >= 0) openPanels.splice(at, 1);
-      releaseScroll();
-      if (before?.isConnected) before.focus({ preventScroll: true });
-    };
-  }, [open]);
+  useModalPanel(open, onClose, panel);
   if (!open) return null;
   return (
     // The backdrop is not a control: a click outside closes the drawer, Escape closes it from the keyboard, and the Close button does both.
@@ -98,6 +72,73 @@ export function Drawer(props: { open: boolean; onClose: () => void; title: strin
           {props.tabs}
         </div>
         <div className="drawer-body">{props.children}</div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What every modal panel does while open (the drawer and the dialog): Escape closes the top one wherever the focus is,
+ * Tab stays inside it, the page behind does not scroll, focus moves in, and closing puts focus back where it was.
+ */
+function useModalPanel(open: boolean, onClose: () => void, panel: RefObject<HTMLDivElement | null>) {
+  const token = useRef({});
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      // A menu inside the panel that handled the key itself (Escape closing the menu) marks it as used.
+      if (e.defaultPrevented || openPanels[openPanels.length - 1] !== token.current) return;
+      if (e.key === "Escape") onClose();
+      else if (e.key === "Tab" && panel.current) keepTabInside(e, panel.current);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose, panel]);
+  useEffect(() => {
+    if (!open) return;
+    const mine = token.current;
+    openPanels.push(mine);
+    const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // Focus moves into the panel unless something inside already took it (a field that focuses itself).
+    if (panel.current && !panel.current.contains(document.activeElement)) panel.current.focus({ preventScroll: true });
+    const releaseScroll = holdPageScroll(document.body);
+    return () => {
+      const at = openPanels.lastIndexOf(mine);
+      if (at >= 0) openPanels.splice(at, 1);
+      releaseScroll();
+      if (before?.isConnected) before.focus({ preventScroll: true });
+    };
+  }, [open, panel]);
+}
+
+/**
+ * A calm confirmation in the middle of the screen (docs/07): an optional mark at the top (a tick once something is
+ * done), the title, a line under it, the body, and the buttons at the foot. The same keyboard rules as the drawer.
+ * `mark` is drawn in green when `markTone` is "good"; it is decorative, since the title says what happened.
+ */
+export function Dialog(props: { open: boolean; onClose: () => void; title: string; sub?: ReactNode; mark?: IconName; markTone?: "good" | "neutral"; footer?: ReactNode; size?: "md" | "lg"; children: ReactNode }) {
+  const { open, onClose } = props;
+  const panel = useRef<HTMLDivElement>(null);
+  useModalPanel(open, onClose, panel);
+  if (!open) return null;
+  return (
+    <div className="dialog-backdrop">
+      <button type="button" className="sheet-backdrop-hit" aria-label="Close" onClick={onClose} />
+      <div ref={panel} className={cx("dialog", props.size === "lg" && "lg")} role="dialog" aria-modal="true" aria-label={props.title} tabIndex={-1}>
+        <button type="button" className="icon-btn dialog-close" aria-label="Close" title="Close" onClick={onClose}>
+          <Icon name="x" />
+        </button>
+        <div className="dialog-head">
+          {props.mark ? (
+            <span className={cx("dialog-mark", props.markTone === "good" && "good")} aria-hidden="true">
+              <Icon name={props.mark} size={24} />
+            </span>
+          ) : null}
+          <h2>{props.title}</h2>
+          {props.sub ? <p className="dialog-sub">{props.sub}</p> : null}
+        </div>
+        <div className="dialog-body">{props.children}</div>
+        {props.footer ? <div className="dialog-foot">{props.footer}</div> : null}
       </div>
     </div>
   );

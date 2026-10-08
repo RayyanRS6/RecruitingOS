@@ -144,7 +144,7 @@ describe("Slice 1 API", () => {
     await container.db.update(entitlements).set({ limit: 1 }).where(eq(entitlements.key, "active_roles"));
   });
 
-  it("approval opens the role and publishes to every channel", async () => {
+  it("approval opens the role and publishes to its channels: the careers page, Google, email and the boards the role plan names", async () => {
     const r = await json("POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "Looks right." });
     expect(r.status).toBe(200);
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { status: string; currentPacketVersion: number; postings: Array<{ channel: string; status: string; intakeToken: string | null; instructions: string | null; steps: string[]; externalUrl: string | null; verifiedBy: { kind: string } | null }> };
@@ -153,13 +153,15 @@ describe("Slice 1 API", () => {
     const byChannel = Object.fromEntries(role.postings.map((p) => [p.channel, p]));
     // docs/spec/20: nothing is live until its public URL was checked. The careers page passed the (fake) check during
     // the inline drain; Google is submitted through the page's structured data; email-in is failed (no inbound domain);
-    // the three boards wait at "ready to post" with their steps until a person records the public URL.
+    // the boards the role plan names (Indeed here; founder decision Q11) wait at "ready to post" with their steps until
+    // a person records the public URL, and no board the plan does not name is prepared.
     expect(byChannel.careers_page.status).toBe("live_verified");
     expect(byChannel.careers_page.verifiedBy).toMatchObject({ kind: "system" });
     expect(byChannel.careers_page.externalUrl).toBe(`${container.env.JOBS_BASE_URL}/careers/${companySlug}/jobs/${roleId}`);
     expect(byChannel.google_jobs.status).toBe("submitted_integration");
     expect(byChannel.email_in.status).toBe("failed");
-    expect(byChannel.linkedin_basic.status).toBe("ready_to_post");
+    expect(byChannel.linkedin_basic).toBeUndefined();
+    expect(byChannel.ziprecruiter).toBeUndefined();
     expect(byChannel.indeed.status).toBe("ready_to_post");
     expect(byChannel.indeed.instructions).toMatch(/apply/);
     expect(byChannel.indeed.steps.length).toBeGreaterThanOrEqual(5);
@@ -461,8 +463,9 @@ describe("Slice 1 API", () => {
   });
 
   it("keeps postings and approvals consistent", async () => {
+    // the careers page, Google, email and the one board the role plan names (Indeed; founder decision Q11)
     const posts = await container.db.select().from(postings).where(eq(postings.roleId, roleId));
-    expect(posts.length).toBe(6);
+    expect(posts.length).toBe(4);
     const pend = await container.db.select().from(approvalRequests).where(eq(approvalRequests.status, "pending"));
     expect(pend.filter((p) => p.roleId === roleId)).toHaveLength(0);
     const [role] = await container.db.select().from(roles).where(eq(roles.id, roleId));

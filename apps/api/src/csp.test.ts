@@ -101,6 +101,38 @@ describe("content-security policy on candidate pages", () => {
     expect((await app.request("/api/v1/auth/config")).headers.get("content-security-policy-report-only")).toBeNull();
   });
 
+  it("the job-page preview (plan D1) carries the same strict policy and nonce; the logo (plan D10) loads from our own address under a policy that runs nothing", async () => {
+    const bytes = new Uint8Array(40);
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+    new DataView(bytes.buffer).setUint32(16, 120);
+    new DataView(bytes.buffer).setUint32(20, 60);
+    expect((await app.request("/api/v1/companies/current/logo", { method: "PUT", headers: { cookie: owner, "content-type": "image/png" }, body: bytes.slice().buffer as ArrayBuffer })).status).toBe(201);
+    for (const path of [`/api/v1/roles/${roleId}/preview/page`, `/api/v1/roles/${roleId}/preview/page?view=apply`, `/careers/${companySlug}`, `/careers/${companySlug}/jobs/${roleId}`]) {
+      const r = await app.request(path, { headers: { cookie: owner } });
+      expect(r.status, path).toBe(200);
+      const csp = r.headers.get("content-security-policy-report-only")!;
+      expect(csp, path).toContain("img-src 'self' data:");
+      expect(csp, path).not.toMatch(/https?:\/\//);
+      const html = await r.text();
+      expectEveryTagNonced(html, nonceOf(csp), path);
+      expect(html, path).not.toMatch(/ on(submit|click|change|load|error)=/);
+      // every image on the page, the logo included, comes from our own address
+      const images = [...html.matchAll(/<img\b[^>]*\bsrc="([^"]+)"/g)].map((m) => m[1]);
+      expect(images.length, path).toBe(path.includes("view=apply") ? 0 : 1);
+      for (const src of images) expect(src, path).toMatch(/^\/(careers|api\/v1\/companies\/current)\/[^/]/);
+    }
+    // the preview's data stays data, without the candidate policy
+    expect((await app.request(`/api/v1/roles/${roleId}/preview`, { headers: { cookie: owner } })).headers.get("content-security-policy-report-only")).toBeNull();
+    // the image itself can only ever be an image
+    const src = (await (await app.request(`/careers/${companySlug}`)).text()).match(/<img\b[^>]*\bsrc="([^"]+)"/)![1];
+    const logo = await app.request(src);
+    expect(logo.status).toBe(200);
+    expect(logo.headers.get("content-type")).toBe("image/png");
+    expect(logo.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox");
+    expect(logo.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(logo.headers.get("content-security-policy-report-only")).toBeNull();
+  });
+
   it("CSP_MODE=enforce switches the header name and nothing else; the default anywhere else stays report-only", async () => {
     const enforcing = await createContainer({ memory: true, env: { ...baseEnv, CSP_MODE: "enforce" } });
     const app2 = createApp(enforcing);

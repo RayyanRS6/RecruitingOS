@@ -307,7 +307,7 @@ export { cx, initials, normalizeToast, OWNER_STAGES, type OwnerStage, ownerStage
 
 // The pieces below listen to the keyboard or keep state, which needs React hooks, so each lives in its own client
 // module: the rest of this file stays usable from server components.
-export { Drawer, Sheet } from "./sheet";
+export { Dialog, Drawer, Sheet } from "./sheet";
 export { type TabItem, TabPanel, Tabs } from "./tabs";
 export { SplitView } from "./split-view";
 export { AutoTextarea } from "./auto-textarea";

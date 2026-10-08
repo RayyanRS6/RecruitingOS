@@ -67,6 +67,11 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       expect(preview.job.steps[0]).toBe("Apply in about three minutes. We confirm by email.");
       expect(preview.job.notices.map((n) => n.key)).toEqual(["ai_use", "pay_transparency"]);
       expect(preview.apply.questions.map((q) => q.key)).toEqual(expect.arrayContaining(["rdh_license", "schedule"]));
+      // the same blocks as the job page (plan D10): the must-haves' words, never why each matters; no approved company text yet
+      expect(preview.job.mustHaves.length).toBeGreaterThan(0);
+      expect(preview.job.mustHaves.every((m) => typeof m === "string" && m.length > 0)).toBe(true);
+      expect(Array.isArray(preview.job.niceToHaves)).toBe(true);
+      expect(preview.company.about).toBeNull();
       expect(preview.gaps).toEqual([]);
       // the draft is the person's own: a hiring manager and an interviewer are refused
       expect((await json(manager, "GET", `/api/v1/intake/sessions/${draftId}/preview`)).status).toBe(403);
@@ -79,7 +84,7 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       expect(r.status).toBe(200);
       const proposal = await read<PacketRevisionProposal>(r);
       expect(proposal).toMatchObject({ target: { kind: "draft", sessionId: draftId }, sections: ["requirements"], takesEffect: "draft", summary: "I added a must-have: Dentrix experience.", question: null, newFlags: [] });
-      expect(proposal.diff.sections).toEqual([{ section: "requirements", label: "Must-haves and eligibility", changes: [expect.objectContaining({ label: "Must-have", kind: "added", before: null, after: "Dentrix experience", visibility: "reviewed" })] }]);
+      expect(proposal.diff.sections).toEqual([{ section: "requirements", label: "Must-haves and eligibility", changes: [expect.objectContaining({ label: "Must-have", kind: "added", before: null, after: "Dentrix experience", visibility: "public" })] }]);
       // nothing is saved yet
       expect((await session(draftId)).draft).toEqual(before);
       const [run] = await container.db.select().from(aiRuns).where(eq(aiRuns.id, proposal.revisionId));
@@ -195,7 +200,7 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
 
     it("the version diff names each change in plain words; pay is left out for people who may not see it", async () => {
       const diff = await read<PacketDiff>(await json(owner, "GET", `/api/v1/roles/${roleId}/packets/diff`));
-      expect(diff).toMatchObject({ from: 1, to: 2, total: 1, sections: [{ section: "requirements", changes: [{ label: "Must-have", kind: "added", after: "Dentrix experience", visibility: "reviewed" }] }] });
+      expect(diff).toMatchObject({ from: 1, to: 2, total: 1, sections: [{ section: "requirements", changes: [{ label: "Must-have", kind: "added", after: "Dentrix experience", visibility: "public" }] }] });
       const pay = await read<PacketRevisionProposal>(await json(owner, "POST", `/api/v1/roles/${roleId}/revisions`, { message: "Change the pay to $50 to $60 an hour" }));
       expect(pay.sections).toEqual(["compensation"]);
       expect(pay.diff.sections[0].changes).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Pay range", before: "$45–$55 an hour", after: "$50–$60 an hour", visibility: "public" }), expect.objectContaining({ label: "Private ceiling", before: expect.stringMatching(/^\$5\d$/), after: "$60", visibility: "internal" })]));
@@ -238,8 +243,15 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       };
       const r = await json(owner, "PATCH", `/api/v1/roles/${roleId}/packet`, edit);
       expect(r.status).toBe(200);
-      const v = await read<{ version: number; outcome: string; fields: string[]; changeSummary: string; packet: RolePacket; diff: PacketDiff }>(r);
-      expect(v.outcome).toBe("approved_current");
+      const v = await read<{ version: number; outcome: string; fields: string[]; changeSummary: string; packet: RolePacket; diff: PacketDiff; needsApproval: unknown }>(r);
+      // the title and the eligibility questions of a live job need the same approval as a new role (founder decision
+      // Q10 = B); the company's only owner confirms their own change
+      expect(v.outcome).toBe("proposed_pending_approval");
+      // (the newest version, the base of this edit, also carries the pay change asked for by chat, still waiting)
+      expect(v.needsApproval).toEqual({ changes: ["pay", "title", "eligibility"], words: "This changes the pay, the job title and the eligibility questions, so it needs the same approval as a new role before it goes live.", youMayConfirm: true });
+      await container.drain();
+      expect((await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: v.version })).status).toBe(200);
+      await container.drain();
       expect(v.fields).toEqual(["title", "schedule", "screeningQuestions", "eligibility", "dealBreakers", "decisionMakerUserId", "tone"]);
       expect(v.changeSummary).toBe("Edited: job title, schedule, screening questions, eligibility questions, deal-breakers, decision maker, message tone");
       expect(v.packet.identity).toMatchObject({ title: "Dental Hygienist (RDH)", schedule: "Tuesday to Saturday" });
@@ -266,6 +278,10 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       expect(pay.packet.compensation).toMatchObject({ min: 52, max: 64, ceiling: 64 });
       expect(pay.notes).toEqual(["The private ceiling was raised to the top of the new range ($64)."]);
       expect(pay.packet.provenance.payConfirmedBy).toMatchObject({ via: "edited", by: { id: ownerId } });
+      // the pay of a live job changes only once approved (Q10); the only owner confirms it
+      await container.drain();
+      expect((await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: pay.version })).status).toBe(200);
+      await container.drain();
       expect((await errorOf(await json(owner, "PATCH", `/api/v1/roles/${roleId}/packet`, { baseVersion: pay.version, compensation: { basis: "salary" } }))).code).toBe("pay_basis_needs_range");
     });
 
@@ -343,8 +359,13 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       const again = structuredClone(r.packet);
       again.communication.tone = "warm";
       again.provenance.payConfirmedBy = forged;
-      const kept = await read<{ packet: RolePacket }>(await json(owner, "POST", `/api/v1/roles/${roleId}/packets`, { packet: again, changeSummary: "Tone" }));
+      const kept = await read<{ version: number; outcome: string; packet: RolePacket }>(await json(owner, "POST", `/api/v1/roles/${roleId}/packets`, { packet: again, changeSummary: "Tone" }));
       expect(kept.packet.provenance.payConfirmedBy).toEqual(r.packet.provenance.payConfirmedBy);
+      // the new pay of the live job waits for approval (Q10); the only owner confirms it
+      expect(kept.outcome).toBe("proposed_pending_approval");
+      await container.drain();
+      expect((await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: kept.version })).status).toBe(200);
+      await container.drain();
     });
 
     it("the approval card lists the flagged wording; a person keeps it with a reason on the version waiting, and sending back is never blocked (C1)", async () => {

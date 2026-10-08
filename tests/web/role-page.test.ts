@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { can, type Permission } from "../../packages/core/src/permissions";
 import { defaultInterviewers } from "../../apps/web/src/interview-defaults";
 import { actorWords, describeRoleEvent, payShownLabel, roleWords } from "../../apps/web/src/role-words";
-import { canDecideInterviews, canDecline, canEditPacket, canManageInterviews, canManageRole, canRecordOutcome, canRequestInterviews, canSeeActivity, canSeeTalent, canStartHire } from "../../apps/web/src/roles";
+import { canApproveRole, canChangeCompany, canDecideInterviews, canDecline, canEditPacket, canManageInterviews, canManageRole, canRecordOutcome, canRequestInterviews, canSeeActivity, canSeePay, canSeeTalent, canShareJob, canStartHire } from "../../apps/web/src/roles";
 
 /**
  * The signed-in pages decide what to show from apps/web/src/roles.ts, a copy of the permission matrix (the pages do not
@@ -22,6 +22,9 @@ const MIRRORS: Array<[string, (role: string) => boolean, Permission]> = [
   ["canManageInterviews", canManageInterviews, "interview.manage"],
   ["canDecideInterviews", canDecideInterviews, "interview.decide"],
   ["canDecline", canDecline, "application.reject"],
+  ["canApproveRole", canApproveRole, "role.approve"],
+  ["canSeePay", canSeePay, "compensation.read"],
+  ["canChangeCompany", canChangeCompany, "company.update"],
 ];
 
 describe("the web pages' copy of the permission matrix", () => {
@@ -36,6 +39,13 @@ describe("the web pages' copy of the permission matrix", () => {
       expect(fn(undefined as unknown as string)).toBe(false);
     }
   });
+  it("sharing a job is open to those who manage postings and to those who approve roles (plan D8)", () => {
+    for (const role of ROLES) expect(canShareJob(role), role).toBe(can(role, "role.manage") || can(role, "role.approve"));
+    expect(canShareJob("hiring_manager")).toBe(true);
+    expect(canShareJob("interviewer")).toBe(false);
+    expect(canShareJob(null)).toBe(false);
+  });
+
   it("hiring managers and HR see postings read-only; HR may close a role, a recruiter may not", () => {
     expect(canManageRole("hiring_manager")).toBe(false);
     expect(canManageRole("hr")).toBe(false);
@@ -64,7 +74,7 @@ describe("the role page's Activity words", () => {
 
   it("names the board and says what each posting state means, never a raw state name", () => {
     const cases: Array<[string, Record<string, unknown>, string]> = [
-      ["posting.ready_to_post", { channel: "linkedin_basic", roleId: "r" }, "LinkedIn: ready for you to post"],
+      ["posting.ready_to_post", { channel: "linkedin_basic", roleId: "r" }, "LinkedIn: ready to post"],
       ["posting.ready_to_post", { channel: "careers_page", roleId: "r" }, "Careers page: prepared"],
       ["posting.posted_manually", { channel: "indeed", roleId: "r" }, "Indeed: address recorded, being checked"],
       ["posting.posted_manually", { channel: "indeed", roleId: "r", corrected: true }, "Indeed: a different address recorded, being checked"],
@@ -78,6 +88,9 @@ describe("the role page's Activity words", () => {
       ["posting.closure_required", { channel: "linkedin_basic", roleId: "r" }, "LinkedIn: still to be taken down"],
       ["posting.closure_confirmed", { channel: "linkedin_basic", roleId: "r" }, "LinkedIn: confirmed taken down"],
       ["posting.published", { channel: "indeed", roleId: "r" }, "Indeed: posting updated"],
+      // an approved edit left a board behind, and it was brought up to date (plan D4)
+      ["posting.update_required", { channel: "indeed", roleId: "r" }, "Indeed: still shows the earlier version, to be updated"],
+      ["posting.updated", { channel: "linkedin_basic", roleId: "r" }, "LinkedIn: brought up to date with the new version"],
     ];
     for (const [type, payload, words] of cases) {
       const said = describeRoleEvent(ev(type, payload));
@@ -92,6 +105,13 @@ describe("the role page's Activity words", () => {
     expect(describeRoleEvent(ev("screen.cancelled", { reason: "stopped_by_team" }))).toBe("A screening invitation was stopped by the team");
     expect(describeRoleEvent(ev("screen.cancelled", { reason: "left_process" }))).toBe("A screen was closed: the candidate is no longer in the process");
     expect(describeRoleEvent(ev("screen.cancelled", { reason: "deletion_request" }))).toBe("A screen was closed: the candidate's information was deleted");
+  });
+
+  it("says which boards were chosen and when applications close (plan D6, D7)", () => {
+    expect(describeRoleEvent(ev("role.boards_chosen", { channels: ["linkedin_basic", "indeed"] }))).toBe("Job boards chosen: LinkedIn, Indeed");
+    expect(describeRoleEvent(ev("role.boards_chosen", { channels: [] }))).toBe("No job boards chosen");
+    expect(describeRoleEvent(ev("role.closing_date_set", { closesOn: "2026-10-30" }))).toBe("Closing date set: last day to apply October 30, 2026");
+    expect(describeRoleEvent(ev("role.closing_date_set", { closesOn: null }))).toBe("Closing date taken off");
   });
 
   it("shows an AI step as the assistant, never its internal id; people by name", () => {

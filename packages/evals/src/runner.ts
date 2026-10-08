@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FakeProvider, createRuntime, intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenTurnPrompt, triageAssessPrompt, type AiRuntime, type IntakeContext, type ScreenContext } from "@ros/ai";
+import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenTurnPrompt, triageAssessPrompt, type AiRuntime, type IntakeContext, type ScreenContext } from "@ros/ai";
 import {
   REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, advanceProgress, basisFor, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, mergeFacts, mergeRevision, redactProtected, registerFakeHandlers,
   resolveBenchmark, verifyQuotes, type BenchmarkResult,
@@ -9,7 +9,7 @@ import {
 import type { IntakeFacts, IntakeMessage, RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
 import { createDb, migrate } from "@ros/db";
 import { findPlaybook, matchPlaybookRole } from "@ros/playbooks";
-import { EMPTY_FACTS, RDH_FACTS, assessmentQuotesGrounded, biasPairDifferences, biasPairs, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, quotesAreGrounded, resumeCases, reviseCases, screenPersonas, triageEdgeCases, type IntakeCase } from "./suites";
+import { EMPTY_FACTS, RDH_FACTS, aboutCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, quotesAreGrounded, resumeCases, reviseCases, screenPersonas, triageEdgeCases, type IntakeCase } from "./suites";
 
 /**
  * Evaluation runner (docs/11). `pnpm eval` runs every suite against the configured provider
@@ -183,6 +183,18 @@ async function main() {
       out.push({ id: c.id, pass: f.length === 0, failures: f });
     }
     results["packet.revise"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
+  }
+
+  // About the company (plan D10): the draft a person approves in Setup, judged as a candidate would read it.
+  if (!onlySuite || onlySuite === "company.about") {
+    const out: (typeof results)[string]["cases"] = [];
+    for (const c of aboutCases) {
+      const r = await runPrompt(q, rt, companyAboutPrompt, c.input, { companyId: null, inputRef: { eval: c.id } });
+      if (!r.ok) { out.push({ id: c.id, pass: false, failures: [`about failed: ${r.error}`] }); continue; }
+      const f = c.expect(r.output.text);
+      out.push({ id: c.id, pass: f.length === 0, failures: f });
+    }
+    results["company.about"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
   }
 
   if (!onlySuite || onlySuite.startsWith("screen")) {

@@ -5,10 +5,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearchParams } from "../nav";
 import { Alert, Button, Card, ErrorState, Icon, PageHeader, Pill, Skeleton, type Tone } from "@ros/ui";
 import type { GettingStartedAction } from "@ros/contracts";
-import { api, ApiError, type Brief, type BriefCard, type Me, type Notification } from "../api/client";
+import { api, ApiError, type Brief, type BriefCard, type ClosingDateResponse, type Me, type Notification } from "../api/client";
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
 import { RecruiterRequests } from "../components/RecruiterRequests";
+import { closingDateToast, isClosingDateAction } from "../publishing";
 import { canStartHire } from "../roles";
 import { presetOf, requestSentText } from "../recruiter-access";
 import { START_HIRE_HREF } from "../start-hire";
@@ -86,11 +87,13 @@ function BriefCardView({ card, onSentToRecruiter }: { card: BriefCard; onSentToR
   // Discarding a draft cannot be undone, so the card asks first (plan C18).
   const [discarding, setDiscarding] = useState<BriefCard["actions"][number] | null>(null);
   const act = useMutation({
-    mutationFn: (a: BriefCard["actions"][number]) => api.post<unknown>(a.path, isDiscardDraft(a) ? {} : { ...(a.body ?? {}), question: (a.body as { question?: string } | undefined)?.question ?? `Please review: ${card.title}` }),
+    // A closing-date card's "Extend" posts the new date exactly as the card has it (plan D7); nothing else is added.
+    mutationFn: (a: BriefCard["actions"][number]) => api.post<unknown>(a.path, isDiscardDraft(a) ? {} : isClosingDateAction(a) ? a.body ?? {} : { ...(a.body ?? {}), question: (a.body as { question?: string } | undefined)?.question ?? `Please review: ${card.title}` }),
     // A request to a recruiter answers with what they will see and until when (Q31); the page keeps those words on screen.
     // An answer to an approval ("Yes", "Not now", "Do not send") says exactly what it did.
     onSuccess: (r, a) => {
       if (isDiscardDraft(a)) { toast("Draft discarded.", "Nothing was sent to anyone."); setDiscarding(null); qc.invalidateQueries({ queryKey: ["intake", "mine"] }); }
+      else if (isClosingDateAction(a)) { const t = closingDateToast(r as ClosingDateResponse); toast(t.title, t.detail); if (card.roleId) { qc.invalidateQueries({ queryKey: ["role", card.roleId] }); qc.invalidateQueries({ queryKey: ["postings", card.roleId] }); } }
       else if (a.path.includes("/escalations")) { toast("Sent to a recruiter."); onSentToRecruiter(requestSentText(r)); qc.invalidateQueries({ queryKey: ["escalations", "mine"] }); }
       else { const t = briefDecisionToast(a, r); toast(t.title, t.detail); }
       qc.invalidateQueries({ queryKey: ["brief"] }); qc.invalidateQueries({ queryKey: ["notifications"] });
@@ -127,14 +130,17 @@ function BriefCardView({ card, onSentToRecruiter }: { card: BriefCard; onSentToR
   );
 }
 
-/** A card's pill: amber when it waits on you, ink when a recruiter is involved, green when there is nothing waiting. */
+/**
+ * A card's pill: amber when it waits on you, ink when a recruiter is involved, green when there is nothing waiting or a
+ * job just went live (the day to share it), amber for a closing date that is about to stop applications or did.
+ */
 function cardTone(kind: string, needsYou: boolean): Tone {
-  if (needsYou) return "caution";
-  return kind === "escalation" ? "accent" : kind === "empty" ? "good" : "neutral";
+  if (needsYou || kind === "closing_date") return "caution";
+  return kind === "escalation" ? "accent" : kind === "empty" || kind === "share" ? "good" : "neutral";
 }
 
 function label(kind: string): string {
-  return { new_applicants: "New applicants", needs_review: "Needs you", decision: "Decision", posting_action: "One step", escalation: "Recruiter", stuck: "Stuck", screening: "Screening", interviews: "Your interviews", empty: "Nothing waiting", getting_started: "Getting started", draft: "Draft" }[kind] ?? kind;
+  return { new_applicants: "New applicants", needs_review: "Needs you", decision: "Decision", posting_action: "One step", escalation: "Recruiter", stuck: "Stuck", screening: "Screening", interviews: "Your interviews", empty: "Nothing waiting", getting_started: "Getting started", draft: "Draft", closing_date: "Closing date", share: "Live today" }[kind] ?? kind;
 }
 
 /**

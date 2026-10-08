@@ -123,7 +123,7 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(html).not.toContain('name="smsConsent"');
     expect(html).not.toMatch(/text message/i);
     const versions = html.match(/name="noticeVersionsShown" value="([^"]*)"/)![1];
-    expect(versions.split(",")).toEqual(expect.arrayContaining(["ai_use@2026-09-01", "privacy@2026-09-01", "pay_transparency@2026-09-01"]));
+    expect(versions.split(",")).toEqual(expect.arrayContaining(["ai_use@2026-10-08", "privacy@2026-09-01", "pay_transparency@2026-09-01"]));
     expect(versions).not.toContain("recording@");
     expect(versions).not.toContain("sms_consent@");
     expect(html).toContain("up to 4 MB without JavaScript");
@@ -138,8 +138,15 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(header).toContain(`<span class="fact-text">${({ onsite: "On site", hybrid: "Hybrid", remote: "Remote" } as Record<string, string>)[pv.packet.identity.remotePolicy]}</span>`);
     expect(header).toContain('<span class="fact-text">Full time</span>');
     expect(header).toMatch(/<span class="fact-text">\$45–\$55 an hour<\/span>/);
-    expect(header).toContain("tell us about your recent work in the box below instead");
-    expect(html).not.toContain("four short questions");
+    expect(header).toContain("Upload a resume, or answer four short questions about your work instead. No cover letter needed.");
+    // the pre-apply line: help, or a change to how to apply because of a disability, from a person (here the ITS inbox)
+    expect(header).toContain(`Need help applying, or a change to how you apply because of a disability? Email <a href="mailto:${container.env.EMAIL_REPLY_TO}">`);
+    // the four short questions instead of one box, behind a disclosure that works without script; closed until used
+    expect(html).toContain("<summary>No resume? Answer four short questions instead</summary>");
+    expect(html).toMatch(/<details class="no-resume">/);
+    for (const name of ["nr_recentWork", "nr_dayToDay", "nr_skills", "nr_lookingFor"]) expect(html).toContain(`name="${name}"`);
+    expect(html).not.toContain('name="noResume"');
+    expect(html).toMatch(/<input type="hidden" name="formOpened" value="v1\.[^"]+"/);
     // the job page
     const job = decodeEntities(await (await app.request(`/careers/${slug}/jobs/${roleId}`)).text());
     expect(job).toContain("A short screening conversation online (about");
@@ -182,7 +189,7 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     anaStatusToken = await statusTokenFor(container, { roleId, email: "ana.lopez@example.com" });
     await container.drain();
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
-    expect(a.answers.noticeVersionsShown).toEqual(expect.arrayContaining(["ai_use@2026-09-01", "privacy@2026-09-01", "pay_transparency@2026-09-01"]));
+    expect(a.answers.noticeVersionsShown).toEqual(expect.arrayContaining(["ai_use@2026-10-08", "privacy@2026-09-01", "pay_transparency@2026-09-01"]));
     expect(a.answers.noticeVersionsShown).not.toContain("made-up@1");
     expect(a.answers.noticeVersionsShown!.join(",")).not.toMatch(/recording|sms_consent/);
     expect(a.answers.acknowledgment).toMatchObject({ ip: "203.0.113.7", noticeVersions: a.answers.noticeVersionsShown });
@@ -242,14 +249,15 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
   let linkToken = "";
   let linkId = "";
 
-  it("a tracked link counts the visit, seals the source into a cookie and sends the person to the form; the application records the source, the detail and the link, the token appears nowhere, and the cookie is cleared", async () => {
+  it("a tracked link counts the visit, seals the source into a cookie and opens the job page (a board's link opens the form); the application records the source, the detail and the link, the token appears nowhere, and the cookie is cleared", async () => {
     const link = await withTenant(container.db, companyId, (tx) => createApplicationLink(tx, { companyId, roleId, source: "referral", sourceDetail: "Dr. Patel", label: "Referral: Dr. Patel", actor: ownerActor, now: container.engine.clock() }));
     linkToken = link.token;
     linkId = link.id;
     const urls = jobUrls(container.env, { slug, roleId });
     const visit = await app.request(`/a/${link.token}`);
     expect(visit.status).toBe(302);
-    expect(visit.headers.get("location")).toBe(urls.apply);
+    // a shared link opens the job page first (plan D8)
+    expect(visit.headers.get("location")).toBe(urls.job);
     const cookie = setCookieOf(visit);
     expect(cookie).toMatch(/^ros_src=v1\./);
     expect(cookie).toContain("HttpOnly");
@@ -288,6 +296,7 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     const board = (await findPostingLink(container.db, indeed.id))!;
     const boardVisit = await app.request(`/a/${board.token}`);
     expect(boardVisit.status).toBe(302);
+    expect(boardVisit.headers.get("location")).toBe(urls.apply);
     const r2 = await apply(applyForm({ firstName: "Cara", lastName: "Diaz", email: "cara.diaz@example.com" }), { cookie: `ros_src=${cookieValue(boardVisit)}` });
     expect(r2.status).toBe(302);
     const cara = (await container.db.select().from(applications).where(eq(applications.roleId, roleId))).find((x) => x.linkId === board.id)!;

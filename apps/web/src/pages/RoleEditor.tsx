@@ -2,9 +2,13 @@
 
 import { useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { JobPreview } from "@ros/contracts";
 import { Alert, Button, Drawer, Field, IconButton, Segmented } from "@ros/ui";
-import { api, ApiError, type EvidenceSource, type InterviewPlanView, type Requirement, type RolePacket } from "../api/client";
+import { api, ApiError, type ClosingDateView, type EvidenceSource, type InterviewPlanView, type NewVersionResponse, type Requirement, type RolePacket, type WhoPosts } from "../api/client";
+import { ClosingDateField } from "../components/ClosingDate";
+import { liveEditWords, materialChangesOf, previewOfEdit, savedVersionToast, type MaterialChange } from "../publishing";
 import { toast } from "../toast";
+import { UnsavedPreview } from "./new-role/CandidatePreview";
 import {
   ELIGIBILITY_TYPES, QUESTION_KINDS, SCREENING_MAX, SCREENING_MIN, TONES, applyPacketForm, moveRow, packetFormFrom, packetFormProblem,
   type EligibilityRow, type PacketForm, type QuestionRow,
@@ -17,6 +21,11 @@ import {
  * application form's questions (only the kinds that may hold an application), deal-breakers, who has the final say and
  * the tone of messages. "Everything (advanced)" is the whole packet as JSON, for admins and recruiters only. Every save
  * is a new version; what happens to it (current at once, or waiting for approval) is the API's call.
+ *
+ * Wave D: someone who may approve, editing a live job, sees what the change does before it is saved (founder decision
+ * Q10, plan D4): a change to the pay, the title, the place or the application form's questions needs the same approval
+ * as a new role; a wording change goes live on confirm, after a look at the job page with the change in it (D1). The
+ * closing date (D7) sits at the top and is saved on its own, straight away; it is not part of the versions.
  */
 const EMPLOYMENT: Array<{ value: string; label: string }> = [
   { value: "full_time", label: "Full time" },
@@ -203,8 +212,15 @@ function problemWith(input: { form: PacketForm; description: string; mustHaves: 
  * `proposed` says the version is the one waiting for approval (a teammate's edit to an open role); saving builds on it.
  * When a version is saved elsewhere while the editor is open (`newerVersion`), it says so before anyone saves over it.
  */
-export function EditPacket({ open, onClose, roleId, packet, version, proposed, currentVersion, newerVersion, advanced }: { open: boolean; onClose: () => void; roleId: string; packet: RolePacket; version: number; proposed: boolean; currentVersion: number | null; newerVersion: number | null; advanced: boolean }) {
+export function EditPacket({ open, onClose, roleId, packet, version, proposed, currentVersion, newerVersion, advanced, roleStatus = "draft", mayApprove = false, whoPosts = "its", closingDate = null, canManage = false }: { open: boolean; onClose: () => void; roleId: string; packet: RolePacket; version: number; proposed: boolean; currentVersion: number | null; newerVersion: number | null; advanced: boolean; roleStatus?: string; mayApprove?: boolean; whoPosts?: WhoPosts; closingDate?: ClosingDateView | null; canManage?: boolean }) {
   const qc = useQueryClient();
+  // An approver's change to the live version shows what it does first (Q10); anyone else's waits for approval as before.
+  const liveEdit = roleStatus === "open" && mayApprove && !proposed;
+  // While reviewing, what the change does is read from the fields as they are now, so a later edit is never saved stale.
+  const [reviewing, setReviewing] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  // The saved version's preview, built by the server; the changed words are laid over it on this page (previewOfEdit).
+  const basePreview = useQuery({ queryKey: ["job-preview", `/api/v1/roles/${roleId}/preview?version=${version}`], queryFn: () => api.get<JobPreview>(`/api/v1/roles/${roleId}/preview?version=${version}`), enabled: previewOpen && reviewing });
   const [mode, setMode] = useState<"simple" | "json">("simple");
   const [form, setForm] = useState<PacketForm>(() => packetFormFrom(packet));
   const [description, setDescription] = useState(packet.description.publicJobDescription);
@@ -218,128 +234,173 @@ export function EditPacket({ open, onClose, roleId, packet, version, proposed, c
   const plan = useQuery({ queryKey: ["interview-plan", roleId], queryFn: () => api.get<InterviewPlanView>(`/api/v1/roles/${roleId}/interview-plan`), enabled: open });
   const deciders = (plan.data?.team ?? []).filter((m) => DECIDERS.includes(m.role));
   const set = (patch: Partial<PacketForm>) => setForm({ ...form, ...patch });
+  /** The packet as the editor now has it. */
+  const build = (): RolePacket => {
+    if (mode === "json" && advanced) return JSON.parse(json) as RolePacket;
+    const next = applyPacketForm(packet, form);
+    next.description.publicJobDescription = description.trim();
+    next.requirements.mustHaves = toRequirements(mustHaves, "mh");
+    next.requirements.niceToHaves = toRequirements(niceToHaves, "nh");
+    return next;
+  };
   const save = useMutation({
-    mutationFn: () => {
-      let next: RolePacket;
-      if (mode === "json" && advanced) next = JSON.parse(json) as RolePacket;
-      else {
-        next = applyPacketForm(packet, form);
-        next.description.publicJobDescription = description.trim();
-        next.requirements.mustHaves = toRequirements(mustHaves, "mh");
-        next.requirements.niceToHaves = toRequirements(niceToHaves, "nh");
-      }
-      return api.post<{ version: number; outcome?: "approved_current" | "proposed_pending_approval" | "proposed"; guardChanges?: string[] }>(`/api/v1/roles/${roleId}/packets`, { packet: next, changeSummary: summary.trim() || "Edited by the owner" });
-    },
+    mutationFn: (next: RolePacket) => api.post<NewVersionResponse>(`/api/v1/roles/${roleId}/packets`, { packet: next, changeSummary: summary.trim() || "Edited by the owner" }),
     onSuccess: async (r) => {
-      // What the fairness and pay checks changed on their own (a must-have taken out, the ceiling raised) is said, never done silently.
-      const changed = r.guardChanges?.length ? r.guardChanges.join(" ") : undefined;
-      toast(r.outcome === "proposed_pending_approval" ? `Saved as version ${r.version}. It takes effect once an approver says yes.` : r.outcome === "proposed" ? `Saved as version ${r.version} with the draft.` : `Saved as version ${r.version}.`, changed);
+      // What the fairness and pay checks changed on their own (a must-have taken out, the ceiling raised) is said, never
+      // done silently; so is why a change to a live job waits, and which boards still show the earlier version.
+      const t = savedVersionToast(r, whoPosts);
+      toast(t.title, t.detail);
       // Closed first, so the editor never shows its own new version as "saved while this was open".
       onClose();
       await qc.invalidateQueries({ queryKey: ["role", roleId] });
+      await qc.invalidateQueries({ queryKey: ["postings", roleId] });
       await qc.invalidateQueries({ queryKey: ["interview-plan", roleId] });
       await qc.invalidateQueries({ queryKey: ["brief"] });
       await qc.invalidateQueries({ queryKey: ["roles"] });
     },
   });
-  const submit = () => {
+  /** The first thing wrong with the fields, or null; said on screen. */
+  const check = (): boolean => {
     if (mode === "simple" || !advanced) {
       const p = problemWith({ form, description, mustHaves, niceToHaves });
       setProblem(p);
-      if (p) return;
-    } else {
-      try { JSON.parse(json); } catch { setProblem("The JSON does not parse. Check for a missing comma or bracket."); return; }
-      setProblem(null);
+      return !p;
     }
-    save.mutate();
+    try { JSON.parse(json); } catch { setProblem("The JSON does not parse. Check for a missing comma or bracket."); return false; }
+    setProblem(null);
+    return true;
   };
+  const submit = () => {
+    if (!check()) return;
+    if (liveEdit) setReviewing(true);
+    else save.mutate(build());
+  };
+  const confirmLive = () => { if (check()) save.mutate(build()); };
+  // The change as the fields have it now (null while the JSON does not parse) and what it needs (Q10).
+  let review: { next: RolePacket; material: MaterialChange[] } | null = null;
+  if (reviewing) {
+    try {
+      const next = build();
+      review = { next, material: materialChangesOf(packet, next) };
+    } catch {
+      review = null;
+    }
+  }
+  const words = review ? liveEditWords(review.material) : null;
   return (
-    <Drawer open={open} onClose={onClose} title="Edit the role" sub={`Editing version ${version}`}>
-      <div className="stack">
-        <p className="small muted" style={{ margin: 0 }}>
-          {proposed
-            ? `You are editing v${version}, the version waiting for approval${currentVersion ? ` (the role still runs on v${currentVersion})` : ""}. Saving keeps its changes and adds yours as a new version.`
-            : `You are editing v${version}. Saving adds a new version; nothing is overwritten.`}
-        </p>
-        {newerVersion ? <Alert tone="caution">A newer version, v{newerVersion}, was saved while this was open. Saving now starts from v{version} and would undo its changes. Copy anything you typed, close this, and open Edit again to start from the newest version.</Alert> : null}
-        {advanced ? <Segmented value={mode} onChange={setMode} options={[{ value: "simple", label: "The usual edits" }, { value: "json", label: "Everything (advanced)" }]} /> : null}
-        {mode === "simple" || !advanced ? (
-          <>
-            <RequirementGroup legend="The job" hint="Shown on the job page.">
-              <Field label="Job title" htmlFor="ed-title"><input id="ed-title" className="input" value={form.title} onChange={(e) => set({ title: e.target.value })} /></Field>
-              <PlaceRows rows={form.places} onChange={(places) => set({ places })} />
-              <div className="grid-2">
-                <Field label="Full or part time" htmlFor="ed-type">
-                  <select id="ed-type" className="select" value={form.employmentType} onChange={(e) => set({ employmentType: e.target.value })}>
-                    {EMPLOYMENT.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+    <>
+      <Drawer open={open} onClose={onClose} title="Edit the role" sub={`Editing version ${version}`}>
+        <div className="stack">
+          <p className="small muted" style={{ margin: 0 }}>
+            {proposed
+              ? `You are editing v${version}, the version waiting for approval${currentVersion ? ` (the role still runs on v${currentVersion})` : ""}. Saving keeps its changes and adds yours as a new version.`
+              : `You are editing v${version}. Saving adds a new version; nothing is overwritten.`}
+          </p>
+          {newerVersion ? <Alert tone="caution">A newer version, v{newerVersion}, was saved while this was open. Saving now starts from v{version} and would undo its changes. Copy anything you typed, close this, and open Edit again to start from the newest version.</Alert> : null}
+          {liveEdit ? <p className="small muted" style={{ margin: 0 }}>The job is live. Before anything is saved you see what your change does: wording goes live when you confirm; a change to the pay, the title, the place or the application form's questions needs the same approval as a new role.</p> : null}
+          {closingDate && roleStatus !== "closed" ? (
+            <fieldset className="field" style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 10, margin: 0, minWidth: 0 }}>
+              <legend style={{ fontWeight: 600, fontSize: 13.5, padding: "0 4px" }}>When applications close</legend>
+              <span className="hint">Saved on its own, straight away. It is not part of the job's versions.</span>
+              <ClosingDateField roleId={roleId} closingDate={closingDate} canEdit={canManage} roleStatus={roleStatus} idBase="editor" />
+            </fieldset>
+          ) : null}
+          {advanced ? <Segmented value={mode} onChange={setMode} options={[{ value: "simple", label: "The usual edits" }, { value: "json", label: "Everything (advanced)" }]} /> : null}
+          {mode === "simple" || !advanced ? (
+            <>
+              <RequirementGroup legend="The job" hint="Shown on the job page.">
+                <Field label="Job title" htmlFor="ed-title"><input id="ed-title" className="input" value={form.title} onChange={(e) => set({ title: e.target.value })} /></Field>
+                <PlaceRows rows={form.places} onChange={(places) => set({ places })} />
+                <div className="grid-2">
+                  <Field label="Full or part time" htmlFor="ed-type">
+                    <select id="ed-type" className="select" value={form.employmentType} onChange={(e) => set({ employmentType: e.target.value })}>
+                      {EMPLOYMENT.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Work model" htmlFor="remote">
+                    <select id="remote" className="select" value={form.remotePolicy} onChange={(e) => set({ remotePolicy: e.target.value as PacketForm["remotePolicy"] })}>
+                      <option value="onsite">On site</option>
+                      <option value="hybrid">Hybrid (some days on site)</option>
+                      <option value="remote">Remote</option>
+                    </select>
+                  </Field>
+                </div>
+                <Field label="Schedule" htmlFor="ed-schedule"><input id="ed-schedule" className="input" value={form.schedule} onChange={(e) => set({ schedule: e.target.value })} placeholder="e.g. Monday to Thursday, 8 to 5" /></Field>
+              </RequirementGroup>
+              <Field label="Public description" htmlFor="desc"><textarea id="desc" className="textarea" style={{ minHeight: 180 }} value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
+              <RequirementGroup legend="Pay" hint="Candidates see the range; only your team sees the most you would pay.">
+                <Field label="Paid" htmlFor="ed-basis">
+                  <select id="ed-basis" className="select" value={form.basis} onChange={(e) => set({ basis: e.target.value as PacketForm["basis"] })}>
+                    <option value="hourly">By the hour</option>
+                    <option value="salary">A yearly salary</option>
                   </select>
                 </Field>
-                <Field label="Work model" htmlFor="remote">
-                  <select id="remote" className="select" value={form.remotePolicy} onChange={(e) => set({ remotePolicy: e.target.value as PacketForm["remotePolicy"] })}>
-                    <option value="onsite">On site</option>
-                    <option value="hybrid">Hybrid (some days on site)</option>
-                    <option value="remote">Remote</option>
-                  </select>
-                </Field>
-              </div>
-              <Field label="Schedule" htmlFor="ed-schedule"><input id="ed-schedule" className="input" value={form.schedule} onChange={(e) => set({ schedule: e.target.value })} placeholder="e.g. Monday to Thursday, 8 to 5" /></Field>
-            </RequirementGroup>
-            <Field label="Public description" htmlFor="desc"><textarea id="desc" className="textarea" style={{ minHeight: 180 }} value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
-            <RequirementGroup legend="Pay" hint="Candidates see the range; only your team sees the most you would pay.">
-              <Field label="Paid" htmlFor="ed-basis">
-                <select id="ed-basis" className="select" value={form.basis} onChange={(e) => set({ basis: e.target.value as PacketForm["basis"] })}>
-                  <option value="hourly">By the hour</option>
-                  <option value="salary">A yearly salary</option>
+                <div className="grid-2">
+                  <Field label="Pay minimum" htmlFor="min"><input id="min" className="input" inputMode="decimal" value={form.min} onChange={(e) => set({ min: e.target.value })} /></Field>
+                  <Field label="Pay maximum" htmlFor="max"><input id="max" className="input" inputMode="decimal" value={form.max} onChange={(e) => set({ max: e.target.value })} /></Field>
+                </div>
+                <Field label="Ceiling (the most you would pay)" htmlFor="ceil" hint="Offers never go above this without a new approval."><input id="ceil" className="input" inputMode="decimal" value={form.ceiling} onChange={(e) => set({ ceiling: e.target.value })} /></Field>
+                <Field label="Benefits" htmlFor="ed-benefits"><input id="ed-benefits" className="input" value={form.benefits} onChange={(e) => set({ benefits: e.target.value })} placeholder="e.g. Health, dental, 401(k), paid time off" /></Field>
+              </RequirementGroup>
+              <RequirementGroup legend={`Must-haves (up to ${MAX_MUST_HAVES})`} hint="The things you would not hire without. Each says why it matters and where it is checked.">
+                <RequirementRows rows={mustHaves} onChange={setMustHaves} idPrefix="mh" max={MAX_MUST_HAVES} addLabel="Add a must-have" />
+              </RequirementGroup>
+              <RequirementGroup legend={`Nice-to-haves (up to ${MAX_NICE_TO_HAVES})`} hint="Helpful, never a reason to hold anyone.">
+                <RequirementRows rows={niceToHaves} onChange={setNiceToHaves} idPrefix="nh" max={MAX_NICE_TO_HAVES} addLabel="Add a nice-to-have" />
+              </RequirementGroup>
+              <RequirementGroup legend={`Screening questions (${SCREENING_MIN} to ${SCREENING_MAX})`} hint="Asked in a short conversation marked as AI, in this order, with a person available instead.">
+                <QuestionRows rows={form.questions} onChange={(questions) => set({ questions })} />
+              </RequirementGroup>
+              <RequirementGroup legend="Questions on the application form" hint="The only questions that can hold an application for your decision. Nothing is ever turned down automatically.">
+                <EligibilityRows rows={form.eligibility} onChange={(eligibility) => set({ eligibility })} />
+              </RequirementGroup>
+              <RequirementGroup legend="Deal-breakers, in your words" hint="Only your team sees these. They are used only once you make them visible must-haves.">
+                <TextRows rows={form.dealBreakers} onChange={(dealBreakers) => set({ dealBreakers })} idPrefix="db" addLabel="Add a deal-breaker" placeholder="e.g. Cannot work Saturdays" />
+              </RequirementGroup>
+              <Field label="Who has the final say" htmlFor="ed-decider" hint="Approvals of this role go to them; an owner can also decide.">
+                <select id="ed-decider" className="select" value={form.decisionMakerUserId || (newDecider ? NEW_PERSON : "")} onChange={(e) => {
+                  const v = e.target.value;
+                  setNewDecider(v === NEW_PERSON);
+                  const member = deciders.find((m) => m.userId === v);
+                  set({ decisionMakerUserId: member ? member.userId : "", decisionMakerName: member ? member.name : v === NEW_PERSON ? form.decisionMakerName : "" });
+                }}>
+                  <option value="">Any owner, admin or hiring manager</option>
+                  {deciders.map((m) => <option key={m.userId} value={m.userId}>{m.name}</option>)}
+                  {form.decisionMakerUserId && !deciders.some((m) => m.userId === form.decisionMakerUserId) ? <option value={form.decisionMakerUserId}>{form.decisionMakerName || "The person chosen before"}</option> : null}
+                  <option value={NEW_PERSON}>Someone not on the team yet</option>
                 </select>
               </Field>
-              <div className="grid-2">
-                <Field label="Pay minimum" htmlFor="min"><input id="min" className="input" inputMode="decimal" value={form.min} onChange={(e) => set({ min: e.target.value })} /></Field>
-                <Field label="Pay maximum" htmlFor="max"><input id="max" className="input" inputMode="decimal" value={form.max} onChange={(e) => set({ max: e.target.value })} /></Field>
+              {newDecider ? <Field label="Their name" htmlFor="ed-decider-name" hint="Invite them to the team from Setup and approvals will go to them."><input id="ed-decider-name" className="input" value={form.decisionMakerName} onChange={(e) => set({ decisionMakerName: e.target.value })} /></Field> : null}
+              <Field label="Tone of messages to candidates">
+                <Segmented value={form.tone} onChange={(tone) => set({ tone })} ariaLabel="Tone of messages to candidates" options={TONES.map((t) => ({ value: t.value, label: t.label }))} />
+              </Field>
+            </>
+          ) : (
+            <Field label="Role packet JSON" htmlFor="packet-json" hint="Validated on save. Eligibility rules must use the allowed types."><textarea id="packet-json" className="textarea" style={{ minHeight: 360, fontFamily: "var(--mono)", fontSize: 12 }} value={json} onChange={(e) => setJson(e.target.value)} /></Field>
+          )}
+          <Field label="What changed and why" htmlFor="sum"><input id="sum" className="input" value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="e.g. Raised the range after seeing the market number" /></Field>
+          {problem ? <Alert tone="caution">{problem}</Alert> : null}
+          {save.error ? <Alert tone="critical">{save.error instanceof ApiError ? save.error.message : "Could not save."}</Alert> : null}
+          {review && words ? (
+            <section className={review.material.length ? "alert caution" : "alert info"} aria-label="What this change does">
+              <div className="stack" style={{ gap: 8 }}>
+                <strong>{words.heading}</strong>
+                <span>{words.body}</span>
+                <div className="row">
+                  <Button size="sm" icon="eye" onClick={() => setPreviewOpen(true)}>See the job page with your changes</Button>
+                </div>
+                <div className="row">
+                  <Button variant="primary" loading={save.isPending} onClick={confirmLive}>{words.confirm}</Button>
+                  <Button variant="ghost" disabled={save.isPending} onClick={() => setReviewing(false)}>Keep editing</Button>
+                </div>
               </div>
-              <Field label="Ceiling (the most you would pay)" htmlFor="ceil" hint="Offers never go above this without a new approval."><input id="ceil" className="input" inputMode="decimal" value={form.ceiling} onChange={(e) => set({ ceiling: e.target.value })} /></Field>
-              <Field label="Benefits" htmlFor="ed-benefits"><input id="ed-benefits" className="input" value={form.benefits} onChange={(e) => set({ benefits: e.target.value })} placeholder="e.g. Health, dental, 401(k), paid time off" /></Field>
-            </RequirementGroup>
-            <RequirementGroup legend={`Must-haves (up to ${MAX_MUST_HAVES})`} hint="The things you would not hire without. Each says why it matters and where it is checked.">
-              <RequirementRows rows={mustHaves} onChange={setMustHaves} idPrefix="mh" max={MAX_MUST_HAVES} addLabel="Add a must-have" />
-            </RequirementGroup>
-            <RequirementGroup legend={`Nice-to-haves (up to ${MAX_NICE_TO_HAVES})`} hint="Helpful, never a reason to hold anyone.">
-              <RequirementRows rows={niceToHaves} onChange={setNiceToHaves} idPrefix="nh" max={MAX_NICE_TO_HAVES} addLabel="Add a nice-to-have" />
-            </RequirementGroup>
-            <RequirementGroup legend={`Screening questions (${SCREENING_MIN} to ${SCREENING_MAX})`} hint="Asked in a short conversation marked as AI, in this order, with a person available instead.">
-              <QuestionRows rows={form.questions} onChange={(questions) => set({ questions })} />
-            </RequirementGroup>
-            <RequirementGroup legend="Questions on the application form" hint="The only questions that can hold an application for your decision. Nothing is ever turned down automatically.">
-              <EligibilityRows rows={form.eligibility} onChange={(eligibility) => set({ eligibility })} />
-            </RequirementGroup>
-            <RequirementGroup legend="Deal-breakers, in your words" hint="Only your team sees these. They are used only once you make them visible must-haves.">
-              <TextRows rows={form.dealBreakers} onChange={(dealBreakers) => set({ dealBreakers })} idPrefix="db" addLabel="Add a deal-breaker" placeholder="e.g. Cannot work Saturdays" />
-            </RequirementGroup>
-            <Field label="Who has the final say" htmlFor="ed-decider" hint="Approvals of this role go to them; an owner can also decide.">
-              <select id="ed-decider" className="select" value={form.decisionMakerUserId || (newDecider ? NEW_PERSON : "")} onChange={(e) => {
-                const v = e.target.value;
-                setNewDecider(v === NEW_PERSON);
-                const member = deciders.find((m) => m.userId === v);
-                set({ decisionMakerUserId: member ? member.userId : "", decisionMakerName: member ? member.name : v === NEW_PERSON ? form.decisionMakerName : "" });
-              }}>
-                <option value="">Any owner, admin or hiring manager</option>
-                {deciders.map((m) => <option key={m.userId} value={m.userId}>{m.name}</option>)}
-                {form.decisionMakerUserId && !deciders.some((m) => m.userId === form.decisionMakerUserId) ? <option value={form.decisionMakerUserId}>{form.decisionMakerName || "The person chosen before"}</option> : null}
-                <option value={NEW_PERSON}>Someone not on the team yet</option>
-              </select>
-            </Field>
-            {newDecider ? <Field label="Their name" htmlFor="ed-decider-name" hint="Invite them to the team from Setup and approvals will go to them."><input id="ed-decider-name" className="input" value={form.decisionMakerName} onChange={(e) => set({ decisionMakerName: e.target.value })} /></Field> : null}
-            <Field label="Tone of messages to candidates">
-              <Segmented value={form.tone} onChange={(tone) => set({ tone })} ariaLabel="Tone of messages to candidates" options={TONES.map((t) => ({ value: t.value, label: t.label }))} />
-            </Field>
-          </>
-        ) : (
-          <Field label="Role packet JSON" htmlFor="packet-json" hint="Validated on save. Eligibility rules must use the allowed types."><textarea id="packet-json" className="textarea" style={{ minHeight: 360, fontFamily: "var(--mono)", fontSize: 12 }} value={json} onChange={(e) => setJson(e.target.value)} /></Field>
-        )}
-        <Field label="What changed and why" htmlFor="sum"><input id="sum" className="input" value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="e.g. Raised the range after seeing the market number" /></Field>
-        {problem ? <Alert tone="caution">{problem}</Alert> : null}
-        {save.error ? <Alert tone="critical">{save.error instanceof ApiError ? save.error.message : "Could not save."}</Alert> : null}
-        <Button variant="primary" loading={save.isPending} onClick={submit}>Save as a new version</Button>
-      </div>
-    </Drawer>
+            </section>
+          ) : (
+            <Button variant="primary" loading={save.isPending} onClick={submit}>{liveEdit ? "Review the change" : "Save as a new version"}</Button>
+          )}
+        </div>
+      </Drawer>
+      <UnsavedPreview open={previewOpen} onClose={() => setPreviewOpen(false)} preview={review && basePreview.data ? previewOfEdit(basePreview.data, review.next) : null} loading={basePreview.isLoading} error={basePreview.error} onRetry={() => basePreview.refetch()} />
+    </>
   );
 }

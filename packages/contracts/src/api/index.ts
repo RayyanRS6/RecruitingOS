@@ -75,6 +75,10 @@ export const CompanySettingsInput = z.object({
   careersPage: z.object({ intro: z.string().trim().max(1000).optional() }).strict().optional(),
   businessHours: BusinessHoursInput.nullable().optional(),
   notices: z.partialRecord(NoticeKey, NoticeOverrideInput.nullable()).optional(),
+  /** Who posts the job on the boards (plan D3): an ITS recruiter from the company's own accounts (default), or the team. */
+  boardPosting: z.enum(["its", "self"]).optional(),
+  /** The company has its own paid ZipRecruiter plan (Q11); only then is ZipRecruiter offered. */
+  zipRecruiterPlan: z.boolean().optional(),
 }).strict();
 export type CompanySettingsInput = z.infer<typeof CompanySettingsInput>;
 export const UpdateCompany = z.object({

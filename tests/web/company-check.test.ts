@@ -21,7 +21,9 @@ describe("whether ITS has confirmed the company", () => {
 describe("approving a role while the company waits", () => {
   it("says it goes public once ITS confirms, not that it is posting now", () => {
     expect(approvedToast({ editWhileOpen: false, check: "waiting" })).toBe("Approved. It goes public as soon as ITS confirms your company.");
-    expect(approvedToast({ editWhileOpen: false, check: "confirmed" })).toBe("Approved. Posting now.");
+    // nothing is promised as posted before it is checked (plan D2): the screen after approval says where it is going
+    expect(approvedToast({ editWhileOpen: false, check: "confirmed" })).toBe("Approved. Getting it ready on its channels.");
+    expect(approvedToast({ editWhileOpen: false, check: "confirmed" })).not.toMatch(/Posting now/);
     expect(approvedToast({ editWhileOpen: true, check: "waiting" })).toBe("Approved. The role now runs on the new version.");
     expect(APPROVE_WAITS_FOR_CHECK).toMatch(/goes public on its own as soon as ITS confirms/);
   });

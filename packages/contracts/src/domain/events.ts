@@ -25,6 +25,9 @@ export const EventType = z.enum([
   // Job distribution (docs/spec/20): one event per posting state, plus the closure checklist and a failed check.
   "posting.draft", "posting.approved", "posting.ready_to_post", "posting.posted_manually", "posting.submitted_integration", "posting.live_verified", "posting.paused", "posting.closed",
   "posting.verification_failed", "posting.closure_required", "posting.closure_confirmed",
+  // Publishing (plan Wave D): a board still shows an earlier version after an approved edit, and was brought up to
+  // date; the boards a person chose for the role; the closing date set, changed or taken off.
+  "posting.update_required", "posting.updated", "role.boards_chosen", "role.closing_date_set",
   "application_link.created", "application_link.disabled",
   "application.received", "application.acknowledged", "application.duplicate_detected", "candidate.created", "candidate.merged",
   "resume.ingested", "resume.extraction_failed", "document.upload_authorized", "document.upload_used", "document.uploaded", "document.validated", "document.rejected", "document.deleted", "eligibility.evaluated", "application.ineligible", "application.hold_reminded", "application.triaged",

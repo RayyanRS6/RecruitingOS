@@ -170,10 +170,12 @@ describe("candidate pages: the look, page by page", () => {
     expect(html).toMatch(/<a class="btn secondary" href="\/careers\/[^"]+\/jobs\/[^"]+">View and apply<span class="sr-only">: [^<]+<\/span><svg class="icon"/);
   });
 
-  it("the job page: the facts as pills with icons and spoken names, the notices before the one Apply button, which sits in the panel that stays on a phone's screen", async () => {
+  it("the job page: the company beside its initials, the facts as pills with icons and spoken names, an Apply button at the top and one in the panel that stays on a phone's screen, the notices before the panel", async () => {
     const html = await page(`/careers/${slug}/jobs/${roleId}`);
     expect(html).toContain('<main class="wide">');
     expect(html).toMatch(/<p class="eyebrow"><a href="\/careers\/[^"]+">Careers at Look Dental<\/a><\/p>/);
+    // no logo uploaded: the square shows the initials, hidden from screen readers since the name is written beside it
+    expect(html).toContain('<span class="logo" aria-hidden="true">LD</span>');
     const facts = html.slice(html.indexOf('<ul class="facts">'), html.indexOf("</ul>", html.indexOf('<ul class="facts">')));
     expect(facts).toContain('<li class="fact"><svg class="icon"');
     expect(facts).toContain('aria-hidden="true" focusable="false"');
@@ -181,10 +183,15 @@ describe("candidate pages: the look, page by page", () => {
     expect(facts).toContain('<span class="sr-only">Workplace: </span><span class="fact-text">On site</span>');
     expect(facts).toContain('<span class="sr-only">Job type: </span><span class="fact-text">Full time</span>');
     expect(facts).toMatch(/<span class="sr-only">Pay: <\/span><span class="fact-text">\$45–\$55 an hour<\/span>/);
-    expect(html.match(/>Apply now</g)).toHaveLength(1);
+    // the posted date names itself, so it has no spoken prefix
+    expect(facts).toMatch(/<li class="fact"><svg class="icon"[^>]*>.*?<\/svg><span class="fact-text">Posted [A-Z][a-z]+ \d{1,2}, \d{4}<\/span><\/li>/);
+    // two Apply buttons: one by the title (hidden on a phone, where the bar is always there) and one in the panel
+    expect(html.match(/>Apply now</g)).toHaveLength(2);
+    expect(html).toMatch(/<a class="btn head-apply" href="\/careers\/[^"]+\/apply">Apply now<\/a>/);
+    expect(CSS).toMatch(/@media \(max-width: 899px\) \{[^@]*\.head-apply \{ display: none; \}/);
     const panel = html.indexOf('<div class="apply-panel">');
     expect(panel).toBeGreaterThan(0);
-    expect(html.indexOf(">Apply now<")).toBeGreaterThan(panel);
+    expect(html.lastIndexOf(">Apply now<")).toBeGreaterThan(panel);
     // the AI and pay notices come first in reading order, in readable notice boxes
     const notices = [...html.matchAll(/<p class="notice">([^<]*)<\/p>/g)].map((m) => ({ at: m.index ?? 0, text: m[1] }));
     expect(notices.length).toBeGreaterThanOrEqual(2);
@@ -193,6 +200,12 @@ describe("candidate pages: the look, page by page", () => {
     expect(CSS).toMatch(/\.apply-panel \{ position: sticky; top: 24px;/);
     expect(CSS).toMatch(/@media \(max-width: 899px\) \{[^@]*\.apply-panel \{ top: auto; bottom: 12px; \}/);
     expect(CSS).toMatch(/html:has\(\.apply-panel\) \{ scroll-padding-bottom: \d+px; \}/); // a focused link is never hidden under the panel
+    // the four points ride in the panel on a wide screen and move into the page on a phone, where the bar shows only the button
+    expect(html.slice(panel)).toContain('<ul class="points">');
+    expect(html.slice(0, panel)).toContain('<div class="card points-card"><ul class="points">');
+    expect(CSS).toMatch(/\.points-card \{ display: none; \}/);
+    expect(CSS).toMatch(/@media \(max-width: 899px\) \{[^@]*\.points-card \{ display: block;/);
+    expect(CSS).toMatch(/@media \(max-width: 899px\) \{[^@]*\.apply-card > p, \.apply-card > \.points \{ display: none; \}/);
   });
 
   it("a job not taking applications says so in a caution note and has no apply panel", async () => {

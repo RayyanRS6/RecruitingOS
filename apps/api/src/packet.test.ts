@@ -391,12 +391,21 @@ describe("role packets: editor, approval rules, sent back, interview plan, timel
     expect(d.currentPacket?.version).toBe(2);
     expect(d.packetVersions.find((v) => v.version === 3)?.status).toBe("superseded");
     expect(d.packetApproval.latest).toMatchObject({ status: "rejected", version: 3, decisionNote: "Not now" });
-    // an approver's own edit to an open role is current at once (unchanged behaviour)
+    // an approver's own change to the pay of a live job needs the same approval as a new role (founder decision Q10 = B):
+    // olive is not the only owner, so another approver decides, and the job keeps running on v2 meanwhile
     const fourth = structuredClone(next);
     fourth.compensation.ceiling = next.compensation.ceiling + 1;
     const own = await json(olive, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: fourth, changeSummary: "Ceiling up by one" });
-    expect(((await own.json()) as { outcome: string; version: number })).toMatchObject({ outcome: "approved_current", version: 4 });
-    expect((await detail(olive, opened.roleId)).currentPacket?.version).toBe(4);
+    expect(((await own.json()) as { outcome: string; version: number; needsApproval: unknown })).toMatchObject({ outcome: "proposed_pending_approval", version: 4, needsApproval: { changes: ["pay"], youMayConfirm: false } });
+    await container.drain();
+    expect((await detail(olive, opened.roleId)).currentPacket?.version).toBe(2);
+    expect((await json(olive, "POST", `/api/v1/roles/${opened.roleId}/approve`, { version: 4 })).status).toBe(409); // she wrote it
+    // a wording change by an approver is current at once (after the preview the page shows first)
+    const fifth = structuredClone(next);
+    fifth.description.publicJobDescription = `${next.description.publicJobDescription} Free parking on site.`;
+    const wording = await json(olive, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: fifth, changeSummary: "Parking" });
+    expect(((await wording.json()) as { outcome: string; version: number; needsApproval: unknown })).toMatchObject({ outcome: "approved_current", version: 5, needsApproval: null });
+    expect((await detail(olive, opened.roleId)).currentPacket?.version).toBe(5);
   });
 
   it("the Interview plan tab: rounds with interviewers by name and readiness; PATCH assigns people per round as a version 'Interviewers assigned'", async () => {

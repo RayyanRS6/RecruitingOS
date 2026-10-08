@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { PacketRevisionProposal, RequirementsCheck } from "@ros/contracts";
 import { Alert, Card } from "@ros/ui";
-import { api, ApiError, type RolePacket } from "../../api/client";
+import { api, ApiError, type NewVersionResponse, type RolePacket, type WhoPosts } from "../../api/client";
+import { savedVersionToast } from "../../publishing";
 import { toast } from "../../toast";
 import { Composer } from "./Composer";
 import { SuggestionCard } from "./DraftPanel";
@@ -12,21 +13,15 @@ import { ProposalCard } from "./ProposalCard";
 import { CHANGE_REQUEST_MAX, asksBack, checkSignature, refinePaths } from "./refine-api";
 import { errorWords } from "./rules";
 
-/** What saving a version did, in the editor's words (every packet write answers the same three ways). */
-export function savedToast(r: { version?: number; outcome?: string }): [string, string] {
-  const v = r.version ? `version ${r.version}` : "a new version";
-  if (r.outcome === "proposed_pending_approval") return [`Saved as ${v}.`, "It takes effect once an approver says yes."];
-  if (r.outcome === "proposed") return [`Saved as ${v} with the draft.`, "Nothing is posted until the role is approved."];
-  return [`Saved as ${v}.`, "Every earlier version is kept."];
-}
-
 /**
  * "Change it by asking" on a role's page (plan C10, C16): the requirements check's suggestions, each fixed with one tap,
  * and a box to ask for any change in plain words. A change comes back as a proposal, shown field by field and saved as a
  * new version only when a person presses Confirm; whether it takes effect now or after approval is the API's rule, and
- * the card says which before anything is pressed. Shown to people who may edit the packet.
+ * the card says which before anything is pressed. Shown to people who may edit the packet. What a saved change became
+ * is said the same way as the editor's (founder decision Q10): live now, with the boards still showing the earlier
+ * version, or waiting for approval, which a company's only owner confirms themselves (`whoPosts` names who updates them).
  */
-export function RoleRefine({ roleId, packet }: { roleId: string; packet: RolePacket }) {
+export function RoleRefine({ roleId, packet, whoPosts = "its" }: { roleId: string; packet: RolePacket; whoPosts?: WhoPosts }) {
   const qc = useQueryClient();
   const paths = refinePaths({ kind: "role", roleId });
   const [text, setText] = useState("");
@@ -46,10 +41,10 @@ export function RoleRefine({ roleId, packet }: { roleId: string; packet: RolePac
     onError: (err, message) => { setText(message); setAsked(null); setProblem(errorWords(err)); },
   });
   const confirm = useMutation({
-    mutationFn: (p: PacketRevisionProposal) => api.post<{ version?: number; outcome?: string }>(paths.apply(p.revisionId)),
+    mutationFn: (p: PacketRevisionProposal) => api.post<NewVersionResponse>(paths.apply(p.revisionId)),
     onSuccess: async (r) => {
-      const [title, detail] = savedToast(r);
-      toast(title, detail);
+      const t = savedVersionToast(r, whoPosts);
+      toast(t.title, t.detail);
       setProposal(null);
       setAsked(null);
       await refresh();
@@ -64,10 +59,10 @@ export function RoleRefine({ roleId, packet }: { roleId: string; packet: RolePac
     onSettled: () => { setProposal(null); setAsked(null); toast("Kept as it was."); },
   });
   const fix = useMutation({
-    mutationFn: (fixId: string) => api.post<{ version?: number; outcome?: string; applied: string[] }>(paths.applyFixes, { base: check.data?.base ?? "", fixIds: [fixId] }),
+    mutationFn: (fixId: string) => api.post<NewVersionResponse & { applied: string[] }>(paths.applyFixes, { base: check.data?.base ?? "", fixIds: [fixId] }),
     onSuccess: async (r) => {
-      const [title, detail] = savedToast(r);
-      toast(title, r.applied.join(" ") || detail);
+      const t = savedVersionToast(r, whoPosts);
+      toast(t.title, [r.applied.join(" "), t.detail].filter(Boolean).join(" ") || undefined);
       await refresh();
     },
     onError: (err) => {

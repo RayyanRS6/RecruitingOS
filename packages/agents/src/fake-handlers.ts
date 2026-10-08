@@ -18,6 +18,7 @@ export function registerFakeHandlers(fake: FakeProvider): void {
   fake.register("screen.turn", (req) => fakeScreenTurn(req));
   fake.register("screen.assess", (req) => fakeScreenAssess(req));
   fake.register("packet.revise", (req) => fakeRevise(req));
+  fake.register("company.about", (req) => fakeCompanyAbout(req));
 }
 
 type FakeIntakeContext = {
@@ -742,4 +743,30 @@ function fakeRevise(req: StructuredRequest<unknown>): PacketRevision {
     return { summary: "I have not changed anything yet.", changes: {}, notChanged: [], question: "What would you like to change? For example: add a must-have, change the schedule, or rename the job." };
   }
   return { summary: done.length ? done.join(" ") : "I have not changed anything.", changes, notChanged };
+}
+
+/**
+ * company.about v1 (D10): a few plain sentences built only from the facts in the request, the way the model is told to
+ * write them. A sentence from the company's notes is kept when it reads as a fact about the company; one that stands in
+ * for a protected trait ("young, energetic team") is left out, and so is one that tries to give instructions.
+ */
+function fakeCompanyAbout(req: StructuredRequest<unknown>): { text: string; basedOn: string[] } {
+  const text = req.messages.map((m) => m.content).join("\n");
+  const fact = (label: string) => text.match(new RegExp(`^${label}: (.+?)\\.?$`, "m"))?.[1]?.trim() ?? "";
+  const name = fact("Company") || "The company";
+  const kind = fact("Kind of business") || "local";
+  const places = fact("Places").split("; ").filter(Boolean);
+  const jobs = fact("Jobs they hire for").split("; ").filter(Boolean);
+  const notes = (text.match(/<notes>\n([\s\S]*?)\n<\/notes>/)?.[1] ?? "").trim();
+  const where = places.length ? ` in ${places.length > 2 ? `${places.slice(0, 2).join(", ")} and other places` : places.join(" and ")}` : "";
+  const sentences = [`${name} is a ${kind} business${where}.`];
+  if (jobs.length) sentences.push(`The team hires for roles such as ${jobs.slice(0, 2).join(" and ").toLowerCase()}.`);
+  // A note's sentence is kept only as a plain fact: no proxy wording, no instruction, no figure, nothing about pay or software.
+  const own = (notes.match(/[^.!?]+[.!?]?/g) ?? []).map((s) => s.trim()).filter((s) => s.length >= 12 && !screenCriterion(s) && !/\b(?:ignore|instructions?|rules?|system|prompt)\b/i.test(s) && !/\byoung\b|\bfamily\b|\benergetic\b|\bdigital natives?\b/i.test(s) && !/[$\d]|\b(?:pay|salary|wages?|AI|software)\b/i.test(s));
+  for (const s of own.slice(0, 2)) sentences.push(/[.!?]$/.test(s) ? s : `${s}.`);
+  const size = fact("Size");
+  if (sentences.length < 2 && size) sentences.push(`It is a team of ${size}.`);
+  if (sentences.length < 2) sentences.push("Its open jobs are listed on its careers page.");
+  const basedOn = [`a ${kind} business${where}`, ...(jobs.length ? [`hires for ${jobs[0].toLowerCase()}`] : []), ...(own.length ? ["what you wrote in the notes"] : [])];
+  return { text: sentences.join(" "), basedOn };
 }
