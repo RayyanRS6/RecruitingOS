@@ -1,10 +1,12 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { createCompanyThroughTheForm, expectAccessible, signIn, skipWithoutFakeSignIn, statusPathFromEmail } from "./helpers";
+import { createCompanyThroughTheForm, expectAccessible, signIn, skipWithoutFakeSignIn, statusPathFromEmail, useOneVisitFlow } from "./helpers";
 
 /**
- * The candidate's own journey on a phone (docs/spec/20 items 2 and 3; docs/readiness/20 section D): the job page, the
- * application form with its transparency block and the affirmative acknowledgment, the screening conversation and the
- * scheduling page, every one rendered on the phone project, checked with axe and for sideways scrolling. The owner's
+ * The candidate's own journey on a phone (docs/spec/20 items 2 and 3; docs/readiness/20 section D; plan Wave E): the job
+ * page, the application form with its transparency block and the affirmative acknowledgment, then in the same visit the
+ * screening conversation (its introduction, the person choice, one question at a time with taps and a skip, check your
+ * answers, send) and later the scheduling page, every one rendered on the phone project, checked with axe and for
+ * sideways scrolling. The owner's
  * side (the company, the role, the interview approval, declared hours) is seeded through the API with the browser's own
  * session so the journey stays on the candidate pages. Everything is synthetic; every provider is a fake.
  */
@@ -43,10 +45,13 @@ async function boardLink(request: APIRequestContext, base: string, roleId: strin
 
 test.describe("candidate journey on a phone", () => {
   skipWithoutFakeSignIn();
-  test("job page, application with the acknowledgment, screening conversation and scheduling, all accessible on a phone", async ({ page, baseURL }) => {
+  test("job page, application with the acknowledgment, screening conversation and scheduling, all accessible on a phone", async ({ page, browser, baseURL }) => {
     test.setTimeout(300_000);
     await signIn(page, { email: `owner+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
     await createCompanyThroughTheForm(page, `Brightline Phone ${run}`);
+    // a pilot company: ITS switches on the conversation in the same visit as the form (plan Wave E, founder decision B1)
+    const companyId = ((await (await page.request.get(`${baseURL}/api/v1/companies/current`)).json()) as { id: string }).id;
+    await useOneVisitFlow(browser, baseURL!, companyId);
     const seeded = await seedOpenRole(page.request, baseURL!);
     const email = `maria.reyes+${run}@example.com`;
 
@@ -111,19 +116,80 @@ test.describe("candidate journey on a phone", () => {
     }
     await expectAccessible(page, "apply form with the acknowledgment missing");
 
-    // ticking the box sends it; the receipt says to check email, with the address masked, and never shows the status link
+    // ticking the box sends it; in one visit (plan E1) the form leads straight to the conversation's introduction, which
+    // says the application went through and where its link went (masked), and never shows the status link
     await page.getByRole("checkbox", { name: /I have read the notice above/ }).check();
     await page.getByRole("button", { name: "Send my application" }).click();
-    await page.waitForURL(new RegExp(`/careers/${seeded.slug}/jobs/${seeded.roleId}/applied$`));
-    await expect(page.getByRole("heading", { level: 1, name: "Thanks for applying" })).toBeVisible();
-    await expect(page.getByText("m***@example.com")).toBeVisible();
-    // the same words stay true for someone who applied before (their reminder goes at most once a day)
-    await expect(page.getByText(/look in our earlier emails too/)).toBeVisible();
-    await expect(page.getByRole("link", { name: "Send my link again" })).toHaveAttribute("href", "/c/link-request");
-    await expectAccessible(page, "receipt");
-    await noHorizontalOverflow(page, "receipt");
-    // "Lost your link?" is reachable from the receipt and accessible on a phone
-    await page.getByRole("link", { name: "Send my link again" }).click();
+    await page.waitForURL(/\/c\/screen\/[A-Za-z0-9_-]+$/);
+    await expect(page.getByText(/This conversation is with .+'s AI assistant, a software program, not a person\./)).toBeVisible();
+    await expect(page.getByText("Your application is sent.")).toBeVisible();
+    await expect(page.getByText(/m\*\*\*@example\.com/)).toBeVisible();
+    await expect(page.locator('a[href^="/c/status/"]')).toHaveCount(0);
+    // the fixed introduction (E2): what it is, a conversation and not a test, how long, and three ways on
+    await expect(page.getByRole("heading", { level: 1, name: /^A few questions about the / })).toBeVisible();
+    await expect(page.getByText(/It is a conversation, not a test\./)).toBeVisible();
+    await expect(page.getByText(/About \d+ questions and \d+ minutes, one question at a time\./)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Do this later" })).toBeVisible();
+    await expectAccessible(page, "conversation introduction");
+    await noHorizontalOverflow(page, "conversation introduction");
+    // "I'd rather talk to a person": two equal choices, and a way back without choosing (E3)
+    await page.getByRole("link", { name: "I'd rather talk to a person" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Talk to a person instead" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Send without the conversation" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Have a person contact me" })).toBeVisible();
+    await expectAccessible(page, "person choice");
+    await noHorizontalOverflow(page, "person choice");
+    await page.getByRole("link", { name: "Back to the conversation" }).click();
+
+    // Start, from the keyboard: the first question at once, in large type, with "Question 1 of N" and the quiet skip
+    await page.getByRole("button", { name: "Start" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByText(/^Question 1 of \d+$/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Skip this question" }).first()).toBeVisible();
+    await expect(page.getByRole("link", { name: "I'd rather talk to a person" })).toBeVisible();
+    await expectAccessible(page, "first question");
+    await noHorizontalOverflow(page, "first question");
+    // every question: a tap where one is offered (E12), words otherwise, and the example question skipped (E11)
+    for (let i = 0; i < 20; i++) {
+      if (await page.getByRole("heading", { level: 1, name: "Check your answers" }).isVisible()) break;
+      const heading = (await page.getByRole("heading", { level: 1 }).textContent()) ?? "";
+      if (/difficult moment/i.test(heading)) {
+        await page.getByRole("button", { name: "Skip this question" }).first().click();
+      } else if (await page.getByRole("button", { name: "Yes", exact: true }).isVisible()) {
+        await page.getByRole("button", { name: "Yes", exact: true }).click();
+      } else if (await page.getByLabel("From").isVisible()) {
+        await page.getByLabel("From").fill("50");
+        await page.getByLabel("To (optional)").fill("54");
+        await page.getByRole("button", { name: "Send", exact: true }).first().click();
+      } else if (await page.getByLabel("The earliest day you could start").isVisible()) {
+        await page.getByLabel("The earliest day you could start").fill(new Date(Date.now() + 14 * 86_400_000).toISOString().slice(0, 10));
+        await page.getByRole("button", { name: "Send", exact: true }).first().click();
+      } else if (await page.getByRole("group", { name: "Tick every day you can work" }).isVisible()) {
+        await page.getByLabel("Monday").check();
+        await page.getByRole("button", { name: "Send", exact: true }).first().click();
+      } else {
+        await page.getByLabel(/^Your answer/).fill("I have been a hygienist for six years, see about nine patients a day in Dentrix, and hold an active California RDH license.");
+        await page.getByRole("button", { name: "Send", exact: true }).click();
+      }
+      if (i === 1) await expectAccessible(page, "a later question");
+    }
+    // check your answers (E10): the skipped one is marked; answer it from here, then send
+    await expect(page.getByRole("heading", { level: 1, name: "Check your answers" })).toBeVisible();
+    await expect(page.getByText("Skipped", { exact: true })).toBeVisible();
+    await expectAccessible(page, "check your answers");
+    await noHorizontalOverflow(page, "check your answers");
+    await page.getByRole("link", { name: /^Answer it/ }).first().click();
+    await page.getByLabel(/^Your answer/).fill("A nervous patient wanted to stop, so I slowed down and explained each step; she rebooked with me.");
+    await page.getByRole("button", { name: "Save this answer" }).click();
+    await expect(page.getByText("Your answer is changed.")).toBeVisible();
+    await expect(page.getByText("Changed", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Send my answers" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Thanks, your answers are sent" })).toBeVisible();
+    await expectAccessible(page, "answers sent");
+    await noHorizontalOverflow(page, "answers sent");
+
+    // "Lost your link?" stays reachable and accessible on a phone
+    await page.goto("/c/link-request");
     await expect(page.getByRole("heading", { level: 1, name: "Lost your link?" })).toBeVisible();
     await expectAccessible(page, "lost your link");
     await noHorizontalOverflow(page, "lost your link");
@@ -146,19 +212,6 @@ test.describe("candidate journey on a phone", () => {
     await expectAccessible(page, "status page after opting out of future roles");
     await page.getByRole("button", { name: "Keep me for future roles again" }).click();
     await expect(page.getByRole("button", { name: "Don't keep me for future roles" })).toBeVisible();
-
-    // the screening conversation (policy: invited automatically after triage), one question at a time
-    await page.goto(statusPath);
-    const startScreen = page.getByRole("link", { name: /screening conversation/ });
-    await expect(startScreen).toBeVisible({ timeout: 60_000 });
-    await startScreen.click();
-    await expect(page.getByRole("heading", { name: /A few questions/ })).toBeVisible();
-    await expectAccessible(page, "screen page");
-    await noHorizontalOverflow(page, "screen page");
-    await page.getByLabel("Your answer").fill("I have been a hygienist for six years and hold an active California RDH license.");
-    await page.getByRole("button", { name: "Send" }).click();
-    await expect(page.getByText(/1 of \d+ answered/)).toBeVisible();
-    await expectAccessible(page, "screen page after an answer");
 
     // the owner approves an interview through the API; the candidate picks a time on the phone
     const applications = (await (await page.request.get(`${baseURL}/api/v1/roles/${seeded.roleId}/applications`)).json()) as Array<{ id: string; source: string }>;

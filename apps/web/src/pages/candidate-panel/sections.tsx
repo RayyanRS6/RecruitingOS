@@ -8,8 +8,10 @@ import { Link } from "../../nav";
 import { toast } from "../../toast";
 import { AskRecruiter } from "../../components/AskRecruiter";
 import { LOW_CONFIDENCE_LABEL, LOW_CONFIDENCE_TEXT, closerLook, openScreenOf } from "../../evidence";
+import { callNotesState, overviewScreenLine } from "../../screen-view";
 import { holdDay } from "../../talent-actions";
 import { AssessmentCard, NoAssessmentCard, ScorecardUnavailableCard, ScreenCard } from "./assessment";
+import { CallNotesCard } from "./call-notes";
 import { historyItems, recruiterEventsFor, suggestionAndDecision, type Compose, type HistoryItem } from "./helpers";
 
 export type { Compose } from "./helpers";
@@ -44,11 +46,17 @@ export function OverviewTab({ a, roleId, onHistory }: { a: ApplicationDetail; ro
   );
 }
 
-/** One line on where things stand: the mark and its note, a hold's date, interviews, a recorded outcome, whether a decision was told. */
+/**
+ * One line on where things stand: the mark and its note, a hold's date, interviews, a recorded outcome, whether a
+ * decision was told, and the screening conversation when it says something ("Applied and talked in one visit", still
+ * applying, sent without it, asked for a person; plan Wave E).
+ */
 function WhereTheyAre({ a }: { a: ApplicationDetail }) {
   const outcomes = useQuery({ queryKey: ["outcomes", a.id], queryFn: () => api.get<{ statement: string; outcomes: OutcomeRecord[] }>(`/api/v1/applications/${a.id}/outcomes`), enabled: ["hired", "withdrawn", "rejected", "talent_pool", "declined"].includes(a.stage) });
   const recorded = outcomes.data?.outcomes.find((o) => !o.correctedAt);
   const lines: string[] = [];
+  const screenLine = overviewScreenLine(a);
+  if (screenLine) lines.push(screenLine);
   if (a.mark) lines.push(`${a.mark.mark === "on_hold" && a.mark.remindAt ? `On hold until ${holdDay(a.mark.remindAt)}` : a.mark.label}${a.mark.setBy.name ? `, set by ${a.mark.setBy.name}` : ""}${a.mark.note ? `: "${a.mark.note}"` : ""}. Private.`);
   if (a.toldState === "sent") lines.push(`Told the decision by message${a.candidateToldAt ? ` on ${new Date(a.candidateToldAt).toLocaleDateString()}` : ""}.`);
   if (a.toldState === "told_in_person") lines.push(`Told the decision in person${a.candidateToldAt ? ` (recorded ${new Date(a.candidateToldAt).toLocaleDateString()})` : ""}.`);
@@ -133,19 +141,26 @@ export function StopScreen({ a, roleId }: { a: ApplicationDetail; roleId: string
   );
 }
 
-/** Screen: every screening conversation, newest first, with its transcript open, and the scorecards. */
-export function ScreenTab({ a, roleId }: { a: ApplicationDetail; roleId: string }) {
+/**
+ * Screen: every screening conversation, newest first, with its transcript open, and the scorecards. A recruiter can add
+ * notes from a call here (plan E3); when the candidate asked for a person, that form waits at the top of the panel instead.
+ */
+export function ScreenTab({ a, roleId, myRole = null }: { a: ApplicationDetail; roleId: string; myRole?: string | null }) {
   const scorecards = a.assessments.filter((x) => x.kind === "screen");
+  const notes = callNotesState(a, myRole);
+  const notesCard = notes.show && !notes.prominent ? <CallNotesCard a={a} roleId={roleId} prominent={false} /> : null;
   if (!a.screens.length) {
     return (
       <div className="stack" style={{ gap: 14 }}>
         <Card title="Screening conversation"><p className="small muted">{a.candidate.firstName} has not been invited to a screen yet. A screen is a short conversation, by web or text, with the questions you approved for this role.</p></Card>
+        {notesCard}
       </div>
     );
   }
   return (
     <div className="stack" style={{ gap: 14 }}>
-      {a.screens.map((s, i) => <ScreenCard key={s.id} screen={s} open={i === 0} action={i === 0 ? <StopScreen a={a} roleId={roleId} /> : undefined} />)}
+      {a.screens.map((s, i) => <ScreenCard key={s.id} screen={s} open={i === 0} questions={a.packetLabels.questions} timeline={a.timeline} action={i === 0 ? <StopScreen a={a} roleId={roleId} /> : undefined} />)}
+      {notesCard}
       <ScorecardUnavailableCard detail={a} roleId={roleId} />
       {scorecards.slice(a.assessments[0]?.kind === "screen" ? 1 : 0).map((s) => <AssessmentCard key={s.id} assessment={s} detail={a} roleId={roleId} labels={a.packetLabels} />)}
       {a.assessments[0]?.kind === "screen" ? <p className="small muted">The latest scorecard is on the Overview.</p> : null}

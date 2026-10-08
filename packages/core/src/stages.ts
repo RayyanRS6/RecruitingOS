@@ -21,6 +21,8 @@ const T: Array<{ from: ApplicationStage[]; to: ApplicationStage; by: Mover[] }> 
   { from: ["triaged", "eligible", "received"], to: "screen_invited", by: ["system", "owner", "admin", "hiring_manager", "recruiter"] },
   { from: ["screening"], to: "screen_invited", by: ["system", "owner", "admin", "hiring_manager", "recruiter"] }, // re-invite after a hand-off to a person
   { from: ["screen_invited"], to: "triaged", by: ["owner", "admin", "hiring_manager", "recruiter"] }, // "Stop this screen invitation" before they start (plan A7): back to waiting on the team
+  // the candidate sent the application without the conversation, or stopped part-way and it was closed after a reminder (plan E3, E4): their application goes on to the team
+  { from: ["screen_invited", "screening"], to: "triaged", by: ["system"] },
   { from: ["screen_invited"], to: "screening", by: ["system"] },
   { from: ["screening", "screen_invited"], to: "screen_complete", by: ["system"] },
   // a person may decide to interview before or during a screen; the screen stays open and is simply superseded

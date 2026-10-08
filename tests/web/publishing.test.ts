@@ -196,7 +196,7 @@ describe("a change to a live job (D4, founder decision Q10)", () => {
     const base: JobPreview = {
       source: { kind: "version", roleId: "r1", version: 2, status: "approved", current: true }, notPublicYet: false, banner: "This is the live version of the job page.",
       company: { name: "Bright Dental", slug: "bright", website: null, logoUrl: null, verified: true, about: "A family practice." },
-      job: { title: "Dental hygienist", facts: [], locations: ["Irvine, CA"], description: "Old words", mustHaves: ["Old must-have"], niceToHaves: [], benefits: "Health and dental.", steps: ["Apply in about three minutes. We confirm by email.", "A short screening conversation online (about 10 minutes) if your background looks like a fit.", "Meet the dentist (30 minutes)", "A decision, and a real answer either way."], notices: [] },
+      job: { title: "Dental hygienist", facts: [], locations: ["Irvine, CA"], description: "Old words", mustHaves: ["Old must-have"], niceToHaves: [], benefits: "Health and dental.", steps: ["Apply in about 15 minutes, including a short written conversation with Bright Dental's AI assistant. We confirm by email.", "The conversation: 9 questions, about 10 minutes. It is not a test. You can skip a question, stop and come back later, or ask for a person instead.", "Meet the dentist (30 minutes)", "A decision, and a real answer either way."], notices: [] },
       pay: { shown: true, text: "$45–$55 an hour", requiredByLaw: true, note: null },
       apply: { questions: [], notices: [], disclosure: "AI", humanAlternative: "Person" },
       gaps: [],
@@ -209,7 +209,14 @@ describe("a change to a live job (D4, founder decision Q10)", () => {
     expect(p.job.description).toBe("New words for the job page, a little longer than before.");
     expect(p.job.facts.map((f) => f.key)).toEqual(["location", "workplace", "job_type", "pay", "schedule"]);
     expect(p.job.facts.find((f) => f.key === "pay")?.text).toBe("$45–$55 an hour");
-    expect(p.job.steps[1]).toContain("about 15 minutes");
+    // applying in one visit: the total time and the conversation's questions and minutes follow the edit (plan E8)
+    expect(p.job.steps[0]).toBe("Apply in about 20 minutes, including a short written conversation with Bright Dental's AI assistant. We confirm by email.");
+    expect(p.job.steps[1]).toBe(`The conversation: ${edited.screening.questions.length} questions, about 15 minutes. It is not a test. You can skip a question, stop and come back later, or ask for a person instead.`);
+    // the later path: the form's own time stays; the conversation's minutes follow the edit
+    const later = previewOfEdit({ ...base, job: { ...base.job, steps: ["Send a short form, about 3 minutes. We confirm by email.", "Possibly a short written conversation with Bright Dental's AI assistant (online, about 10 minutes). If so, we email you the link.", "A decision, and a real answer either way."] } }, edited);
+    expect(later.job.steps[0]).toBe("Send a short form, about 3 minutes. We confirm by email.");
+    expect(later.job.steps[1]).toBe("Possibly a short written conversation with Bright Dental's AI assistant (online, about 15 minutes). If so, we email you the link.");
+    expect(later.job.steps.join(" ")).not.toMatch(/three minutes|looks like a fit/);
     expect(p.apply.questions).toEqual([{ key: "license", question: "Do you hold an active RDH license?", help: "Required by law", answer: "yes_no" }]);
     // the lists come from the edited words, as the job page shows them; the company's text and the benefits carry over (plan D10)
     expect(p.job.mustHaves).toEqual(edited.requirements.mustHaves.map((m) => m.text));

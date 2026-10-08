@@ -8,6 +8,7 @@ import { createContainer, type Container } from "./container";
 import { RECEIPT_COOKIE, maskEmail } from "./pages/candidate";
 import { LINK_REQUEST_JOB_KIND, createApplication } from "./services/applications";
 import { noThanksRequested } from "./services/replies";
+import { useLaterApplyFlow } from "./test-helpers";
 
 /**
  * Wave 0 items 0.1 and 0.11, over HTTP. A repeat application looks exactly like a new one and changes nothing on the
@@ -80,6 +81,9 @@ describe("repeat applications, lost links and the talent-pool opt-out", () => {
     companyId = co.id;
     slug = co.slug;
     await entitlements.applyPlan(container.db, companyId, "growth");
+    // The receipt is what the later path shows after the form (plan Wave E); the one-visit path's identical pages for a
+    // repeat are covered in apply-visit-pages.test.ts.
+    await useLaterApplyFlow(container, companyId);
     const first = await openRole("I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it.");
     roleId = first.id;
     eligibility = first.eligibility;

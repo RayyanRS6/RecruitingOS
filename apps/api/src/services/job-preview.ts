@@ -1,6 +1,6 @@
-import { formatPayRange, isCompanyVerified, type DraftRolePacket, type JobPreview, type JobPreviewFact } from "@ros/contracts";
-import { benefitsDescriptionFor, candidateNotices, jobNoticesFor, payShown, payTransparencyApplies } from "@ros/core";
-import type { companies } from "@ros/db";
+import { APPLY_FORM_MINUTES, formatPayRange, isCompanyVerified, oneVisitMinutes, type DraftRolePacket, type JobPreview, type JobPreviewFact } from "@ros/contracts";
+import { benefitsDescriptionFor, candidateNotices, jobNoticesFor, oneVisitPolicyAllows, payShown, payTransparencyApplies, resolveApplyMode, resolvePolicy } from "@ros/core";
+import type { Queryable, companies } from "@ros/db";
 import { approvedAbout, logoMemberPath, profileOf } from "./company-settings-profile";
 
 /**
@@ -19,9 +19,59 @@ export const EMPLOYMENT_LABEL: Readonly<Record<string, string>> = { full_time: "
 
 type Company = Pick<typeof companies.$inferSelect, "name" | "slug" | "locations" | "settings">;
 
+/**
+ * How a job's applicants meet the screening conversation, as its pages tell it (plan E8): "one_visit", straight after
+ * the form in the same visit (founder decision B1), or "later", by email if the hiring team's rules invite them.
+ */
+export type ApplyFlowView = "one_visit" | "later";
+
+/** The form alone, in minutes; applying in one visit, rounded up to five (shared with the owner's preview of an edit). */
+export const FORM_MINUTES = APPLY_FORM_MINUTES;
+export { oneVisitMinutes };
+
+/** How long applying takes, in the words of the job page, its apply card and the form (plan E8). */
+export function applyTimeLine(packet: { screening: Pick<DraftRolePacket["screening"], "maxMinutes"> }, input: { companyName: string; flow: ApplyFlowView }): string {
+  return input.flow === "one_visit" ? `About ${oneVisitMinutes(packet)} minutes, including a short written conversation with ${input.companyName}'s AI assistant.` : `A short form, about ${FORM_MINUTES} minutes.`;
+}
+
+/**
+ * The steps the candidate can expect, the same on every job page, its preview and the job builder's preview. The first
+ * is applying and the second the conversation (the builder's live preview relies on that order).
+ */
+export function applySteps(packet: Pick<DraftRolePacket, "screening" | "interviews">, input: { companyName: string; smsEnabled: boolean; flow: ApplyFlowView }): string[] {
+  const n = packet.screening.questions.length;
+  const first = input.flow === "one_visit"
+    ? [
+        `Apply in about ${oneVisitMinutes(packet)} minutes, including a short written conversation with ${input.companyName}'s AI assistant. We confirm by email.`,
+        `The conversation: ${n} questions, about ${packet.screening.maxMinutes} minutes. It is not a test. You can skip a question, stop and come back later, or ask for a person instead.`,
+      ]
+    : [
+        `Send a short form, about ${FORM_MINUTES} minutes. We confirm by email.`,
+        `Possibly a short written conversation with ${input.companyName}'s AI assistant (${input.smsEnabled ? "by text or online" : "online"}, about ${packet.screening.maxMinutes} minutes). If so, we email you the link.`,
+      ];
+  return [...first, ...packet.interviews.plan.map((r) => `${r.title} (${r.durationMinutes} minutes)`), "A decision, and a real answer either way."];
+}
+
+/** The flow a company's new roles follow, when nothing more is known (a draft, or a caller without the role's own setting). */
+export function companyApplyFlow(company: Pick<Company, "settings">): ApplyFlowView {
+  return resolveApplyMode({ applyMode: null }, company.settings) === "one_visit" ? "one_visit" : "later";
+}
+
+/**
+ * How a role's applicants meet the conversation, as its pages tell it: the same rule the apply page follows
+ * (services/apply-conversation.ts): the role's or the company's flow, and the owner's rule for screen invitations ("Ask
+ * me first" and "Only a person" keep the later path). Eligibility is per applicant, so it is not part of what the page says.
+ */
+export async function applyFlowOf(q: Queryable, company: { id: string; settings: Company["settings"] }, role: { id: string | null; applyMode?: string | null }): Promise<ApplyFlowView> {
+  if (resolveApplyMode(role, company.settings) !== "one_visit") return "later";
+  const policy = await resolvePolicy(q, company.id, role.id, "application.invite_screen");
+  return oneVisitPolicyAllows(policy.level) ? "one_visit" : "later";
+}
+
 export type PreviewSource = { kind: "draft"; sessionId: string } | { kind: "version"; roleId: string; version: number; status: string; current: boolean; roleStatus: string };
 
-export function jobPreview(input: { packet: DraftRolePacket; company: Company; source: PreviewSource; smsEnabled: boolean }): JobPreview {
+/** `flow`: how applicants meet the conversation (pages/candidate.tsx `applyFlowOf`); the company's default when not given. */
+export function jobPreview(input: { packet: DraftRolePacket; company: Company; source: PreviewSource; smsEnabled: boolean; flow?: ApplyFlowView }): JobPreview {
   const { packet, company, source } = input;
   const notices = jobNoticesFor({ jobLocations: packet.identity.locations, companyLocations: company.locations, overrides: company.settings.notices });
   const shown = candidateNotices(notices);
@@ -68,12 +118,7 @@ export function jobPreview(input: { packet: DraftRolePacket; company: Company; s
       niceToHaves: packet.requirements.niceToHaves.map((m) => m.text),
       benefits: benefitsDescriptionFor(packet.compensation, company.settings),
       // The same steps the job page lists under "What to expect".
-      steps: [
-        "Apply in about three minutes. We confirm by email.",
-        `A short screening conversation ${input.smsEnabled ? "by text or online" : "online"} (about ${packet.screening.maxMinutes} minutes) if your background looks like a fit.`,
-        ...packet.interviews.plan.map((r) => `${r.title} (${r.durationMinutes} minutes)`),
-        "A decision, and a real answer either way.",
-      ],
+      steps: applySteps(packet, { companyName: company.name, smsEnabled: input.smsEnabled, flow: input.flow ?? companyApplyFlow(company) }),
       notices: shown.filter((n) => n.key === "ai_use" || n.key === "pay_transparency").map((n) => ({ key: n.key, text: n.text })),
     },
     pay: { shown: payVisible, text: payText, requiredByLaw: payTransparencyApplies(notices), note: comp ? null : "Pay is not set yet." },

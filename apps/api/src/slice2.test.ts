@@ -5,7 +5,7 @@ import { aiRuns, applications, approvalRequests, assessments, auditRecords, cand
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAs } from "./test-helpers";
+import { signInAs, useLaterApplyFlow } from "./test-helpers";
 
 /**
  * Slice 2 through the HTTP layer: evidence-based assessment → screening (web chat and SMS) → scorecard →
@@ -66,8 +66,10 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     app = createApp(container);
     setClock(0);
     await signIn();
-    const co =(await (await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "100-199", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { slug: string };
+    const co =(await (await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "100-199", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
     slug = co.slug;
+    // The later path: the screening invitation follows the résumé reading, by email or text (plan Wave E keeps it for ITS to switch to).
+    await useLaterApplyFlow(container, co.id);
     const c1 = (await (await json("POST", "/api/v1/intake/conversation/messages", { message: "I need a dental hygienist in Irvine. Full time. $45 to $55 an hour. I need someone who can start within 30 days." })).json()) as { intakeSessionId: string };
     await json("POST", `/api/v1/intake/sessions/${c1.intakeSessionId}/messages`, { message: "It's a replacement, our hygienist moved. Ceiling is $58. Interviewers: Dr. Chen and me. I decide. Must-haves: active CA RDH license, perio experience. Deal-breakers: can't work Saturdays." });
     const compiled = (await (await json("POST", `/api/v1/intake/sessions/${c1.intakeSessionId}/compile`)).json()) as { roleId: string };
@@ -110,12 +112,18 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
   });
 
   it("runs the web screening conversation: disclosure first, one question at a time, answers recorded, scorecard with grounded quotes, recommendation under policy", async () => {
+    // An emailed invitation opens on the same fixed introduction as one offered with the application (plan E2): it says
+    // it is the company's AI assistant, and opening it writes nothing; Start shows the first question, in the packet's words.
     const page = await app.request(`/c/screen/${mariaToken}`);
     expect(page.status).toBe(200);
-    const html = await page.text();
+    const intro = await page.text();
+    expect(intro).toMatch(/AI assistant/);
+    expect(intro).toContain(`/c/screen/${mariaToken}/start`);
+    expect((await screenOf(mariaId)).transcript).toHaveLength(0);
+    expect((await form(`/c/screen/${mariaToken}/start`, {})).status).toBe(302);
+    const html = await (await app.request(`/c/screen/${mariaToken}`)).text();
     expect(html).toMatch(/AI assistant/);
-    expect(html).toMatch(/HUMAN/);
-    expect(html).toMatch(/0 of \d+ answered/);
+    expect(html).toMatch(/Question 1 of \d+/);
     let scr = await screenOf(mariaId);
     expect(scr.transcript[0].role).toBe("assistant");
     expect(scr.transcript.filter((t) => t.role === "assistant")).toHaveLength(1);
@@ -160,7 +168,8 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(await eventsOf("screen.assessed")).toHaveLength(1);
     expect(await eventsOf("candidate.recommended")).toHaveLength(1);
     const turns = await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.turn"));
-    expect(turns).toHaveLength(Object.keys(answers).length + 1);
+    // one per answer: on the web the opening is the fixed introduction and the packet's first question, never the model (plan E2)
+    expect(turns).toHaveLength(Object.keys(answers).length);
     expect(await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.assess"))).toHaveLength(1);
     const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
     expect(notes.some((n) => n.kind === "candidate.recommended" && /Maria Reyes/.test(n.title))).toBe(true);
@@ -359,6 +368,10 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(await container.db.select().from(screens).where(eq(screens.applicationId, a.id))).toHaveLength(1);
     const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
     expect(notes.some((n) => n.kind === "entitlement.text_screens" && /pilot/.test(n.title))).toBe(true);
+    // The conversation counts at Lena's first answer (plan E9), never at the invitation; over the line, she carries on.
+    expect((await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, co.id), eq(entitlements.key, "text_screens"))))[0].used).toBe(row.limit!);
+    expect((await form(`/c/screen/${(await screenOf(a.id)).token}`, { message: "Yes, my RDH license is active in California." })).status).toBe(302);
+    expect((await screenOf(a.id)).status).toBe("in_progress");
     expect((await container.db.select().from(recruiterEscalations)).filter((e) => e.kind !== "candidate_issue" && e.kind !== "stuck_role" && !isPostingTask(e.kind))).toHaveLength(0);
     const current = (await (await json("GET", "/api/v1/companies/current")).json()) as { plan: { name: string }; usage: Record<string, { used: number; limit: number | null }> };
     expect(current.plan.name).toBe("Design Partner");

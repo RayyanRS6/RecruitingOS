@@ -4,12 +4,14 @@ import { WITHDRAW_CONFIRM_KEY } from "@ros/agents";
 import { applications, candidates, events, notifications, recruiterEscalations, screens } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { useOneVisitApplyFlow } from "./test-helpers";
 
 /**
  * The screening conversation's keyword commands (Wave 0 item 0.7), over HTTP and by text. Only a message that is the
  * command itself counts: an answer that starts with "Representative" or "Withdraw" is recorded as an answer. HUMAN hands
  * the conversation to a person at once. WITHDRAW withdraws nothing by itself: the candidate is asked, and confirms with
  * the button on the page (`POST /c/screen/:token/withdraw`) or by replying CONFIRM to a text; NO keeps the application.
+ * The conversations here are the ones offered with the application (plan E1): the introduction, then Start.
  */
 describe("screening keywords: whole-message commands and a confirmed withdrawal", () => {
   let container: Container;
@@ -42,7 +44,9 @@ describe("screening keywords: whole-message commands and a confirmed withdrawal"
     const [a] = await container.db.select().from(applications).where(and(eq(applications.roleId, roleId), eq(applications.candidateId, cand.id)));
     expect(a.stage).toBe("screen_invited");
     const scr = await screenOf(a.id);
-    expect((await app.request(`/c/screen/${scr.token}`)).status).toBe(200); // writes the disclosure and the first question
+    // Offered with the application (plan E1): the fixed introduction, then Start shows the first question in the packet's words.
+    expect((await app.request(`/c/screen/${scr.token}`)).status).toBe(200);
+    expect((await form(`/c/screen/${scr.token}/start`)).status).toBe(302);
     return { application: a, candidate: cand, token: scr.token };
   }
 
@@ -51,8 +55,10 @@ describe("screening keywords: whole-message commands and a confirmed withdrawal"
     app = createApp(container);
     const { devLink } = (await (await json("POST", "/api/v1/auth/magic-link", { email: "dana@keywords.test" })).json()) as { devLink: string };
     cookie = (await json("POST", "/api/v1/auth/magic-link/consume", { token: new URL(devLink).searchParams.get("token") })).headers.get("set-cookie")!.split(";")[0];
-    const co = (await (await json("POST", "/api/v1/companies", { name: "Keyword Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { slug: string };
+    const co = (await (await json("POST", "/api/v1/companies", { name: "Keyword Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
     slug = co.slug;
+    // A pilot company: the conversation is offered in the same visit as the form (plan E1).
+    await useOneVisitApplyFlow(container, co.id);
     const s = (await (await json("POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." })).json()) as { session: { id: string } };
     roleId = ((await (await json("POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
     await json("POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" });

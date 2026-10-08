@@ -8,6 +8,7 @@ import { applications, assessments, auditRecords, candidates, events, screens, w
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { useLaterApplyFlow } from "./test-helpers";
 
 type Finding = { claim: string; evidence: { source: string; quote?: string } };
 type Evidence = { needsCloserLook: boolean; reason: string | null; assessmentUnavailable: boolean; resumeUnreadable: boolean; inconsistent: boolean; lowConfidence: boolean; hasProvenMiss: boolean; unknowns: string[]; unknownCount: number; topStrength: Finding | null; topConcern: Finding | null; confidenceReasons: string[] };
@@ -62,8 +63,10 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     const { devLink } = (await (await json("POST", "/api/v1/auth/magic-link", { email: "dana@closerlook.test" })).json()) as { devLink: string };
     const consume = await json("POST", "/api/v1/auth/magic-link/consume", { token: new URL(devLink).searchParams.get("token") });
     cookie = consume.headers.get("set-cookie")!.split(";")[0];
-    const co = (await (await json("POST", "/api/v1/companies", { name: "Closer Look Dental", vertical: "dental", sizeBand: "20-49", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { slug: string };
+    const co = (await (await json("POST", "/api/v1/companies", { name: "Closer Look Dental", vertical: "dental", sizeBand: "20-49", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
     slug = co.slug;
+    // The résumé reading decides what comes next here, so the role takes the later path (plan Wave E).
+    await useLaterApplyFlow(container, co.id);
     const c1 = (await (await json("POST", "/api/v1/intake/conversation/messages", { message: "I need a dental hygienist in Irvine. Full time. $45 to $55 an hour. I need someone who can start within 30 days." })).json()) as { intakeSessionId: string };
     // The deal-breakers come before the must-haves so the fake intake keeps the must-have phrases clean (it reads a must-haves line to its end).
     await json("POST", `/api/v1/intake/sessions/${c1.intakeSessionId}/messages`, { message: "It's a replacement, our hygienist moved. Ceiling is $58. Interviewers: Dr. Chen and me. I decide. Deal-breakers: can't work Saturdays. Must-haves: active CA RDH license, perio experience." });
@@ -185,15 +188,18 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     expect((await eventsOf("human.override")).some((e) => e.subjectId === rileyId && (e.payload as { action: string }).action === "ask_in_screen")).toBe(true);
     // a second click explains instead of sending twice
     expect((await json("POST", `/api/v1/applications/${rileyId}/actions`, { action: "ask_in_screen" })).status).toBe(409);
-    // the candidate opens the screen: the disclosure, the sentence about the background questions, then the first open question
+    // the candidate opens the screen: the fixed introduction (plan E2) with the sentence about the background questions;
+    // Start then shows the first open question, in its own words
     const page = await app.request(`/c/screen/${scr.token}`);
     expect(page.status).toBe(200);
-    expect(await page.text()).toContain("a few quick questions about your background");
+    const intro = await page.text();
+    expect(intro).toMatch(/AI assistant/);
+    expect(intro).toContain("a few quick questions about your background");
+    expect(intro).toContain("8 short questions");
+    expect((await form(`/c/screen/${scr.token}/start`, {})).status).toBe(302);
     let s = await screenOf(rileyId);
     expect(s.transcript[0].role).toBe("assistant");
-    expect(s.transcript[0].content).toMatch(/AI assistant/);
-    expect(s.transcript[0].content).toContain("a few quick questions about your background");
-    expect(s.transcript[0].content).toContain("First question: Can you tell me about your active CA RDH license?");
+    expect(s.transcript[0].content).toBe("Can you tell me about your active CA RDH license?");
     expect(s.transcript[0].questionKey).toBe("unknown_1");
     // the answers to the open questions sit beside them; the packet's own answers are counted separately
     expect((await form(`/c/screen/${scr.token}`, { message: "Yes, my RDH license is active in California, number RDH55555." })).status).toBe(302);

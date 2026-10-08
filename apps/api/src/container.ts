@@ -19,6 +19,7 @@ import { reportError } from "./observability";
 import { jobFailureReport, stepFailureReport } from "./failure-reports";
 import { DAILY_MS, recurring } from "./recurring-jobs";
 import { LINK_REQUEST_JOB_KIND, emailStatusLinks } from "./services/applications";
+import { registerApplyConversationJobs } from "./services/apply-conversation";
 import { PUBLISHING_BACKFILL_JOB_KIND, backfillPublishing } from "./services/publishing-backfill";
 
 const PRIVACY_DEADLINE_JOB_KIND = "privacy.deadline_check";
@@ -191,6 +192,9 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     const email = typeof payload.email === "string" ? payload.email : "";
     if (email) await emailStatusLinks({ db: handle.db, integrations, jobsBaseUrl: env.JOBS_BASE_URL }, email, ctx.now);
   });
+
+  // A repeat submission's conversation (plan E1): wiped after seven days unconfirmed, and tried again after an outage.
+  registerApplyConversationJobs(engine, { db: handle.db, ai, integrations, engine, jobsBaseUrl: env.JOBS_BASE_URL });
 
   engine.registerJob("email.retry", async (payload, ctx) => {
     await withPlatform(handle.db, (tx) => retryCommunication(tx, integrations, { communicationId: String(payload.communicationId ?? ""), attempt: Number(payload.attempt ?? 1), now: ctx.now }));

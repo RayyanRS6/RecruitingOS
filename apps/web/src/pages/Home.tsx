@@ -6,11 +6,12 @@ import { Link, useNavigate, useSearchParams } from "../nav";
 import { Alert, Button, Card, ErrorState, Icon, PageHeader, Pill, Skeleton, type Tone } from "@ros/ui";
 import type { GettingStartedAction } from "@ros/contracts";
 import { api, ApiError, type Brief, type BriefCard, type ClosingDateResponse, type Me, type Notification } from "../api/client";
+import { ALLOWANCE_ASK, screeningAllowanceWarning, type UsageLine } from "../allowance";
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
 import { RecruiterRequests } from "../components/RecruiterRequests";
 import { closingDateToast, isClosingDateAction } from "../publishing";
-import { canStartHire } from "../roles";
+import { canChangeCompany, canStartHire } from "../roles";
 import { presetOf, requestSentText } from "../recruiter-access";
 import { START_HIRE_HREF } from "../start-hire";
 import { briefDecisionToast } from "../talent-actions";
@@ -59,6 +60,8 @@ export function Home() {
 
       {/* A card's one-click request says what the recruiter will see and until when, and stays until read (the card itself may go). */}
       {sentToRecruiter ? <Alert tone="info"><div className="row" style={{ justifyContent: "space-between" }}><span>{sentToRecruiter}</span><Button size="sm" variant="quiet" onClick={() => setSentToRecruiter(null)}>Got it</Button></div></Alert> : null}
+      {/* The plan's screening conversations at 80% or used up (Q17): owners and admins, who can talk to ITS about the plan. */}
+      {canChangeCompany(myRole) ? <AllowanceCard onSentToRecruiter={setSentToRecruiter} /> : null}
       {brief.isLoading ? <Skeleton lines={3} /> : brief.error ? <ErrorState message="Could not load your brief." onRetry={() => brief.refetch()} /> : (
         <div className="stack">
           {brief.data!.cards.map((card, i) => card.kind === "getting_started" ? <GettingStartedCard key={`setup-${i}`} card={card} onSentToRecruiter={setSentToRecruiter} /> : <BriefCardView key={i} card={card} onSentToRecruiter={setSentToRecruiter} />)}
@@ -71,6 +74,31 @@ export function Home() {
 
       <Updates />
     </div>
+  );
+}
+
+/**
+ * The month's screening conversations at 80% of the plan's allowance, or used up (founder decision Q17). Nothing stops
+ * either way: applications keep coming in, and once the allowance is used up new applicants get the conversation link
+ * by email when more are added. The one button opens the request to ITS about the plan, filled in, never sent in one
+ * click; talking about the plan never uses one of the plan's recruiter requests.
+ */
+function AllowanceCard({ onSentToRecruiter }: { onSentToRecruiter: (message: string) => void }) {
+  const company = useQuery({ queryKey: ["company"], queryFn: () => api.get<{ planKey?: string; usage?: Record<string, UsageLine> }>("/api/v1/companies/current"), ...TODAY_REFRESH });
+  const warning = screeningAllowanceWarning(company.data?.usage, company.data?.planKey);
+  if (!warning) return null;
+  return (
+    <Card needsYou={warning.level === "used_up"} lift>
+      <div className="card-title">
+        <h2 style={{ fontSize: 16 }}>{warning.title}</h2>
+        <Pill size="sm" tone="caution">{warning.level === "used_up" ? "Used up" : "80% used"}</Pill>
+      </div>
+      <p className="small" style={{ color: "var(--ink-2)" }}>{warning.body}</p>
+      <div className="row" style={{ marginTop: 12 }}>
+        <AskRecruiter label="Ask ITS about adding more" size="sm" variant="primary" preset={ALLOWANCE_ASK} onSent={onSentToRecruiter} />
+        <Link to="/setup" className="btn secondary sm">See usage</Link>
+      </div>
+    </Card>
   );
 }
 

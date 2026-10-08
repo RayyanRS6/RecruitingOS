@@ -94,8 +94,11 @@ export function StatusChip(props: { stage: string; label: string; group?: string
   return <Pill tone={tone}>{props.label}</Pill>;
 }
 
+/** Sources whose own name would mislead: a recruiter's call notes are never the candidate's words (plan E3). */
+const EVIDENCE_SOURCE_LABEL: Record<string, string> = { recruiter_note: "recruiter's call notes" };
+
 export function EvidenceChip(props: { source: string }) {
-  return <Chip tone="source">{props.source.replace("_", " ")}</Chip>;
+  return <Chip tone="source">{EVIDENCE_SOURCE_LABEL[props.source] ?? props.source.replace("_", " ")}</Chip>;
 }
 
 /**

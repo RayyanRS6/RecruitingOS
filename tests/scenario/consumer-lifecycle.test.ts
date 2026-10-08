@@ -4,6 +4,7 @@ import { applications, assessments, rolePackets, roles, screens } from "@ros/db"
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "../../apps/api/src/app";
 import { createContainer, type Container } from "../../apps/api/src/container";
+import { useOneVisitApplyFlow } from "../../apps/api/src/test-helpers";
 
 /**
  * The founder context's own "single workflow that should be perfect" (docs/FOUNDER-CONTEXT.md §27):
@@ -28,8 +29,10 @@ describe("End-to-end hiring scenario: Glow Theory (beauty brand, 60 people) hire
     const { devLink } = (await (await json("POST", "/api/v1/auth/magic-link", { email: "sasha@glowtheory.test" })).json()) as { devLink: string };
     const consume = await json("POST", "/api/v1/auth/magic-link/consume", { token: new URL(devLink).searchParams.get("token") });
     cookie = consume.headers.get("set-cookie")!.split(";")[0];
-    const co = (await (await json("POST", "/api/v1/companies", { name: "Glow Theory", vertical: "beauty", sizeBand: "50-99", ownerName: "Sasha Bell", locations: [{ city: "Los Angeles", region: "CA", country: "US" }] })).json()) as { slug: string };
+    const co = (await (await json("POST", "/api/v1/companies", { name: "Glow Theory", vertical: "beauty", sizeBand: "50-99", ownerName: "Sasha Bell", locations: [{ city: "Los Angeles", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
     slug = co.slug;
+    // A pilot company: ITS switched on the conversation in the same visit as the form (plan Wave E, founder decision B1).
+    await useOneVisitApplyFlow(container, co.id);
   });
   afterAll(async () => { await container.close(); });
 
@@ -69,7 +72,7 @@ describe("End-to-end hiring scenario: Glow Theory (beauty brand, 60 people) hire
     expect(html).toMatch(/artificial intelligence/);
   });
 
-  it("A strong applicant is assessed against the packet with grounded evidence, invited to a screen, and recommended after it", async () => {
+  it("A strong applicant goes straight from the form to the screening conversation, is assessed against the packet with grounded evidence beside it, and is recommended after it", async () => {
     const form = new FormData();
     form.set("firstName", "Dev"); form.set("lastName", "Mehta"); form.set("email", "dev.mehta@example.com");
     form.set("resume", new File([
@@ -78,7 +81,10 @@ describe("End-to-end hiring scenario: Glow Theory (beauty brand, 60 people) hire
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> }; screening: { questions: Array<{ key: string; kind: string }> } } } };
     for (const r of role.currentPacket.packet.requirements.eligibility) form.set(`elig_${r.key}`, "yes");
     form.set("acknowledged", "yes");
-    expect((await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: form })).status).toBe(302);
+    const applied = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: form });
+    expect(applied.status).toBe(302);
+    // one visit (plan E1): the form leads straight to the conversation's introduction
+    expect(applied.headers.get("location")).toMatch(/^\/c\/screen\//);
     await container.drain();
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
     expect(a.stage).toBe("screen_invited");
@@ -87,9 +93,12 @@ describe("End-to-end hiring scenario: Glow Theory (beauty brand, 60 people) hire
     expect(triage.result.recommendation).toBe("screen");
     for (const s of triage.result.strengths) expect(s.evidence.source).toBe("resume");
     expect(triage.result.requirementFindings.length).toBeGreaterThan(0);
-    // the web screen, question by question, with the playbook's questions
+    // the web screen, question by question, with the playbook's questions: the introduction, Start, the answers, then "check your answers" and Send
     const [scr] = await container.db.select().from(screens).where(eq(screens.applicationId, a.id));
-    expect((await app.request(`/c/screen/${scr.token}`)).status).toBe(200);
+    expect(applied.headers.get("location")).toBe(`/c/screen/${scr.token}`);
+    expect(await (await app.request(`/c/screen/${scr.token}`)).text()).toContain(`/c/screen/${scr.token}/start`);
+    const post = (path: string, fields: Record<string, string> = {}) => app.request(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields) });
+    expect((await post(`/c/screen/${scr.token}/start`)).status).toBe(302);
     const questions = role.currentPacket.packet.screening.questions;
     const answerFor = (key: string) => {
       const q = questions.find((x) => x.key === key);
@@ -100,10 +109,13 @@ describe("End-to-end hiring scenario: Glow Theory (beauty brand, 60 people) hire
     };
     for (let i = 0; i < 12; i++) {
       const [s] = await container.db.select().from(screens).where(eq(screens.id, scr.id));
-      if (s.status === "completed") break;
-      const res = await app.request(`/c/screen/${scr.token}`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ message: answerFor(s.progress.currentQuestionKey ?? "") }) });
+      if (s.progress.phase === "review") break;
+      const res = await post(`/c/screen/${scr.token}`, { message: answerFor(s.progress.currentQuestionKey ?? "") });
       expect(res.status).toBe(302);
     }
+    expect(await (await app.request(`/c/screen/${scr.token}`)).text()).toContain("<h1>Check your answers</h1>");
+    expect((await post(`/c/screen/${scr.token}/submit`)).status).toBe(302);
+    await container.drain();
     const [done] = await container.db.select().from(screens).where(eq(screens.id, scr.id));
     expect(done.status).toBe("completed");
     expect(Object.keys(done.answers).length).toBe(questions.length);
@@ -111,7 +123,10 @@ describe("End-to-end hiring scenario: Glow Theory (beauty brand, 60 people) hire
     expect(after.stage).toBe("interview_recommended");
     const screenAsmt = (await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id))).find((x) => x.kind === "screen")!;
     expect((screenAsmt.result as { compensationExpectation: { withinRange: string } }).compensationExpectation.withinRange).toBe("yes");
-    expect((container.integrations.email as FakeEmailAdapter).sent.some((m) => m.to === "dev.mehta@example.com" && /screening conversation/.test(m.subject))).toBe(true);
+    // no separate invitation: the acknowledgment carried the conversation's link
+    const mail = (container.integrations.email as FakeEmailAdapter).sent.filter((m) => m.to === "dev.mehta@example.com");
+    expect(mail.some((m) => /screening conversation/.test(m.subject))).toBe(false);
+    expect(mail.find((m) => /received your application/.test(m.subject))?.text).toContain(`/c/screen/${scr.token}`);
   });
 
   it("An applicant with no resume is assessed from their own words, never marked weak for a non-traditional path", async () => {

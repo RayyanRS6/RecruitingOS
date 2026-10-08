@@ -112,9 +112,14 @@ export type ApplicationSummary = ApplicationCore & {
   candidateToldAt: string | null;
   /** The decision message waits for someone to approve it. */
   decisionMessageWaiting: boolean;
+  /** "Still applying" (plan E6): offered the screening conversation with the application and not finished yet; older answers leave it out. */
+  stillApplying?: boolean;
 };
-/** GET /roles/:id/applications?counts=1: the stage strip's counts cover every applicant the caller may see, whatever the filters. */
-export type StageStripCounts = { total: number; byOwnerStage: Record<OwnerStage, number>; byGroup: Record<OwnerGroup, number>; notTold: number; holdsEnded: number };
+/**
+ * GET /roles/:id/applications?counts=1: the stage strip's counts cover every applicant the caller may see, whatever the
+ * filters. `stillApplying` counts the people still in the visit that sent their application (plan E6).
+ */
+export type StageStripCounts = { total: number; byOwnerStage: Record<OwnerStage, number>; byGroup: Record<OwnerGroup, number>; notTold: number; holdsEnded: number; stillApplying?: number };
 export type ApplicationsWithCounts = { applications: ApplicationSummary[]; counts: StageStripCounts };
 /** Where a claim came from. `unquoted`: a claim about the candidate with nothing verified quoted from them (packages/agents/src/triage.ts), shown as "no quote". */
 export type EvidenceRef = { source: string; quote?: string; unquoted?: boolean };
@@ -131,7 +136,22 @@ export type AssessmentResult = {
   availability?: { stated?: string; matchesSchedule: string; earliestStart?: string };
   eligibilityConfirmations?: Array<{ key: string; confirmed: string; quote?: string }>;
 };
-export type Screen = { id: string; channel: string; status: string; invitedAt: string | null; startedAt: string | null; completedAt: string | null; remindedAt: string | null; transcript: Array<{ role: string; content: string; at: string; questionKey?: string; channel?: string }>; answers: Record<string, string>; progress: { askedKeys: string[]; currentQuestionKey: string | null; /** "Ask about this in a screen": the open questions the screen started with, each with its answer once given. */ focusQuestions?: Array<{ key: string; question: string; whyItMatters?: string; answer?: string }> }; assessmentId: string | null; /** The scorecard's state on the candidate page (apps/api/src/services/screen-scorecards.ts); `recruiterAsked` once ITS has the failed one. */ scorecard?: "ready" | "writing" | "unavailable" | "none"; recruiterAsked?: boolean };
+/**
+ * One line of a screening conversation. `role: "recruiter"` with `source: "recruiter_call"` is a recruiter's notes from a
+ * phone call (`by` names them), never the candidate's words; `source` also says when an answer was tapped, skipped or
+ * changed on the "check your answers" page (plan E3, E10-E12).
+ */
+export type ScreenTranscriptLine = { role: string; content: string; at: string; questionKey?: string; channel?: string; source?: string; by?: string };
+/**
+ * Wave E: `invitedVia` is "apply" when the conversation was offered in the visit that sent the application (older
+ * answers leave it out; `progress.flow` says the same). `progress.declined` lists the questions the candidate chose not
+ * to answer, `progress.edits` the answers they changed before sending.
+ */
+export type Screen = { id: string; channel: string; status: string; invitedAt: string | null; startedAt: string | null; completedAt: string | null; remindedAt: string | null; invitedVia?: string | null; transcript: ScreenTranscriptLine[]; answers: Record<string, string>; progress: { askedKeys: string[]; currentQuestionKey: string | null; /** "Ask about this in a screen": the open questions the screen started with, each with its answer once given. */ focusQuestions?: Array<{ key: string; question: string; whyItMatters?: string; answer?: string }>; flow?: string; phase?: string; declined?: string[]; edits?: Record<string, number>; submittedAt?: string }; assessmentId: string | null; /** The scorecard's state on the candidate page (apps/api/src/services/screen-scorecards.ts); `recruiterAsked` once ITS has the failed one. */ scorecard?: "ready" | "writing" | "unavailable" | "none"; recruiterAsked?: boolean };
+/** GET /roles/:id/screening (plan E13): how the conversation goes for one role, counts only. */
+export type { ScreeningFunnel } from "@ros/contracts";
+/** GET and PUT /roles/:id/apply-mode (ITS only): the role's own setting (null follows the company), the company's default, and what applies. */
+export type RoleApplyModeView = { roleId: string; applyMode: "one_visit" | "form_then_screen" | null; companyDefault: "one_visit" | "form_then_screen"; effective: "one_visit" | "form_then_screen" };
 export type Notification = { id: string; kind: string; title: string; body: string; action: { label: string; href: string } | null; readAt: string | null; createdAt: string };
 /** The full history of updates and each person's email alert settings (plan B3); the shapes live in @ros/contracts. */
 export type { NotificationHistoryPage, NotificationPreferencesView, NotificationView, NotifyCadence, NotifyGroup } from "@ros/contracts";

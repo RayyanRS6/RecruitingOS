@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
 
 /** True when the run targets a deployed address (E2E_BASE_URL) rather than the local shell with fake providers. */
 export const REMOTE_TARGET = !!process.env.E2E_BASE_URL?.trim();
@@ -65,6 +65,23 @@ export async function createCompanyThroughTheForm(page: Page, name: string) {
   await page.waitForURL((u) => u.pathname === "/");
 }
 
+/**
+ * ITS switches the one-visit flow on for a company (plan Wave E, founder decision B1): a company without a setting takes
+ * "form now, conversation later", and pilots are switched on by ITS. Done through the admin API, signed in as the e2e
+ * administrator in a browser context of its own, so the owner's session is untouched.
+ */
+export async function useOneVisitFlow(browser: Browser, base: string, companyId: string) {
+  const staff = await browser.newContext();
+  try {
+    const admin = await staff.newPage();
+    await signIn(admin, { email: "admin-e2e@identifiedtalent.com", name: "Admin", provider: "azure", aal2: true });
+    const r = await admin.request.post(`${base}/api/v1/admin/customers/${companyId}/apply-flow`, { data: { applyFlow: "one_visit", reason: "A pilot company for the one-visit flow." }, headers: { "x-admin-reason": "e2e: pilot company" } });
+    expect(r.ok(), await r.text()).toBeTruthy();
+  } finally {
+    await staff.close();
+  }
+}
+
 /** The heavy data setup goes through the API with the browser's own session cookie; the journey stays in the browser. */
 export async function seedRoleAndApplicant(request: APIRequestContext, base: string, first: string, last: string) {
   const s = await (await request.post(`${base}/api/v1/intake/sessions`, { data: { initialMessage: "I need a registered dental hygienist in Tustin, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." } })).json() as { session: { id: string } };
@@ -81,11 +98,16 @@ export async function seedRoleAndApplicant(request: APIRequestContext, base: str
   for (const rule of role.currentPacket.packet.requirements.eligibility) multipart[`elig_${rule.key}`] = "yes";
   const applied = await request.post(`${base}/careers/${company.slug}/jobs/${roleId}/apply`, { multipart, maxRedirects: 0 });
   expect(applied.status()).toBe(302);
-  // every submission lands on the same receipt; the status link travels only by email (Wave 0 item 0.1)
-  expect(applied.headers().location).toBe(`/careers/${company.slug}/jobs/${roleId}/applied`);
+  // On a role that applies and talks in one visit (plan E1; a pilot ITS switched on with `useOneVisitFlow`), passing the
+  // yes/no questions leads straight to the screening conversation's introduction; a role on the later path lands on the
+  // receipt. Either way the status link travels only by email (Wave 0 item 0.1), and the applicant here does not start
+  // the conversation, so on a one-visit role they are "Still applying".
+  const location = applied.headers().location ?? "";
+  expect(location === `/careers/${company.slug}/jobs/${roleId}/applied` || /^\/c\/screen\/[A-Za-z0-9_-]+$/.test(location), `the apply form sent the applicant to ${location}`).toBe(true);
+  const conversationPath = location.startsWith("/c/screen/") ? location : null;
   const candidateEmail = multipart.email as string;
   const statusPath = await statusPathFromEmail(request, base, roleId, candidateEmail);
-  return { roleId, slug: company.slug, statusPath, candidateEmail };
+  return { roleId, slug: company.slug, statusPath, candidateEmail, conversationPath };
 }
 
 /**

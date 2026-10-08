@@ -53,7 +53,7 @@ The packet has a JSON Schema (`packages/contracts/src/domain/role-packet.ts`) th
 
 Candidates are users. Their surface is mobile-first and served by the API application (server-rendered, no login required beyond a signed link):
 
-- Careers page and job page with Google Jobs markup; apply in under three minutes; resume upload or "no resume, answer four questions."
+- Careers page and job page with Google Jobs markup; apply with a three-minute form, then a short written conversation with the company's AI assistant: in the same visit on pilot roles ITS switches on, by email afterwards otherwise; resume upload or "no resume, answer four questions."
 - AI disclosure at first touch and on every automated message; a human alternative ("reply HUMAN" or a link).
 - Consent capture: application terms, SMS opt-in (separate, unchecked by default), recording consent when applicable, state-specific AI notices.
 - Preferences: SMS and email opt-out, contact windows.

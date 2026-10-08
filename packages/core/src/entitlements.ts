@@ -33,6 +33,55 @@ export async function applyPlan(q: Queryable, companyId: string, planKey: string
   await q.update(companies).set({ planKey }).where(eq(companies.id, companyId));
 }
 
+/** The plan's allowance of screening conversations. */
+export const TEXT_SCREENS = "text_screens";
+/** Requests for a person instead of the screening conversation (Q16): counted, never limited; ITS covers them. */
+export const PERSON_REQUESTS = "screen_person_requests";
+/** The share of the monthly allowance at which the owner and ITS are warned (Q17). */
+export const ALLOWANCE_WARN_RATIO = 0.8;
+
+/**
+ * What one more conversation did to the allowance: `warning` when it crossed 80%, `used_up` when it reached the limit,
+ * null otherwise (or when the plan has no limit). Each is crossed once in a period, so each is told once.
+ */
+export type AllowanceCrossing = { crossed: "warning" | "used_up" | null; used: number; limit: number | null };
+
+/**
+ * Counts a screening conversation at the candidate's first answer (plan E9), never at the invitation, and says whether
+ * this one crossed the 80% line or used the allowance up. Nothing is refused here: someone who has started is never cut
+ * off (founder decision F8; Q17).
+ */
+export async function recordScreenStart(q: Queryable, companyId: string, ref: Record<string, unknown>): Promise<AllowanceCrossing> {
+  const [before] = await q.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, TEXT_SCREENS))).limit(1);
+  await record(q, companyId, TEXT_SCREENS, 1, "screen", ref);
+  if (!before || before.limit === null || before.limit <= 0) return { crossed: null, used: (before?.used ?? 0) + 1, limit: before?.limit ?? null };
+  const used = before.used + 1;
+  const line = Math.ceil(before.limit * ALLOWANCE_WARN_RATIO);
+  const crossed = before.used < before.limit && used >= before.limit ? "used_up" : before.used < line && used >= line ? "warning" : null;
+  return { crossed, used, limit: before.limit };
+}
+
+/**
+ * Tells ITS that a company's screening allowance is at 80% or used up (Q17): one alert while it stands. Platform side
+ * only (the tenant role cannot write alerts); the owner's own notice goes in the tenant transaction that counted it.
+ */
+export async function flagScreenAllowance(q: Queryable, input: { companyId: string; companyName: string; crossing: AllowanceCrossing; now?: Date }): Promise<{ id: string; created: boolean } | null> {
+  const { crossed, used, limit } = input.crossing;
+  if (!crossed) return null;
+  const usedUp = crossed === "used_up";
+  return raiseAlertOnce(q, {
+    kind: usedUp ? "billing.screens_used_up" : "billing.screens_warning",
+    severity: usedUp ? "high" : "info",
+    companyId: input.companyId,
+    target: { type: "company", id: input.companyId },
+    title: usedUp ? `${input.companyName} has used all its screening conversations this month` : `${input.companyName} has used 80% of its screening conversations this month`,
+    body: usedUp
+      ? `${used} of ${limit} used. Applications are still accepted; new applicants get the conversation link by email once the allowance is topped up, so everyone for a role has the same process. Talk with the customer about topping up.`
+      : `${used} of ${limit} used. Nothing has stopped. Talk with the customer about topping up before it runs out.`,
+    details: { used, limit },
+  }, { now: input.now });
+}
+
 /** The plan's allowance of recruiter requests. */
 export const RECRUITER_ASKS = "recruiter_asks";
 

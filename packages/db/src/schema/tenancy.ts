@@ -1,5 +1,5 @@
 import { boolean, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import type { Actor, CompanyOnboarding, Location } from "@ros/contracts";
+import type { Actor, ApplyMode, CompanyOnboarding, Location } from "@ros/contracts";
 import { createdAt, id, ts, updatedAt } from "./columns";
 
 export type CompanySettings = {
@@ -42,6 +42,12 @@ export type CompanySettings = {
   boardPosting?: "its" | "self";
   /** The company has its own paid ZipRecruiter plan (Q11): only then is ZipRecruiter offered and prepared. */
   zipRecruiterPlan?: boolean;
+  /**
+   * How new roles meet the screening conversation unless ITS set a role itself (plan E1): "form_then_screen" when unset;
+   * ITS sets "one_visit" for a pilot company. Set from the ITS admin console only, with who and when (apps/api routes/admin.ts).
+   */
+  applyFlowDefault?: ApplyMode;
+  applyFlowSetBy?: { at: string; by: Actor; reason: string };
 };
 
 export const companies = pgTable(

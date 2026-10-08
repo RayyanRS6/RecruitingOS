@@ -77,6 +77,8 @@ export const EvidenceSource = z.enum([
   "playbook",
   "benchmark",
   "owner_statement",
+  // A recruiter's notes from a call that finished a screening conversation (plan E3): never the candidate's own words.
+  "recruiter_note",
 ]);
 export type EvidenceSource = z.infer<typeof EvidenceSource>;
 

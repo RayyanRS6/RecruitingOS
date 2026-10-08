@@ -8,7 +8,9 @@ import { formatPayRange } from "@ros/contracts";
 import { api, ApiError, type Me, type RoleDetail as RoleDetailT, type RolePacket } from "../api/client";
 import { toast } from "../toast";
 import { ROLE_WAITS_FOR_CHECK } from "../company-check";
+import { isItsStaff } from "../apply-flow";
 import { AskRecruiter } from "../components/AskRecruiter";
+import { RoleApplyMode } from "../components/ApplyMode";
 import { useCompanyCheck } from "../components/use-company-check";
 import { canApproveRole, canEditPacket, canEditPacketJson, canManageRole, canRecordOutcome, canSeeActivity, canSeePay, canSeeTalent, canShareJob, canStartHire } from "../roles";
 import { outdatedBoardsLine } from "../publishing";
@@ -228,6 +230,8 @@ export function RoleDetail() {
 
             {visibleTab === "plan" ? <InterviewPlanTab roleId={r.id} canEdit={editPacket} /> : null}
 
+            {/* ITS only (plan E1): whether this role's applicants apply and talk in one visit, or get the conversation later. */}
+            {visibleTab === "posting" && isItsStaff(me.data) ? <div style={{ marginBottom: 14 }}><RoleApplyMode roleId={r.id} roleTitle={r.title} /></div> : null}
             {visibleTab === "posting" ? <PostingTab roleId={r.id} roleStatus={r.status} canManage={manage} canShare={share} roleTitle={r.title} companyName={companyName} /> : null}
 
             {visibleTab === "activity" ? <ActivityTab roleId={r.id} /> : null}

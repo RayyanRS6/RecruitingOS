@@ -21,7 +21,7 @@ Draft of 30 September 2026 (checked again against the product the same day), for
 **Candidates**
 
 - Reply **HUMAN** to any email from the product.
-- Press **Talk to a person instead** during a screening conversation.
+- Press **I'd rather talk to a person** during a screening conversation, then **Have a person contact me**.
 - Use the form on their status page to ask for a copy of their information, a correction, deletion, or a review by a person. Someone without their status link can use the request form on the privacy page instead.
 - Reply to any email from the product. Once ITS has connected the incoming mail for your workspace, the reply appears on the candidate's page and your team is told; until then a person at ITS reads it.
 - Email **privacy@identifiedtalent.com** for privacy requests.

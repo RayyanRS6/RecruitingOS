@@ -15,3 +15,4 @@ export * from "./privacy-messages";
 export * from "./email-failures";
 export * from "./outbox";
 export * from "./candidate-links";
+export * from "./apply-messages";

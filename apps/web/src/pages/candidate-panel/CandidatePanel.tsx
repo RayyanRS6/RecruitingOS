@@ -180,7 +180,7 @@ export function CandidatePanel(props: PanelProps) {
             <NeedsYou a={a} roleId={roleId} myRole={viewer.role} myUserId={viewer.userId} step={props.step} setStep={props.onStep} roundKey={props.roundKey} />
             <TabPanel idBase="candidate-panel" value={tab}>
               {tab === "overview" ? <OverviewTab a={a} roleId={roleId} onHistory={() => onTab("history")} /> : null}
-              {tab === "screen" ? <ScreenTab a={a} roleId={roleId} /> : null}
+              {tab === "screen" ? <ScreenTab a={a} roleId={roleId} myRole={viewer.role} /> : null}
               {tab === "resume" ? <ResumeTab a={a} roleId={roleId} /> : null}
               {tab === "messages" ? <MessagesTab a={a} roleId={roleId} compose={composing} setCompose={setCompose} /> : null}
               {tab === "history" ? <HistoryTab a={a} mayReadActivity={canSeeActivity(viewer.role)} /> : null}

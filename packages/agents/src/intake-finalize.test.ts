@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { intakeCompilePrompt, intakeExtractPrompt, packetRevisePrompt, withoutTag, type IntakeContext } from "@ros/ai";
-import { IntakeServerState, type Actor, type DraftRolePacket, type IntakeFacts } from "@ros/contracts";
+import { IntakeServerState, RolePacket, type Actor, type DraftRolePacket, type IntakeFacts } from "@ros/contracts";
 import { unresolvedFlags } from "@ros/core";
 import { samplePacket } from "./fixtures/sample-packet";
 import { finalizeDraft } from "./intake";
@@ -82,5 +82,14 @@ describe("untrusted text cannot close its own data block", () => {
     expect(extract.match(/<\/owner_text>/g)).toHaveLength(1);
     const revise = packetRevisePrompt.messages({ companyName: "Harbor Dental", target: "draft", roleStatus: null, packet: {}, allowed: ["description"], declined: [], message: sneaky })[0].content;
     expect(revise.match(/<\/request>/g)).toHaveLength(1);
+  });
+});
+
+describe("the screening conversation follows the form in the same visit (plan E8)", () => {
+  it("the draft aims for five or six questions and about ten minutes, and a packet without a length gets ten", () => {
+    expect(intakeCompilePrompt.version).toBe(4);
+    const compile = intakeCompilePrompt.system(ctx(facts())).map((b) => b.text).join("\n");
+    expect(compile).toContain("aim for five or six questions and screening.maxMinutes 10");
+    expect(RolePacket.shape.screening.parse({ questions: [{ key: "a", question: "A?", kind: "skills" }, { key: "b", question: "B?", kind: "skills" }, { key: "c", question: "C?", kind: "skills" }] }).maxMinutes).toBe(10);
   });
 });

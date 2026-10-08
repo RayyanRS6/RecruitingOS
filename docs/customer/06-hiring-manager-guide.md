@@ -8,7 +8,7 @@ Screen names and button labels in **bold** are the ones you will see in the prod
 
 ## 1. Your job in one paragraph
 
-You describe who you need in a conversation. The assistant drafts a role packet. You read it, fix it and approve it. ITS posts the job. Candidates apply. The assistant reads each application and shows you the evidence. You decide who to screen, interview and decline, and you record what happened. A decision is private: nothing that says no is sent to a candidate until someone on your team sends the decision message. Whenever you want a human recruiter's opinion, press **Bring in a recruiter**.
+You describe who you need in a conversation. The assistant drafts a role packet. You read it, fix it and approve it. ITS posts the job. Candidates apply and answer a short written conversation with your AI assistant: in the same visit on the pilot roles ITS has switched on, by email afterwards otherwise (or they do it later, or ask for a person). The assistant reads each application and the answers, and shows you the evidence. You decide who to screen, interview and decline, and you record what happened. A decision is private: nothing that says no is sent to a candidate until someone on your team sends the decision message. Whenever you want a human recruiter's opinion, press **Bring in a recruiter**.
 
 ## 2. The job builder
 
@@ -156,15 +156,23 @@ When a candidate answers no to a required eligibility question, the card reads *
 
 A candidate declined this way shows **Declined on an eligibility answer** with a **Review anyway** button in case you change your mind.
 
-## 8. Inviting to a screen
+## 8. The screening conversation
 
-Under your default settings, the assistant invites candidates whose applications look like a fit and tells you under **What the assistant did**. You can also invite anyone yourself: open the candidate and press **Invite to a screen**. If your owner set that action to "Ask me first", you see **The assistant suggests a screen** and press **Yes, invite to a screen**.
+**In the same visit as applying (pilot roles that ITS has switched on).** Everyone who passes your eligibility questions goes straight from the application form to a short written conversation with your AI assistant. Nobody has to invite them. While they are in it they show apart, under **Still applying**, and you are not alerted about them until they finish, send their application without it, or stop part-way.
 
-What the candidate gets: an email with a link to a web page headed "A few questions, (first name)". The assistant asks your screening questions one at a time. They see how many are answered, can stop and come back, and can press **Talk to a person instead** at any time. The page says an AI assistant is asking the questions and that people make the decisions.
+What the candidate sees, on a phone or a computer, with no app and no password:
 
-Timing: if they have not started after two days they get one reminder. If they have not started three days after that, the invitation lapses, the candidate shows "No response", and you are told. You can then decline with a reason, keep them, or ask a recruiter to call.
+- First, a short introduction: it is your company's AI assistant, a software program, not a person; it is a conversation, not a test; about how many questions and minutes (five or six questions, about ten minutes, is the usual length); they can skip a question or stop and come back. Three buttons: **Start**, **Do this later** (the link goes to them by email) and **I'd rather talk to a person**. Every page of the conversation says at the top that it is the AI assistant.
+- Then one question at a time, in your packet's own words, with "Question 2 of 5" and a thin progress bar. They answer in their own words; for simple facts (yes or no, which days, a start date, the pay they are looking for) they can tap an answer instead. The assistant may ask a short follow-up that quotes what they said. **Skip this question** is always there; a skipped question counts as unknown, never against them.
+- At the end, **Check your answers**: every answer with **Change**, then **Send my answers**. You hear about them only after they press Send.
 
-If the candidate asks for a person, the conversation goes to an ITS recruiter with a four-business-hour response time, the candidate is told a true expectation, and you see it on Today.
+**I'd rather talk to a person** gives the candidate two equal choices: **Send without the conversation** (their application comes to you as it is) or **Have a person contact me** (an ITS recruiter gets in touch within four business hours; ITS covers it, and it does not use your plan's recruiter requests). Both are counted on the role's figures.
+
+If they stop part-way, they get one reminder the next day; two days after that the conversation closes as unfinished, what they said comes to you marked "not finished", and they are told nothing else is needed. If they answered everything but did not press Send, the reminder asks them to check and send, and two days later their answers come to you as they are, read like anyone's. If they never start it, they get one reminder after two days; three days after that their application comes to you without it, and they are told that is fine. If the assistant stops working, the conversation pauses with their answers kept and they are emailed a link to finish once it works again; after a day without it, a person takes over and they are told so. A person is always one click away.
+
+Each conversation counts against your plan's monthly allowance at the candidate's first answer, never at the invitation. At 80% you and ITS are warned. If the allowance runs out, applications keep coming in, and people who apply meanwhile get the link by email once more conversations are added, so everyone for a role has the same process.
+
+**Later, by email (every role ITS has not switched to the same visit, and any role whose screen invitations are "Ask me first" or "Only a person").** Candidates send the form only. Under the default rule the assistant invites candidates whose applications look like a fit and tells you under **What the assistant did**; you can also invite anyone yourself: open the candidate and press **Invite to a screen**. With "Ask me first" you see **The assistant suggests a screen** and press **Yes, invite to a screen**. The candidate gets an email with the link; the page opens on the same introduction, and the conversation works as above. If they have not started after two days they get one reminder. If they have not started three days after that, the invitation lapses, the candidate shows "No response", and you are told. You can then decline with a reason, keep them, or ask a recruiter to call.
 
 ## 9. Reading a scorecard
 

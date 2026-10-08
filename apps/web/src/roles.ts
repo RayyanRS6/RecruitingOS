@@ -75,6 +75,12 @@ export const canDecline = (role: string | null | undefined): boolean => !!role &
 export const canSeeActivity = (role: string | null | undefined): boolean => !!role && role !== "interviewer";
 
 /**
+ * escalation.work: a recruiter's notes from a call with a candidate who asked for a person (plan E3). Recruiters only:
+ * the company's own, or an ITS recruiter working under a grant (who acts with a recruiter's rights).
+ */
+export const canAddCallNotes = (role: string | null | undefined): boolean => role === "recruiter";
+
+/**
  * escalation.create: bring in a recruiter, and read and answer the team's recruiter requests. Everyone but an
  * interviewer (an ITS recruiter inside a customer asks only within their grant; the API holds them to it).
  */

@@ -482,7 +482,7 @@ const NOTICE_LABEL: Record<string, string> = { ai_use: "How we use AI (shown on 
 const NOTICE_SHORT: Record<string, string> = { ai_use: "AI notice", privacy: "privacy notice", pay_transparency: "pay range notice", adverse_decision_explanation: "decision review notice" };
 const SIZE_BANDS = ["1-19", "20-49", "50-99", "100-199", "200-499", "500+"];
 /** The plan's allowances in the company card's words (recruiter_asks counts the team's own requests, founder decision Q33). */
-const USAGE_LABEL: Record<string, string> = { active_roles: "active roles", text_screens: "text screens", voice_minutes: "voice minutes", sourcing_contacts: "sourcing contacts", recruiter_asks: "recruiter requests", seats: "seats" };
+const USAGE_LABEL: Record<string, string> = { active_roles: "active roles", text_screens: "screening conversations this month", screen_person_requests: "requests for a person instead of the screening conversation",voice_minutes: "voice minutes", sourcing_contacts: "sourcing contacts", recruiter_asks: "recruiter requests", seats: "seats" };
 const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /**

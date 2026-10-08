@@ -97,7 +97,11 @@ export type AuditAction =
   | "message.sent"
   | "message.approval_requested"
   /** A person changed which email alerts they get (plan B3): the groups, before and after. Never anything else. */
-  | "notification.preferences_changed";
+  | "notification.preferences_changed"
+  /** Wave E: a recruiter added notes from a call to a screening conversation; ITS changed how a role or a company's roles meet the conversation. Never the notes. */
+  | "screen.recruiter_notes_added"
+  | "role.apply_mode_changed"
+  | "company.apply_flow_changed";
 
 /** Privileged and access actions. Distinct from domain events: this answers "who looked at what, and why." */
 export async function audit(

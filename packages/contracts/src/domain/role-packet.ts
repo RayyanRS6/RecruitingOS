@@ -250,7 +250,8 @@ export const RolePacket = z.object({
   }),
   screening: z.object({
     questions: z.array(ScreeningQuestion).min(3).max(12),
-    maxMinutes: z.number().int().min(5).max(30).default(15),
+    // About ten minutes, five or six questions: the conversation now follows the form in the same visit (plan E8).
+    maxMinutes: z.number().int().min(5).max(30).default(10),
   }),
   interviews: z.object({
     plan: z.array(InterviewRound).min(1).max(5),

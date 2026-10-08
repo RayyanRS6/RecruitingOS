@@ -131,7 +131,8 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
     const rejected = await container.db.select().from(events).where(and(eq(events.subjectType, "application"), eq(events.subjectId, appRow.id), eq(events.type, "document.rejected")));
     expect(rejected.length).toBe(1);
     expect(JSON.stringify(rejected[0]!.payload)).not.toContain("MZ");
-    expect(["eligible", "triaged", "received"]).toContain(appRow.stage);
+    // the application still goes on, without the file: to the conversation offered with it (plan E1), or to the team
+    expect(["eligible", "triaged", "received", "screen_invited"]).toContain(appRow.stage);
   });
 
   it("the EICAR test file is flagged by the scanner and refused", async () => {

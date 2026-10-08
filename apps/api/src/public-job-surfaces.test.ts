@@ -8,7 +8,7 @@ import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { PUBLIC_FEED_CACHE_MS, resetPublicFeedCache } from "./pages/public-feeds";
 import { jobUrls } from "./services/job-urls";
-import { statusTokenFor } from "./test-helpers";
+import { statusTokenFor, useLaterApplyFlow, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
  * The candidate-facing job surfaces (docs/spec/20 section 2 items 1 to 8, 19 and 20; docs/readiness/20 section D):
@@ -50,6 +50,8 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
   const seedRole = async (c: Container, a: ReturnType<typeof createApp>, cookie: string, name: string) => {
     const j = (method: string, path: string, body?: unknown) => a.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
     const co = (await (await j("POST", "/api/v1/companies", { name, vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
+    // A pilot company: ITS switched the one-visit flow on for it (plan Wave E).
+    await useOneVisitApplyFlow(c, co.id);
     const s = (await (await j("POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." })).json()) as { session: { id: string } };
     const id = ((await (await j("POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
     expect((await j("POST", `/api/v1/roles/${id}/approve`, { version: 1, note: "ok" })).status).toBe(200);
@@ -138,7 +140,8 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(header).toContain(`<span class="fact-text">${({ onsite: "On site", hybrid: "Hybrid", remote: "Remote" } as Record<string, string>)[pv.packet.identity.remotePolicy]}</span>`);
     expect(header).toContain('<span class="fact-text">Full time</span>');
     expect(header).toMatch(/<span class="fact-text">\$45–\$55 an hour<\/span>/);
-    expect(header).toContain("Upload a resume, or answer four short questions about your work instead. No cover letter needed.");
+    // how long it really takes (plan E8): the form and the written conversation that follows it in the same visit
+    expect(header).toMatch(/About \d+ minutes, including a short written conversation with Ledger Dental's AI assistant\. First this form: upload a resume, or answer four short questions about your work instead\. No cover letter needed\./);
     // the pre-apply line: help, or a change to how to apply because of a disability, from a person (here the ITS inbox)
     expect(header).toContain(`Need help applying, or a change to how you apply because of a disability? Email <a href="mailto:${container.env.EMAIL_REPLY_TO}">`);
     // the four short questions instead of one box, behind a disclosure that works without script; closed until used
@@ -149,7 +152,7 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(html).toMatch(/<input type="hidden" name="formOpened" value="v1\.[^"]+"/);
     // the job page
     const job = decodeEntities(await (await app.request(`/careers/${slug}/jobs/${roleId}`)).text());
-    expect(job).toContain("A short screening conversation online (about");
+    expect(job).toMatch(/Apply in about \d+ minutes, including a short written conversation with Ledger Dental's AI assistant\./);
     expect(job).not.toContain("by text");
     expect(job).not.toContain("may be recorded");
     expect(job).toContain('href="/privacy"');
@@ -184,8 +187,14 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     // with the box ticked: the application is in, the acknowledgment recorded, and the notice versions are the server's, not the browser's claim
     const accepted = await apply(applyForm({ noticeVersionsShown: "made-up@1", smsConsent: "yes", phone: "(949) 555-0100" }), { "x-forwarded-for": "203.0.113.7" });
     expect(accepted.status).toBe(302);
-    // the receipt, never the status page: the link travels by email only (Wave 0 item 0.1)
-    expect(accepted.headers.get("location")).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
+    // straight on to the conversation's introduction (plan E1), never the status page: the link travels by email only (Wave 0 item 0.1)
+    const screenPath = accepted.headers.get("location")!;
+    expect(screenPath).toMatch(/^\/c\/screen\/[A-Za-z0-9_-]+$/);
+    expect(setCookieOf(accepted)).toMatch(new RegExp(`ros_applied_to=v1\\.[^;]+; Max-Age=1800; Path=${screenPath.replace(/[/]/g, "\\/")}; HttpOnly; SameSite=Lax`));
+    expect(setCookieOf(accepted)).not.toContain("ana.lopez");
+    const intro = decodeEntities(await (await app.request(screenPath, { headers: { cookie: setCookieOf(accepted).match(/ros_applied_to=[^;,]+/)![0] } })).text());
+    expect(intro).toContain("<strong>Your application is sent.</strong><p>Your own link to it is on its way to a***@example.com.");
+    expect(intro).not.toContain("/c/status/");
     anaStatusToken = await statusTokenFor(container, { roleId, email: "ana.lopez@example.com" });
     await container.drain();
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
@@ -199,26 +208,34 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     // texting is off: the posted consent is ignored, nothing recorded, no event, and the acknowledgment email promises an online conversation only
     expect(cand.consent.sms).toBeUndefined();
     expect(await eventsOf("consent.granted")).toHaveLength(0);
+    const [scr] = await container.db.select().from(screens).where(eq(screens.applicationId, a.id));
+    expect(scr).toMatchObject({ channel: "web", invitedVia: "apply" });
+    expect(screenPath).toBe(`/c/screen/${scr.token}`);
+    // the acknowledgment says honestly what comes next, with the conversation's link to come back to (plans E1, E8)
     const ack = emails().find((m) => m.to === "ana.lopez@example.com" && /received your application/.test(m.subject))!;
-    expect(ack.text).toContain("A short screening conversation (online, about");
-    expect(ack.text).not.toContain("by text");
+    expect(ack.text).toMatch(/1\. A short written conversation with Ledger Dental's AI assistant: \d+ questions, about \d+ minutes\. It is not a test, and you can skip a question or ask for a person instead\. If you have not finished it, pick it up here: https:\/\/jobs\.example\.test\/c\/screen\//);
+    expect(ack.text).toContain(`https://jobs.example.test/c/screen/${scr.token}`);
+    expect(ack.text).not.toMatch(/by text|looks like a fit/);
     // the status page and the screen page: no text-message choice, no recording notice
     const status = decodeEntities(await (await app.request(`/c/status/${anaStatusToken}`)).text());
     expect(status).not.toContain("Text messages");
     expect(status).not.toContain("may be recorded");
-    const [scr] = await container.db.select().from(screens).where(eq(screens.applicationId, a.id));
-    expect(scr).toBeTruthy();
     const screen = decodeEntities(await (await app.request(`/c/screen/${scr.token}`)).text());
     expect(screen).not.toContain("may be recorded");
     expect(screen).toContain("artificial intelligence");
   });
 
-  it("with texting on, the SMS checkbox is on the form, the consent is recorded, and the pages say by text or online", async () => {
+  it("with texting on, the SMS checkbox is on the form, the consent is recorded, and on the later path the pages say by text or online", async () => {
     const c2 = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", SMS_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: "http://localhost:3000", JOBS_BASE_URL: "https://jobs.example.test", SMS_ENABLED: "true" } });
     try {
       const a2 = createApp(c2);
       const cookie = await signIn(a2, "owner@texting.test");
       const seeded = await seedRole(c2, a2, cookie, "Texting Dental");
+      // a conversation offered with the application is always on the web; texts belong to "form now, conversation later" (plan Wave E)
+      const sameVisit = decodeEntities(await (await a2.request(`/careers/${seeded.slug}/jobs/${seeded.roleId}`)).text());
+      expect(sameVisit).toContain("including a short written conversation with Texting Dental's AI assistant");
+      expect(sameVisit).not.toContain("by text");
+      await useLaterApplyFlow(c2, seeded.companyId);
       const form = decodeEntities(await (await a2.request(`/careers/${seeded.slug}/jobs/${seeded.roleId}/apply`)).text());
       const box = form.match(/<input type="checkbox" name="smsConsent"[^>]*>/)?.[0];
       expect(box).toBeTruthy();
@@ -227,9 +244,10 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
       expect(form.match(/name="noticeVersionsShown" value="([^"]*)"/)![1]).toContain("sms_consent@2026-09-01");
       expect(form).not.toContain("may be recorded");
       const job = decodeEntities(await (await a2.request(`/careers/${seeded.slug}/jobs/${seeded.roleId}`)).text());
-      expect(job).toContain("A short screening conversation by text or online (about");
+      expect(job).toContain("Possibly a short written conversation with Texting Dental's AI assistant (by text or online, about");
       const r = await apply(applyForm({ smsConsent: "yes", phone: "(949) 555-0100" }, seeded.eligibility), {}, a2, `/careers/${seeded.slug}/jobs/${seeded.roleId}/apply`);
       expect(r.status).toBe(302);
+      expect(r.headers.get("location")).toBe(`/careers/${seeded.slug}/jobs/${seeded.roleId}/applied`);
       await c2.drain();
       const [a] = await c2.db.select().from(applications).where(eq(applications.roleId, seeded.roleId));
       const [cand] = await c2.db.select().from(candidates).where(eq(candidates.id, a.candidateId));
@@ -237,7 +255,9 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
       expect(a.answers.noticeVersionsShown).toContain("sms_consent@2026-09-01");
       expect(await c2.db.select().from(events).where(eq(events.type, "consent.granted"))).toHaveLength(1);
       const ack = (c2.integrations.email as FakeEmailAdapter).sent.find((m) => m.to === "ana.lopez@example.com" && /received your application/.test(m.subject))!;
-      expect(ack.text).toContain("A short screening conversation (by text or online, about");
+      expect(ack.text).toContain("1. Possibly a short written conversation with Texting Dental's AI assistant (by text or online, about");
+      expect(ack.text).toContain("If so, we email you the link.");
+      expect(ack.text).not.toMatch(/looks like a fit/);
       const status = decodeEntities(await (await a2.request(`/c/status/${await statusTokenFor(c2, { roleId: seeded.roleId, email: "ana.lopez@example.com" })}`)).text());
       expect(status).toContain("Text messages:");
       expect(status).toContain("on");

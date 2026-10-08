@@ -6,7 +6,7 @@ import type { DraftRolePacket, IntakeSessionView, JobPreview, PacketDiff, Packet
 import { aiRuns, companies, events, rolePackets } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAs } from "./test-helpers";
+import { signInAs, useLaterApplyFlow, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
  * The job builder's packet tools (plan Wave C): change by chat with a confirmation before anything is saved (C10), the
@@ -64,7 +64,15 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       expect(preview).toMatchObject({ notPublicYet: true, company: { name: "Harbor Dental", verified: true }, pay: { shown: true, text: "$45–$55 an hour", requiredByLaw: true } });
       expect(preview.banner).toMatch(/Nothing is public until the role is approved/);
       expect(preview.job.facts.map((f) => f.key)).toEqual(["location", "workplace", "job_type", "pay"]);
-      expect(preview.job.steps[0]).toBe("Apply in about three minutes. We confirm by email.");
+      // a new role follows the company's flow: "form now, conversation later" until ITS switches the pilot on (plan E8, B1)
+      expect(preview.job.steps[0]).toBe("Send a short form, about 3 minutes. We confirm by email.");
+      expect(preview.job.steps[1]).toMatch(/^Possibly a short written conversation with Harbor Dental's AI assistant \((online|by text or online), about \d+ minutes\)\. If so, we email you the link\.$/);
+      // a pilot company: the conversation in the same visit as the form, counted in the time
+      await useOneVisitApplyFlow(container, companyId);
+      const pilot = await read<JobPreview>(await json(owner, "GET", `/api/v1/intake/sessions/${draftId}/preview`));
+      expect(pilot.job.steps[0]).toMatch(/^Apply in about \d+ minutes, including a short written conversation with Harbor Dental's AI assistant\. We confirm by email\.$/);
+      expect(pilot.job.steps[1]).toMatch(/^The conversation: \d+ questions, about \d+ minutes\./);
+      await useLaterApplyFlow(container, companyId);
       expect(preview.job.notices.map((n) => n.key)).toEqual(["ai_use", "pay_transparency"]);
       expect(preview.apply.questions.map((q) => q.key)).toEqual(expect.arrayContaining(["rdh_license", "schedule"]));
       // the same blocks as the job page (plan D10): the must-haves' words, never why each matters; no approved company text yet

@@ -140,8 +140,8 @@ main:not(.wide) .card { background: var(--ground); }
 
 /* Forms: fields with borders that can be seen (WCAG 1.4.11), a clear mark on a field that needs attention */
 label { display: block; margin: 20px 0 6px; color: var(--ink); font-size: 15px; font-weight: 600; }
-input[type=text], input[type=email], input[type=tel], textarea, select { display: block; width: 100%; min-height: 48px; padding: 11px 14px; border: 1px solid var(--line-strong); border-radius: var(--r-control); background: var(--surface); color: var(--ink); font: inherit; transition: border-color 150ms ease; }
-input[type=text]:hover, input[type=email]:hover, input[type=tel]:hover, textarea:hover, select:hover { border-color: var(--ink-3); }
+input[type=text], input[type=email], input[type=tel], input[type=date], input[type=number], textarea, select { display: block; width: 100%; min-height: 48px; padding: 11px 14px; border: 1px solid var(--line-strong); border-radius: var(--r-control); background: var(--surface); color: var(--ink); font: inherit; transition: border-color 150ms ease; }
+input[type=text]:hover, input[type=email]:hover, input[type=tel]:hover, input[type=date]:hover, input[type=number]:hover, textarea:hover, select:hover { border-color: var(--ink-3); }
 textarea { min-height: 112px; resize: vertical; }
 ::placeholder { color: var(--ink-3); opacity: 1; }
 [aria-invalid="true"] { border-color: var(--critical); box-shadow: 0 0 0 1px var(--critical); }

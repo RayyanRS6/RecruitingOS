@@ -308,7 +308,11 @@ function fakeExtract(req: StructuredRequest<unknown>): IntakeExtraction {
   return { isJobDescription, ...(title ? { title } : {}), ...(locationText ? { locationText } : {}), ...(employmentType ? { employmentType } : {}), ...(schedule ? { schedule } : {}), ...(basis ? { compensationBasis: basis, compensationMin: min, compensationMax: max } : {}) };
 }
 
-/** intake.compile v3: the draft, with pay only when a person set or confirmed it (and never in the description), and the owner's own choices first. */
+/**
+ * intake.compile v4: the draft, with pay only when a person set or confirmed it (and never in the description), the
+ * owner's own choices first, and a screening conversation of five or six questions and about ten minutes (more only for
+ * the owner's own questions), since candidates answer it straight after the form (plan E8).
+ */
 function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
   const f = c.facts;
   const title = f.title ?? c.playbookRoleTitle ?? "New hire";
@@ -363,9 +367,9 @@ function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
     { key: "why", question: "What are you looking for in your next role?", kind: "motivation" as const },
   ];
   const pooled = [...ownQuestions, ...(playbookQuestions.length >= 3 ? playbookQuestions : defaults)];
-  const questions = pooled.filter((q, i, arr) => arr.findIndex((x) => x.key === q.key) === i).slice(0, 12);
+  const questions = pooled.filter((q, i, arr) => arr.findIndex((x) => x.key === q.key) === i).slice(0, Math.min(12, Math.max(6, ownQuestions.length)));
   const first = f.responsibilities?.[0];
-  // intake.compile v3: no pay in the description (the job page shows the range a person set beside it).
+  // intake.compile v3 and v4: no pay in the description (the job page shows the range a person set beside it).
   const benefitsLine = f.benefits ? ` Benefits include ${f.benefits.replace(/\.$/, "")}.` : "";
   const description = `${c.companyName} is hiring a ${title}${locCity ? ` in ${locCity}${locRegion ? `, ${locRegion}` : ""}` : ""}. ${f.reason === "replacement" ? "We are filling an open chair on a team that values consistency and kindness." : "Our team is growing and we need someone who takes pride in careful, friendly work."} You will ${rdh ? "provide preventive care, periodontal therapy, and patient education for a loyal patient base, working alongside a dentist who respects your judgment" : `own ${title.toLowerCase()} outcomes end to end, work directly with the founder and a small team that moves quickly, and see the results of your decisions in the numbers`}.${first ? ` The first thing you will own: ${first.replace(/\.$/, "")}.` : ""} The schedule is ${f.employmentType === "part_time" ? "part time" : "full time"}${f.schedule ? ` (${f.schedule})` : ""}.${benefitsLine} We respond to every applicant within a day, keep the process short, and tell you where you stand at each step.`;
   const notSet = f.whatFailureLooksLike ? `What failure looks like: ${f.whatFailureLooksLike}` : undefined;
@@ -382,7 +386,7 @@ function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
     },
     competencies,
     evaluation: { criteria: ["Evidence for each must-have", "Competency indicators observed in screen and interviews", "Availability matches the schedule"], redFlags: ["Cannot confirm required license", "Availability does not match the schedule"] },
-    screening: { questions: questions.length >= 3 ? questions : defaults, maxMinutes: 15 },
+    screening: { questions: questions.length >= 3 ? questions : defaults, maxMinutes: 10 },
     interviews: {
       plan: !rdh && pbRole.interviews.length >= 1
         ? pbRole.interviews.slice(0, 5).map((r, i, arr) => ({ key: slug(r.title) || `round_${i + 1}`, title: r.title, purpose: i === 0 ? "Fit, results, and the candidate's questions." : "See how they think about our real problems.", durationMinutes: Math.min(240, Math.max(15, r.minutes)), format: (["video", "phone", "onsite", "working_session"].includes(r.format) ? r.format : "video") as DraftRolePacket["interviews"]["plan"][number]["format"], interviewerUserIds: [], interviewerRoles: f.interviewers.length ? f.interviewers : ["owner"], competencyKeys: competencies.filter((_, ci) => ci % arr.length === i).map((x) => x.key).concat(i === 0 ? [competencies[0].key] : []).filter((k, ki, ks) => ks.indexOf(k) === ki), suggestedQuestions: [] }))
@@ -545,14 +549,33 @@ function parseScreenSystem(req: StructuredRequest<unknown>) {
   return { questions, company: company?.[1]?.trim() ?? "the company", role: company?.[2]?.trim() ?? "the role", pay: pay ? { basis: pay[1], min: Number(pay[2]), max: Number(pay[3]) } : null, progress, name, channel, minutes, competencies };
 }
 
+/** The candidate's earlier message in the transcript the prompt renders (the latest one is already the last line). */
+function earlierCandidateMessage(user: string): string | null {
+  const said = [...user.matchAll(/^candidate: (.*)$/gm)].map((m) => m[1].trim());
+  return said.length >= 2 ? said[said.length - 2] : null;
+}
+
+/** A few of the candidate's own words to build a follow-up on: the first clause, at most eight words. */
+function theirWords(text: string): string {
+  const clause = text.split(/[.!?;,]/)[0]?.trim() ?? text.trim();
+  const words = clause.split(/\s+/).slice(0, 8).join(" ").replace(/^(i|i've|i have|i'm|i am)\s+/i, "").trim();
+  return words ? `${words.charAt(0).toLowerCase()}${words.slice(1)}` : "that";
+}
+
+/**
+ * screen.turn v3 (plan Wave E): a move to the next question is a short acknowledgment only (the code adds the packet's
+ * question word for word); a follow-up builds on the candidate's own words, at most two per question; after a follow-up
+ * the whole answer (earlier words and new ones) is recorded verbatim; skipped questions are never asked again.
+ */
 function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
   const s = parseScreenSystem(req);
   const user = req.messages[0]?.content ?? "";
   const latestRaw = user.match(/Candidate's latest message: ([\s\S]*?)\n\nProduce the next turn\./)?.[1]?.trim() ?? "(none)";
   const latest = latestRaw === "(none)" ? null : latestRaw;
   const asked = new Set(s.progress.askedKeys);
+  const declined = new Set(s.progress.declined ?? []);
   const current = s.progress.currentQuestionKey;
-  const remaining = s.questions.filter((q) => !asked.has(q.key));
+  const remaining = s.questions.filter((q) => !asked.has(q.key) && !declined.has(q.key));
   const base: ScreenTurn = { messageToCandidate: "", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
   // A screen that starts with the assessment's open questions says so in the opening, after the disclosure.
   const disclosure = `Hi ${s.name}, this is the hiring team at ${s.company}, using an AI assistant for a short screening for the ${s.role} role (about ${s.minutes} minutes, one question at a time). Reply HUMAN at any time to reach a person.${s.questions.some((q) => isFocusKey(q.key)) ? ` ${FOCUS_INTRO}` : ""}`;
@@ -562,6 +585,10 @@ function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
   }
   if (/\b(human|person|someone real)\b/i.test(latest) && !/\bnot\b/i.test(latest)) {
     return { ...base, messageToCandidate: `Understood. A person from ${s.company} will follow up with you.`, humanRequested: true };
+  }
+  // A candidate who says they are struggling is handed to a person, never pressed with another question.
+  if (/\bi('m| am) (so |really |very )?(stressed|overwhelmed|upset|anxious|frustrated|angry)\b|\bthis is (really |so )?(stressful|frustrating|ridiculous)\b|\bi can'?t do this\b/i.test(latest)) {
+    return { ...base, messageToCandidate: `I'm sorry this is hard. A person from ${s.company} will follow up with you.`, humanRequested: true, sentiment: "distressed" };
   }
   const currentQ = s.questions.find((q) => q.key === current) ?? null;
   const asksAboutPay = /\?/.test(latest) && /\b(pay|salary|rate|per hour|an hour|hourly|wage|\$)\b/i.test(latest) && currentQ?.kind !== "compensation";
@@ -573,13 +600,24 @@ function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
   let answerRecorded: ScreenTurn["answerRecorded"] = null;
   let followUpReason: string | null = null;
   if (currentQ) {
-    const complete = latest.trim().length >= 8 || /^(yes|no)\b/i.test(latest.trim());
+    const trimmed = latest.trim();
+    const complete = trimmed.length >= 8 || /^(yes|no)\b/i.test(trimmed);
     const followUpsSoFar = s.progress.followUps[currentQ.key] ?? 0;
     if (!complete && followUpsSoFar < 1 && !confused) {
       followUpReason = "answer too short to establish anything";
       return { ...base, messageToCandidate: "Could you say a bit more about that? A sentence or two is plenty.", followUpReason, answerRecorded: null, sentiment: "fine" };
     }
-    answerRecorded = { questionKey: currentQ.key, answer: redactProtected(latest), complete };
+    // A short answer about their work with nothing concrete in it gets one follow-up that builds on their own words,
+    // the way the model is asked to: an example, never anything personal.
+    // Never on anything personal: an answer that touches a protected characteristic is recorded (without it), not probed.
+    const thin = ["skills", "behavioral"].includes(currentQ.kind) && complete && trimmed.length < 40 && !/\d/.test(trimmed) && !/^(yes|no)\b/i.test(trimmed) && redactProtected(trimmed) === trimmed;
+    if (thin && followUpsSoFar < 1 && !confused && !isFocusKey(currentQ.key)) {
+      followUpReason = "answer has no example yet";
+      return { ...base, messageToCandidate: `You mentioned ${theirWords(trimmed)}. Could you give one example of how that went?`, followUpReason, answerRecorded: null, sentiment: "fine" };
+    }
+    // After a follow-up, the whole answer to the question: their earlier words and the new ones, verbatim and in order.
+    const earlier = followUpsSoFar > 0 ? earlierCandidateMessage(user) : null;
+    answerRecorded = { questionKey: currentQ.key, answer: redactProtected(earlier && !confused ? `${earlier} ${latest}` : latest), complete };
   }
   if (confused) {
     const msg = currentQ ? `No problem. In plain terms: ${currentQ.question} If you would rather talk to a person, reply HUMAN.` : "No problem. If you would rather talk to a person, reply HUMAN.";
@@ -589,7 +627,8 @@ function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
   if (!next) {
     return { ...base, answerRecorded, done: true, messageToCandidate: `Thanks ${s.name}, that is everything I needed. The hiring team at ${s.company} will review and you will hear back within a few days. Reply HUMAN at any time to reach a person.` };
   }
-  return { ...base, answerRecorded, questionKey: next.key, messageToCandidate: `Thanks. ${next.question}` };
+  // Only the acknowledgment: the code adds the next question in the packet's own words.
+  return { ...base, answerRecorded, questionKey: next.key, messageToCandidate: "Thanks." };
 }
 
 const trimDot = (t: string) => t.trim().replace(/[.!]+$/, "");
@@ -599,8 +638,11 @@ function fakeScreenAssess(req: StructuredRequest<unknown>): ScreenAssessment {
   const user = req.messages[0]?.content ?? "";
   let answers: Record<string, string> = {};
   try { answers = JSON.parse(user.match(/Recorded answers \(JSON\): (\{[\s\S]*?\})\nProgress/)?.[1] ?? "{}"); } catch { /* keep */ }
+  // A recruiter's call notes (plan E3) are their own source, quoted as notes, never as the candidate's words.
+  const notes = [...user.matchAll(/^recruiter note: (.*)$/gm)].map((m) => m[1].trim()).filter(Boolean);
   const questionFindings: ScreenAssessment["questionFindings"] = s.questions.map((q) => {
     const a = answers[q.key];
+    if (!a && notes.length) return { questionKey: q.key, answered: true, finding: "Covered in a recruiter's call notes", evidence: { source: "recruiter_note", quote: notes[0] }, meetsModelAnswer: "unknown" };
     return { questionKey: q.key, answered: !!a, finding: a ? `Answered: "${a.slice(0, 160)}"` : "Not answered", evidence: a ? { source: "screen", quote: a } : undefined, meetsModelAnswer: a ? (a.length > 20 ? "partially" : "unknown") : "unknown" };
   });
   const payQ = s.questions.find((q) => q.kind === "compensation");
@@ -617,19 +659,21 @@ function fakeScreenAssess(req: StructuredRequest<unknown>): ScreenAssessment {
     const a = q ? answers[q.key] : undefined;
     return { competencyKey: c.key, finding: a && a.length > 20 ? "evidenced" : a ? "partially_evidenced" : "not_evidenced", evidence: a ? { source: "screen", quote: a } : undefined };
   });
-  const answered = questionFindings.filter((f) => f.answered).length;
-  const strengths: ScreenAssessment["strengths"] = questionFindings.filter((f) => f.answered && f.evidence && (s.questions.find((q) => q.key === f.questionKey)?.kind === "skills" || s.questions.find((q) => q.key === f.questionKey)?.kind === "behavioral")).slice(0, 3).map((f) => { const q = s.questions.find((x) => x.key === f.questionKey); return { claim: `Gave a concrete answer ${q?.kind === "behavioral" ? "about a difficult moment" : "about recent work"}`, evidence: f.evidence! }; });
+  const answered = questionFindings.filter((f) => f.answered && f.evidence?.source !== "recruiter_note").length;
+  const strengths: ScreenAssessment["strengths"] = questionFindings.filter((f) => f.answered && f.evidence?.source === "screen" && (s.questions.find((q) => q.key === f.questionKey)?.kind === "skills" || s.questions.find((q) => q.key === f.questionKey)?.kind === "behavioral")).slice(0, 3).map((f) => { const q = s.questions.find((x) => x.key === f.questionKey); return { claim: `Gave a concrete answer ${q?.kind === "behavioral" ? "about a difficult moment" : "about recent work"}`, evidence: f.evidence! }; });
   const concerns: ScreenAssessment["concerns"] = [];
   if (withinRange === "above" && payAnswer) concerns.push({ claim: `Pay expectation (${payAnswer.slice(0, 40)}) is above the posted range`, evidence: { source: "screen", quote: payAnswer } });
   const noElig = eligibilityConfirmations.find((e) => e.confirmed === "no");
   if (noElig?.quote) concerns.push({ claim: "Did not confirm a required eligibility item", evidence: { source: "screen", quote: noElig.quote } });
   const unknowns = questionFindings.filter((f) => !f.answered).map((f) => ({ question: s.questions.find((q) => q.key === f.questionKey)?.question ?? f.questionKey, whyItMatters: "Not covered in the screen." }));
-  const recommendation: ScreenAssessment["recommendation"] = noElig ? "decline_recommended" : withinRange === "above" ? "hold" : answered >= Math.max(1, s.questions.length - 1) ? (strengths.length >= 2 ? "strong_interview" : "interview") : answered > 0 ? "interview" : "hold";
+  // screen.assess v3: a conversation that was not finished is read for what it has, says so, and is never "strong interview".
+  const unfinished = /This conversation was not finished/.test(user);
+  const recommendation: ScreenAssessment["recommendation"] = noElig ? "decline_recommended" : withinRange === "above" ? "hold" : answered >= Math.max(1, s.questions.length - 1) ? (strengths.length >= 2 && !unfinished ? "strong_interview" : "interview") : answered > 0 ? "interview" : "hold";
   const overall: ScreenAssessment["overall"] = recommendation === "strong_interview" ? "strong" : recommendation === "interview" ? "potential" : recommendation === "hold" ? "unknown" : "weak";
   return {
     overall,
     confidence: answered >= s.questions.length - 1 ? "medium" : "low",
-    summary: `${answered} of ${s.questions.length} questions answered.${payAnswer ? ` Pay expectation: ${trimDot(payAnswer.slice(0, 40))} (${withinRange === "yes" ? "within range" : withinRange}).` : ""}${availAnswer ? ` Availability: ${trimDot(availAnswer.slice(0, 60))}.` : ""}`,
+    summary: `${unfinished ? "Not finished: " : ""}${answered} of ${s.questions.length} questions answered.${payAnswer ? ` Pay expectation: ${trimDot(payAnswer.slice(0, 40))} (${withinRange === "yes" ? "within range" : withinRange}).` : ""}${availAnswer ? ` Availability: ${trimDot(availAnswer.slice(0, 60))}.` : ""}${notes.length ? " A recruiter's call notes cover the rest." : ""}`,
     strengths,
     concerns,
     unknowns,

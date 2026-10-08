@@ -5,6 +5,7 @@ import { adminAlerts, applications, auditRecords } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { loadEnv } from "./env";
+import { POLICIES } from "./middleware/rate-limit";
 import { statusTokenFor } from "./test-helpers";
 
 /**
@@ -280,6 +281,35 @@ describe("rate limiting", () => {
         const fd = new FormData(); fd.set("firstName", "X");
         expect((await a.request(`/careers/nowhere/jobs/00000000-0000-0000-0000-000000000000/apply`, { method: "POST", body: fd, headers: { "x-forwarded-for": "203.0.113.201" } })).status).not.toBe(429);
         expect((await a.request(`/careers/nowhere/jobs/00000000-0000-0000-0000-000000000000/apply`, { method: "POST", body: fd, headers: { "x-forwarded-for": "203.0.113.201" } })).status).toBe(429);
+        await c.close();
+      }
+    });
+
+    it("the screening conversation is limited mainly per link (plan E14): answers, 'Do this later' and the emailed confirm button each have their own budget, and trip at 429", async () => {
+      // the production budgets: generous per link for answers, a handful of emails per link, raised per-address limits
+      const tokenLimit = (p: { rules: Array<{ by: string; limit: number }> }) => p.rules.find((r) => r.by === "token")?.limit;
+      expect(tokenLimit(POLICIES.screen)).toBe(200);
+      expect(tokenLimit(POLICIES.screenLater)).toBe(5);
+      expect(tokenLimit(POLICIES.confirmAnswers)).toBe(10);
+      expect(POLICIES.apply.rules.find((r) => r.by === "ip")?.limit).toBe(60);
+      const c = await createContainer({ memory: true, env: { ...env, RATE_LIMIT_SHARED_URL: "fake://conversation-tier", RATE_LIMIT_OVERRIDES: JSON.stringify({ "candidate.screen": 3, "candidate.screen_later": 2, "candidate.confirm_answers": 2 }) } });
+      try {
+        const a = createApp(c);
+        const post = (path: string, ip: string) => a.request(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "text/html", "x-forwarded-for": ip }, body: new URLSearchParams({ message: "Hello" }).toString() });
+        const link = "x".repeat(32);
+        // the same link from a different address each time: the link's own budget trips (an unknown link answers 404 until then)
+        const answers: number[] = [];
+        for (let i = 0; i < 4; i++) answers.push((await post(`/c/screen/${link}`, `198.51.100.${60 + i}`)).status);
+        expect(answers).toEqual([404, 404, 404, 429]);
+        const later: number[] = [];
+        for (let i = 0; i < 3; i++) later.push((await post(`/c/screen/${link}/later`, `198.51.100.${70 + i}`)).status);
+        expect(later).toEqual([404, 404, 429]);
+        const confirm: number[] = [];
+        for (let i = 0; i < 3; i++) confirm.push((await post(`/c/confirm-answers/${link}`, `198.51.100.${80 + i}`)).status);
+        expect(confirm).toEqual([404, 404, 429]);
+        // another link is untouched
+        expect((await post(`/c/screen/${"y".repeat(32)}`, "198.51.100.90")).status).toBe(404);
+      } finally {
         await c.close();
       }
     });

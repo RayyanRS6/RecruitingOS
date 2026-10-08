@@ -100,13 +100,22 @@ export type HandedOverDraft = {
 
 /**
  * Where "Open in the customer's workspace" goes: the draft in the job builder when the request is about one, the
- * role's candidates when it is about a role, and Today otherwise.
+ * candidate's panel when it is about one candidate (on the Screen tab when the candidate asked for a person during the
+ * screening conversation, where the call notes go; plan E3), the role's candidates when it is about a role, and Today
+ * otherwise.
  */
-export function workspaceHref(e: { roleId?: string | null; contextSnapshot?: Record<string, unknown> }): string {
+export function workspaceHref(e: { roleId?: string | null; applicationId?: string | null; kind?: string; contextSnapshot?: Record<string, unknown> }): string {
   const draft = (e.contextSnapshot as { intakeSession?: { id?: unknown } | null } | undefined)?.intakeSession;
   if (draft && typeof draft.id === "string") return `/roles/new?session=${encodeURIComponent(draft.id)}`;
+  if (e.roleId && e.applicationId) return `/roles/${e.roleId}/talent?open=${encodeURIComponent(e.applicationId)}${e.kind === CANDIDATE_ASKED_FOR_PERSON ? "&tab=screen" : ""}`;
   return e.roleId ? `/roles/${e.roleId}/talent` : "/";
 }
+
+/** The request a candidate's "I'd rather talk to a person" raises (packages/agents/src/screening.ts `requestHuman`). */
+export const CANDIDATE_ASKED_FOR_PERSON = "candidate_issue";
+
+/** Said on such a request once accepted: what to do after the call, and that the notes are never the candidate's words. */
+export const CALL_NOTES_HINT = "The candidate asked to talk to a person instead of the assistant. Call or email them, then open the candidate in the customer's workspace and add your notes from the call on the Screen tab. Your notes finish the screening so the scorecard is written; they are kept as yours, never as the candidate's own words.";
 
 const PAY_PER: Record<string, string> = { hourly: "an hour", salary: "a year" };
 const money = (n: unknown) => (typeof n === "number" ? `$${n.toLocaleString("en-US")}` : null);

@@ -4,6 +4,7 @@ import { aiRuns, applications, approvalRequests, assessments, candidates, commun
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { useLaterApplyFlow } from "./test-helpers";
 
 /**
  * Slice 1 through the HTTP layer: sign up → company → intake conversation → packet → approval → publish →
@@ -79,9 +80,11 @@ describe("Slice 1 API", () => {
   it("creates the company with trial entitlements", async () => {
     const r = await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "50-99", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] });
     expect(r.status).toBe(201);
-    const co = (await r.json()) as { slug: string; planKey: string };
+    const co = (await r.json()) as { id: string; slug: string; planKey: string };
     companySlug = co.slug;
     expect(co.planKey).toBe("trial");
+    // This suite follows the later path: the form now, the screening invitation by email after the résumé is read (plan Wave E).
+    await useLaterApplyFlow(container, co.id);
     const cur = await json("GET", "/api/v1/companies/current");
     expect(cur.status).toBe(200);
   });

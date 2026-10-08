@@ -4,6 +4,9 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, ErrorState, Field, PageHeader, Segmented, Sheet, Skeleton, Table, Tabs } from "@ros/ui";
 import { api, ApiError } from "../api/client";
+import { allowanceAlerts, allowanceChip } from "../allowance";
+import { APPLY_MODE_HELP, APPLY_MODE_LABEL, APPLY_MODE_NOTE, REASON_MIN, companyFlowToast, reasonReady, type ApplyMode } from "../apply-flow";
+import { RoleApplyMode } from "../components/ApplyMode";
 import { RECRUITER_ASKS_OVER_CHIP, recruiterAsksLine, type RecruiterAskStanding } from "../recruiter-requests";
 import { toast } from "../toast";
 import { CustomerReportSheet } from "./AdminCustomerReport";
@@ -25,17 +28,23 @@ export function Admin() {
   );
 }
 
-type CustomerRow = { id: string; name: string; slug: string; vertical: string; sizeBand: string; planKey: string; status: string; roles: number; applications: number; aiCostUsd: number; lastActivityAt: string | null; escalations: number; createdAt: string; settings: { website?: string }; verifiedAt: string | null; verifiedBy: { id: string; name?: string } | null; heldMessages: number; jobBoardsConfirmedAt: string | null; recruiterAsks?: RecruiterAskStanding };
+/** `applyFlowDefault`: how the company's roles meet the screening conversation unless a role has its own setting (plan E1). */
+type CustomerRow = { id: string; name: string; slug: string; vertical: string; sizeBand: string; planKey: string; status: string; roles: number; applications: number; aiCostUsd: number; lastActivityAt: string | null; escalations: number; createdAt: string; settings: { website?: string }; verifiedAt: string | null; verifiedBy: { id: string; name?: string } | null; heldMessages: number; jobBoardsConfirmedAt: string | null; recruiterAsks?: RecruiterAskStanding; applyFlowDefault?: ApplyMode; screeningConversations?: { used: number; limit: number | null } };
 
 function Customers() {
   const q = useQuery({ queryKey: ["admin", "customers"], queryFn: () => api.get<CustomerRow[]>("/api/v1/admin/customers", reason) });
+  // Companies at 80% of their screening conversations, or past them (Q17): from the alerts ITS was sent.
+  const alerts = useQuery({ queryKey: ["admin", "alerts"], queryFn: () => api.get<AlertRow[]>("/api/v1/admin/alerts", reason) });
+  const low = allowanceAlerts(alerts.data ?? []);
   // The customer's report (the ten role-report figures over every role) opens in a sheet; the read is audited like every other.
   const [reportFor, setReportFor] = useState<{ id: string; name: string } | null>(null);
   const [checking, setChecking] = useState<CustomerRow | null>(null);
+  const [flowFor, setFlowFor] = useState<CustomerRow | null>(null);
   if (q.isLoading) return <Skeleton lines={4} />;
   if (q.error) return <ErrorState message="Could not load customers." onRetry={() => q.refetch()} />;
   // Companies waiting for the ITS check come first, the longest waiting at the top (founder decision B7).
   const waiting = q.data!.filter((c) => !c.verifiedAt).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const lowCompanies = q.data!.filter((c) => low.has(c.id));
   return (
     <div className="stack" style={{ gap: 14 }}>
       {waiting.length ? (
@@ -43,7 +52,15 @@ function Customers() {
           {waiting.length === 1 ? "1 company is" : `${waiting.length} companies are`} waiting for the ITS check: {waiting.map((c) => c.name).join(", ")}. Until you confirm a company, its careers page, job pages and Google listing are offline and its emails to candidates wait.
         </Alert>
       ) : null}
-      <Table head={["Company", "ITS check", "Vertical", "Plan", "Roles", "Applicants", "AI cost", "Recruiter requests", "Last activity", "Churn signal", ""]}>
+      {lowCompanies.length ? (
+        <Card needsYou title="Screening conversations running low">
+          <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+            {lowCompanies.map((c) => <li key={c.id}><strong>{c.name}</strong>: {allowanceChip(low.get(c.id)!)}, since {new Date(low.get(c.id)!.since).toLocaleDateString()}</li>)}
+          </ul>
+          <p className="small muted" style={{ marginTop: 8 }}>Talk with each about topping up. Nothing is refused: applications are still accepted, anyone part-way through finishes, and once the allowance is used up new applicants get the conversation link by email when more are added. The owners were told too.</p>
+        </Card>
+      ) : null}
+      <Table head={["Company", "ITS check", "Vertical", "Plan", "Roles", "Applicants", "AI cost", "Recruiter requests", "How people apply", "Last activity", "Churn signal", ""]}>
         {[...waiting, ...q.data!.filter((c) => c.verifiedAt)].map((c) => {
           const idle = c.lastActivityAt ? (Date.now() - Date.parse(c.lastActivityAt)) / 86_400_000 : 999;
           return (
@@ -54,12 +71,18 @@ function Customers() {
                 {c.heldMessages ? <div className="small muted">{c.heldMessages} {c.heldMessages === 1 ? "message" : "messages"} to candidates held</div> : null}
                 <div className="small muted">job boards: {c.jobBoardsConfirmedAt ? "ITS can sign in" : "not confirmed"}</div>
               </td>
-              <td>{c.vertical}</td><td>{c.planKey} · {c.status}</td><td>{c.roles}</td><td>{c.applications}</td><td>${c.aiCostUsd.toFixed(4)}</td>
+              <td>{c.vertical}</td>
+              <td>{c.planKey} · {c.status}{c.screeningConversations ? <div className="small muted">{c.screeningConversations.used}{c.screeningConversations.limit !== null ? ` of ${c.screeningConversations.limit}` : ""} screening conversations this month</div> : null}{low.has(c.id) ? <div><Chip tone="caution">{allowanceChip(low.get(c.id)!)}</Chip></div> : null}</td>
+              <td>{c.roles}</td><td>{c.applications}</td><td>${c.aiCostUsd.toFixed(4)}</td>
               <td>
                 {/* Past the plan's recruiter requests (Q33): nothing was refused; ITS talks with the customer about billing. */}
                 <div className="small">{recruiterAsksLine(c.recruiterAsks)}</div>
                 {c.recruiterAsks?.over ? <Chip tone="caution">{RECRUITER_ASKS_OVER_CHIP}</Chip> : null}
                 <div className="small muted">{c.escalations} in all</div>
+              </td>
+              <td>
+                <div className="small">{APPLY_MODE_LABEL[c.applyFlowDefault ?? "form_then_screen"]}</div>
+                <Button size="sm" variant="quiet" onClick={() => setFlowFor(c)}>Change</Button>
               </td>
               <td>{c.lastActivityAt ? new Date(c.lastActivityAt).toLocaleString() : "never"}</td>
               <td>{idle > 14 ? <Chip tone="critical">no activity {Math.round(idle)}d</Chip> : idle > 7 ? <Chip tone="caution">quiet {Math.round(idle)}d</Chip> : <Chip tone="good">active</Chip>}</td>
@@ -70,7 +93,65 @@ function Customers() {
       </Table>
       {reportFor ? <CustomerReportSheet companyId={reportFor.id} companyName={reportFor.name} onClose={() => setReportFor(null)} /> : null}
       {checking ? <CompanyCheckSheet company={q.data!.find((c) => c.id === checking.id) ?? checking} onClose={() => setChecking(null)} /> : null}
+      {flowFor ? <ApplyFlowSheet company={q.data!.find((c) => c.id === flowFor.id) ?? flowFor} onClose={() => setFlowFor(null)} /> : null}
     </div>
+  );
+}
+
+/**
+ * How a customer's applicants meet the screening conversation (plan E1; founder decision B1), ITS only: the company's
+ * default ("form now, conversation later" until ITS switches the one-visit flow on for pilot roles or the whole company) and each role's own setting. Every change needs a reason, which is
+ * audited and kept with who made it. Roles that already have their own setting keep it when the default changes.
+ */
+function ApplyFlowSheet({ company, onClose }: { company: CustomerRow; onClose: () => void }) {
+  const qc = useQueryClient();
+  const current: ApplyMode = company.applyFlowDefault ?? "form_then_screen";
+  const [flow, setFlow] = useState<ApplyMode>(current);
+  const [why, setWhy] = useState("");
+  const roles = useQuery({ queryKey: ["admin", "customer-report", company.id], queryFn: () => api.get<{ roles: Array<{ id: string; title: string; status: string }> }>(`/api/v1/admin/customers/${company.id}/report`, reason) });
+  const save = useMutation({
+    mutationFn: () => api.post<{ applyFlow: ApplyMode; changed: boolean }>(`/api/v1/admin/customers/${company.id}/apply-flow`, { applyFlow: flow, reason: why.trim() }, reason),
+    onSuccess: (r) => {
+      const t = companyFlowToast(company.name, r.applyFlow, r.changed);
+      toast(t.title, t.detail);
+      setWhy("");
+      qc.invalidateQueries({ queryKey: ["admin", "customers"] });
+      // each role's "the company's default" now names the new one
+      qc.invalidateQueries({ queryKey: ["role"] });
+    },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not save the default."),
+  });
+  const open = (roles.data?.roles ?? []).filter((r) => r.status !== "closed");
+  return (
+    <Sheet open onClose={onClose} title={`How people apply: ${company.name}`}>
+      <div className="stack" style={{ gap: 14 }}>
+        <Card title="The company's default">
+          <p className="small muted">For every role of {company.name} without its own setting. {APPLY_MODE_NOTE}</p>
+          <div className="stack" style={{ gap: 8, marginTop: 8 }}>
+            <Segmented value={flow} onChange={setFlow} ariaLabel="The company's default" options={[{ value: "one_visit", label: APPLY_MODE_LABEL.one_visit }, { value: "form_then_screen", label: APPLY_MODE_LABEL.form_then_screen }]} />
+            <p className="small" style={{ margin: 0, color: "var(--ink-2)" }}>{APPLY_MODE_HELP[flow]}</p>
+            {flow !== current ? (
+              <>
+                <Field label="Why (required, kept with the change)" htmlFor="apply-flow-why" hint={`At least ${REASON_MIN} characters. The customer sees it in their activity history.`}><input id="apply-flow-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
+                <div className="row"><Button variant="primary" disabled={!reasonReady(why)} loading={save.isPending} onClick={() => save.mutate()}>Save the default</Button><Button variant="quiet" onClick={() => { setFlow(current); setWhy(""); }}>Cancel</Button></div>
+              </>
+            ) : null}
+          </div>
+        </Card>
+        <Card title="Each role">
+          {roles.isLoading ? <Skeleton lines={3} /> : roles.error ? <ErrorState message="Could not load the roles." onRetry={() => roles.refetch()} /> : open.length ? (
+            <div className="stack" style={{ gap: 12 }}>
+              {open.map((r) => (
+                <div key={r.id} className="stack" style={{ gap: 6, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
+                  <strong>{r.title} <span className="small muted">({r.status.replace(/_/g, " ")})</span></strong>
+                  <RoleApplyMode roleId={r.id} roleTitle={r.title} compact />
+                </div>
+              ))}
+            </div>
+          ) : <p className="small muted">No open or draft roles.</p>}
+        </Card>
+      </div>
+    </Sheet>
   );
 }
 

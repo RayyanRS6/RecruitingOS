@@ -153,7 +153,8 @@ describe("no number from the model", () => {
     registerFakeHandlers(fake);
     const rt = { provider: fake, models: { judgment: "fake", standard: "fake", fast: "fake" } };
     expect(triageAssessPrompt.version).toBe(2);
-    expect(screenAssessPrompt.version).toBe(2);
+    // Version 3 (plan Wave E): recruiter call notes kept apart, skipped questions unknown, unfinished conversations read for what they have.
+    expect(screenAssessPrompt.version).toBe(3);
     const packet = { identity: { title: "Registered Dental Hygienist", employmentType: "full_time", locations: [{ city: "Irvine", region: "CA" }] }, requirements: { mustHaves: [], niceToHaves: [] }, competencies: [], evaluation: { criteria: [], redFlags: [] }, compensation: { basis: "hourly", min: 45, max: 55, currency: "USD" } };
     const input = { packet: packet as never, extraction: null, resumeText: RESUME, applicationAnswers: { eligibility: {} }, eligibility: null, priorApplications: [] };
     expect(triageAssessPrompt.system(input).map((b) => b.text).join("\n")).not.toMatch(/secondaryScore|0 to 100/);

@@ -1,9 +1,11 @@
 "use client";
 
+import { Fragment } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Card, EmptyState, ErrorState, OWNER_STAGES, PipelineBar, Pill, Skeleton, Table } from "@ros/ui";
 import { Link } from "../nav";
-import { api } from "../api/client";
+import { api, type ScreeningFunnel } from "../api/client";
+import { dropOffWords, funnelLines } from "../screen-view";
 
 /** The role report as the API answers it (apps/api/src/services/role-report.ts). Counts and days only; never a name. */
 export type RoleReport = {
@@ -49,8 +51,49 @@ export function ReportTab({ roleId }: { roleId: string }) {
       </div>
       {r.applicants.total === 0 ? <EmptyState title="No applicants yet" body="The figures fill in as people apply. The downloads work now; they will be mostly empty." /> : null}
       <ReportFigures report={r} talentHref={`/roles/${roleId}/talent`} />
+      <ScreeningCard roleId={roleId} />
       <ReportDefinitions />
     </div>
+  );
+}
+
+/**
+ * How the screening conversation goes for this role (plan E13): how many were offered it, started and finished, the
+ * typical time to finish, the question where people stop, how many chose a person instead, and the questions people
+ * chose not to answer. From each person's latest conversation; counts only, never a name or an answer.
+ */
+export function ScreeningCard({ roleId }: { roleId: string }) {
+  const q = useQuery({ queryKey: ["role", roleId, "screening"], queryFn: () => api.get<ScreeningFunnel>(`/api/v1/roles/${roleId}/screening`) });
+  if (q.isLoading) return <Card title="The screening conversation"><Skeleton lines={3} /></Card>;
+  if (q.error || !q.data) return <Card title="The screening conversation"><ErrorState message="Could not load how the screening conversation is going." onRetry={() => q.refetch()} /></Card>;
+  const f = q.data;
+  const lines = funnelLines(f);
+  const stop = dropOffWords(f);
+  return (
+    <Card title="The screening conversation">
+      {!lines.length ? <p className="small muted">Nobody has been offered the screening conversation for this role yet.</p> : (
+        <>
+          <div className="row" style={{ gap: 24 }}>
+            <Stat n={f.offered} label={f.offered === 1 ? "person offered it" : "people offered it"} />
+            <Stat n={f.finished} label="finished it" />
+            {f.stillApplying ? <Stat n={f.stillApplying} label="still applying now" /> : null}
+          </div>
+          <dl className="kv" style={{ marginTop: 10 }}>
+            {lines.map((l) => <Fragment key={l.label}><dt>{l.label}</dt><dd>{l.value}</dd></Fragment>)}
+          </dl>
+          {stop ? <p className="small" style={{ marginTop: 8, color: "var(--ink-2)" }}>{stop}</p> : null}
+          {f.skipped.length ? (
+            <div style={{ marginTop: 10 }}>
+              <Table head={["Question", "Chose not to answer"]} label="Questions people chose not to answer">
+                {f.skipped.map((s) => <tr key={s.key}><td>{s.question}</td><td>{s.count}</td></tr>)}
+              </Table>
+            </div>
+          ) : null}
+          {f.stillApplying ? <div className="row" style={{ marginTop: 8 }}><Link to={`/roles/${roleId}/talent?applying=1`} className="btn quiet sm">See who is still applying</Link></div> : null}
+          <p className="small muted" style={{ marginTop: 8 }}>"Typical" is the middle value, from the first answer to sending. Choosing a person or not answering a question is never held against anyone. Counts only; nobody is named here.</p>
+        </>
+      )}
+    </Card>
   );
 }
 

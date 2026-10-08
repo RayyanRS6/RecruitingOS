@@ -15,7 +15,7 @@ import { activeCompanyOf } from "../rail";
 import { canDecline, canShareJob } from "../roles";
 import { roleStatus } from "../role-status";
 import { actionToast, batches, bulkSendToast, holdDay, mergeDecisionResults, noticeText, stageBlocked, stageIntent, type PanelStep } from "../talent-actions";
-import { ORDERS, READING, READING_FILTERS, appliedWhen, applyView, defaultView, emptyText, readingCounts, readingOf, stripItems, waitingText, type Order, type ReadingFilter, type TalentView } from "../talent-list";
+import { ORDERS, READING, READING_FILTERS, STILL_APPLYING_LABEL, STILL_APPLYING_TEXT, appliedWhen, applyView, defaultView, emptyText, isStillApplying, readingCounts, readingOf, stillApplyingCount, stripItems, waitingOnYouCount, waitingText, type Order, type ReadingFilter, type TalentView } from "../talent-list";
 import { CandidatePanel } from "./candidate-panel/CandidatePanel";
 import { MET_TONE, overallLabel } from "./candidate-panel/assessment";
 import { REC_LABEL, STAGE_LABEL, panelSearch, panelTabFrom, type PanelTab } from "./candidate-panel/helpers";
@@ -24,14 +24,18 @@ import type { ActionBody } from "./candidate-panel/hooks";
 /** Where the candidate panel stands: who, which section, a step a stage choice opened, and the list it was opened from. */
 type PanelState = { id: string; tab: PanelTab; step: PanelStep | null; roundKey?: string; ids: string[] | null; compose: boolean };
 
-/** The link filters (`?ownerStage=`, `?stage=`, `?told=`) as one key: when a link changes them, the view starts again from it. */
-const linkKey = (p: URLSearchParams) => ["ownerStage", "stage", "told"].map((k) => p.get(k) ?? "").join("|");
+/** The link filters (`?ownerStage=`, `?stage=`, `?told=`, `?applying=`) as one key: when a link changes them, the view starts again from it. */
+const linkKey = (p: URLSearchParams) => ["ownerStage", "stage", "told", "applying"].map((k) => p.get(k) ?? "").join("|");
 
 /**
  * Talent (plan A3; founder decisions B3 and B6): one role's applicants as a calm list. The stage strip counts everyone
  * at each stage and filters by a click; each row has the person's initials, name, when they applied, how long they have
  * waited on you, the latest reading and the stage button. Readings only filter; nothing is ordered by them. A row opens
  * the candidate panel, whose place is kept in the address (`?open=<id>&tab=…`).
+ *
+ * Beside the strip, "Still applying" (plan E6) counts the people still in the visit that sent their application (the
+ * screening conversation offered with it, not finished yet) and shows only them on a click. They are never counted or
+ * shown as waiting on you.
  */
 export function People() {
   const params = useParams();
@@ -47,11 +51,14 @@ export function People() {
   const apps = useQuery({ queryKey: ["applications", roleId], queryFn: () => api.get<ApplicationsWithCounts>(`/api/v1/roles/${roleId}/applications?counts=1`), enabled: !!roleId });
   const rows = apps.data?.applications ?? [];
   const counts = apps.data?.counts;
+  // Nobody still applying waits on you (plan E6), whatever their group says.
+  const waitingCount = waitingOnYouCount(counts, rows);
+  const applyingCount = stillApplyingCount(counts, rows);
 
   // The view: what a link asked for, otherwise "waiting on you" when anyone does; changed by the strip and the filters.
   const key = linkKey(search);
   const [viewState, setViewState] = useState<{ key: string; view: TalentView } | null>(null);
-  const view = viewState?.key === key ? viewState.view : defaultView(search, counts);
+  const view = viewState?.key === key ? viewState.view : defaultView(search, counts ? { byGroup: { ...counts.byGroup, waiting_on_you: waitingCount } } : counts);
   const setView = (patch: Partial<TalentView>) => setViewState({ key, view: { ...view, ...patch } });
   /** Takes the link's step filter (`?stage=`) off, from the address too, so a reload does not bring it back. */
   const clearStageLink = () => {
@@ -65,7 +72,6 @@ export function People() {
   const shownIds = shown.map((a) => a.id);
   const byReading = readingCounts(rows, view);
   const provenMissKnown = rows.some((a) => a.evidence?.hasProvenMiss !== undefined);
-  const waitingCount = counts?.byGroup.waiting_on_you ?? 0;
   const notTold = rows.filter((a) => a.toldState === "not_told" && !a.decisionMessageWaiting);
   const mayTell = canDecline(myRole);
   const [compareOpen, setCompareOpen] = useState(false);
@@ -107,7 +113,8 @@ export function People() {
   const status = role ? (role.status === "open" ? { label: "Live", tone: "good" as const } : roleStatus(role.status)) : null;
   const total = counts?.total ?? rows.length;
   const empty = emptyText(view, total);
-  const filtersOn = view.reading !== "any" || view.query.trim() !== "" || view.waiting || view.stage !== "all" || !!view.internalStage || !!view.told;
+  const filtersOn = view.reading !== "any" || view.query.trim() !== "" || view.waiting || view.applying || view.stage !== "all" || !!view.internalStage || !!view.told;
+  const headline = [`${total} ${total === 1 ? "applicant" : "applicants"}`, waitingCount ? `${waitingCount} waiting on you` : "", applyingCount ? `${applyingCount} still applying` : ""].filter(Boolean).join(" · ");
 
   return (
     <div className="stack" style={{ gap: 18 }}>
@@ -115,7 +122,7 @@ export function People() {
         eyebrow={company.name ? `Job · ${company.name}` : "Job"}
         title={role?.title ?? "Talent"}
         status={status ? <Pill tone={status.tone} pulse={role?.status === "open"}>{status.label}</Pill> : undefined}
-        sub={roleId && apps.data ? `${total} ${total === 1 ? "applicant" : "applicants"}${waitingCount ? ` · ${waitingCount} waiting on you` : ""}` : undefined}
+        sub={roleId && apps.data ? headline : undefined}
         actions={
           <>
             {roles.data && roles.data.length > 1 ? (
@@ -132,10 +139,14 @@ export function People() {
         roles.isLoading ? <Skeleton lines={4} /> : <EmptyState icon="talent" title="No roles yet" body="Open a role first; its applicants show here." action={<Link to="/" className="btn primary">Go to Today</Link>} />
       ) : (
         <>
-          <Tabs idBase="talent-strip" label="Stages" variant="counts" value={view.stage} onChange={(v) => setView({ stage: v as TalentView["stage"], waiting: false })} items={stripItems(counts)} />
+          <div className="talent-strip">
+            <Tabs idBase="talent-strip" label="Stages" variant="counts" value={view.stage} onChange={(v) => setView({ stage: v as TalentView["stage"], waiting: false })} items={stripItems(counts)} />
+            {/* Beside the strip, not in it (plan E6): the people still in the visit that sent their application. */}
+            {applyingCount || view.applying ? <button type="button" className="toggle-chip" aria-pressed={view.applying} title="Sent the form and answering the screening questions now" onClick={() => setView({ applying: !view.applying, waiting: false })}>{STILL_APPLYING_LABEL} <span className="count">{applyingCount}</span></button> : null}
+          </div>
           <div className="talent-toolbar">
-            {waitingCount ? <button type="button" className="toggle-chip" aria-pressed={view.waiting} onClick={() => setView({ waiting: !view.waiting, order: view.waiting ? view.order : "waiting" })}>Waiting on you <span className="count">{waitingCount}</span></button> : null}
-            {mayTell && (counts?.notTold ?? 0) > 0 ? <button type="button" className="toggle-chip" aria-pressed={view.told === "not_told"} onClick={() => setView(view.told === "not_told" ? { told: null } : { told: "not_told", stage: "not_moving_forward", waiting: false })}>Not told yet <span className="count">{counts?.notTold}</span></button> : null}
+            {waitingCount ? <button type="button" className="toggle-chip" aria-pressed={view.waiting} onClick={() => setView({ waiting: !view.waiting, applying: false, order: view.waiting ? view.order : "waiting" })}>Waiting on you <span className="count">{waitingCount}</span></button> : null}
+            {mayTell && (counts?.notTold ?? 0) > 0 ? <button type="button" className="toggle-chip" aria-pressed={view.told === "not_told"} onClick={() => setView(view.told === "not_told" ? { told: null } : { told: "not_told", stage: "not_moving_forward", waiting: false, applying: false })}>Not told yet <span className="count">{counts?.notTold}</span></button> : null}
             {view.internalStage ? <button type="button" className="toggle-chip" aria-pressed="true" aria-label={`Showing only: ${STAGE_LABEL[view.internalStage] ?? view.internalStage}. Remove this filter`} onClick={clearStageLink}>{STAGE_LABEL[view.internalStage] ?? view.internalStage.replace(/_/g, " ")} <Icon name="x" size={14} /></button> : null}
             <select className="select" aria-label="Reading" value={view.reading} onChange={(e) => setView({ reading: e.target.value as ReadingFilter })}>
               {READING_FILTERS.filter((f) => f.id !== "missing_must_have" || provenMissKnown).map((f) => <option key={f.id} value={f.id}>{f.label}{f.id === "any" ? "" : ` (${byReading[f.id]})`}</option>)}
@@ -145,6 +156,7 @@ export function People() {
               {ORDERS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
             </select>
           </div>
+          {view.applying ? <Alert tone="info">{STILL_APPLYING_TEXT}</Alert> : null}
           {mayTell && notTold.length && (view.told === "not_told" || view.stage === "not_moving_forward") ? (
             <Alert tone="info">
               <div className="row" style={{ justifyContent: "space-between" }}>
@@ -213,6 +225,8 @@ function TalentRow({ a, busy, onOpen, onMove }: { a: ApplicationSummary; busy: b
         </span>
       </div>
       <div className="talent-row-chips">
+        {/* answering the screening questions in the visit that sent the application (plan E6): nothing waits on you yet */}
+        {isStillApplying(a) ? <Pill size="sm" tone="neutral" pulse title="Sent the form and answering the screening questions now">{STILL_APPLYING_LABEL}</Pill> : null}
         {reading !== "none" ? <Pill size="sm" tone={READING[reading].tone}>{READING[reading].label}</Pill> : null}
         {a.evidence?.lowConfidence && reading !== "closer_look" ? <Chip tone="caution">{LOW_CONFIDENCE_LABEL}</Chip> : null}
         {a.tags.map((t) => <Chip key={t} tone="caution">{t}</Chip>)}

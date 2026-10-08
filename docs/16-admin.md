@@ -30,6 +30,13 @@ Founder decision B7 (plan B1 and B2). A company that signs itself up can draft a
 - Both are audited with the reason (the customer sees it in their own history) and the owners, admins and hiring managers are told; that notice is always emailed and cannot be turned off.
 - **Job-board access** (`POST /api/v1/admin/customers/:id/job-boards`): record once ITS can sign in to the company's LinkedIn, Indeed and ZipRecruiter accounts (or that it no longer can, with an optional note). It ticks the owner's getting-started step and is audited.
 
+## How people apply, and the screening allowance
+
+Plan Wave E (founder decisions B1/Q15 and Q17).
+
+- **How people apply** (the Customers column, and **Change**): the company's default, "Form now, conversation later" unless set (the one-visit flow runs on pilot roles first, founder decision B1; `POST /api/v1/admin/customers/:id/apply-flow`), and each open or draft role's own setting, or the company's default (`PUT /api/v1/roles/:id/apply-mode`). The same role control is on the role's Posting tab for ITS staff: an administrator can always use it, an ITS recruiter only under an active grant for that company that covers the role. The **Plan** column also shows this month's screening conversations against the allowance. A reason of five characters or more is required and audited. A role whose rule for screening invitations is "Ask me first" or "Only a person" always uses the later path; a change applies to new applicants only. Customers never see or change it.
+- **Screening conversations running low**: a card at the top of Customers, and a chip on the company's row, while an alert says a company has used 80% of the month's screening conversations or all of them (`billing.screens_warning`, `billing.screens_used_up`). Nothing is refused: applications are still accepted, anyone part-way through finishes, and once the allowance is used up new applicants get the conversation link by email when more are added. The owners and admins see the same on Today.
+
 ## The six questions for any AI action
 
 Inspecting an AI run must answer, on one screen:

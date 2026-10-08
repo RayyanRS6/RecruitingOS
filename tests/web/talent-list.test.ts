@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ApplicationSummary } from "../../apps/web/src/api/client";
-import { READING, appliedWhen, applyView, defaultView, emptyText, fold, matchesQuery, orderRows, readingCounts, readingOf, stageSummary, stripItems, waitingText, type TalentView } from "../../apps/web/src/talent-list";
+import { READING, appliedWhen, applyView, defaultView, emptyText, fold, isStillApplying, matchesQuery, orderRows, readingCounts, readingOf, stageSummary, stillApplyingCount, stripItems, waitingOnYouCount, waitingText, type TalentView } from "../../apps/web/src/talent-list";
 
 /**
  * The Talent list (plan A3; founder decisions B3 and B6): the stage strip, the reading chip, the filters, search and the
@@ -21,7 +21,7 @@ function row(over: Partial<ApplicationSummary> & { name?: string; overall?: stri
     ...rest,
   };
 }
-const view = (over: Partial<TalentView> = {}): TalentView => ({ stage: "all", waiting: false, reading: "any", query: "", order: "newest", internalStage: null, told: null, ...over });
+const view = (over: Partial<TalentView> = {}): TalentView => ({ stage: "all", waiting: false, applying: false, reading: "any", query: "", order: "newest", internalStage: null, told: null, ...over });
 const params = (q: string) => new URLSearchParams(q);
 
 describe("the reading chip", () => {
@@ -134,5 +134,48 @@ describe("the strip and the row's words", () => {
     expect(emptyText(view({ query: "zed" }), 3).body).toMatch(/Nobody here matches "zed"/);
     expect(emptyText(view({ waiting: true }), 3).title).toBe("Nobody is waiting on you");
     expect(emptyText(view({ stage: "offer" }), 3).title).toBe("Nobody here");
+    expect(emptyText(view({ applying: true }), 3)).toMatchObject({ title: "Nobody is still applying", body: expect.stringContaining('Turn off "Still applying"') });
+  });
+});
+
+describe("still applying (plan E6)", () => {
+  // Sofia sent the form and is answering the screening questions in the same visit; her hold ended meanwhile, so the
+  // API puts her in "waiting on you", which the page never shows while she is still applying.
+  const sofia = row({ name: "Sofia Lind", stage: "screen_invited", group: "in_process", stillApplying: true });
+  const theo = row({ name: "Theo Park", stage: "screening", group: "waiting_on_you", stillApplying: true, daysInStage: 2 });
+  const maria = row({ name: "Maria Reyes", overall: "strong", group: "waiting_on_you", daysInStage: 3 });
+  const older = row({ name: "Old Answer" }); // an answer from before Wave E has no stillApplying at all
+  const all = [sofia, theo, maria, older];
+  const counts = { total: 4, byOwnerStage: { new: 4, longlist: 0, shortlist: 0, interviewing: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 3, in_process: 1, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0 };
+
+  it("is read from the row, and an older answer without it is not still applying", () => {
+    expect(isStillApplying(sofia)).toBe(true);
+    expect(isStillApplying(older)).toBe(false);
+  });
+
+  it("counts them beside the strip: the API's count, or the rows' when an older answer has none", () => {
+    expect(stillApplyingCount({ ...counts, stillApplying: 2 }, all)).toBe(2);
+    expect(stillApplyingCount(counts, all)).toBe(2);
+    expect(stillApplyingCount(null, [])).toBe(0);
+  });
+
+  it("never counts or shows them as waiting on you, whatever their group says", () => {
+    expect(waitingOnYouCount(counts, all)).toBe(2); // Maria and the older answer; never Theo
+    expect(waitingOnYouCount(null, all)).toBe(0);
+    expect(applyView(all, view({ waiting: true })).map((a) => a.id).sort()).toEqual([maria.id, older.id].sort());
+    expect(waitingText(theo)).toBeNull();
+    expect(waitingText(maria)).toBe("Waiting on you 3 days");
+    expect(readingCounts(all, { stage: "all", waiting: true }).any).toBe(2);
+  });
+
+  it("keeps them in their stage column, and shows only them when the count beside the strip is pressed", () => {
+    expect(applyView(all, view({ stage: "new" }))).toHaveLength(4);
+    expect(applyView(all, view({ applying: true })).map((a) => a.id).sort()).toEqual([sofia.id, theo.id].sort());
+    expect(readingCounts(all, { stage: "all", waiting: false, applying: true }).any).toBe(2);
+  });
+
+  it("opens on them from a link (the role report's 'See who is still applying'), never on 'waiting on you'", () => {
+    expect(defaultView(params("applying=1"), { byGroup: { waiting_on_you: 2, in_process: 0, not_moving_forward: 0, hired: 0 } })).toEqual(view({ applying: true }));
+    expect(defaultView(params(""), { byGroup: { waiting_on_you: 0, in_process: 2, not_moving_forward: 0, hired: 0 } }).applying).toBe(false);
   });
 });

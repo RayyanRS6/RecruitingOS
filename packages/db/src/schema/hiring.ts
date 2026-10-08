@@ -3,6 +3,7 @@ import { boolean, index, integer, jsonb, numeric, pgTable, text, uniqueIndex, uu
 import type {
   Actor,
   ApplicationStage,
+  ApplyMode,
   DraftRolePacket,
   EligibilityResult,
   EvidenceAssessment,
@@ -16,9 +17,13 @@ import type {
   ResumeExtraction,
   RolePacket,
   ScreenAssessment,
+  ScreenInvitedVia,
   ScreenProgress,
+  ScreenStatus,
   ScreenTranscriptEntry,
   ToldState,
+  UnconfirmedConfirmation,
+  UnconfirmedIntent,
 } from "@ros/contracts";
 import { createdAt, id, ts, updatedAt } from "./columns";
 import { companies, users } from "./tenancy";
@@ -68,6 +73,12 @@ export const roles = pgTable(
     publishChannels: text("publish_channels").array(),
     /** The last day new applications are taken, in the company's time zone (Q12); null when the role has no closing date. */
     applicationsCloseOn: date("applications_close_on", { mode: "string" }),
+    /**
+     * How applicants meet the screening conversation (migration 0033, plan E1): "one_visit" straight after the form,
+     * "form_then_screen" by email later; null follows the company's default (`companies.settings.applyFlowDefault`).
+     * Only ITS changes it (packages/core/src/apply-flow.ts, `resolveApplyMode`).
+     */
+    applyMode: text("apply_mode").$type<ApplyMode>(),
     createdBy: jsonb("created_by").$type<Actor>().notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -375,10 +386,56 @@ export const screens = pgTable(
     lastCandidateMessageAt: ts("last_candidate_message_at"),
     assessmentId: uuid("assessment_id"),
     workflowRunId: uuid("workflow_run_id"),
+    /** "apply" (offered in the visit that sent the application), "confirmed_repeat", or null for an emailed invitation (migration 0033). */
+    invitedVia: text("invited_via").$type<ScreenInvitedVia>(),
+    /** The one reminder to someone who started and stopped part-way (plan E4). */
+    idleRemindedAt: ts("idle_reminded_at"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index("screens_application_idx").on(t.applicationId), uniqueIndex("screens_token_idx").on(t.token), index("screens_company_status_idx").on(t.companyId, t.status)],
+  (t) => [index("screens_application_idx").on(t.applicationId), uniqueIndex("screens_token_idx").on(t.token), index("screens_company_status_idx").on(t.companyId, t.status), index("screens_company_via_status_idx").on(t.companyId, t.invitedVia, t.status)],
+);
+
+/**
+ * The conversation of a repeat submission (migration 0033; Q14 x Q15): it looks exactly like a first application's, and
+ * nothing in it reaches the real application until the owner of the address on file confirms by email. Unconfirmed,
+ * its words are wiped after seven days. Never deleted.
+ */
+export const unconfirmedScreens = pgTable(
+  "unconfirmed_screens",
+  {
+    id: id(),
+    companyId: uuid("company_id").notNull().references(() => companies.id),
+    roleId: uuid("role_id").notNull().references(() => roles.id),
+    applicationId: uuid("application_id").notNull().references(() => applications.id),
+    packetVersion: integer("packet_version").notNull(),
+    /** The first name typed into the form, never the one on file. */
+    firstName: text("first_name").notNull(),
+    token: text("token").notNull(),
+    status: text("status").$type<ScreenStatus>().notNull().default("invited"),
+    intent: text("intent").$type<UnconfirmedIntent | null>(),
+    confirmation: text("confirmation").$type<UnconfirmedConfirmation | null>(),
+    confirmTokenHash: text("confirm_token_hash"),
+    transcript: jsonb("transcript").$type<ScreenTranscriptEntry[]>().notNull().default([]),
+    answers: jsonb("answers").$type<Record<string, string>>().notNull().default({}),
+    progress: jsonb("progress").$type<ScreenProgress>().notNull().default({ askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0 }),
+    startedAt: ts("started_at"),
+    lastCandidateMessageAt: ts("last_candidate_message_at"),
+    finishedAt: ts("finished_at"),
+    confirmSentAt: ts("confirm_sent_at"),
+    confirmedAt: ts("confirmed_at"),
+    mergedScreenId: uuid("merged_screen_id"),
+    discardedAt: ts("discarded_at"),
+    expiresAt: ts("expires_at").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("unconfirmed_screens_token_idx").on(t.token),
+    uniqueIndex("unconfirmed_screens_confirm_idx").on(t.confirmTokenHash).where(sql`${t.confirmTokenHash} is not null`),
+    index("unconfirmed_screens_application_idx").on(t.applicationId, t.createdAt),
+    index("unconfirmed_screens_expiry_idx").on(t.companyId, t.expiresAt).where(sql`${t.discardedAt} is null`),
+  ],
 );
 
 export const interviews = pgTable(

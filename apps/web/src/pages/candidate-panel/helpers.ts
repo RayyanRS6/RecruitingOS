@@ -309,14 +309,38 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
       return approvalWords("expired", p, base);
     // Their screens (recorded on the screen).
     case "screen.invited":
+      if (p.invitedVia === "apply") return { ...base, what: "Offered the screening conversation right after the application form" };
       return { ...base, what: p.focus === "unknowns" ? "Screening invitation sent, starting with the open questions" : "Screening invitation sent" };
     case "screen.started":
       return { ...base, what: "Started the screening conversation" };
     case "screen.completed":
-      return { ...base, what: "Finished the screening conversation" };
+      if (p.via === "review_timeout") return { ...base, what: "Their screening answers were sent as they were", who: "The system", why: "They answered every question but did not press Send; a reminder said the answers would go two days later." };
+      return { ...base, what: p.via === "recruiter_call" ? "Screening finished with a recruiter's notes from a call" : "Finished the screening conversation" };
+    // Wave E: the conversation in the same visit as applying.
+    case "screen.declined_by_candidate":
+      return { ...base, what: "Sent the application without the screening conversation", why: "Their own choice; it is never held against them." };
+    case "screen.idle_reminded":
+      return { ...base, what: "Reminded once to finish the screening conversation", who: "The system" };
+    case "screen.unfinished":
+      return { ...base, what: "The screening conversation was closed part-way, after one reminder", who: "The system", ...(typeof p.answered === "number" && typeof p.questions === "number" ? { why: `${p.answered} of ${p.questions} questions answered; what they said is kept.` } : {}) };
+    case "screen.paused":
+      return { ...base, what: "The screening conversation paused: the assistant was not working", who: "The system", told: "They are emailed a link to finish once it is back." };
+    case "screen.resumed":
+      return { ...base, what: "The screening conversation is back on", who: "The system" };
+    case "screen.question_skipped":
+      return { ...base, what: p.answerKept ? "Moved on from a follow-up question, keeping the answer already given" : "Chose not to answer a screening question" };
+    case "screen.answer_edited":
+      return { ...base, what: "Changed an answer before sending" };
+    case "screen.answer_tapped":
+      return null; // the answer itself is on the Screen tab
+    case "screen.recruiter_notes_added":
+      return { ...base, what: "Added notes from a call with the candidate", why: "Kept as the recruiter's notes, never as the candidate's own words." };
+    case "screen.repeat_confirmed":
+      return { ...base, what: p.intent === "person" ? "Confirmed by email: asked for a person after applying again" : p.intent === "outage" ? "Confirmed by email: a person to finish the conversation the assistant could not, after applying again" : p.added ? "Confirmed by email: answers given when applying again were added" : "Confirmed by email after applying again; nothing was added" };
     case "screen.human_requested":
       return { ...base, what: "Asked to talk to a person instead of the assistant" };
     case "screen.expired":
+      if (p.oneVisit) return { ...base, what: "Did not start the screening conversation that goes with the application", who: "The system", why: "Reminded once; the application came to the team without it, and they were told nothing else is needed." };
       return { ...base, what: "The screening invitation lapsed without an answer" };
     case "screen.abandoned":
       return p.reason === "withdrawn" ? null : { ...base, what: "Left the screening conversation" };

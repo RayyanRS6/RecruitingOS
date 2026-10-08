@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { isCompanyVerified, type Actor } from "@ros/contracts";
-import { ALERT_PRIVACY_LINE, DECISION_STAGES, activeMarksFor, createEscalation, emit, gate, holdEnded, notify, resolveNotifyCadence, resolvePolicy, storedPreferences } from "@ros/core";
+import { ALERT_PRIVACY_LINE, DECISION_STAGES, activeMarksFor, createEscalation, emit, gate, holdEnded, isOneVisitFlow, isStillApplying, notify, resolveNotifyCadence, resolvePolicy, storedPreferences } from "@ros/core";
 import { applications, approvalRequests, candidates, companies, interventions, memberships, roles, screens, users, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { queueCommunication } from "./outbox";
@@ -12,7 +12,7 @@ import { queueCommunication } from "./outbox";
  */
 
 export type Detection = {
-  detector: "candidates_waiting" | "screens_unanswered" | "approval_pending" | "no_applicants" | "hold_ended" | "decisions_untold";
+  detector: "candidates_waiting" | "screens_unanswered" | "approval_pending" | "no_applicants" | "hold_ended" | "decisions_untold" | "conversations_stuck";
   roleId: string;
   roleTitle: string;
   title: string;
@@ -52,6 +52,21 @@ function untoldDecisions(role: { id: string; title: string }, apps: Array<typeof
   const who = late.slice(0, 5).map((a) => names.get(a.candidateId) ?? "A candidate").join(", ");
   const one = late.length === 1;
   return { detector: "decisions_untold", roleId: role.id, roleTitle: role.title, days, applicationIds: late.map((a) => a.id), title: `${one ? "1 person has" : `${late.length} people have`} not been told your decision for ${UNTOLD_REMIND_WORKING_DAYS} working days or more (${role.title})`, body: `${who}${late.length > 5 ? ` and ${late.length - 5} more` : ""}. Your decision stays private until someone sends the decision message or records telling ${one ? "them" : "each of them"}; nothing goes out by itself. Check the message, then send it.`, action: { label: "Review and send", href: `/roles/${role.id}/talent?ownerStage=not_moving_forward&told=not_told` } };
+}
+
+const HOURS = 3_600_000;
+
+/**
+ * Whether a conversation offered with the application is still open a day past the moment it should have closed by
+ * itself (plan E4, E5): never started, a day past its link's lapse; started and idle, a day past the reminder and the
+ * close (72 hours after the last answer); paused, a day past the hand-over to a person (24 hours). Its run stalled, and
+ * someone is left "Still applying" with nobody told.
+ */
+export function conversationOverdue(s: Pick<typeof screens.$inferSelect, "status" | "expiresAt" | "startedAt" | "lastCandidateMessageAt" | "progress">, now: Date): boolean {
+  const since = (at: string | null | undefined) => (at ? now.getTime() - Date.parse(at) : 0);
+  if (s.status === "paused") return since(s.progress.pausedAt ?? s.lastCandidateMessageAt) > (24 + 24) * HOURS;
+  if (s.status === "in_progress") return since(s.lastCandidateMessageAt ?? s.startedAt) > (24 + 48 + 24) * HOURS;
+  return ["invited", "reminded"].includes(s.status) && since(s.expiresAt) > 24 * HOURS;
 }
 
 async function candidateNames(q: Queryable, candidateIds: string[]): Promise<Map<string, string>> {
@@ -99,10 +114,23 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
       out.push({ detector: "hold_ended", roleId: role.id, roleTitle: role.title, days: Math.floor((now.getTime() - since) / DAYS), applicationIds: ended.map((a) => a.id), title: `${ended.length === 1 ? "A hold has" : `${ended.length} holds have`} ended (${role.title})`, body: `${who}${ended.length > 5 ? ` and ${ended.length - 5} more` : ""}. You put ${ended.length === 1 ? "them" : "these people"} on hold until now; decide what comes next: move them on, hold again with a new date, or decline with a reason. Nothing has been sent to them.`, action: { label: "Review them", href: `/roles/${role.id}/talent?ownerStage=on_hold` } });
     }
     const invites = await q.select().from(screens).where(and(eq(screens.companyId, companyId), inArray(screens.status, ["invited", "reminded"]), inArray(screens.applicationId, apps.map((a) => a.id).length ? apps.map((a) => a.id) : ["00000000-0000-0000-0000-000000000000"])));
-    const stale = invites.filter((s) => s.invitedAt && now.getTime() - Date.parse(s.invitedAt) >= 3 * DAYS && !parked({ id: s.applicationId }));
+    // Someone offered the conversation with their application is still applying (plan E6): their reminder and closing
+    // run on their own (the application then reaches the team), and the team hears when it ends, not before.
+    const stale = invites.filter((s) => s.invitedAt && now.getTime() - Date.parse(s.invitedAt) >= 3 * DAYS && !parked({ id: s.applicationId }) && !isStillApplying(s) && !isOneVisitFlow(s.progress));
     if (stale.length && publicNow) {
       const days = Math.floor((now.getTime() - Math.min(...stale.map((s) => Date.parse(s.invitedAt!)))) / DAYS);
       out.push({ detector: "screens_unanswered", roleId: role.id, roleTitle: role.title, days, title: `${stale.length} screening ${stale.length === 1 ? "invite has" : "invites have"} gone unanswered for ${days} days (${role.title})`, body: "A reminder went out automatically. A recruiter can call them, or you can move on to the next candidates.", action: { label: "See who", href: `/roles/${role.id}/talent?stage=screen_invited` } });
+    }
+    // The conversation that goes with the application closes by itself (E4, E5). One still open well past that point
+    // leaves the person "Still applying", unseen by the team and maybe waiting: they are named, for the team to open.
+    const offered = apps.length ? await q.select().from(screens).where(and(eq(screens.companyId, companyId), inArray(screens.status, ["invited", "reminded", "in_progress", "paused"]), inArray(screens.applicationId, apps.map((a) => a.id)))) : [];
+    const stuck = offered.filter((s) => (isOneVisitFlow(s.progress) || isStillApplying(s)) && conversationOverdue(s, now));
+    if (stuck.length) {
+      const stuckApps = apps.filter((a) => stuck.some((s) => s.applicationId === a.id));
+      const names = await candidateNames(q, stuckApps.map((a) => a.candidateId));
+      const who = stuckApps.slice(0, 5).map((a) => names.get(a.candidateId) ?? "A candidate").join(", ");
+      const days = Math.floor((now.getTime() - Math.min(...stuckApps.map((a) => Date.parse(a.createdAt)))) / DAYS);
+      out.push({ detector: "conversations_stuck", roleId: role.id, roleTitle: role.title, days, applicationIds: stuckApps.map((a) => a.id), title: `${stuckApps.length === 1 ? "1 applicant is" : `${stuckApps.length} applicants are`} stuck in the screening conversation (${role.title})`, body: `${who}${stuckApps.length > 5 ? ` and ${stuckApps.length - 5} more` : ""}. Their conversation should have closed by itself and did not, so their application has not reached you as ready and they may be waiting. Open them to see what they sent; a recruiter can contact them.`, action: { label: "See who", href: `/roles/${role.id}/talent` } });
     }
     const pending = await q.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.status, "pending")));
     const oldPending = pending.filter((p) => p.actionType !== "role_packet.approve" && now.getTime() - Date.parse(p.createdAt) >= 2 * DAYS && !(p.applicationId && parked({ id: p.applicationId })));

@@ -4,9 +4,9 @@ import { Hono, type Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { ApplyRequest, CANDIDATE_STEP_LABEL, CandidateSmsPreference, CandidateStep, MAX_RESUME_BYTES, inspectResumeFile, isCompanyVerified, type ApplicationStage, type RolePacket } from "@ros/contracts";
-import { answerWithdrawPrompt, answersOf, focusedPacket, openScreen, requestHuman, runScreenTurn, withdrawPending } from "@ros/agents";
-import { CLOSING_DATE_REASON, DECISION_STAGES, applyByLabel, audit, benefitsDescriptionFor, candidateStep, closingDayWords, createDataRequest, decisionTold, emit, fulfilSmsOptOut, fulfilWithdrawal, humanResponseExpectation, jobNoticesFor, loadBusinessCalendar, mayWithdraw, noticesFor, notify, openHumanReview, openPayload, sealPayload, transition, type Notice } from "@ros/core";
+import { ApplyRequest, CANDIDATE_STEP_LABEL, CandidateSmsPreference, CandidateStep, MAX_RESUME_BYTES, SCREEN_PERSON_ROUTE_STATUSES, TapAnswer, inspectResumeFile, isCompanyVerified, type ApplicationStage, type ReviewItem, type RolePacket, type TapFormat } from "@ros/contracts";
+import { MOVED_ON_MESSAGE, SKIPPED_MESSAGE, WITHDRAW_CONFIRM_KEY } from "@ros/agents";
+import { CLOSING_DATE_REASON, DECISION_STAGES, applyByLabel, audit, benefitsDescriptionFor, candidateStep, closingDayWords, createDataRequest, decisionTold, emit, fulfilSmsOptOut, fulfilWithdrawal, jobNoticesFor, mayWithdraw, noticesFor, notify, openHumanReview, openPayload, sealPayload, transition, type Notice } from "@ros/core";
 import { CandidatePrivacyRequest } from "@ros/contracts";
 import { sendPrivacyAcknowledgment, sendPrivacyCompletion } from "@ros/agents";
 import { applications, candidates, communications, companies, dataRequests, events, interviews, rolePackets, roles, screens, uuidv7, withPlatform, withTenant } from "@ros/db";
@@ -17,11 +17,12 @@ import { clientIp, type Vars } from "../middleware/session";
 import type { Container } from "../container";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { createApplication, markUploadUsed, queueLinkRequest, uploadAlreadyUsed, type ResumeInput } from "../services/applications";
+import { confirmRepeat, conversationEdit, conversationLater, conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, conversationWithdraw, findConversation, repeatConfirmationView, startApplyConversation, type ConversationRef, type ConversationView, type RepeatConfirmationView, type TurnAction } from "../services/apply-conversation";
 import { lateApplicationAllowed, sealFormOpened } from "../services/closing-date";
 import { approvedAbout, contactLineFor, logoPublicPath, logoPublicUrl, logoResponse, profileOf } from "../services/company-settings-profile";
+import { applyFlowOf, type ApplyFlowView } from "../services/job-preview";
 import { jobUrls } from "../services/job-urls";
 import { exitCleanup } from "../services/exit-cleanup";
-import { screenDeps } from "../services/screens";
 import { optBackIntoTalentPool, optOutOfTalentPool } from "../services/talent-pool";
 import { descriptionExcerpt } from "./description";
 import { Icon } from "./icons";
@@ -45,7 +46,13 @@ function jobNotices(packet: RolePacket, company: Pick<typeof companies.$inferSel
 export const RECEIPT_COOKIE = "ros_applied";
 const RECEIPT_PURPOSE = "application-receipt";
 const RECEIPT_TTL_MS = 30 * 60_000;
-type ReceiptPayload = { v: 1; roleId: string; to: string; exp: number };
+/**
+ * `next` is what the receipt says comes next (plan Wave E): "review" (the team reviews; also the neutral answer when an
+ * eligibility answer did not match, E7) or "conversation_by_email" (the month's conversations are used up, so the link
+ * comes by email once more are added, Q17). Worked out from the same inputs for a first and a repeat submission.
+ */
+type ReceiptNext = "review" | "conversation_by_email";
+type ReceiptPayload = { v: 1; roleId: string; to: string; exp: number; next?: ReceiptNext };
 
 /** "a***@example.com": enough for the person to recognise their own address, nothing more. */
 export function maskEmail(email: string): string {
@@ -60,11 +67,33 @@ function receiptPath(slug: string, roleId: string): string {
 }
 
 /** Sends the browser to the receipt, with the masked address it shows. The same answer for every kind of submission. */
-function toReceipt(c: Context<Vars>, job: { company: { slug: string }; role: { id: string } }, typedEmail: string) {
+function toReceipt(c: Context<Vars>, job: { company: { slug: string }; role: { id: string } }, typedEmail: string, next: ReceiptNext = "review") {
   const container = c.get("container");
   const path = receiptPath(job.company.slug, job.role.id);
-  const payload: ReceiptPayload = { v: 1, roleId: job.role.id, to: maskEmail(typedEmail), exp: container.engine.clock().getTime() + RECEIPT_TTL_MS };
+  const payload: ReceiptPayload = { v: 1, roleId: job.role.id, to: maskEmail(typedEmail), exp: container.engine.clock().getTime() + RECEIPT_TTL_MS, next };
   setCookie(c, RECEIPT_COOKIE, sealPayload(RECEIPT_PURPOSE, payload, container.env.SESSION_SECRET), { httpOnly: true, sameSite: "Lax", secure: container.env.NODE_ENV === "production", path, maxAge: RECEIPT_TTL_MS / 1000 });
+  return c.redirect(path);
+}
+
+/**
+ * The conversation's introduction says the application went through, and where its link went, the way the receipt does
+ * (plan E1): the masked address that was typed rides in a sealed cookie for that one conversation's pages, never in the
+ * URL. A repeat submission's conversation gets the same, so the two read alike.
+ */
+export const CONVERSATION_COOKIE = "ros_applied_to";
+const CONVERSATION_PURPOSE = "application-conversation";
+type ConversationPayload = { v: 1; token: string; to: string; exp: number };
+
+function screenPath(token: string): string {
+  return `/c/screen/${token}`;
+}
+
+/** Sends the browser from the form straight to the conversation's introduction (plan E1). */
+function toConversation(c: Context<Vars>, token: string, typedEmail: string) {
+  const container = c.get("container");
+  const path = screenPath(token);
+  const payload: ConversationPayload = { v: 1, token, to: maskEmail(typedEmail), exp: container.engine.clock().getTime() + RECEIPT_TTL_MS };
+  setCookie(c, CONVERSATION_COOKIE, sealPayload(CONVERSATION_PURPOSE, payload, container.env.SESSION_SECRET), { httpOnly: true, sameSite: "Lax", secure: container.env.NODE_ENV === "production", path, maxAge: RECEIPT_TTL_MS / 1000 });
   return c.redirect(path);
 }
 
@@ -235,6 +264,7 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
       role={jobRoleView(role)}
       notices={allNotices}
       smsEnabled={container.env.SMS_ENABLED}
+      flow={await jobFlow(container, job)}
       benefits={benefitsDescriptionFor(packet.compensation, company.settings)}
       links={{ careers: `/careers/${company.slug}`, apply: `/careers/${company.slug}/jobs/${role.id}/apply` }}
       jsonLd={jsonLd}
@@ -244,8 +274,16 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
   );
 });
 
+/**
+ * How this job's applicants meet the screening conversation, so the job page and the form say how long applying really
+ * takes (plan E8): the same rule the apply POST follows (services/apply-conversation.ts).
+ */
+function jobFlow(container: Container, job: Job): Promise<ApplyFlowView> {
+  return withTenant(container.db, job.company.id, (tx) => applyFlowOf(tx, job.company, job.role));
+}
+
 /** Everything the apply form needs that does not change between showing it and showing it again. */
-function applyFormFor(container: Container, job: Job): Omit<ApplyFormProps, "formOpened"> {
+function applyFormFor(container: Container, job: Job, flow: ApplyFlowView): Omit<ApplyFormProps, "formOpened"> {
   const base = `/careers/${job.company.slug}/jobs/${job.role.id}`;
   return {
     company: { slug: job.company.slug, name: job.company.name, contact: contactLineFor(job.company.settings, container.env) },
@@ -254,6 +292,7 @@ function applyFormFor(container: Container, job: Job): Omit<ApplyFormProps, "for
     notices: jobNotices(job.packet, job.company),
     smsEnabled: container.env.SMS_ENABLED,
     privacyEmail: container.env.PRIVACY_EMAIL,
+    flow,
     links: { job: base, uploadIntent: `${base}/upload-intent` },
   };
 }
@@ -275,7 +314,7 @@ candidatePages.get("/careers/:slug/jobs/:roleId/apply", async (c) => {
   if (!job || !acceptingApplications(job.role)) return c.notFound();
   // Funnel measurement without identity (correction 14): a random per-visit reference, no candidate data, no client script; the source comes from the tracked-link cookie when there is one.
   void container.integrations.analytics.capture({ name: "application_started", subjectRef: randomToken(12), companyRef: refFor(job.company.id, container.integrations.analyticsSalt), at: new Date().toISOString(), properties: { source: resolveApplicationSource(c, job.role.id).source } }).catch(() => undefined);
-  return c.html(<ApplyFormPage {...applyFormFor(container, job)} formOpened={sealFormOpened(container.env.SESSION_SECRET, job.role.id, container.engine.clock())} />);
+  return c.html(<ApplyFormPage {...applyFormFor(container, job, await jobFlow(container, job))} formOpened={sealFormOpened(container.env.SESSION_SECRET, job.role.id, container.engine.clock())} />);
 });
 
 /**
@@ -310,7 +349,7 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
   if (!admitted.ok) return c.notFound();
   const { company, role, packet } = job;
   const smsEnabled = container.env.SMS_ENABLED;
-  const form = applyFormFor(container, job);
+  const form = applyFormFor(container, job, await jobFlow(container, job));
   // A form shown again keeps the moment it was first opened, so the closing date's grace still applies to it.
   const formOpened = str("formOpened") || sealFormOpened(container.env.SESSION_SECRET, role.id, container.engine.clock());
   // The versions recorded as shown are the server's own, computed from the same inputs as the render; a browser cannot claim a different set.
@@ -398,11 +437,13 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
   const ip = clientIp(c);
   // The source comes from the tracked-link cookie when it names this role (docs/spec/20 items 8 and 19); the token itself is never stored.
   const origin = resolveApplicationSource(c, role.id);
-  // A new application and a repeat one end on the same receipt (Wave 0 item 0.1): the page never shows or links to an
-  // existing application, so typing someone else's address reveals nothing and changes nothing on their record.
-  await withTenant(container.db, company.id, async (tx) => {
+  // A new application and a repeat one end on the same pages (Wave 0 item 0.1, plan E1): the page never shows or links to
+  // an existing application, so typing someone else's address reveals nothing and changes nothing on their record. Where
+  // the role takes the conversation in the same visit, both go on to its introduction: a repeat's is a detached copy that
+  // touches nothing until the owner of the address on file confirms it (services/apply-conversation.ts).
+  const next = await withTenant(container.db, company.id, async (tx) => {
     if (usedUploadId) await markUploadUsed(tx, { companyId: company.id, roleId: role.id, uploadId: usedUploadId });
-    return createApplication(tx, container, {
+    const created = await createApplication(tx, container, {
       companyId: company.id,
       roleId: role.id,
       source: origin.source,
@@ -422,14 +463,22 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
       resume,
       ip,
     }, { kind: "candidate", id: "applicant" }, { closingGrace: admitted.late });
+    // The conversation offered in the same visit (plan E1), or the receipt: decided in this transaction, from what was typed.
+    return startApplyConversation(tx, container, { ...created, role, company, packet, typedFirstName: parsed.data.firstName, eligibilityAnswers });
   });
   await container.kick();
   clearApplicationSource(c);
-  return toReceipt(c, job, parsed.data.email);
+  if (next.kind === "conversation") return toConversation(c, next.token, parsed.data.email);
+  // An answer that did not match an eligibility question gets the neutral receipt (E7): no conversation, nothing said about why.
+  return toReceipt(c, job, parsed.data.email, next.reason === "conversation_by_email" ? "conversation_by_email" : "review");
 });
 
-/** The receipt (Wave 0 item 0.1). Identical for a first application, a repeat one and a bot; it never names a status link. */
-function Receipt(props: { company: { slug: string; name: string }; role: { id: string }; packet: RolePacket; to: string | null }) {
+/**
+ * The receipt (Wave 0 item 0.1). Identical for a first application, a repeat one and a bot; it never names a status
+ * link. When the month's conversations are used up (Q17), it says the conversation's link comes by email; an answer that
+ * did not match an eligibility question reads like any other application (E7).
+ */
+function Receipt(props: { company: { slug: string; name: string }; role: { id: string }; packet: RolePacket; to: string | null; next: ReceiptNext }) {
   return (
     <Layout title="Check your email">
       <p class="eyebrow"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>{props.packet.identity.title}</a> · {props.company.name}</p>
@@ -441,6 +490,7 @@ function Receipt(props: { company: { slug: string; name: string }; role: { id: s
       </div>
       <h2>What happens next</h2>
       <ol class="steps">
+        {props.next === "conversation_by_email" ? <li>We email you a link to a short written conversation with {props.company.name}'s AI assistant (about {props.packet.screening.maxMinutes} minutes). Answer it whenever suits you, or ask for a person instead.</li> : null}
         <li>The hiring team at {props.company.name} reviews your application. People make every decision.</li>
         <li>You hear from us by email either way.</li>
       </ol>
@@ -457,9 +507,10 @@ candidatePages.get("/careers/:slug/jobs/:roleId/applied", async (c) => {
   const job = await loadJob(container.db, c.req.param("slug"), c.req.param("roleId"));
   if (!job) return c.notFound();
   const sealed = openPayload<ReceiptPayload>(RECEIPT_PURPOSE, getCookie(c, RECEIPT_COOKIE), container.env.SESSION_SECRET, container.engine.clock().getTime());
-  const to = sealed?.v === 1 && sealed.roleId === job.role.id && typeof sealed.to === "string" ? sealed.to : null;
+  const mine = sealed?.v === 1 && sealed.roleId === job.role.id;
+  const to = mine && typeof sealed.to === "string" ? sealed.to : null;
   c.header("Cache-Control", "no-store");
-  return c.html(<Receipt company={job.company} role={job.role} packet={job.packet} to={to} />);
+  return c.html(<Receipt company={job.company} role={job.role} packet={job.packet} to={to} next={mine && sealed.next === "conversation_by_email" ? "conversation_by_email" : "review"} />);
 });
 
 /* ------------------------------------------------------------------------------------------------------------ */
@@ -549,7 +600,8 @@ function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOpt
   const { step, stage, poolOptOut } = input;
   if (step === "received") return stage === "applied" ? "We are confirming your application now." : "Your application is in. We are checking the basics.";
   if (step === "under_review") {
-    if (input.screen) return input.screen.status === "in_progress" ? "Finish the screening conversation whenever you are ready. The link is below." : "We sent you a short screening conversation to complete when convenient. The link is below.";
+    if (input.screen?.status === "paused") return "Your screening conversation is paused while we fix a problem on our end. Your answers so far are saved, and we will email you a link to finish.";
+    if (input.screen) return input.screen.status === "in_progress" ? "Finish the short written conversation with the hiring team's AI assistant whenever you are ready. Your answers so far are saved. The link is below." : "A short written conversation with the hiring team's AI assistant is waiting for you, whenever suits you. The link is below.";
     if (stage === "screen_complete") return "Thanks for completing the screening conversation. The team is reviewing your answers.";
     return "The hiring team is reviewing your application. You will hear from them either way.";
   }
@@ -586,7 +638,10 @@ candidatePages.get("/c/status/:token", async (c) => {
   const msgs = await db.select().from(communications).where(and(eq(communications.applicationId, app.id), eq(communications.direction, "outbound"), inArray(communications.status, ["sent", "delivered"]))).orderBy(desc(communications.createdAt)).limit(5);
   const view = await visibleStage(container, app);
   // Nothing about a private decision shows, and nothing it closed is offered (its screens and interviews were cancelled with it).
-  const openScreen_ = view.hidden ? undefined : (await db.select().from(screens).where(eq(screens.applicationId, app.id)).orderBy(desc(screens.createdAt)).limit(1)).find((s) => ["invited", "reminded", "in_progress"].includes(s.status));
+  // A conversation paused while the assistant is down (plan E5) is mentioned, without a link: an email brings it back.
+  const latestScreen = view.hidden ? undefined : (await db.select().from(screens).where(eq(screens.applicationId, app.id)).orderBy(desc(screens.createdAt)).limit(1))[0];
+  const openScreen_ = latestScreen && ["invited", "reminded", "in_progress"].includes(latestScreen.status) ? latestScreen : undefined;
+  const pausedScreen = latestScreen?.status === "paused" ? latestScreen : undefined;
   const iv = view.hidden ? undefined : (await db.select().from(interviews).where(eq(interviews.applicationId, app.id)).orderBy(desc(interviews.createdAt)).limit(1))[0];
   const offered = !!iv && iv.status === "scheduling" && !!iv.scheduleToken && iv.offeredSlots.length > 0;
   const booked = !!iv && iv.status === "scheduled" && !!iv.startsAt && !!iv.scheduleToken && Date.parse(iv.endsAt ?? iv.startsAt) > Date.now();
@@ -614,7 +669,7 @@ candidatePages.get("/c/status/:token", async (c) => {
         <div><span>Last update</span><span>{new Date(view.since).toLocaleDateString()}</span></div>
       </div>
       <h2>What happens next</h2>
-      <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? null, interview: booked ? "booked" : offered ? "offered" : null })}</p>
+      <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null })}</p>
       <p class="meta">People on the hiring team at {company?.name ?? "the company"} make every decision about your application. An AI assistant reads applications and runs the screening conversation for them; who is interviewed, hired or turned down is always a person's decision.</p>
       {openScreen_ ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue the screening conversation" : "Start the screening conversation"}</a> : null}
       {offered ? <div class="card"><strong>Pick a time for your {iv!.title.toLowerCase()}.</strong><p>{company?.name} would like to interview you.</p><a class="btn" href={`/c/schedule/${iv!.scheduleToken}`}><Icon name="calendar" />Choose a time</a></div> : null}
@@ -718,144 +773,737 @@ candidatePages.get("/privacy", async (c) => {
 });
 
 /* ------------------------------------------------------------------------------------------------------------ */
-/* Screening conversation (Slice 2): server-rendered web chat, no JavaScript required, one question at a time.  */
+/* The screening conversation (plan Wave E): server-rendered, no JavaScript needed, one question at a time.      */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-async function loadScreenByToken(db: Vars["Variables"]["container"]["db"], token: string) {
-  const [scr] = await db.select().from(screens).where(eq(screens.token, token)).limit(1);
-  if (!scr) return null;
-  const [app] = await db.select().from(applications).where(eq(applications.id, scr.applicationId)).limit(1);
-  const [cand] = await db.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
-  const [role] = await db.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
-  const [company] = await db.select().from(companies).where(eq(companies.id, app.companyId)).limit(1);
-  const [pv] = await db.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
-  if (!cand || !role || !company || !pv) return null;
-  return { screen: scr, app, candidate: cand, role, company, packet: pv.packet };
-}
-
 /**
- * The conversation's own styles, on top of the page stylesheet: the assistant's messages on the left in a sunken box,
- * the candidate's in near-black on the right (as in the application), and a quiet progress bar. Buttons and their
- * secondary look come from the page stylesheet, like every other candidate page.
+ * The conversation's own styles, on top of the page stylesheet: the line on top of every page saying it is the
+ * company's AI assistant, the question in large type, the assistant's messages on the left in a sunken box and the
+ * candidate's own in near-black on the right, a thin progress bar (a native progress element, so no inline style), the
+ * tap answers, the quiet actions (skip, a person, later) and the "check your answers" list. Buttons and their secondary
+ * look come from the page stylesheet, like every other candidate page.
  */
 export const SCREEN_CSS = `
-.thread { display: flex; flex-direction: column; gap: 10px; margin: 20px 0; }
+.ai-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 22px; padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface-2); color: var(--ink-2); font-size: 14px; line-height: 1.45; }
+.ai-tag { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: var(--r-pill); background: var(--ink); color: var(--ground); font-size: 12px; font-weight: 600; letter-spacing: 0.04em; }
+h1.question { margin: 12px 0 18px; font-size: 28px; line-height: 1.22; }
+.lead-in { margin: 20px 0 0; color: var(--ink-2); }
+.thread { display: flex; flex-direction: column; gap: 10px; margin: 20px 0; padding: 0; list-style: none; }
 .msg { max-width: 88%; padding: 12px 16px; border-radius: 16px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg.assistant { align-self: flex-start; background: var(--ground); border: 1px solid var(--line); color: var(--ink); border-bottom-left-radius: 6px; }
 .msg.candidate { align-self: flex-end; background: var(--ink); color: var(--ground); border-bottom-right-radius: 6px; }
 .msg.system { align-self: center; background: transparent; color: var(--ink-3); font-size: 14px; }
-.progress { display: flex; align-items: center; gap: 12px; margin-top: 8px; color: var(--ink-3); font-size: 14px; font-variant-numeric: tabular-nums; }
-.bar { flex: 1; height: 6px; overflow: hidden; border-radius: var(--r-pill); background: var(--surface-2); }
-.bar i { display: block; height: 100%; border-radius: inherit; background: var(--ink); }
+.progress { display: flex; align-items: center; gap: 12px; margin: 0 0 4px; color: var(--ink-3); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.progress label { flex: none; margin: 0; color: inherit; font-size: inherit; font-weight: inherit; }
+.progress progress { flex: 1; min-width: 0; height: 6px; overflow: hidden; border: 0; border-radius: var(--r-pill); background: var(--surface-2); color: var(--ink); -webkit-appearance: none; appearance: none; }
+.progress progress::-webkit-progress-bar { border-radius: var(--r-pill); background: var(--surface-2); }
+.progress progress::-webkit-progress-value { border-radius: var(--r-pill); background: var(--ink); }
+.progress progress::-moz-progress-bar { border-radius: var(--r-pill); background: var(--ink); }
+details.earlier, details.own-words { margin: 18px 0 0; }
+details.earlier > summary, details.own-words > summary { color: var(--ink-2); font-size: 15px; font-weight: 600; cursor: pointer; }
+.days { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0 8px; }
+.pay-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.link-action { display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; background: none; color: var(--ink-2); font: 600 15px/1.3 var(--ui); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; cursor: pointer; }
+.link-action:hover { color: var(--ink); text-decoration-thickness: 2px; }
+.aside-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0 24px; margin-top: 24px; padding-top: 8px; border-top: 1px solid var(--line); }
+.aside-actions > form { display: contents; }
+.paths { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin: 20px 0; }
+.paths > .card { display: flex; flex-direction: column; margin: 0; }
+.paths > .card > h2 { margin-top: 0; }
+.paths > .card > form { margin-top: auto; }
+.answers { display: grid; gap: 12px; margin: 20px 0; padding: 0; list-style: none; }
+.answer { padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--ground); }
+.answer-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; }
+.answer-q { margin: 0; color: var(--ink); font-weight: 600; }
+.answer > p { margin: 8px 0 0; }
+.answer > a { display: inline-block; margin-top: 8px; font-weight: 600; }
+.pill { display: inline-flex; align-items: center; padding: 2px 10px; border: 1px solid var(--line-2); border-radius: var(--r-pill); background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 600; }
+@media (max-width: 600px) { h1.question { font-size: 23px; } .msg { max-width: 94%; } }
 `;
 
-candidatePages.get("/c/screen/:token", async (c) => {
+/**
+ * The conversation a link opens (a screen, or a repeat submission's detached copy; services/apply-conversation.ts), and
+ * whether the person behind it had their information deleted, in which case the link is dead (docs/readiness/14).
+ */
+async function openConversation(container: Container, token: string): Promise<{ ref: ConversationRef; gone: boolean } | null> {
+  const ref = await findConversation(container.db, token);
+  if (!ref) return null;
+  const [app] = await container.db.select({ candidateId: applications.candidateId }).from(applications).where(eq(applications.id, ref.applicationId)).limit(1);
+  return { ref, gone: app ? await anonymizedFor(container, app.candidateId) : false };
+}
+
+/** The masked address the application's link went to, for the introduction, when this browser just sent the form. */
+function appliedTo(c: Context<Vars>, token: string): string | null {
   const container = c.get("container");
-  const b = await loadScreenByToken(container.db, c.req.param("token"));
-  if (!b) return c.notFound();
-  const { candidate, company, packet, app } = b;
-  let screen = b.screen;
-  const active = ["invited", "reminded", "in_progress"].includes(screen.status);
-  if (active && !screen.transcript.some((t) => t.role === "assistant")) {
-    await openScreen(container.db, company.id, screenDeps(container), { screenId: screen.id, actor: { kind: "system", id: "screen_web" } });
-    screen = (await container.db.select().from(screens).where(eq(screens.id, screen.id)).limit(1))[0];
-  }
-  // A screen that opened with the open questions counts them too, so "x of N" matches the "N questions" the invitation promised.
-  const total = focusedPacket(packet, screen.progress).screening.questions.length;
-  const answered = Object.keys(answersOf(screen)).length;
-  const err = c.req.query("error");
-  const notice = noticesFor(["*"]).find((n) => n.key === "ai_use");
-  const calendar = await loadBusinessCalendar(container.db);
-  return c.html(
-    <Layout title={`Screening: ${packet.identity.title} at ${company.name}`} extraCss={SCREEN_CSS}>
-      <p class="eyebrow">{company.name} · {packet.identity.title}</p>
-      <h1>A few questions, {candidate.firstName}</h1>
-      <p class="lead">About {packet.screening.maxMinutes} minutes, one question at a time. You can stop and come back any time; this page remembers where you were.</p>
-      {screen.status === "expired" ? <div class="err">This screening link has expired. Reply to any of our emails and a person will pick it up with you.</div> : null}
-      {screen.status === "human_requested" ? <div class="card"><strong>A person will follow up.</strong><p>Someone from {company.name}'s hiring team has your conversation and will reach out {humanResponseExpectation(new Date(), calendar)}.</p></div> : null}
-      {screen.status === "completed" ? <div class="card"><strong>Thanks, that is everything.</strong><p>The hiring team reviews your answers and you hear back within a few days. <a href={`/c/status/${app.statusToken}`}>Check your status</a> any time.</p></div> : null}
-      {screen.status === "abandoned" ? <div class="card">This application was withdrawn. Thank you for your time.</div> : null}
-      {/* Stopped by the team before it started (plan A7), or closed with the application (A9): the old link says so, and nothing about why. */}
-      {screen.status === "cancelled" ? <div class="card" role="status"><strong>This screening conversation is closed.</strong><p>Nothing more is needed from you here. If you have a question, reply to any of our emails. <a href={`/c/status/${app.statusToken}`}>Check your status</a> any time.</p></div> : null}
-      <div class="thread">
-        {screen.transcript.map((t) => <div class={`msg ${t.role}`}>{t.content}</div>)}
+  const sealed = openPayload<ConversationPayload>(CONVERSATION_PURPOSE, getCookie(c, CONVERSATION_COOKIE), container.env.SESSION_SECRET, container.engine.clock().getTime());
+  return sealed?.v === 1 && sealed.token === token && typeof sealed.to === "string" ? sealed.to : null;
+}
+
+type Line = ConversationView["transcript"][number];
+
+/** Which question this is ("Question 2 of 5"): the packet's questions asked so far, the current one included. */
+function questionNumber(view: ConversationView): number {
+  const asked = new Set(view.transcript.filter((t) => t.role === "assistant" && t.questionKey && t.questionKey !== WITHDRAW_CONFIRM_KEY).map((t) => t.questionKey));
+  if (view.current) asked.add(view.current.key);
+  return Math.max(1, Math.min(view.total, asked.size));
+}
+
+/**
+ * The conversation around the current question: what came before it (folded away, one question at a time), what the
+ * assistant said just before asking it ("Thanks."), and the exchange since: the candidate's own words, and any follow-up
+ * that quotes them. Every packet question is asked in the packet's own words (plan E2), so the message that asked it is
+ * found by those words.
+ */
+function aroundQuestion(view: ConversationView): { earlier: Line[]; leadIn: string | null; exchange: Line[] } {
+  const t = view.transcript;
+  const q = view.current;
+  if (!q) return { earlier: [], leadIn: null, exchange: t };
+  let at = -1;
+  for (let i = t.length - 1; i >= 0 && at < 0; i--) if (t[i].role === "assistant" && t[i].content.includes(q.question)) at = i;
+  if (at < 0) return { earlier: [], leadIn: null, exchange: t };
+  const leadIn = t[at].content.replace(q.question, "").replace(/\s*Next:\s*$/i, "").trim();
+  return { earlier: t.slice(0, at), leadIn: leadIn || null, exchange: t.slice(at + 1) };
+}
+
+/** One message: the assistant's on the left, the candidate's own on the right, a skipped question as a quiet note. */
+function Bubble(props: { line: Line }) {
+  const { line } = props;
+  if (line.role === "system") return <li class="msg system">{line.content === SKIPPED_MESSAGE ? "You skipped this question." : line.content === MOVED_ON_MESSAGE ? "You moved on. Your answer is kept." : line.content}</li>;
+  return <li class={`msg ${line.role}`}><span class="sr-only">{line.role === "candidate" ? "You said: " : "The assistant said: "}</span>{line.content}</li>;
+}
+
+/** On top of every conversation page (plan E2): who the candidate is talking to, before anything else. */
+function AiLine(props: { companyName: string }) {
+  return <p class="ai-line"><span class="ai-tag">AI assistant</span><span>This conversation is with {props.companyName}'s AI assistant, a software program, not a person. People on the hiring team make every decision.</span></p>;
+}
+
+/** Every page of the conversation: the AI line, the company and the job, the page, the AI notice, the privacy link. */
+function ConversationPage(props: { view: ConversationView; title: string; children?: unknown }) {
+  const { view } = props;
+  return (
+    <Layout title={`${props.title}: ${view.roleTitle} at ${view.companyName}`} extraCss={SCREEN_CSS}>
+      <AiLine companyName={view.companyName} />
+      <p class="eyebrow">{view.companyName} · {view.roleTitle}</p>
+      {props.children}
+      {view.intro.aiNotice ? <p class="notice">{view.intro.aiNotice.text}</p> : null}
+      <p class="foot"><a href="/privacy">How we handle your information</a></p>
+    </Layout>
+  );
+}
+
+/** "Question 2 of 5" over a thin bar. */
+function Progress(props: { at: number; total: number; text: string }) {
+  return (
+    <div class="progress">
+      <label for="progress">{props.text}</label>
+      <progress id="progress" max={Math.max(1, props.total)} value={Math.min(props.at, Math.max(1, props.total))}>{props.text}</progress>
+    </div>
+  );
+}
+
+/**
+ * "Skip this question" (E11): a second submit button that needs nothing typed, no check by the browser and no script.
+ * While the assistant follows up on an answer already given, the same button moves on and keeps that answer, and says so.
+ */
+function SkipButton(props: { keepsAnswer?: boolean }) {
+  return <button class="link-action" type="submit" name="action" value="skip" formnovalidate>{props.keepsAnswer ? "Keep my answer and move on" : "Skip this question"}</button>;
+}
+
+/** The typed answer. Its label names the question (or the follow-up) it answers, for a screen reader (E14). */
+function TypedAnswer(props: { action: string; about: string; submit: string; skip: boolean; keepsAnswer?: boolean; autofocus?: boolean; value?: string }) {
+  return (
+    <form method="post" action={props.action}>
+      <label for="message">Your answer<span class="sr-only"> to: {props.about}</span></label>
+      <textarea id="message" name="message" rows={4} maxlength={2000} required autofocus={props.autofocus} aria-describedby="message-hint">{props.value ?? ""}</textarea>
+      <small id="message-hint">In your own words. A few sentences is plenty, and there are no wrong answers.</small>
+      <div class="actions">
+        <button class="btn" type="submit">{props.submit}</button>
+        {props.skip ? <SkipButton keepsAnswer={props.keepsAnswer} /> : null}
       </div>
-      {active && withdrawPending(screen.transcript) ? (
+    </form>
+  );
+}
+
+/**
+ * Tap answers (E12) for the factual questions: yes or no, the days of the week, a start date, a pay range. Recorded word
+ * for word without the model; typing stays possible below.
+ */
+function TapAnswerForm(props: { action: string; tap: TapFormat; about: string; submit: string; skip: boolean }) {
+  const { tap } = props;
+  const skip = props.skip ? <SkipButton /> : null;
+  if (tap.kind === "yes_no") {
+    return (
+      <form method="post" action={props.action}>
+        <input type="hidden" name="tap" value="yes_no" />
+        <div class="actions" role="group" aria-label={`Your answer to: ${props.about}`}>
+          <button class="btn secondary" type="submit" name="choice" value="yes">Yes</button>
+          <button class="btn secondary" type="submit" name="choice" value="no">No</button>
+          {skip}
+        </div>
+      </form>
+    );
+  }
+  return (
+    <form method="post" action={props.action}>
+      <input type="hidden" name="tap" value={tap.kind} />
+      {tap.kind === "days" ? (
+        <fieldset>
+          <legend>Tick every day you can work</legend>
+          <div class="days">{tap.options.map((d) => <label class="check slot"><input type="checkbox" name="days" value={d} /> {d}</label>)}</div>
+        </fieldset>
+      ) : tap.kind === "start_date" ? (
+        <>
+          <label for="tap-date">The earliest day you could start</label>
+          <input id="tap-date" type="date" name="date" required />
+        </>
+      ) : (
+        <fieldset>
+          <legend>The pay you are looking for, {tap.basis === "hourly" ? "an hour" : "a year"}{tap.currency === "USD" ? ", in US dollars" : `, in ${tap.currency}`}</legend>
+          <div class="pay-pair">
+            <div>
+              <label for="tap-min">From</label>
+              <input id="tap-min" type="number" name="min" min="1" step="any" inputmode="decimal" required />
+            </div>
+            <div>
+              <label for="tap-max">To (optional)</label>
+              <input id="tap-max" type="number" name="max" min="1" step="any" inputmode="decimal" />
+            </div>
+          </div>
+        </fieldset>
+      )}
+      <div class="actions">
+        <button class="btn" type="submit">{props.submit}</button>
+        {skip}
+      </div>
+    </form>
+  );
+}
+
+/** A tap answer where the question takes one, with the candidate's own words one click away; otherwise the words. */
+function AnswerForms(props: { action: string; tap: TapFormat | null; about: string; submit: string; skip: boolean; keepsAnswer?: boolean; value?: string }) {
+  if (!props.tap) return <TypedAnswer action={props.action} about={props.about} submit={props.submit} skip={props.skip} keepsAnswer={props.keepsAnswer} autofocus value={props.value} />;
+  return (
+    <>
+      <TapAnswerForm action={props.action} tap={props.tap} about={props.about} submit={props.submit} skip={props.skip} />
+      <details class="own-words">
+        <summary>Answer in your own words instead</summary>
+        <TypedAnswer action={props.action} about={props.about} submit={props.submit} skip={false} value={props.value} />
+      </details>
+    </>
+  );
+}
+
+/** Always there, and quiet: a person instead (E3), and the link by email to finish later (E2, E4). */
+function AsideActions(props: { base: string; later: boolean }) {
+  return (
+    <div class="aside-actions">
+      <a class="link-action" href={`${props.base}/person`}>I'd rather talk to a person</a>
+      {props.later ? <form method="post" action={`${props.base}/later`}><button class="link-action" type="submit">Finish later: email me the link</button></form> : null}
+    </div>
+  );
+}
+
+/** What went wrong with the last thing sent, in the candidate's words (the codes come from `turnErrorCode`). */
+const TURN_ERRORS: Record<string, string> = {
+  empty: "Please type an answer first, or press Skip this question.",
+  tap: "That answer does not fit this question. Please check it, or answer in your own words instead.",
+  stale: "This page was out of date, so nothing was saved. Here is where the conversation is now.",
+  trouble: "Something went wrong on our end. Please send that again in a minute.",
+};
+
+function turnErrorCode(message: string): string {
+  if (/type an answer/i.test(message)) return "empty";
+  if (/does not fit/i.test(message)) return "tap";
+  if (/no question to answer/i.test(message)) return "stale";
+  return "trouble";
+}
+
+function ErrorNote(props: { code?: string | null }) {
+  const text = props.code ? TURN_ERRORS[props.code] : undefined;
+  return text ? <div class="err" role="alert">{text}</div> : null;
+}
+
+/**
+ * The fixed introduction (E2), before the first question: it is the company's AI assistant, not a person; what it is for;
+ * a conversation, not a test; how many questions and minutes; skip, stop and come back; then Start, Do this later, or
+ * I'd rather talk to a person. Nothing here is written by the model. Start shows the first question at once.
+ */
+function IntroPage(props: { view: ConversationView; applied: string | null }) {
+  const { view } = props;
+  const { intro } = view;
+  const base = screenPath(view.token);
+  return (
+    <ConversationPage view={view} title="Before you start">
+      {props.applied ? (
+        <div class="card" role="status">
+          <strong>Your application is sent.</strong>
+          <p>Your own link to it is on its way to {props.applied}. If you applied for this job before, it may be in one of our earlier emails.</p>
+        </div>
+      ) : null}
+      <h1>{intro.title}</h1>
+      <p class="lead">{intro.disclosure}</p>
+      <ul class="points">
+        <li><Icon name="people" /><span>It is a conversation, not a test. There are no trick questions: answer in your own words, as briefly as you like.</span></li>
+        <li><Icon name="clock" /><span>About {intro.questions} {intro.questions === 1 ? "question" : "questions"} and {intro.minutes} minutes, one question at a time.</span></li>
+        <li><Icon name="check" /><span>You can skip any question, or stop and come back later: this page keeps your place.</span></li>
+        <li><Icon name="eye" /><span>It helps the hiring team at {view.companyName} learn about your work beyond your resume. Your answers go to them, and people decide.</span></li>
+      </ul>
+      {intro.humanAlternative ? <p>{intro.humanAlternative}</p> : null}
+      <div class="actions">
+        <form method="post" action={`${base}/start`}><button class="btn" type="submit">Start</button></form>
+        <form method="post" action={`${base}/later`}><button class="btn secondary" type="submit">Do this later</button></form>
+        <a class="btn secondary" href={`${base}/person`}>I'd rather talk to a person</a>
+      </div>
+      <p class="meta">"Do this later" emails you the link. "I'd rather talk to a person" lets you send your application without the conversation, or have a person contact you.</p>
+      {intro.packetDisclosure ? <p class="notice">{intro.packetDisclosure}</p> : null}
+    </ConversationPage>
+  );
+}
+
+/**
+ * One question at a time: "Question 2 of 5" and a thin bar, the earlier questions folded away, the question in large
+ * type, the candidate's answers as their own messages and the assistant's follow-ups quoting them, then the answer:
+ * taps for the factual questions (E12), words otherwise, with a quiet "Skip this question" (E11). A person, or finishing
+ * later, is always one click away.
+ */
+function QuestionPage(props: { view: ConversationView; error?: string | null }) {
+  const { view } = props;
+  const base = screenPath(view.token);
+  const q = view.current;
+  const n = questionNumber(view);
+  const { earlier, leadIn, exchange } = aroundQuestion(view);
+  const last = exchange.at(-1);
+  // The assistant asked a follow-up about this question: the answer is to that, in words.
+  const followUp = q && last?.role === "assistant" && !view.withdrawPending ? last.content : null;
+  const heading = q?.question ?? "Your conversation";
+  return (
+    <ConversationPage view={view} title={q ? `Question ${n} of ${view.total}` : "Your conversation"}>
+      <Progress at={q ? n : view.answered} total={view.total} text={q ? `Question ${n} of ${view.total}` : `${view.answered} of ${view.total} answered`} />
+      {earlier.length ? (
+        <details class="earlier">
+          <summary>Earlier in the conversation</summary>
+          <ol class="thread">{earlier.map((l) => <Bubble line={l} />)}</ol>
+        </details>
+      ) : null}
+      {leadIn ? <p class="lead-in"><span class="sr-only">The assistant said: </span>{leadIn}</p> : null}
+      <h1 class="question" id="question">{heading}</h1>
+      {exchange.length ? <ol class="thread" aria-label="This question so far">{exchange.map((l) => <Bubble line={l} />)}</ol> : null}
+      {view.withdrawPending ? (
         // WITHDRAW asked first (Wave 0 item 0.7): nothing is withdrawn until the candidate presses the first button.
         <div class="card" role="status">
           <strong>Do you want to withdraw your application?</strong>
-          <p>Withdrawing ends this conversation and your application for {packet.identity.title}. To keep going instead, just type your answer below.</p>
-          <form method="post" action={`/c/screen/${screen.token}/withdraw`} class="actions">
+          <p>Withdrawing ends this conversation and your application for {view.roleTitle}. To keep going instead, just type your answer below.</p>
+          <form method="post" action={`${base}/withdraw`} class="actions">
             <button class="btn" type="submit" name="confirm" value="yes">Yes, withdraw my application</button>
             <button class="btn secondary" type="submit" name="confirm" value="no">No, keep my application</button>
           </form>
         </div>
       ) : null}
-      {active ? (
-        <>
-          <div class="progress"><span>{answered} of {total} answered</span><span class="bar"><i style={`width:${Math.round((answered / Math.max(1, total)) * 100)}%`} /></span></div>
-          {err === "empty" ? <div class="err">Please type an answer first.</div> : err === "trouble" ? <div class="err">Something went wrong on our end. Please send that again in a minute.</div> : null}
-          <form method="post" action={`/c/screen/${screen.token}`}>
-            <label for="message">Your answer</label>
-            <textarea id="message" name="message" rows={3} required autofocus></textarea>
-            <div class="actions">
-              <button class="btn" type="submit">Send</button>
-            </div>
-          </form>
-          <form method="post" action={`/c/screen/${screen.token}/human`} class="actions">
-            <button class="btn secondary" type="submit">Talk to a person instead</button>
-          </form>
-        </>
-      ) : null}
-      <p class="notice">{notice?.text}</p>
-      <p class="foot"><a href="/privacy">How we handle your information</a></p>
-    </Layout>,
+      <ErrorNote code={props.error} />
+      <AnswerForms action={base} tap={followUp ? null : q?.tap ?? null} about={followUp ?? heading} submit="Send" skip={!!q} keepsAnswer={!!q?.answered} />
+      <AsideActions base={base} later />
+    </ConversationPage>
   );
+}
+
+/** One answer on the "check your answers" page, marked when it was changed or skipped, with its link to change it. */
+function AnswerItem(props: { item: ReviewItem; n: number; base: string }) {
+  const { item } = props;
+  const mark = item.status === "edited" ? "Changed" : item.status === "declined" ? "Skipped" : item.status === "unanswered" ? "Not answered" : null;
+  return (
+    <li class="answer" id={`a-${item.key}`}>
+      <div class="answer-head">
+        <p class="answer-q">{props.n}. {item.question}</p>
+        {mark ? <span class="pill">{mark}</span> : null}
+      </div>
+      <p class="pre">{item.answer ?? (item.status === "declined" ? "You skipped this question." : "No answer yet.")}</p>
+      <a href={`${props.base}/answers/${encodeURIComponent(item.key)}`}>{item.answer ? "Change" : "Answer it"}<span class="sr-only"> (question {props.n})</span></a>
+    </li>
+  );
+}
+
+/** "Check your answers" (E10): every answer with its Change link, changed and skipped ones marked, then Send. */
+function ReviewPage(props: { view: ConversationView; changed: string | null; error?: string | null }) {
+  const { view } = props;
+  const base = screenPath(view.token);
+  const items = view.review ?? [];
+  return (
+    <ConversationPage view={view} title="Check your answers">
+      <Progress at={view.total} total={view.total} text={`All ${view.total} questions done`} />
+      <h1>Check your answers</h1>
+      <p class="lead">This is what you told the assistant. Change any answer you like, then press Send. Nothing is sent until you do.</p>
+      {props.changed && items.some((i) => i.key === props.changed) ? <div class="card" role="status"><strong>Your answer is changed.</strong></div> : null}
+      <ErrorNote code={props.error} />
+      <ol class="answers">{items.map((item, i) => <AnswerItem item={item} n={i + 1} base={base} />)}</ol>
+      <form method="post" action={`${base}/submit`}>
+        <button class="btn" type="submit">Send my answers</button>
+      </form>
+      <AsideActions base={base} later />
+    </ConversationPage>
+  );
+}
+
+/** Changing one answer (E10), from "check your answers": the question in large type, the answer now, and a new one. */
+function EditPage(props: { view: ConversationView; item: ReviewItem; n: number; error?: string | null }) {
+  const { view, item } = props;
+  const base = screenPath(view.token);
+  return (
+    <ConversationPage view={view} title="Change your answer">
+      <p class="back"><a href={`${base}#a-${item.key}`}><Icon name="arrow-left" />Back to your answers</a></p>
+      <p class="meta">Question {props.n} of {view.total}</p>
+      <h1 class="question" id="question">{item.question}</h1>
+      {item.answer ? <div class="card"><strong>Your answer now</strong><p class="pre">{item.answer}</p></div> : null}
+      <ErrorNote code={props.error} />
+      <AnswerForms action={`${base}/answers/${encodeURIComponent(item.key)}`} tap={item.tap} about={item.question} submit="Save this answer" skip={false} value={item.tap ? undefined : item.answer ?? undefined} />
+    </ConversationPage>
+  );
+}
+
+/** What a closed conversation says, by how it closed (plan E3, E4, E5, A7, A9). Never why a team stopped it. */
+function closedWords(view: ConversationView): { title: string; lines: string[] } {
+  const co = view.companyName;
+  switch (view.status) {
+    case "completed":
+      return { title: "Thanks, your answers are sent", lines: [`The hiring team at ${co} reads them with your application. People on the team make every decision, and you will hear from them either way.`, "If anything else is needed from you, we will email you."] };
+    case "human_requested":
+      return { title: "A person will be in touch", lines: [`Someone working with the hiring team at ${co} will contact you ${view.personExpectation}.`, "Anything you answered is kept. Nothing else is needed from you here."] };
+    case "declined_by_candidate":
+      return { title: "Your application is with the hiring team", lines: [`It went to the hiring team at ${co} without the conversation. People on the team review it, and you will hear from them either way.`] };
+    case "paused":
+      return { title: "The conversation is paused", lines: [`Sorry, ${co}'s AI assistant has stopped working for the moment. Your answers so far are saved.`, "We will email you a link to finish as soon as it is working again, usually within a few hours."] };
+    case "unfinished":
+      return { title: "This conversation has closed", lines: [`It closed before every question was answered. What you said has gone to the hiring team at ${co} with your application, which carries on. Nothing else is needed from you.`] };
+    case "expired":
+      // The conversation that goes with the application, never started: the application went on without it (E4).
+      if (view.oneVisit) return { title: "This conversation has closed", lines: [`Your application has gone to the hiring team at ${co} without it, and that is fine. Nothing else is needed from you; you will hear from them either way.`, "If you would like to add something, reply to any of our emails."] };
+      return { title: "This link has expired", lines: ["This screening link has expired. Reply to any of our emails and a person will pick it up with you."] };
+    case "abandoned":
+      return { title: "Your application is withdrawn", lines: ["This application was withdrawn. Thank you for your time."] };
+    default:
+      // Stopped by the team before it started (plan A7), or closed with the application (A9): nothing about why.
+      return { title: "This screening conversation is closed", lines: ["Nothing more is needed from you here. If you have a question, reply to any of our emails."] };
+  }
+}
+
+function ClosedPage(props: { view: ConversationView }) {
+  const { view } = props;
+  const words = closedWords(view);
+  return (
+    <ConversationPage view={view} title={words.title}>
+      <h1>{words.title}</h1>
+      <div class="card" role="status">{words.lines.map((l) => <p>{l}</p>)}</div>
+      {/* While the assistant is down a person is still one click away (E5). */}
+      {view.status === "paused" ? <p>Would you rather not wait? <a href={`${screenPath(view.token)}/person`}>Talk to a person instead</a>.</p> : null}
+      {view.transcript.length ? (
+        <details class="earlier">
+          <summary>See the conversation</summary>
+          <ol class="thread">{view.transcript.map((l) => <Bubble line={l} />)}</ol>
+        </details>
+      ) : null}
+    </ConversationPage>
+  );
+}
+
+/** "I'd rather talk to a person" (E3, Q16): two equal choices, and both are fine. */
+function PersonPage(props: { view: ConversationView }) {
+  const { view } = props;
+  const base = screenPath(view.token);
+  return (
+    <ConversationPage view={view} title="Talk to a person instead">
+      <p class="back"><a href={base}><Icon name="arrow-left" />Back to the conversation</a></p>
+      <h1>Talk to a person instead</h1>
+      <p class="lead">That is fine. Choose whichever suits you. Anything you have answered so far is kept.</p>
+      <div class="paths">
+        <section class="card" aria-labelledby="path-send">
+          <h2 id="path-send">Send my application as it is</h2>
+          <p>Your application goes to the hiring team at {view.companyName} without the conversation. People on the team review it, and you will hear from them either way.</p>
+          <form method="post" action={`${base}/person`}>
+            <input type="hidden" name="choice" value="send_without" />
+            <button class="btn secondary" type="submit">Send without the conversation</button>
+          </form>
+        </section>
+        <section class="card" aria-labelledby="path-person">
+          <h2 id="path-person">Have a person contact me</h2>
+          <p>A recruiter working with the hiring team at {view.companyName} will get in touch {view.personExpectation}, to go through the questions with you or answer yours.</p>
+          <form method="post" action={`${base}/person`}>
+            <input type="hidden" name="choice" value="contact_me" />
+            <button class="btn secondary" type="submit">Have a person contact me</button>
+          </form>
+        </section>
+      </div>
+    </ConversationPage>
+  );
+}
+
+/** After "Do this later" (E2): the link went by email, to the address on the application; the place is kept. */
+function LaterPage(props: { view: ConversationView }) {
+  const { view } = props;
+  return (
+    <ConversationPage view={view} title="Your link is on its way">
+      <h1>Your link is on its way</h1>
+      <div class="card" role="status">
+        <strong>We emailed you the link to this conversation.</strong>
+        <p>It went to the email address on your application. It keeps your place, so open it whenever suits you in the next few days.</p>
+      </div>
+      <p>Changed your mind? <a href={screenPath(view.token)}>Start now instead</a>.</p>
+    </ConversationPage>
+  );
+}
+
+type FormBody = Record<string, string | File | (string | File)[]>;
+const field = (body: FormBody, key: string): string => {
+  const v = body[key];
+  return typeof v === "string" ? v : Array.isArray(v) && typeof v[0] === "string" ? v[0] : "";
+};
+const fields = (body: FormBody, key: string): string[] => (Array.isArray(body[key]) ? (body[key] as unknown[]) : [body[key]]).filter((x): x is string => typeof x === "string");
+
+/** A tapped answer from the form (E12), checked against the contract; null when it does not parse (an empty pay box, no day ticked). */
+function tapFrom(body: FormBody, kind: string): TapAnswer | null {
+  const amount = (s: string) => (s.trim() ? Number(s.replace(/[$,\s]/g, "")) : undefined);
+  const raw = kind === "yes_no" ? { kind, choice: field(body, "choice") } : kind === "days" ? { kind, days: fields(body, "days") } : kind === "start_date" ? { kind, date: field(body, "date") } : kind === "pay_range" ? { kind, min: amount(field(body, "min")), max: amount(field(body, "max")) } : null;
+  const parsed = TapAnswer.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
+/** What the candidate did: pressed "Skip this question" (E11), tapped an answer (E12), or typed. Null for a tap that does not parse. */
+function turnActionFrom(body: FormBody): TurnAction | null {
+  if (field(body, "action") === "skip") return { skip: true };
+  const kind = field(body, "tap");
+  if (kind) {
+    const tap = tapFrom(body, kind);
+    return tap ? { tap } : null;
+  }
+  return { message: field(body, "message") };
+}
+
+/** A question's key in an address: the packet's own keys are short snake_case. */
+const ANSWER_KEY = /^[A-Za-z0-9_-]{1,100}$/;
+
+/**
+ * The conversation page, the same for a first application and a repeat one (Q14 x Q15): it reads only the view the
+ * service gives, so the two cannot render differently. Every conversation on the web, offered with the application or
+ * invited by email later, opens on the fixed introduction (plan E2); nothing on it is written by the model.
+ */
+candidatePages.get("/c/screen/:token", async (c) => {
+  const container = c.get("container");
+  const found = await openConversation(container, c.req.param("token"));
+  if (!found) return c.notFound();
+  if (found.gone) return linkGone(c);
+  // Opening the link writes nothing (a mail scanner may open it): the introduction is fixed, and Start shows the first question.
+  const view = await conversationView(container.db, found.ref);
+  if (!view) return c.notFound();
+  c.header("Cache-Control", "no-store");
+  const error = c.req.query("error") ?? null;
+  if (view.phase === "intro") return c.html(<IntroPage view={view} applied={appliedTo(c, view.token)} />);
+  if (view.phase === "review") return c.html(<ReviewPage view={view} changed={c.req.query("changed") ?? null} error={error} />);
+  if (view.phase === "closed") return c.html(<ClosedPage view={view} />);
+  return c.html(<QuestionPage view={view} error={error} />);
 });
 
+/** An answer: typed, tapped (E12) or skipped (E11). Commands (HUMAN, WITHDRAW), skips and taps never reach the model. */
 candidatePages.post("/c/screen/:token", rateLimit(POLICIES.screen), async (c) => {
   const container = c.get("container");
-  const b = await loadScreenByToken(container.db, c.req.param("token") ?? "");
-  if (!b) return c.notFound();
-  const body = await c.req.parseBody();
-  const message = typeof body.message === "string" ? body.message.trim().slice(0, 2000) : "";
-  if (!message) return c.redirect(`/c/screen/${b.screen.token}?error=empty`);
-  const result = await runScreenTurn(container.db, b.company.id, screenDeps(container), { screenId: b.screen.id, message, channel: "web", actor: { kind: "system", id: "screen_web" } });
-  await container.kick();
-  return c.redirect(`/c/screen/${b.screen.token}${result.kind === "error" ? "?error=trouble" : ""}`);
+  const found = await openConversation(container, c.req.param("token") ?? "");
+  if (!found) return c.notFound();
+  if (found.gone) return linkGone(c);
+  const base = screenPath(found.ref.token);
+  const action = turnActionFrom(await c.req.parseBody({ all: true }));
+  if (!action) return c.redirect(`${base}?error=tap`);
+  if (!action.skip && !action.tap && !(action.message ?? "").trim()) return c.redirect(`${base}?error=empty`);
+  const result = await conversationTurn(container, found.ref, action);
+  return c.redirect(result.kind === "error" ? `${base}?error=${turnErrorCode(result.message)}` : base);
 });
 
-candidatePages.post("/c/screen/:token/human", rateLimit(POLICIES.screenHuman), async (c) => {
+/** "Start" on the introduction (E2): the first question, in the packet's words, at once. Pressing twice changes nothing. */
+candidatePages.post("/c/screen/:token/start", rateLimit(POLICIES.screen), async (c) => {
   const container = c.get("container");
-  const b = await loadScreenByToken(container.db, c.req.param("token") ?? "");
-  if (!b) return c.notFound();
-  if (["invited", "reminded", "in_progress"].includes(b.screen.status)) {
-    await withTenant(container.db, b.company.id, async (tx) => requestHuman(tx, screenDeps(container), { screenId: b.screen.id, reason: "candidate pressed 'Talk to a person'", actor: { kind: "candidate", id: b.candidate.id }, reply: `Understood. A person from ${b.company.name} will follow up with you ${humanResponseExpectation(new Date(), await loadBusinessCalendar(tx))}.`, replyChannel: "web" }));
-    await container.kick();
-  }
-  return c.redirect(`/c/screen/${b.screen.token}`);
+  const found = await openConversation(container, c.req.param("token") ?? "");
+  if (!found) return c.notFound();
+  if (found.gone) return linkGone(c);
+  await conversationStart(container, found.ref);
+  return c.redirect(screenPath(found.ref.token));
+});
+
+/** "Do this later" (E2) and "Finish later": the link goes by email to the address on the application, never to the page. */
+candidatePages.post("/c/screen/:token/later", rateLimit(POLICIES.screenLater), async (c) => {
+  const container = c.get("container");
+  const found = await openConversation(container, c.req.param("token") ?? "");
+  if (!found) return c.notFound();
+  if (found.gone) return linkGone(c);
+  const base = screenPath(found.ref.token);
+  return c.redirect((await conversationLater(container, found.ref)) ? `${base}/later?sent=1` : base);
+});
+
+candidatePages.get("/c/screen/:token/later", async (c) => {
+  const container = c.get("container");
+  const found = await openConversation(container, c.req.param("token"));
+  if (!found) return c.notFound();
+  if (found.gone) return linkGone(c);
+  const view = await conversationView(container.db, found.ref);
+  if (!view) return c.notFound();
+  if (c.req.query("sent") !== "1" || view.phase === "closed") return c.redirect(screenPath(view.token));
+  c.header("Cache-Control", "no-store");
+  return c.html(<LaterPage view={view} />);
+});
+
+/** "I'd rather talk to a person" (E3): the choice page. Open while the conversation can still be answered, or is paused (E5). */
+candidatePages.get("/c/screen/:token/person", async (c) => {
+  const container = c.get("container");
+  const found = await openConversation(container, c.req.param("token"));
+  if (!found) return c.notFound();
+  if (found.gone) return linkGone(c);
+  const view = await conversationView(container.db, found.ref);
+  if (!view) return c.notFound();
+  if (!SCREEN_PERSON_ROUTE_STATUSES.includes(view.status)) return c.redirect(screenPath(view.token));
+  c.header("Cache-Control", "no-store");
+  return c.html(<PersonPage view={view} />);
+});
+
+/**
+ * The choice (Q16): `send_without` sends the application on without the conversation; `contact_me` asks a recruiter to
+ * get in touch within four business hours. Both are counted. The page then says what happens next.
+ */
+candidatePages.post("/c/screen/:token/person", rateLimit(POLICIES.screenHuman), async (c) => {
+  const container = c.get("container");
+  const found = await openConversation(container, c.req.param("token") ?? "");
+  if (!found) return c.notFound();
+  if (found.gone) return linkGone(c);
+  const body = await c.req.parseBody();
+  if (body.choice === "send_without" || body.choice === "contact_me") await conversationPerson(container, found.ref, body.choice);
+  return c.redirect(screenPath(found.ref.token));
+});
+
+/** The earlier one-button route: it now leads to the choice (E3), and changes nothing by itself. */
+candidatePages.post("/c/screen/:token/human", rateLimit(POLICIES.screenHuman), async (c) => {
+  const found = await openConversation(c.get("container"), c.req.param("token") ?? "");
+  if (!found) return c.notFound();
+  return c.redirect(`${screenPath(found.ref.token)}/person`);
 });
 
 /**
  * The answer to "do you want to withdraw?" on the web (Wave 0 item 0.7): `confirm=yes` withdraws the application and
  * closes the conversation, `confirm=no` keeps it and picks up where it was. The link itself is the proof, as on the
- * status page; a screen that already ended is left as it is.
+ * status page; a conversation that already ended is left as it is. A repeat submission's copy withdraws nothing: its
+ * email sends the address owner to their own status page (services/apply-conversation.ts).
  */
 candidatePages.post("/c/screen/:token/withdraw", rateLimit(POLICIES.withdraw), async (c) => {
   const container = c.get("container");
-  const b = await loadScreenByToken(container.db, c.req.param("token") ?? "");
-  if (!b) return c.notFound();
-  if (await anonymizedFor(container, b.candidate.id)) return linkGone(c);
+  const found = await openConversation(container, c.req.param("token") ?? "");
+  if (!found) return c.notFound();
+  if (found.gone) return linkGone(c);
   const body = await c.req.parseBody();
-  if (body.confirm === "yes" || body.confirm === "no") {
-    await withTenant(container.db, b.company.id, async (tx) => {
-      const actor = { kind: "candidate" as const, id: b.candidate.id };
-      // Withdrawing here leaves the process like the status page's button does (plan A9): `screenDeps` cleans up.
-      await answerWithdrawPrompt(tx, screenDeps(container), { screenId: b.screen.id, confirm: body.confirm === "yes", channel: "web", actor });
-    });
-    await container.kick();
-  }
-  return c.redirect(`/c/screen/${b.screen.token}`);
+  // Withdrawing here leaves the process like the status page's button does (plan A9): the service cleans up.
+  if (body.confirm === "yes" || body.confirm === "no") await conversationWithdraw(container, found.ref, body.confirm === "yes");
+  return c.redirect(screenPath(found.ref.token));
+});
+
+/** The plan's address for "check your answers" (E10): the conversation's own page shows it once every question is done. */
+candidatePages.get("/c/screen/:token/review", async (c) => {
+  const found = await openConversation(c.get("container"), c.req.param("token"));
+  if (!found) return c.notFound();
+  return c.redirect(screenPath(found.ref.token));
+});
+
+/** Changing one answer (E10). Only while the candidate is checking their answers; otherwise back to the conversation. */
+candidatePages.get("/c/screen/:token/answers/:key", async (c) => {
+  const container = c.get("container");
+  const found = await openConversation(container, c.req.param("token"));
+  if (!found) return c.notFound();
+  if (found.gone) return linkGone(c);
+  const view = await conversationView(container.db, found.ref);
+  if (!view) return c.notFound();
+  if (view.phase !== "review" || !view.review) return c.redirect(screenPath(view.token));
+  const at = view.review.findIndex((i) => i.key === c.req.param("key"));
+  if (at < 0) return c.notFound();
+  c.header("Cache-Control", "no-store");
+  return c.html(<EditPage view={view} item={view.review[at]} n={at + 1} error={c.req.query("error") ?? null} />);
+});
+
+/** The new answer, typed or tapped, added to the transcript beside the earlier one (the quote check covers both). */
+candidatePages.post("/c/screen/:token/answers/:key", rateLimit(POLICIES.screen), async (c) => {
+  const container = c.get("container");
+  const found = await openConversation(container, c.req.param("token") ?? "");
+  if (!found) return c.notFound();
+  if (found.gone) return linkGone(c);
+  const key = c.req.param("key") ?? "";
+  if (!ANSWER_KEY.test(key)) return c.notFound();
+  const base = screenPath(found.ref.token);
+  const here = `${base}/answers/${encodeURIComponent(key)}`;
+  const action = turnActionFrom(await c.req.parseBody({ all: true }));
+  if (!action) return c.redirect(`${here}?error=tap`);
+  if (action.skip) return c.redirect(base);
+  const out = await conversationEdit(container, found.ref, { questionKey: key, text: action.message ?? null, tap: action.tap ?? null });
+  if (out.ok) return c.redirect(`${base}?changed=${encodeURIComponent(key)}#a-${key}`);
+  const code = turnErrorCode(out.error);
+  return c.redirect(code === "empty" || code === "tap" ? `${here}?error=${code}` : base);
+});
+
+/** "Send my answers" (E10): the conversation is complete. A second press changes nothing. */
+candidatePages.post("/c/screen/:token/submit", rateLimit(POLICIES.screen), async (c) => {
+  const container = c.get("container");
+  const found = await openConversation(container, c.req.param("token") ?? "");
+  if (!found) return c.notFound();
+  if (found.gone) return linkGone(c);
+  await conversationSubmit(container, found.ref);
+  return c.redirect(screenPath(found.ref.token));
+});
+
+/* ------------------------------------------------------------------------------------------------------------ */
+/* A repeat submission's answers, confirmed by the owner of the address on file (Q14 x Q15)                       */
+/* ------------------------------------------------------------------------------------------------------------ */
+
+/** What the emailed link opens: one button while it can still be used, otherwise what happened. Counts only, never the answers. */
+function ConfirmAnswersPage(props: { view: RepeatConfirmationView; token: string }) {
+  const { view } = props;
+  // A person asked for, or offered because the assistant stopped working part-way (nobody asked): confirming brings one in.
+  const person = view.intent === "person" || view.intent === "outage";
+  const happened = view.intent === "outage" ? "started the screening questions, but our assistant stopped working before they finished" : person ? "asked for a person from the hiring team to contact them" : `answered ${view.answered} of the ${view.questions} screening questions`;
+  const outcome: Record<Exclude<RepeatConfirmationView["state"], "ready">, { title: string; text: string }> = {
+    added: { title: "Your answers are added", text: `They are now part of your application for ${view.roleTitle} at ${view.companyName}, and the hiring team reads them with it. Nothing else is needed from you.` },
+    person: { title: "A person will be in touch", text: `We have asked the hiring team at ${view.companyName} to contact you about your application for ${view.roleTitle}. Nothing else is needed from you.` },
+    not_added: { title: "Nothing was added", text: "Your application already has answers to these questions, or it has moved on, so it stays as it was. Nothing else is needed from you." },
+    gone: { title: "This link has expired", text: "It was already used, or more than seven days went by and what was typed was deleted. Nothing was added to your application." },
+  };
+  const done = view.state === "ready" ? null : outcome[view.state];
+  return (
+    <Layout title={done ? done.title : "Please confirm"}>
+      <p class="eyebrow">{view.companyName} · {view.roleTitle}</p>
+      {done ? (
+        <>
+          <h1>{done.title}</h1>
+          <div class="card" role="status"><p>{done.text}</p></div>
+        </>
+      ) : (
+        <>
+          <h1>{person ? "Ask a person to contact you?" : "Add these answers to your application?"}</h1>
+          <p class="lead">Someone using your email address applied again for this job and {happened}. Nothing has been added to your application yet.</p>
+          <form method="post" action={`/c/confirm-answers/${props.token}`} class="card">
+            <p>If that was you, press the button {person ? "and a person will be in touch" : "to add those answers to your application"}.</p>
+            <button class="btn" type="submit">{person ? "Yes, ask a person to contact me" : "Add these answers to my application"}</button>
+          </form>
+          <p>If it was not you, you do not need to do anything: nothing is added, and what was typed is deleted after seven days.</p>
+        </>
+      )}
+      <p class="foot"><a href="/privacy">How we handle your information</a></p>
+    </Layout>
+  );
+}
+
+/** Opening the link changes nothing (a mail scanner may open it); only the button does. */
+candidatePages.get("/c/confirm-answers/:token", async (c) => {
+  const container = c.get("container");
+  const token = c.req.param("token");
+  const view = await repeatConfirmationView(container.db, token, container.engine.clock());
+  if (!view) return c.notFound();
+  c.header("Cache-Control", "no-store");
+  return c.html(<ConfirmAnswersPage view={view} token={token} />);
+});
+
+candidatePages.post("/c/confirm-answers/:token", rateLimit(POLICIES.confirmAnswers), async (c) => {
+  const token = c.req.param("token") ?? "";
+  const view = await confirmRepeat(c.get("container"), token);
+  if (!view) return c.notFound();
+  return c.redirect(`/c/confirm-answers/${token}`);
 });
 
 /** After a fulfilled deletion the link is dead: the page says so and nothing is recorded or sent (docs/readiness/14). */

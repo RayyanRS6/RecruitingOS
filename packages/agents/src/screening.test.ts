@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
-import { EMPTY_SCREEN_PROGRESS, WITHDRAW_CONFIRM_KEY, advanceProgress, enforceTurnRules, screenCommand, withdrawPending } from "./screening";
+import type { RolePacket, ScreenAssessment, ScreenProgress, ScreenTurn } from "@ros/contracts";
+import { FakeProvider, screenAssessPrompt, screenTurnPrompt, type ScreenContext } from "@ros/ai";
+import { EMPTY_SCREEN_PROGRESS, WITHDRAW_CONFIRM_KEY, advanceProgress, candidateWordsOf, enforceTurnRules, nextQuestion, recruiterNotesOf, reviewItems, screenCommand, screenIntro, verifyScreenQuotes, withdrawPending } from "./screening";
+import { registerFakeHandlers } from "./fake-handlers";
 
 /**
  * The follow-up cap (docs/05; docs/spec/21 section 7, P0 row "follow-up cap test"): whatever the model says, a question
@@ -106,5 +108,134 @@ describe("screenCommand: whole-message keywords", () => {
     expect(withdrawPending([...asked, { role: "candidate" as const, content: "hmm", at }])).toBe(true);
     expect(withdrawPending([...asked, { role: "candidate" as const, content: "no", at }, { role: "assistant" as const, content: "No problem.", at }])).toBe(false);
     expect(withdrawPending([])).toBe(false);
+  });
+});
+
+/**
+ * Wave E: the packet's questions in the packet's own words (E2), skipped questions left alone (E11), the progress the
+ * code keeps (the flow, skips, edits, the allowance count) carried through every turn, and the "check your answers" page.
+ */
+describe("the conversation offered with the application", () => {
+  const three = { screening: { questions: [{ key: "license", question: "Is your RDH license active in California?", kind: "eligibility" }, { key: "experience", question: "Tell me about your most recent work.", kind: "skills" }, { key: "pay", question: "What pay range are you looking for?", kind: "compensation" }], maxMinutes: 10 }, compensation: { basis: "hourly", currency: "USD", min: 45, max: 55 }, identity: { title: "Registered Dental Hygienist" }, communication: { humanAlternativeText: "Reply HUMAN to reach a person.", disclosureText: "Sent with help from an AI assistant." } } as unknown as RolePacket;
+  const move: ScreenTurn = { messageToCandidate: "Thanks, that helps.", questionKey: "experience", answerRecorded: { questionKey: "license", answer: "Yes, active since 2015.", complete: true }, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
+
+  it("adds the next packet question word for word after the model's acknowledgment, and never twice", () => {
+    const t = enforceTurnRules(move, three, { ...EMPTY_SCREEN_PROGRESS, askedKeys: ["license"], currentQuestionKey: "license" }, {});
+    expect(t.messageToCandidate).toBe("Thanks, that helps. Tell me about your most recent work.");
+    const already = enforceTurnRules({ ...move, messageToCandidate: "Thanks. Tell me about your most recent work." }, three, { ...EMPTY_SCREEN_PROGRESS, askedKeys: ["license"], currentQuestionKey: "license" }, {});
+    expect(already.messageToCandidate).toBe("Thanks. Tell me about your most recent work.");
+    // how an answer was recorded is the code's to say: a status the model sets is dropped
+    const claimed = enforceTurnRules({ ...move, answerRecorded: { ...move.answerRecorded!, status: "edited" } }, three, { ...EMPTY_SCREEN_PROGRESS, askedKeys: ["license"], currentQuestionKey: "license" }, {});
+    expect(claimed.answerRecorded).toEqual({ questionKey: "license", answer: "Yes, active since 2015.", complete: true });
+  });
+
+  it("a skipped question is never asked again, and counts toward the end of the questions", () => {
+    const progress: ScreenProgress = { ...EMPTY_SCREEN_PROGRESS, askedKeys: ["license", "experience"], currentQuestionKey: "experience", declined: ["license"] };
+    const backToSkipped = enforceTurnRules({ ...move, answerRecorded: { questionKey: "experience", answer: "Eight patients a day.", complete: true }, questionKey: "license" }, three, progress, {});
+    expect(backToSkipped.questionKey).toBeNull();
+    expect(nextQuestion(three, progress, { experience: "Eight patients a day." })?.key).toBe("pay");
+    expect(nextQuestion(three, { ...progress, askedKeys: ["license", "experience", "pay"] }, { experience: "x", pay: "y" })).toBeNull();
+  });
+
+  it("every turn carries over what the code keeps", () => {
+    const progress: ScreenProgress = { ...EMPTY_SCREEN_PROGRESS, flow: "one_visit", declined: ["pay"], edits: { license: 1 }, countedAt: "2026-10-08T10:00:00.000Z", askedKeys: ["license"], currentQuestionKey: "license" };
+    const next = advanceProgress(progress, enforceTurnRules(move, three, progress, {}));
+    expect(next).toMatchObject({ flow: "one_visit", declined: ["pay"], edits: { license: 1 }, countedAt: "2026-10-08T10:00:00.000Z", currentQuestionKey: "experience", askedKeys: ["license", "experience"] });
+  });
+
+  it("the check-your-answers page lists every question with its answer and how it came to be", () => {
+    const items = reviewItems({ answers: { license: "Yes", experience: "Eight patients a day." }, progress: { ...EMPTY_SCREEN_PROGRESS, declined: ["pay"], edits: { experience: 1 } } }, three);
+    expect(items.map((i) => [i.key, i.status, i.answer])).toEqual([["license", "answered", "Yes"], ["experience", "edited", "Eight patients a day."], ["pay", "declined", null]]);
+    expect(items[0].tap).toEqual({ kind: "yes_no" });
+    expect(items[2].tap).toMatchObject({ kind: "pay_range" });
+  });
+
+  it("the fixed introduction is built from the notice, the packet and the counts, never by the model", () => {
+    const intro = screenIntro({ companyName: "Harbor Dental", firstName: "Dana", packet: three });
+    expect(intro.disclosure).toContain("Harbor Dental's hiring assistant, a software program");
+    expect(intro.disclosure).toContain("3 short questions");
+    expect(intro.disclosure).toMatch(/people on the team make every decision/i);
+    expect(intro.aiNotice?.text).toMatch(/artificial intelligence/);
+    expect(intro).toMatchObject({ questions: 3, minutes: 10, humanAlternative: "Reply HUMAN to reach a person.", packetDisclosure: "Sent with help from an AI assistant." });
+    expect(intro.disclosure).not.toContain("about your background");
+    // a conversation that starts with the résumé reading's open questions says so, as an emailed invitation's always did
+    expect(screenIntro({ companyName: "Harbor Dental", firstName: "Dana", packet: three, focus: true }).disclosure).toContain("We will start with a few quick questions about your background, then the usual screening questions.");
+  });
+});
+
+describe("the scorecard keeps a recruiter's call notes apart from the candidate's words (E3) and skipped questions unknown (E11)", () => {
+  const screen = {
+    transcript: [
+      { role: "assistant" as const, content: "Is your license active?", at: "t", questionKey: "license" },
+      { role: "candidate" as const, content: "Yes, active since 2015.", at: "t" },
+      { role: "recruiter" as const, content: "Called her: she has done perio maintenance for six years.", at: "t", source: "recruiter_call" as const },
+    ],
+    answers: { license: "Yes, active since 2015." },
+    progress: { ...EMPTY_SCREEN_PROGRESS, declined: ["pay"] },
+  };
+  const card = (over: Partial<ScreenAssessment>): ScreenAssessment => ({ overall: "potential", confidence: "high", summary: "s", strengths: [], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: [], anomalies: [], questionFindings: [], compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation: "interview", rationale: "r", ...over });
+
+  it("the candidate's words never include the notes; the notes are checked as their own source", () => {
+    expect(candidateWordsOf(screen)).not.toContain("perio maintenance");
+    expect(recruiterNotesOf(screen)).toContain("perio maintenance");
+    const out = verifyScreenQuotes(card({
+      strengths: [
+        { claim: "Perio experience", evidence: { source: "recruiter_note", quote: "she has done perio maintenance for six years" } },
+        { claim: "Perio experience in her words", evidence: { source: "screen", quote: "she has done perio maintenance for six years" } },
+      ],
+      requirementFindings: [{ requirementKey: "mh_perio", met: "no", evidence: { source: "recruiter_note", quote: "she has done perio maintenance for six years" } }],
+      questionFindings: [{ questionKey: "pay", answered: true, finding: "Wants $60", evidence: { source: "screen", quote: "Yes, active since 2015." }, meetsModelAnswer: "no" }],
+    }), candidateWordsOf(screen), { recruiterNotes: recruiterNotesOf(screen), declined: ["pay"] });
+    // the note stands as a note; the same words passed off as the candidate's are dropped
+    expect(out.strengths.map((s) => s.evidence.source)).toEqual(["recruiter_note"]);
+    // a recruiter's note never makes a must-have "no"
+    expect(out.requirementFindings[0].met).toBe("unknown");
+    // a skipped question is unknown, whatever the model wrote
+    expect(out.questionFindings[0]).toEqual({ questionKey: "pay", answered: false, finding: "Skipped by the candidate: unknown.", meetsModelAnswer: "unknown" });
+  });
+
+  it("a question with an answer on record keeps it, even if it was also marked skipped (a skip during a follow-up moves on)", () => {
+    const finding = { questionKey: "license", answered: true, finding: "Active since 2015", evidence: { source: "screen" as const, quote: "Yes, active since 2015." }, meetsModelAnswer: "yes" as const };
+    const out = verifyScreenQuotes(card({ questionFindings: [finding] }), candidateWordsOf(screen), { declined: ["license"], answered: ["license"] });
+    expect(out.questionFindings[0]).toEqual(finding);
+  });
+
+  it("the assistant writing to the candidate never sees a recruiter's call notes; the scorecard does, labelled as notes", () => {
+    const packet = { identity: { title: "Registered Dental Hygienist", employmentType: "full_time", locations: [{ city: "Irvine", region: "CA" }] }, compensation: { basis: "hourly", min: 45, max: 55, currency: "USD", discloseRange: true }, screening: { questions: [{ key: "license", question: "Is your license active?", kind: "eligibility" }], maxMinutes: 10 }, competencies: [], requirements: { mustHaves: [] }, communication: { candidateMayBeTold: [], tone: "warm", humanAlternativeText: "Reply HUMAN." }, interviews: { plan: [] } } as unknown as RolePacket;
+    const ctx: ScreenContext = { company: { name: "Harbor Dental" }, packet, candidate: { firstName: "Dana" }, channel: "web", progress: { ...EMPTY_SCREEN_PROGRESS, askedKeys: ["license"], currentQuestionKey: "license" }, answers: {}, transcript: screen.transcript, focusUnknowns: [], latestCandidateMessage: "Is the job still open?" };
+    const turn = screenTurnPrompt.messages(ctx).map((m) => m.content).join("\n");
+    expect(turn).toContain("candidate: Yes, active since 2015.");
+    expect(turn).not.toContain("perio maintenance for six years");
+    expect(turn).not.toContain("recruiter note");
+    expect(screenAssessPrompt.messages(ctx).map((m) => m.content).join("\n")).toContain("recruiter note: Called her: she has done perio maintenance for six years.");
+  });
+});
+
+describe("the local stand-in for screen.turn v3", () => {
+  const fake = new FakeProvider();
+  registerFakeHandlers(fake);
+  const rt = { provider: fake, models: { judgment: "fake", standard: "fake", fast: "fake" } };
+  const packet = { identity: { title: "Registered Dental Hygienist", employmentType: "full_time", locations: [{ city: "Irvine", region: "CA" }] }, compensation: { basis: "hourly", min: 45, max: 55, currency: "USD", discloseRange: true }, screening: { questions: [{ key: "experience", question: "Tell me about your most recent work.", kind: "skills" }, { key: "pay", question: "What pay range are you looking for?", kind: "compensation" }], maxMinutes: 10 }, competencies: [], requirements: { mustHaves: [] }, communication: { candidateMayBeTold: [], tone: "warm", humanAlternativeText: "Reply HUMAN." }, interviews: { plan: [] } } as unknown as RolePacket;
+  const ctx = (progress: ScreenProgress, transcript: ScreenContext["transcript"], latest: string): ScreenContext => ({ company: { name: "Harbor Dental" }, packet, candidate: { firstName: "Dana" }, channel: "web", progress, answers: {}, transcript, focusUnknowns: [], latestCandidateMessage: latest });
+  const turn = async (c: ScreenContext) => {
+    const { callPrompt } = await import("@ros/ai");
+    const r = await callPrompt(rt, screenTurnPrompt, c, { companyId: null });
+    if (r.result.kind !== "ok") throw new Error(r.result.kind);
+    return r.result.output;
+  };
+
+  it("follows up once on a thin answer about work, in the candidate's own words, then records the whole answer", async () => {
+    const asked: ScreenProgress = { ...EMPTY_SCREEN_PROGRESS, askedKeys: ["experience"], currentQuestionKey: "experience" };
+    const first = await turn(ctx(asked, [{ role: "assistant", content: "Tell me about your most recent work.", at: "t" }, { role: "candidate", content: "Cleanings and charting", at: "t" }], "Cleanings and charting"));
+    expect(first.followUpReason).toBeTruthy();
+    expect(first.messageToCandidate).toBe("You mentioned cleanings and charting. Could you give one example of how that went?");
+    expect(first.answerRecorded).toBeNull();
+    const after: ScreenProgress = { ...asked, followUps: { experience: 1 } };
+    const second = await turn(ctx(after, [{ role: "assistant", content: "Tell me about your most recent work.", at: "t" }, { role: "candidate", content: "Cleanings and charting", at: "t" }, { role: "assistant", content: first.messageToCandidate, at: "t" }, { role: "candidate", content: "I see 9 patients a day and do perio charting in Dentrix.", at: "t" }], "I see 9 patients a day and do perio charting in Dentrix."));
+    expect(second.answerRecorded?.answer).toBe("Cleanings and charting I see 9 patients a day and do perio charting in Dentrix.");
+    // moving on: only the acknowledgment; the code adds the question word for word
+    expect(second.questionKey).toBe("pay");
+    expect(second.messageToCandidate).toBe("Thanks.");
+    expect(enforceTurnRules(second, packet, after, {}).messageToCandidate).toBe("Thanks. What pay range are you looking for?");
   });
 });

@@ -36,6 +36,12 @@ export const EventType = z.enum([
   // Private marks (Longlist, Shortlist, On hold, Not a fit for now) and the candidate being told a decision (founder decisions B3, B6).
   "application.marked", "application.mark_cleared", "application.told",
   "screen.invited", "screen.started", "screen.completed", "screen.abandoned", "screen.expired", "screen.human_requested", "screen.assessed", "screen.cancelled",
+  // Wave E: the conversation in the same visit as applying. Sent without it, closed part-way after a reminder, paused while
+  // the assistant is down and resumed, a question skipped or tapped, an answer changed before sending, a recruiter's call
+  // notes, and how a role's applicants meet the conversation (set by ITS).
+  "screen.declined_by_candidate", "screen.unfinished", "screen.idle_reminded", "screen.paused", "screen.resumed", "screen.question_skipped", "screen.answer_tapped", "screen.answer_edited", "screen.recruiter_notes_added",
+  "screen.repeat_started", "screen.repeat_confirmation_sent", "screen.repeat_confirmed", "screen.repeat_discarded",
+  "role.apply_mode_changed", "company.apply_flow_changed", "entitlement.warning",
   "candidate.recommended", "interview.requested", "interview.scheduling_started", "interview.slots_offered", "interview.scheduled",
   "interview.rescheduled", "interview.cancelled", "interview.no_show", "interview.brief_sent", "interview.recording_consented",
   "interview.recording_declined", "interview.completed", "interview.transcribed", "scorecard.drafted", "scorecard.submitted",

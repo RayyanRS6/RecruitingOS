@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn, skipWithoutFakeSignIn } from "./helpers";
+import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn, skipWithoutFakeSignIn, useOneVisitFlow } from "./helpers";
 
 async function noHorizontalOverflow(page: Page, name: string) {
   const { scrollWidth, innerWidth } = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth }));
@@ -16,11 +16,14 @@ const run = Date.now().toString(36);
 
 test.describe("the stage strip and the candidate panel", () => {
   skipWithoutFakeSignIn();
-  test("strip counts, a private shortlist from the row, the panel's address, next and previous, and the unsent-text guard", async ({ page, baseURL }) => {
+  test("strip counts, a private shortlist from the row, the panel's address, next and previous, and the unsent-text guard", async ({ page, browser, baseURL }) => {
     test.setTimeout(240_000);
     await page.goto("/login");
     await signIn(page, { email: `dana+${run}@strip.test`, name: "Dana Whitfield", provider: "google" });
     await createCompanyThroughTheForm(page, `Strip Dental ${run}`);
+    // a pilot company: the conversation follows the form in the same visit, so the applicants below are "Still applying"
+    const companyId = ((await (await page.request.get(`${baseURL}/api/v1/companies/current`)).json()) as { id: string }).id;
+    await useOneVisitFlow(browser, baseURL!, companyId);
     const seeded = await seedRoleAndApplicant(page.request, baseURL!, "Maria", "Reyes");
     // a second applicant to the same role, answering every eligibility question "yes"
     const role = (await (await page.request.get(`${baseURL}/api/v1/roles/${seeded.roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
@@ -39,6 +42,20 @@ test.describe("the stage strip and the candidate panel", () => {
     await expect(page.getByRole("button", { name: "Maria Reyes" })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("button", { name: "Luis Ortega" })).toBeVisible({ timeout: 30_000 });
     await expectAccessible(page, "talent with the stage strip");
+
+    // Both were offered the screening conversation with their application and have not answered (plan E6): they stay
+    // in New, are counted apart beside the strip, and never as waiting on you
+    await expect(page.getByText("2 applicants · 2 still applying")).toBeVisible();
+    const applying = page.getByRole("button", { name: /^Still applying 2$/ });
+    await expect(applying).toHaveAttribute("aria-pressed", "false");
+    await expect(page.getByRole("button", { name: /^Waiting on you/ })).toHaveCount(0);
+    await applying.click();
+    await expect(applying).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".talent-row")).toHaveCount(2);
+    await expect(page.locator(".talent-row").first().getByText("Still applying", { exact: true })).toBeVisible();
+    await expect(page.getByText(/Nothing about them waits on you until they send their answers/)).toBeVisible();
+    await expectAccessible(page, "talent showing the people still applying");
+    await applying.click();
 
     // Shortlist from the row: one click, private
     await page.getByRole("button", { name: "Stage: New. Move to another stage" }).first().click();

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { and, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { applicationMarks, applications, approvalRequests, candidates, communications, dataRequests, documents, escalationMessages, events, interviewParticipants, interviews, jobs, notifications, recruiterEscalations, screens, type Queryable } from "@ros/db";
+import { applicationMarks, applications, approvalRequests, candidates, communications, dataRequests, documents, escalationMessages, events, interviewParticipants, interviews, jobs, notifications, recruiterEscalations, screens, unconfirmedScreens, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { emit } from "./events";
 import { raiseAlert, resolveAlertsFor } from "./alerts";
@@ -133,7 +133,7 @@ async function closeProcessOnDeletion(q: Queryable, input: { companyId: string; 
     if (parts.length) await notify(q, { companyId, kind: "interview.cancelled", title: `Interview cancelled: ${iv.title}`, body: "The candidate asked for their information to be deleted, so this interview is off.", action: { label: "Open interviews", href: "/interviews" }, userIds: parts.map((p) => p.userId) });
     if (hadEvents) await q.insert(jobs).values({ kind: "interview.cancel_events", payload: { interviewId: iv.id, companyId, actor }, runAt: now.toISOString(), maxAttempts: 5 });
   }
-  const scr = await q.select({ id: screens.id }).from(screens).where(and(inArray(screens.applicationId, appIds), inArray(screens.status, ["invited", "reminded", "in_progress"])));
+  const scr = await q.select({ id: screens.id }).from(screens).where(and(inArray(screens.applicationId, appIds), inArray(screens.status, ["invited", "reminded", "in_progress", "paused"])));
   for (const s of scr) {
     await q.update(screens).set({ status: "cancelled" }).where(eq(screens.id, s.id));
     await emit(q, { type: "screen.cancelled", companyId, actor, subject: { type: "screen", id: s.id }, payload: { reason: "deletion_request" } });
@@ -181,6 +181,8 @@ export async function anonymizeCandidate(
     const scr = await q.select({ id: screens.id, progress: screens.progress }).from(screens).where(inArray(screens.applicationId, appIds));
     scrCount = scr.length;
     for (const s of scr) await q.update(screens).set({ transcript: [], answers: {}, progress: withoutFocusAnswers(s.progress) }).where(eq(screens.id, s.id));
+    // A repeat submission's conversation waiting for the address owner to confirm it (plan E1) goes too, confirmed or not.
+    await q.update(unconfirmedScreens).set({ transcript: [], answers: {}, firstName: "", confirmTokenHash: null, discardedAt: now.toISOString(), confirmation: "discarded" }).where(inArray(unconfirmedScreens.applicationId, appIds));
     // The reply address of every old email is retired with a fresh random token: a reply to one of them no longer names
     // this application, so it cannot write an address or a message back onto the removed record (the webhook also refuses
     // a reply to an anonymized candidate). The status link keeps its token: its page already says the record is gone.

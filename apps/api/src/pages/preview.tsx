@@ -10,7 +10,7 @@ import { HttpError, PERMISSION_MESSAGE } from "../middleware/errors";
 import type { Tenant, Vars } from "../middleware/session";
 import { loadDraft } from "../routes/intake";
 import { approvedAbout, contactLineFor, logoMemberPath, profileOf } from "../services/company-settings-profile";
-import { jobPreview, type PreviewSource } from "../services/job-preview";
+import { applyFlowOf, jobPreview, type ApplyFlowView, type PreviewSource } from "../services/job-preview";
 import { jobUrls } from "../services/job-urls";
 import { currentVersionOf } from "../services/packet-versions";
 import { ApplyFormPage, JobPage, type JobPageCompany, type JobPageRole, type PreviewInfo } from "./job-page";
@@ -81,17 +81,17 @@ function profileGaps(company: CompanyRow): string[] {
 }
 
 /** The job page or the apply form for a packet, with the preview's note and its own links. */
-function render(c: Context<Vars>, input: { packet: DraftRolePacket; company: CompanyRow; role: JobPageRole; preview: PreviewInfo }) {
+function render(c: Context<Vars>, input: { packet: DraftRolePacket; company: CompanyRow; role: JobPageRole; preview: PreviewInfo; flow: ApplyFlowView }) {
   const container = c.get("container");
-  const { packet, company, role, preview } = input;
+  const { packet, company, role, preview, flow } = input;
   const notices = jobNoticesFor({ jobLocations: packet.identity.locations, companyLocations: company.locations, overrides: company.settings.notices });
   const view = previewCompany(company, container);
   c.header("Cache-Control", "no-store");
   c.header("X-Robots-Tag", "noindex, nofollow");
   if (c.req.query("view") === "apply") {
-    return c.html(<ApplyFormPage company={{ slug: company.slug, name: company.name, contact: view.contact }} role={{ id: role.id }} packet={packet} notices={notices} smsEnabled={container.env.SMS_ENABLED} privacyEmail={container.env.PRIVACY_EMAIL} formOpened="" links={{ job: preview.jobHref, uploadIntent: "" }} preview={preview} />);
+    return c.html(<ApplyFormPage company={{ slug: company.slug, name: company.name, contact: view.contact }} role={{ id: role.id }} packet={packet} notices={notices} smsEnabled={container.env.SMS_ENABLED} privacyEmail={container.env.PRIVACY_EMAIL} formOpened="" flow={flow} links={{ job: preview.jobHref, uploadIntent: "" }} preview={preview} />);
   }
-  return c.html(<JobPage packet={packet} company={view} role={role} notices={notices} smsEnabled={container.env.SMS_ENABLED} benefits={benefitsDescriptionFor(packet.compensation, company.settings)} links={{ careers: null, apply: preview.applyHref }} preview={preview} />);
+  return c.html(<JobPage packet={packet} company={view} role={role} notices={notices} smsEnabled={container.env.SMS_ENABLED} flow={flow} benefits={benefitsDescriptionFor(packet.compensation, company.settings)} links={{ careers: null, apply: preview.applyHref }} preview={preview} />);
 }
 
 /** The preview's own addresses: the same path it was opened at, with the version and the view. */
@@ -120,15 +120,15 @@ async function rolePreview(c: Context<Vars>) {
       const pv = asked ? versions.find((v) => String(v.version) === asked) : versions[0];
       if (!pv) throw new HttpError(404, "version_not_found", "That version does not exist.");
       const [company] = await tx.select().from(companies).where(eq(companies.id, role.companyId)).limit(1);
-      return { role, pv, company, current: currentVersionOf(role, versions) };
+      return { role, pv, company, current: currentVersionOf(role, versions), flow: await applyFlowOf(tx, company, role) };
     });
-    const { role, pv, company } = found;
+    const { role, pv, company, flow } = found;
     const source: PreviewSource = { kind: "version", roleId: role.id, version: pv.version, status: pv.status, current: found.current?.version === pv.version && !!role.currentPacketVersion, roleStatus: role.status };
-    const meta = jobPreview({ packet: pv.packet, company, source, smsEnabled: container.env.SMS_ENABLED });
+    const meta = jobPreview({ packet: pv.packet, company, source, smsEnabled: container.env.SMS_ENABLED, flow });
     const preview: PreviewInfo = { notPublicYet: meta.notPublicYet, banner: meta.banner, gaps: [...meta.gaps, ...profileGaps(company)], ...hrefs(c, { version: String(pv.version) }), publicHref: meta.notPublicYet ? null : jobUrls(container.env, { slug: company.slug, roleId: role.id }).job };
     // Shown as candidates will meet it once it is live: taking applications, with its closing date when it has one.
     const view: JobPageRole = { id: role.id, accepting: true, closedMessage: null, postedOn: role.openedAt, applyBy: role.applicationsCloseOn ? applyByLabel(role.applicationsCloseOn) : null };
-    return render(c, { packet: pv.packet, company, role: view, preview });
+    return render(c, { packet: pv.packet, company, role: view, preview, flow });
   } catch (err) {
     return problemPage(c, err);
   }
@@ -143,11 +143,15 @@ async function draftPreview(c: Context<Vars>) {
     if (row.status !== "active") throw new HttpError(409, "not_active", "This draft has already produced a role, or it was set aside. Open the role to preview it.");
     if (!row.draftPacket) throw new HttpError(409, "no_draft", "Write the draft first; then you can preview it.");
     const container = c.get("container");
-    const [company] = await withTenant(container.db, t.companyId, (tx) => tx.select().from(companies).where(eq(companies.id, t.companyId)).limit(1));
+    // A draft has no role yet: it will follow the company's flow and the company's rule for screen invitations.
+    const { company, flow } = await withTenant(container.db, t.companyId, async (tx) => {
+      const [row] = await tx.select().from(companies).where(eq(companies.id, t.companyId)).limit(1);
+      return { company: row, flow: row ? await applyFlowOf(tx, row, { id: null, applyMode: null }) : ("later" as const) };
+    });
     if (!company) throw new HttpError(404, "not_found", "Company not found.");
-    const meta = jobPreview({ packet: row.draftPacket, company, source: { kind: "draft", sessionId: row.id }, smsEnabled: container.env.SMS_ENABLED });
+    const meta = jobPreview({ packet: row.draftPacket, company, source: { kind: "draft", sessionId: row.id }, smsEnabled: container.env.SMS_ENABLED, flow });
     const preview: PreviewInfo = { notPublicYet: true, banner: meta.banner, gaps: [...meta.gaps, ...profileGaps(company)], ...hrefs(c, {}), publicHref: null };
-    return render(c, { packet: row.draftPacket, company, role: { id: row.id, accepting: true, closedMessage: null, postedOn: null, applyBy: null }, preview });
+    return render(c, { packet: row.draftPacket, company, role: { id: row.id, accepting: true, closedMessage: null, postedOn: null, applyBy: null }, preview, flow });
   } catch (err) {
     return problemPage(c, err);
   }

@@ -32,6 +32,9 @@
   "screen.conversation": {
     "minPassRate": 1
   },
+  "screen.assess": {
+    "minPassRate": 1
+  },
   "packet.revise": {
     "minPassRate": 1
   },

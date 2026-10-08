@@ -23,9 +23,19 @@ export const POLICIES = {
   authMagicLink: { name: "auth.magic_link", rules: [{ by: "ip", windowMs: 15 * MIN, limit: 10 }, { by: "email", windowMs: 15 * MIN, limit: 5, field: "email" }] },
   /** "Email me a sign-in link" on the team invitation page: the link goes to the invited address only, so the second rule is per invitation (the form's token), whoever holds the link and from wherever they post it. */
   authInviteEmail: { name: "auth.invite_email", rules: [{ by: "ip", windowMs: 15 * MIN, limit: 10 }, { by: "token", windowMs: 15 * MIN, limit: 3, field: "token" }] },
-  apply: { name: "apply", rules: [{ by: "ip", windowMs: HOUR, limit: 30 }, { by: "role", windowMs: HOUR, limit: 600, param: "roleId" }] },
-  screen: { name: "candidate.screen", rules: [{ by: "token", windowMs: HOUR, limit: 120, param: "token" }, { by: "ip", windowMs: HOUR, limit: 240 }] },
-  screenHuman: { name: "candidate.screen_human", rules: [{ by: "token", windowMs: HOUR, limit: 30, param: "token" }, { by: "ip", windowMs: HOUR, limit: 60 }] },
+  /**
+   * Plan E14: a conversation is now part of applying, and people often apply from one shared address (a library, a
+   * school, a workplace), so the per-address limits are raised and the conversation is limited mainly per link. The
+   * form has no link, so it stays per address and per role.
+   */
+  apply: { name: "apply", rules: [{ by: "ip", windowMs: HOUR, limit: 60 }, { by: "role", windowMs: HOUR, limit: 600, param: "roleId" }] },
+  /** Every conversation post (an answer, a skip, a tap, Start, an edit, Send): one conversation is about twenty, so two hundred per link is ample. */
+  screen: { name: "candidate.screen", rules: [{ by: "token", windowMs: HOUR, limit: 200, param: "token" }, { by: "ip", windowMs: HOUR, limit: 1200 }] },
+  screenHuman: { name: "candidate.screen_human", rules: [{ by: "token", windowMs: HOUR, limit: 30, param: "token" }, { by: "ip", windowMs: HOUR, limit: 150 }] },
+  /** "Do this later" sends an email: a handful per link. */
+  screenLater: { name: "candidate.screen_later", rules: [{ by: "token", windowMs: HOUR, limit: 5, param: "token" }, { by: "ip", windowMs: HOUR, limit: 60 }] },
+  /** The emailed link that confirms a repeat submission's answers: per link and per address. */
+  confirmAnswers: { name: "candidate.confirm_answers", rules: [{ by: "token", windowMs: HOUR, limit: 10, param: "token" }, { by: "ip", windowMs: HOUR, limit: 30 }] },
   privacy: { name: "candidate.privacy_request", rules: [{ by: "token", windowMs: HOUR, limit: 5, param: "token" }, { by: "ip", windowMs: HOUR, limit: 10 }] },
   /** The public privacy-request form (no link to bind to): per address, and per mailbox typed into the form (the email is normalized, so a change of case is the same mailbox). */
   privacyForm: { name: "candidate.privacy_form", rules: [{ by: "ip", windowMs: HOUR, limit: 10 }, { by: "email", windowMs: HOUR, limit: 5, field: "email" }] },

@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import type { MembershipRole } from "@ros/contracts";
 import { grantPlatformRole, type PlatformRole } from "@ros/core";
-import { applications, candidates, memberships, users, withPlatform } from "@ros/db";
+import { applications, candidates, companies, memberships, users, withPlatform } from "@ros/db";
 import type { FakeIdentityProvider } from "@ros/integrations";
 import type { createApp } from "./app";
 import type { Container } from "./container";
@@ -78,6 +78,23 @@ export async function statusTokenFor(container: Container, input: { roleId: stri
   if (!row) throw new Error(`no application from ${input.email} for role ${input.roleId}`);
   return row.token;
 }
+
+/**
+ * Sets how a company's roles meet the screening conversation (plan Wave E), as ITS does from its console. A company
+ * with no setting takes "form now, conversation later" (the one-visit flow runs on pilot roles first, founder decision
+ * B1); suites about the conversation offered in the same visit as the form start their company with `useOneVisitApplyFlow`.
+ * Suites about the emailed invitation say so with `useLaterApplyFlow`, so they keep testing it whatever the default.
+ */
+async function setApplyFlowDefault(container: Container, companyId: string, flow: "one_visit" | "form_then_screen"): Promise<void> {
+  await withPlatform(container.db, async (tx) => {
+    const [co] = await tx.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1);
+    if (!co) throw new Error(`no company ${companyId}`);
+    await tx.update(companies).set({ settings: { ...co.settings, applyFlowDefault: flow } }).where(eq(companies.id, companyId));
+  });
+}
+
+export const useLaterApplyFlow = (container: Container, companyId: string) => setApplyFlowDefault(container, companyId, "form_then_screen");
+export const useOneVisitApplyFlow = (container: Container, companyId: string) => setApplyFlowDefault(container, companyId, "one_visit");
 
 /**
  * A customer with a membership of the given role in the company, signed in through the fake Google issuer (docs/spec/21,

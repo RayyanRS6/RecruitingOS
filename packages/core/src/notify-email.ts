@@ -50,6 +50,7 @@ const HEADLINES: Record<string, string> = {
   "stuck.no_applicants": "A role has had no applicants",
   "stuck.hold_ended": "A hold you set has ended",
   "stuck.decisions_untold": "Some candidates have not been told your decision",
+  "stuck.conversations_stuck": "Some applicants are stuck in the screening conversation",
   "stuck.offer_recruiter": "An ITS recruiter can help with a role",
   "stuck.closing_date_passed": "A role's closing date had passed when it opened",
   "stuck.closing_date_added": "A role was given a closing date",

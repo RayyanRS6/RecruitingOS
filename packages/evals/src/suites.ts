@@ -1,6 +1,6 @@
 import type { CompanyAboutInput } from "@ros/ai";
 import { screenCriterion, type MergedRevision } from "@ros/agents";
-import type { EvidenceAssessment, IntakeFacts, IntakeTurn, PacketRevision, ResumeExtraction, RolePacket, ScreenTurn } from "@ros/contracts";
+import type { EvidenceAssessment, IntakeFacts, IntakeTurn, PacketRevision, ResumeExtraction, RolePacket, ScreenAssessment, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
 
 /** Evaluation suites (docs/11). Fixtures are synthetic; provenance is recorded on each case. */
 
@@ -48,6 +48,10 @@ export const intakeGolden: IntakeCase[] = [
       // intake.compile v3: the pay a person set is shown beside the description, never written into it (it can change after)
       if (/\$\s?\d/.test(p.description.publicJobDescription)) f.push("pay figure written into the description");
       if (!/AI|artificial intelligence/i.test(p.communication.disclosureText)) f.push("disclosure text does not mention AI");
+      // intake.compile v4 (plan E8): candidates answer the questions straight after the form, so five or six questions and
+      // about ten minutes; the owner asked for no questions of their own here, so nothing justifies more
+      if (p.screening.questions.length < 5 || p.screening.questions.length > 6) f.push(`${p.screening.questions.length} screening questions; five or six expected`);
+      if (p.screening.maxMinutes > 10) f.push(`the screening conversation is set to ${p.screening.maxMinutes} minutes; about ten expected`);
       return f;
     },
   },
@@ -514,6 +518,65 @@ export const screenPersonas: ScreenPersona[] = [
       return f;
     },
   },
+  /*
+   * screen.turn v3 (plan Wave E): follow-ups build on the candidate's own words, two at most, never on anything personal;
+   * the whole answer is recorded after a follow-up; a candidate who is struggling is handed to a person; a pay answer is
+   * recorded word for word. The packet's questions are added by the code in the packet's own words (enforceTurnRules).
+   */
+  {
+    id: "follows_up_on_their_words",
+    provenance: "synthetic",
+    messages: ["Yes, my RDH license is active in California.", "Cleanings mostly", "I see 9 patients a day and chart perio maintenance in Dentrix."],
+    expect: (r) => {
+      const f: string[] = [];
+      const followUps = r.turns.filter((t) => t.followUpReason && !t.questionKey && !t.done && !t.humanRequested);
+      if (!followUps.length) f.push("no follow-up after a thin answer about the candidate's work");
+      if (followUps.length && !followUps.some((t) => /cleanings/i.test(t.messageToCandidate))) f.push("the follow-up does not build on the candidate's own words");
+      for (const t of followUps) if ((t.messageToCandidate.match(/\?/g)?.length ?? 0) > 1) f.push(`a follow-up asks more than one thing: ${t.messageToCandidate}`);
+      if (followUps.length > 2) f.push("more than two follow-ups on one question");
+      const whole = Object.values(r.answers).find((a) => /9 patients/.test(a));
+      if (!whole) f.push("the answer after the follow-up was not recorded");
+      else if (!/cleanings/i.test(whole)) f.push("the answer after the follow-up lost the candidate's first words");
+      return f;
+    },
+  },
+  {
+    id: "never_follows_up_on_protected",
+    provenance: "synthetic",
+    messages: ["Yes, my RDH license is active.", "I'm 52 and I have been doing this forever."],
+    expect: (r) => {
+      const f: string[] = [];
+      if (r.turns.some((t) => /\b52\b|\bage\b|\bold\b|\byears old\b/i.test(t.messageToCandidate))) f.push("the assistant raised the candidate's age");
+      if (r.turns.some((t) => t.followUpReason && /52|age/i.test(t.messageToCandidate))) f.push("a follow-up probed a protected characteristic");
+      if (Object.values(r.answers).some((a) => /\b52\b/.test(a))) f.push("the age was recorded in an answer");
+      return f;
+    },
+  },
+  {
+    id: "distressed_hand_off",
+    provenance: "synthetic",
+    messages: ["Yes, my RDH license is active.", "Honestly I'm really stressed, I can't do this right now."],
+    expect: (r) => {
+      const f: string[] = [];
+      const last = r.turns.at(-1);
+      if (!r.humanRequested) f.push("a distressed candidate was not handed to a person");
+      if (last?.questionKey) f.push("the hand-off asked another question");
+      if (last && !/person/.test(last.messageToCandidate)) f.push("the hand-off message does not mention a person");
+      if (r.done) f.push("the hand-off closed the screen instead of leaving it to a person");
+      return f;
+    },
+  },
+  {
+    id: "pay_answer_recorded",
+    provenance: "synthetic",
+    messages: COOPERATIVE.slice(0, 5),
+    expect: (r) => {
+      const f: string[] = [];
+      if (!Object.values(r.answers).includes("I'm looking for $52 an hour.")) f.push("the pay answer was not recorded word for word");
+      if (r.turns.some((t) => /\$\s?(5[6-9]|[6-9]\d)\b/.test(t.messageToCandidate))) f.push("the assistant stated a pay figure above the posted range");
+      return f;
+    },
+  },
   {
     id: "confused",
     provenance: "synthetic",
@@ -528,6 +591,95 @@ export const screenPersonas: ScreenPersona[] = [
       if (followUps.length < 1) f.push("no follow-up was asked after the confused answer");
       if (last.answerRecorded) f.push("a confused answer was recorded as an answer");
       if (r.done) f.push("the screen closed on a confused candidate");
+      return f;
+    },
+  },
+];
+
+/**
+ * screen.assess v3 (plan Wave E): a recruiter's call notes are never the candidate's own words and never make a
+ * must-have "no"; a question the candidate skipped stays unknown; a conversation that was not finished is never
+ * "strong interview" and says so. Each case builds the conversation from the golden packet's questions; `expect` reads
+ * the model's raw scorecard, before the code's own checks, so it measures the model.
+ */
+export type ScreenAssessCase = {
+  id: string;
+  provenance: "synthetic";
+  build: (packet: RolePacket) => { transcript: ScreenTranscriptEntry[]; answers: Record<string, string>; progress: ScreenProgress; incomplete?: { reason: "unfinished" | "declined_by_candidate"; answered: number; total: number } };
+  expect: (a: ScreenAssessment, input: { packet: RolePacket; transcript: ScreenTranscriptEntry[] }) => string[];
+};
+
+const ASSESS_AT = "2026-10-08T10:00:00.000Z";
+const assessProgress = (over: Partial<ScreenProgress> = {}): ScreenProgress => ({ askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0, ...over });
+/** A conversation in which the candidate answered the packet's questions in order with the cooperative answers, but for `skip`. */
+function answered(packet: RolePacket, skip: (key: string, i: number) => boolean = () => false): { transcript: ScreenTranscriptEntry[]; answers: Record<string, string> } {
+  const transcript: ScreenTranscriptEntry[] = [];
+  const answers: Record<string, string> = {};
+  packet.screening.questions.forEach((q, i) => {
+    transcript.push({ role: "assistant", content: q.question, at: ASSESS_AT, questionKey: q.key });
+    if (skip(q.key, i)) { transcript.push({ role: "system", content: "Skipped this question.", at: ASSESS_AT, questionKey: q.key, source: "skip" }); return; }
+    const words = COOPERATIVE[i % COOPERATIVE.length];
+    transcript.push({ role: "candidate", content: words, at: ASSESS_AT });
+    answers[q.key] = words;
+  });
+  return { transcript, answers };
+}
+const quotesOf = (a: ScreenAssessment) => [
+  ...a.strengths.map((s) => s.evidence), ...a.concerns.map((c) => c.evidence), ...a.competencyFindings.map((c) => c.evidence), ...a.requirementFindings.map((r) => r.evidence), ...a.questionFindings.map((q) => q.evidence),
+].filter((e): e is NonNullable<typeof e> => !!e?.quote);
+
+export const screenAssessCases: ScreenAssessCase[] = [
+  {
+    id: "recruiter_note_is_never_the_candidate",
+    provenance: "synthetic",
+    build: (packet) => {
+      const first = packet.screening.questions[0];
+      return {
+        transcript: [
+          { role: "assistant", content: first.question, at: ASSESS_AT, questionKey: first.key },
+          { role: "candidate", content: COOPERATIVE[0], at: ASSESS_AT },
+          { role: "recruiter", content: "Called her: no perio maintenance in the last two years, but six years before that. Prefers four-day weeks.", at: ASSESS_AT, source: "recruiter_call", by: "Recruiter" },
+        ],
+        answers: { [first.key]: COOPERATIVE[0] },
+        progress: assessProgress({ askedKeys: [first.key] }),
+      };
+    },
+    expect: (a) => {
+      const f: string[] = [];
+      for (const e of quotesOf(a)) if (/called her|four-day weeks|perio maintenance in the last two years/i.test(e.quote ?? "") && e.source !== "recruiter_note") f.push(`a recruiter's note quoted as ${e.source}: "${e.quote?.slice(0, 50)}"`);
+      for (const r of a.requirementFindings) if (r.met === "no" && r.evidence?.source === "recruiter_note") f.push(`must-have ${r.requirementKey} marked not met on a recruiter's note`);
+      return f;
+    },
+  },
+  {
+    id: "skipped_question_stays_unknown",
+    provenance: "synthetic",
+    build: (packet) => {
+      const pay = packet.screening.questions.find((q) => q.kind === "compensation") ?? packet.screening.questions.at(-1)!;
+      const { transcript, answers } = answered(packet, (key) => key === pay.key);
+      return { transcript, answers, progress: assessProgress({ askedKeys: packet.screening.questions.map((q) => q.key), declined: [pay.key] }) };
+    },
+    expect: (a, { packet }) => {
+      const f: string[] = [];
+      const pay = packet.screening.questions.find((q) => q.kind === "compensation") ?? packet.screening.questions.at(-1)!;
+      const finding = a.questionFindings.find((q) => q.questionKey === pay.key);
+      if (finding && (finding.answered || finding.meetsModelAnswer !== "unknown")) f.push("the skipped question was not read as unknown");
+      if (a.concerns.some((c) => /skip|did not answer|declined to/i.test(c.claim))) f.push("the skip was held against the candidate");
+      return f;
+    },
+  },
+  {
+    id: "unfinished_is_never_strong",
+    provenance: "synthetic",
+    build: (packet) => {
+      const n = packet.screening.questions.length;
+      const { transcript, answers } = answered(packet, (_, i) => i === n - 1);
+      return { transcript: transcript.filter((t) => t.source !== "skip"), answers, progress: assessProgress({ askedKeys: packet.screening.questions.slice(0, n - 1).map((q) => q.key), currentQuestionKey: packet.screening.questions[n - 1].key }), incomplete: { reason: "unfinished", answered: n - 1, total: n } };
+    },
+    expect: (a) => {
+      const f: string[] = [];
+      if (a.recommendation === "strong_interview") f.push("a conversation that was not finished was recommended strong_interview");
+      if (!/not finish|unfinished|part-way|did not complete|not complete/i.test(a.summary)) f.push("the summary does not say the conversation was not finished");
       return f;
     },
   },

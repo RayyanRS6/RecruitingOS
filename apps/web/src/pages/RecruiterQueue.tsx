@@ -7,7 +7,7 @@ import { Alert, Button, Card, Chip, EmptyState, ErrorState, Field, PageHeader, P
 import type { EscalationThreadEntry } from "@ros/contracts";
 import { api, ApiError, type PostingTaskDetail } from "../api/client";
 import { POSTING_TASK_BEFORE_ACCEPT, isPostingTaskKind, queueKindLabel } from "../publishing";
-import { draftFactLines, queueThreadHeading, workspaceHref, type HandedOverDraft } from "../recruiter-requests";
+import { CALL_NOTES_HINT, CANDIDATE_ASKED_FOR_PERSON, draftFactLines, queueThreadHeading, workspaceHref, type HandedOverDraft } from "../recruiter-requests";
 import { toast } from "../toast";
 
 /** Exactly what a recruiter sees before accepting (correction 11): no customer words, nothing from a candidate record. */
@@ -232,6 +232,13 @@ function EscalationDetail({ id }: { id: string }) {
       ) : (
         <>
           {e.grant ? <Alert tone="info">Your access covers {e.grant.scope.applicationId ? "this candidate" : e.grant.scope.roleId ? "this role" : "this customer"} and ends {new Date(e.grant.expiresAt).toLocaleString()}. <Button size="sm" variant="secondary" loading={enter.isPending} onClick={() => enter.mutate(e)}>Open in the customer's workspace</Button> <Button size="sm" variant="quiet" loading={release.isPending} onClick={() => release.mutate()}>Release</Button></Alert> : null}
+          {/* A candidate who chose a person over the assistant (plan E3, Q16): the call, then the notes on their Screen tab. */}
+          {e.kind === CANDIDATE_ASKED_FOR_PERSON && e.applicationId && e.status !== "resolved" ? (
+            <Card needsYou title="After you talk with them">
+              <p className="small" style={{ color: "var(--ink-2)" }}>{CALL_NOTES_HINT}</p>
+              {e.grant ? <div className="row" style={{ marginTop: 8 }}><Button size="sm" variant="primary" loading={enter.isPending} onClick={() => enter.mutate(e)}>Open the candidate's Screen tab</Button></div> : null}
+            </Card>
+          ) : null}
           {ctx.company ? <Card title="Company"><dl className="kv"><dt>Name</dt><dd>{ctx.company.name}</dd><dt>Vertical</dt><dd>{ctx.company.vertical}</dd><dt>Size</dt><dd>{ctx.company.sizeBand}</dd></dl></Card> : null}
           {ctx.intakeSession ? <DraftHandover draft={ctx.intakeSession} onOpen={e.grant ? () => enter.mutate(e) : null} opening={enter.isPending} /> : null}
           {ctx.role && ctx.packet ? (

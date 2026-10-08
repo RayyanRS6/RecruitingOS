@@ -3,6 +3,7 @@
 import type { DraftRolePacket } from "@ros/contracts";
 import { candidateNotices, type Notice } from "@ros/core";
 import type { ContactLine } from "../services/company-settings-profile";
+import { applySteps, applyTimeLine, type ApplyFlowView } from "../services/job-preview";
 import { Description } from "./description";
 import { Icon } from "./icons";
 import { JobFacts, publicPay } from "./job-facts";
@@ -66,11 +67,14 @@ export function HelpLine(props: { contact: ContactLine; class?: string }) {
   return <p class={props.class ?? "help-line"}>Need help applying, or a change to how you apply because of a disability? Email <ContactLink contact={props.contact} /> and a person will help.</p>;
 }
 
-/** Four things that are true of every application here: how long, what to send, who decides, how to reach a person. */
-export function FourPoints(props: { company: Pick<JobPageCompany, "name" | "contact"> }) {
+/**
+ * Four things that are true of every application here: how long (the conversation included, when it follows the form;
+ * plan E8), what to send, who decides, how to reach a person.
+ */
+export function FourPoints(props: { company: Pick<JobPageCompany, "name" | "contact">; packet: Pick<DraftRolePacket, "screening">; flow: ApplyFlowView }) {
   return (
     <ul class="points">
-      <li><Icon name="clock" /><span>Takes about three minutes.</span></li>
+      <li><Icon name="clock" /><span>{applyTimeLine(props.packet, { companyName: props.company.name, flow: props.flow })}</span></li>
       <li><Icon name="paperclip" /><span>A resume, or a few lines about your work. No cover letter.</span></li>
       <li><Icon name="people" /><span>People at {props.company.name} make every hiring decision.</span></li>
       <li><Icon name="mail" /><span>Questions? Email <ContactLink contact={props.company.contact} /> to reach a person.</span></li>
@@ -90,16 +94,6 @@ export function PreviewNote(props: { preview: PreviewInfo }) {
   );
 }
 
-/** The steps the candidate can expect, the same on every job page and in the builder's preview. */
-export function expectSteps(packet: Pick<DraftRolePacket, "screening" | "interviews">, smsEnabled: boolean): string[] {
-  return [
-    "Apply in about three minutes. We confirm by email.",
-    `A short screening conversation ${smsEnabled ? "by text or online" : "online"} (about ${packet.screening.maxMinutes} minutes) if your background looks like a fit.`,
-    ...packet.interviews.plan.map((r) => `${r.title} (${r.durationMinutes} minutes)`),
-    "A decision, and a real answer either way.",
-  ];
-}
-
 export type JobPageProps = {
   packet: DraftRolePacket;
   company: JobPageCompany;
@@ -107,6 +101,8 @@ export type JobPageProps = {
   /** Every notice for the job's places; the page decides which it renders. */
   notices: Notice[];
   smsEnabled: boolean;
+  /** How applicants meet the screening conversation (services/job-preview.ts `applyFlowOf`): what the time and the steps say. */
+  flow: ApplyFlowView;
   /** The benefits the law (or the company) has the page describe: the role's own, else the company's (Setup). */
   benefits: string | null;
   links: { careers: string | null; apply: string };
@@ -151,7 +147,7 @@ export function JobPage(props: JobPageProps) {
         <div class="job-main">
           {role.accepting ? (
             <div class="card points-card">
-              <FourPoints company={company} />
+              <FourPoints company={company} packet={packet} flow={props.flow} />
               <HelpLine contact={company.contact} />
             </div>
           ) : null}
@@ -166,7 +162,7 @@ export function JobPage(props: JobPageProps) {
             {props.benefits ? <p class="pre">{props.benefits}</p> : null}
             <h2>What to expect</h2>
             <ol class="steps">
-              {expectSteps(packet, props.smsEnabled).map((s) => <li>{s}</li>)}
+              {applySteps(packet, { companyName: company.name, smsEnabled: props.smsEnabled, flow: props.flow }).map((s) => <li>{s}</li>)}
             </ol>
             {notices.map((n) => <p class="notice">{n.text}</p>)}
           </div>
@@ -182,9 +178,9 @@ export function JobPage(props: JobPageProps) {
           <div class="apply-panel">
             <div class="card apply-card">
               <p class="apply-title">{title}</p>
-              {role.applyBy ? <p class="apply-by"><Icon name="calendar" />{role.applyBy}</p> : <p class="meta">About three minutes. We confirm by email.</p>}
+              {role.applyBy ? <p class="apply-by"><Icon name="calendar" />{role.applyBy}</p> : <p class="meta">We confirm by email.</p>}
               <a class="btn" href={props.links.apply}>Apply now</a>
-              <FourPoints company={company} />
+              <FourPoints company={company} packet={packet} flow={props.flow} />
               <HelpLine contact={company.contact} />
             </div>
           </div>
@@ -265,6 +261,8 @@ export type ApplyFormProps = {
   privacyEmail: string;
   /** The sealed "form opened at" value (services/closing-date.ts): a form opened before the closing date may still be sent. */
   formOpened: string;
+  /** How applicants meet the screening conversation: the lead says how long applying takes (plan E8). */
+  flow: ApplyFlowView;
   links: { job: string; uploadIntent: string };
   error?: string;
   state?: Partial<ApplyFormState>;
@@ -374,7 +372,7 @@ export function ApplyFormPage(props: ApplyFormProps) {
       <p class="eyebrow">{props.company.name}</p>
       <h1>Apply: {props.packet.identity.title}</h1>
       <JobFacts packet={props.packet} pay={publicPay(props.packet, props.notices)} />
-      <p class="lead">It takes about three minutes. Upload a resume, or answer four short questions about your work instead. No cover letter needed.</p>
+      <p class="lead">{props.flow === "one_visit" ? `${applyTimeLine(props.packet, { companyName: props.company.name, flow: props.flow })} First this form: upload a resume, or answer four short questions about your work instead. No cover letter needed.` : `${applyTimeLine(props.packet, { companyName: props.company.name, flow: props.flow })} Upload a resume, or answer four short questions about your work instead. No cover letter needed.`}</p>
       <HelpLine contact={props.company.contact} class="notice" />
       {props.error ? <div class="err" role="alert">{props.error}</div> : null}
       {preview ? (
@@ -383,6 +381,7 @@ export function ApplyFormPage(props: ApplyFormProps) {
             <legend class="sr-only">The form as candidates see it; it sends nothing here</legend>
             <ApplyFields {...props} />
             <button class="btn" type="button" disabled>Send my application</button>
+            {props.flow === "one_visit" ? <p class="meta">Next comes the short written conversation with {props.company.name}'s AI assistant. You can start it straight away, do it later, or ask for a person instead.</p> : null}
           </fieldset>
         </div>
       ) : (
@@ -393,6 +392,7 @@ export function ApplyFormPage(props: ApplyFormProps) {
           <ApplyFields {...props} />
           <input type="hidden" name="noticeVersionsShown" value={noticeVersionsFor(props.notices, props.smsEnabled).join(",")} />
           <button class="btn" type="submit">Send my application</button>
+          {props.flow === "one_visit" ? <p class="meta">Next comes the short written conversation with {props.company.name}'s AI assistant. You can start it straight away, do it later, or ask for a person instead.</p> : null}
         </form>
       )}
       {preview ? null : <script nonce={currentNonce()} dangerouslySetInnerHTML={{ __html: APPLY_UPLOAD_JS }} />}

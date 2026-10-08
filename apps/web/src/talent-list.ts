@@ -59,17 +59,46 @@ export const ORDERS: ReadonlyArray<{ id: Order; label: string }> = [
 
 /**
  * What the list shows. `stage` is a column of the strip (or everyone); `waiting` keeps the people waiting on you;
- * `internalStage` and `told` come from links (Today's "held on an eligibility answer", "not told yet") and show as
- * removable chips.
+ * `applying` keeps the people still applying (plan E6); `internalStage` and `told` come from links (Today's "held on an
+ * eligibility answer", "not told yet") and show as removable chips.
  */
-export type TalentView = { stage: OwnerStage | "all"; waiting: boolean; reading: ReadingFilter; query: string; order: Order; internalStage: string | null; told: ToldState | null };
+export type TalentView = { stage: OwnerStage | "all"; waiting: boolean; applying: boolean; reading: ReadingFilter; query: string; order: Order; internalStage: string | null; told: ToldState | null };
+
+/* ------------------------------------------------------------------------------------------------------------ */
+/* Still applying (plan E6)                                                                                       */
+/* ------------------------------------------------------------------------------------------------------------ */
+
+export const STILL_APPLYING_LABEL = "Still applying";
+/** Said above the list while it shows the people still applying. */
+export const STILL_APPLYING_TEXT = "These people sent the form and are answering the screening questions in the same visit, or said they would finish later. Nothing about them waits on you until they send their answers, ask for a person or stop; you are told then.";
+
+/**
+ * Someone still in the visit that sent their application: offered the screening conversation with it and not finished,
+ * sent without it, handed to a person or closed. They sit in their stage like anyone else, are counted apart beside the
+ * strip, and are never shown as waiting on you.
+ */
+export function isStillApplying(a: Pick<ApplicationSummary, "stillApplying">): boolean {
+  return a.stillApplying === true;
+}
+
+/** How many people are still applying: the API's count, or the rows' when an older answer has none. */
+export function stillApplyingCount(counts: Pick<StageStripCounts, "stillApplying"> | null | undefined, rows: ReadonlyArray<Pick<ApplicationSummary, "stillApplying">>): number {
+  return counts?.stillApplying ?? rows.filter(isStillApplying).length;
+}
+
+/** How many people wait on you: never anyone still applying, whatever their group says (a hold that ended mid-visit). */
+export function waitingOnYouCount(counts: Pick<StageStripCounts, "byGroup"> | null | undefined, rows: ReadonlyArray<Pick<ApplicationSummary, "stillApplying" | "group">>): number {
+  const applying = rows.filter((a) => isStillApplying(a) && a.group === "waiting_on_you").length;
+  return Math.max(0, (counts?.byGroup.waiting_on_you ?? 0) - applying);
+}
 
 const OWNER_STAGES = OwnerStageEnum.options as readonly OwnerStage[];
 const TOLD = ["not_told", "queued", "sent", "told_in_person"] as const;
 
 /**
- * The view the page opens on: what the link asks for (`?ownerStage=`, `?stage=`, `?told=`, `?order=`), otherwise
- * "Waiting on you", longest wait first, when anyone waits on you (plan A3), and everyone, newest first, when nobody does.
+ * The view the page opens on: what the link asks for (`?ownerStage=`, `?stage=`, `?told=`, `?applying=1`, `?order=`),
+ * otherwise "Waiting on you", longest wait first, when anyone waits on you (plan A3), and everyone, newest first, when
+ * nobody does. `counts` are the ones the page shows (people still applying never wait on you).
  */
 export function defaultView(params: { get: (k: string) => string | null }, counts: Pick<StageStripCounts, "byGroup"> | null | undefined): TalentView {
   const stageParam = params.get("ownerStage");
@@ -77,11 +106,12 @@ export function defaultView(params: { get: (k: string) => string | null }, count
   const toldParam = params.get("told");
   const told = toldParam && (TOLD as readonly string[]).includes(toldParam) ? (toldParam as ToldState) : null;
   const internalStage = params.get("stage") || null;
-  const linked = stage !== "all" || !!told || !!internalStage;
+  const applying = params.get("applying") === "1";
+  const linked = stage !== "all" || !!told || !!internalStage || applying;
   const waiting = !linked && (counts?.byGroup.waiting_on_you ?? 0) > 0;
   const orderParam = params.get("order");
   const order: Order = orderParam === "newest" || orderParam === "waiting" || orderParam === "name" ? orderParam : waiting ? "waiting" : "newest";
-  return { stage, waiting, reading: "any", query: "", order, internalStage, told };
+  return { stage, waiting, applying, reading: "any", query: "", order, internalStage, told };
 }
 
 /** Lower case without accents, so "José" is found by "jose". */
@@ -100,7 +130,8 @@ export function matchesQuery(a: Pick<ApplicationSummary, "candidate" | "source">
 export function applyView(rows: readonly ApplicationSummary[], view: TalentView): ApplicationSummary[] {
   const shown = rows.filter((a) =>
     (view.stage === "all" || a.ownerStage === view.stage) &&
-    (!view.waiting || a.group === "waiting_on_you") &&
+    (!view.waiting || waitsOnYou(a)) &&
+    (!view.applying || isStillApplying(a)) &&
     (view.reading === "any" || readingOf(a) === view.reading) &&
     (!view.internalStage || a.stage === view.internalStage) &&
     (!view.told || a.toldState === view.told) &&
@@ -129,11 +160,16 @@ export function stageSummary(counts: Partial<Record<OwnerStage, number>> | null 
   return OWNER_STAGES.map((s) => ({ id: s, label: OWNER_STAGE_LABEL[s], count: counts?.[s] ?? 0 })).filter((s) => s.count > 0);
 }
 
-/** How many people each reading filter would show, within the strip column and the waiting toggle. */
-export function readingCounts(rows: readonly ApplicationSummary[], view: Pick<TalentView, "stage" | "waiting">): Record<ReadingFilter, number> {
+/** Waits on you: in the "waiting on you" group and not still applying. */
+function waitsOnYou(a: Pick<ApplicationSummary, "group" | "stillApplying">): boolean {
+  return a.group === "waiting_on_you" && !isStillApplying(a);
+}
+
+/** How many people each reading filter would show, within the strip column and the waiting and still-applying toggles. */
+export function readingCounts(rows: readonly ApplicationSummary[], view: Pick<TalentView, "stage" | "waiting"> & { applying?: boolean }): Record<ReadingFilter, number> {
   const out: Record<ReadingFilter, number> = { any: 0, strong: 0, potential: 0, missing_must_have: 0, closer_look: 0 };
   for (const a of rows) {
-    if ((view.stage !== "all" && a.ownerStage !== view.stage) || (view.waiting && a.group !== "waiting_on_you")) continue;
+    if ((view.stage !== "all" && a.ownerStage !== view.stage) || (view.waiting && !waitsOnYou(a)) || (view.applying && !isStillApplying(a))) continue;
     out.any += 1;
     const r = readingOf(a);
     if (r in out) out[r as ReadingFilter] += 1;
@@ -156,9 +192,9 @@ export function appliedWhen(iso: string, now: Date = new Date()): string {
   return `Applied ${at.toLocaleDateString("en-US", { month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) })}`;
 }
 
-/** How long someone has waited on you, for the people who do; null for everyone else. */
-export function waitingText(a: Pick<ApplicationSummary, "group" | "daysInStage">): string | null {
-  if (a.group !== "waiting_on_you") return null;
+/** How long someone has waited on you, for the people who do; null for everyone else, and for anyone still applying. */
+export function waitingText(a: Pick<ApplicationSummary, "group" | "daysInStage"> & { stillApplying?: boolean }): string | null {
+  if (!waitsOnYou(a)) return null;
   if (a.daysInStage <= 0) return "Waiting on you since today";
   return `Waiting on you ${a.daysInStage} ${a.daysInStage === 1 ? "day" : "days"}`;
 }
@@ -167,6 +203,7 @@ export function waitingText(a: Pick<ApplicationSummary, "group" | "daysInStage">
 export function emptyText(view: TalentView, total: number): { title: string; body: string } {
   if (total === 0) return { title: "Nobody has applied yet", body: "Applicants appear here as soon as they apply. The role's Posting tab has the links to share once it is live." };
   if (view.query.trim()) return { title: "Nobody matches", body: `Nobody here matches "${view.query.trim()}". Search looks at names, email addresses and where people came from.` };
+  if (view.applying) return { title: "Nobody is still applying", body: "Everyone who was offered the screening conversation with their application has sent their answers, asked for a person or stopped. Turn off \"Still applying\" to see everyone." };
   if (view.waiting && view.stage === "all" && view.reading === "any") return { title: "Nobody is waiting on you", body: "Everyone has a next step under way. Choose All to see them." };
   return { title: "Nobody here", body: "Nobody fits these filters right now. Clear one to see more people." };
 }

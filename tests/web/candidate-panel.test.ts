@@ -178,6 +178,30 @@ describe("History: who did what, why, and what the candidate was told", () => {
     expect(historyItem(ev("application.told", { how: "before_tracking" }, { kind: "system", id: "migration_0026" }))).toMatchObject({ what: "Counted as told: decided before decisions became private" });
   });
 
+  it("tells the conversation in the same visit as applying (Wave E): offered, skipped, changed, sent without it, a recruiter's call", () => {
+    const apply = { kind: "system" as const, id: "apply_page" };
+    const cand = { kind: "candidate" as const, id: "c" };
+    expect(historyItem(ev("screen.invited", { invitedBy: "apply", invitedVia: "apply" }, apply))?.what).toBe("Offered the screening conversation right after the application form");
+    expect(historyItem(ev("screen.question_skipped", { questionKey: "q_pay" }, cand))).toMatchObject({ what: "Chose not to answer a screening question", who: "The candidate" });
+    expect(historyItem(ev("screen.answer_edited", { questionKey: "q_start" }, cand))?.what).toBe("Changed an answer before sending");
+    expect(historyItem(ev("screen.answer_tapped", { questionKey: "q_days" }, cand))).toBeNull();
+    expect(historyItem(ev("screen.declined_by_candidate", { answered: 0, questions: 5 }, cand))).toMatchObject({ what: "Sent the application without the screening conversation", why: "Their own choice; it is never held against them." });
+    expect(historyItem(ev("screen.idle_reminded", { answered: 2 }, { kind: "system", id: "wf" }))?.what).toBe("Reminded once to finish the screening conversation");
+    expect(historyItem(ev("screen.unfinished", { answered: 2, questions: 5 }, { kind: "system", id: "wf" }))).toMatchObject({ what: "The screening conversation was closed part-way, after one reminder", why: "2 of 5 questions answered; what they said is kept." });
+    expect(historyItem(ev("screen.paused", { reason: "model down" }, { kind: "system", id: "screening" }))?.told).toBe("They are emailed a link to finish once it is back.");
+    expect(historyItem(ev("screen.resumed", {}, { kind: "system", id: "screening" }))?.what).toBe("The screening conversation is back on");
+    expect(historyItem(ev("screen.recruiter_notes_added", { notes: 3, complete: true }, { kind: "user", id: "s1", name: "Rae Recruiter" }))).toMatchObject({ what: "Added notes from a call with the candidate", who: "Rae Recruiter", why: "Kept as the recruiter's notes, never as the candidate's own words." });
+    expect(historyItem(ev("screen.completed", { via: "recruiter_call" }, { kind: "user", id: "s1", name: "Rae Recruiter" }))?.what).toBe("Screening finished with a recruiter's notes from a call");
+    expect(historyItem(ev("screen.repeat_confirmed", { intent: "answers", added: true }, cand))?.what).toBe("Confirmed by email: answers given when applying again were added");
+    expect(historyItem(ev("screen.repeat_confirmed", { intent: "person", added: true }, cand))?.what).toBe("Confirmed by email: asked for a person after applying again");
+    // a skip during a follow-up keeps the answer; answers sent after the reminder; never started; a person after an outage
+    expect(historyItem(ev("screen.question_skipped", { questionKey: "q_work", answerKept: true }, cand))?.what).toBe("Moved on from a follow-up question, keeping the answer already given");
+    expect(historyItem(ev("screen.completed", { via: "review_timeout" }, { kind: "system", id: "wf" }))).toMatchObject({ what: "Their screening answers were sent as they were", who: "The system" });
+    expect(historyItem(ev("screen.expired", { oneVisit: true }, { kind: "system", id: "wf" }))).toMatchObject({ what: "Did not start the screening conversation that goes with the application", who: "The system" });
+    expect(historyItem(ev("screen.expired", {}, { kind: "system", id: "wf" }))?.what).toBe("The screening invitation lapsed without an answer");
+    expect(historyItem(ev("screen.repeat_confirmed", { intent: "outage", added: true }, cand))?.what).toBe("Confirmed by email: a person to finish the conversation the assistant could not, after applying again");
+  });
+
   it("sets what the assistant suggested beside what a person decided", () => {
     const timeline = [
       ev("application.triaged", { recommendation: "screen" }, { kind: "agent", id: "triage" }, "2026-10-01T10:00:00.000Z"),

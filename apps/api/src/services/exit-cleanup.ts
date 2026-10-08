@@ -28,7 +28,8 @@ export type ExitCleanupResult = { interviewsCancelled: number; screensCancelled:
 
 const NOTICE: Record<ExitCandidateEmail, CancelNotice> = { send_cancellation: "known", private_decision: "known", with_decision_message: "none" };
 const OPEN_INTERVIEWS = ["proposed", "scheduling", "scheduled"];
-const OPEN_SCREENS = ["invited", "reminded", "in_progress"];
+// A conversation paused while the assistant was down (plan E5) is still open.
+const OPEN_SCREENS = ["invited", "reminded", "in_progress", "paused"];
 /** The assistant's suggestions and a decision message waiting for approval: nothing is left to do for someone who left. */
 const WAITING_ON_A_PERSON = ["application.invite_screen", "application.recommend_interview", "disposition.send"];
 
@@ -49,7 +50,7 @@ export async function exitCleanup(tx: Tx, container: Container, input: ExitClean
   const scr = await tx.select().from(screens).where(and(eq(screens.applicationId, applicationId), inArray(screens.status, OPEN_SCREENS)));
   for (const s of scr) {
     await tx.update(screens).set({ status: "cancelled" }).where(eq(screens.id, s.id));
-    await emit(tx, { type: "screen.cancelled", companyId, actor, subject: { type: "screen", id: s.id }, payload: { applicationId, reason: "left_process", started: s.status === "in_progress" } });
+    await emit(tx, { type: "screen.cancelled", companyId, actor, subject: { type: "screen", id: s.id }, payload: { applicationId, reason: "left_process", started: s.status === "in_progress" || s.status === "paused" } });
     if (s.workflowRunId) await container.engine.cancel(tx, s.workflowRunId, actor, `the application left the process (${input.reason})`);
     result.screensCancelled += 1;
   }

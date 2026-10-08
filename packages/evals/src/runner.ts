@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenTurnPrompt, triageAssessPrompt, type AiRuntime, type IntakeContext, type ScreenContext } from "@ros/ai";
+import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, triageAssessPrompt, type AiRuntime, type IntakeContext, type ScreenContext } from "@ros/ai";
 import {
   REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, advanceProgress, basisFor, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, mergeFacts, mergeRevision, redactProtected, registerFakeHandlers,
   resolveBenchmark, verifyQuotes, type BenchmarkResult,
@@ -9,7 +9,7 @@ import {
 import type { IntakeFacts, IntakeMessage, RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
 import { createDb, migrate } from "@ros/db";
 import { findPlaybook, matchPlaybookRole } from "@ros/playbooks";
-import { EMPTY_FACTS, RDH_FACTS, aboutCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, quotesAreGrounded, resumeCases, reviseCases, screenPersonas, triageEdgeCases, type IntakeCase } from "./suites";
+import { EMPTY_FACTS, RDH_FACTS, aboutCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, quotesAreGrounded, resumeCases, reviseCases, screenAssessCases, screenPersonas, triageEdgeCases, type IntakeCase } from "./suites";
 
 /**
  * Evaluation runner (docs/11). `pnpm eval` runs every suite against the configured provider
@@ -237,6 +237,22 @@ async function main() {
       out.push({ id: persona.id, pass: failures.length === 0, failures });
     }
     results["screen.conversation"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
+  }
+
+  // The scorecard (screen.assess v3, plan Wave E): a recruiter's notes kept apart, a skip unknown, an unfinished
+  // conversation never "strong interview". Judged on the model's own output, before the code's checks.
+  if (!onlySuite || onlySuite === "screen.assess") {
+    const packet = await goldenPacket();
+    const out: (typeof results)[string]["cases"] = [];
+    for (const c of screenAssessCases) {
+      const input = c.build(packet);
+      const ctx: ScreenContext = { company: { name: "Eval Dental" }, packet, candidate: { firstName: "Alex" }, channel: "web", progress: input.progress, answers: input.answers, transcript: input.transcript, focusUnknowns: [], latestCandidateMessage: null, incomplete: input.incomplete ?? null };
+      const r = await runPrompt(q, rt, screenAssessPrompt, ctx, { companyId: null, inputRef: { eval: c.id } });
+      if (!r.ok) { out.push({ id: c.id, pass: false, failures: [`assess failed: ${r.error}`] }); continue; }
+      const f = c.expect(r.output, { packet, transcript: input.transcript });
+      out.push({ id: c.id, pass: f.length === 0, failures: f });
+    }
+    results["screen.assess"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
   }
 
   const thresholds = JSON.parse(readFileSync(join(here, "..", "thresholds.json"), "utf8")) as Record<string, { minPassRate: number }>;

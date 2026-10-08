@@ -36,6 +36,7 @@ import { draftPreviewPages, rolePreviewPages } from "./pages/preview";
 import { linkPages } from "./pages/links";
 import { publicFeeds } from "./pages/public-feeds";
 import { fileRoutes } from "./routes/files";
+import { screenApplicationRoutes, screenRoleRoutes } from "./routes/screen-routes";
 import { postmarkWebhook } from "./webhooks/postmark";
 import { POLICIES, apiRateLimit, rateLimit, webhookRateLimit } from "./middleware/rate-limit";
 import { contextStorage } from "hono/context-storage";
@@ -130,6 +131,8 @@ export function createApp(container: Container) {
   app.route("/api/v1/interviews", interviewRoutes);
   app.route("/api/v1/applications", applicationInterviewRoutes);
   app.route("/api/v1/roles", roleInterviewRoutes);
+  app.route("/api/v1/roles", screenRoleRoutes);
+  app.route("/api/v1/applications", screenApplicationRoutes);
   app.route("/api/v1/me", meRoutes);
   app.route("/", schedulePages);
   app.route("/files", fileRoutes);

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { RecruiterRequestView } from "../../packages/contracts/src/api";
 import { hasChoice, loosens, looseningQuestion, splitRules } from "../../apps/web/src/ai-rules";
 import { presetOf } from "../../apps/web/src/recruiter-access";
-import { RECENT_DAYS, RECRUITER_ASKS_OVER_CHIP, aboutWords, askedByWords, draftFactLines, latestAnswer, pickedUpWords, queueThreadHeading, recruiterAsksLine, reopenHint, replyByWords, requestActions, requestState, splitRequests, threadHeading, workspaceHref } from "../../apps/web/src/recruiter-requests";
+import { CALL_NOTES_HINT, CANDIDATE_ASKED_FOR_PERSON, RECENT_DAYS, RECRUITER_ASKS_OVER_CHIP, aboutWords, askedByWords, draftFactLines, latestAnswer, pickedUpWords, queueThreadHeading, recruiterAsksLine, reopenHint, replyByWords, requestActions, requestState, splitRequests, threadHeading, workspaceHref } from "../../apps/web/src/recruiter-requests";
 import { canAskRecruiter } from "../../apps/web/src/roles";
 
 /**
@@ -181,6 +181,15 @@ describe("the recruiter queue shows the draft a request is about (plan C12)", ()
     expect(workspaceHref({ roleId: null, contextSnapshot: { intakeSession: { id: "s 1" } } })).toBe("/roles/new?session=s%201");
     expect(workspaceHref({ roleId: "r1", contextSnapshot: {} })).toBe("/roles/r1/talent");
     expect(workspaceHref({ roleId: null, contextSnapshot: { intakeSession: null } })).toBe("/");
+  });
+
+  it("opens the candidate a request is about, on the Screen tab when they asked for a person (plan E3)", () => {
+    expect(workspaceHref({ roleId: "r1", applicationId: "a1", kind: "review", contextSnapshot: {} })).toBe("/roles/r1/talent?open=a1");
+    expect(workspaceHref({ roleId: "r1", applicationId: "a1", kind: CANDIDATE_ASKED_FOR_PERSON, contextSnapshot: {} })).toBe("/roles/r1/talent?open=a1&tab=screen");
+    expect(CALL_NOTES_HINT).toMatch(/add your notes from the call on the Screen tab/);
+    expect(CALL_NOTES_HINT).toMatch(/never as the candidate's own words/);
+    const queue = readFileSync(new URL("../../apps/web/src/pages/RecruiterQueue.tsx", import.meta.url), "utf8");
+    expect(queue).toContain("e.kind === CANDIDATE_ASKED_FOR_PERSON && e.applicationId");
   });
 
   it("reads what the draft knows, one plain line each, saying the pay may not be confirmed", () => {

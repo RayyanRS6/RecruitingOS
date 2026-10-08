@@ -9,7 +9,9 @@ import { decisionOnItsWayText } from "../../company-check";
 import { AskRecruiter } from "../../components/AskRecruiter";
 import { useCompanyCheck } from "../../components/use-company-check";
 import { defaultInterviewers } from "../../interview-defaults";
+import { callNotesState } from "../../screen-view";
 import { NOT_NOW_TOAST, closeRoleToast, declineConfirmText, decisionToast, holdDay, outcomeToast, sendDecisionToast, type PanelStep } from "../../talent-actions";
+import { CallNotesCard } from "./call-notes";
 import { DECLINE_REASONS, activeInterviews, holdDateBounds } from "./helpers";
 import { useCandidateAction, useDraft, useFocusOnMount, useRefreshCandidate } from "./hooks";
 
@@ -30,7 +32,10 @@ export function NeedsYou(props: Props) {
   // a decision nobody has told the candidate about yet, or whose message is on its way
   const telling = DECIDED.includes(a.stage) && (a.toldState === "not_told" || a.toldState === "queued");
   const messagesWaiting = a.pendingApprovals.some((p) => p.actionType === "message.send_freeform");
+  // the candidate asked for a person (plan E3): for a recruiter, adding the notes from their call is what waits
+  const callNotes = callNotesState(a, props.myRole);
   const cards = [
+    callNotes.prominent ? <CallNotesCard key="call-notes" a={a} roleId={roleId} prominent /> : null,
     step === "hold" ? <HoldStep key="hold" a={a} roleId={roleId} onClose={() => setStep(null)} /> : null,
     step === "decline" ? <DeclineStep key="decline" a={a} roleId={roleId} onClose={() => setStep(null)} /> : null,
     step === "interview" ? <InterviewStep key="interview" a={a} roleId={roleId} initialRoundKey={props.roundKey} onClose={() => setStep(null)} /> : null,

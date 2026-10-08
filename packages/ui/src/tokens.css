@@ -420,6 +420,10 @@ table.table { border-collapse: collapse; width: 100%; font-size: 13.5px; font-va
 .bubble.assistant { background: var(--surface); border: 1px solid var(--line); }
 .bubble.user { background: var(--ink); color: var(--ground); margin-left: auto; }
 .bubble.system { background: transparent; color: var(--ink-3); font-size: 13px; }
+/* A recruiter's notes from a call (plan E3): set apart from the candidate's own words, with who wrote them. */
+.bubble.recruiter { background: var(--surface-2); border: 1px dashed var(--line-strong); }
+.bubble-label { display: block; margin-bottom: 4px; color: var(--ink-3); font-size: 12.5px; font-weight: 600; white-space: normal; }
+.bubble.user .bubble-label { color: inherit; opacity: 0.85; }
 .pipeline { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--surface-2); }
 .pipeline span { display: block; height: 100%; }
 .kv { display: grid; grid-template-columns: 160px 1fr; gap: 6px 12px; font-size: 13.5px; }
@@ -489,6 +493,9 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
 /* The applicant list (Talent): one calm row per person. The name is the row's button and its click area stretches over
    the row; the stage button sits above it, so two controls never nest. No overflow clipping, so a row's menu can open
    over the rows below. */
+/* The stage strip with "Still applying" beside it (plan E6): the strip takes the room, the count sits at its end. */
+.talent-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.talent-strip > .tabs { flex: 1 1 420px; min-width: 0; }
 .talent-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .talent-toolbar .input, .talent-toolbar .select { width: auto; padding: 7px 10px; font-size: 13.5px; }
 .talent-toolbar .talent-search { flex: 1 1 200px; min-width: 160px; }

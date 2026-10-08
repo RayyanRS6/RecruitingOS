@@ -97,8 +97,11 @@ export async function companyConfirmed(q: Queryable, companyId: string): Promise
   return !!locked && isCompanyVerified(locked.settings);
 }
 
-/** Invitations to a next step: pointless, and confusing, once the person has left the process. */
-const NEXT_STEP_TEMPLATES = new Set(["screen_invite", "screen_reminder", "interview_slots", "interview_slots_reminder", "interview_confirmation"]);
+/**
+ * Invitations to a next step: pointless, and confusing, once the person has left the process. The links and reminders
+ * of the conversation that goes with the application (plan Wave E) are among them.
+ */
+const NEXT_STEP_TEMPLATES = new Set(["screen_invite", "screen_reminder", "interview_slots", "interview_slots_reminder", "interview_confirmation", "screen_later", "screen_idle_reminder", "screen_review_reminder", "screen_not_started_reminder", "screen_resume", "screen_repeat_later", "screen_repeat_resume"]);
 /** Where an application has left the process: the candidate withdrew, or a decision was made. */
 const LEFT_PROCESS = new Set(["withdrawn", "rejected", "declined", "talent_pool"]);
 

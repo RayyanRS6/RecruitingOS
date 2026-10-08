@@ -53,7 +53,8 @@ Recruiter Mode never shows a candidate anything the owner cannot see; it shows m
 ## Candidate experience
 
 - **Job page**: title, pay range (shown when the packet allows; required by law in some states, handled by the compliance layer), location, schedule, a plain description, "what to expect" with the steps and typical timeline, the AI disclosure, and one button.
-- **Apply**: name, email, phone (with a separate, unchecked SMS consent box), resume upload or four short questions, the eligibility questions in plain language, the state-appropriate notices, and a confirmation with a status link. Under three minutes on a phone.
+- **Apply**: name, email, phone (with a separate, unchecked SMS consent box), resume upload or four short questions, the eligibility questions in plain language, the state-appropriate notices, and a confirmation with a status link. The form alone under three minutes on a phone; on a pilot role, with the written conversation that follows it in the same visit, about fifteen, and the pages say so.
+- **Screening conversation** (candidate, server-rendered, no script): the AI line on top of every page; a fixed introduction with Start, Do this later and I'd rather talk to a person; one question at a time in large type on the white sheet, with "Question 2 of 5" over a thin native progress bar; the candidate's answers as their own near-black messages and the assistant's follow-ups on the left; tap answers for factual questions; a quiet "Skip this question"; "Check your answers" with Change on each, then Send; the person choice as two equal outlined buttons.
 - **Screen**: text or web chat, one question at a time, progress ("3 of 7"), pause and resume, "talk to a person" always visible.
 - **Schedule**: tap a slot; confirmation with calendar file; reschedule and cancel links.
 - **Interview prep**: who they will meet, format, length, what to bring, the case prompt if any.

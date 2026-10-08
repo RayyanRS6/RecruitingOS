@@ -53,10 +53,13 @@ describe("release-1 security coverage", () => {
     fd.set("acknowledged", "yes");
     const r = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
     expect(r.status).toBe(302);
-    // the response is the receipt for everyone; it never carries the status link (Wave 0 item 0.1)
-    expect(r.headers.get("location")).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
+    // the response is the receipt, or the conversation offered with the application (plan E1); it never carries the status link (Wave 0 item 0.1)
+    const to = r.headers.get("location") ?? "";
+    expect(to === `/careers/${slug}/jobs/${roleId}/applied` || /^\/c\/screen\/[A-Za-z0-9_-]+$/.test(to)).toBe(true);
     await container.drain();
-    return statusTokenFor(container, { roleId, email });
+    const token = await statusTokenFor(container, { roleId, email });
+    expect(to).not.toContain(token);
+    return token;
   };
 
   beforeAll(async () => {

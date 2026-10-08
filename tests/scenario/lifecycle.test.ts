@@ -5,6 +5,7 @@ import { aiRuns, applications, approvalRequests, assessments, auditRecords, comm
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "../../apps/api/src/app";
 import { createContainer, type Container } from "../../apps/api/src/container";
+import { useLaterApplyFlow } from "../../apps/api/src/test-helpers";
 
 /**
  * docs/13: A 100-person company (Brightline Dental Group, Irvine) hires a full-time Dental Hygienist.
@@ -43,8 +44,10 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     app = createApp(container);
     setClock(0);
     await signIn();
-    const co =(await (await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "100-199", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }] })).json()) as { slug: string };
+    const co =(await (await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "100-199", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
     slug = co.slug;
+    // docs/13 tells the later path (the screen by text after the résumé is read): the company is on it, as ITS can set (plan Wave E).
+    await useLaterApplyFlow(container, co.id);
   });
   afterAll(async () => { await container.close(); });
 

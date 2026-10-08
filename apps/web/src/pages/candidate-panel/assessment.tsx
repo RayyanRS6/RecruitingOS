@@ -7,6 +7,7 @@ import { api, ApiError, type ApplicationDetail, type AssessmentResult, type Scre
 import { toast } from "../../toast";
 import { AskRecruiter } from "../../components/AskRecruiter";
 import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, NO_QUOTE_LABEL, RESUME_UNREADABLE_TEXT, SCORECARD_UNAVAILABLE_TEXT, closerLook, competencyUnquoted, isUnquoted, openScreenOf, requirementUnquoted, resumeUnreadable, scorecardUnavailable, screenQuestionText } from "../../evidence";
+import { APPLIED_IN_ONE_VISIT, DECLINED_WORDS, EDITED_WORDS, SCREEN_STATUS_LABEL, TAPPED_WORDS, answerLines, generalNotes, recruiterNoteLabel, screenOrigin, transcriptBubble, unansweredWords } from "../../screen-view";
 import { actionToast } from "../../talent-actions";
 import { REC_LABEL } from "./helpers";
 
@@ -20,8 +21,6 @@ export function overallLabel(o: string): string {
 }
 
 export const MET_TONE: Record<string, "good" | "accent" | "neutral" | "caution"> = { yes: "good", partially: "accent", no: "caution", unknown: "neutral", evidenced: "good", partially_evidenced: "accent", not_evidenced: "neutral", contradicted: "caution" };
-
-const SCREEN_STATUS: Record<string, string> = { invited: "Invited", reminded: "Reminded", in_progress: "Answering", completed: "Completed", expired: "No response", abandoned: "Withdrawn", human_requested: "Asked for a person", cancelled: "Stopped", unfinished: "Not finished", declined_by_candidate: "Said no thanks", paused: "Paused" };
 
 type PacketLabels = ApplicationDetail["packetLabels"];
 
@@ -157,15 +156,23 @@ export function AssessmentCard({ assessment, detail, roleId, labels, title }: { 
   );
 }
 
-/** One screening conversation: its state, the open questions' answers first, and the whole transcript. */
-export function ScreenCard({ screen, open, action }: { screen: Screen; open?: boolean; action?: ReactNode }) {
+/**
+ * One screening conversation: its state and how it reached them ("Applied and talked in one visit"), the open
+ * questions' answers first, each question with what the candidate did with it (chose not to answer, changed it before
+ * sending, picked it from the choices), a recruiter's call notes labelled as theirs, and the whole transcript.
+ */
+export function ScreenCard({ screen, open, action, questions = [], timeline = [] }: { screen: Screen; open?: boolean; action?: ReactNode; questions?: ReadonlyArray<{ key: string; question: string }>; timeline?: ApplicationDetail["timeline"] }) {
   // A screen that opened with the open questions keeps their answers beside the questions; they count, and they are shown first.
   const focusAnswered = (screen.progress.focusQuestions ?? []).filter((f) => f.answer);
   const answered = Object.keys(screen.answers).length + focusAnswered.length;
   const asked = screen.progress.askedKeys.length;
+  const skipped = screen.progress.declined?.length ?? 0;
+  const origin = screenOrigin(screen, timeline);
+  const lines = answerLines(screen, questions);
+  const general = generalNotes(screen, questions);
   return (
-    <Card title="Screening conversation" aside={<div className="row"><Chip>{screen.channel === "sms" ? "text + web" : "web chat"}</Chip><Chip tone={screen.status === "completed" ? "good" : screen.status === "human_requested" ? "needs" : screen.status === "expired" ? "caution" : "accent"}>{SCREEN_STATUS[screen.status] ?? screen.status.replace(/_/g, " ")}</Chip></div>}>
-      <p className="small muted">{screen.invitedAt ? `Invited ${new Date(screen.invitedAt).toLocaleDateString()}` : ""}{screen.remindedAt ? ` · reminded ${new Date(screen.remindedAt).toLocaleDateString()}` : ""}{screen.completedAt ? ` · completed ${new Date(screen.completedAt).toLocaleDateString()}` : ""} · {answered} answered{asked > answered ? `, ${asked - answered} asked` : ""}</p>
+    <Card title="Screening conversation" aside={<div className="row">{origin ? <Chip tone={origin === APPLIED_IN_ONE_VISIT ? "good" : "neutral"}>{origin}</Chip> : null}<Chip>{screen.channel === "sms" ? "text + web" : "web chat"}</Chip><Chip tone={screen.status === "completed" ? "good" : screen.status === "human_requested" ? "needs" : screen.status === "expired" ? "caution" : "accent"}>{SCREEN_STATUS_LABEL[screen.status] ?? screen.status.replace(/_/g, " ")}</Chip></div>}>
+      <p className="small muted">{screen.invitedAt ? `${origin ? "Offered" : "Invited"} ${new Date(screen.invitedAt).toLocaleDateString()}` : ""}{screen.remindedAt ? ` · reminded ${new Date(screen.remindedAt).toLocaleDateString()}` : ""}{screen.completedAt ? ` · ${screen.status === "completed" ? "completed" : "closed"} ${new Date(screen.completedAt).toLocaleDateString()}` : ""} · {answered} answered{skipped ? `, ${skipped} not answered by choice` : ""}{asked > answered + skipped ? `, ${asked - answered - skipped} asked` : ""}</p>
       {action}
       {focusAnswered.length ? (
         <div style={{ marginTop: 8 }}>
@@ -173,11 +180,37 @@ export function ScreenCard({ screen, open, action }: { screen: Screen; open?: bo
           <dl className="kv small" style={{ marginTop: 4 }}>{focusAnswered.map((f) => <div key={f.key}><dt>{f.question}</dt><dd style={{ whiteSpace: "pre-wrap" }}>{f.answer}</dd></div>)}</dl>
         </div>
       ) : null}
+      {lines.length ? (
+        <div style={{ marginTop: 8 }}>
+          <p className="small muted">Their answers{lines.some((l) => l.declined) ? `. "${DECLINED_WORDS}" is never held against them; it counts as not known yet.` : ""}</p>
+          <dl className="kv small" style={{ marginTop: 4 }}>
+            {lines.map((l) => (
+              <div key={l.key}>
+                <dt>{l.question}</dt>
+                <dd style={{ whiteSpace: "pre-wrap" }}>
+                  {l.answer ?? <span className="muted"><em>{l.declined ? DECLINED_WORDS : unansweredWords(screen.status)}</em></span>}
+                  {l.edited ? <> <Chip>{EDITED_WORDS}</Chip></> : null}
+                  {l.tapped ? <> <span className="muted">({TAPPED_WORDS.toLowerCase()})</span></> : null}
+                  {l.notes.map((n, i) => <span key={i} className="bubble recruiter" style={{ display: "block", marginTop: 6 }}><span className="bubble-label">{recruiterNoteLabel(n.by)}</span>{n.text}</span>)}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      ) : null}
+      {general.length ? (
+        <div className="stack" style={{ gap: 6, marginTop: 8 }}>
+          {general.map((n, i) => <div key={i} className="bubble recruiter"><span className="bubble-label">{recruiterNoteLabel(n.by)}</span>{n.text}</div>)}
+        </div>
+      ) : null}
       {screen.transcript.length ? (
         <details style={{ marginTop: 8 }} open={open}>
           <summary className="small">Read the conversation ({screen.transcript.length} messages)</summary>
           <div className="stack" style={{ gap: 6, marginTop: 8 }}>
-            {screen.transcript.map((t, i) => <div key={i} className={`bubble ${t.role === "candidate" ? "user" : t.role === "assistant" ? "assistant" : "system"}`} style={{ whiteSpace: "pre-wrap" }}>{t.content}</div>)}
+            {screen.transcript.map((t, i) => {
+              const b = transcriptBubble(t);
+              return <div key={i} className={`bubble ${b.kind}`} style={{ whiteSpace: "pre-wrap" }}>{b.label ? <span className="bubble-label">{b.label}</span> : null}{b.text}</div>;
+            })}
           </div>
         </details>
       ) : <p className="small muted" style={{ marginTop: 6 }}>They have not opened it yet.</p>}

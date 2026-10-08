@@ -1,4 +1,4 @@
-import { formatPayRange, type JobPreview, type JobPreviewFact } from "@ros/contracts";
+import { APPLY_FORM_MINUTES, formatPayRange, oneVisitMinutes, type JobPreview, type JobPreviewFact } from "@ros/contracts";
 import type { IconName, Tone } from "@ros/ui";
 import type { AutoActionsOnOpen, BoardChoiceView, ClosingDateResponse, ClosingDateView, LegalCheck, LegalCheckItem, NewVersionResponse, PostingView, PostingsResponse, PublishingState, RolePacket, ShareTarget, ShareView, WhoPosts } from "./api/client";
 import { boardNames } from "./role-words";
@@ -272,8 +272,11 @@ export function previewOfEdit(base: JobPreview, packet: RolePacket): JobPreview 
   facts.push({ key: "job_type", label: "Job type", text: EMPLOYMENT_LABEL[packet.identity.employmentType] ?? packet.identity.employmentType.replace(/_/g, " ") });
   if (base.pay.shown) facts.push({ key: "pay", label: "Pay", text: formatPayRange(packet.compensation) });
   if (packet.identity.schedule) facts.push({ key: "schedule", label: "Schedule", text: packet.identity.schedule });
-  const first = base.job.steps[0] ?? "Apply in about three minutes. We confirm by email.";
-  const screen = (base.job.steps[1] ?? "").replace(/about \d+ minutes/, `about ${packet.screening.maxMinutes} minutes`);
+  // The steps as the server words them (apps/api services/job-preview.ts `applySteps`), with the times and the number of
+  // questions worked out again from the edited packet: applying in one visit counts the conversation in its time (plan E8).
+  const oneVisit = /including a short written conversation/.test(base.job.steps[0] ?? "");
+  const first = oneVisit ? base.job.steps[0].replace(/about \d+ minutes/, `about ${oneVisitMinutes(packet)} minutes`) : base.job.steps[0] ?? `Send a short form, about ${APPLY_FORM_MINUTES} minutes. We confirm by email.`;
+  const screen = (base.job.steps[1] ?? "").replace(/\d+ questions/, `${packet.screening.questions.length} questions`).replace(/about \d+ minutes/, `about ${packet.screening.maxMinutes} minutes`);
   const last = base.job.steps[base.job.steps.length - 1] ?? "A decision, and a real answer either way.";
   return {
     ...base,

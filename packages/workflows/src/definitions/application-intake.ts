@@ -1,9 +1,9 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { EvidenceAssessment, ResumeExtraction } from "@ros/contracts";
 import type { RunOutcome } from "@ros/ai";
 import { ASSESSMENT_UNAVAILABLE_TEXT, RESUME_UNREADABLE_TEXT, audit, createEscalation, evaluateEligibility, emit, gate, notify, readingConsistency, resolvePolicy, transition } from "@ros/core";
-import { applications, assessments, candidates, companies, documents, rolePackets, roles, type Tx } from "@ros/db";
-import { assessApplication, extractResume, sendAcknowledgment } from "@ros/agents";
+import { applications, assessments, candidates, communications, companies, documents, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
+import { assessApplication, extractResume, sendAcknowledgment, type AcknowledgedConversation } from "@ros/agents";
 import { twoPhase, type WorkflowDefinition } from "../types";
 import { examineQuarantinedDocument, queueObjectDiscard, recordQuarantineVerdict, type QuarantineExamination } from "../documents";
 import { SUGGESTION_WINDOW_HOURS, settleSuggestion, waitForSuggestion, type SuggestionState } from "../suggestions";
@@ -28,7 +28,13 @@ export const applicationIntake: WorkflowDefinition<State> = {
       const loaded = await load(ctx.q, ctx.state.applicationId);
       if (!loaded) return { kind: "fail", error: "application not found", retryable: false };
       const { app, candidate, role, company, packet } = loaded;
-      if (app.stage === "applied") {
+      // An application whose conversation was offered in the same visit (plan E1) was moved on by the apply page already;
+      // it still gets its acknowledgment, once (the key makes a repeat a no-op).
+      const movedByApplyPage = app.stage !== "applied" && ONE_VISIT_STAGES.includes(app.stage) && !(await acknowledged(ctx.q, app.id));
+      if (app.stage === "applied" || movedByApplyPage) {
+        // The conversation that goes with the application, as it stands when this email goes (plan E1, E8): its link while
+        // it is still to do, the link to come by email when the allowance was used up (Q17), or nothing to promise.
+        const conversation = movedByApplyPage ? await conversationFor(ctx.q, app.id, ctx.services.env.jobsBaseUrl, packet) : null;
         // Queued in this transaction, sent by the outbox after it commits: a retry of this step never sends twice.
         const res = await sendAcknowledgment(ctx.q, ctx.services.integrations, {
           application: app,
@@ -41,8 +47,9 @@ export const applicationIntake: WorkflowDefinition<State> = {
           smsEnabled: ctx.services.env.smsEnabled,
           actor: ctx.actor,
           correlationId: ctx.run.id,
+          ...(conversation ? { conversation } : {}),
         });
-        await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "received", by: "system", actor: ctx.actor, correlationId: ctx.run.id });
+        if (app.stage === "applied") await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "received", by: "system", actor: ctx.actor, correlationId: ctx.run.id });
         await emit(ctx.q, { type: "application.acknowledged", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { channel: "email", status: res.status }, correlationId: ctx.run.id });
       }
       return { kind: "next", step: "validate" };
@@ -176,12 +183,17 @@ export const applicationIntake: WorkflowDefinition<State> = {
       return { kind: "wait", wait: { kind: "timer", until, reason: "reminder for a held application" }, state: { remindersSent }, resumeStep: "ineligible_review" };
     },
 
-    /** Slice 2: the evidence-based assessment. Information for the owner; the only automatic follow-on is a screen invite under policy. */
+    /**
+     * Slice 2: the evidence-based assessment. Information for the owner; the only automatic follow-on is a screen invite
+     * under policy. When the conversation was offered with the application (plan E1) the résumé is read all the same,
+     * beside the conversation: the stage stays where the conversation has it, nothing is announced (the team hears once
+     * the conversation is finished or closed, E6), and no second invitation follows.
+     */
     ready: twoPhase<State, { applicationId: string; out: RunOutcome<EvidenceAssessment> } | null>({
       async prepare(ctx) {
         const inputs = await ctx.read(async (q) => {
           const loaded = await load(q, ctx.state.applicationId);
-          if (loaded?.app.stage !== "eligible" || loaded.app.latestAssessmentId) return null;
+          if (!loaded || !(await readyToAssess(q, loaded.app))) return null;
           const { app, packet } = loaded;
           const doc = app.resumeDocumentId ? (await q.select().from(documents).where(eq(documents.id, app.resumeDocumentId)).limit(1))[0] : undefined;
           const prior = await q.select({ stage: applications.stage, roleId: applications.roleId, at: applications.createdAt }).from(applications).where(eq(applications.candidateId, app.candidateId));
@@ -204,14 +216,20 @@ export const applicationIntake: WorkflowDefinition<State> = {
         const loaded = await load(ctx.q, ctx.state.applicationId);
         if (!loaded) return { kind: "fail", error: "application not found", retryable: false };
         const { app, candidate, role } = loaded;
-        if (app.stage !== "eligible") return { kind: "complete" }; // ineligible held for review, or already moved by a human
-        if (app.latestAssessmentId) return { kind: "next", step: "after_triage" };
+        // The conversation offered with the application is under way or settled: read the résumé beside it, quietly. Only
+        // at the stages the reading still serves (`readyToAssess`): someone who withdrew, was decided on or was invited to
+        // interview before it ran needs no reading, and that is no failure.
+        const beside = READING_BESIDE_STAGES.includes(app.stage) && (await screenOf(ctx.q, app.id)) !== null;
+        if (app.stage !== "eligible" && !beside) return { kind: "complete" }; // ineligible held for review, or already moved by a human
+        if (await hasTriage(ctx.q, app.id)) return { kind: "next", step: "after_triage" };
         if (!prepared) return { kind: "fail", error: "the application became eligible after the read phase; assessing again", retryable: true };
         const out = prepared.out;
         if (!out.ok) {
           if (out.reason === "error") return { kind: "fail", error: out.error, retryable: true };
           // Invalid or refused twice: the owner reviews without an assessment; nothing is hidden, and the owner is told in so many words.
           await emit(ctx.q, { type: "ai.output_invalid", companyId: ctx.companyId, actor: { kind: "agent", id: "triage", runId: out.runId }, subject: { type: "application", id: app.id }, payload: { error: out.error, reason: out.reason }, correlationId: ctx.run.id });
+          // Beside a conversation the stage is the conversation's, and the team hears when it ends (E6).
+          if (beside) return { kind: "complete" };
           await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, reason: "assessment unavailable; manual review", correlationId: ctx.run.id });
           await emit(ctx.q, { type: "application.triaged", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { assessmentId: null, recommendation: "review_manually", reason: "assessment unavailable" }, correlationId: ctx.run.id });
           const name = `${candidate.firstName} ${candidate.lastName}`;
@@ -223,8 +241,11 @@ export const applicationIntake: WorkflowDefinition<State> = {
           .insert(assessments)
           .values({ companyId: ctx.companyId, applicationId: app.id, kind: "triage", packetVersion: app.packetVersion, aiRunId: out.runId, result: out.output, overall: out.output.overall, confidence: out.output.confidence, secondaryScore: null })
           .returning({ id: assessments.id });
-        await ctx.q.update(applications).set({ latestAssessmentId: row.id }).where(eq(applications.id, app.id));
+        // A scorecard the conversation already produced stays the latest reading: it has the candidate's own answers.
+        const screenFirst = app.latestAssessmentId ? (await ctx.q.select({ kind: assessments.kind }).from(assessments).where(eq(assessments.id, app.latestAssessmentId)).limit(1))[0]?.kind === "screen" : false;
+        if (!screenFirst) await ctx.q.update(applications).set({ latestAssessmentId: row.id }).where(eq(applications.id, app.id));
         await emit(ctx.q, { type: "assessment.created", companyId: ctx.companyId, actor: { kind: "agent", id: "triage", runId: out.runId }, subject: { type: "application", id: app.id }, payload: { kind: "triage", assessmentId: row.id, overall: out.output.overall, recommendation: out.output.recommendation, confidence: out.output.confidence }, correlationId: ctx.run.id });
+        if (beside) return { kind: "next", step: "after_triage" };
         await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, correlationId: ctx.run.id });
         await emit(ctx.q, { type: "application.triaged", companyId: ctx.companyId, actor: { kind: "agent", id: "triage", runId: out.runId }, subject: { type: "application", id: app.id }, payload: { assessmentId: row.id, recommendation: out.output.recommendation, overall: out.output.overall }, correlationId: ctx.run.id });
         return { kind: "next", step: "after_triage" };
@@ -243,6 +264,10 @@ export const applicationIntake: WorkflowDefinition<State> = {
       if (!loaded) return { kind: "fail", error: "application not found", retryable: false };
       const { app, candidate, role, packet } = loaded;
       if (app.stage !== "triaged" || !app.latestAssessmentId) return { kind: "complete" };
+      // They were offered the conversation already (plan E1; sent without it, or closed part-way), or the apply page started
+      // its run while the month's conversations were used up (Q17): never invited twice, and the team hears about them
+      // when the conversation ends.
+      if ((await screenOf(ctx.q, app.id)) || (await screenRunStarted(ctx.q, app.id))) return { kind: "complete" };
       const [asmt] = await ctx.q.select().from(assessments).where(eq(assessments.id, app.latestAssessmentId)).limit(1);
       const rec = (asmt?.result as { recommendation?: string } | undefined)?.recommendation;
       const name = `${candidate.firstName} ${candidate.lastName}`;
@@ -287,6 +312,58 @@ export const applicationIntake: WorkflowDefinition<State> = {
     },
   },
 };
+
+/** Stages the apply page may leave an application at when it offered the conversation in the same visit (plan E1). */
+const ONE_VISIT_STAGES: readonly string[] = ["received", "eligible", "screen_invited", "screening", "screen_complete", "triaged"];
+
+/** Whether the acknowledgment was queued already (its idempotency key). */
+async function acknowledged(q: Tx, applicationId: string): Promise<boolean> {
+  const [row] = await q.select({ id: communications.id }).from(communications).where(eq(communications.idempotencyKey, `ack:${applicationId}`)).limit(1);
+  return !!row;
+}
+
+/**
+ * The conversation offered with the application, for the acknowledgment: its link while it is still to be done
+ * (invited, reminded, started, or paused while the assistant is down); closed once it was sent, sent without, or handed
+ * to a person; or, with no screen yet but its run waiting for the month's allowance (Q17), the link to come by email.
+ */
+async function conversationFor(q: Tx, applicationId: string, jobsBaseUrl: string, packet: { screening: { questions: unknown[]; maxMinutes: number } }): Promise<AcknowledgedConversation | null> {
+  const [row] = await q.select({ token: screens.token, status: screens.status, invitedVia: screens.invitedVia }).from(screens).where(eq(screens.applicationId, applicationId)).orderBy(desc(screens.createdAt)).limit(1);
+  if (!row) return (await screenRunStarted(q, applicationId)) ? { state: "by_email", minutes: packet.screening.maxMinutes } : null;
+  if (row.invitedVia !== "apply") return null;
+  if (!["invited", "reminded", "in_progress", "paused"].includes(row.status)) return { state: "closed" };
+  return { state: "open", url: `${jobsBaseUrl}/c/screen/${row.token}`, questions: packet.screening.questions.length, minutes: packet.screening.maxMinutes };
+}
+
+/** Any screen the application has had, newest first. */
+async function screenOf(q: Tx, applicationId: string): Promise<{ id: string; status: string } | null> {
+  const [row] = await q.select({ id: screens.id, status: screens.status }).from(screens).where(eq(screens.applicationId, applicationId)).orderBy(desc(screens.createdAt)).limit(1);
+  return row ?? null;
+}
+
+/** A `screen` run already started for this application (the key every first invitation uses). */
+async function screenRunStarted(q: Tx, applicationId: string): Promise<boolean> {
+  const [row] = await q.select({ id: workflowRuns.id }).from(workflowRuns).where(eq(workflowRuns.idempotencyKey, `screen:${applicationId}`)).limit(1);
+  return !!row;
+}
+
+async function hasTriage(q: Tx, applicationId: string): Promise<boolean> {
+  const [row] = await q.select({ id: assessments.id }).from(assessments).where(and(eq(assessments.applicationId, applicationId), eq(assessments.kind, "triage"))).limit(1);
+  return !!row;
+}
+
+/**
+ * Whether the résumé reading is still to be written: an eligible application without one, or (plan E1) one whose
+ * conversation was offered with the application, whatever the conversation has done to its stage since.
+ */
+async function readyToAssess(q: Tx, app: { id: string; stage: string }): Promise<boolean> {
+  if (await hasTriage(q, app.id)) return false;
+  if (app.stage === "eligible") return true;
+  return READING_BESIDE_STAGES.includes(app.stage) && (await screenOf(q, app.id)) !== null;
+}
+
+/** Where the conversation offered with the application can have taken an application before its résumé is read (plan E1). */
+const READING_BESIDE_STAGES: readonly string[] = ["screen_invited", "screening", "screen_complete", "triaged", "interview_recommended"];
 
 /** A clean résumé file with nothing to read (a scan without a text layer): the assessment used the written answers only. */
 async function resumeUnreadable(q: Tx, app: { resumeDocumentId: string | null; extraction: unknown }): Promise<boolean> {

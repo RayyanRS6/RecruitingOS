@@ -7,7 +7,9 @@ import { createContainer, type Container } from "./container";
 import { descriptionBlocks, descriptionExcerpt } from "./pages/description";
 import { NO_RESUME_QUESTIONS, initials, noResumeAnswersFrom } from "./pages/job-page";
 import { resetPublicFeedCache } from "./pages/public-feeds";
+import { oneVisitMinutes } from "./services/job-preview";
 import { jobUrls } from "./services/job-urls";
+import { useOneVisitApplyFlow } from "./test-helpers";
 
 /** The first bytes of a PNG: enough for the server's header check, which never decodes pixels. */
 function png(width = 200, height = 80): Uint8Array {
@@ -68,6 +70,8 @@ describe("the job page and the careers page (plan D10)", () => {
   let slug = "";
   let roleId = "";
   let eligibility: Array<{ key: string }> = [];
+  let maxMinutes = 0;
+  let questionCount = 0;
   const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
   const decode = (html: string) => html.replace(/&#39;/g, "'").replace(/&quot;/g, "\"").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
   const page = async (path: string) => {
@@ -99,6 +103,8 @@ describe("the job page and the careers page (plan D10)", () => {
     const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Ledger Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
     companyId = co.id;
     slug = co.slug;
+    // A pilot company: the conversation follows the form in the same visit, and the pages say how long both take (plan E8).
+    await useOneVisitApplyFlow(container, companyId);
     const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." })).json()) as { session: { id: string } };
     roleId = ((await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
     expect((await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" })).status).toBe(200);
@@ -116,6 +122,8 @@ describe("the job page and the careers page (plan D10)", () => {
     p.compensation.benefitsSummary = "Health and dental cover, paid holidays.";
     await container.db.update(rolePackets).set({ packet: p }).where(eq(rolePackets.id, pv.id));
     eligibility = p.requirements.eligibility;
+    maxMinutes = p.screening.maxMinutes;
+    questionCount = p.screening.questions.length;
   });
   afterAll(async () => {
     await container.close();
@@ -148,7 +156,7 @@ describe("the job page and the careers page (plan D10)", () => {
     let html = decode(await page(`/careers/${slug}/jobs/${roleId}`));
     const its = container.env.EMAIL_REPLY_TO;
     expect(html).toContain("<li><svg class=\"icon\"");
-    for (const point of ["Takes about three minutes.", "A resume, or a few lines about your work. No cover letter.", "People at Ledger Dental make every hiring decision."]) expect(html).toContain(point);
+    for (const point of [`About ${oneVisitMinutes({ screening: { maxMinutes } })} minutes, including a short written conversation with Ledger Dental's AI assistant.`, "A resume, or a few lines about your work. No cover letter.", "People at Ledger Dental make every hiring decision."]) expect(html).toContain(point);
     expect(html).toContain(`Questions? Email <a href="mailto:${its}">${its}</a> to reach a person.`);
     expect(html).toContain(`Need help applying, or a change to how you apply because of a disability? Email <a href="mailto:${its}">${its}</a> and a person will help.`);
     await setSettings((s) => { s.hiringContact = { email: "jobs@ledger.test", name: "Maya", setAt: new Date().toISOString(), setBy: { kind: "user", id: "u1" } }; });
@@ -158,6 +166,35 @@ describe("the job page and the careers page (plan D10)", () => {
     const form = decode(await page(`/careers/${slug}/jobs/${roleId}/apply`));
     expect(form.slice(0, form.indexOf("<form"))).toContain('Need help applying, or a change to how you apply because of a disability? Email Maya at <a href="mailto:jobs@ledger.test">');
     await setSettings((s) => { delete s.hiringContact; });
+  });
+
+  it("says how long applying really takes (plan E8): the conversation included when it follows the form, the form alone when the role or the owner's rule keeps it for later", async () => {
+    const total = oneVisitMinutes({ screening: { maxMinutes } });
+    let html = decode(await page(`/careers/${slug}/jobs/${roleId}`));
+    // one visit: the time on the panel and the steps count the conversation, and say who it is with
+    expect(html).toContain(`<span>About ${total} minutes, including a short written conversation with Ledger Dental's AI assistant.</span>`);
+    expect(html).toContain(`<li>Apply in about ${total} minutes, including a short written conversation with Ledger Dental's AI assistant. We confirm by email.</li>`);
+    expect(html).toContain(`<li>The conversation: ${questionCount} questions, about ${maxMinutes} minutes. It is not a test. You can skip a question, stop and come back later, or ask for a person instead.</li>`);
+    expect(html).not.toMatch(/three minutes|looks like a fit/);
+    let form = decode(await page(`/careers/${slug}/jobs/${roleId}/apply`));
+    expect(form).toContain(`<p class="lead">About ${total} minutes, including a short written conversation with Ledger Dental's AI assistant. First this form:`);
+    expect(form).toContain("Next comes the short written conversation with Ledger Dental's AI assistant. You can start it straight away, do it later, or ask for a person instead.");
+    expect(form).not.toContain("three minutes");
+    // ITS switched the role back to "form now, conversation later": the form alone, and a conversation that may follow by email
+    await container.db.update(roles).set({ applyMode: "form_then_screen" }).where(eq(roles.id, roleId));
+    html = decode(await page(`/careers/${slug}/jobs/${roleId}`));
+    expect(html).toContain("<span>A short form, about 3 minutes.</span>");
+    expect(html).toContain(`<li>Possibly a short written conversation with Ledger Dental's AI assistant (online, about ${maxMinutes} minutes). If so, we email you the link.</li>`);
+    expect(html).not.toContain("including a short written conversation");
+    form = decode(await page(`/careers/${slug}/jobs/${roleId}/apply`));
+    expect(form).toContain('<p class="lead">A short form, about 3 minutes. Upload a resume');
+    expect(form).not.toContain("Next comes the short written conversation");
+    await container.db.update(roles).set({ applyMode: null }).where(eq(roles.id, roleId));
+    // the owner's rule for screen invitations is "Ask me first": the same later path, so the same words
+    expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "approval", approverRoles: ["owner"] })).status).toBe(200);
+    expect(decode(await page(`/careers/${slug}/jobs/${roleId}`))).toContain("<span>A short form, about 3 minutes.</span>");
+    expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "auto_notify", approverRoles: [] })).status).toBe(200);
+    expect(decode(await page(`/careers/${slug}/jobs/${roleId}`))).toContain(`<span>About ${total} minutes, including`);
   });
 
   it("shows the text about the company only once a person approved it, with the website; a draft waiting in Setup never shows", async () => {
@@ -259,6 +296,8 @@ describe("the job page and the careers page (plan D10)", () => {
       expect((await intent(opened)).status).toBe(200);
       const late = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: applyForm({ email: "late.finisher@example.com", nr_recentWork: "Hygienist at Coastal Dental since 2019.", formOpened: opened }) });
       expect(late.status).toBe(302);
+      // they finish applying like anyone else: the conversation follows in the same visit (plan E1)
+      expect(late.headers.get("location")).toMatch(/^\/c\/screen\/[A-Za-z0-9_-]+$/);
       await container.drain();
       expect((await container.db.select().from(applications).where(eq(applications.roleId, roleId))).length).toBeGreaterThan(0);
     } finally {

@@ -31,7 +31,8 @@ describe("the screening assistant states pay as the job page does (plan 0.8)", (
   const system = (c: ScreenContext) => screenTurnPrompt.system(c).map((b) => b.text).join("\n");
 
   it("gives the range the law makes the public page show, even when the owner chose not to", () => {
-    expect(screenTurnPrompt.version).toBe(2);
+    // Version 3 (plan Wave E) keeps the pay rule of version 2.
+    expect(screenTurnPrompt.version).toBe(3);
     expect(system(ctx(true))).toContain("Posted pay: hourly 45 to 55 USD.");
     expect(system(ctx(false))).toContain("Posted pay: not disclosed; say a person can discuss pay.");
     // without the public rule's answer, the owner's own choice

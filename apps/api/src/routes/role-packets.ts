@@ -13,7 +13,7 @@ import { assertCan, can, emit, guardPacket, membersWithCalendarStatus, normalize
 import { companies, events, intakeSessions, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { HttpError } from "../middleware/errors";
 import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
-import { jobPreview } from "../services/job-preview";
+import { applyFlowOf, jobPreview } from "../services/job-preview";
 import { diffPackets } from "../services/packet-diff";
 import { applyFieldEdit } from "../services/packet-fields";
 import { cancelPendingPacketApprovals, createPacketVersion, currentVersionOf, materialChanges, startPacketApproval, type PacketRow, type RoleRow } from "../services/packet-versions";
@@ -367,7 +367,7 @@ rolePacketRoutes.get("/:id/preview", requireTenant, async (c) => {
     if (!pv) throw new HttpError(404, "version_not_found", "That version does not exist.");
     const [company] = await tx.select({ name: companies.name, slug: companies.slug, locations: companies.locations, settings: companies.settings }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
     const current = currentVersionOf(role, versions);
-    return jobPreview({ packet: pv.packet, company, source: { kind: "version", roleId: role.id, version: pv.version, status: pv.status, current: current?.version === pv.version && !!role.currentPacketVersion, roleStatus: role.status }, smsEnabled: container.env.SMS_ENABLED });
+    return jobPreview({ packet: pv.packet, company, source: { kind: "version", roleId: role.id, version: pv.version, status: pv.status, current: current?.version === pv.version && !!role.currentPacketVersion, roleStatus: role.status }, smsEnabled: container.env.SMS_ENABLED, flow: await applyFlowOf(tx, { id: role.companyId, settings: company.settings }, role) });
   });
   return c.json(out);
 });

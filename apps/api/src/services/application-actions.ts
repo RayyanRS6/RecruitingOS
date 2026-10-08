@@ -17,7 +17,8 @@ import { leftOutOfTalentPool } from "./talent-pool";
  * anything not on it, so the two can never disagree.
  */
 export const TERMINAL_STAGES: readonly string[] = ["hired", "withdrawn", "rejected", "declined"];
-export const SCREEN_OPEN_STATUSES: readonly string[] = ["invited", "reminded", "in_progress"];
+// A conversation paused while the assistant was down (plan E5) is still open: nobody is invited to a second one.
+export const SCREEN_OPEN_STATUSES: readonly string[] = ["invited", "reminded", "in_progress", "paused"];
 export const INTERVIEW_ACTIVE_STATUSES: readonly string[] = ["proposed", "scheduling", "scheduled"];
 export const INTERVIEW_DONE_STATUSES: readonly string[] = ["completed", "no_show"];
 /** The assistant's suggestions that wait on a person (plan A6): a person acting on the candidate directly settles them. */

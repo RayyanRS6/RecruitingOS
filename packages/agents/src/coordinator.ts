@@ -67,19 +67,40 @@ export async function sendFreeformMessage(q: Queryable, integrations: Integratio
   });
 }
 
-/** The acknowledgment every applicant gets within a minute. Templated, disclosed, idempotent. */
-export async function sendAcknowledgment(q: Queryable, integrations: Integrations, input: MessageInput & { appBaseUrl: string; /** Texting is off by default (decision M2); the email then promises an online conversation only. */ smsEnabled?: boolean }): Promise<SendResult> {
+/**
+ * The screening conversation that goes with the application (plan E1), as the acknowledgment tells it:
+ * - `open`: still to be done; the acknowledgment carries its link, so a candidate who chose "Do this later" or closed
+ *   the page can come back.
+ * - `by_email`: the month's conversations were used up when they applied (Q17); the link follows by email.
+ * - `closed`: answered and sent, sent without it, or handed to a person before this email went: nothing to promise.
+ */
+export type AcknowledgedConversation = { state: "open"; url: string; questions: number; minutes: number } | { state: "by_email"; minutes: number } | { state: "closed" };
+
+/**
+ * The acknowledgment every applicant gets within a minute. Templated, disclosed, idempotent. It says honestly what comes
+ * next (plan E8): the conversation that goes with the application as it stands, otherwise that a conversation may
+ * follow by email.
+ */
+export async function sendAcknowledgment(q: Queryable, integrations: Integrations, input: MessageInput & { appBaseUrl: string; /** Texting is off by default (decision M2); the email then promises an online conversation only. */ smsEnabled?: boolean; conversation?: AcknowledgedConversation | null }): Promise<SendResult> {
   const { application, candidate, company, packet } = input;
   const statusUrl = `${input.appBaseUrl}/c/status/${application.statusToken}`;
   const disclosure = packet.communication.disclosureText || disclosureLine(company.name);
   const steps = packet.interviews.plan.map((r, i) => `${i + 2}. ${r.title} (${r.durationMinutes} min)`).join("\n");
   const screenHow = input.smsEnabled ? "by text or online" : "online";
+  const conv = input.conversation;
+  const first = conv?.state === "open"
+    ? `1. A short written conversation with ${company.name}'s AI assistant: ${conv.questions} questions, about ${conv.minutes} minutes. It is not a test, and you can skip a question or ask for a person instead. If you have not finished it, pick it up here: ${conv.url}`
+    : conv?.state === "by_email"
+      ? `1. We email you a link to a short written conversation with ${company.name}'s AI assistant (about ${conv.minutes} minutes). Answer it whenever suits you, or ask for a person instead.`
+      : conv?.state === "closed"
+        ? `1. The hiring team at ${company.name} reviews your application, with anything you answered in the short written conversation.`
+        : `1. Possibly a short written conversation with ${company.name}'s AI assistant (${screenHow}, about ${packet.screening.maxMinutes} minutes). If so, we email you the link.`;
   const text = `Hi ${candidate.firstName},
 
-Thank you for applying for the ${packet.identity.title} position at ${company.name}. We received your application and it is being reviewed.
+Thank you for applying for the ${packet.identity.title} position at ${company.name}. We received your application. People on the hiring team review it and make every decision.
 
 What happens next:
-1. A short screening conversation (${screenHow}, about ${packet.screening.maxMinutes} minutes) if your background looks like a fit.
+${first}
 ${steps}
 
 You can check where things stand any time: ${statusUrl}

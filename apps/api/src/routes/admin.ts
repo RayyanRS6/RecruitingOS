@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { createHash } from "node:crypto";
 import { desc, eq, sql } from "drizzle-orm";
-import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, suppressAddress, describeHours } from "@ros/core";
-import { BreakGlass, BusinessCalendarInput, CompanyVerificationChange, JobBoardAccessChange, PlanChange, RecalculateDeadlines, companyOnboarding, companyVerifiedAt, type Actor } from "@ros/contracts";
+import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, suppressAddress, describeHours, APPLY_FLOW_FALLBACK } from "@ros/core";
+import { ApplyFlowDefaultChange, BreakGlass, BusinessCalendarInput, CompanyVerificationChange, JobBoardAccessChange, PlanChange, RecalculateDeadlines, companyOnboarding, companyVerifiedAt, type Actor } from "@ros/contracts";
 import { HELD_STATUS } from "@ros/agents";
 import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, integrations, jobs, recruiterEscalations, roles, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
 import { requirePlatformAdmin, type Vars } from "../middleware/session";
@@ -42,6 +42,8 @@ adminRoutes.get("/customers", async (c) => {
   const heldCounts = byCompany(await db.select({ companyId: communications.companyId, n: sql<number>`count(*)` }).from(communications).where(eq(communications.status, HELD_STATUS)).groupBy(communications.companyId));
   // Where each company stands against its recruiter requests (Q33): going over never refuses one; ITS talks about billing.
   const asks = byCompany(await db.select({ companyId: entitlementRows.companyId, used: entitlementRows.used, limit: entitlementRows.limit }).from(entitlementRows).where(eq(entitlementRows.key, entitlements.RECRUITER_ASKS)));
+  // This month's screening conversations (plan E9, Q17): counted at a candidate's first answer, so ITS can see a company nearing its allowance.
+  const conversations = byCompany(await db.select({ companyId: entitlementRows.companyId, used: entitlementRows.used, limit: entitlementRows.limit }).from(entitlementRows).where(eq(entitlementRows.key, entitlements.TEXT_SCREENS)));
   return c.json(rows.map((co) => ({
     ...co,
     roles: Number(roleCounts.get(co.id)?.n ?? 0),
@@ -54,6 +56,10 @@ adminRoutes.get("/customers", async (c) => {
     heldMessages: Number(heldCounts.get(co.id)?.n ?? 0),
     jobBoardsConfirmedAt: companyOnboarding(co.settings).jobBoardsConfirmedAt ?? null,
     recruiterAsks: recruiterAsksOf(asks.get(co.id)),
+    screeningConversations: { used: conversations.get(co.id)?.used ?? 0, limit: conversations.get(co.id)?.limit ?? null },
+    // How new roles meet the screening conversation (plan E1): "form now, conversation later" until ITS switches the
+    // one-visit flow on for the company (pilot roles first, founder decision B1) with POST /customers/:id/apply-flow.
+    applyFlowDefault: co.settings.applyFlowDefault ?? APPLY_FLOW_FALLBACK,
   })));
 });
 
@@ -99,6 +105,33 @@ adminRoutes.post("/customers/:id/job-boards", async (c) => {
   const ok = await withPlatform(container.db, (tx) => setJobBoardAccess(tx, { companyId, confirmed: body.confirmed, actor, now: container.engine.clock(), note: body.note }));
   if (!ok) throw new HttpError(404, "not_found", "Company not found.");
   return c.json({ ok: true, companyId, confirmed: body.confirmed });
+});
+
+/**
+ * How a company's roles meet the screening conversation when a role has no setting of its own (plan E1, founder
+ * decision B1): "one_visit" (the pilot) or "form_then_screen" (what a company without a setting follows). ITS only, with
+ * a reason; the change is audited and kept with who made it. Roles that already exist keep their own setting.
+ */
+adminRoutes.post("/customers/:id/apply-flow", async (c) => {
+  const s = c.get("session")!;
+  const container = c.get("container");
+  const companyId = c.req.param("id") ?? "";
+  if (!UUID.test(companyId)) throw new HttpError(404, "not_found", "Company not found.");
+  const body = ApplyFlowDefaultChange.parse(await c.req.json().catch(() => ({})));
+  const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
+  const result = await withPlatform(container.db, async (tx) => {
+    const [co] = await tx.select({ id: companies.id, settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1);
+    if (!co) return null;
+    const from = co.settings.applyFlowDefault ?? APPLY_FLOW_FALLBACK;
+    if (from === body.applyFlow && co.settings.applyFlowDefault) return { from, to: body.applyFlow, changed: false };
+    const setBy = { at: container.engine.clock().toISOString(), by: actor, reason: body.reason };
+    await tx.update(companies).set({ settings: sql`coalesce(${companies.settings}, '{}'::jsonb) || jsonb_build_object('applyFlowDefault', ${body.applyFlow}::text, 'applyFlowSetBy', ${JSON.stringify(setBy)}::jsonb)` }).where(eq(companies.id, companyId));
+    await audit(tx, { companyId, actor, action: "company.apply_flow_changed", target: { type: "company", id: companyId }, reason: body.reason, details: { from, to: body.applyFlow } });
+    await emit(tx, { type: "company.apply_flow_changed", companyId, actor, subject: { type: "company", id: companyId }, payload: { from, to: body.applyFlow } });
+    return { from, to: body.applyFlow, changed: true };
+  });
+  if (!result) throw new HttpError(404, "not_found", "Company not found.");
+  return c.json({ ok: true, companyId, applyFlow: result.to, changed: result.changed });
 });
 
 /**

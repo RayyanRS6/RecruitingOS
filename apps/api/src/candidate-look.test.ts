@@ -9,7 +9,7 @@ import { createContainer, type Container } from "./container";
 import { SCREEN_CSS } from "./pages/candidate";
 import { CANDIDATE_FONTS, FONT_DIR, FONT_LOCK_FILE, type FontLock, fontLicenceFile } from "./pages/fonts";
 import { CSS } from "./pages/layout";
-import { statusTokenFor } from "./test-helpers";
+import { statusTokenFor, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
  * Wave DS, candidate pages: the server-rendered pages wear the application's look (docs/07). The token values are the
@@ -128,6 +128,8 @@ describe("candidate pages: the look, page by page", () => {
     const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Look Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
     slug = co.slug;
     await entitlements.applyPlan(container.db, co.id, "growth");
+    // A pilot company: the screening conversation follows the form in the same visit (plan E1).
+    await useOneVisitApplyFlow(container, co.id);
     const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental hygienist in Irvine, $45 to $55 an hour, full time. It's growth. Ceiling $58. I decide. Must-haves: RDH license. Just draft it." })).json()) as { session: { id: string } };
     roleId = ((await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
     await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" });
@@ -239,7 +241,7 @@ describe("candidate pages: the look, page by page", () => {
     expect(html).toMatch(/<a class="btn" href="\/c\/screen\/[^"]+">(Start|Continue) the screening conversation<\/a>/);
   });
 
-  it("the screening page carries its own styles in the head with the request's nonce, and talking to a person is an outlined button", async () => {
+  it("the screening page carries its own styles in the head with the request's nonce; its introduction says first that it is the company's AI assistant, with Start as the one near-black button and the other two outlined", async () => {
     const r = await app.request(`/c/screen/${screenToken}`);
     const nonce = (r.headers.get("content-security-policy-report-only") ?? "").match(/'nonce-([^']+)'/)![1];
     const html = await r.text();
@@ -247,6 +249,31 @@ describe("candidate pages: the look, page by page", () => {
     expect(head.split(`<style nonce="${nonce}">`).length - 1).toBe(2);
     expect(head).toContain(".msg.candidate { align-self: flex-end; background: var(--ink); color: var(--ground);");
     expect(html.slice(html.indexOf("</head>"))).not.toContain("<style");
-    expect(html).toContain('<button class="btn secondary" type="submit">Talk to a person instead</button>');
+    // the AI line is the first thing in the page, before the company's name and the heading
+    const main = html.slice(html.indexOf("<main>"));
+    expect(main.indexOf('<p class="ai-line"><span class="ai-tag">AI assistant</span>')).toBe("<main>".length);
+    expect(main).toContain("This conversation is with Look Dental&#39;s AI assistant, a software program, not a person.");
+    expect(html).toContain(`<form method="post" action="/c/screen/${screenToken}/start"><button class="btn" type="submit">Start</button></form>`);
+    expect(html).toContain(`<form method="post" action="/c/screen/${screenToken}/later"><button class="btn secondary" type="submit">Do this later</button></form>`);
+    expect(html).toContain(`<a class="btn secondary" href="/c/screen/${screenToken}/person">I&#39;d rather talk to a person</a>`);
+  });
+
+  it("a question page: the question in large type, a thin native progress bar with its words, the quiet skip and the person always there, and no inline style", async () => {
+    expect((await app.request(`/c/screen/${screenToken}/start`, { method: "POST" })).status).toBe(302);
+    const html = await page(`/c/screen/${screenToken}`);
+    expect(html.match(/<h1[\s>]/g)).toHaveLength(1);
+    expect(html).toMatch(/<h1 class="question" id="question">[^<]+<\/h1>/);
+    expect(html).toMatch(/<div class="progress"><label for="progress">Question 1 of (\d+)<\/label><progress id="progress" max="\1" value="1">Question 1 of \1<\/progress><\/div>/);
+    expect(html).toContain('<button class="link-action" type="submit" name="action" value="skip" formnovalidate="">Skip this question</button>');
+    expect(html).toContain(`<a class="link-action" href="/c/screen/${screenToken}/person">I&#39;d rather talk to a person</a>`);
+    expect(html).not.toMatch(/ style="/);
+    // the bar's colours come from the tokens, in both themes, without a style attribute
+    expect(SCREEN_CSS).toContain(".progress progress::-webkit-progress-value { border-radius: var(--r-pill); background: var(--ink); }");
+    expect(SCREEN_CSS).toContain(".progress progress::-moz-progress-bar { border-radius: var(--r-pill); background: var(--ink); }");
+    // the choice page: one heading, two equal outlined buttons
+    const choice = await page(`/c/screen/${screenToken}/person`);
+    expect(choice.match(/<h1[\s>]/g)).toHaveLength(1);
+    expect(choice.match(/<button class="btn secondary" type="submit">/g)).toHaveLength(2);
+    expect(choice).not.toMatch(/<button class="btn" type="submit">/);
   });
 });

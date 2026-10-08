@@ -1,6 +1,10 @@
 import { Hono } from "hono";
 import { and, count, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome, OwnerGroup, OwnerStage, SendDecisionMessages, SetClosingDate, type ActiveMark, type CandidateNotice } from "@ros/contracts";
+import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome, OwnerGroup, OwnerStage, SendDecisionMessages, SetClosingDate, ApplyModeChange, type ActiveMark, type CandidateNotice } from "@ros/contracts";
+import { activeStaffGrant, resolveApplyMode } from "@ros/core";
+import { withPlatform, type Tx } from "@ros/db";
+import { requireRecruiterOrAdmin } from "../middleware/session";
+import { stillApplyingFor } from "../services/screens";
 import { CLOSER_LOOK_LABEL, CLOSING_DATE_REASON, DECISION_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeMarksFor, assertCan, audit, boardPostingOf, can, closingDateProblem, closingDateRequired, closingDayWords, closingMoment, emit, evidenceView, groupFor, holdEnded, jobNoticesFor, listOutcomes, notify, openEscalationsFor, ownerStage, ownerStageLabel, ownerTags, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows, showsOldVersion } from "@ros/core";
 import { armClosingDate } from "@ros/workflows";
 import { autoActionsOnOpen, boardChoices, closingDateFor } from "../services/publishing";
@@ -18,6 +22,8 @@ import { exitCleanup, type ExitCandidateEmail } from "../services/exit-cleanup";
 import { screenScorecards } from "../services/screen-scorecards";
 import { replayHeldEmails, settleHeldEmailsOnClose } from "../webhooks/postmark";
 import { interviewerApplicationView } from "../services/interviewer-view";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const roleRoutes = new Hono<Vars>();
 roleRoutes.use("/:id", roleScopeGuard);
@@ -256,13 +262,63 @@ roleRoutes.post("/:id/closing-date", requireTenant, async (c) => {
   return c.json({ ok: result.ok, reopened: result.reopened, closingDate: result.closingDate });
 });
 
+/**
+ * How this role's applicants meet the screening conversation (plan E1, founder decision B1): "one_visit" (straight
+ * after the form; the pilot), "form_then_screen" (by email later), or null to follow the company's default. ITS only,
+ * never the customer, with a second factor: a platform administrator, or an ITS recruiter whose active grant for the
+ * company covers this role (founder decision Q31: staff reach a customer's hiring only through a grant). A reason is
+ * required and recorded. GET answers `{ roleId, applyMode, companyDefault, effective }`; PUT answers the same after the change.
+ */
+async function applyModeView(tx: Tx, roleId: string) {
+  const [role] = await tx.select({ id: roles.id, companyId: roles.companyId, applyMode: roles.applyMode }).from(roles).where(eq(roles.id, roleId)).limit(1);
+  if (!role) throw new HttpError(404, "not_found", "Role not found.");
+  const [company] = await tx.select({ settings: companies.settings }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
+  return { role, view: { roleId: role.id, applyMode: role.applyMode ?? null, companyDefault: resolveApplyMode({ applyMode: null }, company?.settings), effective: resolveApplyMode(role, company?.settings) } };
+}
+
+/** A platform administrator always; an ITS recruiter only under an active grant for the company that covers the role. */
+async function assertMayChangeApplyMode(tx: Tx, session: NonNullable<Vars["Variables"]["session"]>, role: { id: string; companyId: string }): Promise<void> {
+  if (session.user.platformRole === "platform_admin") return;
+  const grant = await activeStaffGrant(tx, session.user.id, role.companyId);
+  if (!grant || !scopeAllows(grant, { roleId: role.id })) throw new HttpError(403, "staff_scope", "Only an ITS administrator, or a recruiter working on this company's request about this role, can see or change how people apply for it.");
+}
+
+roleRoutes.get("/:id/apply-mode", requireRecruiterOrAdmin, async (c) => {
+  const id = c.req.param("id") ?? "";
+  if (!UUID.test(id)) throw new HttpError(404, "not_found", "Role not found.");
+  const s = c.get("session")!;
+  return c.json((await withPlatform(c.get("container").db, async (tx) => {
+    const found = await applyModeView(tx, id);
+    await assertMayChangeApplyMode(tx, s, found.role);
+    return found;
+  })).view);
+});
+
+roleRoutes.put("/:id/apply-mode", requireRecruiterOrAdmin, async (c) => {
+  const id = c.req.param("id") ?? "";
+  if (!UUID.test(id)) throw new HttpError(404, "not_found", "Role not found.");
+  const body = ApplyModeChange.parse(await c.req.json().catch(() => ({})));
+  const s = c.get("session")!;
+  const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
+  const view = await withPlatform(c.get("container").db, async (tx) => {
+    const { role, view: before } = await applyModeView(tx, id);
+    await assertMayChangeApplyMode(tx, s, role);
+    if (before.applyMode === body.applyMode) return before;
+    await tx.update(roles).set({ applyMode: body.applyMode }).where(eq(roles.id, role.id));
+    await emit(tx, { type: "role.apply_mode_changed", companyId: role.companyId, actor, subject: { type: "role", id: role.id }, payload: { from: before.applyMode, to: body.applyMode } });
+    await audit(tx, { companyId: role.companyId, actor, action: "role.apply_mode_changed", target: { type: "role", id: role.id }, reason: body.reason, details: { from: before.applyMode, to: body.applyMode } });
+    return (await applyModeView(tx, id)).view;
+  });
+  return c.json(view);
+});
+
 // The posting routes (GET /:id/postings, the per-channel actions, links, volume, the accepting switch) live in routes/postings.ts.
 
 /** A time in ISO form whatever the driver hands back, so the page can sort and compare it as text. */
 const iso = (value: string) => new Date(value).toISOString();
 
 /** The stage strip's counts over every applicant the caller may see (founder decision B3). */
-export type StageStripCounts = { total: number; byOwnerStage: Record<OwnerStage, number>; byGroup: Record<OwnerGroup, number>; notTold: number; holdsEnded: number };
+export type StageStripCounts = { total: number; byOwnerStage: Record<OwnerStage, number>; byGroup: Record<OwnerGroup, number>; notTold: number; holdsEnded: number; stillApplying: number };
 
 /**
  * The role's applicants. Each row carries, beside the evidence view: where the person sits on the stage strip
@@ -293,6 +349,8 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
     const scr = appIds.length ? await tx.select({ applicationId: screens.applicationId, status: screens.status }).from(screens).where(inArray(screens.applicationId, appIds)) : [];
     const ivs = appIds.length ? await tx.select({ applicationId: interviews.applicationId, status: interviews.status, decision: interviews.decision }).from(interviews).where(inArray(interviews.applicationId, appIds)) : [];
     const waitingToTell = await pendingDecisionMessages(tx, appIds);
+    // "Still applying" (plan E6): offered the conversation with the application and not finished yet; shown apart.
+    const applying = await stillApplyingFor(tx, appIds);
     const rows = apps.map((a) => {
       const cand = cands.find((x) => x.id === a.candidateId);
       const asmt = asmts.find((x) => x.id === a.latestAssessmentId);
@@ -319,6 +377,7 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
         toldState: DECISION_STAGES.includes(a.stage) ? a.toldState : null,
         candidateToldAt: a.candidateToldAt ? iso(a.candidateToldAt) : null,
         decisionMessageWaiting: waitingToTell.has(a.id),
+        stillApplying: applying.has(a.id),
         candidate: cand ? { id: cand.id, name: `${cand.firstName} ${cand.lastName}`, email: cand.email, phone: cand.phone, locationText: cand.locationText } : null,
         eligibility: a.eligibility,
         extractionSummary: a.extraction ? { positions: a.extraction.positions.slice(0, 3).map((p) => `${p.title}${p.employer ? ` at ${p.employer}` : ""}`), licenses: a.extraction.licenses.map((l) => l.name), years: a.extraction.yearsOfExperienceEstimate ?? null, anomalies: a.extraction.anomalies } : null,
@@ -327,12 +386,13 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
         stageMoves: stageMoves(facts),
       };
     });
-    const counts: StageStripCounts = { total: rows.length, byOwnerStage: Object.fromEntries(OwnerStage.options.map((s) => [s, 0])) as Record<OwnerStage, number>, byGroup: Object.fromEntries(OwnerGroup.options.map((g) => [g, 0])) as Record<OwnerGroup, number>, notTold: 0, holdsEnded: 0 };
+    const counts: StageStripCounts = { total: rows.length, byOwnerStage: Object.fromEntries(OwnerStage.options.map((s) => [s, 0])) as Record<OwnerStage, number>, byGroup: Object.fromEntries(OwnerGroup.options.map((g) => [g, 0])) as Record<OwnerGroup, number>, notTold: 0, holdsEnded: 0, stillApplying: 0 };
     for (const r of rows) {
       counts.byOwnerStage[r.ownerStage] += 1;
       counts.byGroup[r.group] += 1;
       if (r.toldState === "not_told") counts.notTold += 1;
       if (holdEnded(r.mark, now)) counts.holdsEnded += 1;
+      if (r.stillApplying) counts.stillApplying += 1;
     }
     const nameOf = (r: (typeof rows)[number]) => r.candidate?.name.toLowerCase() ?? "";
     const ordered = q.order === "waiting" ? [...rows].sort((x, y) => Date.parse(x.stageChangedAt) - Date.parse(y.stageChangedAt)) : q.order === "name" ? [...rows].sort((x, y) => nameOf(x).localeCompare(nameOf(y))) : rows;
@@ -403,7 +463,7 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const strip = ownerStage(app, mark);
     // The status token opens the candidate's status page and the reply token is all that authenticates a reply, so neither leaves the server.
     const { statusToken: _statusToken, replyToken: _replyToken, ...appOut } = app;
-    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: groupFor(app, mark, now), ownerStage: strip, ownerStageLabel: ownerStageLabel(strip, mark), mark, tags: ownerTags(app, mark, now), stageMoves: stageMoves(facts), toldState: DECISION_STAGES.includes(app.stage) ? app.toldState : null, allowedActions, blockedReasons, declineMessage, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: comms, timeline, screens: scr.map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, assessmentId: s.assessmentId, ...scorecards.get(s.id) })), pendingApprovals, packetLabels };
+    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: groupFor(app, mark, now), ownerStage: strip, ownerStageLabel: ownerStageLabel(strip, mark), mark, tags: ownerTags(app, mark, now), stageMoves: stageMoves(facts), toldState: DECISION_STAGES.includes(app.stage) ? app.toldState : null, allowedActions, blockedReasons, declineMessage, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: comms, timeline, screens: scr.map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedVia: s.invitedVia ?? null, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, assessmentId: s.assessmentId, ...scorecards.get(s.id) })), pendingApprovals, packetLabels };
   });
   if (!row) throw new HttpError(404, "not_found", "Application not found.");
   return c.json(row);
