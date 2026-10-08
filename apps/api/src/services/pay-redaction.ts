@@ -3,8 +3,9 @@ import type { RolePacket } from "@ros/contracts";
 /**
  * What a person without compensation.read (an interviewer) may know of a packet's pay: how it is paid, in what currency
  * and whether the range is shown to candidates. Nothing else: not the range, not the ceiling, not the bonus or the
- * benefits, and not the sources, whose details carry the figures ("45–55 hourly", the benchmark percentiles). One
- * helper for every route that returns a packet, so a new field in the pay section is hidden by default.
+ * benefits, and not the sources, whose details carry the figures ("45–55 hourly", the benchmark percentiles). The
+ * market figure the job builder records on the packet's provenance (`provenance.benchmark`: p25, p50, p75) goes too.
+ * One helper for every route that returns a packet, so a new field in the pay section is hidden by default.
  */
 export type RedactedCompensation = Pick<RolePacket["compensation"], "basis" | "currency" | "discloseRange">;
 
@@ -12,9 +13,15 @@ export function redactedCompensation(comp: RolePacket["compensation"]): Redacted
   return { basis: comp.basis, currency: comp.currency, discloseRange: comp.discloseRange };
 }
 
-/** The packet with its pay section cut down to `redactedCompensation`. */
+/** The provenance without the market pay figures. */
+function provenanceWithoutPay(p: RolePacket["provenance"]): RolePacket["provenance"] {
+  const { benchmark: _figures, ...rest } = p;
+  return rest;
+}
+
+/** The packet with its pay section cut down to `redactedCompensation`, and no market pay figures anywhere. */
 export function withoutPay<T extends { packet: RolePacket }>(row: T): Omit<T, "packet"> & { packet: Omit<RolePacket, "compensation"> & { compensation: RedactedCompensation } } {
-  return { ...row, packet: { ...row.packet, compensation: redactedCompensation(row.packet.compensation) } };
+  return { ...row, packet: { ...row.packet, compensation: redactedCompensation(row.packet.compensation), provenance: provenanceWithoutPay(row.packet.provenance) } };
 }
 
 /**
@@ -22,5 +29,5 @@ export function withoutPay<T extends { packet: RolePacket }>(row: T): Omit<T, "p
  * list, so they are present but empty (zero and none), never the real figures.
  */
 export function withEmptyPay<T extends { packet: RolePacket }>(row: T): T {
-  return { ...row, packet: { ...row.packet, compensation: { ...redactedCompensation(row.packet.compensation), min: 0, max: 0, ceiling: 0, sources: [], ownerStated: false } as RolePacket["compensation"] } };
+  return { ...row, packet: { ...row.packet, compensation: { ...redactedCompensation(row.packet.compensation), min: 0, max: 0, ceiling: 0, sources: [], ownerStated: false } as RolePacket["compensation"], provenance: provenanceWithoutPay(row.packet.provenance) } };
 }

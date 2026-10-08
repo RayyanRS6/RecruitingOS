@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Avatar, Button, Card, Chip, EmptyState, ErrorState, Field, Pill, Skeleton, Timeline } from "@ros/ui";
-import { api, ApiError, type DecisionMaker, type InterviewPlanView, type Requirement, type RoleDetail, type RoleEvent, type RolePacket } from "../api/client";
+import { api, ApiError, type DecisionMaker, type InterviewPlanView, type PacketFlag, type Requirement, type RoleDetail, type RoleEvent, type RolePacket } from "../api/client";
 import { APPROVE_WAITS_FOR_CHECK, approvedToast } from "../company-check";
 import { useCompanyCheck } from "../components/use-company-check";
 import { toast } from "../toast";
@@ -60,7 +60,7 @@ export function PreferencesCard({ packet, decisionMaker }: { packet: RolePacket;
         <dd>{pref.whatFailureLooksLike ?? <span className="muted">Not stated</span>}</dd>
         {pref.interviewStyle ? <><dt>Interview style</dt><dd>{pref.interviewStyle}</dd></> : null}
       </dl>
-      <p className="small muted" style={{ marginTop: 8 }}>In your words from the intake conversation. Use "Everything (advanced)" in Edit to change them.</p>
+      <p className="small muted" style={{ marginTop: 8 }}>In your words from the conversation with the assistant. Change them with Edit.</p>
     </Card>
   );
 }
@@ -144,6 +144,7 @@ export function PacketApprovalCard({ role, onEdit, canEdit, showingProposed, onS
           <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>{assumptions.map((a, i) => <li key={i}>{a}</li>)}</ul>
         </div>
       ) : null}
+      {pending.flags.length ? <ApprovalFlags roleId={role.id} version={pending.version} flags={pending.flags} canKeep={canEdit} onEdit={onEdit} onKept={refresh} /> : null}
       {!pending.viewer.mayDecide ? <Alert tone="info">{pending.viewer.reason ?? "Someone else on your team decides this one."}</Alert> : null}
       {sendingBack ? (
         <div className="stack" style={{ gap: 8, marginTop: 12, maxWidth: 520 }}>
@@ -156,12 +157,76 @@ export function PacketApprovalCard({ role, onEdit, canEdit, showingProposed, onS
       ) : (
         <div className="row" style={{ marginTop: 12 }}>
           {pending.viewer.mayDecide ? <Button variant="primary" loading={approve.isPending} onClick={() => approve.mutate()}>{pending.editWhileOpen ? "Approve this version" : "Approve and post"}</Button> : null}
-          {pending.viewer.mayDecide ? <Button onClick={() => setSendingBack(true)}>Send back with a note</Button> : null}
+          {pending.viewer.maySendBack ? <Button onClick={() => setSendingBack(true)}>Send back with a note</Button> : null}
           {canEdit ? <Button onClick={onEdit}>{pending.viewer.mayDecide ? "Edit first" : "Edit"}</Button> : null}
         </div>
       )}
     </Card>
   );
+}
+
+/**
+ * The wording the fairness check flagged on the version waiting for approval (plan C1), on the approval card itself:
+ * each phrase, where it is, why, and the lawful way to say it. Until each open one is changed (Edit) or kept by a person
+ * with a reason, the role cannot be approved; a kept one shows who kept it and why, for the approver to weigh.
+ */
+function ApprovalFlags({ roleId, version, flags, canKeep, onEdit, onKept }: { roleId: string; version: number; flags: PacketFlag[]; canKeep: boolean; onEdit: () => void; onKept: () => Promise<void> }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
+  const keep = useMutation({
+    mutationFn: (input: { flagId: string; reason: string }) => api.post(`/api/v1/roles/${roleId}/packets/${version}/flags/keep`, input),
+    onSuccess: async () => { toast("Kept, with your reason.", "Whoever approves the role sees why."); setOpen(null); setReason(""); await onKept(); },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not keep it."),
+  });
+  const waiting = flags.filter((f) => !f.kept);
+  return (
+    <section className="flag-list" aria-label="Wording to check before approval" style={{ marginTop: 10 }}>
+      <h3 style={{ fontSize: 14 }}>{waiting.length ? "Check this wording before approving" : "Wording someone chose to keep"}</h3>
+      {flags.map((f) => {
+        const id = `keep-${version}-${f.id.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+        return (
+          <div key={f.id} className="wording-flag">
+            <p><strong>"{f.text}"</strong> <span className="small muted">({flagPlace(f.path)})</span> {f.reason}</p>
+            {f.alternative ? <p className="small" style={{ color: "var(--ink-2)" }}>Instead: {f.alternative}</p> : null}
+            {f.kept ? (
+              <p className="small"><Chip tone="caution">Kept</Chip> {f.kept.by.name ?? "A team member"} kept it on {new Date(f.kept.at).toLocaleDateString()}: "{f.kept.reason}"</p>
+            ) : open === f.id ? (
+              <div className="stack" style={{ gap: 6 }}>
+                <Field label="Why keep it? (whoever approves the role sees this)" htmlFor={id}><input id={id} className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Required by our state licence board" /></Field>
+                <div className="row">
+                  <Button size="sm" variant="primary" disabled={reason.trim().length < 5} loading={keep.isPending} onClick={() => keep.mutate({ flagId: f.id, reason: reason.trim() })}>Keep it, with this reason</Button>
+                  <Button size="sm" variant="quiet" onClick={() => setOpen(null)}>Cancel</Button>
+                </div>
+              </div>
+            ) : canKeep ? (
+              <div className="row">
+                <Button size="sm" variant="primary" onClick={onEdit}>Change the wording</Button>
+                <Button size="sm" onClick={() => { setOpen(f.id); setReason(""); }}>Keep it…</Button>
+              </div>
+            ) : <p className="small muted">Someone who can edit the role changes the wording, or keeps it and says why.</p>}
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
+/** Where in the role a flagged phrase is, in plain words. */
+function flagPlace(path: string): string {
+  const p = path.replace(/\[[^\]]*\]/g, "");
+  if (p.startsWith("identity")) return "the job title";
+  if (p.startsWith("description.publicJobDescription")) return "the job description";
+  if (p.startsWith("description")) return "the team's notes";
+  if (p.startsWith("requirements.mustHaves")) return "a must-have";
+  if (p.startsWith("requirements.niceToHaves")) return "a nice-to-have";
+  if (p.startsWith("requirements.eligibility")) return "an application question";
+  if (p.startsWith("screening")) return "a screening question";
+  if (p.startsWith("competencies")) return "what interviewers look for";
+  if (p.startsWith("evaluation")) return "how applications are judged";
+  if (p.startsWith("interviews")) return "an interview question";
+  if (p.startsWith("preferences.dealBreakers")) return "the deal-breakers";
+  if (p.startsWith("communication")) return "the company description";
+  return "the role";
 }
 
 /** The rounds with who interviews and whether times can be offered to them, and, for anyone with packet.edit (`canEdit`), a way to assign people per round. */

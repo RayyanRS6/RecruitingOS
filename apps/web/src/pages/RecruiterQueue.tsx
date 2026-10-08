@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useRefresh } from "../nav";
 import { Alert, Button, Card, Chip, EmptyState, ErrorState, Field, PageHeader, Pill, Skeleton, type Tone } from "@ros/ui";
 import type { EscalationThreadEntry } from "@ros/contracts";
 import { api, ApiError } from "../api/client";
-import { queueThreadHeading } from "../recruiter-requests";
+import { draftFactLines, queueThreadHeading, workspaceHref, type HandedOverDraft } from "../recruiter-requests";
 import { toast } from "../toast";
 
 /** Exactly what a recruiter sees before accepting (correction 11): no customer words, nothing from a candidate record. */
@@ -51,6 +51,37 @@ export function RecruiterQueue() {
   );
 }
 
+const SPEAKER: Record<string, string> = { owner: "The customer", assistant: "The assistant", system: "Note" };
+
+/**
+ * The draft a request is about (plan C12), as the customer was promised: who started it, what is known so far, the whole
+ * conversation with the assistant (a pasted job ad folded away), and the draft written beside it. "Open the draft" goes
+ * into the customer's workspace on that draft, where the recruiter can carry on.
+ */
+function DraftHandover({ draft, onOpen, opening }: { draft: HandedOverDraft; onOpen: (() => void) | null; opening: boolean }) {
+  const facts = draftFactLines(draft.facts);
+  const title = draft.draftPacket?.identity?.title ?? (typeof draft.facts.title === "string" ? draft.facts.title : null);
+  return (
+    <Card title={`The draft they asked about: ${title ?? "Untitled role"}`} aside={onOpen ? <Button size="sm" variant="primary" loading={opening} onClick={onOpen}>Open the draft</Button> : null}>
+      <p className="small muted">Started by {draft.startedBy ?? "someone on their team"} · {draft.status === "active" ? "still being drafted" : draft.status === "compiled" ? "now a role" : "set aside"}. This is how it stood when they asked.</p>
+      {facts.length ? <dl className="kv" style={{ marginTop: 8 }}>{facts.map((f) => <Fragment key={f.label}><dt>{f.label}</dt><dd>{f.value}</dd></Fragment>)}</dl> : <p className="small muted">Nothing settled yet.</p>}
+      {draft.missingFacts.length ? <p className="small" style={{ marginTop: 6 }}>Still missing: {draft.missingFacts.map((m) => m.replace(/_/g, " ")).join(", ")}</p> : null}
+      <details style={{ marginTop: 8 }} open>
+        <summary className="small">The conversation with the assistant ({draft.messages.length})</summary>
+        <ol aria-label="The conversation with the assistant" style={{ listStyle: "none", margin: "6px 0 0", padding: "0 0 0 12px", borderLeft: "2px solid var(--line)" }}>
+          {draft.messages.map((m, i) => (
+            <li key={`${i}-${m.at}`} style={{ padding: "4px 0" }}>
+              <p className="small muted" style={{ margin: 0 }}>{SPEAKER[m.role] ?? m.role}{m.kind === "answers" ? " (tapped answers)" : ""} · {new Date(m.at).toLocaleString()}</p>
+              {m.kind === "pasted_ad" ? <details><summary className="small">A pasted job ad ({m.content.length.toLocaleString("en-US")} characters)</summary><p className="small" style={{ whiteSpace: "pre-wrap" }}>{m.content}</p></details> : <p style={{ whiteSpace: "pre-wrap", margin: "2px 0 0" }}>{m.content}</p>}
+            </li>
+          ))}
+        </ol>
+      </details>
+      {draft.draftPacket?.description?.publicJobDescription ? <details style={{ marginTop: 8 }}><summary className="small">The draft's job description</summary><p className="small" style={{ whiteSpace: "pre-wrap", marginTop: 6 }}>{draft.draftPacket.description.publicJobDescription}</p></details> : <p className="small muted" style={{ marginTop: 8 }}>No draft was written yet.</p>}
+    </Card>
+  );
+}
+
 function EscalationDetail({ id }: { id: string }) {
   const qc = useQueryClient();
   const nav = useNavigate();
@@ -68,13 +99,14 @@ function EscalationDetail({ id }: { id: string }) {
   const enter = useMutation({
     mutationFn: async (e: Detail) => { await api.post("/api/v1/auth/switch", { companyId: e.companyId }); return e; },
     // Another company now: nothing read for the previous one may show (the cache is emptied), and the frame around the
-    // page (the access notice, the company chip) is drawn again from the new session.
-    onSuccess: (e) => { qc.clear(); nav(e.roleId ? `/roles/${e.roleId}/talent` : "/"); refreshFrame(); },
+    // page (the access notice, the company chip) is drawn again from the new session. A request about a draft opens that
+    // draft in the job builder (C12); one about a role opens its candidates.
+    onSuccess: (e) => { qc.clear(); nav(workspaceHref(e)); refreshFrame(); },
     onError: (err) => toast(err instanceof ApiError ? err.message : "Could not open the customer."),
   });
   if (q.isLoading || !q.data) return <Skeleton lines={8} />;
   const e = q.data;
-  const ctx = (e.contextSnapshot ?? {}) as { company?: { name: string; vertical: string; sizeBand: string }; role?: { title: string; status: string }; packet?: { version: number; packet: { compensation: { basis: string; min: number; max: number; ceiling: number }; requirements: { mustHaves: Array<{ text: string }>; eligibility: Array<{ question: string }> }; description: { publicJobDescription: string } } }; candidate?: { name: string; email: string | null; phone: string | null }; application?: { stage: string }; resumeText?: string | null; assessments?: Array<{ kind: string; overall: string; result: { summary: string } }>; communications?: Array<{ direction: string; subject: string | null; at: string }>; timeline?: Array<{ type: string; at: string }> };
+  const ctx = (e.contextSnapshot ?? {}) as { company?: { name: string; vertical: string; sizeBand: string }; role?: { title: string; status: string }; packet?: { version: number; packet: { compensation: { basis: string; min: number; max: number; ceiling: number }; requirements: { mustHaves: Array<{ text: string }>; eligibility: Array<{ question: string }> }; description: { publicJobDescription: string } } }; candidate?: { name: string; email: string | null; phone: string | null }; application?: { stage: string }; resumeText?: string | null; assessments?: Array<{ kind: string; overall: string; result: { summary: string } }>; communications?: Array<{ direction: string; subject: string | null; at: string }>; timeline?: Array<{ type: string; at: string }>; intakeSession?: HandedOverDraft | null };
   return (
     <div className="stack">
       <Card title={`${e.kind.replace(/_/g, " ")} · ${e.companyName}${e.roleTitle ? ` · ${e.roleTitle}` : ""}`} aside={<div className="row"><Pill size="sm" tone={URGENCY_TONE[e.urgency]}>{e.urgency}</Pill>{e.status === "open" ? <Button size="sm" variant="primary" loading={claim.isPending} onClick={() => claim.mutate()}>Accept this request</Button> : null}</div>}>
@@ -97,6 +129,7 @@ function EscalationDetail({ id }: { id: string }) {
         <>
           {e.grant ? <Alert tone="info">Your access covers {e.grant.scope.applicationId ? "this candidate" : e.grant.scope.roleId ? "this role" : "this customer"} and ends {new Date(e.grant.expiresAt).toLocaleString()}. <Button size="sm" variant="secondary" loading={enter.isPending} onClick={() => enter.mutate(e)}>Open in the customer's workspace</Button> <Button size="sm" variant="quiet" loading={release.isPending} onClick={() => release.mutate()}>Release</Button></Alert> : null}
           {ctx.company ? <Card title="Company"><dl className="kv"><dt>Name</dt><dd>{ctx.company.name}</dd><dt>Vertical</dt><dd>{ctx.company.vertical}</dd><dt>Size</dt><dd>{ctx.company.sizeBand}</dd></dl></Card> : null}
+          {ctx.intakeSession ? <DraftHandover draft={ctx.intakeSession} onOpen={e.grant ? () => enter.mutate(e) : null} opening={enter.isPending} /> : null}
           {ctx.role && ctx.packet ? (
             <Card title={`Role: ${ctx.role.title} (packet v${ctx.packet.version})`}>
               <dl className="kv">

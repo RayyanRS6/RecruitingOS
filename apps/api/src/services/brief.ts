@@ -1,5 +1,5 @@
-import { and, count, desc, eq, gte, inArray, isNull, ne, sql } from "drizzle-orm";
-import { DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeMarksFor, can, groupFor, isBoardChannel, mayDecideApproval, ownerGroup, selfApprovalCheck } from "@ros/core";
+import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeMarksFor, can, groupFor, isBoardChannel, mayDecideApproval, openFlagsMessage, ownerGroup, selfApprovalCheck, unresolvedFlags } from "@ros/core";
 import { HELD_STATUS, detectStuckRoles } from "@ros/agents";
 import { companyOnboarding, companyVerifiedAt, type CompanyOnboarding, type GettingStarted, type GettingStartedStep, type MembershipRole } from "@ros/contracts";
 import { applications, approvalRequests, assessments, candidates, communications, companies, events, intakeSessions, integrations, interviewParticipants, interviewerAvailability, interviews, invitations, memberships, postings, recruiterEscalations, rolePackets, roles, screens, type Tx } from "@ros/db";
@@ -25,7 +25,7 @@ function approvalCardWords(actionType: string, ctx: { who: string; roleTitle: st
 const CHANNEL_NAME: Record<string, string> = { careers_page: "your careers page", google_jobs: "Google for Jobs", email_in: "email-in capture", linkedin_basic: "LinkedIn", indeed: "Indeed", ziprecruiter: "ZipRecruiter" };
 
 export type BriefCard = {
-  kind: "new_applicants" | "needs_review" | "decision" | "posting_action" | "escalation" | "stuck" | "screening" | "interviews" | "empty" | "getting_started";
+  kind: "new_applicants" | "needs_review" | "decision" | "posting_action" | "escalation" | "stuck" | "screening" | "interviews" | "empty" | "getting_started" | "draft";
   title: string;
   body: string;
   roleId?: string;
@@ -48,8 +48,8 @@ export function briefViewerOf(t: Tenant): BriefViewer {
   return { userId: t.userId, role: t.role, scope: staffScopeOf(t) };
 }
 
-/** The empty card's way forward: the client opens the new-role conversation on "/?start=1" (until a page of its own exists). */
-export const START_HIRE_PATH = "/?start=1";
+/** Where "Start a hire" goes (plan C4): the full-screen job builder. A draft is continued at `${START_HIRE_PATH}?session=<id>`. */
+export const START_HIRE_PATH = "/roles/new";
 
 /**
  * The morning brief, Slice 1: deterministic, from the system of record. The orchestrator agent replaces the
@@ -79,11 +79,15 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     if (p.actionType === "role_packet.approve") {
       // The card is offered only to someone the approve route would accept: the approver roles, the named decision maker
       // (or an owner), and not the person who started the role or wrote the version unless they are the sole owner.
-      if (viewer && !(await mayApprovePacketFromBrief(tx, companyId, viewer, p))) continue;
+      const may = viewer ? await mayApprovePacketFromBrief(tx, companyId, viewer, p) : { ok: true, openFlags: await openFlagsOf(tx, p) };
+      if (!may.ok) continue;
       // A version proposed while the role runs is a different decision from opening a new role: the card says which.
       const proposal = p.proposal as { version?: number; editWhileOpen?: boolean };
       const editWhileOpen = !!proposal.editWhileOpen && role?.status !== "pending_approval";
-      cards.push({ kind: "decision", title: editWhileOpen ? `Approve packet v${proposal.version ?? "?"} of ${role?.title ?? "the role"}` : `Approve the role: ${role?.title ?? "new role"}`, body: p.rationale ?? (editWhileOpen ? "The role keeps running on its approved version until you decide." : "Review the role packet and approve it to start posting."), roleId: p.roleId ?? undefined, approvalRequestId: p.id, actions: [{ label: editWhileOpen ? "Review the change" : "Review and approve", method: "GET", path: `/roles/${p.roleId}` }] });
+      // Open wording flags come first (the approve route refuses until each is changed or kept with a reason): the card says so instead of offering approval.
+      const body = may.openFlags ? `${openFlagsMessage(may.openFlags)} It can be approved after that.` : p.rationale ?? (editWhileOpen ? "The role keeps running on its approved version until you decide." : "Review the role packet and approve it to start posting.");
+      const label = may.openFlags ? "Review the wording" : editWhileOpen ? "Review the change" : "Review and approve";
+      cards.push({ kind: "decision", title: editWhileOpen ? `Approve packet v${proposal.version ?? "?"} of ${role?.title ?? "the role"}` : `Approve the role: ${role?.title ?? "new role"}`, body, roleId: p.roleId ?? undefined, approvalRequestId: p.id, actions: [{ label, method: "GET", path: `/roles/${p.roleId}` }] });
     } else if (p.actionType === "application.invite_screen" || p.actionType === "application.recommend_interview") {
       // The card's "Yes" posts to the decide route, which refuses anyone outside the request's approver roles (during a recruiter takeover, everyone but the recruiter).
       if (viewer && !mayDecideByRole(p.requiredRoles, viewer.role)) continue;
@@ -192,6 +196,8 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     cards.push({ kind: "stuck", title: d.title, body: d.body, roleId: d.roleId, actions: [{ label: d.action.label, method: "GET", path: d.action.href }, ...(mayAskAboutRole(d.roleId) ? [{ label: "Have a recruiter review", method: "POST" as const, path: `/api/v1/escalations`, body: { kind: "review", roleId: d.roleId } }] : [])] });
   }
 
+  for (const card of await draftCards(tx, companyId, viewer)) cards.push(card);
+
   const escalations = (await tx.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), inArray(recruiterEscalations.status, ["open", "claimed", "in_progress"])))).filter((e) => escalationInScope(scope, e));
   // Each open request leads to itself in "Your recruiter requests" on Today, where its thread, notes and (once it comes)
   // the answer in full are; answered requests are shown there for two weeks, so the brief needs no card of its own.
@@ -223,6 +229,32 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   const handled = recent.filter((e) => AUTOMATED.has(e.type) && (e.actor.kind === "system" || e.actor.kind === "agent") && (!inScopeSubjects || inScopeSubjects.has(e.subjectId))).length;
   const summary = `${needsMe} ${needsMe === 1 ? "thing needs" : "things need"} you · ${strongWaiting} strong ${strongWaiting === 1 ? "candidate" : "candidates"} ready · ${atRisk} at risk · ${handled} handled for you since yesterday.`;
   return { generatedAt: new Date().toISOString(), cards: setup ? [setup, ...cards] : cards, summary };
+}
+
+/**
+ * "Draft in progress" (plan C18): the roles this person started and has not finished, three at most, each with Continue
+ * and Discard. Drafts are private to whoever started them (founder decision Q6), so nobody else's ever shows here, and
+ * none for an ITS recruiter under a grant narrower than the company.
+ */
+async function draftCards(tx: Tx, companyId: string, viewer: BriefViewer | undefined): Promise<BriefCard[]> {
+  if (!viewer || viewer.scope || !can(viewer.role, "role.create") || !can(viewer.role, "compensation.read")) return [];
+  const drafts = await tx
+    .select({ id: intakeSessions.id, facts: intakeSessions.facts, messages: intakeSessions.messages, draftPacket: intakeSessions.draftPacket })
+    .from(intakeSessions)
+    .where(and(eq(intakeSessions.companyId, companyId), eq(intakeSessions.status, "active"), or(eq(intakeSessions.createdByUserId, viewer.userId), sql`${intakeSessions.createdBy}->>'id' = ${viewer.userId}`)))
+    .orderBy(desc(intakeSessions.updatedAt))
+    .limit(3);
+  return drafts
+    .filter((d) => d.messages.some((m) => m.role === "owner"))
+    .map((d) => {
+      const title = d.facts.title ?? d.draftPacket?.identity.title ?? null;
+      return {
+        kind: "draft" as const,
+        title: title ? `Draft in progress: ${title}` : "A role you started is not finished",
+        body: d.draftPacket ? "The draft is written. Check it, then ask for approval when you are happy with it." : "Pick up where you left off; nothing has been sent to anyone.",
+        actions: [{ label: "Continue", method: "GET" as const, path: `${START_HIRE_PATH}?session=${d.id}` }, { label: "Discard", method: "POST" as const, path: `/api/v1/intake/sessions/${d.id}/abandon` }],
+      };
+    });
 }
 
 /** Where the getting-started card is hidden for one person, and where "I've reviewed them" is recorded (routes/company-settings.ts). */
@@ -351,16 +383,28 @@ async function gettingStartedSteps(tx: Tx, companyId: string, role: MembershipRo
 
 /**
  * The same three checks as packet-approval.ts `assertMayApprovePacket`, applied before the card is built: role.approve,
- * the request's approver roles or named decision maker, and the self-approval rule (sole owners excepted).
+ * the request's approver roles or named decision maker, and the self-approval rule (sole owners excepted). The fourth,
+ * open wording flags, does not hide the card (the approver is the one to settle them), so it is returned for the card
+ * to say what comes first.
  */
-async function mayApprovePacketFromBrief(tx: Tx, companyId: string, viewer: BriefViewer, req: typeof approvalRequests.$inferSelect): Promise<boolean> {
-  if (!can(viewer.role, "role.approve")) return false;
-  if (!mayDecideApproval(req, { userId: viewer.userId, role: viewer.role }).ok) return false;
+async function mayApprovePacketFromBrief(tx: Tx, companyId: string, viewer: BriefViewer, req: typeof approvalRequests.$inferSelect): Promise<{ ok: boolean; openFlags: number }> {
+  const no = { ok: false, openFlags: 0 };
+  if (!can(viewer.role, "role.approve")) return no;
+  if (!mayDecideApproval(req, { userId: viewer.userId, role: viewer.role }).ok) return no;
   const [role] = req.roleId ? await tx.select({ id: roles.id, createdBy: roles.createdBy }).from(roles).where(eq(roles.id, req.roleId)).limit(1) : [];
-  if (!role) return false;
+  if (!role) return no;
   const version = Number((req.proposal as { version?: number }).version);
-  const [pv] = Number.isFinite(version) ? await tx.select({ createdBy: rolePackets.createdBy }).from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, version))).limit(1) : [];
-  return (await selfApprovalCheck(tx, { companyId, userId: viewer.userId, roleCreatedBy: role.createdBy, versionCreatedBy: pv?.createdBy ?? role.createdBy })).ok;
+  const [pv] = Number.isFinite(version) ? await tx.select({ createdBy: rolePackets.createdBy, packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, version))).limit(1) : [];
+  const ok = (await selfApprovalCheck(tx, { companyId, userId: viewer.userId, roleCreatedBy: role.createdBy, versionCreatedBy: pv?.createdBy ?? role.createdBy })).ok;
+  return { ok, openFlags: unresolvedFlags(pv?.packet).length };
+}
+
+/** How many wording flags are open on the version a packet approval is for (an unknown viewer's card says so too). */
+async function openFlagsOf(tx: Tx, req: typeof approvalRequests.$inferSelect): Promise<number> {
+  const version = Number((req.proposal as { version?: number }).version);
+  if (!req.roleId || !Number.isFinite(version)) return 0;
+  const [pv] = await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, req.roleId), eq(rolePackets.version, version))).limit(1);
+  return unresolvedFlags(pv?.packet).length;
 }
 
 /**

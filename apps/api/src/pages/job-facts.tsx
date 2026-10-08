@@ -3,15 +3,14 @@
 import { formatPayRange, type RolePacket } from "@ros/contracts";
 import { payShown as payShownByRule, type Notice } from "@ros/core";
 import { jobValidThrough } from "@ros/integrations";
+import { EMPLOYMENT_LABEL as EMPLOYMENT, WORK_MODEL_LABEL as WORK_MODEL } from "../services/job-preview";
 import { Icon, type CandidateIconName } from "./icons";
 
 /**
  * The plain facts every public job surface states the same way (Wave 0 item 0.8): where, how, what kind of job and
- * the pay, and the one end date search engines and boards are given.
+ * the pay, and the one end date search engines and boards are given. The labels are shared with the job builder's
+ * preview (services/job-preview.ts), so the preview names things as the page does.
  */
-
-const WORK_MODEL: Record<string, string> = { onsite: "On site", hybrid: "Hybrid", remote: "Remote" };
-const EMPLOYMENT: Record<string, string> = { full_time: "Full time", part_time: "Part time", contract: "Contract", temporary: "Temporary", per_diem: "Per diem", internship: "Internship" };
 
 /**
  * Whether a public page shows the pay range: when the owner chose to, and always where a pay transparency law covers the

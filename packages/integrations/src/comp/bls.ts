@@ -34,6 +34,11 @@ const SOC: Record<string, string> = {
   "sales representative": "414012",
   "operations manager": "111021",
   "accountant": "132011",
+  "front desk": "434171",
+  "bookkeeper": "433031",
+  "administrative assistant": "436014",
+  "customer service representative": "434051",
+  "medical assistant": "319092",
 };
 
 const AREA: Record<string, string> = {
@@ -84,10 +89,16 @@ export class BlsOewsAdapter implements CompAdapter {
     this.status = enabled ? "live" : "disabled";
   }
 
+  /**
+   * The occupation for a job title: the longest known name the title contains, so "Dental Office Manager" is an office
+   * manager and "Registered Dental Hygienist" a hygienist whatever order the table is in. The caller passes a title,
+   * never a whole pasted ad (plan C5: an ad that mentions a receptionist is not a receptionist's job).
+   */
   static socFor(title: string): string | null {
     const t = title.toLowerCase();
-    for (const [k, v] of Object.entries(SOC)) if (t.includes(k)) return v;
-    return null;
+    let best: { key: string; soc: string } | null = null;
+    for (const [k, v] of Object.entries(SOC)) if (t.includes(k) && (!best || k.length > best.key.length)) best = { key: k, soc: v };
+    return best?.soc ?? null;
   }
 
   static areaFor(locationText: string | undefined): { code: string; label: string } {

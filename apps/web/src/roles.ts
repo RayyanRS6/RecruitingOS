@@ -36,6 +36,13 @@ export const canManageRole = (role: string | null | undefined): boolean => !!rol
 const PACKET_EDIT_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin", "hiring_manager", "recruiter"]);
 export const canEditPacket = (role: string | null | undefined): boolean => !!role && PACKET_EDIT_ROLES.has(role);
 
+/**
+ * The packet editor's "Everything (advanced)": the whole packet as JSON (plan C11). Kept to admins and recruiters; every
+ * other editor uses the plain fields, which cover everything an owner or hiring manager changes.
+ */
+const PACKET_JSON_ROLES: ReadonlySet<string> = new Set<TenantRole>(["admin", "recruiter"]);
+export const canEditPacketJson = (role: string | null | undefined): boolean => !!role && PACKET_JSON_ROLES.has(role);
+
 /** outcome.record: close a role with its outcome (the decision-makers and HR; not a recruiter, not an interviewer). */
 const OUTCOME_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin", "hiring_manager", "hr"]);
 export const canRecordOutcome = (role: string | null | undefined): boolean => !!role && OUTCOME_ROLES.has(role);

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
-import { aiRuns, applications, approvalRequests, assessments, candidates, communications, documents, events, jobs, postings, recruiterEscalations, roles, screens, workflowRuns } from "@ros/db";
+import { aiRuns, applications, approvalRequests, assessments, candidates, communications, documents, entitlements, events, jobs, postings, recruiterEscalations, roles, screens, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -124,6 +124,8 @@ describe("Slice 1 API", () => {
     // the compiled session no longer resumes
     const none = (await (await json("GET", "/api/v1/intake/sessions/current")).json()) as { session: null | { id: string } };
     expect(none.session).toBeNull();
+    // the trial's one place is taken by the role above: room for a second draft here, put back at the end (plan C13)
+    await container.db.update(entitlements).set({ limit: 2 }).where(eq(entitlements.key, "active_roles"));
     const r1 = await json("POST", "/api/v1/intake/conversation/messages", { message: "I need a front office coordinator in Irvine, $22 to $26 an hour, full time." });
     const { intakeSessionId } = (await r1.json()) as { intakeSessionId: string };
     const cur = (await (await json("GET", "/api/v1/intake/sessions/current")).json()) as { session: { id: string; messages: Array<{ role: string }>; missingFacts: string[] } };
@@ -139,6 +141,7 @@ describe("Slice 1 API", () => {
     expect((await json("POST", `/api/v1/intake/sessions/${intakeSessionId}/messages`, { message: "It's a replacement." })).status).toBe(409);
     const evs = await container.db.select().from(events).where(eq(events.type, "intake.abandoned"));
     expect(evs).toHaveLength(1);
+    await container.db.update(entitlements).set({ limit: 1 }).where(eq(entitlements.key, "active_roles"));
   });
 
   it("approval opens the role and publishes to every channel", async () => {
@@ -422,11 +425,16 @@ describe("Slice 1 API", () => {
     expect(detail.timeline.some((e) => e.type === "human.override")).toBe(true);
   });
 
-  it("enforces the trial's one-active-role entitlement", async () => {
-    const s = await json("POST", "/api/v1/intake/sessions", { initialMessage: "I need a front office coordinator in Irvine, $22 to $26 an hour, full time. Just draft it." });
-    const { session } = (await s.json()) as { session: { id: string } };
-    const r = await json("POST", `/api/v1/intake/sessions/${session.id}/compile`);
+  it("enforces the trial's one-active-role entitlement before any draft or assistant run (plan C13)", async () => {
+    const runsBefore = (await container.db.select().from(aiRuns)).length;
+    const r = await json("POST", "/api/v1/intake/sessions", { initialMessage: "I need a front office coordinator in Irvine, $22 to $26 an hour, full time. Just draft it." });
     expect(r.status).toBe(402);
+    const err = ((await r.json()) as { error: { code: string; message: string; details: { room: { holding: Array<{ title: string }> } } } }).error;
+    expect(err.code).toBe("limit_reached");
+    // the role holding the place is named, and the message says plainly that closing a role would not free it
+    expect(err.details.room.holding.map((h) => h.title)).toEqual(["Registered Dental Hygienist"]);
+    expect(err.message).toMatch(/A place is used when a role is created, and closing a role does not give it back/);
+    expect((await container.db.select().from(aiRuns)).length).toBe(runsBefore);
   });
 
   it("blocks admin routes for non-admins and exposes runs to admins", async () => {

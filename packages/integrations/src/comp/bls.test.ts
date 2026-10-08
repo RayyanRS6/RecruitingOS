@@ -44,6 +44,21 @@ describe("BLS OEWS benchmark", () => {
     expect(calls).toHaveLength(0); // no occupation code, no call
   });
 
+  it("names the occupation by the longest match in the title, and reads hourly or annual figures as asked (plan C2)", async () => {
+    expect(BlsOewsAdapter.socFor("Front Desk Receptionist")).toBe("434171");
+    expect(BlsOewsAdapter.socFor("Registered Dental Hygienist")).toBe("291292");
+    expect(BlsOewsAdapter.socFor("Medical Secretary and Receptionist")).toBe("436013");
+    expect(BlsOewsAdapter.socFor("Full-charge Bookkeeper")).toBe("433031");
+    const calls: Call[] = [];
+    const adapter = new BlsOewsAdapter(undefined, fetchAnswering((c) => ({ status: 200, body: series(c.body.seriesid, [88000, 104000, 126000]) }), calls));
+    const salaried = await adapter.benchmark({ title: "Marketing Manager", locationText: "Los Angeles, CA", basis: "salary" });
+    expect(calls[0].body.seriesid.map((id) => id.slice(-2))).toEqual(["12", "13", "14"]);
+    expect(salaried?.basis).toBe("salary");
+    const hourly = await adapter.benchmark({ title: "Marketing Manager", locationText: "Los Angeles, CA", basis: "hourly" });
+    expect(calls[1].body.seriesid.map((id) => id.slice(-2))).toEqual(["07", "08", "09"]);
+    expect(hourly?.basis).toBe("hourly");
+  });
+
   it("disabled means no call at all", async () => {
     const calls: Call[] = [];
     const adapter = new BlsOewsAdapter(undefined, fetchAnswering(() => ({ status: 200, body: {} }), calls), false);

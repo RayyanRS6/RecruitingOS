@@ -14,7 +14,7 @@ import { privacyRequestPages } from "./pages/privacy-request";
 import { intakeRoutes } from "./routes/intake";
 import { applicationRoutes, roleRoutes } from "./routes/roles";
 import { postingRoutes } from "./routes/postings";
-import { rolePacketRoutes } from "./routes/role-packets";
+import { draftPacketRoutes, rolePacketRoutes } from "./routes/role-packets";
 import { reportRoutes } from "./routes/reports";
 import { messageRoutes } from "./routes/messages";
 import { compareRoutes } from "./routes/compare";
@@ -103,6 +103,7 @@ export function createApp(container: Container) {
   app.route("/api/v1/companies", companyRoutes);
   app.route("/api/v1/companies", companySettingsRoutes);
   app.route("/api/v1/intake", intakeRoutes);
+  app.route("/api/v1/intake", draftPacketRoutes);
   app.route("/api/v1/roles", roleRoutes);
   app.route("/api/v1/roles", postingRoutes);
   app.route("/api/v1/roles", rolePacketRoutes);

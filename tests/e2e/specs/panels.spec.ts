@@ -44,7 +44,7 @@ test.describe("a sheet opened from a candidate's drawer", () => {
     await maria.getByRole("button", { name: "Bring in a recruiter" }).first().click();
     await expect(ask).toBeVisible();
     await page.goBack();
-    await expect(page.getByRole("heading", { name: "Your recruiting chief of staff" })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("heading", { level: 1, name: /^Good (morning|afternoon|evening)\.$/ })).toBeVisible({ timeout: 30_000 });
     await expect.poll(pageScroll).toBe("");
   });
 });

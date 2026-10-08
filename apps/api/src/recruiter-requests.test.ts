@@ -203,14 +203,16 @@ describe("what a recruiter request covers, and saying so", () => {
   });
 
   it("past the plan's role allowance, the refusal offers a request to ITS instead of an upgrade nobody can make", async () => {
-    // the trial allows one active role; the second draft is refused before any model call
-    const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a front office coordinator in Irvine, $22 to $26 an hour, full time. It's growth. Ceiling $28. I decide. Must-haves: Dentrix. Just draft it." })).json()) as { session: { id: string } };
-    const refused = await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`);
+    // the trial allows one active role; the second draft is refused before it starts, so no model call is made (plan C13)
+    const refused = await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a front office coordinator in Irvine, $22 to $26 an hour, full time. It's growth. Ceiling $28. I decide. Must-haves: Dentrix. Just draft it." });
     expect(refused.status).toBe(402);
     const err = ((await refused.json()) as { error: { code: string; message: string; details: { actions: Array<{ label: string; method: string; path: string; body: Record<string, unknown> }> } } }).error;
     expect(err.code).toBe("limit_reached");
     expect(err.message).not.toMatch(/upgrade/i);
-    expect(err.message).toMatch(/talk to ITS/);
+    expect(err.message).toMatch(/talk to ITS/i);
+    // the real rule: closing a role gives no place back, so the message never suggests it
+    expect(err.message).toMatch(/closing a role does not give it back/);
+    expect(err.message).not.toMatch(/Close a role/);
     const [action] = err.details.actions;
     expect(action).toMatchObject({ label: "Talk to ITS about more roles", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company" } });
     // pressing it is an ordinary request about all of the company's hiring

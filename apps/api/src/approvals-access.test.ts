@@ -180,7 +180,8 @@ describe("approvals: sending the held decline, who sees and decides what", () =>
 
   it("the 'Approve the role' card goes only to people the approve route accepts: not the hiring manager who drafted it, not HR", async () => {
     const manager = await signInAs(container, app, { companyId, role: "hiring_manager" });
-    const s = (await (await json(manager, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental assistant in Irvine, $24 to $28 an hour, full time. It's growth. Ceiling $30. Must-haves: radiography certificate. Just draft it." })).json()) as { session: { id: string } };
+    // "Ask for approval" waits for the six essentials (founder decision Q8), so the draft names who decides
+    const s = (await (await json(manager, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental assistant in Irvine, $24 to $28 an hour, full time. It's growth. Ceiling $30. I decide. Must-haves: radiography certificate. Just draft it." })).json()) as { session: { id: string } };
     const { roleId } = (await (await json(manager, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string };
     await container.drain();
     const [pending] = await container.db.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, roleId), eq(approvalRequests.actionType, "role_packet.approve"), eq(approvalRequests.status, "pending")));

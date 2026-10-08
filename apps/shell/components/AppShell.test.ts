@@ -64,7 +64,7 @@ describe("the rail", () => {
     expect(html).toContain("Bright Dental");
     expect(html).toContain("Owner");
     expect(html).toContain('aria-label="Company setup"');
-    expect(html).toMatch(/<a href="\/\?start=1"[^>]*aria-label="Start a hire"[^>]*aria-keyshortcuts="N"/);
+    expect(html).toMatch(/<a href="\/roles\/new"[^>]*aria-label="Start a hire"[^>]*aria-keyshortcuts="N"/);
     expect(html).toContain('<kbd class="kbd" aria-hidden="true">N</kbd>');
     // the open role with a green dot and its count, the draft with a grey dot, never the closed one
     expect(html).toContain('href="/roles/r-open"');
@@ -115,8 +115,10 @@ describe("the rail", () => {
     expect(html).not.toContain('aria-label="Start a hire"');
   });
 
-  it("folds to icons on a role's own pages", () => {
+  it("folds to icons on a role's own pages, and in the job builder", () => {
     nav.path = "/roles/r-open/talent";
+    expect(render(meAs("owner"), { roles })).toContain('<div class="shell" data-rail="compact">');
+    nav.path = "/roles/new";
     expect(render(meAs("owner"), { roles })).toContain('<div class="shell" data-rail="compact">');
     nav.path = "/roles";
     expect(render(meAs("owner"), { roles })).not.toContain('data-rail="compact"');

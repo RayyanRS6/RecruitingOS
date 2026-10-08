@@ -1,4 +1,4 @@
-import type { ActiveMark, CandidateNotice, GettingStarted, MeResponse, OwnerGroup, OwnerStage, StageMove, ToldState } from "@ros/contracts";
+import type { ActiveMark, CandidateNotice, GettingStarted, IntakeSessionView, MeResponse, OwnerGroup, OwnerStage, PacketFlag, StageMove, ToldState } from "@ros/contracts";
 
 export type { ActiveMark, CandidateNotice, OwnerStage, StageMove, ToldState };
 
@@ -46,9 +46,13 @@ export type Posting = { id: string; channel: string; status: string; externalUrl
 export type DecisionMaker = { userId: string; name: string | null; email: string };
 /** Whether candidates see a packet's pay range by the public pages' rule, and whether a pay transparency law is why. */
 export type PacketPayView = { payShown?: boolean; payRequiredByLaw?: boolean };
-/** The packet approval on a role: what waits, what the signed-in person may do about it, and how a sent-back role got there. */
+/**
+ * The packet approval on a role: what waits, what the signed-in person may do about it, and how a sent-back role got
+ * there. `flags` are the wording checks on the version waiting (open ones hold approval until changed or kept with a
+ * reason); sending back is never held up by them (`maySendBack`).
+ */
 export type PacketApproval = {
-  pending: { id: string; version: number; rationale: string | null; requestedBy: { kind: string; id: string; name?: string }; requiredRoles: string[]; requiredUserIds: string[]; decisionMaker: DecisionMaker | null; createdAt: string; expiresAt: string | null; editWhileOpen: boolean; viewer: { mayDecide: boolean; reason: string | null } } | null;
+  pending: { id: string; version: number; rationale: string | null; requestedBy: { kind: string; id: string; name?: string }; requiredRoles: string[]; requiredUserIds: string[]; decisionMaker: DecisionMaker | null; createdAt: string; expiresAt: string | null; editWhileOpen: boolean; flags: PacketFlag[]; viewer: { mayDecide: boolean; maySendBack: boolean; reason: string | null } } | null;
   latest: { id: string; status: string; version: number; decisionNote: string | null; decidedAt: string | null; decidedBy: { id: string; name: string } | null } | null;
 };
 export type RoleDetail = RoleSummary & { currentPacketVersion: number | null; currentPacket: ({ version: number; status: string; packet: RolePacket } & PacketPayView) | null; proposedPacket: ({ version: number; status: string; changeSummary: string | null; createdAt: string; createdBy: { kind: string; id: string; name?: string }; packet: RolePacket } & PacketPayView) | null; packetVersions: Array<{ version: number; status: string; source: string; changeSummary: string | null; createdAt: string; createdBy: { kind: string; name?: string } }>; postings: Posting[]; boardsStillUp: string[]; acceptingApplications: boolean; applicationsClosedAt: string | null; applicationsClosedReason: string | null; volumeAlertPerDay: number | null; pendingApprovals: Array<{ id: string; actionType: string; rationale: string | null; proposal?: Record<string, unknown> }>; counts: Record<string, number>; packetApproval: PacketApproval; decisionMaker: DecisionMaker | null };
@@ -145,6 +149,19 @@ export type DecisionMessagesResponse = { results: DecisionMessageResult[]; queue
 export type TimelineEvent = { type: string; occurredAt: string; actor: { kind: string; name?: string; id: string }; payload: Record<string, unknown> };
 export type ApplicationDetail = ApplicationCore & { roleId: string; stageChangedAt: string; candidateToldAt: string | null; allowedActions: ApplicationCapability[]; /** Why each choice not in `allowedActions` is unavailable, in plain words; shown on the disabled button. */ blockedReasons: Partial<Record<ApplicationCapability, string>>; /** What a Send of the decision message does under the company's settings: it goes, waits for approval, or is not sent. */ declineMessage: DeclineMessagePolicy; rejectReason: string | null; rejectNote: string | null; interviews: Array<{ id: string; roundKey: string; title: string; status: string; startsAt: string | null; endsAt: string | null; timezone: string | null; meetingUrl: string | null; attempt: number; outcome: string | null; decision: string | null; offeredSlots: OfferedSlot[]; createdAt: string }>; interviewPlan: Array<{ key: string; title: string; durationMinutes: number; format: string; interviewerUserIds: string[]; purpose: string }>; candidate: { firstName: string; lastName: string; email: string | null; phone: string | null; locationText: string | null; consent: Record<string, { granted: boolean; at: string; source: string }>; /** `talentPoolOptOut`: the person asked not to be kept for future roles. */ preferences?: { talentPoolOptOut?: boolean } }; documents: Array<{ id: string; kind: string; filename: string; hasText: boolean; sizeBytes: number; status: "quarantined" | "clean" | "rejected" | "deleted" | string; uploadedVia: string; rejectedReason: string | null; validatedAt: string | null }>; assessments: Array<{ id: string; kind: string; overall: string; confidence: string; createdAt: string; result: AssessmentResult }>; screens: Screen[]; /** `proposal` carries a waiting message's text (F11); `requiredRoles` says who may decide it, so the page offers the buttons only to them. */ pendingApprovals: Array<{ id: string; actionType: string; rationale: string | null; createdAt: string; proposal?: Record<string, unknown>; requiredRoles: string[] }>; packetLabels: { mustHaves: Array<{ key: string; text: string }>; competencies: Array<{ key: string; name: string }>; questions: Array<{ key: string; question: string }> }; communications: Array<{ id: string; direction: string; channel: string; subject: string | null; bodyText: string; status: string; createdAt: string; templateKey: string | null }>; timeline: TimelineEvent[]; extraction: { positions: Array<{ title: string; employer?: string; startDate?: string; endDate?: string; quote?: string }>; licenses: Array<{ name: string; jurisdiction?: string; quote?: string }>; certifications: Array<{ name: string }>; skills: string[]; yearsOfExperienceEstimate?: number; anomalies: Array<{ kind: string; detail: string }> } | null; answers: { eligibility?: Record<string, unknown>; noResume?: Record<string, string> } };
 export type IntakeSession = { id: string; status: string; messages: Array<{ role: "owner" | "assistant" | "system"; content: string; at: string }>; facts: Record<string, unknown>; missingFacts: string[]; roleId: string | null };
+
+// The job builder (plan Wave C): apps/api/src/routes/intake.ts. The shapes live in @ros/contracts.
+export type { IntakeQuestion, IntakeSessionSummary, IntakeSessionView, PacketFlag, PlanRoom } from "@ros/contracts";
+/** A "Bring in a recruiter" the server offers on a failed turn, with the draft attached (C12). */
+export type IntakeProposedAction = { kind: string; label: string; method?: string; path: string; body?: Record<string, unknown> };
+/** The assistant's turn as the builder reads it, or what went wrong and what to do next. */
+export type IntakeTurnReply = { assistantMessage?: string; readyToCompile?: boolean; takenFromAd?: string[]; notARole?: boolean; error?: string; recovery?: string; proposedActions?: IntakeProposedAction[] };
+/** POST /intake/sessions: the new draft and its first turn; `session` is null when the message was not about a role. */
+export type IntakeStartResponse = { session: IntakeSessionView | null; notARole?: boolean; reply: IntakeTurnReply | null };
+/** POST /intake/sessions/:id/messages and /answers: the draft as it now stands, the next turn (none for a quiet edit), and anything refused. */
+export type IntakeTurnResponse = { session: IntakeSessionView; reply: IntakeTurnReply | null; refused?: Array<{ field: string; text: string; reason: string; alternative: string | null }>; summary?: string[] };
+/** POST /intake/sessions/:id/request-approval: the role it created and the version waiting for approval. */
+export type IntakeApprovalResponse = { roleId: string; version: number; workflowRunId: string | null };
 
 export type OfferedSlot = { id: string; startsAt: string; endsAt: string; interviewerUserIds: string[]; source: "calendar" | "declared" };
 export type InterviewSummary = {

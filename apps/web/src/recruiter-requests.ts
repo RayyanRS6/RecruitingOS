@@ -84,6 +84,54 @@ export function queueThreadHeading(entry: EscalationThreadEntry): string {
   return entry.kind === "question" ? "The customer asked" : entry.kind === "reopen" ? "The customer reopened it" : "The customer added a note";
 }
 
+/**
+ * A role still being drafted, as a request about it carries it (plan C12; buildEscalationContext in
+ * packages/core/src/escalations.ts): who started it, the whole conversation, what is known, and the draft beside it.
+ */
+export type HandedOverDraft = {
+  id: string;
+  status: string;
+  startedBy: string | null;
+  messages: Array<{ role: string; content: string; at: string; kind?: string }>;
+  facts: Record<string, unknown>;
+  missingFacts: string[];
+  draftPacket: { identity?: { title?: string }; description?: { publicJobDescription?: string } } | null;
+};
+
+/**
+ * Where "Open in the customer's workspace" goes: the draft in the job builder when the request is about one, the
+ * role's candidates when it is about a role, and Today otherwise.
+ */
+export function workspaceHref(e: { roleId?: string | null; contextSnapshot?: Record<string, unknown> }): string {
+  const draft = (e.contextSnapshot as { intakeSession?: { id?: unknown } | null } | undefined)?.intakeSession;
+  if (draft && typeof draft.id === "string") return `/roles/new?session=${encodeURIComponent(draft.id)}`;
+  return e.roleId ? `/roles/${e.roleId}/talent` : "/";
+}
+
+const PAY_PER: Record<string, string> = { hourly: "an hour", salary: "a year" };
+const money = (n: unknown) => (typeof n === "number" ? `$${n.toLocaleString("en-US")}` : null);
+const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()) : []);
+
+/** What the draft knows so far, one plain line each, for the recruiter to read before opening it. */
+export function draftFactLines(facts: Record<string, unknown>): Array<{ label: string; value: string }> {
+  const out: Array<{ label: string; value: string }> = [];
+  const add = (label: string, value: string | null) => {
+    if (value) out.push({ label, value });
+  };
+  add("Job title", text(facts.title));
+  add("Where", text(facts.locationText));
+  const min = money(facts.compensationMin);
+  const max = money(facts.compensationMax);
+  add("Pay", min && max ? `${min}–${max}${PAY_PER[String(facts.compensationBasis)] ? ` ${PAY_PER[String(facts.compensationBasis)]}` : ""} (as discussed; check whether it was confirmed)` : null);
+  add("Why they are hiring", text(facts.reasonDetail) ?? text(facts.reason)?.replace(/_/g, " ") ?? null);
+  add("Final decision", text(facts.decisionMaker));
+  add("Who interviews", list(facts.interviewers).join(", ") || null);
+  add("Must-haves", list(facts.mustHaves).join("; ") || null);
+  add("Deal-breakers", list(facts.dealBreakers).join("; ") || null);
+  return out;
+}
+
 /** The newest answer, shown in full on the request itself. */
 export function latestAnswer(thread: readonly EscalationThreadEntry[]): EscalationThreadEntry | null {
   return [...thread].reverse().find((e) => e.kind === "answer") ?? null;

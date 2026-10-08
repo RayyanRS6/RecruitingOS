@@ -34,7 +34,7 @@ test.describe("route inventory", () => {
   });
 
   test("signed out, every private route sends the person to sign in", async ({ page }) => {
-    for (const path of ["/", "/roles", "/talent", "/interviews", "/setup", "/updates", "/recruiter/queue", "/admin"]) {
+    for (const path of ["/", "/roles", "/roles/new", "/talent", "/interviews", "/setup", "/updates", "/recruiter/queue", "/admin"]) {
       await page.goto(path);
       await expect(page).toHaveURL(/\/login/);
     }
@@ -49,6 +49,8 @@ test.describe("route inventory", () => {
     const routes: Array<[string, RegExp | string]> = [
       ["/", /Good (morning|afternoon|evening)/],
       ["/roles", "Roles"],
+      // the job builder's own page (plan C4): opening it saves nothing
+      ["/roles/new", "Who are you hiring?"],
       [`/roles/${seeded.roleId}`, /Hygienist/i],
       // the Talent page is headed by the role it shows (Wave A: "JOB · <company>" above the role's title)
       [`/roles/${seeded.roleId}/talent`, /Hygienist/i],
@@ -80,14 +82,15 @@ test.describe("route inventory", () => {
       await expect(rail.getByRole("link", { name: "Interviews" })).toBeVisible();
       await expectAccessible(page, "phone menu open");
     }
-    // N outside a text field opens the new-role conversation on Today; opening it saves nothing (the draft starts with
-    // the first message), so a stray key leaves no draft behind
+    // N outside a text field opens the job builder; opening it saves nothing (the draft starts with the first message),
+    // so a stray key leaves no draft behind. An old "/?start=1" link lands there too.
     await page.keyboard.press("n");
-    await expect(page).toHaveURL(/\/$/, { timeout: 30_000 });
-    await expect(page.getByRole("heading", { name: "Your recruiting chief of staff" })).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator("main")).toContainText("Tell me who you need to hire.");
+    await expect(page).toHaveURL(/\/roles\/new$/, { timeout: 30_000 });
+    await expect(page.getByRole("heading", { name: "Who are you hiring?" })).toBeVisible({ timeout: 30_000 });
     const draft = await page.request.get(`${baseURL}/api/v1/intake/sessions/current`);
     expect(((await draft.json()) as { session: unknown }).session).toBeNull();
+    await page.goto("/?start=1");
+    await expect(page).toHaveURL(/\/roles\/new$/, { timeout: 30_000 });
     // and on a page where something was typed but not saved, N is left alone so the typing is not thrown away
     await page.goto("/setup");
     await page.getByLabel("Buffer between interviews (minutes)").fill("25");

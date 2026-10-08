@@ -10,11 +10,13 @@ Screen names and button labels in **bold** are the ones you will see in the prod
 
 You describe who you need in a conversation. The assistant drafts a role packet. You read it, fix it and approve it. ITS posts the job. Candidates apply. The assistant reads each application and shows you the evidence. You decide who to screen, interview and decline, and you record what happened. A decision is private: nothing that says no is sent to a candidate until someone on your team sends the decision message. Whenever you want a human recruiter's opinion, press **Bring in a recruiter**.
 
-## 2. The intake conversation
+## 2. The job builder
 
-Go to **Today**. At the bottom is **Your recruiting chief of staff**. Type who you need in the box (it says "Who do you need to hire?") and press **Send**. One or two sentences is enough to start, for example: "I need a dental hygienist for our Pasadena office, four days a week, $48 to $56 an hour, starting in November."
+Press **Start a hire** (in the menu on every page, or on **Today**), or type into the **Who are you hiring?** box on Today and press **Start drafting**. The job builder opens. Describe the role in a sentence or paste a job ad you already have (up to 20,000 characters), for example: "I need a dental hygienist for our Pasadena office, four days a week, $48 to $56 an hour, starting in November." At a desk, Enter sends and Shift+Enter starts a new line; on a phone, press **Send**. If you have a draft in progress, **Start a hire** takes you back to it; **More**, then **Start a different role**, begins another.
 
-The assistant asks for what it is missing. It always needs six things before it can draft:
+The conversation is on the left and the draft on the right (on a phone, switch between **Conversation** and **Draft**). The assistant asks with question cards under the conversation: tap an answer (**Pick one** or **Pick any that apply**), or **Add your own…**, and press **Next**, then **Send** on the last card. **Why we ask** says why a question matters. Questions about people offer your team, plus **Someone not on the team yet**. **Or type your own answer…** brings the message box back. Your answers go into the conversation as one short message, and the draft on the right fills in, each part marked **Candidates see this**, **Candidates are asked this**, **Used to review applications; not on the job page** (the must-haves and nice-to-haves) or **Only your team sees this**. The **Pay** card shows the market pay for the job and place with its source and year (or says there is none), the range candidates see, and the most you would pay, which only your team sees.
+
+The assistant always needs six things before the role can go for approval:
 
 - the job title
 - where the job is
@@ -25,9 +27,13 @@ The assistant asks for what it is missing. It always needs six things before it 
 
 It may also ask about the schedule, the start date, must-haves and what you would like but do not require. Answer in plain words. If it asks something you have not decided, say so; it will note an assumption and you can fix it in the packet.
 
-When it has enough it says "I have enough to draft the role packet". Press **Draft the role packet**. You are taken to the role page. If you leave and come back, the conversation is where you left it. **Start over** abandons the draft.
+**What we know** and **Still missing** at the top of the draft list them as you go. When there is enough (or once you say "draft it"), press **Write the draft**; the steps show as they happen. Then type any change you want ("make it warmer", "drop the weekend requirement"): the change is shown first, field by field, and saved only when you press **Confirm** (**Keep as is** leaves the draft alone). **Edit** on the draft changes the answers as plain fields. The eye button shows the job exactly as candidates will see it on the job page.
 
-If you ask for something the law does not allow as a hiring criterion, the assistant declines it and suggests a lawful alternative.
+You can write the draft before the pay is settled and set the pay afterwards on the **Pay** card; choosing who decides or who interviews later is fine too. Those go into the draft on their own. If you change other answers after the draft is written (the title, why you are hiring, the must-haves), the draft says so and offers **Write it again with them**. If you saved changes on the draft since it was written, it first tells you that writing it again replaces them.
+
+**Ask for approval** stays greyed until everything needed is in and the draft is up to date with your answers; point at it to see what is missing. Pressing it creates the role from the draft as you see it, sends it to whoever approves it and takes you to the role page. Nothing is posted until it is approved. If you leave and come back, the draft is where you left it, and Today shows it as **Draft in progress**. **More**, then **Discard this draft**, sets it aside. If the assistant cannot help, **Bring in a recruiter** hands the draft and the conversation to ITS.
+
+If you ask for something the law does not allow as a hiring criterion, the assistant declines it and suggests a lawful alternative. Wording in the draft that may stand in for a protected trait is flagged: change it, or keep it with a reason that whoever approves the role will see.
 
 ## 3. Reviewing and editing the role packet
 
@@ -49,16 +55,18 @@ The role page shows the title, location, type, work model and pay at the top, th
 
 **Report.** The role's figures once people apply (section 16).
 
-**To edit**, press **Edit** (or **Edit first** on the approval card). **The usual edits** lets you change:
+**To edit**, press **Edit** (or **Edit first** on the approval card). The editor lets you change:
 
+- **The job**: **Job title**, the places (**City** and **State**; **Add a place**), **Full or part time**, **Work model** and **Schedule**
 - **Public description**
-- **Pay minimum** and **Pay maximum**
-- **Ceiling (the most you would pay)**: offers never go above this without a new approval
-- **Work model**: on site, hybrid or remote; shown on the role and the job page
+- **Pay**: **Paid** (by the hour or a yearly salary), **Pay minimum** and **Pay maximum**, **Ceiling (the most you would pay)**: offers never go above this without a new approval, and **Benefits**
 - **Must-haves (up to six)**: one box per must-have with **What they must bring**, **Why it matters**, and **Where we check it** (résumé, application, screen, interview; pick at least one). **Add a must-have** adds a box; **Remove** takes one away. Existing must-haves keep their identity, so earlier assessments still line up
 - **Nice-to-haves (up to ten)**: the same boxes; never a reason to hold anyone
+- **Screening questions (3 to 12)**: reword, choose what each is about, move up or down, remove or add
+- **Questions on the application form**: only the kinds that may hold an application (a licence, a certification, work authorization, the schedule, the start date, getting to the workplace, a genuine physical requirement, a legal minimum age), each with why it is asked
+- **Deal-breakers, in your words**, **Who has the final say** (someone on your team, or someone not on it yet) and the **Tone of messages to candidates**
 
-Write a line under **What changed and why** and press **Save as a new version**. The old version stays in History. **Everything (advanced)** exposes the whole packet for someone technical; you will not normally need it. If the editor refuses a save, tell ITS and we make the change with you.
+Write a line under **What changed and why** and press **Save as a new version**. The old version stays in History. On the **Overview** tab, **Change it by asking** takes a change in plain words and shows it before saving, and lists suggestions about the requirements with one-tap fixes. **Candidate view** shows the job as candidates will see it. Admins and ITS recruiters also see **Everything (advanced)**, the whole packet for someone technical. If the editor refuses a save, tell ITS and we make the change with you. A filled or closed role offers **Hire for this role again**, which starts a new draft from it and asks you to confirm the pay again.
 
 Things to check before you approve:
 
@@ -71,6 +79,8 @@ Things to check before you approve:
 ## 4. Approval
 
 The card **Approve this role packet** lists any assumptions the assistant made and says who can decide. Press **Approve and post**. The role becomes **Open**, the careers page and job page go live, and the Posting tab fills in. While ITS has not yet made its one-time check of your company, the card says so: the role opens here but nothing of it is public, the role page and its Posting tab say why the job page shows "not found" for now, and it goes public on its own as soon as ITS confirms your company. Owners, admins and hiring managers can approve, with two rules: you cannot approve a role you started or a version you wrote yourself, unless you are the company's only owner (the card tells you so); and if the packet names a decision maker who is on your team, the approval is theirs, though an owner can also decide. Sending a packet back follows the same rule: the named decision maker, or an owner.
+
+If the card lists wording to check (a phrase that may stand in for a protected trait, or a pay figure in the description that is not the range set for the job), the role cannot be approved until each one is dealt with: press **Change the wording** to edit it, or **Keep it…** and say why. Whoever approves sees who kept it and the reason. Sending the role back is always possible, whatever the card lists.
 
 If something should change first, press **Send back with a note** and say what. The role becomes a draft again and its page shows **Sent back** with your note. Whoever edits it presses **Request approval again** when it is ready; every edit is kept as a version. An approval nobody decides within 14 days goes back to a draft the same way.
 

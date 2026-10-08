@@ -38,14 +38,18 @@ export type AskKind = (typeof ASK_KINDS)[number];
  * A request a card offers, opened in the request form instead of sent in one click: the access it would give, the
  * reply-by time and the plan's recruiter requests are on screen before the person presses Send (Q31). `about: "all"` is
  * all of the hiring; `topic: "plan"` marks a talk about the plan itself, which is never counted as a recruiter request.
+ * `intakeSessionId` hands over a role still being drafted (plan C12): the recruiter sees its conversation and draft.
  */
-export type AskPreset = { kind?: AskKind; about?: "all"; question?: string; topic?: "plan" };
+export type AskPreset = { kind?: AskKind; about?: "all"; question?: string; topic?: "plan"; intakeSessionId?: string };
 
 /** A card's request body as a preset for the form; anything it does not recognise is left for the person to choose. */
 export function presetOf(body: Record<string, unknown> | undefined): AskPreset {
   const kind = ASK_KINDS.find((k) => k === body?.kind);
-  return { ...(kind ? { kind } : {}), ...(body?.scope === "company" ? { about: "all" as const } : {}), ...(typeof body?.question === "string" ? { question: body.question } : {}), ...(body?.topic === "plan" ? { topic: "plan" as const } : {}) };
+  return { ...(kind ? { kind } : {}), ...(body?.scope === "company" ? { about: "all" as const } : {}), ...(typeof body?.question === "string" ? { question: body.question } : {}), ...(body?.topic === "plan" ? { topic: "plan" as const } : {}), ...(typeof body?.intakeSessionId === "string" ? { intakeSessionId: body.intakeSessionId, about: "all" as const } : {}) };
 }
+
+/** Said in the request form when a draft goes with the request. */
+export const DRAFT_HANDED_OVER = "The recruiter also sees this draft and your conversation with the assistant, so you do not have to explain it again.";
 
 /** The chip on Setup's recruiter access list. */
 export function accessChip(grant: { roleId: string | null; roleTitle: string | null; applicationId: string | null }): string {

@@ -105,7 +105,18 @@ describe("drafts belong to the person who started them", () => {
     const esc = (await (await json(owner, "POST", "/api/v1/escalations", { kind: "review", roleId, question: "Can you look at our hygienist candidates?" })).json()) as { id: string };
     expect((await json(recruiter, "POST", `/api/v1/escalations/${esc.id}/claim`)).status).toBe(200);
     expect((await json(recruiter, "POST", "/api/v1/auth/switch", { companyId })).status).toBe(200);
-    expect(((await (await current(recruiter)).json()) as { session: unknown }).session).toBeNull();
+    // a grant for one role opens no draft and starts none (plan C12): every drafting route refuses it plainly
+    const resumed = await current(recruiter);
+    expect(resumed.status).toBe(403);
+    expect(((await resumed.json()) as { error: { code: string } }).error.code).toBe("staff_scope");
     expect((await json(recruiter, "POST", `/api/v1/intake/sessions/${ownersDraft}/messages`, { message: "Hello" })).status).toBe(403);
+    expect((await json(recruiter, "GET", `/api/v1/intake/sessions/${ownersDraft}`)).status).toBe(403);
+    expect((await json(recruiter, "GET", "/api/v1/intake/sessions")).status).toBe(403);
+    const before = (await container.db.select().from(intakeSessions).where(eq(intakeSessions.companyId, companyId))).length;
+    expect((await json(recruiter, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental assistant in Irvine, $24 to $28 an hour." })).status).toBe(403);
+    expect((await container.db.select().from(intakeSessions).where(eq(intakeSessions.companyId, companyId))).length).toBe(before);
+    // the conversation box answers them from the brief instead of starting a draft
+    const conv = (await (await json(recruiter, "POST", "/api/v1/intake/conversation/messages", { message: "I need a dental assistant in Irvine." })).json()) as { intakeSessionId?: string };
+    expect(conv.intakeSessionId).toBeUndefined();
   });
 });

@@ -3,10 +3,12 @@ import { boolean, index, integer, jsonb, numeric, pgTable, text, uniqueIndex, uu
 import type {
   Actor,
   ApplicationStage,
+  DraftRolePacket,
   EligibilityResult,
   EvidenceAssessment,
   IntakeFacts,
   IntakeMessage,
+  IntakeServerState,
   Location,
   MarkKind,
   MarkSource,
@@ -95,13 +97,18 @@ export const intakeSessions = pgTable(
     messages: jsonb("messages").$type<IntakeMessage[]>().notNull().default([]),
     facts: jsonb("facts").$type<IntakeFacts>().notNull().default({ mustHaves: [], niceToHaves: [], eligibilityNotes: [], interviewers: [], dealBreakers: [], declinedCriteria: [] }),
     missingFacts: jsonb("missing_facts").$type<string[]>().notNull().default([]),
-    draftPacket: jsonb("draft_packet").$type<RolePacket | null>(),
+    /** The draft written beside the conversation (C7); pay only once a person set or confirmed it. */
+    draftPacket: jsonb("draft_packet").$type<DraftRolePacket | null>(),
     workflowRunId: uuid("workflow_run_id"),
     createdBy: jsonb("created_by").$type<Actor>().notNull(),
+    /** Who the draft belongs to, as a user id (migration 0030): drafts are listed, opened and taken over per person (C3, Q6). */
+    createdByUserId: uuid("created_by_user_id"),
+    /** What the server decides about the draft, never the model: confirmed pay, open question cards, progress (IntakeServerState). */
+    serverState: jsonb("server_state").$type<Partial<IntakeServerState>>().notNull().default({}),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index("intake_sessions_company_idx").on(t.companyId, t.status)],
+  (t) => [index("intake_sessions_company_idx").on(t.companyId, t.status), index("intake_sessions_owner_idx").on(t.companyId, t.createdByUserId, t.status)],
 );
 
 /**

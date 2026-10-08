@@ -156,6 +156,51 @@ export const HiringManagerPreferences = z.object({
   interviewStyle: z.string().optional(),
 });
 
+/** A request the assistant would not build into the role, with the reason the owner was given (C1: kept on the packet). */
+export const DeclinedCriterion = z.object({ requested: z.string(), reason: z.string(), alternative: z.string().optional(), rule: z.string().optional() });
+export type DeclinedCriterion = z.infer<typeof DeclinedCriterion>;
+
+/**
+ * Wording the packet guard found that may stand in for a protected trait (packages/core/src/packet-guard.ts). The role
+ * cannot be approved while a flag is open: a person edits the words out, or keeps them and says why. `keepReason` is
+ * how a client asks to keep one; the server replaces it with `kept`, stamped with who kept it and when, and never
+ * trusts a `kept` it did not write.
+ */
+export const PacketFlag = z.object({
+  id: z.string(),
+  /** Where the words are, e.g. "description.publicJobDescription" or "requirements.mustHaves[1].text". */
+  path: z.string(),
+  rule: z.string(),
+  text: z.string(),
+  reason: z.string(),
+  alternative: z.string().optional(),
+  /** True when the owner was already told this could not be used, earlier in the conversation. */
+  declined: z.boolean().optional(),
+  keepReason: z.string().max(500).optional(),
+  kept: z.object({ reason: z.string(), by: Actor, at: z.string() }).optional(),
+});
+export type PacketFlag = z.infer<typeof PacketFlag>;
+
+/**
+ * The market figure the pay was checked against. "market" is government wage data; "its_estimate" is ITS's own pay table
+ * in the playbook, which is labelled as an estimate wherever it is shown (C8).
+ */
+export const PayBenchmark = z.object({
+  basis: CompensationBasis,
+  p25: z.number(),
+  p50: z.number(),
+  p75: z.number(),
+  source: z.string(),
+  metro: z.string(),
+  asOf: z.string().optional(),
+  origin: z.enum(["market", "its_estimate"]),
+});
+export type PayBenchmark = z.infer<typeof PayBenchmark>;
+
+/** How the advertised range was decided: typed by a person, set on the pay card, edited, or confirmed from an ad or an earlier role. */
+export const PayOrigin = z.enum(["typed", "pay_card", "edited", "confirmed"]);
+export type PayOrigin = z.infer<typeof PayOrigin>;
+
 export const PacketProvenance = z.object({
   playbookId: z.string().optional(),
   playbookVersion: z.number().int().optional(),
@@ -163,6 +208,13 @@ export const PacketProvenance = z.object({
   aiRunIds: z.array(z.string()).default([]),
   assumptions: z.array(z.string()).default([]),
   sources: z.array(z.string()).default([]),
+  /** What the owner asked for and was told could not be used; the guard keeps it out of every later version too. */
+  declinedCriteria: z.array(DeclinedCriterion).optional(),
+  flags: z.array(PacketFlag).optional(),
+  /** Set by the server from the person who set or confirmed the pay, never by the model (C7). */
+  payConfirmedBy: z.object({ by: Actor, at: z.string(), via: PayOrigin }).optional(),
+  payOrigin: PayOrigin.optional(),
+  benchmark: PayBenchmark.optional(),
 });
 
 export const RolePacket = z.object({
@@ -213,12 +265,76 @@ export const RolePacket = z.object({
 });
 export type RolePacket = z.infer<typeof RolePacket>;
 
+/**
+ * The draft written beside the conversation before the role exists (C7). Pay is optional: a draft carries a range only
+ * once a person set or confirmed it; until then the panel says "not set yet" and nothing invents one.
+ */
+export const DraftRolePacket = RolePacket.extend({ compensation: CompensationGuidance.optional() });
+export type DraftRolePacket = z.infer<typeof DraftRolePacket>;
+
+/**
+ * Who sees each part of a packet (C15): "public" is on the job page, "asked" is put to candidates (the apply form's
+ * eligibility questions, the screening conversation, the lines on every message), "reviewed" is what applications are
+ * read against (the must-haves: not listed on the job page, but a person may explain them to a candidate), "internal"
+ * stays with the team. Keys are dotted paths; the longest matching prefix wins (`packetVisibility`).
+ */
+export type PacketVisibility = "public" | "asked" | "reviewed" | "internal";
+export const PACKET_VISIBILITY: Readonly<Record<string, PacketVisibility>> = {
+  identity: "public",
+  "identity.reportsTo": "internal",
+  "identity.department": "internal",
+  business: "internal",
+  compensation: "internal",
+  "compensation.basis": "public",
+  "compensation.currency": "public",
+  "compensation.min": "public",
+  "compensation.max": "public",
+  "compensation.bonus": "public",
+  "compensation.benefitsSummary": "public",
+  "description.publicJobDescription": "public",
+  "description.internalNotes": "internal",
+  "requirements.mustHaves": "reviewed",
+  "requirements.niceToHaves": "reviewed",
+  "requirements.eligibility": "asked",
+  competencies: "internal",
+  evaluation: "internal",
+  "screening.questions": "asked",
+  "screening.maxMinutes": "asked",
+  interviews: "internal",
+  communication: "internal",
+  "communication.disclosureText": "asked",
+  "communication.humanAlternativeText": "asked",
+  approvals: "internal",
+  compliance: "internal",
+  sourcing: "internal",
+  preferences: "internal",
+  provenance: "internal",
+};
+
+/** The plain label for each visibility, as the draft panel shows it. */
+export const PACKET_VISIBILITY_LABEL: Readonly<Record<PacketVisibility, string>> = {
+  public: "Candidates see this",
+  asked: "Candidates are asked this",
+  reviewed: "Used to review applications; not on the job page",
+  internal: "Only your team sees this",
+};
+
+/** Who sees the part of the packet at `path` ("screening.questions[2].question" reads as "screening.questions"). */
+export function packetVisibility(path: string): PacketVisibility {
+  const parts = path.replace(/\[\d+\]/g, "").split(".");
+  for (let n = parts.length; n > 0; n -= 1) {
+    const hit = PACKET_VISIBILITY[parts.slice(0, n).join(".")];
+    if (hit) return hit;
+  }
+  return "internal";
+}
+
 export const RolePacketVersion = z.object({
   id: z.string(),
   roleId: z.string(),
   version: z.number().int().min(1),
   status: z.enum(["proposed", "approved", "superseded"]),
-  source: z.enum(["intake_agent", "human_edit", "playbook", "import"]),
+  source: z.enum(["intake_agent", "human_edit", "playbook", "import", "agent_revision"]),
   changeSummary: z.string().optional(),
   createdBy: Actor,
   approvedBy: z.string().nullable().optional(),

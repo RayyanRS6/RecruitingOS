@@ -24,9 +24,9 @@ function memoryStorage() {
 }
 
 describe("where Start a hire goes", () => {
-  it("is the same address as the API's empty Today card, until the job builder has its own page", () => {
+  it("is the job builder's own page, the same address as the API's empty Today card and its draft card", () => {
     expect(START_HIRE_HREF).toBe(START_HIRE_PATH);
-    expect(START_HIRE_HREF).toBe("/?start=1");
+    expect(START_HIRE_HREF).toBe("/roles/new");
   });
 
   it("is offered exactly to the roles the API lets start a hire", () => {

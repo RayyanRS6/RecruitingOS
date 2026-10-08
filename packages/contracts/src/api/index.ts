@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { Location } from "../domain/common";
-import { RolePacket } from "../domain/role-packet";
+import { CompensationBasis, RolePacket } from "../domain/role-packet";
+import { INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX } from "../domain/intake";
 import { ApplicationStage, MarkKind, OwnerStage, RejectReason, ToldState } from "../domain/stages";
 import { ActionType, PolicyLevel } from "../domain/policy";
 
@@ -98,8 +99,61 @@ export const UpdateMember = z.object({ role: TeamRole.optional(), status: z.enum
 export type UpdateMember = z.infer<typeof UpdateMember>;
 
 // Intake
-export const StartIntake = z.object({ initialMessage: z.string().min(1).max(4000).optional() });
-export const IntakeMessageRequest = z.object({ message: z.string().min(1).max(4000) });
+/**
+ * POST /intake/sessions. A draft starts only with its first message (C3): the owner's words (a pasted job ad fits, up to
+ * 20,000 characters, C5), or "hire again" from an earlier role (C14), or both. The words never travel in a URL.
+ */
+export const StartIntake = z.object({ initialMessage: z.string().trim().min(1).max(INTAKE_FIRST_MESSAGE_MAX).optional(), fromRoleId: z.string().min(1).max(64).optional() });
+export const IntakeMessageRequest = z.object({ message: z.string().trim().min(1).max(INTAKE_MESSAGE_MAX) });
+
+/** One answered question card (C6): ticked offered values, the owner's own words, a skip, or the pay card's figures. */
+export const IntakeAnswer = z.object({
+  questionId: z.string().min(1).max(60),
+  selected: z.array(z.string().max(500)).max(8).default([]),
+  own: z.array(z.string().trim().min(1).max(500)).max(6).default([]),
+  skipped: z.boolean().default(false),
+  pay: z.object({ basis: CompensationBasis, min: z.number().nonnegative().max(10_000_000), max: z.number().nonnegative().max(10_000_000), ceiling: z.number().nonnegative().max(10_000_000).optional() }).optional(),
+});
+export type IntakeAnswer = z.infer<typeof IntakeAnswer>;
+
+/** The facts a person may edit from the draft panel, one list item or one field at a time (set / add / remove / clear). */
+export const IntakeListFact = z.enum(["mustHaves", "niceToHaves", "dealBreakers", "interviewers", "eligibilityNotes", "responsibilities", "screeningQuestions"]);
+export type IntakeListFact = z.infer<typeof IntakeListFact>;
+export const IntakeTextFact = z.enum(["title", "locationText", "employmentType", "schedule", "remotePolicy", "reason", "reasonDetail", "benefits", "targetStartDate", "urgency", "whatFailureLooksLike", "decisionMaker"]);
+export type IntakeTextFact = z.infer<typeof IntakeTextFact>;
+const FactText = z.string().trim().min(1).max(500);
+export const IntakeFactsPatch = z.object({
+  set: z.object({
+    title: FactText, locationText: FactText, employmentType: FactText, schedule: FactText, remotePolicy: FactText, reason: FactText, reasonDetail: FactText,
+    benefits: FactText, targetStartDate: FactText, urgency: FactText, whatFailureLooksLike: FactText, decisionMaker: FactText,
+    decisionMakerUserId: z.string().min(1).max(64),
+    interviewerUserIds: z.array(z.string().min(1).max(64)).max(10),
+    /** Pay set from the panel counts as a person setting it, like the pay card. */
+    pay: z.object({ basis: CompensationBasis, min: z.number().nonnegative().max(10_000_000), max: z.number().nonnegative().max(10_000_000), ceiling: z.number().nonnegative().max(10_000_000).optional() }),
+  }).partial().strict().optional(),
+  add: z.array(z.object({ field: IntakeListFact, value: FactText })).max(20).optional(),
+  remove: z.array(z.object({ field: IntakeListFact, value: z.string().max(500) })).max(20).optional(),
+  clear: z.array(IntakeTextFact).max(20).optional(),
+}).strict();
+export type IntakeFactsPatch = z.infer<typeof IntakeFactsPatch>;
+
+/**
+ * POST /intake/sessions/:id/answers. The answers to the open cards, an optional panel edit, "draft it", and any words
+ * typed beside them. The server writes one short summary to the conversation and, unless `reply` is false (a quiet
+ * edit from the panel), asks the assistant for the next turn.
+ */
+export const IntakeAnswersRequest = z.object({
+  answers: z.array(IntakeAnswer).max(3).default([]),
+  patch: IntakeFactsPatch.optional(),
+  draftIt: z.boolean().default(false),
+  note: z.string().trim().max(INTAKE_MESSAGE_MAX).optional(),
+  reply: z.boolean().default(true),
+}).refine((b) => b.answers.length > 0 || !!b.patch || b.draftIt || !!b.note, { message: "Answer a question, change something or say what to do next." });
+export type IntakeAnswersRequest = z.infer<typeof IntakeAnswersRequest>;
+
+/** Keep a flagged phrase in a draft, with the reason (C1); the approver sees who kept it and why. */
+export const KeepPacketFlag = z.object({ flagId: z.string().min(1).max(300), reason: z.string().trim().min(5).max(500) });
+export type KeepPacketFlag = z.infer<typeof KeepPacketFlag>;
 
 // Roles
 export const CreatePacketVersion = z.object({ packet: RolePacket, changeSummary: z.string().min(1).max(500) });
@@ -235,6 +289,11 @@ export const CreateEscalation = z.object({
    * role. It is not a request for recruiting help, so it never counts against the plan's recruiter requests (Q33).
    */
   topic: z.enum(["plan"]).optional(),
+  /**
+   * A role still being drafted (C12): the recruiter's view of the request carries the whole conversation and the current
+   * draft. Only with `scope: "company"`, since a draft has no role yet; the asker must be able to open the draft.
+   */
+  intakeSessionId: z.string().min(1).max(64).optional(),
 });
 export type CreateEscalation = z.infer<typeof CreateEscalation>;
 export const ResolveEscalation = z.object({ resolution: z.string().min(1).max(4000), /** Recruiter effort, for capacity and pricing (founder decision F12). */ minutesSpent: z.number().int().min(0).max(1440).optional() });
@@ -264,8 +323,8 @@ export const PlanChange = z.object({ planKey: z.string().min(1), pilotDays: z.nu
 
 export const BreakGlass = z.object({ companyId: z.string().min(1), reason: z.string().min(10).max(1000), minutes: z.number().int().min(5).max(60).default(30) });
 
-// Owner conversation
-export const ConversationMessage = z.object({ message: z.string().min(1).max(4000) });
+// Owner conversation: a thin wrapper that always drafts (C4); the first message of a draft may be a pasted ad.
+export const ConversationMessage = z.object({ message: z.string().trim().min(1).max(INTAKE_FIRST_MESSAGE_MAX) });
 
 // Screening (Slice 2)
 export const ScreenCandidateMessage = z.object({ message: z.string().min(1).max(2000) });

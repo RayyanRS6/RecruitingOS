@@ -5,6 +5,15 @@
   "intake.illegal_criteria": {
     "minPassRate": 1
   },
+  "intake.job_ad": {
+    "minPassRate": 1
+  },
+  "intake.proxy_refusal": {
+    "minPassRate": 1
+  },
+  "intake.benchmark_basis": {
+    "minPassRate": 1
+  },
   "resume.extraction": {
     "minPassRate": 0.9
   },
@@ -21,6 +30,9 @@
     "minPassRate": 1
   },
   "screen.conversation": {
+    "minPassRate": 1
+  },
+  "packet.revise": {
     "minPassRate": 1
   },
   "_note": "Thresholds gate prompt promotion (docs/11). The fake provider validates the harness; real thresholds are measured with AI_PROVIDER=anthropic."

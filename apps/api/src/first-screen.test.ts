@@ -43,7 +43,7 @@ describe("sign-up and the first Today", () => {
     expect(cards.map((c) => c.kind)).toEqual(["getting_started"]);
     const firstRole = cards[0].gettingStarted?.steps.find((s) => s.key === "first_role");
     expect(firstRole?.done).toBe(false);
-    expect(firstRole?.actions[0]).toEqual({ label: "Start a hire", method: "GET", path: "/?start=1" });
+    expect(firstRole?.actions[0]).toEqual({ label: "Start a hire", method: "GET", path: "/roles/new" });
     const hr = await signInAs(container, app, { companyId, role: "hr" });
     // HR's only step is inviting the team, done now that HR is on it, so HR's Today is the honest empty card alone
     const theirs = ((await (await json(hr, "GET", "/api/v1/brief")).json()) as { cards: Card[] }).cards;

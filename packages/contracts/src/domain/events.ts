@@ -10,6 +10,12 @@ export const EventType = z.enum([
   "member.joined", "member.removed", "invitation.revoked",
   "integration.connected", "integration.failed", "policy.changed", "plan.changed", "entitlement.exceeded",
   "intake.started", "intake.turn_completed", "intake.compiled", "intake.abandoned",
+  // The job builder (Wave C): tapped answers applied, the draft written beside the conversation, pay set or confirmed by a
+  // person, a draft taken over by an owner or admin, approval asked for, and a flagged phrase kept with a reason.
+  "intake.answered", "intake.drafted", "intake.pay_confirmed", "intake.taken_over", "intake.approval_requested", "packet.flag_kept",
+  // Changing a packet by chat (C10): the assistant proposed a change, a person confirmed it, or set it aside. The
+  // requirements check (C16): a person applied the fixes they tapped.
+  "packet.revision_proposed", "packet.revision_applied", "packet.revision_discarded", "packet.check_applied",
   "role.created", "role_packet.proposed", "role_packet.approved", "role_packet.edited",
   "role.approved", "role.opened", "role.paused", "role.resumed", "role.filled", "role.closed",
   // A packet approval was rejected or ran out of time (the role goes back to draft), or was replaced by a newer version.

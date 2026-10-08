@@ -1,7 +1,7 @@
 import { and, desc, eq, isNull, like } from "drizzle-orm";
 import type { Actor, EscalationThreadEntry } from "@ros/contracts";
 import {
-  applications, assessments, candidates, communications, companies, documents, escalationMessages, events, interviews, recruiterEscalations,
+  applications, assessments, candidates, communications, companies, documents, escalationMessages, events, intakeSessions, interviews, recruiterEscalations,
   rolePackets, roles, scorecards, screens, staffAccessGrants, users, type EscalationMessageKind, type EscalationMessageSide, type Queryable,
 } from "@ros/db";
 import { emit } from "./events";
@@ -21,10 +21,12 @@ export async function createEscalation(
     companyId: string; roleId?: string | null; applicationId?: string | null; kind: string; question: string; requestedBy: Actor; workflowRunId?: string | null; now?: Date;
     /** Pre-acceptance preview (correction 11). Defaults come from the category; a caller may only pass template text, never a person's words. */
     urgency?: EscalationUrgency; summaryOrigin?: "customer" | "system" | "candidate";
+    /** A role still being drafted (C12): its whole conversation and the current draft go into the context. The caller checked access. */
+    intakeSessionId?: string | null;
   },
 ): Promise<{ id: string; slaDueAt: string }> {
   const now = input.now ?? new Date();
-  const snapshot = await buildEscalationContext(q, input.companyId, input.roleId ?? null, input.applicationId ?? null);
+  const snapshot = await buildEscalationContext(q, input.companyId, input.roleId ?? null, input.applicationId ?? null, input.intakeSessionId ?? null);
   // Founder decision F12: SLAs count business hours on the ITS calendar (correction 12: the calendar is editable and versioned).
   const calendar = await loadBusinessCalendar(q, now);
   const slaDueAt = escalationReplyBy(input.kind, now, calendar).toISOString();
@@ -50,7 +52,7 @@ export async function createEscalation(
     companyId: input.companyId,
     actor: input.requestedBy,
     subject: { type: "escalation", id: row.id },
-    payload: { kind: input.kind, roleId: input.roleId ?? null, applicationId: input.applicationId ?? null },
+    payload: { kind: input.kind, roleId: input.roleId ?? null, applicationId: input.applicationId ?? null, ...(input.intakeSessionId ? { intakeSessionId: input.intakeSessionId } : {}) },
     correlationId: input.workflowRunId ?? null,
   });
   return { id: row.id, slaDueAt };
@@ -161,12 +163,17 @@ export function escalationThread(
   return out;
 }
 
-export async function buildEscalationContext(q: Queryable, companyId: string, roleId: string | null, applicationId: string | null): Promise<Record<string, unknown>> {
+export async function buildEscalationContext(q: Queryable, companyId: string, roleId: string | null, applicationId: string | null, intakeSessionId: string | null = null): Promise<Record<string, unknown>> {
   const [company] = await q.select().from(companies).where(eq(companies.id, companyId)).limit(1);
   const ctx: Record<string, unknown> = {
     capturedAt: new Date().toISOString(),
     company: company ? { id: company.id, name: company.name, vertical: company.vertical, sizeBand: company.sizeBand, locations: company.locations } : null,
   };
+  if (intakeSessionId) {
+    // The draft the request is about: who started it, the whole conversation, what is known, and the draft beside it.
+    const [s] = await q.select().from(intakeSessions).where(and(eq(intakeSessions.id, intakeSessionId), eq(intakeSessions.companyId, companyId))).limit(1);
+    ctx.intakeSession = s ? { id: s.id, status: s.status, startedBy: s.createdBy.name ?? null, messages: s.messages, facts: s.facts, missingFacts: s.missingFacts, draftPacket: s.draftPacket ?? null, createdAt: s.createdAt, updatedAt: s.updatedAt } : null;
+  }
   if (roleId) {
     const [role] = await q.select().from(roles).where(eq(roles.id, roleId)).limit(1);
     const packet = role?.currentPacketVersion

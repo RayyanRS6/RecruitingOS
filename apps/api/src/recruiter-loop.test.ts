@@ -232,6 +232,9 @@ describe("the recruiter loop", () => {
   it("'this didn't solve it' reopens it: the recruiter who answered has it again with fresh, recorded access and a new reply-by time", async () => {
     expect((await json(hana, "POST", `/api/v1/escalations/mine/${normalId}/reopen`, { note: "It was never answered." })).status).toBe(409);
     expect((await json(hana, "POST", `/api/v1/escalations/mine/${urgentId}/reopen`, { note: "no" })).status).toBe(400);
+    // a note that is too long says the limit, without the job builder's "after the first message" (this form has no first message)
+    const long = await json(hana, "POST", `/api/v1/escalations/mine/${urgentId}/reopen`, { note: "x".repeat(4_001) });
+    expect(await errorOf(long)).toMatchObject({ code: "message_too_long", message: "That is too long to send in one go: up to 4,000 characters. Shorten it, or send it in parts." });
     const [oldGrant] = await container.db.select().from(staffAccessGrants).where(eq(staffAccessGrants.escalationId, urgentId));
     const before = mail().length;
     const r = await json(hana, "POST", `/api/v1/escalations/mine/${urgentId}/reopen`, { note: "She cannot start until March. Does that change your advice?" });

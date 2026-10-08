@@ -20,21 +20,28 @@ test.describe("owner and candidate journey", () => {
 
     const seeded = await seedRoleAndApplicant(page.request, baseURL!, "Maria", "Reyes");
 
-    // the intake conversation announces each new reply to screen readers (a polite live region)
-    await page.goto("/");
-    await expect(page.getByRole("heading", { name: "Your recruiting chief of staff" })).toBeVisible({ timeout: 30_000 });
+    // the job builder (/roles/new): the first message starts the draft, and the conversation announces each new reply
+    // to screen readers (a polite live region)
+    await page.goto("/roles/new?new=1");
+    await expect(page.getByRole("heading", { name: "Who are you hiring?" })).toBeVisible({ timeout: 30_000 });
+    await expectAccessible(page, "job builder");
+    await page.getByRole("textbox", { name: "Describe the role, or paste a job ad" }).fill("I need a bookkeeper in Los Angeles, $60,000 to $70,000, in the office.");
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page).toHaveURL(/\/roles\/new\?session=/, { timeout: 30_000 });
     const announcer = page.getByTestId("intake-announcer");
     await expect(announcer).toHaveAttribute("aria-live", "polite");
     await expect(announcer).toHaveAttribute("role", "status");
-    await page.getByRole("textbox").last().fill("I need a bookkeeper in Los Angeles, $60,000 to $70,000, in the office.");
-    await page.getByRole("button", { name: "Send" }).click();
     await expect(announcer).not.toHaveText("", { timeout: 30_000 });
     await expect(announcer).not.toHaveText("The assistant is thinking.", { timeout: 30_000 });
     // what is announced is exactly the newest reply on the page, and it changes with the next reply
     const firstReply = (await announcer.textContent())!.trim();
     expect(firstReply.length).toBeGreaterThan(10);
     await expect(page.locator("main")).toContainText(firstReply);
-    await page.getByRole("textbox").last().fill("Ceiling $72,000. I decide. Must-haves: QuickBooks.");
+    await expectAccessible(page, "job builder conversation");
+    // typed words instead of the question cards: "Or type your own answer…" puts the message box back
+    const typeInstead = page.getByRole("button", { name: "Or type your own answer…" });
+    if (await typeInstead.isVisible()) await typeInstead.click();
+    await page.getByRole("textbox", { name: "Message to the assistant" }).fill("Ceiling $72,000. I decide. Must-haves: QuickBooks.");
     await page.getByRole("button", { name: "Send" }).click();
     await expect(announcer).not.toHaveText(firstReply, { timeout: 30_000 });
     await expect(announcer).not.toHaveText("The assistant is thinking.", { timeout: 30_000 });

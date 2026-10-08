@@ -123,7 +123,8 @@ roleRoutes.post("/:id/packets", requireTenant, async (c) => {
     const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
     if (!role) throw new HttpError(404, "not_found", "Role not found.");
     const made = await createPacketVersion(tx, container, { tenant: t, actor: actorOf(c), role, packet: body.packet, changeSummary: body.changeSummary });
-    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId };
+    // `guardChanges` says what the packet guard changed on its own (a must-have it took out, the ceiling it raised), so the page can tell the person.
+    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId, guardChanges: made.guardChanges };
   });
   await container.kick();
   return c.json(result, 201);

@@ -8,6 +8,7 @@ import { HttpError } from "../middleware/errors";
 import { briefViewerOf, composeBrief } from "../services/brief";
 import { escalationInScope, eventTargets, inStaffScope, staffMayAsk, staffScopeOf } from "../services/staff-scope";
 import { assertMayApprovePacket } from "../services/packet-approval";
+import { assertMayShareDraft } from "./intake";
 import { settleMessageApproval } from "../services/messages";
 import { declineSent, sendApprovedDecline } from "../services/application-actions";
 import { approverRolesOf, mayDecideByRole } from "../services/approvers";
@@ -140,7 +141,12 @@ escalationRoutes.post("/", requireTenant, async (c) => {
     const { scope, roleId, applicationId } = await settleScope(tx, body);
     // A recruiter under a grant asks only about what that grant covers, never wider: claiming the request would grant it.
     if (!staffMayAsk(staffScopeOf(t), { roleId, applicationId })) throw new HttpError(403, "staff_scope", "Your access is limited to the role or candidate of the request you accepted, so you can only ask about that.");
-    const created = await createEscalation(tx, { companyId: t.companyId, roleId, applicationId, kind: body.kind, question: body.question, requestedBy: actor, urgency: body.urgency });
+    // A draft still being written (C12) has no role yet: the request covers the company, and carries the draft's conversation.
+    if (body.intakeSessionId) {
+      if (scope !== "company") throw new HttpError(400, "scope_mismatch", "A request about a draft covers all of your hiring, since the role does not exist yet.");
+      await assertMayShareDraft(tx, t, body.intakeSessionId);
+    }
+    const created = await createEscalation(tx, { companyId: t.companyId, roleId, applicationId, kind: body.kind, question: body.question, requestedBy: actor, urgency: body.urgency, intakeSessionId: body.intakeSessionId ?? null });
     // The plan's recruiter requests count only what the team itself asks for, and going over never refuses one (Q33). A
     // talk about the plan itself (more roles) is not recruiting help and is never counted.
     const allowance = actor.kind === "user" && body.topic !== "plan" ? await entitlements.recordRecruiterAsk(tx, t.companyId, { escalationId: created.id }) : null;

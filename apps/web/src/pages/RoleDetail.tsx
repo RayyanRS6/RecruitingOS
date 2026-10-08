@@ -10,7 +10,7 @@ import { toast } from "../toast";
 import { ROLE_WAITS_FOR_CHECK } from "../company-check";
 import { AskRecruiter } from "../components/AskRecruiter";
 import { useCompanyCheck } from "../components/use-company-check";
-import { canEditPacket, canManageRole, canRecordOutcome, canSeeActivity, canSeeTalent } from "../roles";
+import { canEditPacket, canEditPacketJson, canManageRole, canRecordOutcome, canSeeActivity, canSeeTalent, canStartHire } from "../roles";
 import { payShownLabel } from "../role-words";
 import { roleStatus } from "../role-status";
 import { closeRoleToast } from "../talent-actions";
@@ -18,6 +18,14 @@ import { AcceptingSwitch, ClosedBanner, PostingTab, StillUpAlert } from "./RoleP
 import { ActivityTab, InterviewPlanTab, PacketApprovalCard, PreferencesCard, RequirementList, workModelLabel } from "./RolePlan";
 import { EditPacket } from "./RoleEditor";
 import { ReportTab } from "./RoleReport";
+import { CandidatePreview } from "./new-role/CandidatePreview";
+import { RoleRefine } from "./new-role/RoleRefine";
+import { RoomAlert } from "./new-role/StartView";
+import { mayHireAgain } from "./new-role/rules";
+import { useStartDraft } from "./new-role/use-start-draft";
+
+/** Statuses in which the packet is still worked on, so a change can be asked for by chat (plan C10). */
+const REFINABLE = ["draft", "pending_approval", "open", "paused"];
 
 type Tab = "overview" | "requirements" | "evaluation" | "plan" | "posting" | "activity" | "history" | "report";
 const TABS: readonly Tab[] = ["overview", "requirements", "evaluation", "plan", "posting", "activity", "history", "report"];
@@ -50,6 +58,9 @@ export function RoleDetail() {
   const [showProposed, setShowProposed] = useState(false);
   // An open role of a company ITS has not confirmed yet is not public (founder decision B7): the page says so at the top.
   const check = useCompanyCheck();
+  // "See what candidates will see" (plan C9) and "Hire for this role again" (C14).
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const again = useStartDraft();
 
   const status = useMutation({
     mutationFn: (action: "pause" | "resume") => api.post(`/api/v1/roles/${id}/${action}`, {}),
@@ -93,6 +104,7 @@ export function RoleDetail() {
         actions={
           <>
             <AskRecruiter roleId={r.id} />
+            {canStartHire(myRole) && mayHireAgain(r.status) ? <Button variant="primary" icon="refresh" loading={again.pending} onClick={() => again.hireAgain(r.id)}>Hire for this role again</Button> : null}
             {manage ? <AcceptingSwitch role={r} /> : null}
             {manage && r.status === "open" ? <Button loading={status.isPending} onClick={() => status.mutate("pause")}>Pause</Button> : null}
             {manage && r.status === "paused" ? <Button loading={status.isPending} onClick={() => status.mutate("resume")}>Resume</Button> : null}
@@ -101,6 +113,8 @@ export function RoleDetail() {
         }
       />
 
+      {again.limit?.room && !again.limit.room.ok ? <RoomAlert room={again.limit.room} ask={again.limit.ask} /> : null}
+      {again.problem ? <Alert tone="critical">{again.problem}</Alert> : null}
       <StillUpAlert channels={r.boardsStillUp ?? []} roleStatus={r.status} onOpen={() => pickTab("posting")} canManage={manage} />
       <ClosedBanner role={r} canManage={manage} />
       {check === "waiting" && ["open", "paused"].includes(r.status) ? <Alert tone="caution">{ROLE_WAITS_FOR_CHECK}</Alert> : null}
@@ -131,6 +145,7 @@ export function RoleDetail() {
             </div>
             <div className="row">
               <Chip>Packet v{shown!.version}</Chip>
+              {talent ? <Button size="sm" icon="eye" onClick={() => setPreviewOpen(true)}>Candidate view</Button> : null}
               {editPacket ? <Button size="sm" icon="edit" onClick={openEditor}>Edit</Button> : null}
               {talent ? <Link to={`/roles/${r.id}/talent`} className="btn primary sm">Talent ({r.counts ? Object.values(r.counts).reduce((a, b) => a + b, 0) : 0})</Link> : null}
             </div>
@@ -140,7 +155,10 @@ export function RoleDetail() {
           <TabPanel idBase="role-sections" value={visibleTab}>
             {visibleTab === "overview" ? (
               <div className="grid-2">
-                <Card title="Public description"><p style={{ whiteSpace: "pre-wrap", color: "var(--ink-2)" }}>{p.description.publicJobDescription}</p></Card>
+                <div className="stack">
+                  <Card title="Public description"><p style={{ whiteSpace: "pre-wrap", color: "var(--ink-2)" }}>{p.description.publicJobDescription}</p></Card>
+                  {editPacket && REFINABLE.includes(r.status) ? <RoleRefine roleId={r.id} packet={editSource?.packet ?? p} /> : null}
+                </div>
                 <div className="stack">
                   <Card title="Pay">
                     <dl className="kv">
@@ -210,7 +228,9 @@ export function RoleDetail() {
         </>
       ) : null}
 
-      {editBase ? <EditPacket key={editBase.version} open onClose={() => setEditBase(null)} roleId={r.id} packet={editBase.packet} version={editBase.version} proposed={editBase.proposed} currentVersion={current?.version ?? null} newerVersion={newestVersion > editBase.newestAtOpen ? newestVersion : null} /> : null}
+      {editBase ? <EditPacket key={editBase.version} open onClose={() => setEditBase(null)} roleId={r.id} packet={editBase.packet} version={editBase.version} proposed={editBase.proposed} currentVersion={current?.version ?? null} newerVersion={newestVersion > editBase.newestAtOpen ? newestVersion : null} advanced={canEditPacketJson(myRole)} /> : null}
+      {/* The preview shows pay, so it is offered to the roles that see pay (everyone but an interviewer). */}
+      {shown && talent ? <CandidatePreview open={previewOpen} onClose={() => setPreviewOpen(false)} path={`/api/v1/roles/${r.id}/preview?version=${shown.version}`} /> : null}
     </div>
   );
 }

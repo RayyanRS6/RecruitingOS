@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { RecruiterRequestView } from "../../packages/contracts/src/api";
 import { hasChoice, loosens, looseningQuestion, splitRules } from "../../apps/web/src/ai-rules";
 import { presetOf } from "../../apps/web/src/recruiter-access";
-import { RECENT_DAYS, RECRUITER_ASKS_OVER_CHIP, aboutWords, askedByWords, latestAnswer, pickedUpWords, queueThreadHeading, recruiterAsksLine, reopenHint, replyByWords, requestActions, requestState, splitRequests, threadHeading } from "../../apps/web/src/recruiter-requests";
+import { RECENT_DAYS, RECRUITER_ASKS_OVER_CHIP, aboutWords, askedByWords, draftFactLines, latestAnswer, pickedUpWords, queueThreadHeading, recruiterAsksLine, reopenHint, replyByWords, requestActions, requestState, splitRequests, threadHeading, workspaceHref } from "../../apps/web/src/recruiter-requests";
 import { canAskRecruiter } from "../../apps/web/src/roles";
 
 /**
@@ -167,7 +167,39 @@ describe("reopening and the recruiter-request allowance", () => {
     expect(presetOf({ kind: "nonsense" })).toEqual({});
     const home = readFileSync(new URL("../../apps/web/src/pages/Home.tsx", import.meta.url), "utf8");
     expect(home).toContain("preset={presetOf(a.body)}");
-    expect(home).toContain("preset={presetOf(limitAsk.body)}");
     expect(home).not.toContain("askForMoreRoles");
+    // "Talk to ITS about more roles", when the plan has no room, opens the form too (the job builder, Today's box, Hire again)
+    const room = readFileSync(new URL("../../apps/web/src/pages/new-role/StartView.tsx", import.meta.url), "utf8");
+    expect(room).toContain("preset={ask ? presetOf(ask.body) :");
+    // a draft handed to a recruiter goes with the request, and the request covers all of the hiring (plan C12)
+    expect(presetOf({ kind: "ask", scope: "company", intakeSessionId: "s1", question: "Please help me finish drafting this role." })).toEqual({ kind: "ask", about: "all", question: "Please help me finish drafting this role.", intakeSessionId: "s1" });
+  });
+});
+
+describe("the recruiter queue shows the draft a request is about (plan C12)", () => {
+  it("opens the customer's workspace on that draft, a role's candidates, or Today", () => {
+    expect(workspaceHref({ roleId: null, contextSnapshot: { intakeSession: { id: "s 1" } } })).toBe("/roles/new?session=s%201");
+    expect(workspaceHref({ roleId: "r1", contextSnapshot: {} })).toBe("/roles/r1/talent");
+    expect(workspaceHref({ roleId: null, contextSnapshot: { intakeSession: null } })).toBe("/");
+  });
+
+  it("reads what the draft knows, one plain line each, saying the pay may not be confirmed", () => {
+    const lines = draftFactLines({ title: "Dental Office Manager", locationText: "Irvine", compensationBasis: "hourly", compensationMin: 34, compensationMax: 40, reason: "new_position", decisionMaker: "Hank Manager", interviewers: [], mustHaves: ["Dentrix", ""], dealBreakers: [] });
+    expect(lines).toEqual([
+      { label: "Job title", value: "Dental Office Manager" },
+      { label: "Where", value: "Irvine" },
+      { label: "Pay", value: "$34–$40 an hour (as discussed; check whether it was confirmed)" },
+      { label: "Why they are hiring", value: "new position" },
+      { label: "Final decision", value: "Hank Manager" },
+      { label: "Must-haves", value: "Dentrix" },
+    ]);
+    expect(draftFactLines({})).toEqual([]);
+  });
+
+  it("the queue renders the conversation and the draft, and the request form's promise is kept", () => {
+    const queue = readFileSync(new URL("../../apps/web/src/pages/RecruiterQueue.tsx", import.meta.url), "utf8");
+    expect(queue).toContain("{ctx.intakeSession ? <DraftHandover");
+    expect(queue).toContain("nav(workspaceHref(e))");
+    expect(queue).toContain("Open the draft");
   });
 });

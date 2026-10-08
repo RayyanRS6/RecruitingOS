@@ -4,11 +4,11 @@
  */
 
 /**
- * Where "Start a hire" goes. Today opens the new-role conversation on `?start=1` (or the draft already in progress)
- * until the job builder has a page of its own; Wave C switches this to "/roles/new". The API's empty Today card points
- * at the same address (START_HIRE_PATH in apps/api/src/services/brief.ts); tests/web/start-hire.test.ts keeps them equal.
+ * Where "Start a hire" goes: the job builder's own page (plan C4), which picks up the draft this person has in progress,
+ * if any. The API's empty Today card and its "Draft in progress" card point at the same address (START_HIRE_PATH in
+ * apps/api/src/services/brief.ts); tests/web/start-hire.test.ts keeps them equal.
  */
-export const START_HIRE_HREF = "/?start=1";
+export const START_HIRE_HREF = "/roles/new";
 
 /** The key that opens it, shown as a hint on the button and announced through aria-keyshortcuts. */
 export const START_HIRE_KEY = "N";

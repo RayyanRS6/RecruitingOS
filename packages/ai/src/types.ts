@@ -6,6 +6,8 @@ export type Tier = "judgment" | "standard" | "fast";
 export type TaskKey =
   | "intake.turn"
   | "intake.compile"
+  | "intake.extract"
+  | "packet.revise"
   | "resume.extract"
   | "triage.assess"
   | "screen.turn"

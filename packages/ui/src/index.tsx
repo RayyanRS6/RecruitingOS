@@ -310,5 +310,6 @@ export { cx, initials, normalizeToast, OWNER_STAGES, type OwnerStage, ownerStage
 export { Drawer, Sheet } from "./sheet";
 export { type TabItem, TabPanel, Tabs } from "./tabs";
 export { SplitView } from "./split-view";
+export { AutoTextarea } from "./auto-textarea";
 export { Menu, type MenuItem, StageButton } from "./menu";
 export { Toast, Toaster } from "./toast";

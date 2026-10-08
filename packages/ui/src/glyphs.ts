@@ -59,6 +59,8 @@ export const GLYPHS = {
   menu: { stroke: ["M4 6h16", "M4 12h16", "M4 18h16"] },
   message: { stroke: ["M5 4h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-8l-5 4v-4H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"] },
   grid: { stroke: ["M4 4h6v6H4z", "M14 4h6v6h-6z", "M4 14h6v6H4z", "M14 14h6v6h-6z"] },
+  pin: { stroke: ["M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z", circle(12, 10, 2.5)] },
+  dollar: { stroke: ["M12 3v18", "M16.5 7.5c-.6-1.5-2.3-2.5-4.5-2.5-2.5 0-4.5 1.3-4.5 3.3 0 4.7 9.5 2.4 9.5 7.2 0 2-2 3.5-4.8 3.5-2.4 0-4.2-1.1-4.8-2.8"] },
 } satisfies Record<string, Glyph>;
 
 /** Second names for the same drawing, matching the places they stand for (the rail's Today, Roles, Talent, Interviews). */
@@ -71,6 +73,8 @@ export const ICON_ALIASES = {
   pencil: "edit",
   attach: "paperclip",
   "sign-out": "log-out",
+  location: "pin",
+  pay: "dollar",
 } as const satisfies Record<string, keyof typeof GLYPHS>;
 
 export type IconName = keyof typeof GLYPHS | keyof typeof ICON_ALIASES;

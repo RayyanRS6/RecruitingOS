@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Field, Segmented, Sheet } from "@ros/ui";
 import { api, ApiError, type RoleSummary } from "../api/client";
-import { ACCESS_LIMITS, accessWords, scopeOf, type AskKind, type AskPreset } from "../recruiter-access";
+import { ACCESS_LIMITS, DRAFT_HANDED_OVER, accessWords, scopeOf, type AskKind, type AskPreset } from "../recruiter-access";
 import { toast } from "../toast";
 import { useAskRole } from "./use-ask-role";
 
@@ -39,7 +39,9 @@ export function AskRecruiter(props: { roleId?: string; applicationId?: string; l
   const [question, setQuestion] = useState(preset.question ?? "");
   const [urgency, setUrgency] = useState<"normal" | "high">("normal");
   const [done, setDone] = useState<string | null>(null);
-  const picks = !props.roleId && !props.applicationId;
+  // A draft handed over (plan C12) has no role yet: the request covers all of the hiring and carries the draft.
+  const draftId = preset.intakeSessionId;
+  const picks = !props.roleId && !props.applicationId && !draftId;
   const [about, setAbout] = useState<string>(preset.about === "all" ? ALL_HIRING : "");
   const topic = preset.topic;
   const roles = useQuery({ queryKey: ["roles"], queryFn: () => api.get<RoleSummary[]>("/api/v1/roles"), enabled: open && picks });
@@ -47,12 +49,12 @@ export function AskRecruiter(props: { roleId?: string; applicationId?: string; l
   const estimate = useQuery({ queryKey: ["escalations", "estimate", kind, topic ?? ""], queryFn: () => api.get<{ slaDueAt: string; message: string; allowance?: { message: string } }>(`/api/v1/escalations/estimate?kind=${kind}${topic ? `&topic=${topic}` : ""}`), enabled: open && !done && who.mayAsk, staleTime: 60_000 });
   const choosable = (roles.data ?? []).filter((r) => r.status !== "closed");
   // What the request names: the page's role or candidate, or the choice made here ({} is all of the company's hiring).
-  const target = picks ? (about === ALL_HIRING ? {} : about ? { roleId: about } : null) : { roleId: props.roleId, applicationId: props.applicationId };
+  const target = draftId ? {} : picks ? (about === ALL_HIRING ? {} : about ? { roleId: about } : null) : { roleId: props.roleId, applicationId: props.applicationId };
   const scope = target ? scopeOf(target) : null;
   const note = question.trim();
   const ready = !!scope && (!picks || note.length > 0);
   const send = useMutation({
-    mutationFn: () => api.post<{ id: string; slaDueAt: string; message: string }>("/api/v1/escalations", { kind, scope, ...(target ?? {}), question: note || QUICK.find((q) => q[0] === kind)![1], urgency, ...(topic ? { topic } : {}) }),
+    mutationFn: () => api.post<{ id: string; slaDueAt: string; message: string }>("/api/v1/escalations", { kind, scope, ...(target ?? {}), question: note || QUICK.find((q) => q[0] === kind)![1], urgency, ...(topic ? { topic } : {}), ...(draftId ? { intakeSessionId: draftId } : {}) }),
     onSuccess: (r) => {
       setDone(`${r.message} You can follow it, and read the answer in full, under Your recruiter requests on Today.`);
       toast(topic === "plan" ? "Sent to ITS." : "A recruiter has it.");
@@ -81,7 +83,7 @@ export function AskRecruiter(props: { roleId?: string; applicationId?: string; l
                 </select>
               </Field>
             ) : null}
-            {scope ? <p className="small muted">The recruiter will see {accessWords(scope)}. {ACCESS_LIMITS}</p> : null}
+            {scope ? <p className="small muted">The recruiter will see {accessWords(scope)}. {draftId ? `${DRAFT_HANDED_OVER} ` : ""}{ACCESS_LIMITS}</p> : null}
             {/* One choice of three: pressed buttons, so a screen reader hears which one is chosen. */}
             <Field label="What do you want help with?">
               <Segmented value={kind} onChange={setKind} ariaLabel="What do you want help with?" options={QUICK.map(([value, label]) => ({ value, label }))} />
