@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Avatar, Button, Card, Chip, EmptyState, ErrorState, Field, Pill, Skeleton, Timeline } from "@ros/ui";
 import { api, ApiError, type DecisionMaker, type InterviewPlanView, type Requirement, type RoleDetail, type RoleEvent, type RolePacket } from "../api/client";
+import { APPROVE_WAITS_FOR_CHECK, approvedToast } from "../company-check";
+import { useCompanyCheck } from "../components/use-company-check";
 import { toast } from "../toast";
 import { actorWords, describeRoleEvent, roleWords } from "../role-words";
 
@@ -81,9 +83,11 @@ export function PacketApprovalCard({ role, onEdit, canEdit, showingProposed, onS
   const latest = role.packetApproval?.latest ?? null;
   const [sendingBack, setSendingBack] = useState(false);
   const [note, setNote] = useState("");
+  // Until ITS confirms the company (founder decision B7) an approved role waits to go public; the toast says so.
+  const check = useCompanyCheck();
   const approve = useMutation({
     mutationFn: () => api.post(`/api/v1/roles/${role.id}/approve`, { version: pending!.version }),
-    onSuccess: async () => { toast(pending?.editWhileOpen ? "Approved. The role now runs on the new version." : "Approved. Posting now."); await refresh(); },
+    onSuccess: async () => { toast(approvedToast({ editWhileOpen: !!pending?.editWhileOpen, check })); await refresh(); },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not approve."),
   });
   const sendBack = useMutation({
@@ -123,6 +127,7 @@ export function PacketApprovalCard({ role, onEdit, canEdit, showingProposed, onS
   return (
     <Card needsYou lift title={pending.editWhileOpen ? `Approve packet v${pending.version} of ${role.title}` : "Approve this role packet"}>
       <p style={{ color: "var(--ink-2)" }}>{pending.rationale ?? (pending.editWhileOpen ? "The role keeps running on its approved version until you decide." : "Review the packet, edit anything, then approve. Approval opens the role and posts it.")}</p>
+      {!pending.editWhileOpen && check === "waiting" ? <Alert tone="info">{APPROVE_WAITS_FOR_CHECK}</Alert> : null}
       {pending.editWhileOpen && role.proposedPacket ? (
         <div className="row" style={{ marginTop: 6, flexWrap: "wrap" }}>
           <p className="small" style={{ color: "var(--ink-2)", margin: 0 }}>What changed: {role.proposedPacket.changeSummary ?? "edited"} · by {role.proposedPacket.createdBy.name ?? "a team member"} on {new Date(role.proposedPacket.createdAt).toLocaleDateString()}. Current version: v{role.currentPacket?.version ?? "?"}.</p>

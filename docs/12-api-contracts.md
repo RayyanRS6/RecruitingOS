@@ -112,6 +112,9 @@ Public, no session (rate-limited): `GET /a/:token` (counts the visit, seals the 
 |---|---|---|---|
 | GET | `/notifications?unread=1` | → `Notification[]` | "Do it and tell me": what auto_notify actions and recommendations did, per person |
 | POST | `/notifications/read` | `{ids[]}` → `{ok, marked}` | |
+| GET | `/notifications/history?filter=&before=&limit=` | → `NotificationHistoryPage` | Every update, read and unread, newest first, paged by the last id shown (plan B3) |
+| POST | `/notifications/unread`, `/notifications/read-all` | `{ids[]}` / `{upTo}` → `{ok, marked}` | Back to unread; read-all marks only what existed when the list loaded |
+| GET / PUT | `/notifications/preferences` | `UpdateNotificationPreferences` → `NotificationPreferencesView` | Email alerts per group: as it happens, daily or weekly summary (8:00 company time; weekly on Monday), or off. A few kinds are always emailed. Emails carry the role's name and a link only, never a candidate's name or details |
 
 ## Interviews and scheduling
 | POST | `/applications/:id/interviews` | `RequestInterview` `{roundKey, interviewerUserIds[], linkSource, meetingUrl?, window?, note?}` → `InterviewSummary` | `interview.request`. The human approval that starts scheduling |

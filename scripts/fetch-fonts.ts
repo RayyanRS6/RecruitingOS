@@ -2,25 +2,27 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CANDIDATE_FONTS, FONT_LOCK_FILE, type FontLock, fontLicenceFile } from "../apps/api/src/pages/fonts";
+import { APP_FONTS, APP_FONT_CSS_FILE, FONT_LOCK_FILE, type FontLock, appFontCss, fontLicenceFile } from "../apps/api/src/pages/fonts";
 
 /**
- * Puts the candidate pages' font files where the deployment serves them from its own origin (apps/shell/public/fonts,
- * served at /fonts/; apps/api/src/pages/fonts.ts names the files). IBM Plex Sans and Bricolage Grotesque are published
- * under the SIL Open Font License 1.1; the files come from their Fontsource packages and each package's licence is saved
- * beside its files. Run once, review, and commit the files together with the lock:
+ * Puts the font files of the candidate pages and the signed-in application where the deployment serves them from its
+ * own origin (apps/shell/public/fonts, served at /fonts/; apps/api/src/pages/fonts.ts names the files), and writes the
+ * application's @font-face stylesheet (apps/shell/app/fonts.css). IBM Plex Sans, IBM Plex Mono and Bricolage Grotesque
+ * are published under the SIL Open Font License 1.1; the files come from their Fontsource packages and each package's
+ * licence is saved beside its files. Run once, review, and commit the files together with the lock:
  *   node_modules\.bin\tsx.cmd scripts/fetch-fonts.ts
  *
  * Nothing floats. The first run picks the newest release of each package's major version, then writes the exact
  * version and the SHA-256 of every file it saved to apps/api/src/pages/fonts.lock.json. Every later run downloads only
  * that exact version and refuses a file whose hash differs from the lock, so a republished package or a swapped file on
  * the CDN cannot slip in. A file already present is kept and checked against the lock. `--check` changes nothing: it
- * fails when a file is missing, is not a woff2 file, or does not match the lock (apps/api/src/candidate-look.test.ts
- * checks the same once the files are committed).
+ * fails when a file is missing, is not a woff2 file, or does not match the lock, or when fonts.css does not match the
+ * list (apps/api/src/candidate-look.test.ts checks the same once the files are committed).
  */
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "apps", "shell", "public", "fonts");
 const LOCK = join(ROOT, FONT_LOCK_FILE);
+const APP_CSS = join(ROOT, APP_FONT_CSS_FILE);
 const FONTSOURCE = "https://cdn.jsdelivr.net/npm/@fontsource";
 const RESOLVE = "https://data.jsdelivr.com/v1/packages/npm/@fontsource";
 const MAJOR = "5";
@@ -50,7 +52,7 @@ async function main() {
   const lock: FontLock = existsSync(LOCK) ? (JSON.parse(readFileSync(LOCK, "utf8")) as FontLock) : { packages: {}, files: {} };
   if (!check) mkdirSync(OUT, { recursive: true });
 
-  const slugs = [...new Set(CANDIDATE_FONTS.map((f) => f.slug))];
+  const slugs = [...new Set(APP_FONTS.map((f) => f.slug))];
   for (const slug of slugs) {
     const pinned = lock.packages[slug];
     if (pinned && !EXACT.test(pinned)) problems.push(`${slug} is pinned to "${pinned}", which is not an exact version`);
@@ -58,7 +60,7 @@ async function main() {
     else if (!pinned) lock.packages[slug] = await newestRelease(slug);
   }
 
-  const wanted = [...CANDIDATE_FONTS.map((f) => ({ slug: f.slug, file: f.file, url: `files/${f.file}`, woff2: true })), ...slugs.map((slug) => ({ slug, file: fontLicenceFile(slug), url: "LICENSE", woff2: false }))];
+  const wanted = [...APP_FONTS.map((f) => ({ slug: f.slug, file: f.file, url: `files/${f.file}`, woff2: true })), ...slugs.map((slug) => ({ slug, file: fontLicenceFile(slug), url: "LICENSE", woff2: false }))];
   for (const w of wanted) {
     const path = join(OUT, w.file);
     const expected = lock.files[w.file];
@@ -82,6 +84,10 @@ async function main() {
     else if (!expected) lock.files[w.file] = actual;
   }
 
+  // The application's stylesheet of faces follows the list; --check only compares it (a checkout may turn its line ends).
+  const css = appFontCss();
+  if (check && (!existsSync(APP_CSS) || readFileSync(APP_CSS, "utf8").replace(/\r\n/g, "\n") !== css)) problems.push(`${APP_FONT_CSS_FILE} does not match the font list; run the script without --check`);
+
   if (problems.length) {
     console.error(problems.join("\n"));
     process.exit(1);
@@ -89,6 +95,7 @@ async function main() {
   if (!check) {
     const sorted: FontLock = { packages: Object.fromEntries(Object.entries(lock.packages).sort()), files: Object.fromEntries(Object.entries(lock.files).sort()) };
     writeFileSync(LOCK, `${JSON.stringify(sorted, null, 2)}\n`);
+    writeFileSync(APP_CSS, css);
   }
   console.log(check ? "every font file is in place and matches the lock" : `fonts are in ${OUT}; versions and hashes are in ${FONT_LOCK_FILE}. Review both, then commit them together.`);
 }

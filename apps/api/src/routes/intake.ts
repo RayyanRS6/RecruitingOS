@@ -128,14 +128,16 @@ const MORE_ROLES_QUESTION = "We would like to open more roles than our plan incl
  * the allowance is recorded; all of that commits together or not at all.
  *
  * There is nowhere in the product to change plans, so a refusal offers the one thing that helps: asking ITS about more
- * roles. Its action is a request for a recruiter about the company's hiring as a whole (kind "ask", scope "company").
+ * roles. Its action is a request for a recruiter about the company's hiring as a whole (kind "ask", scope "company"),
+ * marked as a talk about the plan (topic "plan"), so it never uses one of the plan's recruiter requests. The page opens
+ * it in the request form, where the access it would give is shown before anything is sent.
  */
 intakeRoutes.post("/sessions/:id/compile", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertMayDraft(t);
   await assertDraftAccess(c, c.req.param("id"));
   const container = c.get("container");
-  const askAction = { label: "Talk to ITS about more roles", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", question: MORE_ROLES_QUESTION } };
+  const askAction = { label: "Talk to ITS about more roles", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan", question: MORE_ROLES_QUESTION } };
   const limitReached = (limit: number | null) => new HttpError(402, "limit_reached", `Your plan includes ${limit} active role${limit === 1 ? "" : "s"}. Close a role you no longer need, or talk to ITS about adding more.`, { actions: can(t.role, "escalation.create") ? [askAction] : [] });
   const first = await withTenant(container.db, t.companyId, (tx) => entitlements.check(tx, t.companyId, "active_roles", 1));
   if (!first.ok) throw limitReached(first.limit);

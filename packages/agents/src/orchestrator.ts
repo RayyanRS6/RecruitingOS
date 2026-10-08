@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
-import type { Actor } from "@ros/contracts";
-import { DECISION_STAGES, activeMarksFor, createEscalation, emit, gate, holdEnded, notify, resolvePolicy } from "@ros/core";
-import { applications, approvalRequests, candidates, interventions, memberships, roles, screens, users, type Queryable } from "@ros/db";
+import { isCompanyVerified, type Actor } from "@ros/contracts";
+import { ALERT_PRIVACY_LINE, DECISION_STAGES, activeMarksFor, createEscalation, emit, gate, holdEnded, notify, resolveNotifyCadence, resolvePolicy, storedPreferences } from "@ros/core";
+import { applications, approvalRequests, candidates, companies, interventions, memberships, roles, screens, users, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { queueCommunication } from "./outbox";
 
@@ -62,6 +62,10 @@ async function candidateNames(q: Queryable, candidateIds: string[]): Promise<Map
 
 export async function detectStuckRoles(q: Queryable, companyId: string, now: Date): Promise<Detection[]> {
   const out: Detection[] = [];
+  // Until ITS confirms the company (founder decision B7) its open roles are not public and its invitations wait in the
+  // outbox: "no applicants" and "invitations nobody answered" would be wrong advice, so they wait for the check too.
+  const [company] = await q.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1);
+  const publicNow = !!company && isCompanyVerified(company.settings);
   const open = await q.select().from(roles).where(and(eq(roles.companyId, companyId), eq(roles.status, "open")));
   // A closed role's people were moved to the talent pool privately: they are reminded about too, however long ago it closed.
   const closed = await q.select({ id: roles.id, title: roles.title }).from(roles).where(and(eq(roles.companyId, companyId), eq(roles.status, "closed")));
@@ -96,7 +100,7 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
     }
     const invites = await q.select().from(screens).where(and(eq(screens.companyId, companyId), inArray(screens.status, ["invited", "reminded"]), inArray(screens.applicationId, apps.map((a) => a.id).length ? apps.map((a) => a.id) : ["00000000-0000-0000-0000-000000000000"])));
     const stale = invites.filter((s) => s.invitedAt && now.getTime() - Date.parse(s.invitedAt) >= 3 * DAYS && !parked({ id: s.applicationId }));
-    if (stale.length) {
+    if (stale.length && publicNow) {
       const days = Math.floor((now.getTime() - Math.min(...stale.map((s) => Date.parse(s.invitedAt!)))) / DAYS);
       out.push({ detector: "screens_unanswered", roleId: role.id, roleTitle: role.title, days, title: `${stale.length} screening ${stale.length === 1 ? "invite has" : "invites have"} gone unanswered for ${days} days (${role.title})`, body: "A reminder went out automatically. A recruiter can call them, or you can move on to the next candidates.", action: { label: "See who", href: `/roles/${role.id}/talent?stage=screen_invited` } });
     }
@@ -110,7 +114,7 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
     const untold = decided.length ? untoldDecisions(role, decided, new Set(pending.filter((p) => p.actionType === "disposition.send").map((p) => p.applicationId ?? "")), await candidateNames(q, decided.map((a) => a.candidateId)), now) : null;
     if (untold) out.push(untold);
     const daysOpen = role.openedAt ? Math.floor((now.getTime() - Date.parse(role.openedAt)) / DAYS) : 0;
-    if (apps.length === 0 && daysOpen >= 14) {
+    if (apps.length === 0 && daysOpen >= 14 && publicNow) {
       out.push({ detector: "no_applicants", roleId: role.id, roleTitle: role.title, days: daysOpen, title: `${role.title} has had no applicants in ${daysOpen} days`, body: "Posting on Indeed from your account, asking the team for referrals, or a recruiter search usually fixes this within a week.", action: { label: "See posting options", href: `/roles/${role.id}` } });
     }
   }
@@ -175,22 +179,30 @@ async function sendIntervention(q: Queryable, deps: LadderDeps, companyId: strin
     await notify(q, { companyId, kind: `stuck.${d.detector}`, title: d.title, body: d.body, action: d.action });
     return;
   }
-  const owners = await q.select({ email: users.email, name: users.name, userId: users.id }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(memberships.companyId, companyId), inArray(memberships.role, ["owner", "admin", "hiring_manager"]), eq(memberships.status, "active")));
+  const team = await q.select({ email: users.email, name: users.name, userId: users.id }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(memberships.companyId, companyId), inArray(memberships.role, ["owner", "admin", "hiring_manager"]), eq(memberships.status, "active")));
+  // Each person's own setting for roles that need attention (plan B3) decides: as it happens, this rung's own email; daily
+  // or weekly, their summary carries it; off, the app only. Both rungs' updates sit in the same group.
+  const prefs = await storedPreferences(q, companyId, team.map((o) => o.userId));
+  const owners = team.filter((o) => resolveNotifyCadence(`stuck.${d.detector}`, prefs.get(o.userId) ?? {}).cadence === "immediate");
+  const emailed = owners.map((o) => o.userId);
   const day = deps.now.toISOString().slice(0, 10);
+  // The emails carry the title (the role, counts and days) and the link, never the body: a body can name candidates,
+  // and no email alert does (plan B3). The app shows the rest after sign-in.
+  // The people emailed here have their copy recorded as emailed, so no alert or summary repeats it for them.
   if (level === "message") {
-    await notify(q, { companyId, kind: `stuck.${d.detector}`, title: d.title, body: d.body, action: d.action });
+    await notify(q, { companyId, kind: `stuck.${d.detector}`, title: d.title, body: d.body, action: d.action, emailedSeparatelyTo: emailed });
     for (const o of owners) {
-      await teamMail(q, deps, companyId, { to: o.email, subject: d.title, text: `${o.name ? `Hi ${o.name.split(" ")[0]},` : "Hi,"}\n\n${d.body}\n\n${d.action.label}: ${href}\n\nIf you would rather a recruiter handled this, reply to this email or use "Ask a recruiter" in the app.`, idempotencyKey: `intervention:${companyId}:${d.roleId}:${d.detector}:message:${day}:${o.userId}`, templateKey: "intervention", tags: { detector: d.detector } });
+      await teamMail(q, deps, companyId, { to: o.email, subject: d.title, text: `${o.name ? `Hi ${o.name.split(" ")[0]},` : "Hi,"}\n\n${d.title}.\n\n${d.action.label}: ${href}\n\n${ALERT_PRIVACY_LINE}\n\nIf you would rather a recruiter handled this, reply to this email or use "Ask a recruiter" in the app.`, idempotencyKey: `intervention:${companyId}:${d.roleId}:${d.detector}:message:${day}:${o.userId}`, templateKey: "intervention", tags: { detector: d.detector } });
     }
     return;
   }
   if (level === "offer_recruiter") {
     const g = await gate(q, { companyId, roleId: d.roleId, actionType: "intervention.offer_recruiter", subject: { type: "role", id: d.roleId }, proposal: { detector: d.detector }, rationale: d.title, requestedBy: deps.actor });
     if (g.outcome === "human_only") return;
-    const body = `${d.body}\n\nAn ITS recruiter can review the shortlist, reach out to candidates, and get this moving. It is one click from the role page or the brief.`;
-    await notify(q, { companyId, kind: "stuck.offer_recruiter", title: `Want a recruiter to take a look at ${d.roleTitle}?`, body, action: { label: "Ask a recruiter", href: d.action.href } });
+    const offer = "An ITS recruiter can review the shortlist, reach out to candidates, and get this moving. It is one click from the role page or the brief.";
+    await notify(q, { companyId, kind: "stuck.offer_recruiter", title: `Want a recruiter to take a look at ${d.roleTitle}?`, body: `${d.body}\n\n${offer}`, action: { label: "Ask a recruiter", href: d.action.href }, emailedSeparatelyTo: emailed });
     for (const o of owners) {
-      await teamMail(q, deps, companyId, { to: o.email, subject: `Want a recruiter to look at ${d.roleTitle}?`, text: `${body}\n\nOpen: ${href}`, idempotencyKey: `intervention:${companyId}:${d.roleId}:${d.detector}:offer:${day}:${o.userId}`, templateKey: "intervention", tags: { detector: d.detector } });
+      await teamMail(q, deps, companyId, { to: o.email, subject: `Want a recruiter to look at ${d.roleTitle}?`, text: `${d.title}.\n\n${offer}\n\nOpen: ${href}\n\n${ALERT_PRIVACY_LINE}`, idempotencyKey: `intervention:${companyId}:${d.roleId}:${d.detector}:offer:${day}:${o.userId}`, templateKey: "intervention", tags: { detector: d.detector } });
     }
     return;
   }

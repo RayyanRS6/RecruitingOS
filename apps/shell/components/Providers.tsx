@@ -8,6 +8,8 @@ import type { Me } from "../lib/session";
 /**
  * React Query for every page; the server-resolved session seeds the "me" query so nothing flashes. The design system's
  * Toaster shows what toast() (apps/web/src/toast.ts) sends: a title, and a second line when there is more to say.
+ * Queries do not refetch on focus by default, so a half-filled form is never reloaded under someone; a page that must
+ * stay current asks for it itself (Today: on focus and every minute, TODAY_REFRESH in apps/web/src/today.ts).
  */
 export function Providers({ children, me }: { children: ReactNode; me: Me | null }) {
   const [client] = useState(() => {

@@ -44,7 +44,7 @@ Rules that hold in code (`packages/core/src/stages.ts`): `rejected` from any act
 - Packet: `proposed → approved → superseded`; a rejected approval returns the role to `draft` with the packet still `proposed`.
 - Screen: `invited → reminded → in_progress → completed | expired | abandoned | human_requested`.
 - Interview (new definition): `proposed → scheduling → scheduled → completed | cancelled | no_show`; `scheduling → offer_expired` (no slot chosen); `scheduled → scheduling` on reschedule.
-- Escalation: `open → claimed → in_progress → resolved | cancelled`.
+- Escalation: `open → claimed → in_progress → resolved | cancelled`; `resolved → claimed | open` when the team reopens it ("this didn't solve it", plan B5). A reopened request goes back to the recruiter who answered, with fresh access, when they still hold an ITS role and the company did not end their access to it (`claimed`); otherwise to the queue (`open`). A recruiter's first reply without resolving moves `claimed → in_progress`.
 - Workflow run: `running ⇄ waiting → completed | failed | cancelled | paused`.
 - Approval request: `pending → approved | rejected | expired | cancelled`.
 - Calendar connection: `connected ⇄ needs_attention → disconnected`.
@@ -91,13 +91,17 @@ Reschedule (human or candidate): a route cancels the calendar events (idempotent
 
 Adds detectors: `slots_unanswered` (offer open ≥ 3 days), `decision_pending_after_interview` (interview_complete with no decision ≥ 2 days), `no_availability` (an approved interview waiting on availability ≥ 1 day). Same ladder and cooldown policy. As built (30 Sep 2026, audit F3): the existing `candidates_waiting` rule counts `interview_complete` among the decisions pending, at its 3-day threshold, and its message says "decide after an interview"; a separate 2-day `decision_pending_after_interview` detector is not built.
 
+Email alerts (8 Oct 2026, plan B3): the ladder's `message` and `offer_recruiter` rungs email only the owners, admins and hiring managers who want "Roles that need attention" as it happens; everyone else's copy of the update follows their own setting (the morning or Monday summary, or the app only). While ITS has not confirmed the company (founder decision B7), `no_applicants` and `screens_unanswered` are not raised: nothing of the company is public and its invitations wait in the outbox.
+
 ### calendar_health (new, platform-level per company)
 
 Daily: for each connection, a free/busy probe; on auth failure set `needs_attention`, emit `integration.failed`, notify the user and the owner; three consecutive failures → `disconnected` and credentials deleted.
 
-### escalation (existing service, unchanged)
+### escalation (existing service, changed by plan B4 to B8)
 
-create → notify queue → claim → resolve → notify customer.
+create (counted against the plan's recruiter requests when the team asked, never refused: founder decision Q33) → notify queue → claim (scoped, time-limited grant) → notes either way on the thread (`escalation_messages`, migration 0029; events `customer.replied`, `recruiter.replied`) → resolve (the answer kept on the thread; the person who asked and the owners get it in full with a link to the request) → reopen by the team with a reason (event `recruiter.reopened`; the running grant ends, a fresh one is given and recorded, and the reply-by time is counted again from the reopening).
+
+The ITS queue lists urgent requests first, then by the soonest reply-by time (founder decision Q32, option A). Urgency never changes the reply-by time.
 
 ## 4. Timers and SLAs
 
@@ -111,7 +115,7 @@ create → notify queue → claim → resolve → notify customer.
 | Schedule token | 14 d | no |
 | Interview reminders | −24 h, −2 h | no |
 | Interview close | end +1 h | no |
-| Escalation SLA | 4 h candidate_issue; 8 h takeover, negotiation; 24 h ask, review, stuck_role; 48 h search_support | D14 |
+| Escalation SLA (reply-by time) | Business hours on the ITS calendar (F12, D26): 2 h negotiation, platform_blocking; 4 h candidate_issue; 8 h (one business day) ask, review, takeover, search_support, stuck_role, data_request. The same for urgent requests (Q32 A); a reopened request counts again from the reopening | ITS calendar (admin console) |
 | Intervention cooldown | 48 h | policy param |
 | Data request SLA | 30 d | no |
 | Job lease | 5 min | engine option |

@@ -167,8 +167,9 @@ describe("sending to many people at once", () => {
     expect(batches(ids).map((b) => b.length)).toEqual([100, 100, 30]);
     expect(batches(ids).flat()).toEqual(ids);
     expect(batches([])).toEqual([]);
-    const merged = mergeDecisionResults([{ results: [{ applicationId: "a", ok: true, candidateNotice: "queued" }], queued: 1, waitingApproval: 0, notSent: 0 }, { results: [{ applicationId: "b", ok: false, code: "not_decided" }], queued: 0, waitingApproval: 0, notSent: 1 }]);
-    expect(merged).toEqual({ results: [{ applicationId: "a", ok: true, candidateNotice: "queued" }, { applicationId: "b", ok: false, code: "not_decided" }], queued: 1, waitingApproval: 0, notSent: 1 });
+    const merged = mergeDecisionResults([{ results: [{ applicationId: "a", ok: true, candidateNotice: "queued" }], queued: 1, waitingApproval: 0, notSent: 0 }, { results: [{ applicationId: "b", ok: false, code: "not_decided" }, { applicationId: "c", ok: true, candidateNotice: "held" }], queued: 0, held: 1, waitingApproval: 0, notSent: 1 }]);
+    // a message held for the ITS company check is counted apart from those on their way (founder decision B7)
+    expect(merged).toEqual({ results: [{ applicationId: "a", ok: true, candidateNotice: "queued" }, { applicationId: "b", ok: false, code: "not_decided" }, { applicationId: "c", ok: true, candidateNotice: "held" }], queued: 1, held: 1, waitingApproval: 0, notSent: 1 });
   });
 });
 

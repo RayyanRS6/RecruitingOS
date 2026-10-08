@@ -4,6 +4,8 @@ import { Actor, Subject } from "./common";
 /** The event taxonomy (docs/04). Payloads are validated where they matter; others are open objects. */
 export const EventType = z.enum([
   "company.created", "company.updated", "user.invited", "user.joined", "membership.changed",
+  // The one-time ITS check of a self-serve company (founder decision B7): confirmed, or the confirmation taken back.
+  "company.verified", "company.unverified",
   // Team membership through invitations (docs/spec/21, area A): someone joined on an invitation, was removed, or an invitation was withdrawn.
   "member.joined", "member.removed", "invitation.revoked",
   "integration.connected", "integration.failed", "policy.changed", "plan.changed", "entitlement.exceeded",
@@ -36,12 +38,16 @@ export const EventType = z.enum([
   "message.queued", "message.sent", "message.delivered", "message.bounced", "message.complained", "message.retried", "message.suppressed", "message.failed", "message.received",
   // A decision message withdrawn from the outbox before it left: the decision it carried no longer applies.
   "message.cancelled",
+  // A message to a candidate waiting for the ITS company check, and its release once ITS confirms the company.
+  "message.held", "message.released",
   "consent.granted", "consent.revoked", "candidate.opted_out", "candidate.data_request", "candidate.data_request_fulfilled", "candidate.anonymized", "candidate.complaint",
   "workflow.started", "workflow.step_completed", "workflow.waiting", "workflow.resumed", "workflow.retried", "workflow.failed", "workflow.completed",
   "workflow.escalated", "workflow.cancelled", "approval.requested", "approval.granted", "approval.denied", "approval.expired",
   "ai.run_completed", "ai.run_failed", "ai.output_invalid", "ai.refused", "human.override",
   "recruiter.requested", "recruiter.claimed", "recruiter.resolved", "recruiter.takeover_started", "recruiter.takeover_ended",
   "recruiter.access_granted", "recruiter.access_ended", "recruiter.access_revoked", "recruiter.sla_recalculated",
+  // The thread on a recruiter request (plan B5): a note from the team, a reply from the recruiter, and "this didn't solve it".
+  "customer.replied", "recruiter.replied", "recruiter.reopened",
   "intervention.sent", "intervention.responded", "brief.sent",
   "integration.connected", "integration.disconnected", "integration.credentials_deleted", "integration.deletion_failed", "integration.health_changed",
   "availability.updated", "interview.requested", "interview.slots_offered", "interview.slots_reminded", "interview.offer_expired", "interview.candidate_availability",

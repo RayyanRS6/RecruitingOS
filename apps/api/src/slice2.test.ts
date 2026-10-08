@@ -302,6 +302,9 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     const days = 86_400_000;
     const LADDER = ["brief", "message", "offer_recruiter", "escalation"];
     const level = async (detector: string) => (await container.db.select().from(interventions).where(eq(interventions.detector, detector))).sort((x, y) => (x.sentAt < y.sentAt ? -1 : 1)).map((i) => `${i.ladderLevel}:${i.status}`);
+    // The ladder's own emails go to whoever wants roles that need attention as they happen (plan B3; the default is the
+    // morning summary), so the owner asks for them here.
+    expect((await json("PUT", "/api/v1/notifications/preferences", { preferences: [{ group: "stuck", cadence: "immediate" }] })).status).toBe(200);
     // Maria and Omar have been waiting on the owner since the earlier tests; the daily run may already have started the ladder.
     let rungs = await level("candidates_waiting");
     if (rungs.length === 0) { await advance(4 * days); rungs = await level("candidates_waiting"); }

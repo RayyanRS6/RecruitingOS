@@ -203,6 +203,7 @@ export function MessagesTab({ a, roleId, compose, setCompose }: { a: Application
     mutationFn: () => api.post<SendMessageResult>(`/api/v1/applications/${a.id}/messages`, { subject: subject.trim() || undefined, text }),
     onSuccess: async (r) => {
       if (r.status === "queued") toast(`Sent to ${a.candidate.firstName}.`, "It is on its way.");
+      else if (r.status === "held") toast("Saved.", "It goes out as soon as ITS confirms your company.");
       else toast("Saved for approval.", "An owner or admin reads it before it goes out; you will be told.");
       setCompose({ open: false, subject: "", text: "" });
       await refresh();
@@ -235,7 +236,7 @@ export function MessagesTab({ a, roleId, compose, setCompose }: { a: Application
         {a.communications.length ? a.communications.map((m) => (
           <div key={m.id} className="small" style={{ borderTop: "1px solid var(--line)", padding: "8px 0" }}>
             <strong>{m.direction === "outbound" ? "We sent" : "They wrote"}: {m.subject ?? (m.direction === "inbound" ? `"${m.bodyText.slice(0, 90)}${m.bodyText.length > 90 ? "…" : ""}"` : (m.templateKey ?? "a message").replace(/[:_]/g, " "))}</strong>{" "}
-            <Chip tone={m.status === "sent" || m.status === "received" || m.status === "delivered" ? "good" : m.status === "failed" ? "critical" : "neutral"}>{m.channel}{m.status === "failed" ? " · failed" : m.status === "queued" ? " · waiting to go out" : ""}</Chip>
+            <Chip tone={m.status === "sent" || m.status === "received" || m.status === "delivered" ? "good" : m.status === "failed" ? "critical" : "neutral"}>{m.channel}{m.status === "failed" ? " · failed" : m.status === "queued" ? " · waiting to go out" : m.status === "held" ? " · waiting for the ITS check" : ""}</Chip>
             <br />
             <span className="muted">{new Date(m.createdAt).toLocaleString()}</span>
             {m.direction === "inbound" ? <p style={{ margin: "4px 0 0", whiteSpace: "pre-wrap" }}>{m.bodyText}</p> : null}

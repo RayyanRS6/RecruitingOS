@@ -328,6 +328,8 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
   it("Step 10c, Nothing rots: the stuck-role detector nudges the owner up a ladder and, if ignored, brings in a recruiter; policy intervention.nudge sets the cooldown", async () => {
     const days = 86_400_000;
     const rungs = async () => (await container.db.select().from(interventions).where(eq(interventions.detector, "candidates_waiting"))).sort((x, y) => (x.sentAt < y.sentAt ? -1 : 1)).map((i) => i.ladderLevel);
+    // the ladder's own email reaches whoever wants roles that need attention as they happen (plan B3); Dana does
+    expect((await json("PUT", "/api/v1/notifications/preferences", { preferences: [{ group: "stuck", cadence: "immediate" }] })).status).toBe(200);
     await advance(4 * days); // Maria has been "recommended for interview" with no owner action
     expect(await rungs()).toEqual(["brief"]);
     const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string }>;

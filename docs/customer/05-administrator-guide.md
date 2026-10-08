@@ -43,7 +43,7 @@ The rail then has five entries:
 - **Roles**: every role, its status and its pipeline. Up to eight roles you are working on are listed under it: a green dot and the number of applicants for an open role, a grey dot for a paused role, a draft or one waiting for approval. **All roles** shows the rest. For an interviewer, this list and the **Roles** page show only the roles they interview for, without applicant counts.
 - **Talent**: the candidates for a role, grouped by what needs you.
 - **Interviews**: every interview in motion or done, and each interviewer's load.
-- **Setup**: your company, your team, recruiter access, your sessions, availability, connected services, what the assistant may do on its own, and the audit history.
+- **Setup**: your company, your team, recruiter access, your sessions, availability, email alerts, connected services, what the assistant may do on its own, and the audit history.
 
 Your name, your email address and **Sign out** are at the bottom. On a role's own pages the rail folds to a narrow column of icons to leave room for the work. On a phone or a tablet the rail becomes a bar across the top: **Start a hire** and **Sign out** stay in it, and **Menu** opens the rest.
 
@@ -80,7 +80,7 @@ A menu beside the cards (across the top on a phone) jumps straight to each one: 
 
 **Keyboard shortcut.** For the people who may start a hire: **Press N to start a hire** is on unless you untick it. The choice is kept in the browser you are using.
 
-**Company.** Your name, careers page address, website, kind of business, size, time zone, locations, contact hours, candidate notices, plan and usage. **Plan** shows your program and, where it has an end date, that date; a role already in progress is never cut off on that date. **Usage** shows what your program includes and what you have used.
+**Company.** Your name, the ITS check, careers page address, website, kind of business, size, time zone, locations, contact hours, candidate notices, plan and usage. **ITS check** shows **Confirmed**, or **ITS is confirming your company** while the one-time check is under way; until then the careers page address carries "Offline until ITS confirms your company." **Plan** shows your program and, where it has an end date, that date; a role already in progress is never cut off on that date. **Usage** shows what your program includes and what you have used, recruiter requests among them: only the requests your own team makes count, and going over never holds one up.
 
 Owners and admins press **Edit** on the card to change the company name, website, logo address, time zone, size, locations, the careers-page introduction, the benefits summary, the contact hours and the wording of the candidate notices, then **Save changes**. The website and logo appear on your job pages and in search results. Contact hours can only narrow the legal window for texting candidates, never widen it. A reworded notice gets a new version, shows on the job page and the application form from then on, and is recorded; clear the box to go back to the standard wording. The plan, the program dates and the allowances are set by ITS and cannot be changed here. Every change is recorded in the audit history.
 
@@ -99,6 +99,8 @@ Owners and admins press **Edit** on the card to change the company name, website
 
 If a person has both, the declared hours limit the calendar.
 
+**Email alerts.** Each person chooses for themselves how they hear about updates by email, group by group: **Waiting for your approval**, **Candidates**, **Interviews** (your calendar connection included), **Roles that need attention**, **Your ITS recruiter**, **Messages to candidates** and **Your account**. For each: **As it happens** (one short email per update), **Daily summary** (8:00 each morning, your company's time), **Weekly summary** (Monday at 8:00) or **Off**. The card says which updates are always emailed at once and why: an ITS recruiter is given access to your hiring, ITS confirms your company or takes the confirmation back, a candidate asks for a person, or someone waits for your eligibility decision. Every update still shows in the product whatever you choose. Alert emails carry the role's name and a link, never a candidate's name or details. Unsubscribing from an alert email turns your alerts off here.
+
 **Connected services.** A table of the services the product uses for your company, each with a status: **Connected and working**, **Submitted, awaiting verification**, **Manual action required**, **Not connected** or **Disabled**. The last column explains what each one takes. Two rows to understand:
 
 - The job boards (LinkedIn, Indeed, ZipRecruiter) show **Manual action required** or **Not connected**. This is expected. ITS posts to them by hand under your accounts. Whether a particular role is live on a board is shown on that role's **Posting** tab (section 7), not here.
@@ -106,23 +108,25 @@ If a person has both, the declared hours limit the calendar.
 
 The line under the table names the AI provider. On your live workspace it reads Anthropic.
 
-**What the AI may do on its own.** A list of actions grouped by stage of hiring. Each has four levels:
+**What the AI may do on its own.** A list of actions grouped by stage of hiring. Where a setting changes what happens, you choose one of four levels:
 
 - **Do it**: the assistant does it without asking.
 - **Do it and tell me**: the assistant does it and you see it under **What the assistant did** on Today.
 - **Ask me first**: the assistant proposes it and waits for a person to approve.
 - **Only a person**: the assistant never does it.
 
-Some rows are marked **always a person**. They are locked at "Only a person" and nobody can change them: declining a candidate on judgment, declining an applicant held on an eligibility answer, deciding who to hire, negotiating an offer, acting on a background check, changing these rules, changing eligibility rules, changing candidate notices, deleting candidate data, and exporting data. Rows marked **a person approves** offer only the choices allowed: "Approve a drafted role, pay included" is always **Ask me first** (a person approves every role before it opens), and "Advance someone to an interview", "Draft an offer", "Send an offer" and "Revise an offer" can never be set below **Ask me first**.
+Some rows are marked **always a person**. They are locked at "Only a person" and nobody can change them: declining a candidate on judgment, declining an applicant held on an eligibility answer, deciding who to hire, negotiating an offer, acting on a background check, changing these rules, changing eligibility rules, changing candidate notices, deleting candidate data, and exporting data. "Approve a drafted role, pay included" is always **Ask me first**: a person approves every role before it opens.
+
+Some rows show **Nothing to choose** with a line saying what the product does, because no setting changes it: reading and assessing applicants (information only; it never decides anything), running the screening conversation once someone is invited, sending confirmations and reminders, advancing someone to an interview (a person always approves it on the candidate's page), and booking and moving interviews on calendars once a person approved them.
 
 The defaults are the recommended settings. The ones you are most likely to touch:
 
 - **Invite an applicant to a screen** (default: Do it and tell me). Set it to Ask me first if you want to approve every screening invitation.
 - **Recommend who to interview** (default: Do it and tell me).
-- **Send confirmations and reminders** (default: Do it).
 - **Send a message a team member wrote to a candidate** (default: Do it and tell me: the message goes at once and owners are told). Set it to Ask me first or Only a person and an owner or admin reads each message before it goes out. Messages from owners and admins always go at once.
+- **Send the decision message** (default: Do it: the message goes when someone on your team presses Send; declining never sends anything by itself).
 
-Only owners and admins can change these settings, and only after a recent sign-in (**Confirm it's you**, above). Every change is recorded. The list includes rows for actions that are not part of release 1 (offers, background checks, references, payroll, outreach). Those rows are inactive; changing them has no effect on the product today.
+Only owners and admins can change these settings, and only after a recent sign-in (**Confirm it's you**, above). Choosing a level that lets more happen without a person asks you to confirm first; choosing a stricter one saves at once. Every change is recorded. Actions that are not part of release 1 (offers, background checks, references, payroll, outreach) are listed under **Coming later**, with nothing to choose.
 
 **Audit history.** Who did what in your workspace, in plain words, newest first: recruiter access, team changes, rule changes, company changes, candidate records opened, outcomes and downloads. The last 50 are shown. Tick **Include every page an ITS recruiter opened** to see each page as well. **Download as a spreadsheet** gives you everything; the download is itself recorded. Owners, admins, hiring managers and HR can see it.
 
@@ -137,12 +141,13 @@ Only owners and admins can change these settings, and only after a recent sign-i
 - **Decision** also covers a message a teammate wrote to a candidate that waits for you to read it, when your rules say so.
 - **Screening**: who is invited, answering now, or completed since yesterday.
 - **Stuck**: a role where nothing has moved for a while, with a suggested action and **Have a recruiter review**.
-- **Recruiter**: a request you sent, shown as "A recruiter will pick this up" or "A recruiter is on it".
+- **Recruiter**: a request you sent, shown as "A recruiter will pick this up" or "A recruiter is on it", with **See the request**.
+- **Getting started**: for a new company, the setup steps each person can do (company details, team, interview hours, the first role, job-board access, the AI rules), each with a line on why it matters, ticked as they are done; **Hide these steps** hides them for you only. While ITS has not yet confirmed your company the card says so, with how many emails to candidates are waiting, and nobody can hide that part.
 - **Nothing waiting**: nothing needs you. A new company with no role yet sees **Start a hire** here.
 
 A role packet waiting for approval appears as a **Decision** only for the people who can approve it: not for the person who started the role (unless they are the only owner), and only for the named decision maker or an owner when the packet names one.
 
-Under the brief, **What the assistant did** lists what happened since you last looked: an invitation sent, a resume that could not be read, an interview booked, a recruiter's answer. It shows the eight newest. Press **Mark all read** when you have seen them; when there are more than eight it reads **Mark these read** and marks only the ones on screen.
+Today refreshes itself while it is open. Under the brief, **Your recruiter requests** lists your team's requests to ITS (section 8). **What the assistant did** lists what happened since you last looked: an invitation sent, a resume that could not be read, an interview booked. It shows the eight newest. Press **Mark all read** when you have seen them; when there are more than eight it reads **Mark these read** and marks only the ones on screen. **See earlier updates** opens the **Updates** page: every update you ever had here, newest first, all or only the unread ones, each of which you can mark read or unread again. Its **Mark all read** marks only the unread updates on the page; while there are more further back it says how many it marks. **Email alerts** there leads to your settings in Setup.
 
 Below that is **Your recruiting chief of staff**, the conversation where a new role starts. The hiring manager guide covers it.
 
@@ -152,7 +157,7 @@ Below that is **Your recruiting chief of staff**, the conversation where a new r
 
 **The role page** has the title, its status, location and pay at the top, then tabs: **Overview**, **Requirements**, **How we'll evaluate**, **Interview plan**, **Posting**, **Activity**, **History**, **Report**. **Edit** opens the editor; every save is a new version, and **History** lists them all. Nothing is overwritten. **Interview plan** shows who interviews in each round and whether times can be offered to them yet; **Activity** is everything that happened on the role, newest first, in plain words.
 
-**Approval.** A role waiting for approval shows a card **Approve this role packet** with any assumptions the assistant made. **Approve and post** opens the role and starts posting. **Edit first** lets you change the packet before you approve. Owners, admins and hiring managers can approve, with two rules: the person who ran the intake (or wrote the version being approved) cannot approve it themselves unless they are the company's only owner, and when the packet names a decision maker who is on your team, the approval is reserved for them (an owner can also decide). The card says who can decide and why you cannot, if you cannot. **Send back with a note** returns the role to a draft with the note on its page; **Request approval again** sends it back after the edit. An approval nobody decides within 14 days goes back to a draft the same way. An edit to an open role by someone who can edit but not approve waits for approval on the same card while the role keeps running on its current version; Today shows it as "Approve packet v3 of ...".
+**Approval.** A role waiting for approval shows a card **Approve this role packet** with any assumptions the assistant made. **Approve and post** opens the role and starts posting. While ITS has not yet confirmed your company, the card says so: approving opens the role, but nothing of it is public until ITS confirms; the top of the role page and the Posting tab explain why the job page shows "not found" meanwhile, and it goes public on its own once ITS confirms. **Edit first** lets you change the packet before you approve. Owners, admins and hiring managers can approve, with two rules: the person who ran the intake (or wrote the version being approved) cannot approve it themselves unless they are the company's only owner, and when the packet names a decision maker who is on your team, the approval is reserved for them (an owner can also decide). The card says who can decide and why you cannot, if you cannot. **Send back with a note** returns the role to a draft with the note on its page; **Request approval again** sends it back after the edit. An approval nobody decides within 14 days goes back to a draft the same way. An edit to an open role by someone who can edit but not approve waits for approval on the same card while the role keeps running on its current version; Today shows it as "Approve packet v3 of ...".
 
 **The Posting tab.** One card per place the job appears. Each card has a status and one sentence that says what happens next.
 
@@ -184,16 +189,20 @@ Only owners and admins can pause the role, stop accepting applications, or chang
 Press **Bring in a recruiter** on Today, on a role, or on a candidate. In the panel:
 
 1. From Today only: under **Which hire is this about?** choose one of your roles, or **All of your hiring**, and write one line under **In one line, what do you need?**. On a role or a candidate the request is about that role or candidate.
-2. Pick what you want: **Review these candidates**, **Help me decide**, or **Take this role over**.
-3. Pick **Normal** or **Urgent**. Urgent marks the request urgent for the recruiter; it does not change the promised time.
+2. Pick what you want: **Review these candidates**, **Help me decide**, or **Ask ITS to run this hire** (an ITS recruiter contacts you to agree how they would run it; nothing changes until you have both agreed).
+3. Pick **Normal** or **Urgent**. Urgent puts the request at the front of the ITS queue; it does not change the promised time.
 4. On a role or a candidate, add anything specific under **Anything specific?** (optional).
 5. Press **Send to a recruiter**.
 
-The panel says what the recruiter will see before you send. You see "A recruiter has it", the expected response time and the access again. The request appears on Today until it is answered. The recruiter's answer appears under **What the assistant did** and on the candidate's timeline.
+Before you send, the panel says what the recruiter will see, the time they will respond by, and which of your plan's recruiter requests this one would be. You see "A recruiter has it", the expected response time and the access again.
+
+**Your recruiter requests** on Today lists every request your team made, and those the product made for you, with its state, the reply-by time, who asked and who picked it up. When the recruiter answers, the person who asked and your owners are told, and the answer appears there in full (and on the candidate's timeline); it stays for two weeks, then folds under **Older requests**. A recruiter can also write to you before answering; you are told the same way. While a request is open, **Add a note for the recruiter** adds to it; the recruiter is told there is a note. Once it is answered, **This didn't solve it** opens it again: say what is still missing, and it gets a new reply-by time. It goes back to the recruiter who answered when they can still take it, otherwise to the ITS queue; the fresh access is recorded like any other and your team is told.
 
 **What the recruiter can see.** Before accepting, only your company name, the role title, the kind of request, its urgency, the skill it needs and the time remaining. After accepting, what the request names: one candidate and the role they applied for, one role and its candidates, or all of your hiring when you chose that. Access lasts at most 14 days and ends a day after they mark it resolved. Every page they open is recorded in your **Access history** under **ITS recruiter access** in Setup, and you are told as soon as a recruiter starts.
 
-**When your plan's roles are used up.** If your plan's number of open roles is reached, drafting a new role says so and offers **Talk to ITS about more roles**, which sends ITS a request about your hiring as a whole.
+**When your plan's roles are used up.** If your plan's number of open roles is reached, drafting a new role says so and offers **Talk to ITS about more roles**. It opens the request form filled in, so you see what it shares before you send it. A talk about your plan does not use one of its recruiter requests.
+
+**Recruiter requests and your plan.** Your plan includes a number of recruiter requests. Only the requests your own team makes count; going over never holds a request up, and ITS talks with you about the extra.
 
 **Ending access.** In **Setup**, under **ITS recruiter access**, press **End this recruiter's access**, type a short reason under **Why you are ending it (the recruiter sees this)**, and press **End access now**. Access ends immediately, the recruiter is told, the request goes back to the queue, and your activity log records it. Only owners and admins can do this.
 

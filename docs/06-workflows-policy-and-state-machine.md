@@ -67,6 +67,13 @@ Every workflow definition declares: trigger, preconditions, steps (actions), suc
 - **Trigger:** daily timer per company (and after any brief).
 - **Detectors:** no owner action ≥ N days with candidates waiting; candidates in `triaged` or `interview_recommended` ≥ 3 days; interviews unscored ≥ 24h; offer pending approval ≥ 2 days; screen invites unanswered ≥ 3 days; scorecards incomplete ≥ 48h.
 - **Ladder:** brief line → direct message with a one-tap action → offer recruiter → escalation `stuck_role`. Cooldowns and thresholds are policies (`intervention.*`).
+- **Emails:** the message and offer rungs email the title (role, counts, days) and the link, never the body, which can name candidates (plan B3).
+
+### `notification_digest` (plan B3, 8 Oct 2026)
+- **Trigger:** one run per company, started by the stuck-role check (so companies that existed before it get one on their next daily check) and when someone saves their email alert settings; idempotent by company.
+- **Steps:** `send` wakes at 8:00 in the company's time zone. Each active member gets one summary of their updates that are neither read nor emailed, in the groups they get daily (and on Monday, weekly), from the previous summary up to 8:00 (never later), reaching back a week further for anything a missed summary never sent; counts by group and role, with links. Then it sleeps until the next 8:00. A new run only sets its clock; a wake for a time already summarized sends nothing.
+- **As it happens:** `notify` queues a `notification.email` job for the people who want that group at once (and for everyone, for the kinds that are always emailed: a recruiter given access, a candidate asking for a person, an eligibility hold); the job reads each setting again and writes one short email per update through the outbox.
+- **Content:** what happened, the company, the role's name and a link. Never a candidate's name or details, a recruiter's answer, or a ranking (`packages/core/src/notify-email.ts`).
 
 ### `escalation` (Slice 1 minimal, Slice 6 full)
 - **Trigger:** `recruiter.requested` from any surface, or from a workflow failure.

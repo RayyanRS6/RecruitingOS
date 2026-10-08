@@ -25,6 +25,32 @@ const GROUPS: Record<string, string[]> = {
   "Rules and data": ["policy.change", "knockout_rule.change", "notice_text.change", "data.delete", "data.export"],
 };
 
+/**
+ * The rules a setting really changes (plan B7, step 13): a workflow's gate or a route's policy read reads each of them
+ * today, so choosing a level changes what happens. Setup offers choices for these only. When a feature starts reading
+ * another rule, add it here; a test checks that every rule here has a reader in the code.
+ */
+export const SETTABLE: ReadonlySet<string> = new Set([
+  "role_packet.approve", "application.hold_ineligible", "application.invite_screen", "application.recommend_interview",
+  "message.send_freeform", "disposition.send", "intervention.nudge", "intervention.offer_recruiter",
+]);
+
+/**
+ * Work the product does today that no setting changes, with what happens, in plain words. Setup shows these read-only,
+ * so nobody picks a level that changes nothing, and nothing the product does is listed as "coming later".
+ */
+export const FIXED: Readonly<Record<string, string>> = {
+  "application.triage": "The assistant reads every applicant and writes an assessment for you to review. It never decides anything with it.",
+  "screen.conduct": "Once someone is invited to a screen, the screening conversation runs with them in their own time; they can ask for a person at any point. Whether people are invited is the rule above.",
+  "message.send_templated": "Confirmations and reminders (that an application arrived, a screening reminder, an interview time) go out by themselves in the approved wording.",
+  "interview.request": "An interview always waits for a person on your team to approve it on the candidate's page before any times go to the candidate.",
+  "interview.schedule": "Once an interview is approved, times are offered from your team's calendars or declared hours, and the booking goes on the calendars by itself.",
+  "interview.reschedule": "When someone on your team moves or cancels an interview, the candidate is offered new times or told, and the calendars follow by themselves.",
+};
+
+/** The product does it today: a setting to choose, or work it does the same way for everyone. The rest are planned. */
+const inProduct = (actionType: string) => SETTABLE.has(actionType) || actionType in FIXED;
+
 policyRoutes.get("/", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "company.read");
@@ -35,8 +61,9 @@ policyRoutes.get("/", requireTenant, async (c) => {
       for (const a of actions) {
         const actionType = ActionType.parse(a);
         const d = await resolvePolicy(tx, t.companyId, roleId, actionType);
-        // minLevel and maxLevel tell Setup which choices to offer, so it never shows one the PUT below refuses.
-        out.push({ group, actionType, level: d.level, approverRoles: d.approverRoles, source: d.source, locked: HARD_HUMAN_ONLY.has(actionType), defaultLevel: DEFAULT_POLICIES[actionType].level, minLevel: MIN_LEVELS[actionType] ?? null, maxLevel: MAX_LEVELS[actionType] ?? null });
+        // minLevel and maxLevel tell Setup which choices to offer, so it never shows one the PUT below refuses. `settable`:
+        // a level here changes what happens; `does`: what the product does where nothing is to choose.
+        out.push({ group, actionType, level: d.level, approverRoles: d.approverRoles, source: d.source, locked: HARD_HUMAN_ONLY.has(actionType), available: inProduct(actionType), settable: SETTABLE.has(actionType), does: FIXED[actionType] ?? null, defaultLevel: DEFAULT_POLICIES[actionType].level, minLevel: MIN_LEVELS[actionType] ?? null, maxLevel: MAX_LEVELS[actionType] ?? null });
       }
     }
     return out;
@@ -55,6 +82,10 @@ policyRoutes.put("/", requireTenant, async (c) => {
   if (allowed !== body.level) {
     if (levelAtLeast(allowed, body.level)) throw new HttpError(400, "minimum_level", `A person approves this before anything happens, so it cannot be set below "${LEVEL_WORDS[allowed]}".`);
     throw new HttpError(400, "maximum_level", `This stays at "${LEVEL_WORDS[allowed]}": a person approves it from the card on Today. "${LEVEL_WORDS[body.level]}" would leave it waiting with nobody asked to decide.`);
+  }
+  // A level nothing reads would be saved, audited and shown as chosen while changing nothing: refused in plain words.
+  if (!SETTABLE.has(body.actionType) && !HARD_HUMAN_ONLY.has(body.actionType)) {
+    throw new HttpError(400, "no_setting", body.actionType in FIXED ? `There is nothing to choose here: ${FIXED[body.actionType]}` : "This is not in the product yet, so there is nothing to choose.");
   }
   const container = c.get("container");
   const row = await withTenant(container.db, t.companyId, async (tx) => {

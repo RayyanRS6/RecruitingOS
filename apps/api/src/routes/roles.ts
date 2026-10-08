@@ -279,7 +279,8 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
 
 /**
  * "Send the decision message" to several people of this role at once (the Talent page's and Today's "not told yet"):
- * the same Send as on each person's page, one result per person, so one refusal never blocks the rest.
+ * the same Send as on each person's page, one result per person, so one refusal never blocks the rest. `held` counts
+ * the messages saved to go out once ITS confirms the company (founder decision B7).
  */
 roleRoutes.post("/:id/decision-messages", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -289,7 +290,7 @@ roleRoutes.post("/:id/decision-messages", requireTenant, async (c) => {
   const results = await withTenant(container.db, t.companyId, (tx) => sendDecisionMessages(tx, container, { roleId: c.req.param("id") ?? "", applicationIds: body.applicationIds, tenant: t, actor: actorOf(c) }));
   await container.kick();
   const tally = (n: CandidateNotice) => results.filter((r) => r.candidateNotice === n).length;
-  return c.json({ results, queued: tally("queued"), waitingApproval: tally("waiting_approval"), notSent: results.length - tally("queued") - tally("waiting_approval") });
+  return c.json({ results, queued: tally("queued"), held: tally("held"), waitingApproval: tally("waiting_approval"), notSent: results.length - tally("queued") - tally("held") - tally("waiting_approval") });
 });
 
 /** Application detail and actions live here too, keyed by application id. */

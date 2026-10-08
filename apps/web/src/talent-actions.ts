@@ -12,6 +12,8 @@ export type ToastParts = { title: string; detail?: string };
 export const NOT_TOLD = "Private: the candidate was not told.";
 /** The second line after a decision: private, and how the candidate will hear. */
 export const PRIVATE_DECISION = "Private: the candidate was not told. Send them the decision message when you are ready.";
+/** A message saved in the outbox of a company ITS has not confirmed yet (founder decision B7): it is not on its way yet. */
+export const HELD_FOR_CHECK = "The message is saved and goes to the candidate as soon as ITS confirms your company; they have not been told yet.";
 
 /** What became of the candidate's message, in one sentence. */
 export function noticeText(notice: CandidateNotice): string {
@@ -20,6 +22,8 @@ export function noticeText(notice: CandidateNotice): string {
       return NOT_TOLD;
     case "queued":
       return "A short, courteous message to the candidate is on its way.";
+    case "held":
+      return HELD_FOR_CHECK;
     case "waiting_approval":
       return "The message waits for approval; the candidate has not been told yet.";
     case "not_sent_settings":
@@ -118,6 +122,8 @@ export function sendDecisionToast(notice: CandidateNotice): ToastParts {
   switch (notice) {
     case "queued":
       return { title: "Decision message sent.", detail: "A short, courteous message is on its way to the candidate." };
+    case "held":
+      return { title: "Saved.", detail: HELD_FOR_CHECK };
     case "waiting_approval":
       return { title: "Waiting for approval.", detail: "Someone who may approve it reads it first. The candidate has not been told yet." };
     case "not_sent_settings":
@@ -141,14 +147,16 @@ export function batches<T>(items: readonly T[], size = DECISION_BATCH): T[][] {
 
 /** The answers of several bulk Sends as one: every person's own result, and the counts added up. */
 export function mergeDecisionResults(parts: readonly DecisionMessagesResponse[]): DecisionMessagesResponse {
-  return { results: parts.flatMap((p) => p.results), queued: parts.reduce((n, p) => n + p.queued, 0), waitingApproval: parts.reduce((n, p) => n + p.waitingApproval, 0), notSent: parts.reduce((n, p) => n + p.notSent, 0) };
+  return { results: parts.flatMap((p) => p.results), queued: parts.reduce((n, p) => n + p.queued, 0), held: parts.reduce((n, p) => n + (p.held ?? 0), 0), waitingApproval: parts.reduce((n, p) => n + p.waitingApproval, 0), notSent: parts.reduce((n, p) => n + p.notSent, 0) };
 }
 
 /** The toast after sending the decision message to several people at once: every outcome counted, nothing hidden. */
-export function bulkSendToast(r: Pick<DecisionMessagesResponse, "queued" | "waitingApproval" | "notSent">): ToastParts {
+export function bulkSendToast(r: Pick<DecisionMessagesResponse, "queued" | "held" | "waitingApproval" | "notSent">): ToastParts {
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-  const title = r.queued ? `${plural(r.queued, "decision message", "decision messages")} on ${r.queued === 1 ? "its" : "their"} way.` : "No decision messages were sent.";
-  const rest = [r.waitingApproval ? `${r.waitingApproval} waiting for approval` : "", r.notSent ? `${r.notSent} not sent; the list says why` : ""].filter(Boolean);
+  const held = r.held ?? 0;
+  const title = r.queued ? `${plural(r.queued, "decision message", "decision messages")} on ${r.queued === 1 ? "its" : "their"} way.`
+    : held ? `${plural(held, "decision message", "decision messages")} saved.` : "No decision messages were sent.";
+  const rest = [r.queued && held ? `${held} saved` : "", held ? "saved messages go out as soon as ITS confirms your company" : "", r.waitingApproval ? `${r.waitingApproval} waiting for approval` : "", r.notSent ? `${r.notSent} not sent; the list says why` : ""].filter(Boolean);
   return rest.length ? { title, detail: `${rest.join("; ")}.` } : { title };
 }
 
@@ -169,7 +177,11 @@ export function briefDecisionToast(action: { label: string; body?: Record<string
   if (notice) return sendDecisionToast(notice);
   if (/invite to a screen/i.test(action.label)) return { title: "Invitation on its way.", detail: "The screen goes to the candidate by email, or by text when they agreed to texts." };
   if (/^Yes, interview/i.test(action.label)) return { title: "Moved to Interviewing.", detail: "Open the candidate to choose the round and the interviewers; times go out from there." };
-  if (action.label === "Yes, send it") return { title: "Sent.", detail: "It is on its way." };
+  if (action.label === "Yes, send it") {
+    // a message a team member wrote, approved: on its way, or saved until ITS confirms the company (founder decision B7)
+    if ((response as { messageStatus?: string } | null)?.messageStatus === "held") return { title: "Approved and saved.", detail: "It goes out under the writer's name as soon as ITS confirms your company." };
+    return { title: "Sent.", detail: "It is on its way." };
+  }
   return { title: "Approved.", detail: "Recorded with your name." };
 }
 

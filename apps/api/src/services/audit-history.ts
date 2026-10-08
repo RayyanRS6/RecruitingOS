@@ -11,7 +11,7 @@ export const CUSTOMER_AUDIT_ACTIONS: readonly string[] = [
   // the team
   "membership.changed", "invitation.sent", "invitation.resent", "invitation.revoked", "invitation.accepted", "session.revoked", "session.reauthenticated",
   // the rules and the company
-  "policy.changed", "notice.changed", "company.updated",
+  "policy.changed", "notice.changed", "company.updated", "company.verified", "company.unverified",
   // candidates, outcomes and exports
   "candidate.viewed", "candidate.exported", "outcome.recorded", "outcome.corrected", "role.outcome_recorded",
   "export.created", "report.exported", "audit.exported",
@@ -53,6 +53,8 @@ export function describeAuditRecord(r: Pick<AuditRow, "action" | "actor" | "reas
     case "policy.changed": return `${who} changed what the AI may do on its own${r.reason ? `: ${r.reason}` : ""}.`;
     case "notice.changed": return `${who} ${str(d.version) ? "reworded" : "restored the standard text of"} ${NOTICE_WORDS[str(d.key) ?? ""] ?? "a candidate notice"}${str(d.version) ? ` (version ${str(d.version)})` : ""}.`;
     case "company.updated": return `${who} changed the company details${Array.isArray(d.fields) && d.fields.length ? ` (${(d.fields as unknown[]).map(fieldWords).join(", ")})` : ""}.`;
+    case "company.verified": return r.actor.kind === "system" ? "The company was confirmed automatically (no ITS check is needed in this environment)." : `ITS confirmed your company${num(d.released) ? `; ${num(d.released)} waiting ${num(d.released) === 1 ? "message" : "messages"} to candidates went out` : ""}.`;
+    case "company.unverified": return "ITS took back its confirmation of your company: your careers page and job pages are offline and messages to candidates wait until ITS confirms it again.";
     case "candidate.viewed": return `${who} opened a candidate's record${r.reason ? ` (${r.reason})` : ""}.`;
     case "candidate.exported": return `${who} exported a candidate's information.`;
     case "outcome.recorded": return `${who} recorded an outcome: ${OUTCOME_WORDS[str(d.outcome) ?? ""] ?? str(d.outcome) ?? "recorded"}.`;
@@ -70,7 +72,7 @@ function roleWords(role: string | null): string {
 }
 
 function fieldWords(f: unknown): string {
-  return ({ name: "name", website: "website", timezone: "time zone", sizeBand: "size", locations: "locations", logoUrl: "logo", benefitsSummary: "benefits summary", careersPage: "careers page intro", businessHours: "contact hours", notices: "candidate notices" } as Record<string, string>)[String(f)] ?? String(f);
+  return ({ name: "name", website: "website", timezone: "time zone", sizeBand: "size", locations: "locations", logoUrl: "logo", benefitsSummary: "benefits summary", careersPage: "careers page intro", businessHours: "contact hours", notices: "candidate notices", aiRulesReviewed: "the AI rules marked as reviewed", jobBoardAccess: "job-board access, confirmed by ITS", jobBoardAccessRemoved: "job-board access, no longer confirmed by ITS" } as Record<string, string>)[String(f)] ?? String(f);
 }
 
 /** A timestamp as ISO 8601 whatever the driver returned (Postgres writes "2026-09-30 16:05:10.123+00"). */

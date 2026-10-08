@@ -1,4 +1,5 @@
 import { and, desc, eq, gt } from "drizzle-orm";
+import { isCompanyVerified } from "@ros/contracts";
 import { BOARD_NAME, POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, applyLinkUrl, canTransitionPosting, createApplicationLink, emit, findPostingLink, isBoardChannel, jobUrlsFor, sourceForChannel, transitionPosting, type PostingState } from "@ros/core";
 import { companies, events, postings, randomToken, rolePackets, roles, uuidv7, type Tx } from "@ros/db";
 import { intakeAddress, type PublishResult } from "@ros/integrations";
@@ -24,7 +25,18 @@ type PostingValues = Partial<typeof postings.$inferInsert>;
  * nobody holds: a board that is posted, paused or waiting on a person is left alone. A channel a person closed while
  * the role stayed open is final (a pause and resume, or a Retry on another channel, never brings it back); only a
  * role that was closed and opened again prepares its closed rows again, and never a board still up on the outside.
+ *
+ * Nothing is prepared for a company ITS has not confirmed yet (founder decision B7): the run waits, with no deadline, for
+ * the company.verified signal the admin console sends when ITS confirms the company, then publishes whatever is still
+ * open. The role itself stays open and approved meanwhile; only its public side waits.
  */
+export const COMPANY_CHECK_WAIT_REASON = "waiting for ITS to confirm the company before anything is public";
+
+/** The signal key the admin console wakes waiting publish runs with (the engine's event keys are `<subject id>:<type>`). */
+export function companyVerifiedSignal(companyId: string): string {
+  return `${companyId}:company.verified`;
+}
+
 export const publishRole: WorkflowDefinition<State> = {
   key: "publish_role",
   version: 2,
@@ -38,6 +50,7 @@ export const publishRole: WorkflowDefinition<State> = {
       const [pv] = await ctx.q.select().from(rolePackets).where(and(eq(rolePackets.roleId, ctx.state.roleId), eq(rolePackets.version, ctx.state.packetVersion))).limit(1);
       if (!role || !company || !pv) return { kind: "fail", error: "role, company, or packet not found", retryable: false };
       if (role.status !== "open") return { kind: "complete" };
+      if (!isCompanyVerified(company.settings)) return { kind: "wait", wait: { kind: "event", eventTypes: ["company.verified"], subjectId: company.id, reason: COMPANY_CHECK_WAIT_REASON }, resumeStep: "publish" };
 
       const { integrations, env } = ctx.services;
       const urls = jobUrlsFor(env.jobsBaseUrl, { slug: company.slug, roleId: role.id });

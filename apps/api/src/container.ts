@@ -5,7 +5,7 @@ import { createDb, inspectConnectionRole, migrate, migrationStatus, postings, pr
 import { POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, countActiveAdmins, createRateLimitStore, emit, raiseAlert, transitionPosting, type RateLimitStore } from "@ros/core";
 import { createIntegrations, type Integrations } from "@ros/integrations";
 import { createEngine, type WorkflowEngine } from "@ros/workflows";
-import { REVOKE_JOB_KIND, checkPrivacyRequestDeadlines, listSuppressions, onSuppressionChange, revokeAndDeleteCredentials, setEventSink } from "@ros/core";
+import { REVOKE_JOB_KIND, checkPrivacyRequestDeadlines, listSuppressions, onSuppressionChange, revokeAndDeleteCredentials, setEventSink, setNotifyClock } from "@ros/core";
 import { SEND_JOB_KIND, retryCommunication, sendFallbackSms, sendQueuedCommunication } from "@ros/agents";
 import { guardEmailAdapter } from "@ros/integrations";
 import type { Actor } from "@ros/contracts";
@@ -135,6 +135,8 @@ export async function createContainer(opts: { env?: Record<string, string | unde
   );
   // The outbox stamps its send jobs on the engine's clock, so a message queued "now" is due on the clock that runs the queue.
   integrations.clock = () => engine.clock();
+  // So does the job that writes an email alert for an update (plan B3).
+  setNotifyClock(() => engine.clock());
 
   // Correction 10: disconnecting queues revocation and deletion; the worker (the only role that can read the value) runs it.
   engine.registerJob(REVOKE_JOB_KIND, async (payload, ctx) => {

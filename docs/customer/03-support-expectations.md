@@ -14,7 +14,7 @@ Draft of 30 September 2026 (checked again against the product the same day), for
 
 **Your team**
 
-- **Bring in a recruiter**, inside the product. The button is on Today, on every role and on every candidate. Pick what you need (Review these candidates, Help me decide, Take this role over), add a note if you like, mark it Normal or Urgent, and press **Send to a recruiter**. You see the expected response time straight away, and the request appears on Today until it is answered.
+- **Bring in a recruiter**, inside the product. The button is on Today, on every role and on every candidate. Pick what you need (Review these candidates, Help me decide, Ask ITS to run this hire), add a note if you like, mark it Normal or Urgent, and press **Send to a recruiter**. Before you send, the form shows the response time, what the recruiter will be able to see, and which of your plan's recruiter requests this one would be. The request is listed on Today under **Your recruiter requests**, where you can follow it, add a note while it is open, and read the answer.
 - **support@identifiedtalent.com** for anything else: a question about the product, a change to your plan or program, something that looks wrong, or a problem that is blocking you. If it is blocking your hiring, say so in the subject line. You change your team and your company details yourself in **Setup**; we are glad to help if you ask.
 - Your ITS contact for the program is the person named in your agreement. In the first week, that person checks your workspace every business day.
 
@@ -34,7 +34,7 @@ Response times count **business hours only**, on the ITS calendar above. A busin
 |---|---|---|
 | Help me decide (advice on a hire) | Your team, in the product | 8 business hours (one business day) |
 | Review these candidates | Your team, in the product | 8 business hours |
-| Take this role over | Your team, in the product | 8 business hours |
+| Ask ITS to run this hire (we contact you to agree how; nothing changes until you have agreed) | Your team, in the product | 8 business hours |
 | A held application that nobody on your team decided on for three days | The product, on its own | 8 business hours |
 | A role that has stalled despite reminders | The product, on its own | 8 business hours |
 | A candidate asks for a person, or the assistant could not continue with a candidate | The candidate, or the product | 4 business hours |
@@ -50,13 +50,15 @@ Examples of how business hours count:
 
 **What "Urgent" does.** Marking a request Urgent moves it to the top of the recruiter queue. It does not shorten the promised response time.
 
-**How you see the answer.** When the recruiter responds, the answer appears on Today under **What the assistant did** as "(name) (ITS recruiter) responded", and on the candidate's timeline. If the recruiter needs to act inside your workspace, their access is limited to that request and every page they open is recorded for you.
+**How you see the answer.** When the recruiter answers, the person who asked and your owners are told, and the answer appears in full on Today under **Your recruiter requests** (it stays there for two weeks), and on the candidate's timeline. A recruiter can also write to you before answering, for example to ask a question back; you are told the same way. If the answer did not solve it, press **This didn't solve it** on the request and say what is still missing: it opens again with a new response time. If the recruiter needs to act inside your workspace, their access is limited to that request, your team is told when it starts, and every page they open is recorded for you.
+
+**Recruiter requests and your plan.** Your plan includes a number of recruiter requests. Only the requests your own team makes count; requests the product raises on its own, a candidate's request for a person, and a talk with ITS about adding roles to your plan do not. Going over never holds a request up: it goes to the queue like any other, and ITS talks with you about the extra.
 
 ## 4. What support covers
 
 - Using the product: sign-in, inviting your team, Setup, roles, Talent, Interviews, the Posting and Report tabs.
 - The manual posting of your approved job to LinkedIn, Indeed and ZipRecruiter under your accounts, recording and checking each posting's address, and taking postings down when a role closes.
-- Recruiting help through Bring in a recruiter: reviewing candidates, advice on a decision, running a role for you.
+- Recruiting help through Bring in a recruiter: reviewing candidates, advice on a decision, and agreeing with you how ITS would run a hire.
 - Candidates who ask for a person, cannot be reached, or have a problem with a screening or scheduling link.
 - Privacy requests from candidates.
 - Changes only ITS can make: correcting a recorded outcome, and changing your plan, program dates or allowances.

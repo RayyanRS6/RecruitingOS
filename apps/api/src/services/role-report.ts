@@ -133,7 +133,8 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
           failed: sql<string>`count(*) filter (where ${communications.status} in ('failed', 'complained'))`,
           bounced: sql<string>`count(*) filter (where ${communications.status} = 'bounced')`,
           unknown: sql<string>`count(*) filter (where ${communications.status} = 'unknown')`,
-          pending: sql<string>`count(*) filter (where ${communications.status} in ('queued', 'sending'))`,
+          // held: waiting for the ITS company check (founder decision B7); it goes out once the company is confirmed
+          pending: sql<string>`count(*) filter (where ${communications.status} in ('queued', 'sending', 'held'))`,
           candidatesAffected: sql<string>`count(distinct ${communications.applicationId}) filter (where ${communications.status} in ('failed', 'bounced', 'complained', 'unknown'))`,
         })
         .from(communications)

@@ -6,7 +6,9 @@ import { Link, useNavigate, useParams, useSearchParams } from "../nav";
 import { Alert, Avatar, Button, Card, Chip, EmptyState, ErrorState, Icon, PageHeader, Pill, Sheet, Skeleton, StageButton, StatusChip, TabPanel, Table, Tabs, type OwnerStage } from "@ros/ui";
 import { api, ApiError, type ActionResult, type ApplicationSummary, type ApplicationsWithCounts, type CompareResponse, type DecisionMessagePreview, type DecisionMessagesResponse, type Me, type RoleSummary } from "../api/client";
 import { toast } from "../toast";
+import { messageOnItsWayChip } from "../company-check";
 import { AskRecruiter } from "../components/AskRecruiter";
+import { useCompanyCheck } from "../components/use-company-check";
 import { LOW_CONFIDENCE_LABEL } from "../evidence";
 import { activeCompanyOf } from "../rail";
 import { canDecline } from "../roles";
@@ -188,6 +190,8 @@ function TalentRow({ a, busy, onOpen, onMove }: { a: ApplicationSummary; busy: b
   const name = a.candidate?.name ?? "Unknown";
   const reading = readingOf(a);
   const waiting = waitingText(a);
+  // A decision message in the outbox of a company ITS has not confirmed yet waits for the check (founder decision B7).
+  const check = useCompanyCheck();
   return (
     <div className="talent-row">
       <Avatar name={name} />
@@ -205,7 +209,7 @@ function TalentRow({ a, busy, onOpen, onMove }: { a: ApplicationSummary; busy: b
         {a.evidence?.lowConfidence && reading !== "closer_look" ? <Chip tone="caution">{LOW_CONFIDENCE_LABEL}</Chip> : null}
         {a.tags.map((t) => <Chip key={t} tone="caution">{t}</Chip>)}
         {a.toldState === "not_told" ? <Chip>{a.decisionMessageWaiting ? "Message waiting for approval" : "Not told yet"}</Chip> : null}
-        {a.toldState === "queued" ? <Chip>Message on its way</Chip> : null}
+        {a.toldState === "queued" ? <Chip>{messageOnItsWayChip(check)}</Chip> : null}
       </div>
       {/* the match score (Wave F) goes here; the room is kept so the rows do not move when it arrives */}
       <span className="score-slot" aria-hidden="true" />

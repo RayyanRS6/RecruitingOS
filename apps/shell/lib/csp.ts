@@ -1,7 +1,8 @@
 /**
  * Content-security policy for the authenticated application (21 Sep, item 6). Dependency-free so the Next.js middleware
- * can use it. A per-request nonce covers the scripts Next.js emits and any script the shell adds; external origins are
- * the two font hosts only. Report-only until the staging reports have been reviewed (docs/readiness/18).
+ * can use it. A per-request nonce covers the scripts Next.js emits and any script the shell adds. No outside origin at
+ * all: the fonts are served from this deployment's own /fonts/ folder (app/fonts.css). Report-only until the staging
+ * reports have been reviewed (docs/readiness/18).
  */
 export type AppCspMode = "report-only" | "enforce";
 
@@ -21,8 +22,8 @@ export function buildAppCsp(input: { nonce: string; dev: boolean; reportPath?: s
     "frame-ancestors 'none'",
     "object-src 'none'",
     "img-src 'self' data: blob:",
-    "font-src 'self' https://fonts.gstatic.com",
-    `style-src 'self' 'nonce-${input.nonce}' https://fonts.googleapis.com`,
+    "font-src 'self'",
+    `style-src 'self' 'nonce-${input.nonce}'`,
     "style-src-attr 'unsafe-inline'",
     // 'unsafe-eval' only in development: the dev server's module runtime needs it; production builds do not.
     `script-src 'self' 'nonce-${input.nonce}' 'strict-dynamic'${input.dev ? " 'unsafe-eval'" : ""}`,

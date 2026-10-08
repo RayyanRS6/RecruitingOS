@@ -5,19 +5,26 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, ErrorState, Field, PageHeader, Pill, Segmented, Skeleton, Table, type Tone } from "@ros/ui";
 import { api, ApiError, type MyCalendar } from "../api/client";
 import { useSearchParams } from "../nav";
+import { hasChoice, loosens, looseningQuestion, splitRules } from "../ai-rules";
+import { CAREERS_PAGE_WAITS, companyCheckOf } from "../company-check";
 import { LEVELS, allowedLevels, type PolicyLevel } from "../policy-levels";
 import { ACCESS_DAYS, accessChip } from "../recruiter-access";
 import { canSeeActivity, canStartHire } from "../roles";
 import { setupSections } from "../setup-sections";
 import { browserStorage, SHORTCUT_CHANGED_EVENT, START_HIRE_KEY, setStartHireShortcut, startHireShortcutOn } from "../start-hire";
 import { toast } from "../toast";
+import { NotificationsCard } from "./NotificationsCard";
 import { TeamCard } from "./TeamCard";
 
 type BusinessHours = { days: number[]; start: string; end: string };
 type CompanySettings = { website?: string; logoUrl?: string; benefitsSummary?: string; careersPage?: { enabled: boolean; intro?: string }; businessHours?: BusinessHours; notices?: Record<string, { version: string; text: string }>; pilot?: { startedAt: string; endsAt: string; extendedUntil?: string } };
 type Company ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; timezone: string; planKey: string; status: string; plan?: { key: string; name: string; limits: Record<string, number | null> } | null; usage?: Record<string, { used: number; limit: number | null }>; locations: Array<{ city?: string; region?: string; country?: string }>; settings: CompanySettings; integrations: Array<{ kind: string; provider: string; status: string }>; ai: { provider: string } };
-/** minLevel and maxLevel: the floor and ceiling the API holds the action to; only the levels between them are offered. */
-type PolicyRow ={ group: string; actionType: string; level: PolicyLevel; approverRoles: string[]; source: string; locked: boolean; defaultLevel: string; minLevel?: PolicyLevel | null; maxLevel?: PolicyLevel | null };
+/**
+ * minLevel and maxLevel: the floor and ceiling the API holds the action to; only the levels between them are offered.
+ * available: whether the product does this today (plan B7); the rest are listed under "Coming later" with no choice.
+ * settable: a level changes what happens; otherwise `does` says what the product does, with nothing to choose.
+ */
+type PolicyRow ={ group: string; actionType: string; level: PolicyLevel; approverRoles: string[]; source: string; locked: boolean; available?: boolean; settable?: boolean; does?: string | null; defaultLevel: PolicyLevel; minLevel?: PolicyLevel | null; maxLevel?: PolicyLevel | null };
 
 export function Setup() {
   const qc = useQueryClient();
@@ -31,11 +38,17 @@ export function Setup() {
   const [reauthNeeded, setReauthNeeded] = useState(false);
   const [params] = useSearchParams();
   const reauthOutcome = params.get("reauth");
+  const [loosening, setLoosening] = useState<{ row: PolicyRow; to: PolicyLevel } | null>(null);
   const setPolicy = useMutation({
     mutationFn: (p: { actionType: string; level: string; approverRoles: string[] }) => api.put("/api/v1/policies", p),
-    onSuccess: () => { toast("Saved."); setReauthNeeded(false); qc.invalidateQueries({ queryKey: ["policies"] }); qc.invalidateQueries({ queryKey: ["audit-history"] }); },
-    onError: (e) => { if (e instanceof ApiError && e.code === "reauth_required") { setReauthNeeded(true); toast("Confirm it's you first, then change the rule again."); } else toast(e instanceof ApiError ? e.message : "Could not save."); },
+    onSuccess: () => { toast("Saved."); setReauthNeeded(false); setLoosening(null); qc.invalidateQueries({ queryKey: ["policies"] }); qc.invalidateQueries({ queryKey: ["audit-history"] }); },
+    onError: (e) => { setLoosening(null); if (e instanceof ApiError && e.code === "reauth_required") { setReauthNeeded(true); toast("Confirm it's you first, then change the rule again."); } else toast(e instanceof ApiError ? e.message : "Could not save."); },
   });
+  // Loosening a rule asks first (plan B7): the choice waits here until the person confirms it. Tightening saves at once.
+  const choose = (row: PolicyRow, to: PolicyLevel) => {
+    if (loosens(row.level, to)) setLoosening({ row, to });
+    else { setLoosening(null); setPolicy.mutate({ actionType: row.actionType, level: to, approverRoles: row.approverRoles }); }
+  };
 
   // The section menu (plan I1): every card has an id; the menu lists the ones this person sees.
   const sections = setupSections({ mayStartHire: canStartHire(myRole), seesAudit: canSeeActivity(myRole) });
@@ -44,13 +57,15 @@ export function Setup() {
   if (company.isLoading) return <Skeleton lines={5} />;
   if (company.error || !company.data) return <ErrorState message="Could not load settings." onRetry={() => company.refetch()} />;
   const c = company.data;
-  const groups = [...new Set((policies.data ?? []).map((p) => p.group))];
+  // What the product does today, with every "always a person" guarantee; the rest under "Coming later" (plan B7).
+  const rules = splitRules(policies.data ?? []);
+  const groups = [...new Set(rules.now.map((p) => p.group))];
 
   return (
     <div className="stack" style={{ gap: 18 }}>
       <PageHeader eyebrow={c.name} title="Setup" sub="Your company, your team, what is connected, and what the AI may do on its own." />
 
-      {reauthOutcome === "ok" ? <Alert tone="info">Thanks, that is confirmed. You can change the rules and the candidate notices for the next ten minutes.</Alert> : reauthOutcome === "mismatch" ? <Alert tone="critical">That sign-in was a different account. Confirm with the account you are signed in as.</Alert> : reauthOutcome === "failed" ? <Alert tone="critical">The confirmation did not complete. Try again.</Alert> : null}
+      {reauthOutcome === "ok" ? <Alert tone="info">Thanks, that is confirmed. For the next ten minutes you can change the rules and the candidate notices, and make someone an admin or an owner.</Alert> : reauthOutcome === "mismatch" ? <Alert tone="critical">That sign-in was a different account. Confirm with the account you are signed in as.</Alert> : reauthOutcome === "failed" ? <Alert tone="critical">The confirmation did not complete. Try again.</Alert> : null}
       {reauthNeeded ? <ReauthPrompt /> : null}
 
       <div className="setup-layout">
@@ -60,7 +75,7 @@ export function Setup() {
         <div className="stack" style={{ gap: 18 }}>
           <div className="grid-2">
             <Section id="setup-company"><CompanyCard company={c} canEdit={["owner", "admin"].includes(myRole)} onReauthRequired={() => setReauthNeeded(true)} /></Section>
-            <Section id="setup-team"><TeamCard myRole={myRole} myUserId={me.data?.user.id ?? ""} /></Section>
+            <Section id="setup-team"><TeamCard myRole={myRole} myUserId={me.data?.user.id ?? ""} onReauthRequired={() => setReauthNeeded(true)} /></Section>
           </div>
 
           <Section id="setup-recruiters"><RecruiterAccess canRevoke={["owner", "admin"].includes(myRole)} /></Section>
@@ -68,6 +83,8 @@ export function Setup() {
           <Section id="setup-sessions"><YourSessions /></Section>
 
           <Section id="setup-availability"><MyAvailability /></Section>
+
+          <Section id="setup-notifications"><NotificationsCard /></Section>
 
           {canStartHire(myRole) ? <Section id="setup-shortcut"><ShortcutCard /></Section> : null}
 
@@ -89,23 +106,45 @@ export function Setup() {
 
           <Section id="setup-rules">
             <Card title="What the AI may do on its own">
-              <p className="small muted" style={{ marginBottom: 10 }}>Four levels for every action. Some decisions always stay with a person, and some always wait for a person's approval (approving a role, offers, interviews); those offer only the choices allowed. Changes are recorded.</p>
+              <p className="small muted" style={{ marginBottom: 10 }}>What the product does today, and how much of it may happen without a person. Some decisions always stay with a person, and approving a role always waits for a person; those offer only the choices allowed. Work the product does the same way for everyone says what it does, with nothing to choose. Letting something happen with less checking asks you first, and every change is recorded.</p>
               {!canManagePolicy && myRole ? <Alert tone="info">Only owners and admins change these rules. You can see what applies; ask one of them if something should work differently.</Alert> : null}
               {policies.isLoading ? <Skeleton lines={6} /> : groups.map((g) => (
                 <div key={g} style={{ marginBottom: 14 }}>
                   <h3 style={{ marginBottom: 6 }}>{g}</h3>
                   <div className="stack" style={{ gap: 6 }}>
-                    {policies.data!.filter((p) => p.group === g).map((p) => (
-                      <div key={p.actionType} className="row" style={{ justifyContent: "space-between", padding: "6px 0", borderTop: "1px solid var(--line)" }}>
-                        <div><span>{actionLabel(p.actionType)}</span>{p.locked ? <Chip>always a person</Chip> : p.minLevel === "approval" ? <Chip>a person approves</Chip> : p.source !== "default" ? <Chip tone="accent">customized</Chip> : null}</div>
-                        {canManagePolicy ? (
-                          <Segmented value={p.level} onChange={(v) => setPolicy.mutate({ actionType: p.actionType, level: v, approverRoles: p.approverRoles })} options={allowedLevels(p)} ariaLabel={actionLabel(p.actionType)} />
-                        ) : <Chip tone="neutral">{LEVELS.find((l) => l.value === p.level)?.label ?? p.level}</Chip>}
+                    {rules.now.filter((p) => p.group === g).map((p) => (
+                      <div key={p.actionType} style={{ padding: "6px 0", borderTop: "1px solid var(--line)" }}>
+                        <div className="row" style={{ justifyContent: "space-between" }}>
+                          <div><span>{actionLabel(p.actionType)}</span>{p.locked ? <Chip>always a person</Chip> : p.minLevel === "approval" ? <Chip>a person approves</Chip> : p.source !== "default" && hasChoice(p) ? <Chip tone="accent">customized</Chip> : null}</div>
+                          {!hasChoice(p) ? <Chip tone="neutral">Nothing to choose</Chip> : canManagePolicy ? (
+                            <Segmented value={loosening?.row.actionType === p.actionType ? loosening.to : p.level} onChange={(v) => choose(p, v)} options={allowedLevels(p)} ariaLabel={actionLabel(p.actionType)} />
+                          ) : <Chip tone="neutral">{levelLabel(p.level)}</Chip>}
+                        </div>
+                        {p.does ? <p className="small muted" style={{ margin: "4px 0 0" }}>{p.does}</p> : null}
+                        {loosening?.row.actionType === p.actionType ? (
+                          <div style={{ marginTop: 8 }}>
+                            <Alert tone="caution">
+                              <div className="stack" style={{ gap: 6 }}>
+                                <span>{looseningQuestion(actionLabel(p.actionType), p.level, loosening.to)}</span>
+                                <div className="row"><Button size="sm" variant="primary" loading={setPolicy.isPending} onClick={() => setPolicy.mutate({ actionType: p.actionType, level: loosening.to, approverRoles: p.approverRoles })}>Yes, change it</Button><Button size="sm" variant="quiet" onClick={() => setLoosening(null)}>Keep it as it is</Button></div>
+                              </div>
+                            </Alert>
+                          </div>
+                        ) : null}
                       </div>
                     ))}
                   </div>
                 </div>
               ))}
+              {rules.later.length ? (
+                <details style={{ marginTop: 6 }}>
+                  <summary className="small">Coming later ({rules.later.length})</summary>
+                  <p className="small muted" style={{ margin: "6px 0" }}>Planned, not in the product yet, so there is nothing to choose. When one arrives it moves up into the list above, with its choices.</p>
+                  <ul className="small" style={{ paddingLeft: 18, margin: 0 }}>
+                    {rules.later.map((p) => <li key={p.actionType}>{actionLabel(p.actionType)}</li>)}
+                  </ul>
+                </details>
+              ) : null}
               {setPolicy.error ? <Alert tone="critical">{setPolicy.error instanceof ApiError ? setPolicy.error.message : "Could not save."}</Alert> : null}
             </Card>
           </Section>
@@ -190,6 +229,10 @@ function explainStatus(i: { kind: string; provider: string; status: string }): s
   if (i.kind === "secrets") return i.status === "live" ? "Connected credentials are kept in the managed key vault." : "Development stand-in; production uses the managed key vault.";
   if (i.kind === "comp") return i.status === "live" ? "Public wage data from the Bureau of Labor Statistics." : "Wage benchmarks unavailable; playbook ranges are used and cited.";
   return "";
+}
+
+function levelLabel(l: string): string {
+  return LEVELS.find((x) => x.value === l)?.label ?? l;
 }
 
 function actionLabel(a: string): string {
@@ -301,7 +344,7 @@ function RecruiterAccess({ canRevoke }: { canRevoke: boolean }) {
   const past = (q.data ?? []).filter((g) => !g.active).slice(0, 10);
   return (
     <Card title="ITS recruiter access">
-      <p className="small muted">A recruiter gets access when your team asks for one, and also when the system brings one in on its own: a candidate asks for a person, or something gets stuck. A request about one candidate or one role gives access to that alone; all of your hiring only when someone on your team chose that. Access ends a day after the request is resolved, or after {ACCESS_DAYS} days at most, and you are told when a recruiter starts. Every page they open is recorded in your activity. {canRevoke ? "You can end it at any time." : "Owners and admins can end it at any time."}</p>
+      <p className="small muted">A recruiter gets access when your team asks for one, and also when the system brings one in on its own: a candidate asks for a person, or something gets stuck. A request about one candidate or one role gives access to that alone; all of your hiring only when someone on your team chose that. Access ends a day after the request is resolved, or after {ACCESS_DAYS} days at most, and you are told when a recruiter starts. Reopening an answered request gives fresh access, listed here like any other. Every page they open is recorded in your activity. {canRevoke ? "You can end it at any time." : "Owners and admins can end it at any time."}</p>
       {q.isLoading ? <Skeleton lines={2} /> : active.length === 0 ? <p className="small muted" style={{ marginTop: 8 }}>No recruiter has access right now.</p> : (
         <div className="stack" style={{ gap: 8, marginTop: 8 }}>
           {active.map((g) => (
@@ -409,7 +452,7 @@ function ReauthPrompt() {
   return (
     <Alert tone="caution">
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-        <span><strong>Confirm it's you.</strong> Changing the rules or the candidate notices needs a fresh sign-in. You will come straight back here.</span>
+        <span><strong>Confirm it's you.</strong> Changing the rules or the candidate notices, or making someone an admin or an owner, needs a fresh sign-in. You will come straight back here.</span>
         <Button size="sm" variant="primary" loading={start.isPending} onClick={() => start.mutate()}>Confirm with my sign-in</Button>
       </div>
     </Alert>
@@ -421,6 +464,8 @@ const NOTICE_LABEL: Record<string, string> = { ai_use: "How we use AI (shown on 
 /** The same notices named briefly, for the read view's one-line summary. */
 const NOTICE_SHORT: Record<string, string> = { ai_use: "AI notice", privacy: "privacy notice", pay_transparency: "pay range notice", adverse_decision_explanation: "decision review notice" };
 const SIZE_BANDS = ["1-19", "20-49", "50-99", "100-199", "200-499", "500+"];
+/** The plan's allowances in the company card's words (recruiter_asks counts the team's own requests, founder decision Q33). */
+const USAGE_LABEL: Record<string, string> = { active_roles: "active roles", text_screens: "text screens", voice_minutes: "voice minutes", sourcing_contacts: "sourcing contacts", recruiter_asks: "recruiter requests", seats: "seats" };
 const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /** What the company card sends: only what the person may change; the plan, pilot and allowances are never in it. */
@@ -479,7 +524,8 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
       {!editing || !f ? (
         <dl className="kv">
           <dt>Name</dt><dd>{c.name}</dd>
-          <dt>Careers page</dt><dd><a href={`/careers/${c.slug}`} target="_blank" rel="noreferrer">/careers/{c.slug}</a></dd>
+          <dt>ITS check</dt><dd>{companyCheckOf(c) === "waiting" ? <Chip tone="caution">ITS is confirming your company</Chip> : <Chip tone="good">Confirmed</Chip>}</dd>
+          <dt>Careers page</dt><dd><a href={`/careers/${c.slug}`} target="_blank" rel="noreferrer">/careers/{c.slug}</a>{companyCheckOf(c) === "waiting" ? <span className="small muted"> · {CAREERS_PAGE_WAITS}</span> : null}</dd>
           <dt>Website</dt><dd>{c.settings.website || <span className="muted">not set</span>}</dd>
           <dt>Vertical</dt><dd>{c.vertical}</dd>
           <dt>Size</dt><dd>{c.sizeBand} employees</dd>
@@ -488,7 +534,7 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
           <dt>Contact hours</dt><dd>{hours ? `${hours.days.map((d) => DAY_SHORT[d]).join(", ")} ${hours.start} to ${hours.end}` : "Any day, 8:00 to 21:00 local time (the legal default for texts)"}</dd>
           <dt>Notices</dt><dd className="small">{shownNotices.some((n) => n.overridden) ? shownNotices.filter((n) => n.overridden).map((n) => `${NOTICE_SHORT[n.key] ?? n.key} reworded (version ${n.version})`).join("; ") : "Standard wording"}</dd>
           <dt>Plan</dt><dd><Chip tone="accent">{c.plan?.name ?? c.planKey}</Chip>{c.settings.pilot ? <span className="small muted"> · pilot until {new Date(c.settings.pilot.extendedUntil ?? c.settings.pilot.endsAt).toLocaleDateString()}; roles in progress are never cut off</span> : null}</dd>
-          {c.usage ? <><dt>Usage</dt><dd className="small">{Object.entries(c.usage).map(([k, v]) => `${k.replace(/_/g, " ")}: ${v.used}${v.limit === null ? "" : ` of ${v.limit}`}`).join(" · ")}</dd></> : null}
+          {c.usage ? <><dt>Usage</dt><dd className="small">{Object.entries(c.usage).map(([k, v]) => `${USAGE_LABEL[k] ?? k.replace(/_/g, " ")}: ${v.used}${v.limit === null ? "" : ` of ${v.limit}`}`).join(" · ")}{c.usage.recruiter_asks ? <span className="muted"> Recruiter requests count only what your team asks for. Going over never holds a request up; ITS will talk with you about the extra.</span> : null}</dd></> : null}
         </dl>
       ) : (
         <div className="stack" style={{ gap: 10 }}>

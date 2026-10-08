@@ -1,12 +1,13 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, gte, inArray, lt, lte, or } from "drizzle-orm";
-import { UpdateCompany } from "@ros/contracts";
+import { GettingStartedRequest, UpdateCompany } from "@ros/contracts";
 import { DEFAULT_NOTICES, applyNoticeOverrides, assertCan, audit, emit, revokeAllSessions } from "@ros/core";
 import { auditRecords, companies, memberships, withPlatform, withTenant } from "@ros/db";
 import { actorOf, clientIp, requireTenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { assertRecentAuth } from "../middleware/reauth";
 import { CUSTOMER_AUDIT_ACTIONS, auditCsv, customerAuditRow, isoTime } from "../services/audit-history";
+import { dismissGettingStarted, markPoliciesReviewed } from "../services/company-trust";
 
 /**
  * Company preferences, the customer's audit history and member sign-out (audit findings A8, A9, A11, J16). Mounted
@@ -18,7 +19,7 @@ export const companySettingsRoutes = new Hono<Vars>();
 const ADMIN_ONLY_COMPANY_KEYS: Record<string, string> = {
   planKey: "the plan", plan: "the plan", status: "the account status", slug: "the careers page address", vertical: "the kind of business", id: "the company id", entitlements: "the allowances", usage: "the allowances",
 };
-const ADMIN_ONLY_SETTINGS_KEYS: Record<string, string> = { pilot: "the pilot term", retention: "the retention periods", brief: "the daily brief settings", entitlements: "the allowances", plan: "the plan" };
+const ADMIN_ONLY_SETTINGS_KEYS: Record<string, string> = { pilot: "the pilot term", retention: "the retention periods", brief: "the daily brief settings", entitlements: "the allowances", plan: "the plan", verifiedAt: "the ITS company check", verifiedBy: "the ITS company check", onboarding: "the getting-started checklist" };
 
 function refuseAdminOnlyKeys(raw: unknown): void {
   if (!raw || typeof raw !== "object") return;
@@ -49,7 +50,8 @@ companySettingsRoutes.patch("/current", requireTenant, async (c) => {
   const now = container.engine.clock();
   const actor = actorOf(c);
   const result = await withTenant(container.db, t.companyId, async (tx) => {
-    const [existing] = await tx.select().from(companies).where(eq(companies.id, t.companyId)).limit(1);
+    // Locked: the settings are written back whole, so an ITS confirmation made meanwhile (services/company-trust.ts) is kept.
+    const [existing] = await tx.select().from(companies).where(eq(companies.id, t.companyId)).limit(1).for("update");
     if (!existing) throw new HttpError(404, "not_found", "Company not found.");
     const patch: Partial<typeof companies.$inferInsert> = {};
     const fields: string[] = [];
@@ -100,6 +102,24 @@ companySettingsRoutes.get("/current/notices", requireTenant, async (c) => {
   assertCan(t.role, "company.read");
   const [co] = await withTenant(c.get("container").db, t.companyId, (tx) => tx.select({ settings: companies.settings }).from(companies).where(eq(companies.id, t.companyId)).limit(1));
   return c.json(noticesView(co?.settings.notices));
+});
+
+/**
+ * The getting-started card on Today (plan B2): anyone on the team hides it for themselves ("dismiss"); an owner or
+ * admin records that the AI rules were reviewed ("policies_reviewed", audited). Never ITS staff under a grant.
+ */
+companySettingsRoutes.post("/current/getting-started", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  assertCan(t.role, "company.read");
+  if (t.staff) throw new HttpError(403, "forbidden", "The getting-started card belongs to the company's own team.");
+  const body = GettingStartedRequest.parse(await c.req.json().catch(() => ({})));
+  if (body.action === "policies_reviewed") assertCan(t.role, "policy.manage");
+  const container = c.get("container");
+  const now = container.engine.clock();
+  await withTenant(container.db, t.companyId, (tx) => body.action === "dismiss"
+    ? dismissGettingStarted(tx, { companyId: t.companyId, userId: t.userId, now })
+    : markPoliciesReviewed(tx, { companyId: t.companyId, actor: actorOf(c), now, ip: clientIp(c) ?? undefined }));
+  return c.json({ ok: true, action: body.action });
 });
 
 /* ---------------------------------------------------------------------------------------------------------- */

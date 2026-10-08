@@ -2,8 +2,9 @@ import { Hono } from "hono";
 import { createHash } from "node:crypto";
 import { desc, eq, sql } from "drizzle-orm";
 import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, suppressAddress, describeHours } from "@ros/core";
-import { BreakGlass, BusinessCalendarInput, PlanChange, RecalculateDeadlines } from "@ros/contracts";
-import { aiRuns, applications, companies, events, integrations, jobs, recruiterEscalations, roles, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
+import { BreakGlass, BusinessCalendarInput, CompanyVerificationChange, JobBoardAccessChange, PlanChange, RecalculateDeadlines, companyOnboarding, companyVerifiedAt, type Actor } from "@ros/contracts";
+import { HELD_STATUS } from "@ros/agents";
+import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, integrations, jobs, recruiterEscalations, roles, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
 import { requirePlatformAdmin, type Vars } from "../middleware/session";
 import { OUTCOME_STATEMENT, OutcomeError, PlatformRoleError, raiseAlert, correctOutcome, countActiveAdmins, grantPlatformRole, listPlatformRoleGrants, revokeAllSessions, revokePlatformRole, type PlatformRole } from "@ros/core";
 import { CorrectOutcome } from "@ros/contracts";
@@ -14,6 +15,8 @@ import { and } from "drizzle-orm";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
 import { customerReport } from "../services/role-report";
+import { setJobBoardAccess, unverifyCompany, verifyCompany } from "../services/company-trust";
+import { resetPublicFeedCache } from "../pages/public-feeds";
 
 /** Platform admin console API (docs/16). Every read is audited with the reason the admin supplies. */
 export const adminRoutes = new Hono<Vars>();
@@ -28,13 +31,17 @@ adminRoutes.use("*", requirePlatformAdmin, async (c, next) => {
 adminRoutes.get("/customers", async (c) => {
   const db = c.get("container").db;
   const rows = await db.select().from(companies).orderBy(desc(companies.createdAt));
-  // Five queries for the whole list, however many customers there are.
+  // A fixed handful of queries for the whole list, however many customers there are.
   const byCompany = <T extends { companyId: string | null }>(list: T[]) => new Map(list.map((r) => [r.companyId, r]));
   const roleCounts = byCompany(await db.select({ companyId: roles.companyId, n: sql<number>`count(*)` }).from(roles).groupBy(roles.companyId));
   const appCounts = byCompany(await db.select({ companyId: applications.companyId, n: sql<number>`count(*)` }).from(applications).groupBy(applications.companyId));
   const costs = byCompany(await db.select({ companyId: aiRuns.companyId, usd: sql<string>`coalesce(sum(cost_usd), 0)` }).from(aiRuns).groupBy(aiRuns.companyId));
   const lastActivity = byCompany(await db.select({ companyId: events.companyId, at: sql<string>`max(occurred_at)` }).from(events).groupBy(events.companyId));
   const escalationCounts = byCompany(await db.select({ companyId: recruiterEscalations.companyId, n: sql<number>`count(*)` }).from(recruiterEscalations).groupBy(recruiterEscalations.companyId));
+  // Messages to candidates waiting for the ITS company check (founder decision B7): how long a company has been waiting matters.
+  const heldCounts = byCompany(await db.select({ companyId: communications.companyId, n: sql<number>`count(*)` }).from(communications).where(eq(communications.status, HELD_STATUS)).groupBy(communications.companyId));
+  // Where each company stands against its recruiter requests (Q33): going over never refuses one; ITS talks about billing.
+  const asks = byCompany(await db.select({ companyId: entitlementRows.companyId, used: entitlementRows.used, limit: entitlementRows.limit }).from(entitlementRows).where(eq(entitlementRows.key, entitlements.RECRUITER_ASKS)));
   return c.json(rows.map((co) => ({
     ...co,
     roles: Number(roleCounts.get(co.id)?.n ?? 0),
@@ -42,7 +49,56 @@ adminRoutes.get("/customers", async (c) => {
     aiCostUsd: Number(costs.get(co.id)?.usd ?? 0),
     lastActivityAt: lastActivity.get(co.id)?.at ?? null,
     escalations: Number(escalationCounts.get(co.id)?.n ?? 0),
+    verifiedAt: companyVerifiedAt(co.settings),
+    verifiedBy: companyVerifiedAt(co.settings) ? ((co.settings as { verifiedBy?: Actor }).verifiedBy ?? null) : null,
+    heldMessages: Number(heldCounts.get(co.id)?.n ?? 0),
+    jobBoardsConfirmedAt: companyOnboarding(co.settings).jobBoardsConfirmedAt ?? null,
+    recruiterAsks: recruiterAsksOf(asks.get(co.id)),
   })));
+});
+
+/** A company's recruiter requests as the Customers tab shows them; a plan without the allowance counts what was used. */
+function recruiterAsksOf(row: { used: number; limit: number | null } | undefined): { used: number; limit: number | null; over: boolean } {
+  if (!row) return { used: 0, limit: null, over: false };
+  return { used: row.used, limit: row.limit, over: row.limit !== null && row.used > row.limit };
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The one-time ITS check (founder decision B7, plan B1): an administrator confirms a company that signed itself up, after
+ * whatever check they made (the kick-off call, the website, a phone number), or takes the confirmation back. Confirming
+ * makes the careers page, job pages and feeds public, publishes approved roles and sends every message to candidates that
+ * waited; taking it back puts them offline again and holds messages. A reason and a confirmation are required; the
+ * change is audited (the customer sees it, with the reason, in their own history) and the owners are told.
+ */
+adminRoutes.post("/customers/:id/verification", async (c) => {
+  const s = c.get("session")!;
+  const container = c.get("container");
+  const companyId = c.req.param("id") ?? "";
+  if (!UUID.test(companyId)) throw new HttpError(404, "not_found", "Company not found.");
+  const body = CompanyVerificationChange.parse(await c.req.json().catch(() => ({})));
+  const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
+  const now = container.engine.clock();
+  const result = await withPlatform(container.db, (tx) => (body.verified ? verifyCompany(tx, container, { companyId, actor, reason: body.reason, now }) : unverifyCompany(tx, { companyId, actor, reason: body.reason })));
+  if (!result) throw new HttpError(404, "not_found", "Company not found.");
+  // The feeds and the sitemap are rebuilt at once, so a company taken offline leaves them now, not in five minutes.
+  resetPublicFeedCache(container);
+  await container.kick();
+  return c.json({ ok: true, companyId: result.companyId, verified: body.verified, changed: result.changed, verifiedAt: result.verifiedAt, releasedMessages: result.released });
+});
+
+/** ITS confirms it can sign in to the company's job-board accounts (onboarding checklist step 8), or no longer can. */
+adminRoutes.post("/customers/:id/job-boards", async (c) => {
+  const s = c.get("session")!;
+  const container = c.get("container");
+  const companyId = c.req.param("id") ?? "";
+  if (!UUID.test(companyId)) throw new HttpError(404, "not_found", "Company not found.");
+  const body = JobBoardAccessChange.parse(await c.req.json().catch(() => ({})));
+  const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
+  const ok = await withPlatform(container.db, (tx) => setJobBoardAccess(tx, { companyId, confirmed: body.confirmed, actor, now: container.engine.clock(), note: body.note }));
+  if (!ok) throw new HttpError(404, "not_found", "Company not found.");
+  return c.json({ ok: true, companyId, confirmed: body.confirmed });
 });
 
 /**
@@ -287,7 +343,8 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
   const now = new Date();
   const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
   const result = await withPlatform(c.get("container").db, async (tx) => {
-    const [co] = await tx.select().from(companies).where(eq(companies.id, companyId)).limit(1);
+    // Locked: the settings are written back whole, so the ITS check or a customer's change made meanwhile is kept.
+    const [co] = await tx.select().from(companies).where(eq(companies.id, companyId)).limit(1).for("update");
     if (!co) throw new HttpError(404, "not_found", "Company not found.");
     await entitlements.applyPlan(tx, companyId, body.planKey, "plan");
     const pilot = body.planKey === "design_partner"

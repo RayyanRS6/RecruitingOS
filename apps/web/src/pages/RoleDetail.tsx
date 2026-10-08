@@ -7,7 +7,9 @@ import { Alert, Button, Card, Chip, ErrorState, Field, PageHeader, Pill, Skeleto
 import { formatPayRange } from "@ros/contracts";
 import { api, ApiError, type Me, type RoleDetail as RoleDetailT, type RolePacket } from "../api/client";
 import { toast } from "../toast";
+import { ROLE_WAITS_FOR_CHECK } from "../company-check";
 import { AskRecruiter } from "../components/AskRecruiter";
+import { useCompanyCheck } from "../components/use-company-check";
 import { canEditPacket, canManageRole, canRecordOutcome, canSeeActivity, canSeeTalent } from "../roles";
 import { payShownLabel } from "../role-words";
 import { roleStatus } from "../role-status";
@@ -46,6 +48,8 @@ export function RoleDetail() {
   const [editBase, setEditBase] = useState<{ version: number; packet: RolePacket; proposed: boolean; newestAtOpen: number } | null>(null);
   // "Show vN" on the approval card: the tabs show the version waiting for approval instead of the one the role runs on.
   const [showProposed, setShowProposed] = useState(false);
+  // An open role of a company ITS has not confirmed yet is not public (founder decision B7): the page says so at the top.
+  const check = useCompanyCheck();
 
   const status = useMutation({
     mutationFn: (action: "pause" | "resume") => api.post(`/api/v1/roles/${id}/${action}`, {}),
@@ -99,6 +103,7 @@ export function RoleDetail() {
 
       <StillUpAlert channels={r.boardsStillUp ?? []} roleStatus={r.status} onOpen={() => pickTab("posting")} canManage={manage} />
       <ClosedBanner role={r} canManage={manage} />
+      {check === "waiting" && ["open", "paused"].includes(r.status) ? <Alert tone="caution">{ROLE_WAITS_FOR_CHECK}</Alert> : null}
 
       {closing ? (
         <Card needsYou title="Close this role">

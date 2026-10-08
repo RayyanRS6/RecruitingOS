@@ -49,6 +49,9 @@ export default defineConfig({
       AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", SMS_PROVIDER: "fake", AUTH_PROVIDER: "fake", CALENDAR_PROVIDER: "fake", ANALYTICS_PROVIDER: "fake",
       SECRET_STORE: "memory", STORAGE_PROVIDER: "memory", WORKER_INLINE: "true", WORKER_POLL_MS: "250", COMP_BLS_ENABLED: "false", MAGIC_LINK_ENABLED: "true",
       BOOTSTRAP_ADMIN_EMAILS: "admin-e2e@identifiedtalent.com",
+      // New companies are confirmed at sign-up so the journeys have public pages; company-check.spec.ts takes a
+      // confirmation back and gives it again through the admin console (founder decision B7).
+      COMPANY_CHECK: "auto",
     },
   },
 });

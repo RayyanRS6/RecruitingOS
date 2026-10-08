@@ -4,6 +4,7 @@ import { emit, notify } from "@ros/core";
 import { applications, companies, events, roles } from "@ros/db";
 import type { StepContext, WorkflowDefinition } from "../types";
 import { DEFAULT_VOLUME_ALERT_PER_DAY, localDays } from "../volume-days";
+import { startNotificationDigest } from "./notification-digest";
 
 type VolumeAlert = { roleId: string; day: string; count: number; threshold: number };
 type State = { companyId: string; lastRunAt?: string; lastResults?: unknown; lastVolumeAlerts?: VolumeAlert[] };
@@ -22,6 +23,9 @@ export const stuckRoleDetector: WorkflowDefinition<State> = {
   escalationKind: "stuck_role",
   steps: {
     async detect(ctx) {
+      // The company's morning email summaries (plan B3) run beside this check: a company that existed before them gets
+      // its run on its next daily check, a new one on its first.
+      await startNotificationDigest(ctx.services.engine, ctx.q, ctx.companyId, ctx.actor);
       const detections = await detectStuckRoles(ctx.q, ctx.companyId, ctx.now);
       const results = await runInterventionLadder(ctx.q, { integrations: ctx.services.integrations, appBaseUrl: ctx.services.env.appBaseUrl, itsQueueEmail: ctx.services.env.itsQueueEmail, now: ctx.now, actor: ctx.actor }, ctx.companyId, detections);
       const volumeAlerts = await checkApplicationVolume(ctx);

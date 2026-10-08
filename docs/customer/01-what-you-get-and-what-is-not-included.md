@@ -18,6 +18,7 @@ Two words we use throughout: **ITS** is Identified Talent Solutions, the company
 ### Getting the job in front of candidates
 
 - A public job page and a careers page for your company on our hosting. They read well on a phone and carry the structured data that search engines such as Google use to list jobs. Your website and logo appear there if you add them in **Setup**.
+- A one-time check of your company by ITS, usually within a business day of creating your workspace. Until ITS confirms your company you can draft and approve roles, but your careers page, job pages and Google listing stay offline and emails to candidates wait; they go out on their own once ITS confirms. **Today**, the role page and **Setup** say so while you wait, and you are told by email when it is done.
 - A job listing file and a site map that search engines and approved job sites can read. They list only roles that are open and taking applications.
 - ITS posts your approved job to LinkedIn, Indeed and ZipRecruiter by hand, under your own employer accounts on those boards. The role's **Posting** tab has everything needed: the text to copy, the steps for each board, and each board's own application link.
 - Each board gets its own application link. The link is how the product knows where each applicant came from. Its code never appears on the candidate's application, in their emails or on their status page.
@@ -81,9 +82,10 @@ Two words we use throughout: **ITS** is Identified Talent Solutions, the company
 
 ### Recruiter help
 
-- A **Bring in a recruiter** button on Today, on every role and on every candidate. You pick what you want: Review these candidates, Help me decide, or Take this role over. You can add a note and mark it Normal or Urgent.
-- The ITS recruiter receives the role, the candidates, every message and every decision so far. There is nothing to re-explain. You see the expected response time when you send the request.
-- The recruiter's access is limited to that request's role and candidate. It lasts at most 14 days and ends 24 hours after the request is resolved. Every page the recruiter opens is recorded in your activity. Owners and admins can end the access at once, and the recruiter is told.
+- A **Bring in a recruiter** button on Today, on every role and on every candidate. You pick what you want: Review these candidates, Help me decide, or Ask ITS to run this hire (an ITS recruiter contacts you to agree how; nothing changes until you have both agreed). You can add a note and mark it Normal or Urgent; Urgent puts it at the front of the ITS queue and does not change the response time.
+- Before you send, the form shows the response time, what the recruiter will be able to see, and which of your plan's recruiter requests this one would be. The ITS recruiter receives what the request covers: the role, its candidates, their messages and the decisions so far, or one candidate. There is nothing to re-explain.
+- The recruiter's access is limited to that request's role or candidate, or all of your hiring only when someone on your team chose that. It lasts at most 14 days and ends 24 hours after the request is resolved. Your team is told when it starts. Every page the recruiter opens is recorded in your activity. Owners and admins can end the access at once, and the recruiter is told.
+- **Your recruiter requests** on Today lists every request with its state, its reply-by time and who picked it up. The answer appears there in full, and the person who asked and your owners are told when it comes in. While a request is open you can add a note for the recruiter; once it is answered, **This didn't solve it** opens it again with a new reply-by time.
 
 ### Candidates' rights
 
@@ -102,8 +104,9 @@ Two words we use throughout: **ITS** is Identified Talent Solutions, the company
 - Changing what the assistant may do, or the notices candidates see, asks you to confirm it's you with a fresh sign-in if you signed in more than 30 minutes ago.
 - **Audit history** in **Setup** shows who did what in your workspace, in plain words: recruiter access, team changes, rule and company changes, candidate records opened, outcomes and downloads. You can download it as a spreadsheet; the download is recorded too.
 - Your company's data is kept separate from every other customer's.
-- **Setup** shows what the assistant may do on its own, with four levels for every action. Some decisions always stay with a person and cannot be changed by anyone.
-- A daily brief on **Today**: what needs you, who is worth a look, what is at risk, and what the assistant did since you last looked.
+- **Setup** shows what the assistant may do on its own. Where a setting changes what happens, you choose from up to four levels; work the product does the same way for everyone says what it does, and features still to come are listed under **Coming later**. Some decisions always stay with a person and cannot be changed by anyone. Letting something happen with less checking asks you to confirm first.
+- A daily brief on **Today**: what needs you, who is worth a look, what is at risk, and what the assistant did since you last looked. It refreshes itself while it is open. Every earlier update is on the **Updates** page, read or unread.
+- **Email alerts** in **Setup**: each person chooses, for each kind of update, whether it is emailed as it happens, in a summary at 8:00 each morning or each Monday morning, or not at all. A few updates are always emailed at once: an ITS recruiter is given access to your hiring, ITS confirms your company or takes the confirmation back, a candidate asks for a person, or someone waits for an eligibility decision. Alert emails carry the role's name and a link, never a candidate's name or details.
 - **Roles** shows every role with its pipeline, days open, applicant count and what needs you. **Interviews** shows every interview and each interviewer's load.
 - Each role has a **Report** tab: who applied and from where, where everyone is, how long each step takes, interviews, decisions waiting for you, what the assistant suggested and what you decided, recruiter help, messages that did not arrive, and outcomes. You can download the applicant list and the summary as spreadsheets. Every download is recorded.
 

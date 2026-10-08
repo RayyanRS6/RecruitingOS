@@ -163,7 +163,8 @@ describe("Slice 1 API", () => {
     expect(byChannel.indeed.steps.join("\n")).toMatch(new RegExp(`${container.env.JOBS_BASE_URL}/a/[a-z0-9]{12}`));
     expect(byChannel.email_in.intakeToken).toBeTruthy();
     const runs = await container.db.select().from(workflowRuns);
-    expect(runs.map((x) => `${x.workflowKey}:${x.status}`).sort()).toEqual(["publish_role:completed", "role_approval:completed", "stuck_role_detector:waiting"]);
+    // the morning email summaries (plan B3) run beside the stuck-role check
+    expect(runs.map((x) => `${x.workflowKey}:${x.status}`).sort()).toEqual(["notification_digest:waiting", "publish_role:completed", "role_approval:completed", "stuck_role_detector:waiting"]);
     const feed = await app.request("/feeds/linkedin.xml");
     expect(await feed.text()).toContain("Registered Dental Hygienist");
   });

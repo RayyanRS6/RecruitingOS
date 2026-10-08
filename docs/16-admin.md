@@ -6,7 +6,7 @@ Route group `/admin` in the web app; API under `/api/v1/admin/*`; permission `pl
 
 | View | Shows | Actions |
 |---|---|---|
-| Customers | Every company: plan, status, roles open, applicants this week, last owner activity, escalations open, cost this month, churn signals (no login 14 days, roles stuck, brief unopened 7 days, downgrade, support tickets) | Open (with reason), impersonate in read-only mode, adjust entitlements, add credits |
+| Customers | Every company: the ITS check (companies waiting for it listed first, longest waiting at the top, with how many messages to candidates are held), whether ITS can sign in to its job boards, plan, status, roles open, applicants this week, last owner activity, recruiter requests against the plan's allowance ("Recruiter requests: used of limit", with a caution chip "Past its recruiter requests: talk about billing" once over) and escalations in all, cost this month, churn signals (no login 14 days, roles stuck, brief unopened 7 days, downgrade, support tickets) | Open (with reason), impersonate in read-only mode, adjust entitlements, add credits; **Confirm** / **Check** opens the ITS check sheet (below); **Report** |
 | Roles | All roles across tenants with pipeline counts and stuck flags | Open |
 | Candidates | Search across tenants (audited) for support and dedupe issues | Open |
 | Workflows | Active, waiting, failed runs with workflow key, subject, current step, wait reason, age | Inspect, retry step, cancel, escalate |
@@ -20,6 +20,15 @@ Route group `/admin` in the web app; API under `/api/v1/admin/*`; permission `pl
 | Support issues | Linked tickets (external) | |
 | Prompts and evals | Active prompt versions, last eval results, thresholds | Promote or roll back a prompt version (audited) |
 | Playbooks | Versions, status | Publish (audited) |
+
+## The ITS check of a company and job-board access
+
+Founder decision B7 (plan B1 and B2). A company that signs itself up can draft and approve roles at once, but nothing of it is public (careers page, job pages and their addresses, the JobPosting data, the feeds and sitemap, tracked links, the apply form) and its messages to candidates wait in the outbox as `held` until an administrator confirms it. The ITS queue mailbox is emailed when such a company signs up. Companies that existed before the check began were confirmed by migration 0027.
+
+- **Confirm the company** (`POST /api/v1/admin/customers/:id/verification`, `verified: true`): after checking the company is real (the kick-off call, its website, a phone number). A reason of five characters or more and a second press are required. Its pages go public, approved roles waiting to be published are published, and every held message goes into the queue, oldest first (texts wait for the company's allowed hours); a held message that must no longer go (the candidate stopped texts, or an invitation to someone who has since left the process) is cancelled with its reason instead. Confirming a company that is already confirmed changes nothing except that any message still held goes out: use it to repair a message held while the confirmation was being made.
+- **Take back the confirmation** (`verified: false`): the pages and feeds go offline at once and messages to candidates wait again, including ones already queued. Roles, candidates and decisions are kept. Today tells the company "ITS is checking your company again".
+- Both are audited with the reason (the customer sees it in their own history) and the owners, admins and hiring managers are told; that notice is always emailed and cannot be turned off.
+- **Job-board access** (`POST /api/v1/admin/customers/:id/job-boards`): record once ITS can sign in to the company's LinkedIn, Indeed and ZipRecruiter accounts (or that it no longer can, with an optional note). It ticks the owner's getting-started step and is audited.
 
 ## The six questions for any AI action
 

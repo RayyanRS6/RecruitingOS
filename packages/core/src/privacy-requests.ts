@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { and, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { applicationMarks, applications, approvalRequests, candidates, communications, dataRequests, documents, events, interviewParticipants, interviews, jobs, notifications, recruiterEscalations, screens, type Queryable } from "@ros/db";
+import { applicationMarks, applications, approvalRequests, candidates, communications, dataRequests, documents, escalationMessages, events, interviewParticipants, interviews, jobs, notifications, recruiterEscalations, screens, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { emit } from "./events";
 import { raiseAlert, resolveAlertsFor } from "./alerts";
@@ -247,6 +247,14 @@ async function scrubRecruiterCopies(q: Queryable, input: { companyId: string; ap
       escalationCount++;
     }
   }
+  // The threads on those requests (migration 0029): on a request about one of the person's applications the team's own
+  // notes go, like its question, and the recruiter's words lose what names them; elsewhere every message loses it.
+  const aboutThem = new Set(escs.filter((e) => e.applicationId && input.appIds.includes(e.applicationId)).map((e) => e.id));
+  for (const m of await q.select({ id: escalationMessages.id, escalationId: escalationMessages.escalationId, side: escalationMessages.side, body: escalationMessages.body }).from(escalationMessages).where(eq(escalationMessages.companyId, input.companyId))) {
+    const about = aboutThem.has(m.escalationId);
+    const body = about && m.side === "customer" ? removed : redactPerson(m.body, patterns, about ? "the candidate" : "a candidate");
+    if (body !== m.body) await q.update(escalationMessages).set({ body }).where(eq(escalationMessages.id, m.id));
+  }
   let notificationCount = 0;
   if (patterns.name.length || patterns.contact.length) {
     const notes = await q.select({ id: notifications.id, title: notifications.title, body: notifications.body }).from(notifications).where(eq(notifications.companyId, input.companyId));
@@ -274,13 +282,20 @@ export async function fulfilDeletionRequest(q: Queryable, row: DataRequestRow, i
   return resolve(q, row, `${input.resolution} (anonymized: ${counts.documents} documents, ${counts.screens} screens, ${counts.communications} messages)`, input.actor, "fulfilled", input.now);
 }
 
-/** Text-message opt-out: applied at once; the record exists so the deadline and the confirmation are tracked like any other request. */
+/**
+ * Text-message opt-out: applied at once; the record exists so the deadline and the confirmation are tracked like any
+ * other request. Any text to them still waiting (queued for a later hour, or held for the ITS company check) is withdrawn
+ * now; the outbox checks again before every send.
+ */
 export async function fulfilSmsOptOut(q: Queryable, row: DataRequestRow, actor: Actor, now: Date = new Date()): Promise<DataRequestRow> {
   if (row.candidateId) {
     const [cand] = await q.select().from(candidates).where(eq(candidates.id, row.candidateId)).limit(1);
     if (cand) {
       await q.update(candidates).set({ preferences: { ...cand.preferences, smsOptOut: true }, consent: { ...cand.consent, sms: { ...(cand.consent.sms ?? { at: now.toISOString(), source: "status_page" }), granted: false, at: now.toISOString() } } }).where(eq(candidates.id, cand.id));
       await emit(q, { type: "candidate.opted_out", companyId: row.companyId, actor, subject: { type: "candidate", id: cand.id }, payload: { channel: "sms", requestId: row.id } });
+      const reason = "the candidate stopped text messages";
+      const waiting = await q.update(communications).set({ status: "cancelled", error: reason }).where(and(eq(communications.candidateId, cand.id), eq(communications.channel, "sms"), inArray(communications.status, ["queued", "held"]))).returning({ id: communications.id, templateKey: communications.templateKey, applicationId: communications.applicationId });
+      for (const c of waiting) await emit(q, { type: "message.cancelled", companyId: row.companyId, actor, subject: { type: "communication", id: c.id }, payload: { template: c.templateKey, channel: "sms", applicationId: c.applicationId, reason } });
     }
   }
   return resolve(q, row, "Text messages stopped.", actor, "fulfilled", now);

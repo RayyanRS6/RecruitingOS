@@ -49,3 +49,9 @@ export const canDecline = (role: string | null | undefined): boolean => !!role &
 
 /** events.read: the role's Activity tab. Everyone but an interviewer. */
 export const canSeeActivity = (role: string | null | undefined): boolean => !!role && role !== "interviewer";
+
+/**
+ * escalation.create: bring in a recruiter, and read and answer the team's recruiter requests. Everyone but an
+ * interviewer (an ITS recruiter inside a customer asks only within their grant; the API holds them to it).
+ */
+export const canAskRecruiter = (role: string | null | undefined): boolean => !!role && role !== "interviewer";

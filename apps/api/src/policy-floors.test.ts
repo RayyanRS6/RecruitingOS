@@ -56,7 +56,10 @@ describe("what the AI may do: floors and ceilings", () => {
     expect((await json("PUT", "/api/v1/policies", { actionType: "role_packet.approve", level: "approval", approverRoles: ["owner", "admin", "hiring_manager"] })).status).toBe(200);
     for (const actionType of ["offer.draft", "offer.send", "offer.revise"]) {
       expect((await json("PUT", "/api/v1/policies", { actionType, level: "auto_notify", approverRoles: [] })).status).toBe(400);
-      expect((await json("PUT", "/api/v1/policies", { actionType, level: "human_only", approverRoles: [] })).status).toBe(200);
+      // offers are not in the product yet, so there is no level to save at all (plan B7)
+      const later = await json("PUT", "/api/v1/policies", { actionType, level: "human_only", approverRoles: [] });
+      expect(later.status).toBe(400);
+      expect(((await later.json()) as { error: { code: string } }).error.code).toBe("no_setting");
     }
   });
 

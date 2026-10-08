@@ -3,6 +3,7 @@
 import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { eq } from "drizzle-orm";
+import { isCompanyVerified } from "@ros/contracts";
 import { findLinkByToken, isSource, openPayload, recordLinkVisit, sealPayload, type ApplicationSource } from "@ros/core";
 import { companies, roles, withPlatform } from "@ros/db";
 import type { Vars } from "../middleware/session";
@@ -60,9 +61,10 @@ linkPages.get("/a/:token", async (c) => {
   const found = await withPlatform(container.db, async (tx) => {
     const link = await findLinkByToken(tx, token);
     if (!link || link.disabledAt) return null;
-    const [company] = await tx.select({ slug: companies.slug }).from(companies).where(eq(companies.id, link.companyId)).limit(1);
+    const [company] = await tx.select({ slug: companies.slug, settings: companies.settings }).from(companies).where(eq(companies.id, link.companyId)).limit(1);
     const [role] = await tx.select({ status: roles.status, acceptingApplications: roles.acceptingApplications }).from(roles).where(eq(roles.id, link.roleId)).limit(1);
-    if (!company || !role) return null;
+    // A company ITS has not confirmed has no public pages (founder decision B7): its links lead nowhere and count nothing.
+    if (!company || !role || !isCompanyVerified(company.settings)) return null;
     await recordLinkVisit(tx, link.id, now);
     return { link, slug: company.slug, accepting: role.status === "open" && role.acceptingApplications };
   });

@@ -2,7 +2,7 @@ import { and, count, desc, eq, gte, inArray, like } from "drizzle-orm";
 import { OWNER_STAGE_LABEL, OwnerStage, type ActiveMark, type Actor, type ApplicationAction, type ApplicationStage, type CandidateNotice, type MarkKind, type MembershipRole, type StageMove, type StageMoveVia, type ToldState } from "@ros/contracts";
 import { DECISION_STAGES, MarkError, STAGE_LABEL, activeMarksFor, assertCan, baseOwnerStage, can, clearMark, emit, gate, markBlockedReason, ownerStage, resolvePolicy, setMark, transition, withdrawQueuedDecision, type Permission } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, communications, companies, interviews, rolePackets, roles, screens, type Tx } from "@ros/db";
-import { dispositionMessage, sendDisposition, type CancelledInterview } from "@ros/agents";
+import { HELD_REASON, dispositionMessage, sendDisposition, type CancelledInterview } from "@ros/agents";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
 import type { Tenant } from "../middleware/session";
@@ -244,8 +244,8 @@ export async function applicationFacts(tx: Tx, app: Pick<typeof applications.$in
   return applicationFactsFrom(app, scr.map((s) => s.status), ivs, role, triage ?? null, { mark, decisionMessagePending: pending.has(app.id) });
 }
 
-/** Whether the message is out or on its way: what `dispositionSent` has always meant. */
-export const declineSent = (n: CandidateNotice): boolean => n === "queued";
+/** Whether the message is out or on its way (held for the ITS check counts: it goes on its own): what `dispositionSent` has always meant. */
+export const declineSent = (n: CandidateNotice): boolean => n === "queued" || n === "held";
 
 type App = typeof applications.$inferSelect;
 /** What a "Send" did: the toast's words, the told state now, and the approval request when it waits for one. */
@@ -289,11 +289,12 @@ async function deliverDecision(tx: Tx, container: Container, input: { app: App; 
   // delivered never gets here (the told state stops it).
   const [failed] = await tx.select({ n: count() }).from(communications).where(and(eq(communications.applicationId, app.id), like(communications.templateKey, "disposition:%"), eq(communications.status, "failed"), gte(communications.createdAt, app.rejectedAt ?? app.stageChangedAt)));
   const res = await sendDisposition(tx, container.integrations, { application: app, candidate: parts.cand, role: parts.role, company: parts.company, packet: parts.packet, actor, reason: decisionKind(app), cancelledInterviews: await interviewsCalledOff(tx, app, now), attempt: Number(failed?.n ?? 0) });
-  // The outbox answers "sent" only for this decision's own message, already delivered under the same key.
+  // The outbox answers "sent" only for this decision's own message, already delivered under the same key. A message held
+  // for the ITS company check is in the outbox too ("queued" told state), and the team is told it waits for the check.
   if (res.status === "sent" || res.status === "pending") {
     const toldState: ToldState = res.status === "sent" ? "sent" : "queued";
     await tx.update(applications).set({ toldState, ...(toldState === "sent" ? { candidateToldAt: now.toISOString() } : {}) }).where(and(eq(applications.id, app.id), eq(applications.toldState, "not_told")));
-    return { notice: "queued", toldState };
+    return { notice: res.status === "pending" && res.reason === HELD_REASON ? "held" : "queued", toldState };
   }
   return { notice: parts.cand.email ? "not_sent" : "not_sent_no_email", toldState: app.toldState };
 }

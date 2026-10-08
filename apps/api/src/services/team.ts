@@ -1,6 +1,6 @@
 import { and, count, eq, inArray } from "drizzle-orm";
 import type { Actor, InviteMember, UpdateMember } from "@ros/contracts";
-import { audit, createInvitation, disconnectCalendar, emit, invitationLink, listPendingInvitations, membersWithCalendarStatus, normalizeEmail, notify, publicInvitation, resendInvitation, revokeAllSessions, revokeInvitation, roleInWords, type InvitationRow } from "@ros/core";
+import { FRESH_SESSION_MS, REAUTH_WINDOW_MS, audit, createInvitation, disconnectCalendar, emit, invitationLink, isRecentlyAuthenticated, listPendingInvitations, membersWithCalendarStatus, normalizeEmail, notify, publicInvitation, resendInvitation, revokeAllSessions, revokeInvitation, roleInWords, type InvitationRow, type SessionContext } from "@ros/core";
 import { queueCommunication } from "@ros/agents";
 import { companies, interviewParticipants, interviews, memberships, users, withPlatform, withTenant, type Tx } from "@ros/db";
 import type { Container } from "../container";
@@ -14,15 +14,19 @@ import { cancelInterviewInTx } from "./interview-cancel";
  * runs after that transaction has committed. Messages to people go through the outbox, never straight to a provider.
  */
 
-type Team = { tenant: Tenant; actor: Actor; container: Container };
+/**
+ * `session`: when the person signed in, and when they last confirmed it was them. Making someone an admin or an owner
+ * needs a recent one (plan B7), the same rule as changing the AI rules (audit finding A12).
+ */
+type Team = { tenant: Tenant; actor: Actor; container: Container; session: Pick<SessionContext, "createdAt" | "reauthenticatedAt"> | null };
 
 /** Active members only, each with their scheduling readiness. Removed people are gone from the list. */
-export async function listTeam({ tenant, container }: Omit<Team, "actor">) {
+export async function listTeam({ tenant, container }: Pick<Team, "tenant" | "container">) {
   const rows = await withTenant(container.db, tenant.companyId, (tx) => membersWithCalendarStatus(tx, tenant.companyId));
   return rows.filter((r) => r.status === "active");
 }
 
-export async function listInvitations({ tenant, container }: Omit<Team, "actor">) {
+export async function listInvitations({ tenant, container }: Pick<Team, "tenant" | "container">) {
   const now = container.engine.clock();
   const rows = await withTenant(container.db, tenant.companyId, (tx) => listPendingInvitations(tx, tenant.companyId, now));
   return rows.map((r) => publicInvitation(r, now));
@@ -75,7 +79,7 @@ async function queueInvitationEmail(tx: Tx, team: Team, input: { invitation: Inv
  */
 export async function inviteMember(team: Team, input: { body: InviteMember; inviterName: string }) {
   const { container, tenant, actor } = team;
-  assertMayInviteAs(tenant, input.body.role);
+  assertMayInviteAs(team, input.body.role);
   const email = normalizeEmail(input.body.email);
   const domain = email.split("@")[1] ?? "";
   if (container.env.ITS_STAFF_EMAIL_DOMAINS.includes(domain)) throw new HttpError(400, "staff_domain", "That address belongs to ITS. Recruiters are not team members; they get access through Bring in a recruiter, for one request at a time.");
@@ -93,11 +97,25 @@ export async function inviteMember(team: Team, input: { body: InviteMember; invi
 }
 
 /**
- * Only an owner grants the owner role, whichever way it is granted: an invitation accepted at sign-in creates the
- * membership with the invited role, so inviting someone as owner is refused to HR and admins exactly as promoting them is.
+ * Only an owner grants the owner role, and only an owner or an admin grants the admin role (plan B7), whichever way it
+ * is granted: an invitation accepted at sign-in creates the membership with the invited role, so inviting someone as
+ * owner or admin is refused exactly as promoting them is. Either needs a recent sign-in.
  */
-function assertMayInviteAs(tenant: Tenant, role: string): void {
-  if (role === "owner" && tenant.role !== "owner") throw new HttpError(403, "owner_only", "Only an owner can invite another owner.");
+function assertMayInviteAs(team: Team, role: string): void {
+  if (role === "owner" && team.tenant.role !== "owner") throw new HttpError(403, "owner_only", "Only an owner can invite another owner.");
+  if (role === "admin" && !mayGrantAdmin(team.tenant)) throw new HttpError(403, "admin_only", "Only an owner or an admin can invite an admin.");
+  if (role === "owner" || role === "admin") assertRecentSignIn(team);
+}
+
+/** Who may make someone an admin, or change or remove an admin: never HR, who otherwise manages the team. */
+function mayGrantAdmin(tenant: Tenant): boolean {
+  return tenant.role === "owner" || tenant.role === "admin";
+}
+
+/** The same rule and the same refusal as middleware/reauth.ts, which Setup turns into "Confirm it's you". */
+function assertRecentSignIn(team: Team): void {
+  if (team.session && isRecentlyAuthenticated(team.session, team.container.engine.clock())) return;
+  throw new HttpError(403, "reauth_required", "To make someone an admin or an owner, confirm it's you first: sign in with your provider again, then try once more.", { freshSessionMinutes: FRESH_SESSION_MS / 60_000, reauthMinutes: REAUTH_WINDOW_MS / 60_000 });
 }
 
 /** A fresh link (the old one stops working) and another seven days; the email goes out again. */
@@ -107,8 +125,8 @@ export async function resendMemberInvitation(team: Team, input: { invitationId: 
   const result = await withTenant(container.db, tenant.companyId, async (tx) => {
     const rotated = await resendInvitation(tx, { invitationId: input.invitationId, companyId: tenant.companyId, actor, now });
     if (!rotated) throw new HttpError(404, "not_found", "No open invitation with that id.");
-    // A fresh link to an owner invitation is an owner's to send; the refusal rolls the rotation back, so the old link still works.
-    assertMayInviteAs(tenant, rotated.row.role);
+    // A fresh link to an owner or admin invitation is for those who may grant it; the refusal rolls the rotation back, so the old link still works.
+    assertMayInviteAs(team, rotated.row.role);
     const companyName = await companyNameOf(tx, tenant.companyId);
     const link = await queueInvitationEmail(tx, team, { invitation: rotated.row, token: rotated.token, companyName, inviterName: input.inviterName, again: true });
     return { row: rotated.row, link };
@@ -130,7 +148,9 @@ const OPEN_INTERVIEW_STATUSES = ["proposed", "scheduling", "scheduled"];
 /**
  * A role change or a removal. The rules, in the order they are checked: the target must be an active member (404);
  * nobody changes their own membership (409 self_change); the last active owner is neither demoted nor removed
- * (409 last_owner); only an owner grants or takes the owner role, including by removal (403 owner_only). Either change
+ * (409 last_owner); only an owner grants or takes the owner role, including by removal (403 owner_only); only an owner
+ * or an admin grants or takes the admin role, including by removal (403 admin_only); granting admin or owner needs a
+ * recent sign-in (403 reauth_required). Either change
  * ends the person's sessions so it applies at once. Removal also disconnects their calendar (its credential deletion is
  * queued exactly as the disconnect route does), takes them off the interviews still ahead that counted on them, cancels
  * the ones nobody else was on (services/interview-cancel.ts), and tells the owners and admins what happened to each.
@@ -158,6 +178,9 @@ export async function updateMember(team: Team, input: { userId: string; body: Up
       if (Number(owners?.n ?? 0) <= 1) throw new HttpError(409, "last_owner", "This is the only owner. Make someone else an owner first.");
     }
     if ((target.role === "owner" || newRole === "owner") && tenant.role !== "owner") throw new HttpError(403, "owner_only", "Only an owner can make someone an owner, or change an owner's role.");
+    if ((target.role === "admin" || newRole === "admin") && !mayGrantAdmin(tenant)) throw new HttpError(403, "admin_only", "Only an owner or an admin can make someone an admin, or change or remove an admin.");
+    // Granting admin or owner needs a recent sign-in (plan B7); taking either away, or removing someone, does not.
+    if (!removing && roleChanges && (newRole === "admin" || newRole === "owner")) assertRecentSignIn(team);
     const who = target.name ?? target.email;
     if (!removing) {
       const [updated] = await tx.update(memberships).set({ role: newRole }).where(eq(memberships.id, target.id)).returning();

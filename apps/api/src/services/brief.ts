@@ -1,8 +1,8 @@
-import { and, desc, eq, gte, inArray, isNull } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNull, ne, sql } from "drizzle-orm";
 import { DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeMarksFor, can, groupFor, isBoardChannel, mayDecideApproval, ownerGroup, selfApprovalCheck } from "@ros/core";
-import { detectStuckRoles } from "@ros/agents";
-import type { MembershipRole } from "@ros/contracts";
-import { applications, approvalRequests, assessments, candidates, companies, events, interviewParticipants, interviews, postings, recruiterEscalations, rolePackets, roles, screens, type Tx } from "@ros/db";
+import { HELD_STATUS, detectStuckRoles } from "@ros/agents";
+import { companyOnboarding, companyVerifiedAt, type CompanyOnboarding, type GettingStarted, type GettingStartedStep, type MembershipRole } from "@ros/contracts";
+import { applications, approvalRequests, assessments, candidates, communications, companies, events, intakeSessions, integrations, interviewParticipants, interviewerAvailability, interviews, invitations, memberships, postings, recruiterEscalations, rolePackets, roles, screens, type Tx } from "@ros/db";
 import type { Tenant } from "../middleware/session";
 import { mayDecideByRole } from "./approvers";
 import { APPROVAL_LABEL } from "./role-report";
@@ -25,13 +25,15 @@ function approvalCardWords(actionType: string, ctx: { who: string; roleTitle: st
 const CHANNEL_NAME: Record<string, string> = { careers_page: "your careers page", google_jobs: "Google for Jobs", email_in: "email-in capture", linkedin_basic: "LinkedIn", indeed: "Indeed", ziprecruiter: "ZipRecruiter" };
 
 export type BriefCard = {
-  kind: "new_applicants" | "needs_review" | "decision" | "posting_action" | "escalation" | "stuck" | "screening" | "interviews" | "empty";
+  kind: "new_applicants" | "needs_review" | "decision" | "posting_action" | "escalation" | "stuck" | "screening" | "interviews" | "empty" | "getting_started";
   title: string;
   body: string;
   roleId?: string;
   applicationId?: string;
   approvalRequestId?: string;
   actions: Array<{ label: string; method: "GET" | "POST"; path: string; body?: Record<string, unknown> }>;
+  /** Only on the getting_started card: the ITS company check and the steps this viewer can do (plan B1, B2). */
+  gettingStarted?: GettingStarted;
 };
 
 export type Brief = { generatedAt: string; cards: BriefCard[]; summary: string };
@@ -191,10 +193,17 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   }
 
   const escalations = (await tx.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), inArray(recruiterEscalations.status, ["open", "claimed", "in_progress"])))).filter((e) => escalationInScope(scope, e));
+  // Each open request leads to itself in "Your recruiter requests" on Today, where its thread, notes and (once it comes)
+  // the answer in full are; answered requests are shown there for two weeks, so the brief needs no card of its own.
+  const readsRequests = !viewer || can(viewer.role, "escalation.create");
   for (const e of escalations) {
-    cards.push({ kind: "escalation", title: e.status === "open" ? "A recruiter will pick this up" : "A recruiter is on it", body: e.question.slice(0, 200), roleId: e.roleId ?? undefined, applicationId: e.applicationId ?? undefined, actions: [] });
+    cards.push({ kind: "escalation", title: e.status === "open" ? "A recruiter will pick this up" : "A recruiter is on it", body: e.question.slice(0, 200), roleId: e.roleId ?? undefined, applicationId: e.applicationId ?? undefined, actions: readsRequests ? [{ label: "See the request", method: "GET", path: `/?request=${e.id}` }] : [] });
   }
-  if (cards.length === 0) {
+  // Getting started leads Today until the company is set up; its steps step aside once real decisions are waiting. Its
+  // "Start your first role" makes the empty card's "Start a hire" redundant, so that card is left out while it shows.
+  const setup = await gettingStartedCard(tx, companyId, viewer, { decisionsWaiting: cards.some((c) => c.kind === "decision" || c.kind === "needs_review") });
+  const offersFirstRole = !!setup?.gettingStarted?.steps.some((s) => s.key === "first_role" && !s.done);
+  if (cards.length === 0 && !offersFirstRole) {
     // A brand-new company's first screen always offers the way forward; so does a quiet day.
     const startsHires = !viewer || (can(viewer.role, "role.create") && can(viewer.role, "compensation.read") && !scope);
     const actions: BriefCard["actions"] = openRoles.length ? [{ label: "See your roles", method: "GET", path: "/roles" }] : startsHires ? [{ label: "Start a hire", method: "GET", path: START_HIRE_PATH }] : [];
@@ -213,7 +222,131 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   const inScopeSubjects = scope ? new Set<string>([...openRoles.map((r) => r.id), ...companyApps.map((a) => a.id)]) : null;
   const handled = recent.filter((e) => AUTOMATED.has(e.type) && (e.actor.kind === "system" || e.actor.kind === "agent") && (!inScopeSubjects || inScopeSubjects.has(e.subjectId))).length;
   const summary = `${needsMe} ${needsMe === 1 ? "thing needs" : "things need"} you · ${strongWaiting} strong ${strongWaiting === 1 ? "candidate" : "candidates"} ready · ${atRisk} at risk · ${handled} handled for you since yesterday.`;
-  return { generatedAt: new Date().toISOString(), cards, summary };
+  return { generatedAt: new Date().toISOString(), cards: setup ? [setup, ...cards] : cards, summary };
+}
+
+/** Where the getting-started card is hidden for one person, and where "I've reviewed them" is recorded (routes/company-settings.ts). */
+export const GETTING_STARTED_PATH = "/api/v1/companies/current/getting-started";
+
+/** Who migration 0027 recorded as confirming the companies that existed when the ITS check began. */
+const EXISTING_COMPANY_ACTOR_ID = "migration_0027";
+
+/** What "Draft it with an ITS recruiter" asks; the request covers all of the company's hiring, as the form says before it is sent. */
+export const FIRST_ROLE_QUESTION = "Please help us draft our first role. We would like an ITS recruiter to go through the job with us and draft it for us to approve.";
+
+/**
+ * Getting started (plan B1 and B2; docs/customer/04 steps 3 to 9). While ITS has not confirmed the company the card says
+ * so, with what waits meanwhile (the public pages, and how many messages to candidates are held), whatever else Today
+ * shows: nobody can hide that. Below it, the steps this viewer can do, each with one line on why it matters, ticked when
+ * done (derived from the record, never asked). The steps are left out once real decisions are waiting or the viewer hid
+ * them, and the card goes once the company is confirmed and every step of the viewer's is done. Never for ITS staff, and
+ * no steps for a company that was already running when the check began (migration 0027): ITS set those up by hand.
+ */
+async function gettingStartedCard(tx: Tx, companyId: string, viewer: BriefViewer | undefined, opts: { decisionsWaiting: boolean }): Promise<BriefCard | null> {
+  if (viewer?.scope || viewer?.role === "recruiter" || viewer?.role === "interviewer") return null;
+  const [company] = await tx.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1);
+  if (!company) return null;
+  const verified = companyVerifiedAt(company.settings) !== null;
+  const onboarding = companyOnboarding(company.settings);
+  const setUpBefore = company.settings.verifiedBy?.id === EXISTING_COMPANY_ACTOR_ID;
+  const hidden = opts.decisionsWaiting || setUpBefore || (!!viewer && !!onboarding.dismissedBy?.[viewer.userId]);
+  const role = viewer?.role ?? "owner";
+  const steps = hidden ? [] : await gettingStartedSteps(tx, companyId, role, company.settings, onboarding);
+  if (verified && !steps.some((s) => !s.done)) return null;
+  const [held] = verified ? [{ n: 0 }] : await tx.select({ n: count() }).from(communications).where(and(eq(communications.companyId, companyId), eq(communications.status, HELD_STATUS)));
+  const heldMessages = Number(held?.n ?? 0);
+  const waiting = heldMessages ? ` ${heldMessages} ${heldMessages === 1 ? "message" : "messages"} to candidates ${heldMessages === 1 ? "is" : "are"} waiting for it now.` : "";
+  // A company whose confirmation ITS took back is checked again; the one-time check's words would not be true for it.
+  const [taken] = verified ? [] : await tx.select({ id: events.id }).from(events).where(and(eq(events.companyId, companyId), eq(events.type, "company.unverified"))).limit(1);
+  const lead = taken ? "ITS is checking your company again; your ITS contact will be in touch." : "ITS is confirming your company. This one-time check usually takes up to a business day.";
+  // Only the people who may draft or approve a role are told they can; HR, say, cannot.
+  const meanwhile = can(role, "role.create") ? (can(role, "role.approve") ? " You can draft and approve roles in the meantime." : " You can draft roles in the meantime.") : "";
+  const body = verified
+    ? `${steps.filter((s) => s.done).length} of ${steps.length} done. A few steps get your hiring ready; each says why it matters.`
+    : `${lead} Until it is done, your careers page, job pages and Google listing stay offline, and emails to candidates wait; they go out on their own as soon as ITS confirms.${waiting}${meanwhile}`;
+  const dismissible = steps.length > 0;
+  return {
+    kind: "getting_started",
+    title: steps.length ? "Getting started" : taken ? "ITS is checking your company again" : "ITS is confirming your company",
+    body,
+    actions: dismissible ? [{ label: "Hide these steps", method: "POST", path: GETTING_STARTED_PATH, body: { action: "dismiss" } }] : [],
+    gettingStarted: { verified, heldMessages, steps, dismissible },
+  };
+}
+
+/** The steps a person in this role can do, in the order of the onboarding checklist. */
+async function gettingStartedSteps(tx: Tx, companyId: string, role: MembershipRole, settings: typeof companies.$inferSelect.settings, onboarding: CompanyOnboarding): Promise<GettingStartedStep[]> {
+  const steps: GettingStartedStep[] = [];
+  if (can(role, "company.update")) {
+    const missing = [settings.website ? null : "your website", settings.careersPage?.intro ? null : "a careers-page introduction", settings.benefitsSummary ? null : "a benefits summary"].filter((m): m is string => !!m);
+    steps.push({
+      key: "company_details",
+      title: "Add your website, careers-page introduction and benefits",
+      why: "Candidates read these on your careers page and job pages before they apply.",
+      done: missing.length === 0,
+      ...(missing.length ? { detail: `Still to add: ${missing.join(", ")}.${settings.logoUrl ? "" : " A logo is optional."}` } : {}),
+      actions: [{ label: "Open company details", method: "GET", path: "/setup#setup-company" }],
+    });
+  }
+  if (can(role, "members.manage")) {
+    const [members] = await tx.select({ n: count() }).from(memberships).where(and(eq(memberships.companyId, companyId), eq(memberships.status, "active")));
+    const [invited] = await tx.select({ n: count() }).from(invitations).where(and(eq(invitations.companyId, companyId), eq(invitations.status, "pending")));
+    steps.push({
+      key: "team",
+      title: "Invite your team",
+      why: "Everyone signs in with their own work account, so each decision is theirs and on the record.",
+      done: Number(members?.n ?? 0) > 1 || Number(invited?.n ?? 0) > 0,
+      actions: [{ label: "Invite people", method: "GET", path: "/setup#setup-team" }],
+    });
+  }
+  if (can(role, "scorecard.write")) {
+    const [hours] = await tx.select({ id: interviewerAvailability.id }).from(interviewerAvailability).where(and(eq(interviewerAvailability.companyId, companyId), sql`jsonb_array_length(${interviewerAvailability.windows}) > 0`)).limit(1);
+    const [calendar] = hours ? [] : await tx.select({ id: integrations.id }).from(integrations).where(and(eq(integrations.companyId, companyId), eq(integrations.kind, "calendar"), eq(integrations.status, "live"))).limit(1);
+    steps.push({
+      key: "interview_hours",
+      title: "Set when you can interview, or connect your calendar",
+      why: "Candidates are offered interview times only from the hours or calendars your team has set.",
+      done: !!hours || !!calendar,
+      actions: [{ label: "Set my hours", method: "GET", path: "/setup#setup-availability" }],
+    });
+  }
+  if (can(role, "role.create") && can(role, "compensation.read")) {
+    const [anyRole] = await tx.select({ id: roles.id }).from(roles).where(eq(roles.companyId, companyId)).limit(1);
+    const [draft] = anyRole ? [] : await tx.select({ id: intakeSessions.id }).from(intakeSessions).where(and(eq(intakeSessions.companyId, companyId), ne(intakeSessions.status, "abandoned"))).limit(1);
+    // a talk with ITS about the plan (more roles) is not a request to draft the first role
+    const [asked] = await tx.select({ id: recruiterEscalations.id }).from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), eq(recruiterEscalations.kind, "ask"), isNull(recruiterEscalations.roleId), isNull(recruiterEscalations.applicationId), inArray(recruiterEscalations.status, ["open", "claimed", "in_progress"]), sql`coalesce(${recruiterEscalations.billing}->>'topic', '') <> 'plan'`)).limit(1);
+    // The page opens this request in the request form, prefilled, so what the recruiter would see, the reply-by time and
+    // the plan's recruiter requests are shown before anything is sent (Q31); nothing goes in one click.
+    const askRecruiter = can(role, "escalation.create") && !asked ? [{ label: "Draft it with an ITS recruiter", method: "POST" as const, path: "/api/v1/escalations", body: { kind: "ask", scope: "company", question: FIRST_ROLE_QUESTION } }] : [];
+    steps.push({
+      key: "first_role",
+      title: "Start your first role",
+      why: "Describe the job in a sentence or two; the assistant asks for the rest and drafts it for you to approve. An ITS recruiter can draft it with you instead: you see what they would have access to before you send the request.",
+      done: !!anyRole || !!draft,
+      ...(asked ? { detail: "You asked an ITS recruiter to draft it with you; they will be in touch." } : {}),
+      actions: [{ label: "Start a hire", method: "GET", path: START_HIRE_PATH }, ...askRecruiter],
+    });
+  }
+  if (can(role, "integration.manage")) {
+    steps.push({
+      key: "job_boards",
+      title: "Give ITS access to your job boards",
+      why: "ITS posts your jobs on LinkedIn, Indeed and ZipRecruiter under your own employer accounts. Add the ITS recruiter your contact names as a user on each; never send a password by email.",
+      done: !!onboarding.jobBoardsConfirmedAt,
+      ...(onboarding.jobBoardsConfirmedAt ? {} : { detail: "This ticks once ITS confirms it can sign in to each one." }),
+      actions: [],
+    });
+  }
+  if (can(role, "policy.manage")) {
+    steps.push({
+      key: "ai_rules",
+      title: "Review what the assistant may do on its own",
+      why: "Everything starts at the recommended settings. You choose what waits for a person; the decisions that always need a person stay that way.",
+      done: !!onboarding.policiesReviewedAt,
+      actions: [{ label: "Open the AI rules", method: "GET", path: "/setup#setup-rules" }, { label: "I've reviewed them", method: "POST", path: GETTING_STARTED_PATH, body: { action: "policies_reviewed" } }],
+    });
+  }
+  return steps;
 }
 
 /**

@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { jobNoticesFor } from "@ros/core";
 import { companies, rolePackets, roles, withPlatform } from "@ros/db";
 import { jobFeedJson, jobFeedXml, jobValidThrough, linkedInFeedXml, schemaEmploymentType, type FeedJob } from "@ros/integrations";
@@ -43,7 +43,11 @@ async function cached(container: Container, key: string, build: () => Promise<st
   return body;
 }
 
-/** Open roles that accept applications, with the approved packet the role currently runs on. Platform read: the feeds span every company. */
+/**
+ * Open roles that accept applications, with the approved packet the role currently runs on, of companies ITS has
+ * confirmed (founder decision B7: an unconfirmed company is in no feed and no sitemap). Platform read: the feeds span
+ * every company.
+ */
 async function listings(container: Container): Promise<Listing[]> {
   const rows = await withPlatform(container.db, (tx) =>
     tx
@@ -51,7 +55,7 @@ async function listings(container: Container): Promise<Listing[]> {
       .from(roles)
       .innerJoin(companies, eq(companies.id, roles.companyId))
       .innerJoin(rolePackets, and(eq(rolePackets.roleId, roles.id), eq(rolePackets.version, roles.currentPacketVersion)))
-      .where(and(eq(roles.status, "open"), eq(roles.acceptingApplications, true)))
+      .where(and(eq(roles.status, "open"), eq(roles.acceptingApplications, true), sql`coalesce(${companies.settings}->>'verifiedAt', '') <> ''`))
       .orderBy(roles.openedAt),
   );
   return rows.map((r) => {

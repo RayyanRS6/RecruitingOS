@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, ErrorState, Field, Pill, Sheet, Skeleton, Table, type Tone } from "@ros/ui";
 import { api, ApiError, type ApplicationLink, type Posting, type PostingView, type PostingsResponse, type RoleDetail, type VolumeReport } from "../api/client";
+import { POSTING_WAITS_FOR_CHECK } from "../company-check";
+import { useCompanyCheck } from "../components/use-company-check";
 import { toast } from "../toast";
 import { boardNames } from "../role-words";
 
@@ -154,6 +156,8 @@ export function PostingTab({ roleId, roleStatus, canManage }: { roleId: string; 
     onError: (e) => toast(message(e, "That did not work. Try again.")),
   });
   const run: Run = (channel, action, done, body, onSuccess) => act.mutate({ channel, action, body, done }, onSuccess ? { onSuccess } : undefined);
+  // Until ITS confirms the company (founder decision B7) nothing of an approved role is public, and the tab says why.
+  const check = useCompanyCheck();
 
   if (q.isLoading) return <Skeleton lines={6} />;
   if (q.error || !q.data) return <ErrorState message="Could not load the postings." onRetry={() => q.refetch()} />;
@@ -169,7 +173,8 @@ export function PostingTab({ roleId, roleStatus, canManage }: { roleId: string; 
       {roleStatus === "draft" || roleStatus === "pending_approval" ? <Alert tone="caution">Posting starts when the role is approved and open. Nothing is posted anywhere until then.</Alert> : null}
       {roleStatus === "paused" ? <Alert tone="caution">The role is paused: it is off the careers page and the feeds, and postings keep their state. Resume the role to carry on. A board posting stays visible on the board until it is paused or removed there.</Alert> : null}
       {roleStatus === "closed" ? <Alert tone={d.boardsStillUp.length ? "critical" : "neutral"}>{d.boardsStillUp.length ? `The role is closed. Still up on: ${boardNames(d.boardsStillUp)}. ${canManage ? "Take each posting down from your own account, then tick it off below." : "An owner or an admin takes each posting down and ticks it off below."}` : "The role is closed and every board is confirmed down. Nothing more to do here."}</Alert> : null}
-      {d.postings.length === 0 ? <p className="muted">Nothing prepared yet. The channels are prepared the moment the role is approved.</p> : null}
+      {check === "waiting" && roleStatus !== "closed" ? <Alert tone="caution">{POSTING_WAITS_FOR_CHECK}</Alert> : null}
+      {d.postings.length === 0 && check !== "waiting" ? <p className="muted">Nothing prepared yet. The channels are prepared the moment the role is approved.</p> : null}
 
       {careers || google ? (
         <div className="grid-2">

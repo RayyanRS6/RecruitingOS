@@ -329,6 +329,12 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
       return { ...base, what: "An ITS recruiter picked up the request" };
     case "recruiter.resolved":
       return { ...base, what: "The ITS recruiter answered", ...(str(p.resolution) ? { why: String(p.resolution) } : {}) };
+    case "recruiter.replied":
+      return { ...base, what: "The ITS recruiter wrote about the request" };
+    case "customer.replied":
+      return { ...base, what: "A note was added to the request for the recruiter" };
+    case "recruiter.reopened":
+      return { ...base, what: "The request was reopened: it was not solved yet" };
     case "recruiter.access_granted":
       return { ...base, what: `An ITS recruiter was given access until ${shortDay(p.expiresAt)}` };
     case "recruiter.access_ended":

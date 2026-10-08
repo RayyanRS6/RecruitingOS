@@ -29,7 +29,10 @@ messageRoutes.get("/:id/messages/preview", requireTenant, async (c) => {
   return c.json(row);
 });
 
-/** 201 when the message is queued for sending; 202 when it waits for an owner or admin. */
+/**
+ * 201 when the message is in the outbox: queued for sending, or held until ITS confirms the company (`status: "held"`,
+ * founder decision B7); 202 when it waits for an owner or admin.
+ */
 messageRoutes.post("/:id/messages", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "application.act");
@@ -41,5 +44,5 @@ messageRoutes.post("/:id/messages", requireTenant, async (c) => {
     return sendCandidateMessage(tx, container, { app, tenant: t, actor: actorOf(c), body });
   });
   await container.kick();
-  return c.json(result, result.status === "queued" ? 201 : 202);
+  return c.json(result, result.status === "pending_approval" ? 202 : 201);
 });

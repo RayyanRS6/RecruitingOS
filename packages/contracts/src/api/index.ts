@@ -230,9 +230,34 @@ export const CreateEscalation = z.object({
   question: z.string().min(1).max(4000),
   /** Optional; the category sets a default. Shown to recruiters before acceptance (correction 11). */
   urgency: z.enum(["low", "normal", "high", "critical"]).optional(),
+  /**
+   * "plan": a talk with ITS about the plan itself (more roles than it includes), offered when the plan refuses a new
+   * role. It is not a request for recruiting help, so it never counts against the plan's recruiter requests (Q33).
+   */
+  topic: z.enum(["plan"]).optional(),
 });
 export type CreateEscalation = z.infer<typeof CreateEscalation>;
 export const ResolveEscalation = z.object({ resolution: z.string().min(1).max(4000), /** Recruiter effort, for capacity and pricing (founder decision F12). */ minutesSpent: z.number().int().min(0).max(1440).optional() });
+/** A note on a request: from the team while a recruiter works on it, or from the recruiter holding it (plan B5). */
+export const EscalationReply = z.object({ body: z.string().trim().min(1).max(4000) });
+/** "This didn't solve it": the team reopens an answered request and says why; the recruiter reads it (plan B5). */
+export const ReopenEscalation = z.object({ note: z.string().trim().min(5).max(4000) });
+/** The reply-by time a request would get if it were sent now (plan B6): the form shows it before anything is sent. */
+export const EscalationEstimateQuery = z.object({ kind: CreateEscalation.shape.kind.default("ask"), topic: CreateEscalation.shape.topic });
+
+/** One entry in a request's thread as the team reads it: what they asked, every note, every answer, every reopening. */
+export type EscalationThreadEntry = { id: string; side: "customer" | "recruiter"; kind: "question" | "reply" | "answer" | "reopen"; body: string; by: string | null; at: string };
+/**
+ * A request as "Your recruiter requests" on Today shows it (plan B4): its state, the reply-by time, who picked it up and
+ * the full answer. `askedBy.kind` is "you" for the reader's own requests; `recruiterName` is null until someone picks it up.
+ */
+export type RecruiterRequestView = {
+  id: string; kind: string; status: string; urgency: string; summary: string; question: string;
+  scope: EscalationScope; roleId: string | null; roleTitle: string | null; applicationId: string | null; candidateName: string | null;
+  askedBy: { kind: "you" | "team" | "recruiter" | "system" | "candidate"; name: string | null };
+  createdAt: string; slaDueAt: string | null; firstResponseAt: string | null; resolvedAt: string | null; resolution: string | null; accessExpiresAt: string | null;
+  recruiterName: string | null; reopenedCount: number; thread: EscalationThreadEntry[];
+};
 
 // Emergency access for platform administrators (founder decision F10): MFA, a recorded reason, a short expiry.
 export const PlanChange = z.object({ planKey: z.string().min(1), pilotDays: z.number().int().min(1).max(365).optional(), extendUntil: z.string().optional(), reason: z.string().max(500).optional() });

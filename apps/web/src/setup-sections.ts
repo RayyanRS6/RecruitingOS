@@ -9,6 +9,7 @@ export function setupSections(viewer: { mayStartHire: boolean; seesAudit: boolea
     { id: "setup-recruiters", label: "Recruiter access" },
     { id: "setup-sessions", label: "Your sessions" },
     { id: "setup-availability", label: "Your availability" },
+    { id: "setup-notifications", label: "Email alerts" },
     ...(viewer.mayStartHire ? [{ id: "setup-shortcut", label: "Keyboard shortcut" }] : []),
     { id: "setup-services", label: "Connected services" },
     { id: "setup-rules", label: "What the AI may do" },

@@ -84,10 +84,11 @@ export const CANDIDATE_STEP_LABEL: Record<CandidateStep, string> = { received: "
 /**
  * What became of the candidate's message after a decision or a "Send", so the toast says exactly that.
  * `not_told`: nothing was sent (every decision, hold and mark; the candidate was not told). `queued`: the message is on
- * its way. `waiting_approval`: it waits for someone who may approve it. `not_sent_settings`: the company's settings
- * send no decision messages. `not_sent_no_email`: no address on file. `not_sent`: it could not be prepared.
+ * its way. `held`: it is saved and goes out on its own once ITS confirms the company (founder decision B7).
+ * `waiting_approval`: it waits for someone who may approve it. `not_sent_settings`: the company's settings send no
+ * decision messages. `not_sent_no_email`: no address on file. `not_sent`: it could not be prepared.
  */
-export const CandidateNotice = z.enum(["not_told", "queued", "waiting_approval", "not_sent_settings", "not_sent_no_email", "not_sent"]);
+export const CandidateNotice = z.enum(["not_told", "queued", "held", "waiting_approval", "not_sent_settings", "not_sent_no_email", "not_sent"]);
 export type CandidateNotice = z.infer<typeof CandidateNotice>;
 
 /**

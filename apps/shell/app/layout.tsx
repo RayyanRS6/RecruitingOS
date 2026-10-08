@@ -1,5 +1,8 @@
 import type { ReactNode } from "react";
 import "@ros/ui/tokens.css";
+// The typefaces come from this deployment's own /fonts/ folder (apps/api/src/pages/fonts.ts lists them, scripts/fetch-fonts.ts
+// writes this file), so no font host learns who opened the application and the policy keeps font-src 'self'.
+import "./fonts.css";
 import { Providers } from "../components/Providers";
 import { getMe } from "../lib/session";
 
@@ -10,11 +13,6 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   const me = await getMe();
   return (
     <html lang="en">
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono&display=swap" />
-      </head>
       <body>
         <Providers me={me}>{children}</Providers>
       </body>

@@ -1,4 +1,4 @@
-import type { ActiveMark, CandidateNotice, MeResponse, OwnerGroup, OwnerStage, StageMove, ToldState } from "@ros/contracts";
+import type { ActiveMark, CandidateNotice, GettingStarted, MeResponse, OwnerGroup, OwnerStage, StageMove, ToldState } from "@ros/contracts";
 
 export type { ActiveMark, CandidateNotice, OwnerStage, StageMove, ToldState };
 
@@ -31,7 +31,8 @@ export const api = {
 /** The signed-in person, exactly as the API answers it (the shape lives in @ros/contracts so the two cannot drift). */
 export type Me = MeResponse;
 
-export type BriefCard = { kind: string; title: string; body: string; roleId?: string; applicationId?: string; approvalRequestId?: string; actions: Array<{ label: string; method: "GET" | "POST"; path: string; body?: Record<string, unknown> }> };
+/** `gettingStarted`: only on the getting_started card, the ITS company check and the steps this person can do (plan B1, B2). */
+export type BriefCard = { kind: string; title: string; body: string; roleId?: string; applicationId?: string; approvalRequestId?: string; actions: Array<{ label: string; method: "GET" | "POST"; path: string; body?: Record<string, unknown> }>; gettingStarted?: GettingStarted };
 export type Brief = { generatedAt: string; cards: BriefCard[]; summary: string };
 
 /**
@@ -120,6 +121,8 @@ export type AssessmentResult = {
 };
 export type Screen = { id: string; channel: string; status: string; invitedAt: string | null; startedAt: string | null; completedAt: string | null; remindedAt: string | null; transcript: Array<{ role: string; content: string; at: string; questionKey?: string; channel?: string }>; answers: Record<string, string>; progress: { askedKeys: string[]; currentQuestionKey: string | null; /** "Ask about this in a screen": the open questions the screen started with, each with its answer once given. */ focusQuestions?: Array<{ key: string; question: string; whyItMatters?: string; answer?: string }> }; assessmentId: string | null; /** The scorecard's state on the candidate page (apps/api/src/services/screen-scorecards.ts); `recruiterAsked` once ITS has the failed one. */ scorecard?: "ready" | "writing" | "unavailable" | "none"; recruiterAsked?: boolean };
 export type Notification = { id: string; kind: string; title: string; body: string; action: { label: string; href: string } | null; readAt: string | null; createdAt: string };
+/** The full history of updates and each person's email alert settings (plan B3); the shapes live in @ros/contracts. */
+export type { NotificationHistoryPage, NotificationPreferencesView, NotificationView, NotifyCadence, NotifyGroup } from "@ros/contracts";
 /**
  * What a Send of the decision message does under the company's settings (`declineMessagePolicy` in
  * apps/api/src/services/application-actions.ts): it goes, waits for approval, or is not sent. Declining itself sends nothing.
@@ -137,7 +140,8 @@ export type ApplicationCapability = "invite_screen" | "ask_in_screen" | "intervi
 export type DecisionMessagePreview = { to: string | null; subject: string; text: string; wording: "eligibility" | "human"; policy: DeclineMessagePolicy; toldState: ToldState; candidateToldAt: string | null; waitingApproval: boolean };
 /** POST /roles/:id/decision-messages: one result per person, so one refusal never hides the others. */
 export type DecisionMessageResult = { applicationId: string; ok: boolean; candidateNotice?: CandidateNotice; toldState?: ToldState; code?: string; message?: string };
-export type DecisionMessagesResponse = { results: DecisionMessageResult[]; queued: number; waitingApproval: number; notSent: number };
+/** `held`: saved to go out on their own once ITS confirms the company (founder decision B7). */
+export type DecisionMessagesResponse = { results: DecisionMessageResult[]; queued: number; held?: number; waitingApproval: number; notSent: number };
 export type TimelineEvent = { type: string; occurredAt: string; actor: { kind: string; name?: string; id: string }; payload: Record<string, unknown> };
 export type ApplicationDetail = ApplicationCore & { roleId: string; stageChangedAt: string; candidateToldAt: string | null; allowedActions: ApplicationCapability[]; /** Why each choice not in `allowedActions` is unavailable, in plain words; shown on the disabled button. */ blockedReasons: Partial<Record<ApplicationCapability, string>>; /** What a Send of the decision message does under the company's settings: it goes, waits for approval, or is not sent. */ declineMessage: DeclineMessagePolicy; rejectReason: string | null; rejectNote: string | null; interviews: Array<{ id: string; roundKey: string; title: string; status: string; startsAt: string | null; endsAt: string | null; timezone: string | null; meetingUrl: string | null; attempt: number; outcome: string | null; decision: string | null; offeredSlots: OfferedSlot[]; createdAt: string }>; interviewPlan: Array<{ key: string; title: string; durationMinutes: number; format: string; interviewerUserIds: string[]; purpose: string }>; candidate: { firstName: string; lastName: string; email: string | null; phone: string | null; locationText: string | null; consent: Record<string, { granted: boolean; at: string; source: string }>; /** `talentPoolOptOut`: the person asked not to be kept for future roles. */ preferences?: { talentPoolOptOut?: boolean } }; documents: Array<{ id: string; kind: string; filename: string; hasText: boolean; sizeBytes: number; status: "quarantined" | "clean" | "rejected" | "deleted" | string; uploadedVia: string; rejectedReason: string | null; validatedAt: string | null }>; assessments: Array<{ id: string; kind: string; overall: string; confidence: string; createdAt: string; result: AssessmentResult }>; screens: Screen[]; /** `proposal` carries a waiting message's text (F11); `requiredRoles` says who may decide it, so the page offers the buttons only to them. */ pendingApprovals: Array<{ id: string; actionType: string; rationale: string | null; createdAt: string; proposal?: Record<string, unknown>; requiredRoles: string[] }>; packetLabels: { mustHaves: Array<{ key: string; text: string }>; competencies: Array<{ key: string; name: string }>; questions: Array<{ key: string; question: string }> }; communications: Array<{ id: string; direction: string; channel: string; subject: string | null; bodyText: string; status: string; createdAt: string; templateKey: string | null }>; timeline: TimelineEvent[]; extraction: { positions: Array<{ title: string; employer?: string; startDate?: string; endDate?: string; quote?: string }>; licenses: Array<{ name: string; jurisdiction?: string; quote?: string }>; certifications: Array<{ name: string }>; skills: string[]; yearsOfExperienceEstimate?: number; anomalies: Array<{ kind: string; detail: string }> } | null; answers: { eligibility?: Record<string, unknown>; noResume?: Record<string, string> } };
 export type IntakeSession = { id: string; status: string; messages: Array<{ role: "owner" | "assistant" | "system"; content: string; at: string }>; facts: Record<string, unknown>; missingFacts: string[]; roleId: string | null };
@@ -176,7 +180,8 @@ export type InterviewerBrief = {
 };
 // Writing to a candidate (F11) and hearing back (F12): apps/api/src/routes/messages.ts.
 export type MessagePreview = { to: string | null; candidateFirstName: string; fromName: string; footer: string; repliesComeBack: boolean; policyLevel: string; needsApproval: boolean };
-export type SendMessageResult = { ok: true; status: "queued"; communicationId: string } | { ok: true; status: "pending_approval"; approvalRequestId: string };
+/** `held`: saved, and it goes out on its own once ITS confirms the company (founder decision B7). */
+export type SendMessageResult = { ok: true; status: "queued" | "held"; communicationId: string } | { ok: true; status: "pending_approval"; approvalRequestId: string };
 // The comparison view (F10): GET /roles/:id/compare?ids=a,b,c (apps/api/src/routes/compare.ts). Nothing ranked; columns in the order chosen.
 export type CompareCandidate = { applicationId: string; name: string; stage: string; stageLabel: string; group: string; ownerStage?: OwnerStage; ownerStageLabel?: string; mustHaves: Record<string, { met: string; quote: string | null }>; competencies: Record<string, { finding: string; note: string | null }>; screen: { recommendation: string; summary: string } | null; resume: { overall: string; recommendation: string; summary: string } | null; unknownCount: number; open: string };
 export type CompareResponse = { role: { id: string; title: string }; mustHaves: Array<{ key: string; text: string }>; competencies: Array<{ key: string; name: string; definition: string }>; candidates: CompareCandidate[]; max: number; reminder: string };

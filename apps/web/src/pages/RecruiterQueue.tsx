@@ -4,12 +4,14 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useRefresh } from "../nav";
 import { Alert, Button, Card, Chip, EmptyState, ErrorState, Field, PageHeader, Pill, Skeleton, type Tone } from "@ros/ui";
+import type { EscalationThreadEntry } from "@ros/contracts";
 import { api, ApiError } from "../api/client";
+import { queueThreadHeading } from "../recruiter-requests";
 import { toast } from "../toast";
 
 /** Exactly what a recruiter sees before accepting (correction 11): no customer words, nothing from a candidate record. */
 type Preview = { id: string; status: string; kind: string; urgency: "low" | "normal" | "high" | "critical"; requiredExpertise: string; summary: string; companyName: string; roleTitle: string | null; slaDueAt: string | null; slaRemainingMinutes: number | null; businessMinutesRemaining: number | null; overdue: boolean; createdAt: string; claimedByMe: boolean; claimed: boolean };
-type Detail = Preview & { accessGranted: boolean; why?: string | null; companyId?: string; roleId?: string | null; applicationId?: string | null; question?: string; contextSnapshot?: Record<string, unknown>; resolution?: string | null; minutesSpent?: number | null; firstResponseAt?: string | null; grant?: { id: string; purpose: string; expiresAt: string; scope: { roleId: string | null; applicationId: string | null } } };
+type Detail = Preview & { accessGranted: boolean; why?: string | null; companyId?: string; roleId?: string | null; applicationId?: string | null; question?: string; contextSnapshot?: Record<string, unknown>; resolution?: string | null; minutesSpent?: number | null; firstResponseAt?: string | null; thread?: EscalationThreadEntry[]; reopenedCount?: number; grant?: { id: string; purpose: string; expiresAt: string; scope: { roleId: string | null; applicationId: string | null } } };
 
 const URGENCY_TONE: Record<Preview["urgency"], Tone> = { low: "neutral", normal: "accent", high: "caution", critical: "critical" };
 
@@ -32,7 +34,7 @@ export function RecruiterQueue() {
   const list = useQuery({ queryKey: ["escalations"], queryFn: () => api.get<Preview[]>("/api/v1/escalations") });
   return (
     <div className="stack" style={{ gap: 18 }}>
-      <PageHeader eyebrow="ITS recruiters" title="Recruiter queue" sub="Requests from customers, soonest deadline first. Accept one to open the request itself; your access is limited to that request and ends when it is resolved." />
+      <PageHeader eyebrow="ITS recruiters" title="Recruiter queue" sub="Requests from customers: urgent ones first, then the soonest deadline. Urgency changes the order, never the reply-by time. Accept one to open the request itself; your access is limited to that request and ends a day after it is resolved." />
       <div className="grid-2" style={{ gridTemplateColumns: id ? "minmax(260px, 1fr) 2fr" : undefined }}>
         <div className="stack">
           {list.isLoading ? <Skeleton lines={4} /> : list.error ? <ErrorState message="Could not load the queue." onRetry={() => list.refetch()} /> : list.data!.length === 0 ? <EmptyState icon="grid" title="Queue is empty" body="Customer requests appear here." /> : list.data!.map((e) => (
@@ -55,10 +57,13 @@ function EscalationDetail({ id }: { id: string }) {
   const q = useQuery({ queryKey: ["escalation", id], queryFn: () => api.get<Detail>(`/api/v1/escalations/${id}`) });
   const [resolution, setResolution] = useState("");
   const [minutes, setMinutes] = useState("");
+  const [reply, setReply] = useState("");
   const refresh = () => { qc.invalidateQueries({ queryKey: ["escalation", id] }); qc.invalidateQueries({ queryKey: ["escalations"] }); qc.invalidateQueries({ queryKey: ["me"] }); };
   const claim = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/claim`), onSuccess: () => { toast("Accepted. Your access to this customer is now active."); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not accept.") });
   const release = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/release`), onSuccess: () => { toast("Released. Your access ended."); refresh(); } });
-  const resolve = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/resolve`, { resolution, minutesSpent: minutes ? Number(minutes) : undefined }), onSuccess: () => { toast("Resolved. Access ends in 24 hours."); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not resolve.") });
+  const resolve = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/resolve`, { resolution, minutesSpent: minutes ? Number(minutes) : undefined }), onSuccess: () => { toast("Resolved. The customer has your answer in full; your access ends in 24 hours."); setResolution(""); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not resolve.") });
+  // A message without resolving (plan B5): a question back, or progress. The person who asked and the owners read it in full.
+  const write = useMutation({ mutationFn: () => api.post(`/api/v1/escalations/${id}/messages`, { body: reply.trim() }), onSuccess: () => { toast("Sent to the customer."); setReply(""); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send.") });
   const refreshFrame = useRefresh();
   const enter = useMutation({
     mutationFn: async (e: Detail) => { await api.post("/api/v1/auth/switch", { companyId: e.companyId }); return e; },
@@ -75,11 +80,19 @@ function EscalationDetail({ id }: { id: string }) {
       <Card title={`${e.kind.replace(/_/g, " ")} · ${e.companyName}${e.roleTitle ? ` · ${e.roleTitle}` : ""}`} aside={<div className="row"><Pill size="sm" tone={URGENCY_TONE[e.urgency]}>{e.urgency}</Pill>{e.status === "open" ? <Button size="sm" variant="primary" loading={claim.isPending} onClick={() => claim.mutate()}>Accept this request</Button> : null}</div>}>
         <p>{e.summary}</p>
         <p className="small muted">Needs {e.requiredExpertise} · {remainingText(e)}{e.slaDueAt ? ` · respond by ${new Date(e.slaDueAt).toLocaleString()}` : ""}{e.firstResponseAt ? ` · first response ${new Date(e.firstResponseAt).toLocaleString()}` : ""}</p>
-        {e.accessGranted && e.question ? <div style={{ marginTop: 10 }}><p className="small muted">The customer's request</p><p style={{ whiteSpace: "pre-wrap" }}>{e.question}</p></div> : null}
+        {e.reopenedCount ? <p className="small" style={{ marginTop: 6 }}><Chip tone="caution">Reopened{e.reopenedCount > 1 ? ` ${e.reopenedCount} times` : ""}</Chip> The customer said an earlier answer did not solve it; their reason is in the conversation below.</p> : null}
+        {e.accessGranted && e.thread?.length ? (
+          <div style={{ marginTop: 10 }}>
+            <p className="small muted">The conversation</p>
+            <ol aria-label="The conversation" style={{ listStyle: "none", margin: 0, padding: "0 0 0 12px", borderLeft: "2px solid var(--line)" }}>
+              {e.thread.map((m) => <li key={m.id} style={{ padding: "4px 0" }}><p className="small muted" style={{ margin: 0 }}>{queueThreadHeading(m)} · {new Date(m.at).toLocaleString()}</p><p style={{ whiteSpace: "pre-wrap", margin: "2px 0 0" }}>{m.body}</p></li>)}
+            </ol>
+          </div>
+        ) : e.accessGranted && e.question ? <div style={{ marginTop: 10 }}><p className="small muted">The customer's request</p><p style={{ whiteSpace: "pre-wrap" }}>{e.question}</p></div> : null}
         {e.resolution ? <Alert tone="info">Resolved: {e.resolution}{e.minutesSpent != null ? ` (${e.minutesSpent} min)` : ""}</Alert> : null}
       </Card>
       {!e.accessGranted ? (
-        <Alert tone="neutral">{e.why === "claim it to open the full context" ? "Accept the request to open the customer's own words and context. Access is limited to this role and candidate, ends when the request is resolved, and every page you open is recorded for the customer." : e.why}</Alert>
+        <Alert tone="neutral">{e.why === "claim it to open the full context" ? "Accept the request to open the customer's own words and context. Access is limited to what the request covers (one candidate, one role, or all of their hiring when they chose that), ends a day after the request is resolved, and every page you open is recorded for the customer." : e.why}</Alert>
       ) : (
         <>
           {e.grant ? <Alert tone="info">Your access covers {e.grant.scope.applicationId ? "this candidate" : e.grant.scope.roleId ? "this role" : "this customer"} and ends {new Date(e.grant.expiresAt).toLocaleString()}. <Button size="sm" variant="secondary" loading={enter.isPending} onClick={() => enter.mutate(e)}>Open in the customer's workspace</Button> <Button size="sm" variant="quiet" loading={release.isPending} onClick={() => release.mutate()}>Release</Button></Alert> : null}
@@ -104,9 +117,15 @@ function EscalationDetail({ id }: { id: string }) {
               {ctx.timeline?.length ? <details style={{ marginTop: 8 }}><summary className="small">Timeline ({ctx.timeline.length})</summary><ul className="small" style={{ paddingLeft: 18 }}>{ctx.timeline.map((t, i) => <li key={i}>{new Date(t.at).toLocaleString()} · {t.type}</li>)}</ul></details> : null}
             </Card>
           ) : null}
+          {e.status !== "resolved" && e.status !== "cancelled" ? (
+            <Card title="Write to the customer">
+              <Field label="A question or an update, without resolving the request" hint="The person who asked and the owners read it in full on Today." htmlFor="reply"><textarea id="reply" className="textarea" value={reply} onChange={(ev) => setReply(ev.target.value)} /></Field>
+              <div style={{ marginTop: 10 }}><Button variant="secondary" loading={write.isPending} disabled={!reply.trim()} onClick={() => write.mutate()}>Send</Button></div>
+            </Card>
+          ) : null}
           {e.status !== "resolved" ? (
             <Card title="Resolve">
-              <Field label="What you did or advised (the customer sees this)" htmlFor="res"><textarea id="res" className="textarea" value={resolution} onChange={(ev) => setResolution(ev.target.value)} /></Field>
+              <Field label="What you did or advised (the customer reads this in full)" htmlFor="res"><textarea id="res" className="textarea" value={resolution} onChange={(ev) => setResolution(ev.target.value)} /></Field>
               <Field label="Minutes spent" hint="Recorded to size recruiter capacity and pricing." htmlFor="mins"><input id="mins" className="input" type="number" min={0} max={1440} value={minutes} onChange={(ev) => setMinutes(ev.target.value)} /></Field>
               <div style={{ marginTop: 10 }}><Button variant="primary" loading={resolve.isPending} disabled={!resolution.trim()} onClick={() => resolve.mutate()}>Mark resolved</Button></div>
             </Card>

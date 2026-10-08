@@ -1,5 +1,5 @@
 import { boolean, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import type { Actor, Location } from "@ros/contracts";
+import type { Actor, CompanyOnboarding, Location } from "@ros/contracts";
 import { createdAt, id, ts, updatedAt } from "./columns";
 
 export type CompanySettings = {
@@ -18,6 +18,11 @@ export type CompanySettings = {
   businessHours?: { days: number[]; start: string; end: string };
   /** Design Partner pilot term (founder decision F8): roles in progress are never cut off when it ends. */
   pilot?: { startedAt: string; endsAt: string; extendedUntil?: string };
+  /** The one-time ITS check (founder decision B7): set and cleared from the admin console only (apps/api services/company-trust.ts). */
+  verifiedAt?: string;
+  verifiedBy?: Actor;
+  /** Getting started (plan B2): who hid the card, the AI rules reviewed, job-board access confirmed by ITS. */
+  onboarding?: CompanyOnboarding;
 };
 
 export const companies = pgTable(

@@ -5,7 +5,9 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, ErrorState, Field, Skeleton } from "@ros/ui";
 import { api, ApiError, type ActionResult, type ApplicationDetail, type CandidateNotice, type DecisionMessagePreview, type InterviewPlanView } from "../../api/client";
 import { toast } from "../../toast";
+import { decisionOnItsWayText } from "../../company-check";
 import { AskRecruiter } from "../../components/AskRecruiter";
+import { useCompanyCheck } from "../../components/use-company-check";
 import { defaultInterviewers } from "../../interview-defaults";
 import { NOT_NOW_TOAST, closeRoleToast, declineConfirmText, decisionToast, holdDay, outcomeToast, sendDecisionToast, type PanelStep } from "../../talent-actions";
 import { DECLINE_REASONS, activeInterviews, holdDateBounds } from "./helpers";
@@ -407,6 +409,8 @@ function TellCard({ a, roleId, myRole }: { a: ApplicationDetail; roleId: string;
   const act = useCandidateAction(a.id, roleId, () => { setPreviewOpen(false); setInPerson(false); });
   const preview = useQuery({ queryKey: ["decision-message", a.id], queryFn: () => api.get<DecisionMessagePreview>(`/api/v1/applications/${a.id}/decision-message`), enabled: previewOpen });
   const waiting = a.pendingApprovals.find((p) => p.actionType === "disposition.send");
+  // In the outbox of a company ITS has not confirmed yet, the message waits for the check (founder decision B7).
+  const check = useCompanyCheck();
   const decide = useMutation({
     mutationFn: (decision: "approve" | "reject") => api.post<{ candidateNotice?: CandidateNotice }>(`/api/v1/approvals/${waiting?.id}/decide`, { decision }),
     onSuccess: async (r, decision) => {
@@ -422,7 +426,7 @@ function TellCard({ a, roleId, myRole }: { a: ApplicationDetail; roleId: string;
     return (
       <Alert tone="info">
         <div className="row" style={{ justifyContent: "space-between" }}>
-          <span>The decision message is on its way to {first}.</span>
+          <span>{decisionOnItsWayText(first, check)}</span>
           {a.allowedActions.includes("told_in_person") ? <Button size="sm" variant="quiet" loading={act.isPending} onClick={() => act.mutate({ action: "told_in_person", note: "Told them while the message was on its way" })}>I told them myself</Button> : null}
         </div>
       </Alert>

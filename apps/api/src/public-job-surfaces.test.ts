@@ -79,8 +79,10 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     slug = seeded.slug;
     roleId = seeded.roleId;
     eligibility = seeded.eligibility;
-    // the employer's website and logo go into the structured data when the company set them
-    await container.db.update(companies).set({ settings: { website: "https://ledgerdental.example", logoUrl: "https://ledgerdental.example/logo.png" } }).where(eq(companies.id, companyId));
+    // the employer's website and logo go into the structured data when the company set them (the rest of the settings,
+    // the ITS confirmation among them, are kept: an unconfirmed company has no public pages)
+    const [co] = await container.db.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId));
+    await container.db.update(companies).set({ settings: { ...co.settings, website: "https://ledgerdental.example", logoUrl: "https://ledgerdental.example/logo.png" } }).where(eq(companies.id, companyId));
   });
   afterAll(async () => {
     await container.close();

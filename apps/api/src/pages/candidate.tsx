@@ -4,7 +4,7 @@ import { Hono, type Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { ApplyRequest, CANDIDATE_STEP_LABEL, CandidateSmsPreference, CandidateStep, MAX_RESUME_BYTES, inspectResumeFile, type ApplicationStage, type RolePacket } from "@ros/contracts";
+import { ApplyRequest, CANDIDATE_STEP_LABEL, CandidateSmsPreference, CandidateStep, MAX_RESUME_BYTES, inspectResumeFile, isCompanyVerified, type ApplicationStage, type RolePacket } from "@ros/contracts";
 import { answerWithdrawPrompt, answersOf, focusedPacket, openScreen, requestHuman, runScreenTurn, withdrawPending } from "@ros/agents";
 import { DECISION_STAGES, audit, candidateNotices, candidateStep, createDataRequest, decisionTold, emit, fulfilSmsOptOut, fulfilWithdrawal, humanResponseExpectation, jobNoticesFor, loadBusinessCalendar, mayWithdraw, noticesFor, notify, openHumanReview, openPayload, sealPayload, transition, type Notice } from "@ros/core";
 import { CandidatePrivacyRequest } from "@ros/contracts";
@@ -91,8 +91,18 @@ function noticeVersionsFor(notices: Notice[], smsEnabled: boolean): string[] {
 /** Without JavaScript the résumé travels inside the form itself, which the platform refuses above a few megabytes; this cap gives that case a plain answer (D14). */
 export const NO_SCRIPT_MAX_RESUME_BYTES = 4 * 1024 * 1024;
 
-async function loadJob(db: Vars["Variables"]["container"]["db"], slug: string, roleId: string) {
+/**
+ * A company's public pages (the careers page, its job pages, the apply form and its receipt) exist only once ITS has
+ * confirmed the company (founder decision B7). Until then they answer exactly as a company that does not exist, so
+ * nothing about an unconfirmed company is public, its JobPosting data included.
+ */
+async function loadPublicCompany(db: Vars["Variables"]["container"]["db"], slug: string) {
   const [company] = await db.select().from(companies).where(eq(companies.slug, slug)).limit(1);
+  return company && isCompanyVerified(company.settings) ? company : null;
+}
+
+async function loadJob(db: Vars["Variables"]["container"]["db"], slug: string, roleId: string) {
+  const company = await loadPublicCompany(db, slug);
   if (!company) return null;
   const [role] = await db.select().from(roles).where(and(eq(roles.id, roleId), eq(roles.companyId, company.id))).limit(1);
   if (!role?.currentPacketVersion) return null;
@@ -103,7 +113,7 @@ async function loadJob(db: Vars["Variables"]["container"]["db"], slug: string, r
 
 candidatePages.get("/careers/:slug", async (c) => {
   const db = c.get("container").db;
-  const [company] = await db.select().from(companies).where(eq(companies.slug, c.req.param("slug"))).limit(1);
+  const company = await loadPublicCompany(db, c.req.param("slug"));
   if (!company) return c.notFound();
   const open = await db.select().from(roles).where(and(eq(roles.companyId, company.id), eq(roles.status, "open"))).orderBy(desc(roles.openedAt));
   return c.html(

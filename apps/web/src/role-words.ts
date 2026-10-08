@@ -124,6 +124,9 @@ export function describeRoleEvent(e: RoleEvent): string {
     "recruiter.requested": "A recruiter was asked for help",
     "recruiter.claimed": "An ITS recruiter picked it up",
     "recruiter.resolved": "The ITS recruiter responded",
+    "recruiter.replied": "The ITS recruiter wrote about a request",
+    "customer.replied": "Someone on the team added a note to a recruiter request",
+    "recruiter.reopened": "A recruiter request was reopened",
   };
   return known[e.type] ?? e.type.replace(/[._]/g, " ");
 }

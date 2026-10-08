@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, ErrorState, Field, PageHeader, Segmented, Sheet, Skeleton, Table, Tabs } from "@ros/ui";
 import { api, ApiError } from "../api/client";
+import { RECRUITER_ASKS_OVER_CHIP, recruiterAsksLine, type RecruiterAskStanding } from "../recruiter-requests";
 import { toast } from "../toast";
 import { CustomerReportSheet } from "./AdminCustomerReport";
 
@@ -24,29 +25,119 @@ export function Admin() {
   );
 }
 
+type CustomerRow = { id: string; name: string; slug: string; vertical: string; sizeBand: string; planKey: string; status: string; roles: number; applications: number; aiCostUsd: number; lastActivityAt: string | null; escalations: number; createdAt: string; settings: { website?: string }; verifiedAt: string | null; verifiedBy: { id: string; name?: string } | null; heldMessages: number; jobBoardsConfirmedAt: string | null; recruiterAsks?: RecruiterAskStanding };
+
 function Customers() {
-  const q = useQuery({ queryKey: ["admin", "customers"], queryFn: () => api.get<Array<{ id: string; name: string; vertical: string; planKey: string; status: string; roles: number; applications: number; aiCostUsd: number; lastActivityAt: string | null; escalations: number; createdAt: string }>>("/api/v1/admin/customers", reason) });
+  const q = useQuery({ queryKey: ["admin", "customers"], queryFn: () => api.get<CustomerRow[]>("/api/v1/admin/customers", reason) });
   // The customer's report (the ten role-report figures over every role) opens in a sheet; the read is audited like every other.
   const [reportFor, setReportFor] = useState<{ id: string; name: string } | null>(null);
+  const [checking, setChecking] = useState<CustomerRow | null>(null);
   if (q.isLoading) return <Skeleton lines={4} />;
   if (q.error) return <ErrorState message="Could not load customers." onRetry={() => q.refetch()} />;
+  // Companies waiting for the ITS check come first, the longest waiting at the top (founder decision B7).
+  const waiting = q.data!.filter((c) => !c.verifiedAt).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   return (
-    <>
-      <Table head={["Company", "Vertical", "Plan", "Roles", "Applicants", "AI cost", "Escalations", "Last activity", "Churn signal", ""]}>
-        {q.data!.map((c) => {
+    <div className="stack" style={{ gap: 14 }}>
+      {waiting.length ? (
+        <Alert tone="caution">
+          {waiting.length === 1 ? "1 company is" : `${waiting.length} companies are`} waiting for the ITS check: {waiting.map((c) => c.name).join(", ")}. Until you confirm a company, its careers page, job pages and Google listing are offline and its emails to candidates wait.
+        </Alert>
+      ) : null}
+      <Table head={["Company", "ITS check", "Vertical", "Plan", "Roles", "Applicants", "AI cost", "Recruiter requests", "Last activity", "Churn signal", ""]}>
+        {[...waiting, ...q.data!.filter((c) => c.verifiedAt)].map((c) => {
           const idle = c.lastActivityAt ? (Date.now() - Date.parse(c.lastActivityAt)) / 86_400_000 : 999;
           return (
             <tr key={c.id}>
-              <td>{c.name}</td><td>{c.vertical}</td><td>{c.planKey} · {c.status}</td><td>{c.roles}</td><td>{c.applications}</td><td>${c.aiCostUsd.toFixed(4)}</td><td>{c.escalations}</td>
+              <td>{c.name}</td>
+              <td>
+                {c.verifiedAt ? <Chip tone="good">confirmed</Chip> : <Chip tone="caution">waiting since {new Date(c.createdAt).toLocaleDateString()}</Chip>}
+                {c.heldMessages ? <div className="small muted">{c.heldMessages} {c.heldMessages === 1 ? "message" : "messages"} to candidates held</div> : null}
+                <div className="small muted">job boards: {c.jobBoardsConfirmedAt ? "ITS can sign in" : "not confirmed"}</div>
+              </td>
+              <td>{c.vertical}</td><td>{c.planKey} · {c.status}</td><td>{c.roles}</td><td>{c.applications}</td><td>${c.aiCostUsd.toFixed(4)}</td>
+              <td>
+                {/* Past the plan's recruiter requests (Q33): nothing was refused; ITS talks with the customer about billing. */}
+                <div className="small">{recruiterAsksLine(c.recruiterAsks)}</div>
+                {c.recruiterAsks?.over ? <Chip tone="caution">{RECRUITER_ASKS_OVER_CHIP}</Chip> : null}
+                <div className="small muted">{c.escalations} in all</div>
+              </td>
               <td>{c.lastActivityAt ? new Date(c.lastActivityAt).toLocaleString() : "never"}</td>
               <td>{idle > 14 ? <Chip tone="critical">no activity {Math.round(idle)}d</Chip> : idle > 7 ? <Chip tone="caution">quiet {Math.round(idle)}d</Chip> : <Chip tone="good">active</Chip>}</td>
-              <td><Button size="sm" variant="secondary" onClick={() => setReportFor({ id: c.id, name: c.name })}>Report</Button></td>
+              <td><div className="row"><Button size="sm" variant={c.verifiedAt ? "secondary" : "primary"} onClick={() => setChecking(c)}>{c.verifiedAt ? "Check" : "Confirm"}</Button><Button size="sm" variant="secondary" onClick={() => setReportFor({ id: c.id, name: c.name })}>Report</Button></div></td>
             </tr>
           );
         })}
       </Table>
       {reportFor ? <CustomerReportSheet companyId={reportFor.id} companyName={reportFor.name} onClose={() => setReportFor(null)} /> : null}
-    </>
+      {checking ? <CompanyCheckSheet company={q.data!.find((c) => c.id === checking.id) ?? checking} onClose={() => setChecking(null)} /> : null}
+    </div>
+  );
+}
+
+/**
+ * The one-time ITS check of a company (founder decision B7): confirm it after checking it is real, or take a confirmation
+ * back; both need a reason, which the customer sees in their own history, and a second press to confirm. Below, whether
+ * ITS can sign in to the company's job boards, which ticks the owner's getting-started step.
+ */
+function CompanyCheckSheet({ company, onClose }: { company: CustomerRow; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [why, setWhy] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const verified = !!company.verifiedAt;
+  const change = useMutation({
+    mutationFn: () => api.post<{ changed: boolean; releasedMessages: number }>(`/api/v1/admin/customers/${company.id}/verification`, { verified: !verified, reason: why.trim(), confirm: true }, reason),
+    onSuccess: (r) => {
+      toast(verified ? `${company.name} is no longer confirmed.` : `${company.name} is confirmed.`, verified ? "Its public pages are offline and its messages to candidates wait. The owners were told." : `Its pages are public now${r.releasedMessages ? ` and ${r.releasedMessages} held ${r.releasedMessages === 1 ? "message is" : "messages are"} on ${r.releasedMessages === 1 ? "its" : "their"} way` : ""}. The owners were told.`);
+      setWhy("");
+      setConfirming(false);
+      qc.invalidateQueries({ queryKey: ["admin", "customers"] });
+    },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not change the check."),
+  });
+  const boards = useMutation({
+    mutationFn: (confirmed: boolean) => api.post(`/api/v1/admin/customers/${company.id}/job-boards`, { confirmed }, reason),
+    onSuccess: (_r, confirmed) => { toast(confirmed ? "Job-board access confirmed." : "Job-board access no longer confirmed."); qc.invalidateQueries({ queryKey: ["admin", "customers"] }); },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record it."),
+  });
+  // A confirmed company with messages still held (one held while the confirmation was being made): confirming again sends them.
+  const release = useMutation({
+    mutationFn: () => api.post<{ releasedMessages: number }>(`/api/v1/admin/customers/${company.id}/verification`, { verified: true, reason: "Held messages sent after the company was confirmed.", confirm: true }, reason),
+    onSuccess: (r) => { toast(r.releasedMessages ? `${r.releasedMessages} held ${r.releasedMessages === 1 ? "message is" : "messages are"} on ${r.releasedMessages === 1 ? "its" : "their"} way.` : "Nothing was held any more."); qc.invalidateQueries({ queryKey: ["admin", "customers"] }); },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send the held messages."),
+  });
+  return (
+    <Sheet open onClose={onClose} title={`ITS check: ${company.name}`}>
+      <div className="stack" style={{ gap: 14 }}>
+        <Card title="The company">
+          <p className="small">{company.name} · {company.vertical} · {company.sizeBand} employees · {company.settings.website || "no website given"} · signed up {new Date(company.createdAt).toLocaleDateString()}</p>
+          <p className="small muted">{verified ? `Confirmed ${new Date(company.verifiedAt!).toLocaleString()}${company.verifiedBy?.name ? ` by ${company.verifiedBy.name}` : ""}.` : "Not confirmed yet: its careers page, job pages and Google listing are offline, and its emails to candidates wait. It can draft and approve roles."}</p>
+          {company.heldMessages && !verified ? <p className="small">{company.heldMessages} {company.heldMessages === 1 ? "message" : "messages"} to candidates {company.heldMessages === 1 ? "is" : "are"} held and will go out when you confirm.</p> : null}
+          {company.heldMessages && verified ? (
+            <div className="row" style={{ justifyContent: "space-between", marginTop: 6 }}>
+              <span className="small">{company.heldMessages} {company.heldMessages === 1 ? "message" : "messages"} to candidates {company.heldMessages === 1 ? "is" : "are"} still held although the company is confirmed.</span>
+              <Button size="sm" variant="primary" loading={release.isPending} onClick={() => release.mutate()}>Send the held messages</Button>
+            </div>
+          ) : null}
+        </Card>
+        <Card title={verified ? "Take the confirmation back" : "Confirm the company"}>
+          <p className="small muted">{verified ? "Its careers page, job pages and feeds go offline at once and its messages to candidates wait again. Roles, candidates and decisions are kept." : "Confirm only after checking the company is real: the kick-off call, its website, a phone number. Its pages go public, approved roles are published and held messages go out."} The owners are told, and they see your reason in their activity history.</p>
+          <div className="stack" style={{ gap: 8, marginTop: 8 }}>
+            <Field label={verified ? "Why you are taking it back" : "How you checked the company"} htmlFor="co-check-why"><input id="co-check-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
+            {confirming ? (
+              <Alert tone="caution"><div className="row" style={{ justifyContent: "space-between" }}><span>{verified ? `Take back the confirmation of ${company.name}?` : `Confirm ${company.name} and make its pages public?`}</span><span className="row"><Button size="sm" variant={verified ? "destructive" : "primary"} loading={change.isPending} onClick={() => change.mutate()}>{verified ? "Yes, take it back" : "Yes, confirm it"}</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
+            ) : <div className="row"><Button variant={verified ? "secondary" : "primary"} disabled={why.trim().length < 5} onClick={() => setConfirming(true)}>{verified ? "Take back the confirmation" : "Confirm the company"}</Button></div>}
+          </div>
+        </Card>
+        <Card title="Job-board access">
+          <p className="small muted">The owner adds the ITS recruiter as a user on the company's LinkedIn, Indeed and ZipRecruiter accounts. Record here once ITS can sign in to each; it ticks the owner's getting-started step.</p>
+          <div className="row" style={{ marginTop: 8 }}>
+            {company.jobBoardsConfirmedAt
+              ? <><Chip tone="good">ITS can sign in</Chip><Button size="sm" variant="secondary" loading={boards.isPending} onClick={() => boards.mutate(false)}>No longer confirmed</Button></>
+              : <Button size="sm" variant="primary" loading={boards.isPending} onClick={() => boards.mutate(true)}>ITS can sign in to the job boards</Button>}
+          </div>
+        </Card>
+      </div>
+    </Sheet>
   );
 }
 

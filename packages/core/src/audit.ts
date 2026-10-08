@@ -83,13 +83,18 @@ export type AuditAction =
   | "report.exported"
   /** Company preferences changed by an owner or admin (audit finding A8): which keys, never the old and new text of a notice (notice.changed carries the versions). */
   | "company.updated"
+  /** The one-time ITS check of a self-serve company (founder decision B7): confirmed, or taken back, by whom and why. */
+  | "company.verified"
+  | "company.unverified"
   /** The customer's own audit history left as a file (audit finding A9): who, how many rows, which filters. */
   | "audit.exported"
   /** The holder of a session confirmed with their sign-in provider again before a sensitive change (audit finding A12). */
   | "session.reauthenticated"
   /** A person wrote to a candidate from the sheet (F11): who, which application, whether it went at once or waited for an approval, and who approved it. Never the text. */
   | "message.sent"
-  | "message.approval_requested";
+  | "message.approval_requested"
+  /** A person changed which email alerts they get (plan B3): the groups, before and after. Never anything else. */
+  | "notification.preferences_changed";
 
 /** Privileged and access actions. Distinct from domain events: this answers "who looked at what, and why." */
 export async function audit(

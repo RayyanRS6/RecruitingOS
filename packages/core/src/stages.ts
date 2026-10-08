@@ -1,4 +1,4 @@
-import { and, eq, isNull, like } from "drizzle-orm";
+import { and, eq, inArray, isNull, like } from "drizzle-orm";
 import { MARK_LABEL, OWNER_STAGE_LABEL, type ActorKind, type ApplicationStage, type Actor, type CandidateStep, type MarkKind, type OwnerGroup, type OwnerStage, type ToldState } from "@ros/contracts";
 import { applicationMarks, applications, communications, type Queryable } from "@ros/db";
 import { emit } from "./events";
@@ -138,13 +138,13 @@ export async function endMarkOnMove(q: Queryable, input: { applicationId: string
 }
 
 /**
- * A decision message still in the outbox (queued, not yet handed to the provider) is withdrawn, and a told state of
- * "queued" goes back to not told: the decision it carried no longer applies. Recorded as `message.cancelled`. A message
- * already being sent cannot be called back; the outbox leaves the told state alone for an application that left its
- * decision. Returns how many messages were withdrawn.
+ * A decision message still in the outbox (queued, or held for the ITS company check; not yet handed to the provider)
+ * is withdrawn, and a told state of "queued" goes back to not told: the decision it carried no longer applies. Recorded
+ * as `message.cancelled`. A message already being sent cannot be called back; the outbox leaves the told state alone for
+ * an application that left its decision. Returns how many messages were withdrawn.
  */
 export async function withdrawQueuedDecision(q: Queryable, input: { applicationId: string; companyId: string; actor: Actor; reason: string }): Promise<number> {
-  const rows = await q.update(communications).set({ status: "cancelled", error: input.reason }).where(and(eq(communications.applicationId, input.applicationId), like(communications.templateKey, "disposition:%"), eq(communications.status, "queued"))).returning({ id: communications.id, templateKey: communications.templateKey });
+  const rows = await q.update(communications).set({ status: "cancelled", error: input.reason }).where(and(eq(communications.applicationId, input.applicationId), like(communications.templateKey, "disposition:%"), inArray(communications.status, ["queued", "held"]))).returning({ id: communications.id, templateKey: communications.templateKey });
   for (const r of rows) await emit(q, { type: "message.cancelled", companyId: input.companyId, actor: input.actor, subject: { type: "communication", id: r.id }, payload: { template: r.templateKey, applicationId: input.applicationId, reason: input.reason } });
   await q.update(applications).set({ toldState: "not_told" }).where(and(eq(applications.id, input.applicationId), eq(applications.toldState, "queued")));
   return rows.length;

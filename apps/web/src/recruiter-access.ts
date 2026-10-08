@@ -30,6 +30,23 @@ export function scopeOf(input: { roleId?: string | null; applicationId?: string 
   return input.applicationId ? "application" : input.roleId ? "role" : "company";
 }
 
+/** What the request form offers to ask for, in its order (components/AskRecruiter.tsx). */
+export const ASK_KINDS = ["review", "ask", "takeover"] as const;
+export type AskKind = (typeof ASK_KINDS)[number];
+
+/**
+ * A request a card offers, opened in the request form instead of sent in one click: the access it would give, the
+ * reply-by time and the plan's recruiter requests are on screen before the person presses Send (Q31). `about: "all"` is
+ * all of the hiring; `topic: "plan"` marks a talk about the plan itself, which is never counted as a recruiter request.
+ */
+export type AskPreset = { kind?: AskKind; about?: "all"; question?: string; topic?: "plan" };
+
+/** A card's request body as a preset for the form; anything it does not recognise is left for the person to choose. */
+export function presetOf(body: Record<string, unknown> | undefined): AskPreset {
+  const kind = ASK_KINDS.find((k) => k === body?.kind);
+  return { ...(kind ? { kind } : {}), ...(body?.scope === "company" ? { about: "all" as const } : {}), ...(typeof body?.question === "string" ? { question: body.question } : {}), ...(body?.topic === "plan" ? { topic: "plan" as const } : {}) };
+}
+
 /** The chip on Setup's recruiter access list. */
 export function accessChip(grant: { roleId: string | null; roleTitle: string | null; applicationId: string | null }): string {
   if (grant.applicationId) return "one candidate";
