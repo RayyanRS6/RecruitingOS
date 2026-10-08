@@ -1,0 +1,16 @@
+{
+  "packages": {
+    "bricolage-grotesque": "5.3.0",
+    "ibm-plex-sans": "5.3.0"
+  },
+  "files": {
+    "bricolage-grotesque-LICENSE.txt": "923f4ddf0fd39f9b7794ab0df7332f3d95dc43e8ad7ec2289d6d9e8491177f51",
+    "bricolage-grotesque-latin-700-normal.woff2": "4c373ce3c1cca41c864eb3e27c059a59fc6310547ab9c9b6cd780d387ba24206",
+    "bricolage-grotesque-latin-ext-700-normal.woff2": "25d714d702deab603819c7fbc619d6d63d86a0d055fa61b3b9f0453f9d5e697a",
+    "ibm-plex-sans-LICENSE.txt": "d0283623ef57e722fd0eb688a8041589670c608ab780cd3612d06ba6f153d3fd",
+    "ibm-plex-sans-latin-400-normal.woff2": "3b646991d30055a93a4ecc499713d4347953a74a947ecab435ab72070cbdab0e",
+    "ibm-plex-sans-latin-600-normal.woff2": "8960851d691c054ed38e259bdcf1a6190d157b4203ed5bb32c632a863fb8ec2f",
+    "ibm-plex-sans-latin-ext-400-normal.woff2": "c93d2a12aaa280f68b9ab7b726ff8dfedda67c99ef9abed047c1847a1cc6d583",
+    "ibm-plex-sans-latin-ext-600-normal.woff2": "b25dfd4f979e442ae1e25cd0894463434cf01ba21ac1a35d39f4a82bd4cc060e"
+  }
+}

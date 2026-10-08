@@ -234,7 +234,7 @@ At any stage, open the candidate, press the stage button and choose **Not moving
 - **Position filled**
 - **Other**
 
-Add a **Note (kept internally)** if you like and press **Confirm: not moving forward**. The decision is private: nothing is sent to the candidate, and their status page still shows the step they were at. If they had an interview booked or times offered, it is cancelled now, without a word to them; the decision message says it is off. Declined candidates appear under **Not moving forward** with **Not told yet**, and the reason is on their timeline. A candidate is never declined by software.
+Add a **Note (kept internally)** if you like and press **Confirm: not moving forward**. The decision is private: it is not sent to the candidate, and their status page still shows the step they were at. If they had an interview booked or times offered, it is cancelled now, and they get a short note straight away saying only that the interview is off (no reason given), so nobody turns up to an interview that no longer exists. The confirmation names that interview, with its day and time, before you press the button. The decision message you send later does not mention the interview again. Declined candidates appear under **Not moving forward** with **Not told yet**, and the reason is on their timeline. A candidate is never declined by software.
 
 **Telling the candidate.** Telling is a separate step, by a person. On the candidate's page, **Send message** shows the exact standard message first; **Send** sends it (under **Ask me first** it waits for a second person to approve it; under **Only a person** the product sends no decision messages). To tell several people at once, use **Not told yet** on the Talent page, then **Review and send**: each person gets their own message, and you see what happened for each. If you told them yourself (by phone, say), press **I told them myself** and nothing more is sent. Only once they were told does their status page show the decision. Anyone not told after two working days is listed on **Today** and you get a reminder; nothing goes out by itself.
 
@@ -250,7 +250,7 @@ The product never makes or sends an offer, and it asks for no pay, tax, identity
 - **We declined the candidate**: add a reason. Like any decline it is private until someone sends the decision message (section 13). Shown only to people who may decline candidates.
 - **No hire for this candidate**
 
-Press **Continue**, then **Yes, record it**. The record carries your name and can only be corrected by an ITS administrator, with the original kept. After a hire, the product asks **Close the role too?**. Closing the role is a separate decision, made from the role page, and candidates who were still active stay in your talent pool.
+Press **Continue**, then **Yes, record it**. The record carries your name and can only be corrected by an ITS administrator, with the original kept. After a hire, the product asks **Close the role too?**. Closing the role is a separate decision, made from the role page, and candidates who were still active stay in your talent pool, privately. Anyone among them with an interview booked or times offered gets a short note straight away saying only that the interview is off.
 
 ## 15. Writing to a candidate
 

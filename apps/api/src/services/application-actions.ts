@@ -257,9 +257,11 @@ function decisionKind(app: Pick<App, "stage" | "rejectReason">): "eligibility" |
 }
 
 /**
- * Interviews the decision called off that the candidate knew about: a booked time still to come, or times they were
- * offered and had not picked. A private decision cancels them without a word (plan-adjustments §4), so the decision
- * message says they are off, unless the candidate already had a cancellation note for one of them.
+ * Interviews the decision called off that the candidate knew about (a booked time still to come, or times they were
+ * offered and had not picked) and has not yet been told are off. A private decision tells the candidate at once, in a
+ * short note with no reason, that such an interview is off, so the decision message leaves those out. It names one only
+ * when nobody told them yet: the decision message went in the same transaction as the cancellation, or the interview
+ * was called off under the earlier rule that waited for the decision message.
  */
 async function interviewsCalledOff(tx: Tx, app: App, now: Date): Promise<CancelledInterview[]> {
   const since = app.rejectedAt ?? app.stageChangedAt;
@@ -395,9 +397,10 @@ type ActionBody = ApplicationAction;
  * `toldState` is the told state after the action; `ownerStage` and `mark` are where the person now sits on the strip.
  * `talentPoolOptOut`: a move to the talent pool for someone who asked not to be kept for future roles; they stay out of
  * the pool. `dispositionSent` is kept for older pages: true only when a message is on its way. `interviewsCancelled`:
- * interviews a decision called off, without a word to the candidate; the decision message says they are off.
+ * interviews a decision called off; `interviewOffNotes`: how many of them the candidate was told about at once, in a
+ * short note with no reason (they had a booked time or times to pick from). The decision itself stays private.
  */
-export type ActionResult = { ok: true; stage: string; ownerStage?: OwnerStage; mark?: ActiveMark | null; toldState?: ToldState; dispositionSent?: boolean; candidateNotice?: CandidateNotice; approvalRequestId?: string; workflowRunId?: string; next?: string; talentPoolOptOut?: boolean; interviewsCancelled?: number };
+export type ActionResult = { ok: true; stage: string; ownerStage?: OwnerStage; mark?: ActiveMark | null; toldState?: ToldState; dispositionSent?: boolean; candidateNotice?: CandidateNotice; approvalRequestId?: string; workflowRunId?: string; next?: string; talentPoolOptOut?: boolean; interviewsCancelled?: number; interviewOffNotes?: number };
 
 function markHttpError(e: unknown): never {
   if (e instanceof MarkError) throw new HttpError(e.code === "bad_date" ? 400 : 409, e.code, e.message);
@@ -432,10 +435,11 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       await tx.update(applications).set({ rejectNote: body.note ?? null }).where(eq(applications.id, app.id));
       await emit(tx, { type: "application.rejected", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { reason: body.reason, byHuman: true, candidateTold: false } });
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "reject", reason: body.reason } });
-      // Decisions are private (founder decision B6): nothing is sent. An interview still to come is called off without a
-      // word; the decision message says so when someone sends it (plan-adjustments §4).
+      // Decisions are private (founder decision B6): the decision is not sent. An interview still to come is called off,
+      // and a candidate who held a booked time or was offered times is told at once, with no reason, that it is off, so
+      // nobody turns up for it; the decision message sent later leaves it out.
       const cleaned = await exitCleanup(tx, container, { companyId: t.companyId, applicationId: app.id, reason: `declined: ${body.reason}`, actor, candidateEmail: "private_decision" });
-      return { ok: true, stage: "rejected", ownerStage: "not_moving_forward", mark: null, toldState: "not_told", dispositionSent: false, candidateNotice: "not_told", interviewsCancelled: cleaned.interviewsCancelled, next: PRIVATE_DECISION };
+      return { ok: true, stage: "rejected", ownerStage: "not_moving_forward", mark: null, toldState: "not_told", dispositionSent: false, candidateNotice: "not_told", interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, next: PRIVATE_DECISION };
     }
     case "override_eligibility": {
       assertCan(t.role, "application.act");
@@ -463,7 +467,7 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       if (!optedOut) await tx.update(candidates).set({ inTalentPool: true }).where(eq(candidates.id, app.candidateId));
       await emit(tx, { type: "application.moved_to_talent_pool", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: optedOut ? { talentPoolOptOut: true } : {} });
       const cleaned = await exitCleanup(tx, container, { companyId: t.companyId, applicationId: app.id, reason: "moved to the talent pool", actor, candidateEmail: "private_decision" });
-      return { ok: true, stage: "talent_pool", ownerStage: "not_moving_forward", mark: null, toldState: "not_told", candidateNotice: "not_told", interviewsCancelled: cleaned.interviewsCancelled, ...(optedOut ? { talentPoolOptOut: true } : {}) };
+      return { ok: true, stage: "talent_pool", ownerStage: "not_moving_forward", mark: null, toldState: "not_told", candidateNotice: "not_told", interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, ...(optedOut ? { talentPoolOptOut: true } : {}) };
     }
     case "hold":
     case "set_mark": {

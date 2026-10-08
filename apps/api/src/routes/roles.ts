@@ -456,19 +456,20 @@ applicationRoutes.post("/:id/outcome", requireTenant, async (c) => {
     try {
       const r = await recordApplicationOutcome(tx, { companyId: t.companyId, applicationId: c.req.param("id") ?? "", outcome: body.outcome, by: t.role, actor, hireDate: body.hireDate, offerAcceptedAt: body.offerAcceptedAt, reason: body.reason, note: body.note, now: container.engine.clock() });
       // The candidate's own news (a withdrawal, a hire, an offer they declined) may be confirmed with the cancellation; the
-      // team's decisions (declined, no hire) are private like the Decline button's (founder decision B6): nothing is sent,
-      // and the decision message, when someone sends it, says an interview is off (plan-adjustments §4).
+      // team's decisions (declined, no hire) are private like the Decline button's (founder decision B6): the decision is
+      // not sent, but a candidate who held a booked time or was offered times is told at once, with no reason, that the
+      // interview is off, and the decision message sent later leaves it out.
       const privateDecision = body.outcome === "employer_declined" || body.outcome === "no_hire";
       const candidateEmail: ExitCandidateEmail = privateDecision ? "private_decision" : "send_cancellation";
       const cleaned = r.to !== "hired" ? await exitCleanup(tx, container, { companyId: t.companyId, applicationId: r.app.id, reason: `outcome: ${body.outcome}`, actor, candidateEmail }) : null;
       const candidateNotice: CandidateNotice | null = privateDecision ? "not_told" : null;
-      return { ...r, dispositionSent: false, candidateNotice, interviewsCancelled: cleaned?.interviewsCancelled ?? 0 };
+      return { ...r, dispositionSent: false, candidateNotice, interviewsCancelled: cleaned?.interviewsCancelled ?? 0, interviewOffNotes: cleaned?.candidateNotes ?? 0 };
     } catch (e) { outcomeHttpError(e); }
   });
   const label: Record<string, string> = { hired_externally: "recorded a hire (offer accepted outside the platform)", candidate_withdrew: "recorded that the candidate withdrew", employer_declined: "declined the candidate", offer_declined_externally: "recorded that the candidate declined an offer made outside the platform", no_hire: "closed the process for this candidate without a hire" };
   await tellRecruiterAboutOutcome(container, t.companyId, result.roleId, c.req.param("id") ?? null, `${actor.name ?? "The customer"} ${label[body.outcome]}.`, `outcome:${result.row.id}`);
   await container.kick();
-  return c.json({ ok: true, outcomeId: result.row.id, stage: result.to, roleId: result.roleId, roleStillOpen: result.roleStillOpen, dispositionSent: result.dispositionSent, ...(result.candidateNotice ? { candidateNotice: result.candidateNotice, interviewsCancelled: result.interviewsCancelled } : {}), movedToTalentPool: 0, statement: OUTCOME_STATEMENT, next: result.roleStillOpen ? "The role is still open. Close it with its outcome when you are ready; that is a separate confirmation." : null }, 201);
+  return c.json({ ok: true, outcomeId: result.row.id, stage: result.to, roleId: result.roleId, roleStillOpen: result.roleStillOpen, dispositionSent: result.dispositionSent, ...(result.candidateNotice ? { candidateNotice: result.candidateNotice, interviewsCancelled: result.interviewsCancelled, interviewOffNotes: result.interviewOffNotes } : {}), movedToTalentPool: 0, statement: OUTCOME_STATEMENT, next: result.roleStillOpen ? "The role is still open. Close it with its outcome when you are ready; that is a separate confirmation." : null }, 201);
 });
 
 roleRoutes.post("/:id/outcome", requireTenant, async (c) => {
@@ -480,11 +481,17 @@ roleRoutes.post("/:id/outcome", requireTenant, async (c) => {
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     try {
       const closed = await recordRoleOutcome(tx, { companyId: t.companyId, roleId: c.req.param("id") ?? "", outcome: body.outcome, by: t.role, actor, reason: body.reason, now: container.engine.clock() });
-      // Everyone still in the process left it with the role: their interviews and screens end, privately (founder decision
-      // B6); the decision message, when someone sends it, says an interview is off.
+      // Everyone still in the process left it with the role: their interviews and screens end. The decision stays private
+      // (founder decision B6) until someone sends the decision message, but a candidate who held a booked time or was
+      // offered times is told at once, with no reason, that the interview is off; the decision message leaves it out.
       let interviewsCancelled = 0;
-      for (const applicationId of closed.movedApplicationIds) interviewsCancelled += (await exitCleanup(tx, container, { companyId: t.companyId, applicationId, reason: `role closed: ${body.outcome}`, actor, candidateEmail: "private_decision" })).interviewsCancelled;
-      return { ...closed, interviewsCancelled };
+      let interviewOffNotes = 0;
+      for (const applicationId of closed.movedApplicationIds) {
+        const cleaned = await exitCleanup(tx, container, { companyId: t.companyId, applicationId, reason: `role closed: ${body.outcome}`, actor, candidateEmail: "private_decision" });
+        interviewsCancelled += cleaned.interviewsCancelled;
+        interviewOffNotes += cleaned.candidateNotes;
+      }
+      return { ...closed, interviewsCancelled, interviewOffNotes };
     } catch (e) { outcomeHttpError(e); }
   });
   const label: Record<string, string> = { filled: "closed the role as filled", filled_outside_platform: "closed the role: filled outside the platform", role_cancelled: "cancelled the role", no_hire: "closed the role without a hire" };
@@ -492,5 +499,5 @@ roleRoutes.post("/:id/outcome", requireTenant, async (c) => {
   // Applications emailed while the role was paused or closed to applications were held with a promise to add them (C19); a close keeps it by putting them in the talent pool.
   const held = await settleHeldEmailsOnClose(container, { companyId: t.companyId, roleId: result.role.id });
   await container.kick();
-  return c.json({ ok: true, outcomeId: result.row.id, role: result.role, movedToTalentPool: result.movedToTalentPool + held.addedToTalentPool, heldEmailsAddedToTalentPool: held.addedToTalentPool, interviewsCancelled: result.interviewsCancelled, statement: OUTCOME_STATEMENT });
+  return c.json({ ok: true, outcomeId: result.row.id, role: result.role, movedToTalentPool: result.movedToTalentPool + held.addedToTalentPool, heldEmailsAddedToTalentPool: held.addedToTalentPool, interviewsCancelled: result.interviewsCancelled, interviewOffNotes: result.interviewOffNotes, statement: OUTCOME_STATEMENT });
 });

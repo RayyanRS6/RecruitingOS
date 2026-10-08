@@ -10,8 +10,8 @@ import { MIGRATIONS_DIR, migrate } from "./migrate";
  * Migration 0026 (founder decisions B3 and B6) on data that existed before it: decisions whose decline message left are
  * "sent", one still in the outbox is "queued", one whose message waits for an approver is "not_told", and every other
  * earlier decision (already shown on the candidate's status page) is "before_tracking", recorded as an event; people
- * still in the process keep the default; saved decision-message settings move to the
- * new default ("auto": the message goes when a person presses Send), except "only a person", and each move is recorded;
+ * still in the process keep the default; saved send-at-once decision-message settings move to the new default ("auto":
+ * the message goes when a person presses Send), while "Ask me first" and "only a person" stay, and each move is recorded;
  * and the new marks table keeps one active mark per application and a date on every hold.
  */
 describe("migration 0026: marks and the told state", () => {
@@ -71,12 +71,12 @@ describe("migration 0026: marks and the told state", () => {
     expect(recorded.map((e) => [e.subject_id, e.payload.how])).toEqual([[app(3), "before_tracking"], [app(6), "before_tracking"]]);
   });
 
-  it("moves saved decision-message settings to the new default, keeps 'only a person', and records each move", async () => {
+  it("moves saved send-at-once decision-message settings to the new default, keeps 'Ask me first' and 'only a person', and records each move", async () => {
     const levels = await rows<{ role_id: string | null; action_type: string; level: string }>(sql`SELECT role_id, action_type, level FROM policies ORDER BY action_type, level`);
-    expect(levels.filter((p) => p.action_type === "disposition.send").map((p) => p.level).sort()).toEqual(["auto", "auto", "human_only"]);
+    expect(levels.filter((p) => p.action_type === "disposition.send").map((p) => p.level).sort()).toEqual(["approval", "auto", "human_only"]);
     expect(levels.find((p) => p.action_type === "interview.request")?.level).toBe("approval");
     const moved = await rows<{ payload: { previous: string; level: string } }>(sql`SELECT payload FROM events WHERE type = 'policy.changed' ORDER BY id`);
-    expect(moved.map((e) => e.payload.previous).sort()).toEqual(["approval", "auto_notify"]);
+    expect(moved.map((e) => e.payload.previous).sort()).toEqual(["auto_notify"]);
     expect(moved.every((e) => e.payload.level === "auto")).toBe(true);
   });
 

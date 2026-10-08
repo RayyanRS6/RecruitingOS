@@ -50,7 +50,7 @@ Two words we use throughout: **ITS** is Identified Talent Solutions, the company
 ### Decisions
 
 - A person on your team makes every decision to invite a candidate to a screen, hold, interview or decline.
-- Declining requires a reason from a fixed list. A decision is private: the candidate gets a respectful message only when someone on your team sends it (or you record that you told them yourself). Anyone not told after two working days is listed on Today and you are reminded; nothing is sent by itself.
+- Declining requires a reason from a fixed list. A decision is private: the candidate gets a respectful message only when someone on your team sends it (or you record that you told them yourself). If they had an interview booked or times offered, that is cancelled and they get a short note straight away saying only that the interview is off, so nobody turns up for it. Anyone not told after two working days is listed on Today and you are reminded; nothing is sent by itself.
 - After an interview, a person records the decision on the candidate's page: next round, finalist, or not moving forward. The candidate waits on you until someone does, and the **Interviews** page shows each decision.
 - You can put up to five candidates side by side and see how each one stands on your must-haves and what you look for. Nothing is ranked or scored.
 - Every decision is recorded with the name of the person who made it.

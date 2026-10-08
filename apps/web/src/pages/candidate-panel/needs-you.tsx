@@ -80,7 +80,8 @@ function HoldStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId: string
 
 /**
  * Not moving forward (founder decision B6): a reason from the fixed list, a note kept internally, and before the click
- * what follows: nothing is sent now, any booked interview is called off and named, and how the candidate will hear.
+ * what follows: the decision is not sent now; a booked interview or offered times are called off, named, and the
+ * candidate is told at once (no reason given) that the interview is off; and how the candidate will hear the decision.
  */
 function DeclineStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId: string; onClose: () => void }) {
   const [reason, setReason] = useState(DECLINE_REASONS[0][0]);
@@ -170,7 +171,7 @@ function OutcomeStep({ a, roleId, hire, onClose, onHired }: { a: ApplicationDeta
   useDraft("outcome-note", `${form.reason}${form.note}`);
   const first = useFocusOnMount<HTMLSelectElement>();
   const record = useMutation({
-    mutationFn: () => api.post<{ roleStillOpen: boolean; roleId: string } & Pick<ActionResult, "candidateNotice" | "dispositionSent">>(`/api/v1/applications/${a.id}/outcome`, { outcome: form.outcome, confirm: true, hireDate: form.hireDate || undefined, offerAcceptedAt: form.offerAcceptedAt || undefined, reason: form.reason || undefined, note: form.note || undefined }),
+    mutationFn: () => api.post<{ roleStillOpen: boolean; roleId: string } & Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes">>(`/api/v1/applications/${a.id}/outcome`, { outcome: form.outcome, confirm: true, hireDate: form.hireDate || undefined, offerAcceptedAt: form.offerAcceptedAt || undefined, reason: form.reason || undefined, note: form.note || undefined }),
     onSuccess: async (r) => {
       const t = outcomeToast(form.outcome, r);
       toast(t.title, t.detail);
@@ -216,13 +217,13 @@ function OutcomeStep({ a, roleId, hire, onClose, onHired }: { a: ApplicationDeta
 function CloseRoleCard({ id, roleId, onClose }: { id: string; roleId: string; onClose: () => void }) {
   const refresh = useRefreshCandidate(id, roleId);
   const close = useMutation({
-    mutationFn: () => api.post<{ movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number }>(`/api/v1/roles/${roleId}/outcome`, { outcome: "filled", confirm: true }),
+    mutationFn: () => api.post<{ movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number }>(`/api/v1/roles/${roleId}/outcome`, { outcome: "filled", confirm: true }),
     onSuccess: async (r) => { const t = closeRoleToast(r); toast(t.title, t.detail); onClose(); await refresh(); },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not close the role."),
   });
   return (
     <Card needsYou title="Close the role too?">
-      <p className="small" style={{ color: "var(--ink-2)" }}>The hire is recorded. The role is still open; closing it is a separate decision. Other active candidates are kept in your talent pool, privately.</p>
+      <p className="small" style={{ color: "var(--ink-2)" }}>The hire is recorded. The role is still open; closing it is a separate decision. Other active candidates are kept in your talent pool, privately; anyone with an interview booked or times offered is told now, in a short note that gives no reason, that it is off.</p>
       <div className="row" style={{ marginTop: 10 }}><Button variant="primary" size="sm" loading={close.isPending} onClick={() => close.mutate()}>Yes, close it as filled</Button><Button size="sm" variant="quiet" onClick={onClose}>Keep it open</Button></div>
     </Card>
   );
@@ -283,7 +284,7 @@ function DecisionCard({ a, roleId, onNextRound }: { a: ApplicationDetail; roleId
   const [note, setNote] = useState("");
   useDraft("decision-note", note);
   const record = useMutation({
-    mutationFn: (body: { decision: "next_round" | "finalist" | "not_moving_forward"; reason?: string; note?: string }) => api.post<{ stage: string; nextRoundKey: string | null } & Pick<ActionResult, "candidateNotice" | "dispositionSent">>(`/api/v1/applications/${a.id}/decision`, body),
+    mutationFn: (body: { decision: "next_round" | "finalist" | "not_moving_forward"; reason?: string; note?: string }) => api.post<{ stage: string; nextRoundKey: string | null } & Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes">>(`/api/v1/applications/${a.id}/decision`, body),
     onSuccess: async (r, body) => {
       const t = decisionToast(body.decision, r);
       toast(t.title, t.detail);

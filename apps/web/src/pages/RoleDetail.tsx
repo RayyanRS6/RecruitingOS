@@ -55,8 +55,8 @@ export function RoleDetail() {
   });
   const [closing, setClosing] = useState<{ outcome: string; reason: string } | null>(null);
   const closeWithOutcome = useMutation({
-    mutationFn: (body: { outcome: string; reason: string }) => api.post<{ movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number }>(`/api/v1/roles/${id}/outcome`, { outcome: body.outcome, confirm: true, reason: body.reason || undefined }),
-    // says who moved to the talent pool privately and which interviews ended (founder decision B6)
+    mutationFn: (body: { outcome: string; reason: string }) => api.post<{ movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number }>(`/api/v1/roles/${id}/outcome`, { outcome: body.outcome, confirm: true, reason: body.reason || undefined }),
+    // says who moved to the talent pool privately, which interviews ended, and who was told only that theirs is off (founder decision B6)
     onSuccess: async (res) => { const t = closeRoleToast(res, "Role closed; the outcome is recorded with your name."); toast(t.title, t.detail); setClosing(null); await qc.invalidateQueries({ queryKey: ["role", id] }); await qc.invalidateQueries({ queryKey: ["roles"] }); },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not close the role."),
   });
@@ -102,7 +102,7 @@ export function RoleDetail() {
 
       {closing ? (
         <Card needsYou title="Close this role">
-          <p className="small" style={{ color: "var(--ink-2)" }}>Say what happened. It is recorded with your name; active candidates are kept in your talent pool. The platform made no offer.</p>
+          <p className="small" style={{ color: "var(--ink-2)" }}>Say what happened. It is recorded with your name; active candidates are kept in your talent pool, privately. Anyone with an interview booked or times offered is told now, in a short note that gives no reason, that it is off. The platform made no offer.</p>
           <div className="stack" style={{ gap: 8, marginTop: 8, maxWidth: 520 }}>
             <Field label="Outcome" htmlFor="rc-outcome"><select id="rc-outcome" className="select" value={closing.outcome} onChange={(e) => setClosing({ ...closing, outcome: e.target.value })}>
               <option value="filled_outside_platform">Filled outside the platform</option>

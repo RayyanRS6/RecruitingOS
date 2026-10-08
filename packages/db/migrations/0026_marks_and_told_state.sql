@@ -82,11 +82,12 @@ CREATE INDEX IF NOT EXISTS applications_company_told_idx ON applications (compan
 --> statement-breakpoint
 -- The decision message policy (disposition.send) now governs only the message a person chooses to send: declining
 -- never sends anything by itself. The new default is "auto" (the message goes when a person presses Send). Saved
--- settings move to it, except "only a person" (human_only: the product sends no decision messages and the team tells
--- candidates themselves). "Ask me first" stays available for a company that wants a second person; each move is recorded.
+-- settings that sent at once on their own (auto_notify, and any other unattended level) move to it. A company's own
+-- choices stay: "Ask me first" (approval: a second person approves each message) and "only a person" (human_only: the
+-- product sends no decision messages and the team tells candidates themselves). Each move is recorded.
 INSERT INTO events (company_id, type, actor, subject_type, subject_id, payload)
   SELECT company_id, 'policy.changed', '{"kind":"system","id":"migration_0026","name":"Private decisions (founder decision B6)"}'::jsonb, 'policy', id::text,
     jsonb_build_object('actionType', action_type, 'level', 'auto', 'roleId', role_id, 'previous', level, 'reason', 'Declining no longer sends a message by itself; a person sends it later.')
-  FROM policies WHERE action_type = 'disposition.send' AND level NOT IN ('auto', 'human_only');
+  FROM policies WHERE action_type = 'disposition.send' AND level NOT IN ('auto', 'approval', 'human_only');
 --> statement-breakpoint
-UPDATE policies SET level = 'auto', updated_at = now() WHERE action_type = 'disposition.send' AND level NOT IN ('auto', 'human_only');
+UPDATE policies SET level = 'auto', updated_at = now() WHERE action_type = 'disposition.send' AND level NOT IN ('auto', 'approval', 'human_only');

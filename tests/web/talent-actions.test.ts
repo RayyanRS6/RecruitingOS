@@ -102,7 +102,7 @@ describe("the private decline step", () => {
     for (const p of ["sends", "needs_approval", "not_sent"] as const) expect(declineConfirmText(p, { hasEmail: true })).not.toMatch(/The candidate gets/);
   });
 
-  it("names the interviews it calls off: one the candidate knew about is off in the decision message, one never offered just stops", () => {
+  it("names the interviews it calls off, by day and time: the candidate is told now that one they knew about is off, the decision only when you send it; one never offered just stops", () => {
     const booked = { title: "Phone screen", startsAt: "2026-10-14T18:00:00.000Z", timezone: "America/New_York", status: "scheduled", offeredSlots: [] };
     const offered = { title: "Working interview", startsAt: null, timezone: null, status: "scheduling", offeredSlots: [{ id: "s1" }] };
     const proposed = { title: "Team lunch", startsAt: null, timezone: null, status: "proposed", offeredSlots: [] };
@@ -112,23 +112,41 @@ describe("the private decline step", () => {
     expect(interviewWords(offered)).toBe("the Working interview (times offered, none chosen yet)");
     expect(interviewWords(proposed)).toBe("the Team lunch (times not offered yet)");
     const text = declineConfirmText("sends", { hasEmail: true, interviews: [booked, offered, proposed] });
-    expect(text).toContain(`This also cancels ${iv} and the Working interview (times offered, none chosen yet). The candidate is not told yet: the decision message says they are off when someone sends it, so send it soon.`);
+    // the decision stays private; the interview note goes now, so nobody turns up to an interview that is off
+    expect(text).toMatch(/^Not moving forward is your decision, recorded with your reason\. It is private: the decision itself is only sent to the candidate when you choose to send it\./);
+    expect(text).not.toMatch(/nothing is sent to the candidate now/);
+    expect(text).toContain(`This cancels ${iv} and the Working interview (times offered, none chosen yet), and the candidate is told now, in a short note that gives no reason, that they are off.`);
     expect(text).toContain("It also stops the Team lunch (times not offered yet); no times had gone to the candidate.");
-    // nothing is promised now: no note goes to the candidate at the decline
-    expect(text).not.toMatch(/gets a short note|is sent a/);
-    expect(declineConfirmText("sends", { hasEmail: true, interviews: [booked] })).toMatch(/says it is off when someone sends it/);
+    expect(text).toMatch(/send the decision message from their page: a short, courteous email\.$/);
+    const one = declineConfirmText("sends", { hasEmail: true, interviews: [booked] });
+    expect(one).toContain(`This cancels ${iv}, and the candidate is told now, in a short note that gives no reason, that it is off.`);
+    // where the product sends no decision messages, the note about the interview still goes; the decision is not sent
+    const noMessages = declineConfirmText("not_sent", { hasEmail: true, interviews: [booked] });
+    expect(noMessages).toMatch(/It is private: the decision itself is not sent to the candidate\. This cancels /);
+    expect(noMessages).toMatch(/no decision messages are sent, so tell them yourself/);
+    // an interview never offered to them sends nothing, so nothing is sent now
+    const notOffered = declineConfirmText("sends", { hasEmail: true, interviews: [proposed] });
+    expect(notOffered).toMatch(/It is private: nothing is sent to the candidate now\./);
+    expect(notOffered).not.toMatch(/told now/);
     expect(declineConfirmText("sends", { hasEmail: true, interviews: [] })).not.toMatch(/cancels|stops/);
   });
 
-  it("the decline's toast says an interview was called off and is told with the decision message", () => {
-    expect(actionToast("reject", { candidateNotice: "not_told", interviewsCancelled: 1 }).detail).toBe(`${PRIVATE_DECISION} Their interview is cancelled; they hear that with your decision message, so send it soon.`);
-    expect(decisionToast("not_moving_forward", { candidateNotice: "not_told", interviewsCancelled: 2 }).detail).toMatch(/2 interviews are cancelled/);
-    expect(actionToast("move_to_talent_pool", { interviewsCancelled: 1 }).detail).toMatch(/^The candidate was not told\. Their interview is cancelled/);
+  it("the decline's toast says the interview was called off and the candidate was told only that it is off", () => {
+    expect(actionToast("reject", { candidateNotice: "not_told", interviewsCancelled: 1, interviewOffNotes: 1 }).detail).toBe(`${PRIVATE_DECISION} Their interview is cancelled, and they were sent a short note now saying only that it is off.`);
+    expect(decisionToast("not_moving_forward", { candidateNotice: "not_told", interviewsCancelled: 2, interviewOffNotes: 2 }).detail).toMatch(/2 interviews are cancelled, and they were sent a short note now saying only that they are off\.$/);
+    expect(actionToast("move_to_talent_pool", { interviewsCancelled: 1, interviewOffNotes: 1 }).detail).toBe("The candidate was not told. Their interview is cancelled, and they were sent a short note now saying only that it is off.");
+    expect(outcomeToast("employer_declined", { candidateNotice: "not_told", interviewsCancelled: 1, interviewOffNotes: 1 }).detail).toMatch(/they were sent a short note now saying only that it is off\.$/);
     expect(outcomeToast("no_hire", { candidateNotice: "not_told", interviewsCancelled: 0 }).detail).toBe(PRIVATE_DECISION);
+    // an interview whose times had not gone out is stopped, and nothing is said to have been sent
+    expect(actionToast("reject", { candidateNotice: "not_told", interviewsCancelled: 1, interviewOffNotes: 0 }).detail).toBe(`${PRIVATE_DECISION} Their interview is stopped; no times had gone to them, so nothing was sent about it.`);
+    expect(actionToast("reject", { candidateNotice: "not_told", interviewsCancelled: 2, interviewOffNotes: 1 }).detail).toBe(`${PRIVATE_DECISION} Their interview is cancelled, and they were sent a short note now saying only that it is off. Another interview is stopped; no times had gone to them for it.`);
   });
 
-  it("closing a role says who moved privately and which interviews ended", () => {
-    expect(closeRoleToast({ movedToTalentPool: 3, heldEmailsAddedToTalentPool: 1, interviewsCancelled: 1 })).toEqual({ title: "Role closed as filled.", detail: "The 2 people still in the process moved to your talent pool, privately: nobody is told until someone sends them the decision message. 1 interview was cancelled; the decision message says so." });
+  it("closing a role says who moved privately, which interviews ended, and who was told only that theirs is off", () => {
+    expect(closeRoleToast({ movedToTalentPool: 3, heldEmailsAddedToTalentPool: 1, interviewsCancelled: 1, interviewOffNotes: 1 })).toEqual({ title: "Role closed as filled.", detail: "The 2 people still in the process moved to your talent pool, privately: nobody is told the decision until someone sends them the decision message. 1 interview was cancelled; the candidate was sent a short note now saying only that it is off." });
+    expect(closeRoleToast({ movedToTalentPool: 2, interviewsCancelled: 2, interviewOffNotes: 2 }).detail).toMatch(/2 interviews were cancelled; each candidate was sent a short note now saying only that their interview is off\.$/);
+    expect(closeRoleToast({ movedToTalentPool: 3, interviewsCancelled: 3, interviewOffNotes: 2 }).detail).toMatch(/3 interviews were cancelled; the 2 candidates who had a time booked or offered were sent a short note now saying only that their interview is off\.$/);
+    expect(closeRoleToast({ movedToTalentPool: 1, interviewsCancelled: 1, interviewOffNotes: 0 }).detail).toMatch(/1 interview was cancelled; no times had gone to the candidate, so nothing was sent about it\.$/);
     expect(closeRoleToast({ movedToTalentPool: 1 }).detail).toMatch(/^The one person still in the process moved/);
     expect(closeRoleToast({}).detail).toBe("Nobody else was still in the process.");
     // the role page closes with any outcome, under its own title

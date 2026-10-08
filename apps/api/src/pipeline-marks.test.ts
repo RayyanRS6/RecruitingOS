@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, like } from "drizzle-orm";
 import type { ActiveMark, ApplicationStage, StageMove } from "@ros/contracts";
-import { anonymizeCandidate, correctOutcome, entitlements, exportCandidateData, transition } from "@ros/core";
+import { anonymizeCandidate, correctOutcome, emit, entitlements, exportCandidateData, transition } from "@ros/core";
 import { detectStuckRoles, handleEmailEvent, runInterventionLadder, sweepStaleSending, workingDaysSince } from "@ros/agents";
 import { applicationMarks, applications, approvalRequests, candidates, communications, events, interviews, notifications, policies, randomToken, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
@@ -212,13 +212,20 @@ describe("the stage strip, private marks and private decisions", () => {
       expect((await application(id)).toldState).toBe("sent");
     });
 
-    it("tells an interview the decision called off in the same message", async () => {
+    it("names an interview the decision called off only when nobody told the candidate it is off yet", async () => {
       const id = await seed("Hugo", { stage: "interview_scheduled" });
       await decline(id);
       const startsAt = new Date(Date.now() + 3 * DAY).toISOString();
-      await withTenant(container.db, companyId, (tx) => tx.insert(interviews).values({ companyId, applicationId: id, roundKey: "r1", title: "Working interview", format: "onsite", durationMinutes: 45, status: "cancelled", startsAt, timezone: "America/Los_Angeles", cancelReason: "declined", createdBy: { kind: "user", id: ownerId } }));
+      const actor = { kind: "user" as const, id: ownerId };
+      await withTenant(container.db, companyId, async (tx) => {
+        await tx.insert(interviews).values({ companyId, applicationId: id, roundKey: "r1", title: "Working interview", format: "onsite", durationMinutes: 45, status: "cancelled", startsAt, timezone: "America/Los_Angeles", cancelReason: "declined", createdBy: actor });
+        // one whose short "interview is off" note already went (a private decision tells them at once) is left out
+        const [told] = await tx.insert(interviews).values({ companyId, applicationId: id, roundKey: "r2", title: "Team lunch", format: "onsite", durationMinutes: 45, status: "cancelled", startsAt, timezone: "America/Los_Angeles", cancelReason: "declined", createdBy: actor }).returning();
+        await emit(tx, { type: "interview.cancelled", companyId, actor, subject: { type: "interview", id: told.id }, payload: { reason: "declined", byCandidate: false, hadEvents: false, candidateTold: true, cause: "left_process" } });
+      });
       const preview = (await (await json(owner, "GET", `/api/v1/applications/${id}/decision-message`)).json()) as { text: string };
       expect(preview.text).toMatch(/The Working interview on .* is cancelled, so there is no need to attend\./);
+      expect(preview.text).not.toContain("Team lunch");
     });
 
     it("under 'ask me first' the Send waits for an approver; approving sends it; 'Do not send' leaves them not told", async () => {

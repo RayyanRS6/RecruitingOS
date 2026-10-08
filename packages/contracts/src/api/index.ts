@@ -118,8 +118,10 @@ const RemindAt = z.string().trim().max(40).refine((v) => !Number.isNaN(Date.pars
 export const ApplicationAction = z.object({
   /**
    * ask_in_screen: invite_screen with `focus: "unknowns"`, the one-click follow-up on an assessment that needs a closer look.
-   * reject: files a private decision (founder decision B6); nothing is sent. set_mark / clear_mark: the private Longlist,
-   * Shortlist, On hold and Not a fit for now marks; hold is set_mark with on_hold. send_decision: a person sends the
+   * reject: files a private decision (founder decision B6); the decision is not sent, but a booked interview or offered
+   * times are called off and the candidate gets a short note, with no reason, that the interview is off.
+   * set_mark / clear_mark: the private Longlist, Shortlist, On hold and Not a fit for now marks; hold is set_mark with
+   * on_hold. send_decision: a person sends the
    * standard decision message (or asks for its approval, under the company's settings). told_in_person: records that
    * someone told the candidate themselves, so nothing more is sent. cancel_screen: "Stop this screen invitation" before
    * the candidate starts; they get a short, polite note and go back to waiting on the team.

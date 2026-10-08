@@ -13,18 +13,20 @@ import { cancelInterviewInTx, type CancelNotice } from "./interview-cancel";
  * - "send_cancellation": the candidate's own news (they withdrew, declined an offer). Every interview they knew about
  *   (a booked time, or times they were offered) is called off with a short note.
  * - "private_decision": the team's decision, which stays private until a person sends it (founder decision B6;
- *   plan-adjustments §4). Nothing is sent here: a booked time and offered times are withdrawn quietly (their link says
- *   so), and the decision message, when someone sends it, says the interview is off. One message, not two.
- * - "with_decision_message": nothing is sent here either, because the caller sends the decision message in this same
- *   transaction and that message names the cancelled interview.
- * A screen is closed without a note in every case (its link says the conversation is closed). A booked interview whose
+ *   plan-adjustments §4). The decision is not sent here, but a candidate who holds a booked time or was offered times
+ *   is told now, with no reason, that the interview is off, so nobody turns up to an interview that no longer exists.
+ *   The decision message a person sends later leaves out an interview whose cancellation was already told.
+ * - "with_decision_message": nothing is sent here, because the caller sends the decision message in this same
+ *   transaction and that message names the cancelled interview, so the candidate gets one message, not two.
+ * A privacy deletion does not come here: packages/core/src/privacy-requests.ts ends the person's interviews itself and
+ * writes nothing to the candidate. A screen is closed without a note in every case (its link says the conversation is closed). A booked interview whose
  * time has already started is left to the scheduling run, which records that it ended without asking for a decision.
  */
 export type ExitCandidateEmail = "send_cancellation" | "private_decision" | "with_decision_message";
 export type ExitCleanupInput = { companyId: string; applicationId: string; reason: string; actor: Actor; candidateEmail: ExitCandidateEmail };
 export type ExitCleanupResult = { interviewsCancelled: number; screensCancelled: number; suggestionsWithdrawn: number; candidateNotes: number };
 
-const NOTICE: Record<ExitCandidateEmail, CancelNotice> = { send_cancellation: "known", private_decision: "none", with_decision_message: "none" };
+const NOTICE: Record<ExitCandidateEmail, CancelNotice> = { send_cancellation: "known", private_decision: "known", with_decision_message: "none" };
 const OPEN_INTERVIEWS = ["proposed", "scheduling", "scheduled"];
 const OPEN_SCREENS = ["invited", "reminded", "in_progress"];
 /** The assistant's suggestions and a decision message waiting for approval: nothing is left to do for someone who left. */

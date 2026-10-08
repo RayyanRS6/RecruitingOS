@@ -31,15 +31,29 @@ export function noticeText(notice: CandidateNotice): string {
   }
 }
 
-/** What a private decision did to interviews still to come: cancelled now, and said in the decision message later. */
-export function interviewsOffText(n: number | undefined): string {
-  if (!n) return "";
-  return ` ${n === 1 ? "Their interview is" : `${n} interviews are`} cancelled; they hear that with your decision message, so send it soon.`;
+/**
+ * What a private decision did to interviews still to come (founder decision B6): each is cancelled now. A candidate who
+ * had a booked time or times to pick from was sent a short note at once saying only that it is off (no reason), so
+ * nobody turns up for it; the decision itself stays private until someone sends the decision message. `toldOff` is how
+ * many such notes went (the API's `interviewOffNotes`); the rest had no times sent to the candidate yet.
+ */
+export function interviewsOffText(cancelled: number | undefined, toldOff?: number): string {
+  if (!cancelled) return "";
+  const told = Math.min(toldOff ?? 0, cancelled);
+  const stopped = cancelled - told;
+  const parts: string[] = [];
+  if (told) parts.push(`${told === 1 ? "Their interview is" : `${told} interviews are`} cancelled, and they were sent a short note now saying only that ${told === 1 ? "it is" : "they are"} off.`);
+  if (stopped) {
+    parts.push(told
+      ? `${stopped === 1 ? "Another interview is" : `${stopped} more interviews are`} stopped; no times had gone to them for ${stopped === 1 ? "it" : "those"}.`
+      : `${stopped === 1 ? "Their interview is" : `${stopped} interviews are`} stopped; no times had gone to them, so nothing was sent about ${stopped === 1 ? "it" : "them"}.`);
+  }
+  return ` ${parts.join(" ")}`;
 }
 
 /** A decision's second line: the private sentence while nothing went (always, since B6), else what became of the message. */
-function decisionDetail(r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled">): string {
-  if (!r.candidateNotice || r.candidateNotice === "not_told") return r.dispositionSent ? noticeText("queued") : `${PRIVATE_DECISION}${interviewsOffText(r.interviewsCancelled)}`;
+function decisionDetail(r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes">): string {
+  if (!r.candidateNotice || r.candidateNotice === "not_told") return r.dispositionSent ? noticeText("queued") : `${PRIVATE_DECISION}${interviewsOffText(r.interviewsCancelled, r.interviewOffNotes)}`;
   return noticeText(r.candidateNotice);
 }
 
@@ -49,7 +63,7 @@ export function holdDay(remindAt: string): string {
 }
 
 /** The toast after a choice on the candidate panel or a row (POST /applications/:id/actions). */
-export function actionToast(action: string, r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "next" | "talentPoolOptOut" | "mark" | "ownerStage" | "interviewsCancelled">): ToastParts {
+export function actionToast(action: string, r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "next" | "talentPoolOptOut" | "mark" | "ownerStage" | "interviewsCancelled" | "interviewOffNotes">): ToastParts {
   switch (action) {
     case "reject":
       return { title: "Moved to Not moving forward.", detail: decisionDetail(r) };
@@ -64,8 +78,8 @@ export function actionToast(action: string, r: Pick<ActionResult, "candidateNoti
     case "move_to_talent_pool":
       // The person's own "don't keep me for future roles" stands (Wave 0 item 0.11); the page says so instead of "added".
       return r.talentPoolOptOut
-        ? { title: "Moved out of this role.", detail: `They asked not to be kept for future roles, so they are not in your talent pool and nobody will contact them about other openings. The candidate was not told.${interviewsOffText(r.interviewsCancelled)}` }
-        : { title: "Added to your talent pool.", detail: `The candidate was not told.${interviewsOffText(r.interviewsCancelled)}` };
+        ? { title: "Moved out of this role.", detail: `They asked not to be kept for future roles, so they are not in your talent pool and nobody will contact them about other openings. The candidate was not told.${interviewsOffText(r.interviewsCancelled, r.interviewOffNotes)}` }
+        : { title: "Added to your talent pool.", detail: `The candidate was not told.${interviewsOffText(r.interviewsCancelled, r.interviewOffNotes)}` };
     case "invite_screen":
       return { title: r.next ?? "Invitation on its way." };
     case "ask_in_screen":
@@ -86,14 +100,14 @@ export function actionToast(action: string, r: Pick<ActionResult, "candidateNoti
 }
 
 /** The toast after "How did the interview go?" (POST /applications/:id/decision). */
-export function decisionToast(decision: "next_round" | "finalist" | "not_moving_forward", r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled"> & { nextRoundKey?: string | null }): ToastParts {
+export function decisionToast(decision: "next_round" | "finalist" | "not_moving_forward", r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes"> & { nextRoundKey?: string | null }): ToastParts {
   if (decision === "finalist") return { title: "Marked as a finalist.", detail: "The candidate was not told." };
   if (decision === "next_round") return { title: r.nextRoundKey ? "Next round." : "Next round recorded.", detail: r.nextRoundKey ? "Check the interviewers below and approve; times go out from there." : undefined };
   return { title: "Recorded: not moving forward.", detail: decisionDetail(r) };
 }
 
 /** The toast after "Record what happened" (POST /applications/:id/outcome); the team's own decisions are private. */
-export function outcomeToast(outcome: string, r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled">): ToastParts {
+export function outcomeToast(outcome: string, r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes">): ToastParts {
   if (outcome === "hired_externally") return { title: "Hire recorded with your name." };
   if (outcome === "employer_declined" || outcome === "no_hire") return { title: "Outcome recorded with your name.", detail: decisionDetail(r) };
   return { title: "Outcome recorded with your name." };
@@ -168,16 +182,20 @@ export function candidateKnowsOf(iv: InterviewRef): boolean {
 }
 
 /**
- * What the confirm step says before "Not moving forward" (founder decision B6, plan-adjustments §4): the decision is
- * private, how the candidate will hear under the company's settings, and the interviews it calls off, by name. One they
- * knew about (a booked time, times to pick from) is cancelled without a word now, and the decision message says it is
- * off; one never offered to them is simply stopped.
+ * What the confirm step says before "Not moving forward" (founder decision B6): the decision is private, how the
+ * candidate will hear it under the company's settings, and the interviews it calls off, by name and time. One they knew
+ * about (a booked time, times to pick from) is cancelled and the candidate is told at once, in a short note with no
+ * reason, that it is off, so nobody turns up for it; the decision itself is sent only when someone chooses to send it.
+ * One never offered to them is simply stopped.
  */
 export function declineConfirmText(policy: DeclineMessagePolicy, input: { hasEmail: boolean; eligibility?: boolean; interviews?: readonly InterviewRef[] }): string {
-  const parts = ["Not moving forward is your decision, recorded with your reason. It is private: nothing is sent to the candidate now."];
   const known = (input.interviews ?? []).filter(candidateKnowsOf);
   const unknown = (input.interviews ?? []).filter((iv) => !candidateKnowsOf(iv));
-  if (known.length) parts.push(`This also cancels ${listWords(known.map(interviewWords))}. The candidate is not told yet: the decision message says ${known.length === 1 ? "it is" : "they are"} off when someone sends it, so send it soon.`);
+  // With an interview to call off something does go now (the short note), so the private sentence is about the decision.
+  const sendable = policy !== "not_sent" && input.hasEmail;
+  const privacy = !known.length ? "nothing is sent to the candidate now" : sendable ? "the decision itself is only sent to the candidate when you choose to send it" : "the decision itself is not sent to the candidate";
+  const parts = [`Not moving forward is your decision, recorded with your reason. It is private: ${privacy}.`];
+  if (known.length) parts.push(`This cancels ${listWords(known.map(interviewWords))}, and the candidate is told now, in a short note that gives no reason, that ${known.length === 1 ? "it is" : "they are"} off.`);
   if (unknown.length) parts.push(`It also stops ${listWords(unknown.map(interviewWords))}; no times had gone to the candidate.`);
   if (policy === "not_sent") parts.push("Under your settings no decision messages are sent, so tell them yourself and record it on their page.");
   else if (!input.hasEmail) parts.push("There is no email address on file, so tell them yourself and record it on their page.");
@@ -202,12 +220,25 @@ export function interviewCancelToast(r: { candidateTold?: boolean; interviewersT
   return { title: "Interview cancelled.", detail: `${r.candidateTold ? "The candidate was sent a cancellation." : "The candidate had no time booked or offered, so nothing was sent to them."}${r.interviewersTold ? " The interviewers were told." : ""}` };
 }
 
-/** The toast after closing a role (POST /roles/:id/outcome): who moved, privately, and the interviews it called off. */
-export function closeRoleToast(r: { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number }, title = "Role closed as filled."): ToastParts {
+/**
+ * The toast after closing a role (POST /roles/:id/outcome): who moved, privately, and the interviews it called off. A
+ * candidate who had a booked time or times to pick from was sent a short note at once saying only that the interview is
+ * off (`interviewOffNotes`); the decision stays private until someone sends the decision message.
+ */
+export function closeRoleToast(r: { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number }, title = "Role closed as filled."): ToastParts {
   const moved = Math.max(0, (r.movedToTalentPool ?? 0) - (r.heldEmailsAddedToTalentPool ?? 0));
-  const ivs = r.interviewsCancelled ?? 0;
-  const who = moved ? `${moved === 1 ? "The one person" : `The ${moved} people`} still in the process moved to your talent pool, privately: nobody is told until someone sends them the decision message.` : "Nobody else was still in the process.";
-  return { title, detail: `${who}${ivs ? ` ${ivs === 1 ? "1 interview was" : `${ivs} interviews were`} cancelled; the decision message says so.` : ""}` };
+  const who = moved ? `${moved === 1 ? "The one person" : `The ${moved} people`} still in the process moved to your talent pool, privately: nobody is told the decision until someone sends them the decision message.` : "Nobody else was still in the process.";
+  return { title, detail: `${who}${closedInterviewsText(r.interviewsCancelled ?? 0, r.interviewOffNotes ?? 0)}` };
+}
+
+/** The interviews a role close called off, and who was told they are off (a short note, no reason). */
+function closedInterviewsText(ivs: number, toldOff: number): string {
+  if (!ivs) return "";
+  const told = Math.min(toldOff, ivs);
+  const head = `${ivs === 1 ? "1 interview was" : `${ivs} interviews were`} cancelled`;
+  if (told === ivs) return ` ${head}; ${ivs === 1 ? "the candidate was sent a short note now saying only that it is off" : "each candidate was sent a short note now saying only that their interview is off"}.`;
+  if (told) return ` ${head}; ${told === 1 ? "the candidate who had a time booked or offered was" : `the ${told} candidates who had a time booked or offered were`} sent a short note now saying only that their interview is off.`;
+  return ` ${head}; no times had gone to ${ivs === 1 ? "the candidate" : "the candidates"}, so nothing was sent about ${ivs === 1 ? "it" : "them"}.`;
 }
 
 function listWords(items: string[]): string {

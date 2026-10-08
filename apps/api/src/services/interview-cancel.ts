@@ -11,10 +11,10 @@ type Mover = Parameters<typeof transition>[1]["by"];
 /**
  * Who hears from us that the interview is off, beside the interviewers (plan A9).
  * - "known": the candidate, whenever they knew about it: a booked time, or times they were offered to pick from. The
- *   Cancel button, a team member's removal, and the candidate's own news (they withdrew).
- * - "none": nothing here; the link shows a friendly page. A private decision (founder decision B6, plan-adjustments §4):
- *   the decision message a person sends later names the cancelled interview, so the candidate gets one message, not
- *   two; or the caller sends that message in the same transaction.
+ *   Cancel button, a team member's removal, the candidate's own news (they withdrew), and a private decision (founder
+ *   decision B6): the note carries no reason, and the decision message a person sends later leaves this interview out.
+ * - "none": nothing here; the link shows a friendly page. Used when the caller sends the decision message in the same
+ *   transaction and that message names the cancelled interview, so the candidate gets one message, not two.
  */
 export type CancelNotice = "known" | "none";
 

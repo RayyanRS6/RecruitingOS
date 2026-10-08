@@ -87,7 +87,8 @@ export async function recordRoleOutcome(
   if (!closed.length) throw new OutcomeError("already_closed", "This role was closed a moment ago by someone else.");
   const updated = closed[0];
   // active candidates are kept in the talent pool, as the page promises; hired and closed candidates are untouched. The
-  // move is a private decision like any other (founder decision B6): nobody is told until a person sends the message.
+  // move is a private decision like any other (founder decision B6): nobody is told the decision until a person sends the
+  // message (the caller's exit cleanup tells someone with a booked time or offered times only that the interview is off).
   const open = await q.select({ id: applications.id, stage: applications.stage }).from(applications).where(eq(applications.roleId, role.id));
   const movedApplicationIds: string[] = [];
   for (const a of open) {

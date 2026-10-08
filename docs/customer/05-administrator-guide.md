@@ -224,7 +224,7 @@ On the role page press **Close**. Under **Close this role** choose the outcome:
 - **Cancelled**
 - **Closed without a hire**
 
-Add a reason if you like and press **Confirm and close the role**. Candidates who were still active are kept in your talent pool. The role leaves your careers page and the job listings; the job page itself says the position is closed, and search engines drop it on their own. Every posting on the **Posting** tab closes. The role then names the boards where the posting is still up, in a red alert at the top and on **Today**; ITS takes each one down and ticks **Removed from this board** on the Posting tab.
+Add a reason if you like and press **Confirm and close the role**. Candidates who were still active are kept in your talent pool, privately: nobody is told the decision until someone sends them the decision message. Anyone with an interview booked or times offered gets a short note straight away saying only that the interview is off (no reason given). The role leaves your careers page and the job listings; the job page itself says the position is closed, and search engines drop it on their own. Every posting on the **Posting** tab closes. The role then names the boards where the posting is still up, in a red alert at the top and on **Today**; ITS takes each one down and ticks **Removed from this board** on the Posting tab.
 
 Hiring managers can close a role too. Pausing a role and stopping applications are for owners and admins (section 7).
 

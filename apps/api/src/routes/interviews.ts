@@ -268,8 +268,10 @@ applicationInterviewRoutes.post("/:id/interviews", requireTenant, async (c) => {
 /**
  * The human decision after an interview (HARD human-only in spirit: there is no automated path to any of these). It is
  * recorded on the newest interview that is over and still undecided, so a second decision never overwrites the first
- * one's, and a "not moving forward" is filed privately like every decline (founder decision B6): nothing is sent until a
- * person sends the decision message. `candidateNotice` ("not_told") and `dispositionSent` (false) say so on the page.
+ * one's, and a "not moving forward" is filed privately like every decline (founder decision B6): the decision is not sent
+ * until a person sends the decision message. `candidateNotice` ("not_told") and `dispositionSent` (false) say so on the
+ * page. An interview still to come is called off, and a candidate who held a booked time or was offered times is told
+ * at once, with no reason, that it is off (`interviewOffNotes`).
  */
 applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -287,13 +289,16 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
     let dispositionSent: boolean | undefined;
     let candidateNotice: CandidateNotice | undefined;
     let interviewsCancelled = 0;
+    let interviewOffNotes = 0;
     if (body.decision === "not_moving_forward") {
       if (!body.reason) throw new HttpError(400, "reason_required", "A reason is required to decline a candidate.");
       assertCan(t.role, "application.reject");
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "rejected", by: t.role, actor, reason: body.reason, payload: { note: body.note ?? null } });
       await tx.update(applications).set({ rejectNote: body.note ?? null }).where(eq(applications.id, app.id));
       await emit(tx, { type: "application.rejected", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { reason: body.reason, byHuman: true, afterInterview: true, candidateTold: false } });
-      interviewsCancelled = (await exitCleanup(tx, container, { companyId: t.companyId, applicationId: app.id, reason: `declined after an interview: ${body.reason}`, actor, candidateEmail: "private_decision" })).interviewsCancelled;
+      const cleaned = await exitCleanup(tx, container, { companyId: t.companyId, applicationId: app.id, reason: `declined after an interview: ${body.reason}`, actor, candidateEmail: "private_decision" });
+      interviewsCancelled = cleaned.interviewsCancelled;
+      interviewOffNotes = cleaned.candidateNotes;
       candidateNotice = "not_told";
       dispositionSent = false;
       stage = "rejected";
@@ -311,7 +316,7 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
     }
     await emit(tx, { type: "interview.decision_recorded", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { decision: body.decision, interviewId: last?.id ?? null, note: body.note ?? null, nextRoundKey } });
     await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "interview.decision", decision: body.decision } });
-    return { ok: true, stage, nextRoundKey, ...(dispositionSent === undefined ? {} : { dispositionSent, candidateNotice, interviewsCancelled }) };
+    return { ok: true, stage, nextRoundKey, ...(dispositionSent === undefined ? {} : { dispositionSent, candidateNotice, interviewsCancelled, interviewOffNotes }) };
   });
   await container.kick();
   return c.json(result);

@@ -157,10 +157,10 @@ describe("the steps a stage choice opens", () => {
     expect(text(html)).toContain("1 of 2");
   });
 
-  it("Not moving forward is private, names a booked interview, and offers the fixed reasons", () => {
+  it("Not moving forward is private, names a booked interview the candidate is told now is off, and offers the fixed reasons", () => {
     const html = panel("decline", detail(maria, { interviews: [{ id: "iv1", roundKey: "r1", title: "Working interview", status: "scheduled", startsAt: "2026-10-14T18:00:00.000Z", endsAt: null, timezone: "America/Los_Angeles", meetingUrl: null, attempt: 1, outcome: null, decision: null, offeredSlots: [], createdAt: daysAgo(2) }] }));
-    expect(text(html)).toContain("It is private: nothing is sent to the candidate now.");
-    expect(text(html)).toMatch(/This also cancels the Working interview on Wednesday, October 14(,| at) 11:00\sAM\./);
+    expect(text(html)).toContain("It is private: the decision itself is only sent to the candidate when you choose to send it.");
+    expect(text(html)).toMatch(/This cancels the Working interview on Wednesday, October 14(,| at) 11:00\sAM, and the candidate is told now, in a short note that gives no reason, that it is off\./);
     expect(html).toContain('<option value="candidate_unresponsive">They stopped responding</option>');
     expect(text(html)).toContain("Confirm: not moving forward");
   });

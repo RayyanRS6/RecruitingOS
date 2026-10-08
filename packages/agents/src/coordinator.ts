@@ -119,15 +119,17 @@ export function reminderClosingLine(candidate: { preferences: { talentPoolOptOut
 }
 
 /**
- * An interview the candidate knew about that is cancelled with the decision; the decision message says so (one message,
- * not two). A booked one has its time; one whose times were only offered has none (`startsAt` null).
+ * An interview the candidate knew about that the decision called off and nobody has told them is off yet (the decision
+ * message goes in the same transaction as the cancellation); the decision message says so, so the candidate gets one
+ * message, not two. A booked one has its time; one whose times were only offered has none (`startsAt` null).
  */
 export type CancelledInterview = { title: string; startsAt: string | null; timezone: string | null };
 
 /**
  * The decision message: respectful and specific, after a human decision or an owner-authored eligibility rule. A
- * decision is private until a person sends this (founder decision B6), so it also carries the cancellation of any
- * interview the decision called off. Pure, so the page can preview exactly what will go.
+ * decision is private until a person sends this (founder decision B6). It also carries the cancellation of an interview
+ * the decision called off when the candidate was not already told it is off. Pure, so the page can preview exactly what
+ * will go.
  */
 export function dispositionMessage(input: Pick<MessageInput, "candidate" | "company" | "packet"> & { reason: string; cancelledInterviews?: CancelledInterview[] }): { subject: string; text: string; templateKey: string } {
   const { candidate, company, packet } = input;
