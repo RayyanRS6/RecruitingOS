@@ -472,6 +472,13 @@ function fakeTriageAssess(req: StructuredRequest<unknown>): EvidenceAssessment {
     const what = m.text.replace(/\(.*\)$/, "").trim().replace(/[.!]+$/, "");
     const tks = tokens(what);
     const hits = tks.filter((t) => lower.includes(t));
+    // The candidate's own line saying they do not meet it ("RDH license expired in 2021", "I do not have a forklift
+    // certificate"): a "no" with that line quoted, which the quote check keeps. It gives local runs weak readings too.
+    const miss = lines.find((l) => NOT_MET.test(l) && tks.some((t) => l.toLowerCase().includes(t)));
+    if (miss) {
+      concerns.push({ claim: `Their own words show ${plainPhrase(what)} is not met`, evidence: { source, quote: miss } });
+      return { requirementKey: m.key, met: "no" as const, evidence: { source, quote: miss } };
+    }
     const license = /licen/i.test(m.text) && (extraction.licenses?.length || /\b(rdh|rda|license|licensed)\b/i.test(text));
     const met = hits.length >= 2 || license ? "yes" : hits.length === 1 ? "partially" : "unknown";
     const quote = lineFor(hits.length ? hits : tks);
@@ -493,12 +500,14 @@ function fakeTriageAssess(req: StructuredRequest<unknown>): EvidenceAssessment {
   const yes = requirementFindings.filter((r) => r.met === "yes").length;
   const partial = requirementFindings.filter((r) => r.met === "partially").length;
   const missing = requirementFindings.filter((r) => r.met === "unknown").length;
+  const notMet = requirementFindings.filter((r) => r.met === "no").length;
   // "Thin but relevant" (the prompt's rule for "potential"): the text shows this kind of work even when no must-have is spelled out.
   const roleTitle = sys.match(/^Role: ([^(\n]+?) \(/m)?.[1] ?? "";
   const relevant = !noText && tokens(roleTitle).some((t) => lower.includes(t));
-  const overall: EvidenceAssessment["overall"] = noText ? "unknown" : mustHaves.length && yes === mustHaves.length ? "strong" : yes + partial > 0 || relevant ? "potential" : "unknown";
+  // A must-have their own words show is not met makes the reading Weak (the prompt's rule), and nothing is suggested.
+  const overall: EvidenceAssessment["overall"] = noText ? "unknown" : notMet ? "weak" : mustHaves.length && yes === mustHaves.length ? "strong" : yes + partial > 0 || relevant ? "potential" : "unknown";
   // The prompt's rule: "review_manually" when overall is unknown or the resume could not be read; the eligibility hold is reviewed by a person too.
-  const recommendation: EvidenceAssessment["recommendation"] = overall === "unknown" ? "review_manually" : eligibilityFailed ? "review_manually" : "screen";
+  const recommendation: EvidenceAssessment["recommendation"] = overall === "unknown" ? "review_manually" : eligibilityFailed ? "review_manually" : overall === "weak" ? "hold" : "screen";
   const summary = noText
     ? "No resume text or description was available, so nothing can be said yet; a person should open the file or ask the candidate."
     : `${yes} of ${mustHaves.length} must-haves evidenced${partial ? `, ${partial} partially` : ""}; ${competencyFindings.filter((c) => c.finding === "evidenced").length} of ${competencies.length} competencies evidenced. ${extraction.positions?.length ? `Most recent work: ${extraction.positions[0].title}.` : ""}`.trim();
@@ -506,6 +515,7 @@ function fakeTriageAssess(req: StructuredRequest<unknown>): EvidenceAssessment {
   const confidenceReasons: string[] = [];
   if (noText) confidenceReasons.push("no résumé text and no written summary to assess");
   else if (noResume) confidenceReasons.push("no résumé, only the written summary");
+  if (notMet) confidenceReasons.push(`${notMet === 1 ? "one must-have is" : `${notMet} must-haves are`} shown not met in their own words`);
   if (missing) confidenceReasons.push(`${missing === 1 ? "one must-have has" : `${missing} must-haves have`} no evidence`);
   if (partial) confidenceReasons.push(`${partial === 1 ? "one must-have is" : `${partial} must-haves are`} only partly shown`);
   if (eligibilityFailed) confidenceReasons.push("an eligibility answer did not match");
@@ -522,9 +532,24 @@ function fakeTriageAssess(req: StructuredRequest<unknown>): EvidenceAssessment {
     requirementFindings,
     anomalies,
     recommendation,
-    rationale: recommendation === "screen" ? "Eligible, with relevant evidence for the must-haves; a screen will settle the unknowns." : noText ? "There is nothing to assess against; a human should look." : overall === "unknown" ? `The ${where} shows none of the must-haves and nothing about this kind of work; a person should look or ask.` : "Eligibility was not met; the owner reviews before anything else happens.",
+    rationale: recommendation === "screen" ? "Eligible, with relevant evidence for the must-haves; a screen will settle the unknowns." : noText ? "There is nothing to assess against; a human should look." : overall === "unknown" ? `The ${where} shows none of the must-haves and nothing about this kind of work; a person should look or ask.` : overall === "weak" ? "Their own words show a must-have is not met; a person decides what happens next." : "Eligibility was not met; the owner reviews before anything else happens.",
   };
 }
+
+/**
+ * Three dental hygienist résumés that the fake reads three ways against the hygienist role it drafts when the owner's
+ * must-haves are "active CA RDH license, periodontal charting": everything shown (a very high score, the Shortlist),
+ * the license with the rest only partly shown (a middling score, the Longlist), and the license lapsed in their own
+ * words (a missing must-have, Not moving forward). For local runs of the pool board and for tests.
+ */
+export const FAKE_SAMPLE_RESUMES = {
+  strong: "Registered Dental Hygienist at Harbor Dental 2019 - present\nRDH license CA active\nPeriodontal charting, scaling and root planing, Dentrix\nThorough, gentle clinical care to high standards\nPatient communication: explains findings plainly and builds trust\nKeeps to time without cutting corners\nShows up consistently and communicates early",
+  possible: "Dental Hygienist at Coastal Smiles 2022 - present\nRDH license CA active\nCharting in Dentrix, patient reminders",
+  weak: "Dental Hygienist at Pacific Dental 2010 - 2020\nRDH license CA expired in 2021\nPeriodontal charting, Dentrix",
+} as const;
+
+/** A line where the candidate says, in their own words, that they do not have something: lapsed, expired, never, do not have. */
+const NOT_MET = /\b(expired|lapsed|no longer (?:hold|have|active)|not (?:licensed|certified|currently licensed)|(?:do|does) not (?:have|hold)|don't (?:have|hold)|never (?:had|held|done|worked))\b/i;
 
 /** "Active CA RDH license" reads as "active CA RDH license" after "your"; an acronym at the start ("RDH license") is left alone. */
 function plainPhrase(s: string): string {

@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Avatar, Button, Drawer, ErrorState, IconButton, Menu, type MenuItem, Skeleton, StageButton, TabPanel, Tabs, type OwnerStage } from "@ros/ui";
+import { Alert, Avatar, Button, Drawer, ErrorState, IconButton, Menu, type MenuItem, ScoreBadge, Skeleton, StageButton, TabPanel, Tabs, type OwnerStage } from "@ros/ui";
 import { api, type ApplicationDetail } from "../../api/client";
 import { canSeeActivity } from "../../roles";
 import { isTextEntry } from "../../start-hire";
 import { stageBlocked, stageIntent, type PanelStep } from "../../talent-actions";
 import { NO_COMPOSE, PANEL_TABS, composeFor, hasUnsent, latestByTab, markSeen, neighbours, unreadTabs, type PanelTab, type SeenTabs } from "./helpers";
 import { DraftContext, useCandidateAction, useViewer } from "./hooks";
+import { matchOf } from "./match-view";
 import { NeedsYou } from "./needs-you";
 import { type Compose, HistoryTab, MessagesTab, OverviewTab, ResumeTab, ScreenTab } from "./sections";
 
@@ -133,7 +134,10 @@ export function CandidatePanel(props: PanelProps) {
     if (choice === "invite_screen") act.mutate({ action: "invite_screen" });
     if (choice === "record_outcome") props.onStep("outcome");
   };
-  const sub = a ? `Applied ${new Date(a.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}${props.roleTitle ? ` · ${props.roleTitle}` : ""}` : undefined;
+  const applied = a ? `Applied ${new Date(a.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}${props.roleTitle ? ` · ${props.roleTitle}` : ""}` : undefined;
+  // The match score stays in sight on every section (founder decision B2); its breakdown is on the Overview.
+  const score = a ? matchOf(a)?.score ?? null : null;
+  const sub = applied && score !== null ? <>{applied} · <ScoreBadge score={score} size="sm" /></> : applied;
 
   return (
     <Drawer

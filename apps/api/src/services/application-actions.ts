@@ -409,9 +409,17 @@ function markHttpError(e: unknown): never {
   throw e;
 }
 
+/**
+ * Where a decision came from when it was not a click on the candidate: Review and apply on the pool board (plan F8),
+ * with what the board suggested for this person. Recorded on the mark (source "board") and on the decision's events as
+ * "suggested by the assistant, applied by" the person acting.
+ */
+export type ActionVia = { via: "review_and_apply"; batchId: string; suggested: string | null };
+
 /** One person's decision about one application, inside the caller's tenant transaction. */
-export async function performApplicationAction(tx: Tx, container: Container, input: { app: App; body: ActionBody; tenant: Tenant; actor: Actor }): Promise<ActionResult> {
+export async function performApplicationAction(tx: Tx, container: Container, input: { app: App; body: ActionBody; tenant: Tenant; actor: Actor; via?: ActionVia }): Promise<ActionResult> {
   const { app, body, tenant: t, actor } = input;
+  const provenance = input.via ? { via: input.via.via, batchId: input.via.batchId, suggested: input.via.suggested, suggestedBy: "assistant", appliedBy: actor.name ?? actor.id } : {};
   const by = t.role;
   // Who may comes first: a role without the permission is refused (403) whatever the application's state.
   assertCan(t.role, CAPABILITY[body.action].permission);
@@ -433,10 +441,10 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
     case "reject": {
       assertCan(t.role, "application.reject");
       if (!body.reason) throw new HttpError(400, "reason_required", "A reason is required to decline a candidate.");
-      await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "rejected", by, actor, reason: body.reason, payload: { note: body.note ?? null } });
+      await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "rejected", by, actor, reason: body.reason, payload: { note: body.note ?? null, ...provenance } });
       await tx.update(applications).set({ rejectNote: body.note ?? null }).where(eq(applications.id, app.id));
-      await emit(tx, { type: "application.rejected", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { reason: body.reason, byHuman: true, candidateTold: false } });
-      await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "reject", reason: body.reason } });
+      await emit(tx, { type: "application.rejected", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { reason: body.reason, byHuman: true, candidateTold: false, ...provenance } });
+      await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "reject", reason: body.reason, ...provenance } });
       // Decisions are private (founder decision B6): the decision is not sent. An interview still to come is called off,
       // and a candidate who held a booked time or was offered times is told at once, with no reason, that it is off, so
       // nobody turns up for it; the decision message sent later leaves it out.
@@ -477,8 +485,8 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       assertCan(t.role, "application.act");
       const mark: MarkKind | undefined = body.action === "hold" ? "on_hold" : body.mark;
       if (!mark) throw new HttpError(400, "mark_required", "Choose Longlist, Shortlist, On hold or Not a fit for now.");
-      const set = await setMark(tx, { companyId: t.companyId, app, mark, note: body.note, remindAt: body.remindAt, actor, source: "manual", now }).catch(markHttpError);
-      await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "set_mark", mark, note: body.note ?? null, remindAt: set.mark.remindAt } });
+      const set = await setMark(tx, { companyId: t.companyId, app, mark, note: body.note, remindAt: body.remindAt, actor, source: input.via ? "board" : "manual", now }).catch(markHttpError);
+      await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "set_mark", mark, note: body.note ?? null, remindAt: set.mark.remindAt, ...provenance } });
       const until = set.mark.remindAt ? new Date(set.mark.remindAt).toLocaleDateString("en-US", { month: "long", day: "numeric" }) : null;
       return { ok: true, stage: app.stage, ownerStage: ownerStage(app, set.mark), mark: set.mark, toldState: app.toldState, candidateNotice: "not_told", next: until ? `On hold until ${until}; they come back to Today then. The candidate was not told.` : "Private: the candidate was not told." };
     }
@@ -510,7 +518,7 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       // "Ask about this in a screen": the same invitation, opened with the assessment's open questions (docs/spec/21, P1).
       const focus = body.action === "ask_in_screen" || body.focus === "unknowns" ? ("unknowns" as const) : undefined;
       const { runId } = await container.engine.start(tx, { workflowKey: "screen", companyId: t.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: app.roleId, channel: body.channel, invitedBy: t.userId, ...(focus ? { focus } : {}) }, idempotencyKey: `screen:${app.id}:${Date.now()}`, actor });
-      await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: body.action, channel: body.channel ?? "auto", focus: focus ?? null, note: body.note ?? null, workflowRunId: runId } });
+      await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: body.action, channel: body.channel ?? "auto", focus: focus ?? null, note: body.note ?? null, workflowRunId: runId, ...provenance } });
       return { ok: true, stage: app.stage, workflowRunId: runId, next: focus ? "Invitation on its way. The screen starts with the open questions from the assessment; the answers land on the candidate's page." : undefined };
     }
     case "cancel_screen": {

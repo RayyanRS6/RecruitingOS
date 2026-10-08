@@ -278,7 +278,7 @@ function TransparencyBlock(props: { company: { name: string }; notices: Notice[]
   return (
     <section class="card" aria-labelledby="before-you-send">
       <h2 id="before-you-send">Before you send</h2>
-      <p><strong>{props.company.name}</strong> runs this hiring process and is the employer. People at {props.company.name} make every hiring decision; software only helps organize and summarize.</p>
+      <p><strong>{props.company.name}</strong> runs this hiring process and is the employer. People at {props.company.name} make every hiring decision. Software helps organize and summarize applications, and works out a match score from what you send, checked against the job's requirements; the team sees what the score is based on, and a person always decides.</p>
       <p><strong>What we collect:</strong> your name, your email, your phone number if you give one, where you are based, your resume or your answers about your work, and your answers to the questions above.</p>
       <p><strong>Why:</strong> to consider you for this position and to contact you about it. Nothing else.</p>
       <p><strong>Who can see it:</strong> the hiring team at {props.company.name}; an Identified Talent Solutions recruiter only if {props.company.name} brings one in to help; and the companies that run this service for us: hosting, file storage, email delivery, and the AI service that helps organize applications. Each does only its own job; the privacy page linked below says what each one does.</p>

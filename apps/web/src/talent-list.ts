@@ -3,9 +3,10 @@ import type { Tone } from "@ros/ui";
 import type { ApplicationSummary, OwnerStage, StageStripCounts, ToldState } from "./api/client";
 
 /**
- * The Talent page's list (plan A3; founder decisions B3 and B6), kept free of React so it can be tested: the stage strip,
- * the reading chip, the filters, search and the three orders. Nothing here orders people by an AI reading: the orders
- * are newest first, waiting longest and by name, and the readings only filter.
+ * The Talent page's list (plan A3; founder decisions B2, B3 and B6), kept free of React so it can be tested: the stage
+ * strip, the reading chip, the filters, search and the four orders. The AI reading's words only filter; the list can be
+ * ordered by the match score, the number worked out by code from the checked findings (B2), as well as newest first,
+ * waiting longest and by name.
  */
 
 /** The latest reading in a word: the chip on each row and the reading filter. */
@@ -50,8 +51,10 @@ export const READING_FILTERS: ReadonlyArray<{ id: ReadingFilter; label: string }
   { id: "closer_look", label: "Needs a closer look" },
 ];
 
-export type Order = "newest" | "waiting" | "name";
+/** `score`: the match score, highest first; people with no score yet last, newest first among equals. */
+export type Order = "score" | "newest" | "waiting" | "name";
 export const ORDERS: ReadonlyArray<{ id: Order; label: string }> = [
+  { id: "score", label: "Score" },
   { id: "newest", label: "Newest first" },
   { id: "waiting", label: "Waiting longest" },
   { id: "name", label: "Name" },
@@ -110,7 +113,7 @@ export function defaultView(params: { get: (k: string) => string | null }, count
   const linked = stage !== "all" || !!told || !!internalStage || applying;
   const waiting = !linked && (counts?.byGroup.waiting_on_you ?? 0) > 0;
   const orderParam = params.get("order");
-  const order: Order = orderParam === "newest" || orderParam === "waiting" || orderParam === "name" ? orderParam : waiting ? "waiting" : "newest";
+  const order: Order = ORDERS.some((o) => o.id === orderParam) ? (orderParam as Order) : waiting ? "waiting" : "newest";
   return { stage, waiting, applying, reading: "any", query: "", order, internalStage, told };
 }
 
@@ -143,10 +146,12 @@ export function applyView(rows: readonly ApplicationSummary[], view: TalentView)
 export function orderRows(rows: readonly ApplicationSummary[], order: Order): ApplicationSummary[] {
   const name = (a: ApplicationSummary) => a.candidate?.name ?? "";
   const when = (iso: string) => Date.parse(iso) || 0;
+  const newest = (x: ApplicationSummary, y: ApplicationSummary) => when(y.appliedAt ?? y.createdAt) - when(x.appliedAt ?? x.createdAt);
   const out = [...rows];
   if (order === "waiting") out.sort((x, y) => when(x.stageChangedAt) - when(y.stageChangedAt));
   else if (order === "name") out.sort((x, y) => name(x).localeCompare(name(y), undefined, { sensitivity: "base" }));
-  else out.sort((x, y) => when(y.appliedAt ?? y.createdAt) - when(x.appliedAt ?? x.createdAt));
+  else if (order === "score") out.sort((x, y) => (y.score ?? -1) - (x.score ?? -1) || newest(x, y));
+  else out.sort(newest);
   return out;
 }
 

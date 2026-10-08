@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 import "@ros/ui/tokens.css";
+// The pool board's own styles (Talent page, plan F6-F10), after the tokens they are built from.
+import "@ros/ui/board.css";
 // The typefaces come from this deployment's own /fonts/ folder (apps/api/src/pages/fonts.ts lists them, scripts/fetch-fonts.ts
 // writes this file), so no font host learns who opened the application and the policy keeps font-src 'self'.
 import "./fonts.css";

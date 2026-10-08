@@ -227,15 +227,16 @@ export const CorrectOutcome = z.object({ confirm: z.literal(true), reason: z.str
 
 /**
  * GET /roles/:id/applications. `ownerStage` narrows to one column of the stage strip and `told` to decisions in that told
- * state; `order` is newest first (default), waiting longest, or by name; never by an AI reading. `counts=1` answers
- * `{ applications, counts }` with the strip's counts over every visible applicant instead of the bare list.
+ * state; `order` (or `sort`) is newest first (default), waiting longest, by name, or by match score, highest first (the
+ * number worked out by code from checked evidence, founder decision B2; never the AI reading's words). `counts=1`
+ * answers `{ applications, counts }` with the strip's counts over every visible applicant instead of the bare list.
  */
 export const OwnerGroupQuery = z.object({
   group: z.enum(["waiting_on_you", "in_process", "not_moving_forward", "hired"]).optional(),
   stage: ApplicationStage.optional(),
   ownerStage: OwnerStage.optional(),
   told: ToldState.optional(),
-  order: z.enum(["newest", "waiting", "name"]).optional(),
+  order: z.enum(["newest", "waiting", "name", "score"]).optional(),
   counts: z.enum(["1", "true"]).optional(),
 });
 

@@ -29,6 +29,12 @@
   "triage.bias_pairs": {
     "minPassRate": 1
   },
+  "triage.consistency": {
+    "minPassRate": 1
+  },
+  "board.determinism": {
+    "minPassRate": 1
+  },
   "screen.conversation": {
     "minPassRate": 1
   },

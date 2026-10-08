@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "../nav";
-import { Alert, Avatar, Button, Card, Chip, EmptyState, ErrorState, Icon, PageHeader, Pill, Sheet, Skeleton, StageButton, StatusChip, TabPanel, Table, Tabs, type OwnerStage } from "@ros/ui";
-import { api, ApiError, type ActionResult, type ApplicationSummary, type ApplicationsWithCounts, type CompareResponse, type DecisionMessagePreview, type DecisionMessagesResponse, type Me, type RoleSummary } from "../api/client";
+import { Alert, Avatar, Button, Card, Chip, EmptyState, ErrorState, Icon, PageHeader, Pill, ScoreBadge, Sheet, Skeleton, StageButton, TabPanel, Tabs, type OwnerStage } from "@ros/ui";
+import { api, ApiError, type ActionResult, type ApplicationSummary, type ApplicationsWithCounts, type BoardView, type DecisionMessagePreview, type DecisionMessagesResponse, type Me, type RoleSummary } from "../api/client";
 import { toast } from "../toast";
 import { messageOnItsWayChip } from "../company-check";
 import { AskRecruiter } from "../components/AskRecruiter";
@@ -12,14 +12,18 @@ import { ShareJob } from "../components/ShareJob";
 import { useCompanyCheck } from "../components/use-company-check";
 import { LOW_CONFIDENCE_LABEL } from "../evidence";
 import { activeCompanyOf } from "../rail";
-import { canDecline, canShareJob } from "../roles";
+import { canDecline, canSeeTalent, canShareJob } from "../roles";
 import { roleStatus } from "../role-status";
 import { actionToast, batches, bulkSendToast, holdDay, mergeDecisionResults, noticeText, stageBlocked, stageIntent, type PanelStep } from "../talent-actions";
 import { ORDERS, READING, READING_FILTERS, STILL_APPLYING_LABEL, STILL_APPLYING_TEXT, appliedWhen, applyView, defaultView, emptyText, isStillApplying, readingCounts, readingOf, stillApplyingCount, stripItems, waitingOnYouCount, waitingText, type Order, type ReadingFilter, type TalentView } from "../talent-list";
 import { CandidatePanel } from "./candidate-panel/CandidatePanel";
-import { MET_TONE, overallLabel } from "./candidate-panel/assessment";
-import { REC_LABEL, STAGE_LABEL, panelSearch, panelTabFrom, type PanelTab } from "./candidate-panel/helpers";
+import { STAGE_LABEL, panelSearch, panelTabFrom, type PanelTab } from "./candidate-panel/helpers";
 import type { ActionBody } from "./candidate-panel/hooks";
+import { ComparePanel } from "./compare/ComparePanel";
+import { AskPool } from "./board/AskPool";
+import { PoolBoard, SortStrip } from "./board/PoolBoard";
+import { ReviewApply } from "./board/ReviewApply";
+import { boardOrder, boardSearch, modeFrom, type TalentMode } from "./board/board-model";
 
 /** Where the candidate panel stands: who, which section, a step a stage choice opened, and the list it was opened from. */
 type PanelState = { id: string; tab: PanelTab; step: PanelStep | null; roundKey?: string; ids: string[] | null; compose: boolean };
@@ -30,12 +34,18 @@ const linkKey = (p: URLSearchParams) => ["ownerStage", "stage", "told", "applyin
 /**
  * Talent (plan A3; founder decisions B3 and B6): one role's applicants as a calm list. The stage strip counts everyone
  * at each stage and filters by a click; each row has the person's initials, name, when they applied, how long they have
- * waited on you, the latest reading and the stage button. Readings only filter; nothing is ordered by them. A row opens
- * the candidate panel, whose place is kept in the address (`?open=<id>&tab=…`).
+ * waited on you, the latest reading, the match score and the stage button. Readings only filter; the list can be sorted
+ * by the match score (B2), newest, waiting longest or name. A row opens the candidate panel, whose place is kept in the
+ * address (`?open=<id>&tab=…`).
  *
  * Beside the strip, "Still applying" (plan E6) counts the people still in the visit that sent their application (the
  * screening conversation offered with it, not finished yet) and shows only them on a click. They are never counted or
  * shown as waiting on you.
+ *
+ * The pool board (plan F6-F10; founder decisions B2, B4, B5): "Sort the pool" switches to the board (`?view=board`),
+ * where the people who finished applying sit in Shortlist, Longlist and Not moving forward with the reason for each,
+ * under a summary in plain words. "Review and apply" (`&review=1`, also Today's link) files the ticked people privately;
+ * "Ask about this pool" opens the one-click questions. Nothing moves until a person applies it, and nobody is emailed.
  */
 export function People() {
   const params = useParams();
@@ -77,6 +87,22 @@ export function People() {
   const [compareOpen, setCompareOpen] = useState(false);
   const [telling, setTelling] = useState(false);
 
+  // The pool board (plan F6): its view and Review and apply live in the address, so Today's links open them. The board
+  // sits under the applications' key, so every change that refreshes the list refreshes the board too.
+  const mode = modeFrom(search);
+  const goTo = (qs: string) => nav(`${window.location.pathname}${qs}`, { replace: true });
+  const setMode = (next: TalentMode) => goTo(boardSearch(search, { mode: next }));
+  const board = useQuery({ queryKey: ["applications", roleId, "board"], queryFn: () => api.get<BoardView>(`/api/v1/roles/${roleId}/board`), enabled: !!roleId && mode === "board" });
+  const reviewing = mode === "board" && search.get("review") === "1";
+  const [asking, setAsking] = useState(false);
+  // "Show these on the board" from an answer: only those people, until the chip is pressed (or another role is chosen).
+  const [onlyFor, setOnlyFor] = useState<{ roleId: string; ids: string[]; label: string } | null>(null);
+  const only = onlyFor && onlyFor.roleId === roleId ? onlyFor : null;
+  // Review and apply needs application.act: everyone who sees the applicants (an interviewer sees none).
+  const mayApply = canSeeTalent(myRole);
+  const boardIds = board.data ? boardOrder(board.data, only ? new Set(only.ids) : null) : [];
+  const navIds = mode === "board" ? boardIds : shownIds;
+
   // The candidate panel, mirrored in the address with replace, so Back leaves the page as before.
   const openParam = search.get("open");
   const fromLink = (): PanelState | null => (openParam ? { id: openParam, tab: search.get("message") === "1" ? "messages" : panelTabFrom(search.get("tab")), step: null, ids: null, compose: search.get("message") === "1" } : null);
@@ -88,9 +114,10 @@ export function People() {
     setPanel(next);
     nav(`${window.location.pathname}${panelSearch(search, next ? { open: next.id, tab: next.tab } : { open: null })}`, { replace: true });
   };
-  const openPanel = (id: string, step: PanelStep | null = null) => showPanel({ id, tab: "overview", step, ids: shownIds, compose: false });
-  // Opened from a link, the panel steps through the list on screen when the person is in it.
-  const panelIds = panel ? (panel.ids ?? (shownIds.includes(panel.id) ? shownIds : null)) : null;
+  // The panel steps through what is on screen: the list, or the board's columns left to right.
+  const openPanel = (id: string, step: PanelStep | null = null) => showPanel({ id, tab: "overview", step, ids: navIds.includes(id) ? navIds : null, compose: false });
+  // Opened from a link, the panel steps through the list or the board on screen when the person is in it.
+  const panelIds = panel ? (panel.ids ?? (navIds.includes(panel.id) ? navIds : null)) : null;
 
   // A stage choice on a row: a mark in one click; anything that needs more opens that step in the panel.
   const rowAct = useMutation({
@@ -130,13 +157,19 @@ export function People() {
                 {roles.data.map((r) => <option key={r.id} value={r.id}>{r.title}</option>)}
               </select>
             ) : null}
-            {roleId && rows.length > 1 ? <Button variant={compareOpen ? "primary" : "secondary"} onClick={() => setCompareOpen((v) => !v)}>{compareOpen ? "Done comparing" : "Compare"}</Button> : null}
-            {roleId ? <AskRecruiter roleId={roleId} /> : null}
+            {/* On the board, "Compare these" and "Have a recruiter check this" sit in the board's own header. */}
+            {roleId && mode === "list" && rows.length > 1 ? <Button variant={compareOpen ? "primary" : "secondary"} onClick={() => setCompareOpen((v) => !v)}>{compareOpen ? "Done comparing" : "Compare"}</Button> : null}
+            {roleId && mode === "list" ? <AskRecruiter roleId={roleId} /> : null}
           </>
         }
       />
+      {roleId && (total > 0 || mode === "board") ? <SortStrip mode={mode} onMode={setMode} onSort={() => (mode === "board" ? board.refetch() : setMode("board"))} sorting={board.isFetching} generatedAt={board.data?.generatedAt ?? null} /> : null}
       {!roleId ? (
         roles.isLoading ? <Skeleton lines={4} /> : <EmptyState icon="talent" title="No roles yet" body="Open a role first; its applicants show here." action={<Link to="/" className="btn primary">Go to Today</Link>} />
+      ) : mode === "board" ? (
+        board.isLoading ? <Skeleton lines={6} /> : board.error ? <ErrorState message="Could not sort the pool just now." onRetry={() => board.refetch()} /> : board.data ? (
+          <PoolBoard roleId={roleId} board={board.data} only={only} onClearOnly={() => setOnlyFor(null)} onOpen={(id) => openPanel(id)} onReview={() => goTo(boardSearch(search, { review: true }))} onAsk={() => setAsking(true)} mayApply={mayApply} />
+        ) : null
       ) : (
         <>
           <div className="talent-strip">
@@ -152,7 +185,7 @@ export function People() {
               {READING_FILTERS.filter((f) => f.id !== "missing_must_have" || provenMissKnown).map((f) => <option key={f.id} value={f.id}>{f.label}{f.id === "any" ? "" : ` (${byReading[f.id]})`}</option>)}
             </select>
             <input className="input talent-search" type="search" value={view.query} onChange={(e) => setView({ query: e.target.value })} placeholder="Search name, email or source" aria-label="Search applicants" />
-            <select className="select" aria-label="Order" value={view.order} onChange={(e) => setView({ order: e.target.value as Order })}>
+            <select className="select" aria-label="Sort by" value={view.order} onChange={(e) => setView({ order: e.target.value as Order })}>
               {ORDERS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
             </select>
           </div>
@@ -165,7 +198,7 @@ export function People() {
               </div>
             </Alert>
           ) : null}
-          {compareOpen ? <ComparePanel roleId={roleId} candidates={shown.map((a) => ({ id: a.id, name: a.candidate?.name ?? "Unknown", stageLabel: a.ownerStageLabel }))} /> : null}
+          {compareOpen ? <ComparePanel roleId={roleId} candidates={shown.map((a) => ({ id: a.id, name: a.candidate?.name ?? "Unknown", stageLabel: a.ownerStageLabel, score: a.score }))} /> : null}
           <TabPanel idBase="talent-strip" value={view.stage}>
             {apps.isLoading ? <Skeleton lines={5} /> : apps.error ? <ErrorState message="Could not load the applicants." onRetry={() => apps.refetch()} /> : shown.length === 0 && total === 0 && role?.status === "open" && canShareJob(myRole) ? (
               // Nobody yet on a live job (plan D8): the empty list is the place to share it from.
@@ -184,6 +217,9 @@ export function People() {
           </TabPanel>
         </>
       )}
+      {/* The candidate panel comes last, so a name opened from Review and apply or from an answer sits on top of them. */}
+      {reviewing && roleId && board.data ? <ReviewApply roleId={roleId} board={board.data} mayDecline={mayTell} onClose={() => goTo(boardSearch(search, { review: false }))} onOpen={(id) => openPanel(id)} /> : null}
+      {asking && roleId && board.data ? <AskPool roleId={roleId} board={board.data} onClose={() => setAsking(false)} onOpen={(id) => openPanel(id)} onShow={(ids, label) => { setOnlyFor({ roleId, ids, label }); setAsking(false); }} /> : null}
       {panel && roleId ? (
         <CandidatePanel
           id={panel.id}
@@ -205,7 +241,7 @@ export function People() {
   );
 }
 
-/** One applicant: initials, name, when they applied, the wait, the reading, the room kept for the match score, the stage button. */
+/** One applicant: initials, name, when they applied, the wait, the reading, the match score (B2), the stage button. */
 function TalentRow({ a, busy, onOpen, onMove }: { a: ApplicationSummary; busy: boolean; onOpen: () => void; onMove: (to: OwnerStage) => void }) {
   const name = a.candidate?.name ?? "Unknown";
   const reading = readingOf(a);
@@ -222,6 +258,8 @@ function TalentRow({ a, busy, onOpen, onMove }: { a: ApplicationSummary; busy: b
           <span>{a.source.replace(/_/g, " ")}</span>
           {waiting ? <span className="waiting">{waiting}</span> : null}
           {a.mark?.mark === "on_hold" && a.mark.remindAt && !a.tags.includes("Hold ended") ? <span>On hold until {holdDay(a.mark.remindAt)}</span> : null}
+          {/* a reading made against an earlier version of the role (plan F4): its score uses the requirements as they were then */}
+          {a.readingVersion ? <span title={a.readingVersion.label}>Read against version {a.readingVersion.readAgainst}</span> : null}
         </span>
       </div>
       <div className="talent-row-chips">
@@ -233,8 +271,8 @@ function TalentRow({ a, busy, onOpen, onMove }: { a: ApplicationSummary; busy: b
         {a.toldState === "not_told" ? <Chip>{a.decisionMessageWaiting ? "Message waiting for approval" : "Not told yet"}</Chip> : null}
         {a.toldState === "queued" ? <Chip>{messageOnItsWayChip(check)}</Chip> : null}
       </div>
-      {/* the match score (Wave F) goes here; the room is kept so the rows do not move when it arrives */}
-      <span className="score-slot" aria-hidden="true" />
+      {/* the match score, worked out by code from the checked findings (founder decision B2); an older answer has none */}
+      <span className="score-slot" title={a.coverage?.words}>{a.score !== undefined ? <ScoreBadge score={a.score} size="sm" /> : null}</span>
       <StageButton stage={a.ownerStage} label={a.ownerStageLabel} blocked={stageBlocked(a.stageMoves)} disabled={busy} onMove={onMove} align="end" />
     </div>
   );
@@ -303,54 +341,5 @@ function TellSheet({ roleId, people, onClose }: { roleId: string; people: Applic
         </div>
       )}
     </Sheet>
-  );
-}
-
-const COMPARE_MAX = 5;
-const COMPARE_LABEL: Record<string, string> = { yes: "met", partially: "partly met", no: "not met", unknown: "unknown", evidenced: "seen", partially_evidenced: "partly seen", not_evidenced: "not seen yet", contradicted: "contradicted" };
-
-/** Compare mode (F10): pick up to five people from the list, then see must-haves and competencies side by side. Nothing is ranked. */
-function ComparePanel({ roleId, candidates }: { roleId: string; candidates: Array<{ id: string; name: string; stageLabel: string }> }) {
-  const [picked, setPicked] = useState<string[]>([]);
-  const [ids, setIds] = useState<string[] | null>(null);
-  const toggle = (id: string, on: boolean) => setPicked((p) => (on ? (p.includes(id) || p.length >= COMPARE_MAX ? p : [...p, id]) : p.filter((x) => x !== id)));
-  const q = useQuery({ queryKey: ["compare", roleId, (ids ?? []).join(",")], queryFn: () => api.get<CompareResponse>(`/api/v1/roles/${roleId}/compare?ids=${(ids ?? []).join(",")}`), enabled: !!ids?.length });
-  return (
-    <Card title="Compare candidates" aside={<span className="small muted">{picked.length} of {COMPARE_MAX} chosen</span>}>
-      <p className="small muted" style={{ margin: 0 }}>Tick up to five people, then compare. People decide; nothing here is ranked.</p>
-      <div className="row" style={{ flexWrap: "wrap", gap: 12, marginTop: 8 }}>
-        {candidates.map((c) => (
-          <label key={c.id} className="row small" style={{ gap: 6 }}>
-            <input type="checkbox" checked={picked.includes(c.id)} disabled={!picked.includes(c.id) && picked.length >= COMPARE_MAX} onChange={(e) => toggle(c.id, e.target.checked)} />
-            {c.name} <span className="muted">({c.stageLabel})</span>
-          </label>
-        ))}
-      </div>
-      <div className="row" style={{ marginTop: 10 }}>
-        <Button size="sm" variant="primary" disabled={!picked.length} onClick={() => setIds(picked)}>Compare selected</Button>
-        {ids ? <Button size="sm" variant="quiet" onClick={() => { setIds(null); setPicked([]); }}>Clear</Button> : null}
-      </div>
-      {ids?.length ? (q.isLoading ? <Skeleton lines={3} /> : q.error ? <ErrorState message="Could not load the comparison." onRetry={() => q.refetch()} /> : q.data ? <CompareTable data={q.data} /> : null) : null}
-    </Card>
-  );
-}
-
-/** Candidates as columns, must-haves and competencies as rows, findings as chips; a link back to each panel. */
-function CompareTable({ data }: { data: CompareResponse }) {
-  const chip = (v: string | undefined) => (v ? <Chip tone={MET_TONE[v] ?? "neutral"}>{COMPARE_LABEL[v] ?? v.replace(/_/g, " ")}</Chip> : <span className="small muted">no evidence yet</span>);
-  const cands = data.candidates;
-  return (
-    <div style={{ marginTop: 12 }}>
-      <Table head={["What we checked", ...cands.map((c) => c.name)]} label="Candidates compared">
-        <tr><td className="small muted">Where they are</td>{cands.map((c) => <td key={c.applicationId}><StatusChip stage={c.stage} label={c.ownerStageLabel ?? c.stageLabel} group={c.group} /></td>)}</tr>
-        {data.mustHaves.map((m) => <tr key={m.key}><td className="small"><strong>Must-have:</strong> {m.text}</td>{cands.map((c) => <td key={c.applicationId}>{chip(c.mustHaves[m.key]?.met)}</td>)}</tr>)}
-        {data.competencies.map((x) => <tr key={x.key}><td className="small" title={x.definition}>{x.name}</td>{cands.map((c) => <td key={c.applicationId}>{chip(c.competencies[x.key]?.finding)}</td>)}</tr>)}
-        <tr><td className="small muted">Screen</td>{cands.map((c) => <td key={c.applicationId} className="small">{c.screen ? REC_LABEL[c.screen.recommendation] ?? c.screen.recommendation.replace(/_/g, " ") : <span className="muted">no screen yet</span>}</td>)}</tr>
-        <tr><td className="small muted">Résumé</td>{cands.map((c) => <td key={c.applicationId} className="small">{c.resume ? overallLabel(c.resume.overall) : <span className="muted">not assessed yet</span>}</td>)}</tr>
-        <tr><td className="small muted">Still unknown</td>{cands.map((c) => <td key={c.applicationId} className="small">{c.unknownCount}</td>)}</tr>
-        <tr><td className="small muted">Their panel</td>{cands.map((c) => <td key={c.applicationId}><Link to={c.open} className="btn quiet sm">Open</Link></td>)}</tr>
-      </Table>
-      <p className="small muted" style={{ marginTop: 8 }}>{data.reminder}</p>
-    </div>
   );
 }

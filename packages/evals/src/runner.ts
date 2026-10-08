@@ -6,10 +6,10 @@ import {
   REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, advanceProgress, basisFor, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, mergeFacts, mergeRevision, redactProtected, registerFakeHandlers,
   resolveBenchmark, verifyQuotes, type BenchmarkResult,
 } from "@ros/agents";
-import type { IntakeFacts, IntakeMessage, RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
+import type { EvidenceAssessment, IntakeFacts, IntakeMessage, RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
 import { createDb, migrate } from "@ros/db";
 import { findPlaybook, matchPlaybookRole } from "@ros/playbooks";
-import { EMPTY_FACTS, RDH_FACTS, aboutCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, quotesAreGrounded, resumeCases, reviseCases, screenAssessCases, screenPersonas, triageEdgeCases, type IntakeCase } from "./suites";
+import { CONSISTENCY_READS, EMPTY_FACTS, RDH_FACTS, aboutCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, quotesAreGrounded, resumeCases, reviseCases, screenAssessCases, screenPersonas, triageEdgeCases, type IntakeCase } from "./suites";
 
 /**
  * Evaluation runner (docs/11). `pnpm eval` runs every suite against the configured provider
@@ -165,10 +165,35 @@ async function main() {
       const ra = await readResume(`${pair.id}_a`, pair.a);
       const rb = await readResume(`${pair.id}_b`, pair.b);
       if (!ra.ok || !rb.ok) { bias.push({ id: pair.id, pass: false, failures: [ra.ok ? "" : ra.error, rb.ok ? "" : rb.error].filter(Boolean) }); continue; }
-      const f = biasPairDifferences(pair, ra.output, rb.output);
+      // the pair must read the same and score the same: the match score is worked out from these findings (founder decision B2)
+      const f = biasPairDifferences(pair, ra.output, rb.output, packet);
       bias.push({ id: pair.id, pass: f.length === 0, failures: f });
     }
     results["triage.bias_pairs"] = { cases: bias, passRate: bias.filter((x) => x.pass).length / bias.length };
+
+    // Consistency (docs/11; plan Wave F gate): the same résumé read again must read, score and place the same each time.
+    const steady: (typeof results)[string]["cases"] = [];
+    for (const c of consistencyCases) {
+      const reads: EvidenceAssessment[] = [];
+      let failed: string | null = null;
+      for (let i = 1; i <= CONSISTENCY_READS && !failed; i++) {
+        const r = await readResume(`${c.id}_read_${i}`, c.resume);
+        if (r.ok) reads.push(r.output);
+        else failed = r.error;
+      }
+      const f = failed ? [failed] : consistencyDifferences(reads, packet);
+      steady.push({ id: c.id, pass: f.length === 0, failures: f });
+    }
+    results["triage.consistency"] = { cases: steady, passRate: steady.filter((x) => x.pass).length / steady.length };
+  }
+
+  // The match score and the board's placement (plan F6): rules and determinism of the code, no model call.
+  if (!onlySuite || onlySuite === "board.determinism") {
+    const out: (typeof results)[string]["cases"] = boardCases.map((c) => {
+      const f = boardCaseFailures(c);
+      return { id: c.id, pass: f.length === 0, failures: f };
+    });
+    results["board.determinism"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
   }
 
   // Change by chat (plan C10): each request against the golden packet, judged after the server's own merge.

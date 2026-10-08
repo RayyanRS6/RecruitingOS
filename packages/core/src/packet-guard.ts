@@ -1,4 +1,4 @@
-import type { Actor, DeclinedCriterion, DraftRolePacket, Location, PacketFlag } from "@ros/contracts";
+import { IMPORTANCE_WEIGHT, type Actor, type DeclinedCriterion, type DraftRolePacket, type Location, type PacketFlag } from "@ros/contracts";
 import { DEFAULT_NOTICES, disclosureLine, resolveJurisdictions } from "./compliance";
 
 /**
@@ -233,6 +233,8 @@ export function guardPacket<T extends DraftRolePacket>(input: T, ctx: GuardConte
     packet.requirements.mustHaves = packet.requirements.mustHaves.slice(0, 6);
     changes.push("Must-haves were cut to six.");
   }
+  // A skill's importance as a person picked it (plan F3) is what counts; the 1-5 weight is kept in step with it.
+  for (const c of packet.competencies) if (c.importance && c.weight !== IMPORTANCE_WEIGHT[c.importance]) c.weight = IMPORTANCE_WEIGHT[c.importance];
 
   // What the owner was told could not be used: recorded on the packet so no later version can bring it back.
   const declined: DeclinedCriterion[] = [];

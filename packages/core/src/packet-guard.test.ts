@@ -63,6 +63,15 @@ describe("the packet guard's fixed rules (plan C1)", () => {
     expect(stale.flags.map((f) => [f.rule, f.text])).toEqual([["pay_mismatch", "$40"], ["pay_mismatch", "$50"], ["pay_mismatch", "$58"]]);
     expect(unresolvedFlags(stale.packet)).toHaveLength(3);
   });
+
+  it("keeps a skill's 1-5 weight in step with the importance a person picked (plan F3), and leaves an unpicked one alone", () => {
+    const { packet: p, changes } = guardPacket(packet((x) => {
+      x.competencies[0].importance = "helpful";
+      x.competencies[1].importance = "essential";
+    }), ctx);
+    expect(p.competencies.map((c) => [c.importance ?? null, c.weight])).toEqual([["helpful", 1], ["essential", 5], [null, 4]]);
+    expect(changes).toEqual([]);
+  });
 });
 
 describe("what the owner was told could not be used never comes back (C1)", () => {

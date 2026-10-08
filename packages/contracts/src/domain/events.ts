@@ -35,6 +35,8 @@ export const EventType = z.enum([
   "application.moved_to_talent_pool",
   // Private marks (Longlist, Shortlist, On hold, Not a fit for now) and the candidate being told a decision (founder decisions B3, B6).
   "application.marked", "application.mark_cleared", "application.told",
+  // Review and apply on the pool board (plan F8): one fact per batch, with what the board suggested and what a person chose.
+  "pool.batch_applied",
   "screen.invited", "screen.started", "screen.completed", "screen.abandoned", "screen.expired", "screen.human_requested", "screen.assessed", "screen.cancelled",
   // Wave E: the conversation in the same visit as applying. Sent without it, closed part-way after a reminder, paused while
   // the assistant is down and resumed, a question skipped or tapped, an answer changed before sending, a recruiter's call

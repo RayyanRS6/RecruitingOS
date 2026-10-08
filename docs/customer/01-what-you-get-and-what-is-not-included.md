@@ -51,15 +51,19 @@ Two words we use throughout: **ITS** is Identified Talent Solutions, the company
 - The list of candidates shows each person's top strength, top concern and how many questions are still open, so you can see at a glance where to look.
 - When the assistant cannot say enough about someone, the candidate is marked **Needs a closer look** and the card says what is missing. You can filter the list to just those people. One click, **Ask about this in a screen**, invites the candidate to a short web conversation that starts with exactly those questions. It never starts on its own.
 - Eligibility questions are the only automatic holds. If a candidate answers no to a required question, the application is held for your decision. You are reminded every day. If nobody has decided after three days, an ITS recruiter is brought in. Nothing is sent to the candidate, even if you decline, until someone on your team sends the decision message.
-- Nothing is scored, ranked or rejected by software. If the assistant cannot produce an assessment, the application is shown to you without one.
-- If an assessment looks wrong, one click flags it for ITS to review.
+- Every applicant gets a **match score** from 0 to 100, worked out from checked evidence, with the breakdown shown: which of your must-haves and skills they show, partly show or do not meet, and how many points each one cost. Your must-haves count most, then each skill by how important you marked it (Essential, Important or Helpful). Anything the application does not say is left out of the score, not counted against them, and the score says what it is based on ("based on 5 of 7 requirements"). A must-have counts as not met only when the candidate's own words show it, and then the score stays below 55 and says which must-have is missing. The assistant never writes the number; the software works it out from the checked findings, and a person always decides. You can sort the list by score.
+- Software never rejects anyone. If the assistant cannot produce an assessment, the application is shown to you without one and without a score.
+- If an assessment looks wrong, **Something wrong?** sends it to an ITS recruiter to check, as a request you can follow under **Your recruiter requests** on Today.
 
 ### Decisions
 
 - A person on your team makes every decision to invite a candidate to a screen, hold, interview or decline.
 - Declining requires a reason from a fixed list. A decision is private: the candidate gets a respectful message only when someone on your team sends it (or you record that you told them yourself). If they had an interview booked or times offered, that is cancelled and they get a short note straight away saying only that the interview is off, so nobody turns up for it. Anyone not told after two working days is listed on Today and you are reminded; nothing is sent by itself.
 - After an interview, a person records the decision on the candidate's page: next round, finalist, or not moving forward. The candidate waits on you until someone does, and the **Interviews** page shows each decision.
-- You can put up to five candidates side by side and see how each one stands on your must-haves and what you look for. Nothing is ranked or scored.
+- You can put up to five candidates side by side and see how each one stands on your must-haves and what you look for, with each one's match score.
+- The **pool board** sorts a role's applicants into Shortlist, Longlist and Not moving forward from their own evidence, with a one-line reason and a suggested next step for each person, and a short summary on top: how many are in each group, the must-have shown least often, who has waited longest, and up to three next steps naming people. Anyone the board is unsure about (a reading that needs a closer look, low confidence, no reading, an eligibility answer to check, too little evidence to go on, a screening conversation still open, or the assistant's own suggestion and the score disagreeing) goes on the Longlist with the reason, for you to look at. The board never suggests declining someone on a low score built from too little evidence.
+- **Review and apply** lists the board's suggestions, up to 50 people at a time. People the board placed with confidence start ticked; the rest start unticked with the reason. You untick anyone you want to look at yourself, change the reason for anyone filed as not moving forward (each starts with a reason from their own evidence, such as the missing must-have), and apply. Everything it does is private: nobody is emailed, and you send decision messages later, when you are ready. Each decision is recorded under your name as "suggested by the assistant, applied by you".
+- **Ask about your candidates** offers one-click questions answered from the evidence already on file: who is missing a must-have and why, the strongest evidence for a must-have, who you might be overlooking, and a comparison of up to five people. Each answer shows the quotes it rests on and what it looked at. No new AI is involved.
 - Every decision is recorded with the name of the person who made it.
 
 ### Writing to candidates
@@ -113,7 +117,7 @@ Two words we use throughout: **ITS** is Identified Talent Solutions, the company
 - A daily brief on **Today**: what needs you, who is worth a look, what is at risk, and what the assistant did since you last looked. It refreshes itself while it is open. Every earlier update is on the **Updates** page, read or unread.
 - **Email alerts** in **Setup**: each person chooses, for each kind of update, whether it is emailed as it happens, in a summary at 8:00 each morning or each Monday morning, or not at all. A few updates are always emailed at once: an ITS recruiter is given access to your hiring, ITS confirms your company or takes the confirmation back, a candidate asks for a person, or someone waits for an eligibility decision. Alert emails carry the role's name and a link, never a candidate's name or details.
 - **Roles** shows every role with its pipeline, days open, applicant count and what needs you. **Interviews** shows every interview and each interviewer's load.
-- Each role has a **Report** tab: who applied and from where, where everyone is, how long each step takes, interviews, decisions waiting for you, what the assistant suggested and what you decided, recruiter help, messages that did not arrive, and outcomes. You can download the applicant list and the summary as spreadsheets. Every download is recorded.
+- Each role has a **Report** tab: who applied and from where, where everyone is, how long each step takes, interviews, decisions waiting for you, what the assistant suggested and what you decided, how your applicants meet each must-have, recruiter help, messages that did not arrive, and outcomes. You can download the applicant list and the summary as spreadsheets. Every download is recorded.
 
 ### Outcomes
 
@@ -123,7 +127,7 @@ Two words we use throughout: **ITS** is Identified Talent Solutions, the company
 
 ## What is not included in release 1
 
-- **No automatic rejection, ranking or scoring of candidates.** This is by design and cannot be switched on.
+- **No automatic rejection.** The match score and the pool board suggest; a person decides every move, and nothing moves anyone on its own. This is by design and cannot be switched on.
 - **No text messaging with candidates.** Screening runs by web chat from an email link. The product has a texting path, but it is switched off.
 - **No interview recording.**
 - **No offer letters, e-signature, background checks, reference checks, onboarding or payroll set-up.** You make and send offers your own way and record the outcome in the product.
@@ -138,7 +142,7 @@ Two words we use throughout: **ITS** is Identified Talent Solutions, the company
 
 ## What the assistant never does
 
-- It never declines, rejects or ranks a candidate.
+- It never declines or rejects a candidate, and it never writes the match score: the software works the score out from checked evidence, shows the breakdown, and a person always decides.
 - It never decides who to hire, never negotiates, and never sends an offer.
 - It never changes your eligibility rules, your notices, or the settings that say what it may do.
 - It never deletes or exports candidate data.

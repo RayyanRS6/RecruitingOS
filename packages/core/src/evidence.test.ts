@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EvidenceAssessment, RolePacket, ScreenAssessment } from "@ros/contracts";
-import { evidenceView, lowConfidence, readingConsistency, type AssessmentLike } from "./evidence";
+import { evidenceView, insufficientEvidence, lowConfidence, readingConsistency, type AssessmentLike } from "./evidence";
 
 /**
  * The software check before any automatic step (plan A8) and the low-confidence flag. Pure functions over a stored
@@ -61,6 +61,32 @@ describe("readingConsistency", () => {
     expect(readingConsistency(scorecard({ overall: "weak", recommendation: "strong_interview" }), packet).reason).toContain("suggested an interview for a reading of Weak match");
     expect(readingConsistency(scorecard({ overall: "potential", recommendation: "interview" }), packet).consistent).toBe(true);
     expect(readingConsistency(scorecard({ overall: "weak", recommendation: "hold" }), packet).consistent).toBe(true);
+  });
+
+  it("fails a Strong reading whose own words go against an Essential skill, with the role's skills only (plan F3)", () => {
+    const skills = { ...packet, competencies: [{ key: "chairside", name: "Chairside skill", definition: "d", weight: 5, evaluatedIn: "both", indicators: ["x"] }, { key: "software", name: "Dental software", definition: "d", weight: 2, evaluatedIn: "both", indicators: ["x"] }] } as unknown as Pick<RolePacket, "requirements" | "competencies">;
+    const against = (key: string, quote?: string) => triage({ overall: "strong", competencyFindings: [{ competencyKey: key, finding: "contradicted", ...(quote ? { evidence: { source: "resume" as const, quote } } : {}) }] });
+    const r = readingConsistency(against("chairside", "I avoid chairside work"), skills);
+    expect(r).toEqual({ consistent: false, reason: 'The reading says Strong match, but the candidate\'s own words go against an essential skill (Chairside skill): "I avoid chairside work". Read it yourself before anything else happens.' });
+    // a Helpful skill, nothing quoted, a Potential reading, or no skills given: consistent
+    expect(readingConsistency(against("software", "I never used Dentrix"), skills).consistent).toBe(true);
+    expect(readingConsistency(against("chairside"), skills).consistent).toBe(true);
+    expect(readingConsistency({ ...against("chairside", "I avoid chairside work"), overall: "potential" }, skills).consistent).toBe(true);
+    expect(readingConsistency(against("chairside", "I avoid chairside work"), packet).consistent).toBe(true);
+    // the list's own check, given the packet the reading was made against, agrees with the workflow's
+    expect(evidenceView({ stage: "triaged", latest: against("chairside", "I avoid chairside work"), resumeUnreadable: false, packet: skills })).toMatchObject({ needsCloserLook: true, inconsistent: true });
+  });
+});
+
+describe("insufficientEvidence", () => {
+  it("reads a résumé reading or a scorecard that says too little, each in its own words", () => {
+    expect(insufficientEvidence(triage({ recommendation: "review_manually" }))).toBe(true);
+    expect(insufficientEvidence(triage({ overall: "unknown" }))).toBe(true);
+    expect(insufficientEvidence(triage())).toBe(false);
+    expect(insufficientEvidence(scorecard({ overall: "unknown" }))).toBe(true);
+    expect(insufficientEvidence(scorecard({ recommendation: "hold" }))).toBe(true);
+    expect(insufficientEvidence(scorecard({ overall: "potential", recommendation: "interview" }))).toBe(false);
+    expect(insufficientEvidence(null)).toBe(false);
   });
 });
 

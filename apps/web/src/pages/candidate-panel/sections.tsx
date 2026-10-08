@@ -12,6 +12,7 @@ import { callNotesState, overviewScreenLine } from "../../screen-view";
 import { holdDay } from "../../talent-actions";
 import { AssessmentCard, NoAssessmentCard, ScorecardUnavailableCard, ScreenCard } from "./assessment";
 import { CallNotesCard } from "./call-notes";
+import { MatchCard } from "./match";
 import { historyItems, recruiterEventsFor, suggestionAndDecision, type Compose, type HistoryItem } from "./helpers";
 
 export type { Compose } from "./helpers";
@@ -20,8 +21,9 @@ import { useCandidateAction, useRefreshCandidate } from "./hooks";
 /** The candidate panel's sections (plan A10): Overview, Screen, Résumé, Messages and History. */
 
 /**
- * Overview: where they are, the latest reading (the screen's scorecard once there is one), the eligibility answers and
- * the last three things that happened. The rest of the evidence is one tab away.
+ * Overview: where they are, the match score against your must-haves with its breakdown (founder decision B2), the
+ * latest reading (the screen's scorecard once there is one), the eligibility answers and the last three things that
+ * happened. The rest of the evidence is one tab away.
  */
 export function OverviewTab({ a, roleId, onHistory }: { a: ApplicationDetail; roleId: string; onHistory: () => void }) {
   const latest = a.assessments[0] ?? null;
@@ -31,6 +33,7 @@ export function OverviewTab({ a, roleId, onHistory }: { a: ApplicationDetail; ro
     <div className="stack" style={{ gap: 14 }}>
       <WhereTheyAre a={a} />
       {look.lowConfidence && !look.needsCloserLook ? <Alert tone="caution"><strong>{LOW_CONFIDENCE_LABEL}.</strong> {LOW_CONFIDENCE_TEXT}</Alert> : null}
+      <MatchCard a={a} />
       <ScorecardUnavailableCard detail={a} roleId={roleId} />
       {latest ? <AssessmentCard assessment={latest} detail={a} roleId={roleId} labels={a.packetLabels} title={latest.kind === "screen" ? "Latest reading: the screen" : "Latest reading: the résumé"} /> : look.assessmentUnavailable ? <NoAssessmentCard detail={a} /> : <Card title="Latest reading"><p className="small muted">The assistant has not read this application yet. It usually takes a minute or two after they apply.</p></Card>}
       <EligibilityAnswers a={a} />

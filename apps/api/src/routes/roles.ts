@@ -1,23 +1,27 @@
 import { Hono } from "hono";
 import { and, count, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome, OwnerGroup, OwnerStage, SendDecisionMessages, SetClosingDate, ApplyModeChange, type ActiveMark, type CandidateNotice } from "@ros/contracts";
-import { activeStaffGrant, resolveApplyMode } from "@ros/core";
+import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome, OwnerGroup, OwnerStage, PoolQuestionQuery, RoleBatchRequest, SendDecisionMessages, SetClosingDate, ApplyModeChange, importanceOf, type ActiveMark, type AssessmentFlagKind, type CandidateNotice, type PoolAnswer } from "@ros/contracts";
+import { ESCALATION_ACCESS_DAYS, PoolQuestionError, activeStaffGrant, addEscalationReply, answerPoolQuestion, createEscalation, poolQuestions, resolveApplyMode } from "@ros/core";
 import { withPlatform, type Tx } from "@ros/db";
 import { requireRecruiterOrAdmin } from "../middleware/session";
 import { stillApplyingFor } from "../services/screens";
-import { CLOSER_LOOK_LABEL, CLOSING_DATE_REASON, DECISION_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeMarksFor, assertCan, audit, boardPostingOf, can, closingDateProblem, closingDateRequired, closingDayWords, closingMoment, emit, evidenceView, groupFor, holdEnded, jobNoticesFor, listOutcomes, notify, openEscalationsFor, ownerStage, ownerStageLabel, ownerTags, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows, showsOldVersion } from "@ros/core";
+import { CLOSER_LOOK_LABEL, CLOSING_DATE_REASON, DECISION_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeMarksFor, assertCan, audit, boardPostingOf, can, closingDateProblem, closingDateRequired, closingDayWords, closingMoment, emit, groupFor, holdEnded, jobNoticesFor, listOutcomes, notify, openEscalationsFor, ownerStage, ownerStageLabel, ownerTags, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows, showsOldVersion } from "@ros/core";
+import { boardView, loadPool, openPath, packetsOf, poolPersonOf, scoreFields, scorePerson } from "../services/pool";
+import { applyBatch, previewBatch } from "../services/review-apply";
+import { emailHolderAboutNote, emailItsQueue, queueNoticeOf, type HeldNote, type QueueNotice } from "../services/escalation-queue";
+import { COMPARE_MAX, compareCandidates } from "./compare";
 import { armClosingDate } from "@ros/workflows";
 import { autoActionsOnOpen, boardChoices, closingDateFor } from "../services/publishing";
 import { withEmptyPay, withoutPay } from "../services/pay-redaction";
 import { users } from "@ros/db";
 import { assertMayApprovePacket, packetApprovalView } from "../services/packet-approval";
 import { createPacketVersion, currentVersionOf } from "../services/packet-versions";
-import { aiRuns, applicationMarks, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviewParticipants, interviews, postings, rolePackets, roles, screens, withTenant } from "@ros/db";
+import { aiRuns, applicationMarks, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviewParticipants, interviews, postings, recruiterEscalations, rolePackets, roles, screens, withTenant } from "@ros/db";
 import { actorOf, applicationScopeGuard, clientIp, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { DOWNLOAD_URL_TTL_SECONDS, safeFilename } from "../uploads";
 import type { Container } from "../container";
-import { applicationActionState, applicationFactsFrom, declineMessagePolicy, decisionMessagePreview, pendingDecisionMessages, performApplicationAction, sendDecisionMessages, stageMoves } from "../services/application-actions";
+import { SCREEN_OPEN_STATUSES, applicationActionState, applicationFactsFrom, declineMessagePolicy, decisionMessagePreview, pendingDecisionMessages, performApplicationAction, sendDecisionMessages, stageMoves } from "../services/application-actions";
 import { exitCleanup, type ExitCandidateEmail } from "../services/exit-cleanup";
 import { screenScorecards } from "../services/screen-scorecards";
 import { replayHeldEmails, settleHeldEmailsOnClose } from "../webhooks/postmark";
@@ -324,23 +328,28 @@ export type StageStripCounts = { total: number; byOwnerStage: Record<OwnerStage,
  * The role's applicants. Each row carries, beside the evidence view: where the person sits on the stage strip
  * (`ownerStage`, `ownerStageLabel`), their active private mark (`mark`: kind, label, `remindAt`, note, who set it),
  * small `tags` ("Check eligibility", "Hold ended"), `stageChangedAt` and `appliedAt` with `daysInStage`, the told state
- * of a decision (`toldState`, `candidateToldAt`, `decisionMessageWaiting`), and the stage button (`stageMoves`). One
- * query per kind of fact for the whole list, never one per row. Ordered newest first, by the longest wait or by name;
- * never by an AI reading. `?counts=1` answers `{ applications, counts }`, the counts covering every visible applicant
- * whatever the filters.
+ * of a decision (`toldState`, `candidateToldAt`, `decisionMessageWaiting`), and the stage button (`stageMoves`). The match
+ * score (founder decision B2), worked out on read from the stored findings: `score`, `band`, `bandLabel`, `coverage`,
+ * `missingMustHave`, the must-have line (`mustHaves`), where the pool board puts them (`placement`) and its `nextStep`,
+ * and `readingVersion` when the reading was made against an earlier version of the role. One query per kind of fact for
+ * the whole list, never one per row. Ordered newest first, by the longest wait, by name, or by score, highest first
+ * (`order=score`, or `sort=score`). `?counts=1` answers `{ applications, counts }`, the counts covering every visible
+ * applicant whatever the filters.
  */
 roleRoutes.get("/:id/applications", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "application.read");
-  const q = OwnerGroupQuery.parse({ group: c.req.query("group"), stage: c.req.query("stage"), ownerStage: c.req.query("ownerStage"), told: c.req.query("told"), order: c.req.query("order"), counts: c.req.query("counts") });
+  const q = OwnerGroupQuery.parse({ group: c.req.query("group"), stage: c.req.query("stage"), ownerStage: c.req.query("ownerStage"), told: c.req.query("told"), order: c.req.query("order") ?? c.req.query("sort"), counts: c.req.query("counts") });
   const now = c.get("container").engine.clock();
   const result = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const apps = (await tx.select().from(applications).where(eq(applications.roleId, c.req.param("id"))).orderBy(desc(applications.createdAt))).filter((a) => !t.staff?.scope.applicationId || a.id === t.staff.scope.applicationId);
     const ids = apps.map((a) => a.candidateId);
     const appIds = apps.map((a) => a.id);
     const cands = ids.length ? await tx.select().from(candidates).where(inArray(candidates.id, ids)) : [];
-    const latest = apps.filter((a) => a.latestAssessmentId).map((a) => a.latestAssessmentId!);
-    const asmts = latest.length ? await tx.select().from(assessments).where(inArray(assessments.id, latest)) : [];
+    // Every reading of every applicant (the score takes the scorecard's finding where it has one, the résumé's otherwise) and the role's packets by version.
+    const asmts = appIds.length ? await tx.select().from(assessments).where(inArray(assessments.applicationId, appIds)).orderBy(desc(assessments.createdAt)) : [];
+    const [roleRow] = await tx.select({ id: roles.id, currentPacketVersion: roles.currentPacketVersion }).from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
+    const packets = roleRow ? await packetsOf(tx, roleRow) : { byVersion: new Map(), currentVersion: null };
     // Whether each résumé file had text to read (a clean scan without a text layer has none): one query, no text pulled.
     const docIds = apps.filter((a) => a.resumeDocumentId).map((a) => a.resumeDocumentId!);
     const docs = docIds.length ? await tx.select({ id: documents.id, status: documents.status, hasText: sql<boolean>`${documents.textExtracted} is not null` }).from(documents).where(inArray(documents.id, docIds)) : [];
@@ -353,11 +362,13 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
     const applying = await stillApplyingFor(tx, appIds);
     const rows = apps.map((a) => {
       const cand = cands.find((x) => x.id === a.candidateId);
-      const asmt = asmts.find((x) => x.id === a.latestAssessmentId);
+      const own = asmts.filter((x) => x.applicationId === a.id);
+      const asmt = own.find((x) => x.id === a.latestAssessmentId);
       const doc = docs.find((d) => d.id === a.resumeDocumentId);
       const mark: ActiveMark | null = marks.get(a.id) ?? null;
-      // Insufficient evidence as a state the owner can see: derived here and on the candidate page from the same assessment, never stored.
-      const evidence = evidenceView({ stage: a.stage, latest: asmt ?? null, resumeUnreadable: !!doc && doc.status === "clean" && !doc.hasText && !a.extraction });
+      // Insufficient evidence as a state the owner can see, and the match score: derived here and on the candidate page from the same assessments, never stored.
+      const scored = scorePerson({ app: a, assessments: own, packets: packets.byVersion, currentVersion: packets.currentVersion, mark, stillApplying: applying.has(a.id), resumeUnreadable: !!doc && doc.status === "clean" && !doc.hasText && !a.extraction, openScreen: scr.some((s) => s.applicationId === a.id && SCREEN_OPEN_STATUSES.includes(s.status)) });
+      const evidence = scored.evidence;
       const strip = ownerStage(a, mark);
       const facts = applicationFactsFrom(a, scr.filter((s) => s.applicationId === a.id).map((s) => s.status), ivs.filter((i) => i.applicationId === a.id), t.role, asmt?.kind === "triage" ? asmt : null, { mark, decisionMessagePending: waitingToTell.has(a.id) });
       return {
@@ -383,6 +394,11 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
         extractionSummary: a.extraction ? { positions: a.extraction.positions.slice(0, 3).map((p) => `${p.title}${p.employer ? ` at ${p.employer}` : ""}`), licenses: a.extraction.licenses.map((l) => l.name), years: a.extraction.yearsOfExperienceEstimate ?? null, anomalies: a.extraction.anomalies } : null,
         assessment: asmt ? { overall: asmt.overall, confidence: asmt.confidence, summary: asmt.result.summary, strengths: asmt.result.strengths.slice(0, 2), concerns: asmt.result.concerns.slice(0, 1) } : null,
         evidence,
+        ...scoreFields(scored.match),
+        mustHaves: scored.mustHaves,
+        placement: scored.placement,
+        nextStep: scored.placement.nextStep,
+        readingVersion: scored.readingVersion,
         stageMoves: stageMoves(facts),
       };
     });
@@ -395,7 +411,9 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
       if (r.stillApplying) counts.stillApplying += 1;
     }
     const nameOf = (r: (typeof rows)[number]) => r.candidate?.name.toLowerCase() ?? "";
-    const ordered = q.order === "waiting" ? [...rows].sort((x, y) => Date.parse(x.stageChangedAt) - Date.parse(y.stageChangedAt)) : q.order === "name" ? [...rows].sort((x, y) => nameOf(x).localeCompare(nameOf(y))) : rows;
+    // By score: highest first, people with no score yet last, newest first among equals (the rows come newest first).
+    const byScore = (x: (typeof rows)[number], y: (typeof rows)[number]) => (y.score ?? -1) - (x.score ?? -1);
+    const ordered = q.order === "waiting" ? [...rows].sort((x, y) => Date.parse(x.stageChangedAt) - Date.parse(y.stageChangedAt)) : q.order === "name" ? [...rows].sort((x, y) => nameOf(x).localeCompare(nameOf(y))) : q.order === "score" ? [...rows].sort(byScore) : rows;
     const shown = ordered.filter((r) => (!q.group || r.group === q.group) && (!q.stage || r.stage === q.stage) && (!q.ownerStage || r.ownerStage === q.ownerStage) && (!q.told || r.toldState === q.told));
     return { shown, counts };
   });
@@ -416,6 +434,82 @@ roleRoutes.post("/:id/decision-messages", requireTenant, async (c) => {
   await container.kick();
   const tally = (n: CandidateNotice) => results.filter((r) => r.candidateNotice === n).length;
   return c.json({ results, queued: tally("queued"), held: tally("held"), waitingApproval: tally("waiting_approval"), notSent: results.length - tally("queued") - tally("held") - tally("waiting_approval") });
+});
+
+/* ------------------------------------------------------------------------------------------------------------ */
+/* The pool board, Review and apply, and the one-click questions (plan Wave F; docs/spec/22).                     */
+/* ------------------------------------------------------------------------------------------------------------ */
+
+/**
+ * The pool board (plan F6, F7): Shortlist, Longlist and Not moving forward, each card with its match score, the
+ * must-have line, why it is placed there and the suggested next step; the people still applying apart; the rule-built
+ * summary on top. Answers `BoardView` (packages/contracts api/board.ts). Nothing moves until a person applies it.
+ */
+roleRoutes.get("/:id/board", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  assertCan(t.role, "application.read");
+  const container = c.get("container");
+  const now = container.engine.clock();
+  return c.json(await withTenant(container.db, t.companyId, async (tx) => boardView(await loadPool(tx, { roleId: c.req.param("id") ?? "", tenant: t }), now)));
+});
+
+/**
+ * Review and apply (plan F8; founder decision B4): `{ items: [{ applicationId, action, reason?, note? }], dryRun }`, up to
+ * 50 people. With `dryRun` nothing changes and the answer is the preview (`BatchPreview`): per person what will happen,
+ * whether it may, the warnings, and the pre-filled reason for a not-moving-forward. Without it each person is applied
+ * in a transaction of their own (`BatchResult`, one result each). Marks and declines are private; nobody is emailed.
+ */
+roleRoutes.post("/:id/batch", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  const body = RoleBatchRequest.parse(await c.req.json());
+  const container = c.get("container");
+  const roleId = c.req.param("id") ?? "";
+  if (body.dryRun) return c.json(await previewBatch(container, { roleId, tenant: t, body }));
+  return c.json(await applyBatch(container, { roleId, tenant: t, actor: actorOf(c), body }));
+});
+
+/** The one-click questions the board offers for this role (plan F10), in plain words. */
+roleRoutes.get("/:id/questions", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  assertCan(t.role, "application.read");
+  const container = c.get("container");
+  const pool = await withTenant(container.db, t.companyId, (tx) => loadPool(tx, { roleId: c.req.param("id") ?? "", tenant: t, onlyIds: [] }));
+  return c.json({ questions: poolQuestions(pool.packet) });
+});
+
+/**
+ * One question answered from the stored, checked findings (plan F10; founder decision B5): no AI is asked anything
+ * new. `missing_must_have`, `strongest_evidence?mustHave=<key>`, `overlooked`, or `compare?ids=a,b` (up to five, the
+ * comparison view). Answers `PoolAnswer`: the people with why and the quotes, the ids to filter the board, and what it
+ * looked at.
+ */
+roleRoutes.get("/:id/questions/:kind", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  assertCan(t.role, "application.read");
+  const q = PoolQuestionQuery.parse({ kind: c.req.param("kind"), mustHave: c.req.query("mustHave") || undefined, ids: c.req.query("ids") || undefined });
+  const container = c.get("container");
+  const roleId = c.req.param("id") ?? "";
+  const now = container.engine.clock();
+  const answer = await withTenant(container.db, t.companyId, async (tx): Promise<PoolAnswer> => {
+    if (q.kind === "compare") {
+      const ids = [...new Set((q.ids ?? "").split(",").map((s) => s.trim()).filter(Boolean))];
+      if (!ids.length) throw new HttpError(400, "invalid_request", "Choose the people to compare first.");
+      if (ids.length > COMPARE_MAX) throw new HttpError(400, "too_many", `Compare up to ${COMPARE_MAX} candidates at a time.`);
+      const out = await compareCandidates(tx, { roleId, ids, tenant: t, actor: actorOf(c), now });
+      if (!out) throw new HttpError(404, "not_found", "Role not found.");
+      const people = out.candidates.map((p) => ({ applicationId: p.applicationId, name: p.name, score: p.score?.score ?? null, band: p.score?.band ?? null, placement: null, why: p.score && p.score.score !== null ? `Match score ${p.score.score}; ${p.score.coverage.words.toLowerCase()}.` : "No score yet.", quotes: out.mustHaves.filter((m) => p.mustHaves[m.key]?.quote).map((m) => ({ criterion: m.text, quote: p.mustHaves[m.key].quote!, source: "evidence" })), open: p.open }));
+      const read = out.candidates.filter((p) => p.score);
+      return { kind: "compare", question: "Compare these", answer: `${out.candidates.length} people side by side, in the order you chose.`, people, applicationIds: people.map((p) => p.applicationId), lookedAt: { people: read.length, resumeReadings: read.filter((p) => p.score!.basedOn !== "screen").length, screenReadings: read.filter((p) => p.score!.basedOn !== "resume").length, requirements: out.mustHaves.map((m) => m.text), words: "Looked at the checked findings already on file for each person; no AI was asked anything new." }, compare: out };
+    }
+    const pool = await loadPool(tx, { roleId, tenant: t });
+    try {
+      return answerPoolQuestion(q.kind, pool.rows.map(poolPersonOf), pool.packet, { mustHaveKey: q.mustHave ?? null, now, open: (id) => openPath(roleId, id) });
+    } catch (e) {
+      if (e instanceof PoolQuestionError) throw new HttpError(400, e.code, e.message);
+      throw e;
+    }
+  });
+  return c.json(answer);
 });
 
 /** Application detail and actions live here too, keyed by application id. */
@@ -446,7 +540,7 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const timeline = [...own, ...related].sort((x, y) => Date.parse(y.occurredAt) - Date.parse(x.occurredAt));
     const ivs = await tx.select({ id: interviews.id, roundKey: interviews.roundKey, title: interviews.title, status: interviews.status, startsAt: interviews.startsAt, endsAt: interviews.endsAt, timezone: interviews.timezone, meetingUrl: interviews.meetingUrl, attempt: interviews.attempt, outcome: interviews.outcome, decision: interviews.decision, offeredSlots: interviews.offeredSlots, createdAt: interviews.createdAt }).from(interviews).where(eq(interviews.applicationId, app.id)).orderBy(desc(interviews.createdAt));
     const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
-    const packetLabels = pv ? { mustHaves: pv.packet.requirements.mustHaves.map((m) => ({ key: m.key, text: m.text })), competencies: pv.packet.competencies.map((c) => ({ key: c.key, name: c.name })), questions: pv.packet.screening.questions.map((q) => ({ key: q.key, question: q.question })) } : { mustHaves: [], competencies: [], questions: [] };
+    const packetLabels = pv ? { mustHaves: pv.packet.requirements.mustHaves.map((m) => ({ key: m.key, text: m.text })), competencies: pv.packet.competencies.map((c) => ({ key: c.key, name: c.name, importance: importanceOf(c) })), questions: pv.packet.screening.questions.map((q) => ({ key: q.key, question: q.question })) } : { mustHaves: [], competencies: [], questions: [] };
     // `proposal` carries a waiting message's text (F11), so the sheet can show it to the approver; `requiredRoles` says who may decide.
     const pendingApprovals = await tx.select({ id: approvalRequests.id, actionType: approvalRequests.actionType, rationale: approvalRequests.rationale, createdAt: approvalRequests.createdAt, proposal: approvalRequests.proposal, requiredRoles: approvalRequests.requiredRoles }).from(approvalRequests).where(and(eq(approvalRequests.applicationId, app.id), eq(approvalRequests.status, "pending")));
     await audit(tx, { companyId: t.companyId, actor: actorOf(c), action: "candidate.viewed", target: { type: "application", id: app.id } });
@@ -461,9 +555,15 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const scorecards = await screenScorecards(tx, scr);
     const now = c.get("container").engine.clock();
     const strip = ownerStage(app, mark);
+    // The match score with its breakdown (founder decision B2), the must-have line, where the pool board puts them and
+    // the version label, from the same assessments and rules as the list and the board.
+    const [roleRow] = await tx.select({ id: roles.id, currentPacketVersion: roles.currentPacketVersion }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
+    const packets = roleRow ? await packetsOf(tx, roleRow) : { byVersion: new Map(), currentVersion: null };
+    const resumeDoc = docs.find((d) => d.id === app.resumeDocumentId);
+    const scored = scorePerson({ app, assessments: asmts, packets: packets.byVersion, currentVersion: packets.currentVersion, mark, stillApplying: (await stillApplyingFor(tx, [app.id])).has(app.id), resumeUnreadable: !!resumeDoc && resumeDoc.status === "clean" && !resumeDoc.hasText && !app.extraction, openScreen: scr.some((s) => SCREEN_OPEN_STATUSES.includes(s.status)) });
     // The status token opens the candidate's status page and the reply token is all that authenticates a reply, so neither leaves the server.
     const { statusToken: _statusToken, replyToken: _replyToken, ...appOut } = app;
-    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: groupFor(app, mark, now), ownerStage: strip, ownerStageLabel: ownerStageLabel(strip, mark), mark, tags: ownerTags(app, mark, now), stageMoves: stageMoves(facts), toldState: DECISION_STAGES.includes(app.stage) ? app.toldState : null, allowedActions, blockedReasons, declineMessage, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: comms, timeline, screens: scr.map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedVia: s.invitedVia ?? null, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, assessmentId: s.assessmentId, ...scorecards.get(s.id) })), pendingApprovals, packetLabels };
+    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: groupFor(app, mark, now), ownerStage: strip, ownerStageLabel: ownerStageLabel(strip, mark), mark, tags: ownerTags(app, mark, now), stageMoves: stageMoves(facts), toldState: DECISION_STAGES.includes(app.stage) ? app.toldState : null, allowedActions, blockedReasons, declineMessage, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: comms, timeline, screens: scr.map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedVia: s.invitedVia ?? null, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, assessmentId: s.assessmentId, ...scorecards.get(s.id) })), pendingApprovals, packetLabels, matchScore: scored.match, mustHaves: scored.mustHaves, placement: scored.placement, readingVersion: scored.readingVersion };
   });
   if (!row) throw new HttpError(404, "not_found", "Application not found.");
   return c.json(row);
@@ -522,21 +622,63 @@ applicationRoutes.post("/:id/actions", requireTenant, async (c) => {
   return c.json(result);
 });
 
-/** One-click flag on an AI assessment (docs/FOUNDER-CONTEXT.md §23). Stored against the AI run, emitted as a human override, audited. Never retrains anything by itself. */
+/** The flag kinds as the ITS recruiter reads them. */
+const FLAG_WORDS: Record<AssessmentFlagKind, string> = {
+  wrong_evidence: "it quotes the wrong evidence",
+  hallucination: "it says something that is not in the application",
+  policy_error: "it broke one of the rules it should follow",
+  bias_concern: "it may be unfair to the candidate",
+  poor_communication: "it is hard to understand",
+  wrong_workflow_action: "it led to the wrong next step",
+  false_negative: "it rates the candidate too low",
+  false_positive: "it rates the candidate too high",
+  missing_context: "it misses something important",
+};
+const OPEN_REQUEST = ["open", "claimed", "in_progress"];
+
+/**
+ * One-click flag on an AI assessment (docs/FOUNDER-CONTEXT.md §23). Stored against the AI run, emitted as a human
+ * override, audited. Never retrains anything by itself. A team member's flag reaches the ITS recruiter queue (plan F11)
+ * as a request to review that candidate's reading: one request per candidate while it is open (a later flag adds a note
+ * to it), not counted against the plan's recruiter requests. `review` says which request carries it.
+ */
 applicationRoutes.post("/:id/assessments/:assessmentId/flag", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "application.act");
   const body = FlagAssessment.parse(await c.req.json());
-  const row = await withTenant(c.get("container").db, t.companyId, async (tx) => {
+  const container = c.get("container");
+  const actor = actorOf(c);
+  const { out, notice, note } = await withTenant(container.db, t.companyId, async (tx): Promise<{ out: Record<string, unknown>; notice: QueueNotice | null; note: HeldNote | null }> => {
     const [asmt] = await tx.select().from(assessments).where(and(eq(assessments.id, c.req.param("assessmentId")), eq(assessments.applicationId, c.req.param("id")))).limit(1);
     if (!asmt) throw new HttpError(404, "not_found", "Assessment not found.");
-    const flag = { kind: body.kind, note: body.note ?? null, by: actorOf(c), at: new Date().toISOString() };
+    const at = new Date().toISOString();
+    const flag = { kind: body.kind, note: body.note ?? null, by: actor, at };
     if (asmt.aiRunId) await tx.update(aiRuns).set({ humanOverride: flag }).where(eq(aiRuns.id, asmt.aiRunId));
-    await emit(tx, { type: "human.override", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: asmt.applicationId }, payload: { action: "flag_assessment", assessmentId: asmt.id, kind: body.kind, note: body.note ?? null, aiRunId: asmt.aiRunId } });
-    await audit(tx, { companyId: t.companyId, actor: actorOf(c), action: "assessment.flagged", target: { type: "ai_run", id: asmt.aiRunId ?? asmt.id }, reason: `${body.kind}${body.note ? `: ${body.note}` : ""}` });
-    return { ok: true, assessmentId: asmt.id, kind: body.kind };
+    await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: asmt.applicationId }, payload: { action: "flag_assessment", assessmentId: asmt.id, kind: body.kind, note: body.note ?? null, aiRunId: asmt.aiRunId } });
+    await audit(tx, { companyId: t.companyId, actor, action: "assessment.flagged", target: { type: "ai_run", id: asmt.aiRunId ?? asmt.id }, reason: `${body.kind}${body.note ? `: ${body.note}` : ""}` });
+    // An ITS recruiter flagging a reading is ITS already: recorded, with no request to itself.
+    if (t.staff) return { out: { ok: true, assessmentId: asmt.id, kind: body.kind, review: null, message: "Flagged and recorded." }, notice: null, note: null };
+    const [app] = await tx.select({ roleId: applications.roleId }).from(applications).where(eq(applications.id, asmt.applicationId)).limit(1);
+    const words = `The team flagged the assistant's ${asmt.kind === "screen" ? "screening scorecard" : "résumé reading"} for this candidate: ${FLAG_WORDS[body.kind]}.${body.note?.trim() ? ` Their note: ${body.note.trim()}` : ""} Please check the reading and tell them what you find.`;
+    // The recruiter reads the flag under their grant; the team member's name stays with the company (the audit record and
+    // the human.override event keep who it was), as everywhere else the recruiter reads the team's words.
+    const entry = { assessmentId: asmt.id, aiRunId: asmt.aiRunId, kind: body.kind, note: body.note ?? null, by: actor.kind, at };
+    const [open] = await tx.select({ id: recruiterEscalations.id, companyId: recruiterEscalations.companyId, kind: recruiterEscalations.kind, assignedToUserId: recruiterEscalations.assignedToUserId, contextSnapshot: recruiterEscalations.contextSnapshot }).from(recruiterEscalations).where(and(eq(recruiterEscalations.applicationId, asmt.applicationId), eq(recruiterEscalations.kind, "review"), inArray(recruiterEscalations.status, OPEN_REQUEST), sql`(${recruiterEscalations.contextSnapshot} -> 'flags') is not null`)).limit(1);
+    if (open) {
+      const message = await addEscalationReply(tx, { escalation: open, side: "customer", author: actor, body: words });
+      const flags = Array.isArray(open.contextSnapshot.flags) ? open.contextSnapshot.flags : [];
+      await tx.update(recruiterEscalations).set({ contextSnapshot: { ...open.contextSnapshot, flags: [...flags, entry] } }).where(eq(recruiterEscalations.id, open.id));
+      return { out: { ok: true, assessmentId: asmt.id, kind: body.kind, review: { escalationId: open.id, created: false }, message: "Thanks. It is added to the ITS recruiter's open check of this candidate's reading." }, notice: null, note: open.assignedToUserId ? { escalationId: open.id, kind: open.kind, holderId: open.assignedToUserId, messageId: message.id } : null };
+    }
+    const created = await createEscalation(tx, { companyId: t.companyId, roleId: app?.roleId ?? null, applicationId: asmt.applicationId, kind: "review", question: words, requestedBy: actor });
+    const [row] = await tx.select({ contextSnapshot: recruiterEscalations.contextSnapshot }).from(recruiterEscalations).where(eq(recruiterEscalations.id, created.id)).limit(1);
+    await tx.update(recruiterEscalations).set({ contextSnapshot: { ...(row?.contextSnapshot ?? {}), flags: [entry] } }).where(eq(recruiterEscalations.id, created.id));
+    return { out: { ok: true, assessmentId: asmt.id, kind: body.kind, review: { escalationId: created.id, created: true }, message: `Thanks. An ITS recruiter will check this reading; follow it under Your recruiter requests on Today. Once they pick it up they see this candidate and the role they applied for, until a day after they answer or ${ESCALATION_ACCESS_DAYS} days at most.` }, notice: await queueNoticeOf(tx, created.id), note: null };
   });
-  return c.json(row);
+  if (notice) await emailItsQueue(container, notice);
+  // A flag added to a request someone already holds tells them there is a note, never its words, as a note from the team does.
+  if (note) await emailHolderAboutNote(container, note);
+  return c.json(out);
 });
 
 /* ------------------------------------------------------------------------------------------------------------ */

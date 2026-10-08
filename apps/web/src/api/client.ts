@@ -1,6 +1,9 @@
-import type { ActiveMark, AutoActionsOnOpen, BoardChoiceView, CandidateNotice, ClosingDateView, GettingStarted, IntakeSessionView, LegalCheck, MeResponse, OwnerGroup, OwnerStage, PacketFlag, PostingTaskKind, PostingTaskView, PublishingState, ShareTarget, ShareView, StageMove, ToldState } from "@ros/contracts";
+import type { ActiveMark, AutoActionsOnOpen, BoardChoiceView, BoardPlacement, CandidateNotice, ClosingDateView, GettingStarted, Importance, IntakeSessionView, LegalCheck, MatchBand, MatchScore, MeResponse, MustHaveSummary, NextStep, OwnerGroup, OwnerStage, PacketFlag, PoolSummary, PostingTaskKind, PostingTaskView, PublishingState, ReadingVersion, ShareTarget, ShareView, StageMove, ToldState } from "@ros/contracts";
 
 export type { ActiveMark, CandidateNotice, OwnerStage, StageMove, ToldState };
+// The match score, the pool board, Review and apply and the one-click questions (plan Wave F; founder decisions B2, B4,
+// B5): the shapes live in @ros/contracts (domain/match.ts, api/board.ts), as the API answers them.
+export type { BatchAction, BatchPreview, BatchPreviewItem, BatchResult, BatchResultItem, BoardCard, BoardColumn, BoardPlacement, BoardQuote, BoardView, MatchBand, MatchCriterion, MatchScore, MustHaveSummary, NextStep, PoolAnswer, PoolAnswerPerson, PoolQuestion, PoolQuestionKind, PoolSummary, ReadingVersion, RoleBatchItem, RoleBatchRequest } from "@ros/contracts";
 // Approving and publishing (plan Wave D): the shapes live in @ros/contracts (api/publishing.ts).
 export type { AutoActionsOnOpen, BoardChoiceView, ClosingDateView, LegalCheck, LegalCheckItem, PostingTaskKind, PostingTaskView, PublishingState, SharePlace, SharePlaceView, ShareTarget, ShareView } from "@ros/contracts";
 /** Typed-enough fetch wrapper. The API is served by the same deployment as the pages, so every path is relative. */
@@ -32,8 +35,11 @@ export const api = {
 /** The signed-in person, exactly as the API answers it (the shape lives in @ros/contracts so the two cannot drift). */
 export type Me = MeResponse;
 
-/** `gettingStarted`: only on the getting_started card, the ITS company check and the steps this person can do (plan B1, B2). */
-export type BriefCard = { kind: string; title: string; body: string; roleId?: string; applicationId?: string; approvalRequestId?: string; actions: Array<{ label: string; method: "GET" | "POST"; path: string; body?: Record<string, unknown> }>; gettingStarted?: GettingStarted };
+/**
+ * `gettingStarted`: only on the getting_started card, the ITS company check and the steps this person can do (plan B1, B2).
+ * `pool`: only on the pool_ready card, the pool board's summary for the role, the same as above the board (plan F7).
+ */
+export type BriefCard = { kind: string; title: string; body: string; roleId?: string; applicationId?: string; approvalRequestId?: string; actions: Array<{ label: string; method: "GET" | "POST"; path: string; body?: Record<string, unknown> }>; gettingStarted?: GettingStarted; pool?: PoolSummary };
 export type Brief = { generatedAt: string; cards: BriefCard[]; summary: string };
 
 /**
@@ -73,8 +79,8 @@ export type RolePacket = {
   compensation: { basis: string; min: number; mid?: number; max: number; ceiling: number; discloseRange: boolean; benefitsSummary?: string; sources: Array<{ name: string; detail?: string }>; ownerStated: boolean };
   description: { publicJobDescription: string; internalNotes?: string };
   requirements: { mustHaves: Requirement[]; niceToHaves: Requirement[]; eligibility: Array<{ key: string; type: string; question: string; rationale: string; knockout: boolean }> };
-  competencies: Array<{ key: string; name: string; definition: string; weight: number; evaluatedIn: string }>;
-  screening: { questions: Array<{ key: string; question: string; kind: string }>; maxMinutes: number };
+  competencies: Array<{ key: string; name: string; definition: string; weight: number; evaluatedIn: string; /** Essential, Important or Helpful (plan F3); older packets leave it out. */ importance?: Importance; indicators?: string[] }>;
+  screening: { questions: Array<{ key: string; question: string; kind: string; competencyKey?: string }>; maxMinutes: number };
   interviews: { plan: Array<{ key: string; title: string; purpose: string; durationMinutes: number; format: string; interviewerUserIds: string[]; interviewerRoles: string[]; competencyKeys: string[] }> };
   communication: { disclosureText: string; humanAlternativeText: string; signature: string };
   sourcing: { summary: string; channels: string[]; referralPrompt?: string };
@@ -114,6 +120,21 @@ export type ApplicationSummary = ApplicationCore & {
   decisionMessageWaiting: boolean;
   /** "Still applying" (plan E6): offered the screening conversation with the application and not finished yet; older answers leave it out. */
   stillApplying?: boolean;
+  /**
+   * The match score (founder decision B2), worked out by code from the checked findings, never by the model: the number
+   * (null when nothing could be judged yet), its band, what it rests on and the must-haves shown missing by a quote.
+   * `placement` and `nextStep` are where the pool board puts the person and the step it suggests. Older answers leave
+   * them all out.
+   */
+  score?: number | null;
+  band?: MatchBand | null;
+  bandLabel?: string | null;
+  coverage?: { known: number; total: number; words: string } | null;
+  missingMustHave?: Array<{ key: string; label: string; quote: string }>;
+  mustHaves?: MustHaveSummary | null;
+  placement?: BoardPlacement;
+  nextStep?: NextStep | null;
+  readingVersion?: ReadingVersion | null;
 };
 /**
  * GET /roles/:id/applications?counts=1: the stage strip's counts cover every applicant the caller may see, whatever the
@@ -175,7 +196,7 @@ export type DecisionMessageResult = { applicationId: string; ok: boolean; candid
 /** `held`: saved to go out on their own once ITS confirms the company (founder decision B7). */
 export type DecisionMessagesResponse = { results: DecisionMessageResult[]; queued: number; held?: number; waitingApproval: number; notSent: number };
 export type TimelineEvent = { type: string; occurredAt: string; actor: { kind: string; name?: string; id: string }; payload: Record<string, unknown> };
-export type ApplicationDetail = ApplicationCore & { roleId: string; stageChangedAt: string; candidateToldAt: string | null; allowedActions: ApplicationCapability[]; /** Why each choice not in `allowedActions` is unavailable, in plain words; shown on the disabled button. */ blockedReasons: Partial<Record<ApplicationCapability, string>>; /** What a Send of the decision message does under the company's settings: it goes, waits for approval, or is not sent. */ declineMessage: DeclineMessagePolicy; rejectReason: string | null; rejectNote: string | null; interviews: Array<{ id: string; roundKey: string; title: string; status: string; startsAt: string | null; endsAt: string | null; timezone: string | null; meetingUrl: string | null; attempt: number; outcome: string | null; decision: string | null; offeredSlots: OfferedSlot[]; createdAt: string }>; interviewPlan: Array<{ key: string; title: string; durationMinutes: number; format: string; interviewerUserIds: string[]; purpose: string }>; candidate: { firstName: string; lastName: string; email: string | null; phone: string | null; locationText: string | null; consent: Record<string, { granted: boolean; at: string; source: string }>; /** `talentPoolOptOut`: the person asked not to be kept for future roles. */ preferences?: { talentPoolOptOut?: boolean } }; documents: Array<{ id: string; kind: string; filename: string; hasText: boolean; sizeBytes: number; status: "quarantined" | "clean" | "rejected" | "deleted" | string; uploadedVia: string; rejectedReason: string | null; validatedAt: string | null }>; assessments: Array<{ id: string; kind: string; overall: string; confidence: string; createdAt: string; result: AssessmentResult }>; screens: Screen[]; /** `proposal` carries a waiting message's text (F11); `requiredRoles` says who may decide it, so the page offers the buttons only to them. */ pendingApprovals: Array<{ id: string; actionType: string; rationale: string | null; createdAt: string; proposal?: Record<string, unknown>; requiredRoles: string[] }>; packetLabels: { mustHaves: Array<{ key: string; text: string }>; competencies: Array<{ key: string; name: string }>; questions: Array<{ key: string; question: string }> }; communications: Array<{ id: string; direction: string; channel: string; subject: string | null; bodyText: string; status: string; createdAt: string; templateKey: string | null }>; timeline: TimelineEvent[]; extraction: { positions: Array<{ title: string; employer?: string; startDate?: string; endDate?: string; quote?: string }>; licenses: Array<{ name: string; jurisdiction?: string; quote?: string }>; certifications: Array<{ name: string }>; skills: string[]; yearsOfExperienceEstimate?: number; anomalies: Array<{ kind: string; detail: string }> } | null; answers: { eligibility?: Record<string, unknown>; noResume?: Record<string, string> } };
+export type ApplicationDetail = ApplicationCore & { roleId: string; stageChangedAt: string; candidateToldAt: string | null; allowedActions: ApplicationCapability[]; /** Why each choice not in `allowedActions` is unavailable, in plain words; shown on the disabled button. */ blockedReasons: Partial<Record<ApplicationCapability, string>>; /** What a Send of the decision message does under the company's settings: it goes, waits for approval, or is not sent. */ declineMessage: DeclineMessagePolicy; rejectReason: string | null; rejectNote: string | null; interviews: Array<{ id: string; roundKey: string; title: string; status: string; startsAt: string | null; endsAt: string | null; timezone: string | null; meetingUrl: string | null; attempt: number; outcome: string | null; decision: string | null; offeredSlots: OfferedSlot[]; createdAt: string }>; interviewPlan: Array<{ key: string; title: string; durationMinutes: number; format: string; interviewerUserIds: string[]; purpose: string }>; candidate: { firstName: string; lastName: string; email: string | null; phone: string | null; locationText: string | null; consent: Record<string, { granted: boolean; at: string; source: string }>; /** `talentPoolOptOut`: the person asked not to be kept for future roles. */ preferences?: { talentPoolOptOut?: boolean } }; documents: Array<{ id: string; kind: string; filename: string; hasText: boolean; sizeBytes: number; status: "quarantined" | "clean" | "rejected" | "deleted" | string; uploadedVia: string; rejectedReason: string | null; validatedAt: string | null }>; assessments: Array<{ id: string; kind: string; overall: string; confidence: string; createdAt: string; result: AssessmentResult; /** The version of the role it was read against (plan F4). */ packetVersion?: number }>; screens: Screen[]; /** `proposal` carries a waiting message's text (F11); `requiredRoles` says who may decide it, so the page offers the buttons only to them. */ pendingApprovals: Array<{ id: string; actionType: string; rationale: string | null; createdAt: string; proposal?: Record<string, unknown>; requiredRoles: string[] }>; packetLabels: { mustHaves: Array<{ key: string; text: string }>; competencies: Array<{ key: string; name: string; /** Essential, Important or Helpful (plan F3); older answers leave it out. */ importance?: Importance }>; questions: Array<{ key: string; question: string }> }; communications: Array<{ id: string; direction: string; channel: string; subject: string | null; bodyText: string; status: string; createdAt: string; templateKey: string | null }>; timeline: TimelineEvent[]; extraction: { positions: Array<{ title: string; employer?: string; startDate?: string; endDate?: string; quote?: string }>; licenses: Array<{ name: string; jurisdiction?: string; quote?: string }>; certifications: Array<{ name: string }>; skills: string[]; yearsOfExperienceEstimate?: number; anomalies: Array<{ kind: string; detail: string }> } | null; answers: { eligibility?: Record<string, unknown>; noResume?: Record<string, string> }; /** The match score with its breakdown (founder decision B2), the must-have line, where the pool board puts them and the version label, from the same rules as the list and the board; older answers leave them out. */ matchScore?: MatchScore | null; mustHaves?: MustHaveSummary | null; placement?: BoardPlacement; readingVersion?: ReadingVersion | null };
 export type IntakeSession = { id: string; status: string; messages: Array<{ role: "owner" | "assistant" | "system"; content: string; at: string }>; facts: Record<string, unknown>; missingFacts: string[]; roleId: string | null };
 
 // The job builder (plan Wave C): apps/api/src/routes/intake.ts. The shapes live in @ros/contracts.
@@ -275,7 +296,8 @@ export type InterviewerBrief = {
 export type MessagePreview = { to: string | null; candidateFirstName: string; fromName: string; footer: string; repliesComeBack: boolean; policyLevel: string; needsApproval: boolean };
 /** `held`: saved, and it goes out on its own once ITS confirms the company (founder decision B7). */
 export type SendMessageResult = { ok: true; status: "queued" | "held"; communicationId: string } | { ok: true; status: "pending_approval"; approvalRequestId: string };
-// The comparison view (F10): GET /roles/:id/compare?ids=a,b,c (apps/api/src/routes/compare.ts). Nothing ranked; columns in the order chosen.
-export type CompareCandidate = { applicationId: string; name: string; stage: string; stageLabel: string; group: string; ownerStage?: OwnerStage; ownerStageLabel?: string; mustHaves: Record<string, { met: string; quote: string | null }>; competencies: Record<string, { finding: string; note: string | null }>; screen: { recommendation: string; summary: string } | null; resume: { overall: string; recommendation: string; summary: string } | null; unknownCount: number; open: string };
-export type CompareResponse = { role: { id: string; title: string }; mustHaves: Array<{ key: string; text: string }>; competencies: Array<{ key: string; name: string; definition: string }>; candidates: CompareCandidate[]; max: number; reminder: string };
+// The comparison view (F10): GET /roles/:id/compare?ids=a,b,c (apps/api/src/routes/compare.ts). Columns in the order
+// chosen; each person's match score (B2) and, when their reading was made against an earlier version of the role, the label.
+export type CompareCandidate = { applicationId: string; name: string; stage: string; stageLabel: string; group: string; ownerStage?: OwnerStage; ownerStageLabel?: string; mustHaves: Record<string, { met: string; quote: string | null }>; competencies: Record<string, { finding: string; note: string | null }>; screen: { recommendation: string; summary: string } | null; resume: { overall: string; recommendation: string; summary: string } | null; unknownCount: number; open: string; score?: MatchScore | null; readingVersion?: ReadingVersion | null };
+export type CompareResponse = { role: { id: string; title: string }; version?: number | null; mustHaves: Array<{ key: string; text: string }>; competencies: Array<{ key: string; name: string; definition: string }>; candidates: CompareCandidate[]; max: number; reminder: string };
 export type MyCalendar = { connection: { id: string; provider: string; status: string; externalAccountId: string | null; connectedAt: string | null; lastError: string | null; disconnectedAt: string | null; credentialsDeleted: boolean } | null; availability: { timezone: string; windows: Array<{ day: number; start: string; end: string }>; bufferMinutes: number; maxPerDay: number; updatedAt: string } | null; providers: Array<{ key: string; status: string }> };

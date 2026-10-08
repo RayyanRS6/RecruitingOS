@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { JobPreview } from "@ros/contracts";
+import { MISSING_MUST_HAVE_CAP, type JobPreview } from "@ros/contracts";
 import { Alert, Button, Drawer, Field, IconButton, Segmented } from "@ros/ui";
 import { api, ApiError, type ClosingDateView, type EvidenceSource, type InterviewPlanView, type NewVersionResponse, type Requirement, type RolePacket, type WhoPosts } from "../api/client";
 import { ClosingDateField } from "../components/ClosingDate";
 import { liveEditWords, materialChangesOf, previewOfEdit, savedVersionToast, type MaterialChange } from "../publishing";
+import { CHECKED_IN, IMPORTANCE_CHOICES, IMPORTANCE_HINT, READ_FROM_NOW_ON, SCORE_WEIGHTS_LINE, SKILLS_MAX, SKILLS_MIN, applySkills, newSkillRow, removalWords, skillRowsFrom, skillUses, skillsProblem, type EditorFocus, type SkillRow } from "../skills-form";
 import { toast } from "../toast";
 import { UnsavedPreview } from "./new-role/CandidatePreview";
 import {
@@ -21,6 +22,9 @@ import {
  * application form's questions (only the kinds that may hold an application), deal-breakers, who has the final say and
  * the tone of messages. "Everything (advanced)" is the whole packet as JSON, for admins and recruiters only. Every save
  * is a new version; what happens to it (current at once, or waiting for approval) is the API's call.
+ *
+ * Wave F (plan F3, F12): the skills we look for are plain rows too, each with what it means, how much it counts in the
+ * match score (Essential, Important or Helpful) and where it is checked, for owners and ITS alike.
  *
  * Wave D: someone who may approve, editing a live job, sees what the change does before it is saved (founder decision
  * Q10, plan D4): a change to the pay, the title, the place or the application form's questions needs the same approval
@@ -91,10 +95,62 @@ function RequirementRows({ rows, onChange, idPrefix, max, addLabel }: { rows: Ro
   );
 }
 
-/** A group of requirement rows: a fieldset named by its legend, since there is no single control for a label to point at. */
-function RequirementGroup({ legend, hint, children }: { legend: string; hint: string; children: ReactNode }) {
+/**
+ * The skills we look for (plan F3, F12): what each means, how much it counts in the match score (Essential, Important or
+ * Helpful) and where it is checked. Removing one that a screening question or an interview round leans on says so first;
+ * one that is the only skill an interview round checks cannot be removed until the round checks another.
+ */
+function SkillRows({ rows, onChange, packet }: { rows: SkillRow[]; onChange: (rows: SkillRow[]) => void; packet: RolePacket }) {
+  const [asking, setAsking] = useState<string | null>(null);
+  const update = (i: number, patch: Partial<SkillRow>) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const remove = (i: number) => { setAsking(null); onChange(rows.filter((_, j) => j !== i)); };
+  const filled = rows.filter((r) => r.name.trim()).length;
   return (
-    <fieldset className="field" style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+    <div className="stack" style={{ gap: 10 }}>
+      {rows.map((r, i) => {
+        const words = r.key ? removalWords(r.name, skillUses(packet, r.key, rows.map((x) => x.key))) : null;
+        const label = r.name.trim() || `skill ${i + 1}`;
+        return (
+          <div key={r.key ?? `new-${i}`} className="stack" style={{ gap: 6, padding: 10, border: "1px solid var(--line)", borderRadius: 8 }}>
+            <Field label={`${i + 1}. Skill`} htmlFor={`sk-name-${i}`}><input id={`sk-name-${i}`} className="input" value={r.name} onChange={(e) => update(i, { name: e.target.value })} placeholder="e.g. Putting patients at ease" /></Field>
+            <Field label="What it means" htmlFor={`sk-def-${i}`}><input id={`sk-def-${i}`} className="input" value={r.definition} onChange={(e) => update(i, { definition: e.target.value })} placeholder="e.g. Explains each step and calms nervous patients" /></Field>
+            <div className="grid-2">
+              <Field label="How much it counts" hint={IMPORTANCE_HINT[r.importance]}>
+                <Segmented value={r.importance} onChange={(importance) => update(i, { importance })} ariaLabel={`How much ${label} counts`} options={IMPORTANCE_CHOICES.map((o) => ({ value: o.value, label: o.label }))} />
+              </Field>
+              <Field label="Where we check it" htmlFor={`sk-in-${i}`}>
+                <select id={`sk-in-${i}`} className="select" value={r.evaluatedIn} onChange={(e) => update(i, { evaluatedIn: e.target.value as SkillRow["evaluatedIn"] })}>
+                  {CHECKED_IN.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </Field>
+            </div>
+            {asking !== null && asking === r.key && words ? (
+              <Alert tone="caution">
+                <div className="stack" style={{ gap: 8 }}>
+                  <span>{words.text}</span>
+                  <div className="row">
+                    {words.blocked ? null : <Button size="sm" onClick={() => remove(i)}>Remove it</Button>}
+                    <Button size="sm" variant="quiet" onClick={() => setAsking(null)}>{words.blocked ? "Keep it" : "Keep it after all"}</Button>
+                  </div>
+                </div>
+              </Alert>
+            ) : null}
+            <div className="row"><Button size="sm" variant="quiet" disabled={filled <= SKILLS_MIN && !!r.name.trim()} title={filled <= SKILLS_MIN && !!r.name.trim() ? `A role needs at least ${SKILLS_MIN} skills` : undefined} onClick={() => (words && r.key ? setAsking(r.key) : remove(i))}>Remove</Button></div>
+          </div>
+        );
+      })}
+      <div className="row">
+        <Button size="sm" disabled={rows.length >= SKILLS_MAX} onClick={() => onChange([...rows, newSkillRow()])}>Add a skill</Button>
+        <span className="small muted">{rows.length >= SKILLS_MAX ? `That is the most there can be (${SKILLS_MAX}).` : filled <= SKILLS_MIN ? `At least ${SKILLS_MIN} are needed.` : null}</span>
+      </div>
+    </div>
+  );
+}
+
+/** A group of requirement rows: a fieldset named by its legend, since there is no single control for a label to point at. */
+function RequirementGroup({ legend, hint, children, id }: { legend: string; hint: string; children: ReactNode; id?: string }) {
+  return (
+    <fieldset id={id} className="field" style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       <legend style={{ fontWeight: 600, fontSize: 13.5, padding: 0, marginBottom: 6 }}>{legend}</legend>
       <span className="hint">{hint}</span>
       {children}
@@ -192,7 +248,7 @@ function TextRows({ rows, onChange, idPrefix, addLabel, placeholder }: { rows: s
 }
 
 /** The first thing wrong with the simple form, in the owner's words, or null when it can be saved. */
-function problemWith(input: { form: PacketForm; description: string; mustHaves: Row[]; niceToHaves: Row[] }): string | null {
+function problemWith(input: { form: PacketForm; description: string; mustHaves: Row[]; niceToHaves: Row[]; skills: SkillRow[]; packet: RolePacket }): string | null {
   const fields = packetFormProblem(input.form);
   if (fields) return fields;
   if (input.description.trim().length < 50) return "The public description needs at least a few sentences (50 characters).";
@@ -203,7 +259,7 @@ function problemWith(input: { form: PacketForm; description: string; mustHaves: 
   const nh = input.niceToHaves.filter((r) => r.text.trim());
   if (nh.length > MAX_NICE_TO_HAVES) return `At most ${MAX_NICE_TO_HAVES} nice-to-haves.`;
   if (nh.some((r) => !r.evidencedBy.length)) return "Every nice-to-have needs at least one place where it is checked.";
-  return null;
+  return skillsProblem(input.skills, input.packet);
 }
 
 /**
@@ -211,9 +267,17 @@ function problemWith(input: { form: PacketForm; description: string; mustHaves: 
  * and keys it by that version, so every opening starts from what is there now, never from what the page first loaded.
  * `proposed` says the version is the one waiting for approval (a teammate's edit to an open role); saving builds on it.
  * When a version is saved elsewhere while the editor is open (`newerVersion`), it says so before anyone saves over it.
+ * `focus` opens it at the must-haves or the skills (a link such as the role report's "stricter than needed" prompt).
  */
-export function EditPacket({ open, onClose, roleId, packet, version, proposed, currentVersion, newerVersion, advanced, roleStatus = "draft", mayApprove = false, whoPosts = "its", closingDate = null, canManage = false }: { open: boolean; onClose: () => void; roleId: string; packet: RolePacket; version: number; proposed: boolean; currentVersion: number | null; newerVersion: number | null; advanced: boolean; roleStatus?: string; mayApprove?: boolean; whoPosts?: WhoPosts; closingDate?: ClosingDateView | null; canManage?: boolean }) {
+export function EditPacket({ open, onClose, roleId, packet, version, proposed, currentVersion, newerVersion, advanced, roleStatus = "draft", mayApprove = false, whoPosts = "its", closingDate = null, canManage = false, focus = null }: { open: boolean; onClose: () => void; roleId: string; packet: RolePacket; version: number; proposed: boolean; currentVersion: number | null; newerVersion: number | null; advanced: boolean; roleStatus?: string; mayApprove?: boolean; whoPosts?: WhoPosts; closingDate?: ClosingDateView | null; canManage?: boolean; focus?: EditorFocus | null }) {
   const qc = useQueryClient();
+  // Opened at a section: it is scrolled into view and its first field takes the focus (after the drawer has taken it).
+  useEffect(() => {
+    if (!open || !focus) return;
+    const group = document.getElementById(`ed-${focus}`);
+    group?.scrollIntoView({ block: "start" });
+    group?.querySelector<HTMLElement>("input, select, textarea")?.focus({ preventScroll: true });
+  }, [open, focus]);
   // An approver's change to the live version shows what it does first (Q10); anyone else's waits for approval as before.
   const liveEdit = roleStatus === "open" && mayApprove && !proposed;
   // While reviewing, what the change does is read from the fields as they are now, so a later edit is never saved stale.
@@ -226,6 +290,7 @@ export function EditPacket({ open, onClose, roleId, packet, version, proposed, c
   const [description, setDescription] = useState(packet.description.publicJobDescription);
   const [mustHaves, setMustHaves] = useState<Row[]>(rowsFrom(packet.requirements.mustHaves));
   const [niceToHaves, setNiceToHaves] = useState<Row[]>(rowsFrom(packet.requirements.niceToHaves));
+  const [skills, setSkills] = useState<SkillRow[]>(() => skillRowsFrom(packet));
   const [json, setJson] = useState(JSON.stringify(packet, null, 2));
   const [summary, setSummary] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
@@ -241,6 +306,7 @@ export function EditPacket({ open, onClose, roleId, packet, version, proposed, c
     next.description.publicJobDescription = description.trim();
     next.requirements.mustHaves = toRequirements(mustHaves, "mh");
     next.requirements.niceToHaves = toRequirements(niceToHaves, "nh");
+    applySkills(next, skills);
     return next;
   };
   const save = useMutation({
@@ -262,7 +328,7 @@ export function EditPacket({ open, onClose, roleId, packet, version, proposed, c
   /** The first thing wrong with the fields, or null; said on screen. */
   const check = (): boolean => {
     if (mode === "simple" || !advanced) {
-      const p = problemWith({ form, description, mustHaves, niceToHaves });
+      const p = problemWith({ form, description, mustHaves, niceToHaves, skills, packet });
       setProblem(p);
       return !p;
     }
@@ -342,11 +408,14 @@ export function EditPacket({ open, onClose, roleId, packet, version, proposed, c
                 <Field label="Ceiling (the most you would pay)" htmlFor="ceil" hint="Offers never go above this without a new approval."><input id="ceil" className="input" inputMode="decimal" value={form.ceiling} onChange={(e) => set({ ceiling: e.target.value })} /></Field>
                 <Field label="Benefits" htmlFor="ed-benefits"><input id="ed-benefits" className="input" value={form.benefits} onChange={(e) => set({ benefits: e.target.value })} placeholder="e.g. Health, dental, 401(k), paid time off" /></Field>
               </RequirementGroup>
-              <RequirementGroup legend={`Must-haves (up to ${MAX_MUST_HAVES})`} hint="The things you would not hire without. Each says why it matters and where it is checked.">
+              <RequirementGroup id="ed-must-haves" legend={`Must-haves (up to ${MAX_MUST_HAVES})`} hint={`The things you would not hire without. Each says why it matters and where it is checked. They count the most in each applicant's match score; one their own words show is missing holds the score at ${MISSING_MUST_HAVE_CAP} at most. ${READ_FROM_NOW_ON}`}>
                 <RequirementRows rows={mustHaves} onChange={setMustHaves} idPrefix="mh" max={MAX_MUST_HAVES} addLabel="Add a must-have" />
               </RequirementGroup>
               <RequirementGroup legend={`Nice-to-haves (up to ${MAX_NICE_TO_HAVES})`} hint="Helpful, never a reason to hold anyone.">
                 <RequirementRows rows={niceToHaves} onChange={setNiceToHaves} idPrefix="nh" max={MAX_NICE_TO_HAVES} addLabel="Add a nice-to-have" />
+              </RequirementGroup>
+              <RequirementGroup id="ed-skills" legend={`Skills we look for (${SKILLS_MIN} to ${SKILLS_MAX})`} hint={`${SCORE_WEIGHTS_LINE} Only your team sees these. ${READ_FROM_NOW_ON}`}>
+                <SkillRows rows={skills} onChange={setSkills} packet={packet} />
               </RequirementGroup>
               <RequirementGroup legend={`Screening questions (${SCREENING_MIN} to ${SCREENING_MAX})`} hint="Asked in a short conversation marked as AI, in this order, with a person available instead.">
                 <QuestionRows rows={form.questions} onChange={(questions) => set({ questions })} />

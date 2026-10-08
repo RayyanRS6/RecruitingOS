@@ -9,6 +9,8 @@ import { api, ApiError, type PostingTaskDetail } from "../api/client";
 import { POSTING_TASK_BEFORE_ACCEPT, isPostingTaskKind, queueKindLabel } from "../publishing";
 import { CALL_NOTES_HINT, CANDIDATE_ASKED_FOR_PERSON, draftFactLines, queueThreadHeading, workspaceHref, type HandedOverDraft } from "../recruiter-requests";
 import { toast } from "../toast";
+import { BoardSnapshotCard } from "./board/BoardSnapshot";
+import { snapshotOf } from "./board/board-model";
 
 /** Exactly what a recruiter sees before accepting (correction 11): no customer words, nothing from a candidate record. */
 type Preview = { id: string; status: string; kind: string; urgency: "low" | "normal" | "high" | "critical"; requiredExpertise: string; summary: string; companyName: string; roleTitle: string | null; slaDueAt: string | null; slaRemainingMinutes: number | null; businessMinutesRemaining: number | null; overdue: boolean; createdAt: string; claimedByMe: boolean; claimed: boolean };
@@ -252,6 +254,8 @@ function EscalationDetail({ id }: { id: string }) {
               <details style={{ marginTop: 8 }}><summary className="small">Public description</summary><p className="small" style={{ whiteSpace: "pre-wrap", marginTop: 6 }}>{ctx.packet.packet.description.publicJobDescription}</p></details>
             </Card>
           ) : null}
+          {/* "Have a recruiter check this" from the pool board (plan F9): the board as it stood when they asked. */}
+          {snapshotOf(e.contextSnapshot) ? <BoardSnapshotCard snapshot={snapshotOf(e.contextSnapshot)!} /> : null}
           {ctx.candidate ? (
             <Card title={`Candidate: ${ctx.candidate.name}`}>
               <dl className="kv"><dt>Email</dt><dd>{ctx.candidate.email ?? "none"}</dd><dt>Phone</dt><dd>{ctx.candidate.phone ?? "none"}</dd><dt>Stage</dt><dd>{ctx.application?.stage}</dd></dl>

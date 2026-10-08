@@ -2,12 +2,13 @@ import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle
 import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeMarksFor, addCalendarDays, boardPostingOf, can, closingDayWords, companyToday, groupFor, isBoardChannel, isPostingTask, mayDecideApproval, openFlagsMessage, ownerGroup, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unresolvedFlags } from "@ros/core";
 import { legalCheckFor, legalCheckMessage } from "./packet-approval";
 import { HELD_STATUS, detectStuckRoles } from "@ros/agents";
-import { companyOnboarding, companyVerifiedAt, type CompanyOnboarding, type GettingStarted, type GettingStartedStep, type MembershipRole } from "@ros/contracts";
+import { companyOnboarding, companyVerifiedAt, type CompanyOnboarding, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
 import { applications, approvalRequests, assessments, candidates, communications, companies, events, intakeSessions, integrations, interviewParticipants, interviewerAvailability, interviews, invitations, memberships, postings, recruiterEscalations, rolePackets, roles, screens, type Tx } from "@ros/db";
 import type { Tenant } from "../middleware/session";
 import { mayDecideByRole } from "./approvers";
 import { APPROVAL_LABEL } from "./role-report";
 import { escalationInScope, inStaffScope, staffMayAsk, staffScopeOf, type StaffScope } from "./staff-scope";
+import { boardView, loadPool } from "./pool";
 
 /**
  * What a decision card says for an approval that has no card of its own: a question in plain words (never an action
@@ -28,9 +29,10 @@ const CHANNEL_NAME: Record<string, string> = { careers_page: "your careers page"
 /**
  * `closing_date`: a role's closing date stopped applications, or stops them tonight or tomorrow night (plan D7), with
  * "Extend by two weeks" (a POST), another date, or closing the role. `share`: the day a job opens, the moment to share it (D8).
+ * `pool_ready`: a role's pool is sorted on the board and waiting for Review and apply (plan F7), with the summary.
  */
 export type BriefCard = {
-  kind: "new_applicants" | "needs_review" | "decision" | "posting_action" | "escalation" | "stuck" | "screening" | "interviews" | "empty" | "getting_started" | "draft" | "closing_date" | "share";
+  kind: "new_applicants" | "needs_review" | "decision" | "posting_action" | "escalation" | "stuck" | "screening" | "interviews" | "empty" | "getting_started" | "draft" | "closing_date" | "share" | "pool_ready";
   title: string;
   body: string;
   roleId?: string;
@@ -39,7 +41,31 @@ export type BriefCard = {
   actions: Array<{ label: string; method: "GET" | "POST"; path: string; body?: Record<string, unknown> }>;
   /** Only on the getting_started card: the ITS company check and the steps this viewer can do (plan B1, B2). */
   gettingStarted?: GettingStarted;
+  /** Only on the pool_ready card: the board's summary, the same as above the board. */
+  pool?: PoolSummary;
 };
+
+/** A pool is ready to review once at least this many people wait to be sorted on the board. */
+export const POOL_READY_MIN = 2;
+
+/**
+ * The pool board's card on Today (plan F7): the role's pool, sorted by the board's rules and waiting for a person, with
+ * the summary's sentences and next steps. It suggests; nothing is applied until someone uses Review and apply.
+ */
+async function poolReadyCard(tx: Tx, role: typeof roles.$inferSelect, scope: StaffScope | null): Promise<BriefCard | null> {
+  const pool = await loadPool(tx, { roleId: role.id, scopeApplicationId: scope?.applicationId ?? null });
+  const summary = boardView(pool, new Date()).summary;
+  if (summary.toSort < POOL_READY_MIN) return null;
+  const steps = summary.nextSteps.map((s) => `${s.label}: ${s.name}. ${s.reason}`);
+  return {
+    kind: "pool_ready",
+    title: `${summary.toSort} ${summary.toSort === 1 ? "person" : "people"} to sort for ${role.title}`,
+    body: [...summary.sentences, ...(steps.length ? ["Suggested next steps:", ...steps] : [])].join("\n"),
+    roleId: role.id,
+    actions: [{ label: "Open the board", method: "GET", path: `/roles/${role.id}/talent?view=board` }, { label: "Review and apply", method: "GET", path: `/roles/${role.id}/talent?view=board&review=1` }],
+    pool: summary,
+  };
+}
 
 export type Brief = { generatedAt: string; cards: BriefCard[]; summary: string };
 
@@ -125,6 +151,8 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
 
   // Telling candidates a private decision (founder decision B6) is offered to those who may decline.
   const tells = !viewer || can(viewer.role, "application.reject");
+  // The pool board's card (plan F7) goes to those who can apply its suggestions (Review and apply needs application.act).
+  const sortsPools = !viewer || can(viewer.role, "application.act");
   // Who posts on the boards (plan D3): when ITS does, the posting and taking-down work is ITS's, not a card for the team.
   const [company] = await tx.select({ settings: companies.settings, timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId)).limit(1);
   const teamPosts = boardPostingOf(company?.settings) === "self";
@@ -169,6 +197,8 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     if (manualPostings.length) {
       cards.push({ kind: "posting_action", title: `${role.title}: post it on ${manualPostings.map((p) => CHANNEL_NAME[p.channel] ?? p.channel).join(", ")} from your own account`, body: "These boards are not connected to the product. The role's Posting tab has the posting package, each board's own apply link and the steps; record the public URL there once it is up.", roleId: role.id, actions: [{ label: "See instructions", method: "GET", path: `/roles/${role.id}?tab=posting` }] });
     }
+    const pool = sortsPools && apps.length >= POOL_READY_MIN ? await poolReadyCard(tx, role, scope) : null;
+    if (pool) cards.push(pool);
     const scr = apps.length ? await tx.select().from(screens).where(and(eq(screens.companyId, companyId), inArray(screens.applicationId, apps.map((a) => a.id)))) : [];
     const invited = scr.filter((s) => s.status === "invited" || s.status === "reminded").length;
     const talking = scr.filter((s) => s.status === "in_progress").length;
@@ -251,7 +281,8 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   }
   // Today answers four questions (docs/FOUNDER-CONTEXT.md §08): what needs me, who is worth a look, what is at risk, what was done for me.
   const needsMe = cards.filter((c) => c.kind === "decision" || c.kind === "needs_review").length;
-  const strongIds = new Set((await tx.select({ id: assessments.applicationId }).from(assessments).where(and(eq(assessments.companyId, companyId), eq(assessments.overall, "strong")))).map((r) => r.id));
+  // Strong by each person's latest reading only (plan F5): an earlier Strong résumé reading a scorecard has since replaced does not count.
+  const strongIds = new Set((await tx.select({ id: applications.id }).from(applications).innerJoin(assessments, eq(assessments.id, applications.latestAssessmentId)).where(and(eq(applications.companyId, companyId), eq(assessments.overall, "strong")))).map((r) => r.id));
   const companyApps = (await tx.select({ id: applications.id, roleId: applications.roleId, stage: applications.stage }).from(applications).where(eq(applications.companyId, companyId))).filter((a) => inStaffScope(scope, { roleId: a.roleId, applicationId: a.id }));
   const companyMarks = await activeMarksFor(tx, companyApps.filter((a) => strongIds.has(a.id)).map((a) => a.id));
   const strongWaiting = companyApps.filter((a) => strongIds.has(a.id) && groupFor(a, companyMarks.get(a.id), now) === "waiting_on_you").length;

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ApplicationSummary } from "../../apps/web/src/api/client";
-import { READING, appliedWhen, applyView, defaultView, emptyText, fold, isStillApplying, matchesQuery, orderRows, readingCounts, readingOf, stageSummary, stillApplyingCount, stripItems, waitingOnYouCount, waitingText, type TalentView } from "../../apps/web/src/talent-list";
+import { ORDERS, READING, appliedWhen, applyView, defaultView, emptyText, fold, isStillApplying, matchesQuery, orderRows, readingCounts, readingOf, stageSummary, stillApplyingCount, stripItems, waitingOnYouCount, waitingText, type TalentView } from "../../apps/web/src/talent-list";
 
 /**
- * The Talent list (plan A3; founder decisions B3 and B6): the stage strip, the reading chip, the filters, search and the
- * three orders. Readings only ever filter; no order uses an AI reading.
+ * The Talent list (plan A3; founder decisions B2, B3 and B6): the stage strip, the reading chip, the filters, search and
+ * the four orders. The AI reading's words only ever filter; the match score, worked out by code from the checked
+ * findings, can order the list.
  */
 let n = 0;
 function row(over: Partial<ApplicationSummary> & { name?: string; overall?: string } = {}): ApplicationSummary {
@@ -97,6 +98,21 @@ describe("filters, search and order", () => {
     expect(orderRows(weakFirst, "newest").map((a) => a.candidate?.name)).toEqual(["Zed", "Amy"]);
   });
 
+  it("orders by the match score, highest first, people with no score yet last and newest first among equals (B2)", () => {
+    const high = row({ name: "High", score: 91, appliedAt: "2026-10-01T10:00:00.000Z" });
+    const mid = row({ name: "Mid", score: 62, appliedAt: "2026-10-05T10:00:00.000Z" });
+    const tieOld = row({ name: "Tie old", score: 62, appliedAt: "2026-10-02T10:00:00.000Z" });
+    const none = row({ name: "None", score: null, appliedAt: "2026-10-08T10:00:00.000Z" });
+    const older = row({ name: "Older answer", appliedAt: "2026-10-09T10:00:00.000Z" }); // an answer from before the score has none at all
+    expect(orderRows([none, tieOld, older, mid, high], "score").map((a) => a.candidate?.name)).toEqual(["High", "Mid", "Tie old", "Older answer", "None"]);
+    expect(applyView([none, high], view({ order: "score" })).map((a) => a.candidate?.name)).toEqual(["High", "None"]);
+  });
+
+  it("offers Score, Newest, Waiting longest and Name, and opens on the score from a link", () => {
+    expect(ORDERS.map((o) => o.label)).toEqual(["Score", "Newest first", "Waiting longest", "Name"]);
+    expect(defaultView(params("order=score"), null)).toEqual(view({ order: "score" }));
+  });
+
   it("counts each reading within the column and the waiting toggle", () => {
     expect(readingCounts(all, { stage: "all", waiting: false })).toEqual({ any: 4, strong: 1, potential: 1, missing_must_have: 0, closer_look: 0 });
     expect(readingCounts(all, { stage: "shortlist", waiting: false })).toEqual({ any: 1, strong: 0, potential: 0, missing_must_have: 0, closer_look: 0 });
@@ -155,7 +171,7 @@ describe("still applying (plan E6)", () => {
 
   it("counts them beside the strip: the API's count, or the rows' when an older answer has none", () => {
     expect(stillApplyingCount({ ...counts, stillApplying: 2 }, all)).toBe(2);
-    expect(stillApplyingCount(counts, all)).toBe(2);
+    expect(stillApplyingCount({ ...counts, stillApplying: undefined }, all)).toBe(2);
     expect(stillApplyingCount(null, [])).toBe(0);
   });
 

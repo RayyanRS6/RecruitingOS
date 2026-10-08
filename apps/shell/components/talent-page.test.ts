@@ -36,11 +36,11 @@ const maria = {
   ownerStage: "new", ownerStageLabel: "New", mark: null, tags: [] as string[], stageMoves: moves("new", { offer: "Offers are made outside the app for now; when they accept, choose Hired." }), toldState: null as string | null,
   candidate: { id: "c1", name: "Maria Reyes", email: "maria@example.com", phone: null, locationText: "Tustin, CA" }, extractionSummary: null,
   assessment: { overall: "strong", confidence: "high", summary: "Active RDH license.", strengths: [], concerns: [] }, evidence,
-  appliedAt: daysAgo(4), stageChangedAt: daysAgo(3), daysInStage: 3, candidateToldAt: null, decisionMessageWaiting: false,
+  appliedAt: daysAgo(4), stageChangedAt: daysAgo(3), daysInStage: 3, candidateToldAt: null, decisionMessageWaiting: false, score: 91 as number | null,
 };
 const luis = {
   ...maria, id: "a2", stage: "rejected", stageLabel: "Not moving forward", group: "not_moving_forward", ownerStage: "not_moving_forward", ownerStageLabel: "Not moving forward", stageMoves: moves("not_moving_forward"), toldState: "not_told",
-  candidate: { id: "c2", name: "Luis Ortega", email: "luis@example.com", phone: null, locationText: null }, assessment: null, daysInStage: 1,
+  candidate: { id: "c2", name: "Luis Ortega", email: "luis@example.com", phone: null, locationText: null }, assessment: null, daysInStage: 1, score: null,
 };
 const counts = { total: 2, byOwnerStage: { new: 1, longlist: 0, shortlist: 0, interviewing: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 1 }, byGroup: { waiting_on_you: 1, in_process: 0, not_moving_forward: 1, hired: 0 }, notTold: 1, holdsEnded: 0 };
 
@@ -96,9 +96,29 @@ describe("the Talent page", () => {
     expect(text(html)).toContain("Waiting on you 3 days");
     expect(text(html)).toContain("Applied 4 days ago");
     expect(text(html)).toContain("Strong match");
-    // the stage button on the row, and room kept for the match score
+    // the stage button on the row, and the match score's badge (founder decision B2)
     expect(html).toContain('aria-label="Stage: New. Move to another stage"');
-    expect(html).toContain('class="score-slot" aria-hidden="true"');
+    expect(html).toMatch(/<span class="score-slot"><span class="score good sm" title="Match score 91 out of 100">/);
+    // the list sorts by the score too, and the strip above it offers to sort the pool onto the board
+    expect(html).toContain('<option value="score">Score</option>');
+    expect(text(html)).toContain("Sort the pool");
+    expect(html).toMatch(/<button type="button" class="on" aria-pressed="true">List<\/button>/);
+  });
+
+  it("shows 'No score yet' on a row nothing could be judged for", () => {
+    nav.search = "ownerStage=not_moving_forward";
+    const html = render(client([]), createElement(People));
+    expect(html).toContain('<span class="score-slot"><span class="score none sm">No score yet</span></span>');
+  });
+
+  it("says on a row what the score rests on, and when the reading was made against an earlier version of the role", () => {
+    nav.search = "";
+    const qc = client([]);
+    const label = "Read against version 1 of the role; the role is now on version 2.";
+    qc.setQueryData(["applications", "r1"], { applications: [{ ...maria, coverage: { known: 3, total: 4, words: "Based on 3 of 4 requirements" }, readingVersion: { readAgainst: 1, current: 2, label } }, luis], counts });
+    const html = render(qc, createElement(People));
+    expect(html).toContain('<span class="score-slot" title="Based on 3 of 4 requirements"><span class="score good sm"');
+    expect(html).toMatch(new RegExp(`<span title="${label.replace(/[.;]/g, "\\$&")}">Read against version (<!-- -->)?1</span>`));
   });
 
   it("follows a link to the people not told yet, with the way to send them the decision message", () => {

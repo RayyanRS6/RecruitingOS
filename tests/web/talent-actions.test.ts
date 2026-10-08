@@ -255,4 +255,13 @@ describe("evidence marks", () => {
     // past the step, nothing is held any more
     expect(closerLook(detail("interview_recommended", [screen])).needsCloserLook).toBe(false);
   });
+
+  it("mirrors the check on an Essential skill (plan F3): a Strong reading whose own quote goes against one needs a closer look", () => {
+    const against = { competencyKey: "chairside", finding: "contradicted", evidence: { source: "resume", quote: "I avoid chairside work" } };
+    const detail = (importance: string) => ({ stage: "triaged", assessments: [{ id: "a1", kind: "triage", overall: "strong", confidence: "high", createdAt: "2026-10-01T00:00:00.000Z", result: { summary: "s", strengths: [], concerns: [], unknowns: [], rationale: "r", recommendation: "screen", requirementFindings: [], competencyFindings: [against] } }], documents: [], extraction: null, packetLabels: { mustHaves: [], competencies: [{ key: "chairside", name: "Chairside skill", importance }], questions: [] } }) as unknown as ApplicationDetail;
+    const look = closerLook(detail("essential"));
+    expect(look).toMatchObject({ needsCloserLook: true, inconsistent: true });
+    expect(look.reason).toBe('The reading says Strong match, but the candidate\'s own words go against an essential skill (Chairside skill): "I avoid chairside work". Read it yourself before anything else happens.');
+    expect(closerLook(detail("helpful")).needsCloserLook).toBe(false);
+  });
 });

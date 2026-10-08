@@ -36,15 +36,21 @@ export function provenMisses(reading: Pick<Reading, "result">, mustHaves?: Reado
 /**
  * The software check before an automatic step (plan A8), as in `readingConsistency` in packages/core: the reading must
  * agree with its own must-have findings. Inconsistent when it says Strong or Potential while a must-have is shown not met
- * by a checked quote, or when it suggests a step (a screen, an interview) for a Weak or Insufficient reading.
+ * by a checked quote, when it says Strong while the candidate's own words go against an Essential skill (plan F3; only
+ * with the role's `skills`), or when it suggests a step (a screen, an interview) for a Weak or Insufficient reading.
  */
-export function readingConsistency(reading: Pick<Reading, "kind" | "overall" | "result">, mustHaves?: ReadonlyArray<{ key: string; text: string }> | null): { consistent: boolean; reason: string | null } {
+export function readingConsistency(reading: Pick<Reading, "kind" | "overall" | "result">, mustHaves?: ReadonlyArray<{ key: string; text: string }> | null, skills?: ReadonlyArray<{ key: string; name: string; importance?: string | null }> | null): { consistent: boolean; reason: string | null } {
   const misses = provenMisses(reading, mustHaves);
   const words = OVERALL_WORDS[reading.overall] ?? reading.overall;
   if ((reading.overall === "strong" || reading.overall === "potential") && misses.length) {
     const miss = misses[0];
     const name = mustHaves?.find((m) => m.key === miss.requirementKey)?.text;
     return { consistent: false, reason: `The reading says ${words}, but the candidate's own words show a must-have is not met${name ? ` (${name})` : ""}: "${miss.evidence!.quote!.trim()}". Read it yourself before anything else happens.` };
+  }
+  if (reading.overall === "strong" && skills?.length) {
+    const essential = new Map(skills.filter((s) => s.importance === "essential").map((s) => [s.key, s.name]));
+    const against = (reading.result.competencyFindings ?? []).find((f) => f.finding === "contradicted" && essential.has(f.competencyKey) && !!f.evidence?.quote?.trim() && !f.evidence.unquoted);
+    if (against) return { consistent: false, reason: `The reading says ${words}, but the candidate's own words go against an essential skill (${essential.get(against.competencyKey)}): "${against.evidence!.quote!.trim()}". Read it yourself before anything else happens.` };
   }
   const rec = reading.result.recommendation;
   const step = reading.kind === "triage" ? (rec === "screen" ? "a screen" : null) : rec === "strong_interview" || rec === "interview" ? "an interview" : null;
@@ -67,7 +73,7 @@ export function closerLook(a: ApplicationDetail): { needsCloserLook: boolean; as
   const assessmentUnavailable = waiting && a.assessments.length === 0;
   const insufficient = !!triage && (triage.result.recommendation === "review_manually" || triage.overall === "unknown");
   const checked = latest && ((waiting && latest.kind === "triage") || (a.stage === "screen_complete" && latest.kind === "screen")) ? latest : null;
-  const consistency = checked ? readingConsistency(checked, a.packetLabels?.mustHaves) : { consistent: true, reason: null };
+  const consistency = checked ? readingConsistency(checked, a.packetLabels?.mustHaves, a.packetLabels?.competencies) : { consistent: true, reason: null };
   const needsCloserLook = (waiting && (assessmentUnavailable || insufficient)) || !consistency.consistent;
   const parts: string[] = [];
   if (assessmentUnavailable) parts.push(ASSESSMENT_UNAVAILABLE_TEXT);

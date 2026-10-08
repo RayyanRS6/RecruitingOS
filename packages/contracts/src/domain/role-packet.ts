@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { Actor, Evidence, ISODate, Location } from "./common";
+import { Importance } from "./match";
 
 /**
  * The Role Packet is the central object of the system (docs/02). Every agent reads it;
@@ -55,6 +56,8 @@ export const Competency = z.object({
   name: z.string().min(1),
   definition: z.string().min(1),
   weight: z.number().min(1).max(5),
+  /** Essential, Important or Helpful, as a person picked it (plan F3); without it the weight stands for one (`importanceOf`). */
+  importance: Importance.optional(),
   evaluatedIn: z.enum(["screen", "interview", "both"]),
   indicators: z.array(z.string()).min(1),
 });

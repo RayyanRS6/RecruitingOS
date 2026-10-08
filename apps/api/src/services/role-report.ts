@@ -1,8 +1,9 @@
 import { and, asc, desc, eq, inArray, notInArray, or, sql } from "drizzle-orm";
-import { ApplicationStage as ApplicationStageEnum, MARK_LABEL, OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum, type ApplicationStage, type MarkKind, type OwnerGroup, type OwnerStage, type ToldState } from "@ros/contracts";
+import { ApplicationStage as ApplicationStageEnum, MARK_LABEL, OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum, type ApplicationStage, type MarkKind, type OwnerGroup, type OwnerStage, type PoolMustHaveCount, type PoolSummary, type ToldState } from "@ros/contracts";
 import { DECISION_STAGES, OUTCOME_STATEMENT, POSTING_TASK_KINDS, SOURCES, SOURCE_LABEL, STAGE_LABEL, groupFor, holdEnded, isSource, ownerGroup, ownerStage } from "@ros/core";
 import { applicationMarks, applications, approvalRequests, assessments, candidates, communications, companies, events, hiringOutcomes, interviews, recruiterEscalations, roles, type Tx } from "@ros/db";
 import { localDays } from "@ros/workflows";
+import { boardView, loadPool } from "./pool";
 
 /**
  * The role report (docs/spec/21 section 7, P1): the ten figures an owner asked for, computed from the system of record
@@ -52,6 +53,11 @@ export type RoleReport = {
     statement: string; hired: number; withdrew: number; declinedByEmployer: number; declinedOffer: number; noHire: number; talentPool: number; corrections: number;
     role: { outcome: string; recordedAt: string } | null; rolesByOutcome: Record<string, number>; declineReasons: Array<{ reason: string; label: string; count: number }>;
   };
+  /**
+   * One role only: how the people read so far meet each must-have (shown, partly, shown not met, not known), how many
+   * show every one, and the gentle note when one must-have is not shown by most people. Counts only, no names.
+   */
+  mustHaves?: { people: number; showEveryMustHave: number; byMustHave: PoolMustHaveCount[]; stricter: PoolSummary["stricter"] };
 };
 
 /** `talentPoolOptOut`: the person asked not to be kept for future roles, so they are never counted in the talent pool. */
@@ -165,7 +171,13 @@ function activeMarkOf(data: ReportData): Map<string, MarkRow> {
 export async function roleReport(tx: Tx, input: { companyId: string; roleId: string; now: Date }): Promise<RoleReport | null> {
   const data = await loadReportData(tx, { companyId: input.companyId, roleIds: [input.roleId] });
   if (!data.roles.length) return null;
-  return composeRoleReport(data, input.now);
+  const report = composeRoleReport(data, input.now);
+  // How the pool meets each must-have (plan F7), from the same findings as the board, with its gentle "stricter than needed?" note.
+  const pool = await loadPool(tx, { roleId: input.roleId });
+  const summary = boardView(pool, input.now).summary;
+  // Everyone on the board with a reading; each must-have's own total counts only those read against a version that had it.
+  const people = pool.rows.filter((r) => !r.stillApplying && r.placement.column && r.match).length;
+  return { ...report, mustHaves: { people, showEveryMustHave: summary.showEveryMustHave, byMustHave: summary.mustHaves, stricter: summary.stricter } };
 }
 
 export type CustomerRoleSummary = { id: string; title: string; status: string; openedAt: string | null; closedAt: string | null; applicants: number; waitingOnYou: number; hired: number };

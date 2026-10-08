@@ -105,6 +105,8 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     const html = decodeEntities(await page.text());
     expect(html).toContain("Before you send");
     expect(html).toContain("<strong>Ledger Dental</strong> runs this hiring process and is the employer");
+    // the match score is said before anyone applies (founder decision B2): worked out from what they send, and a person decides
+    expect(html).toContain("works out a match score from what you send, checked against the job's requirements; the team sees what the score is based on, and a person always decides.");
     expect(html).toContain("What we collect:");
     expect(html).toContain("Why:");
     expect(html).toContain("Who can see it:");

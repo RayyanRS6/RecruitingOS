@@ -1,4 +1,4 @@
-import type { EvidenceAssessment, RolePacket, ScreenAssessment } from "@ros/contracts";
+import { importanceOf, type EvidenceAssessment, type RolePacket, type ScreenAssessment } from "@ros/contracts";
 
 /**
  * "Insufficient evidence" as an explicit state (docs/spec/21 section 7, P1; docs/FOUNDER-CONTEXT.md, "What should count
@@ -42,10 +42,15 @@ export type EvidenceView = {
   confidenceReasons: string[];
 };
 
-/** True when the assessment itself says the evidence was insufficient. Only the résumé assessment counts; a screen scorecard has its own vocabulary. */
+/**
+ * True when the reading itself says the evidence was insufficient: a résumé reading that recommends reading it manually
+ * or reads "unknown", or a screening scorecard in its own words, one that left it open (overall "unknown", or "hold").
+ */
 export function insufficientEvidence(latest: AssessmentLike | null | undefined): boolean {
-  if (!latest || latest.kind !== "triage") return false;
+  if (!latest) return false;
   const rec = (latest.result as { recommendation?: string }).recommendation;
+  if (latest.kind === "screen") return latest.overall === "unknown" || rec === "hold";
+  if (latest.kind !== "triage") return false;
   return rec === "review_manually" || latest.overall === "unknown";
 }
 
@@ -78,12 +83,13 @@ export function provenMisses(latest: Pick<AssessmentLike, "result">, packet?: Pi
 /**
  * The software check before any automatic step (plan A8): the assistant's reading must agree with its own must-have
  * findings. It fails when the reading is Strong or Potential but a must-have is shown as not met by a verified quote
- * (the quote check leaves a "no" only on a quote it found in the candidate's own words), and when a step is suggested
- * for a Weak or Insufficient reading. Pure: the workflows call it before `gate()` and the pages read it off the same
- * assessment. `packet` limits the check to the role's must-haves and names them; without it every requirement finding
- * counts (the assessment writes one per must-have).
+ * (the quote check leaves a "no" only on a quote it found in the candidate's own words), when a Strong reading's own
+ * findings show, by a verified quote, that an Essential skill goes against them (plan F3: importance counts here), and
+ * when a step is suggested for a Weak or Insufficient reading. Pure: the workflows call it before `gate()` and the pages
+ * read it off the same assessment. `packet` limits the check to the role's must-haves and names them; without it every
+ * requirement finding counts (the assessment writes one per must-have). The skills are checked only with the packet.
  */
-export function readingConsistency(latest: AssessmentLike, packet?: Pick<RolePacket, "requirements"> | null): ReadingConsistency {
+export function readingConsistency(latest: AssessmentLike, packet?: (Pick<RolePacket, "requirements"> & Partial<Pick<RolePacket, "competencies">>) | null): ReadingConsistency {
   const mustHaves = packet ? new Map(packet.requirements.mustHaves.map((m) => [m.key, m.text])) : null;
   const misses = provenMisses(latest, packet);
   const words = OVERALL_WORDS[latest.overall] ?? latest.overall;
@@ -92,6 +98,11 @@ export function readingConsistency(latest: AssessmentLike, packet?: Pick<RolePac
     const name = mustHaves?.get(miss.requirementKey);
     return { consistent: false, reason: `The reading says ${words}, but the candidate's own words show a must-have is not met${name ? ` (${name})` : ""}: "${miss.evidence!.quote!.trim()}". Read it yourself before anything else happens.` };
   }
+  if (latest.overall === "strong" && packet?.competencies) {
+    const essential = new Map(packet.competencies.filter((c) => importanceOf(c) === "essential").map((c) => [c.key, c.name]));
+    const against = (latest.result.competencyFindings ?? []).find((f) => f.finding === "contradicted" && essential.has(f.competencyKey) && !!f.evidence?.quote?.trim() && !f.evidence.unquoted);
+    if (against) return { consistent: false, reason: `The reading says ${words}, but the candidate's own words go against an essential skill (${essential.get(against.competencyKey)}): "${against.evidence!.quote!.trim()}". Read it yourself before anything else happens.` };
+  }
   const step = suggestedStep(latest);
   if (step && (latest.overall === "weak" || latest.overall === "unknown")) {
     return { consistent: false, reason: `The assistant suggested ${step} for a reading of ${words}, which does not add up. Read it yourself before anything else happens.` };
@@ -99,14 +110,15 @@ export function readingConsistency(latest: AssessmentLike, packet?: Pick<RolePac
   return { consistent: true, reason: null };
 }
 
-export function evidenceView(input: { stage: string; latest: AssessmentLike | null | undefined; resumeUnreadable: boolean }): EvidenceView {
+/** `packet` (the version the reading was made against) makes the consistency check the same one the workflows ran. */
+export function evidenceView(input: { stage: string; latest: AssessmentLike | null | undefined; resumeUnreadable: boolean; packet?: (Pick<RolePacket, "requirements"> & Partial<Pick<RolePacket, "competencies">>) | null }): EvidenceView {
   const latest = input.latest ?? null;
   const waiting = input.stage === "triaged";
   // An application only reaches "triaged" through the assessment step: with an assessment, or by the branch that gave up on one.
   const assessmentUnavailable = waiting && !latest;
   // A held step waits on the owner where the reading was made: the résumé reading at "triaged", the scorecard at "screen complete".
   const checked = !!latest && ((waiting && latest.kind === "triage") || (input.stage === "screen_complete" && latest.kind === "screen"));
-  const consistency = checked ? readingConsistency(latest!) : { consistent: true, reason: null };
+  const consistency = checked ? readingConsistency(latest!, input.packet) : { consistent: true, reason: null };
   const unknowns = latest?.result.unknowns.map((u) => u.question) ?? [];
   const needsCloserLook = (waiting && (assessmentUnavailable || insufficientEvidence(latest))) || !consistency.consistent;
   const parts: string[] = [];

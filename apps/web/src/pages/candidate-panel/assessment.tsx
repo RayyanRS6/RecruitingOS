@@ -1,15 +1,17 @@
 "use client";
 
 import { type ReactNode, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, EvidenceChip } from "@ros/ui";
-import { api, ApiError, type ApplicationDetail, type AssessmentResult, type Screen } from "../../api/client";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Alert, Button, Card, Chip, Dialog, EvidenceChip } from "@ros/ui";
+import { api, ApiError, type ApplicationDetail, type AssessmentResult, type Me, type Screen } from "../../api/client";
+import { ACCESS_LIMITS, accessWords } from "../../recruiter-access";
 import { toast } from "../../toast";
 import { AskRecruiter } from "../../components/AskRecruiter";
 import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, NO_QUOTE_LABEL, RESUME_UNREADABLE_TEXT, SCORECARD_UNAVAILABLE_TEXT, closerLook, competencyUnquoted, isUnquoted, openScreenOf, requirementUnquoted, resumeUnreadable, scorecardUnavailable, screenQuestionText } from "../../evidence";
 import { APPLIED_IN_ONE_VISIT, DECLINED_WORDS, EDITED_WORDS, SCREEN_STATUS_LABEL, TAPPED_WORDS, answerLines, generalNotes, recruiterNoteLabel, screenOrigin, transcriptBubble, unansweredWords } from "../../screen-view";
 import { actionToast } from "../../talent-actions";
 import { REC_LABEL } from "./helpers";
+import { competencyChip, importanceTag, orderCompetencyFindings, orderRequirementFindings, requirementChip, skillLabels } from "./match-view";
 
 /**
  * The evidence on the candidate panel (plan A10): the assistant's readings with every claim's source and quote, the
@@ -36,22 +38,44 @@ const FLAG_KINDS: Array<[string, string]> = [
   ["missing_context", "Missed context we gave"],
 ];
 
-/** One-click flag with the founder context's taxonomy (§23). It records; it never retrains anything on its own. */
+/** Said before a team member's flag goes to ITS: what the recruiter will see, and for how long (Q31: say the real access). */
+export const FLAG_SHARE = `This asks an ITS recruiter to check the reading. Once they pick it up they see ${accessWords("application")}. ${ACCESS_LIMITS}`;
+
+/**
+ * One-click flag with the founder context's taxonomy (§23). It records; it never retrains anything on its own. A team
+ * member's flag reaches an ITS recruiter as a check of this reading (plan F11), so choosing a kind asks first, saying
+ * what the recruiter will see, and the toast says what the API did. An ITS recruiter's own flag is only recorded.
+ */
 function FlagAssessment({ applicationId, assessmentId }: { applicationId: string; assessmentId: string }) {
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
+  const staff = !!me.data?.staffAccess;
   const [kind, setKind] = useState("");
   const [done, setDone] = useState(false);
   const flag = useMutation({
-    mutationFn: (k: string) => api.post(`/api/v1/applications/${applicationId}/assessments/${assessmentId}/flag`, { kind: k }),
-    onSuccess: () => { setDone(true); toast("Flagged.", "A person reviews these and they improve the system."); },
+    mutationFn: (k: string) => api.post<{ message?: string; review?: { escalationId: string; created: boolean } | null }>(`/api/v1/applications/${applicationId}/assessments/${assessmentId}/flag`, { kind: k }),
+    onSuccess: (r) => { setDone(true); toast(r.message ?? "Flagged and recorded.", "Nothing changes for the candidate."); },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not flag this."),
   });
   if (done) return <span className="small muted">Flagged, thank you.</span>;
+  const label = FLAG_KINDS.find(([v]) => v === kind)?.[1] ?? "";
   return (
     <span className="row" style={{ gap: 6 }}>
-      <select className="select" style={{ width: "auto", padding: "4px 8px", fontSize: 12.5 }} value={kind} onChange={(e) => { setKind(e.target.value); if (e.target.value) flag.mutate(e.target.value); }} aria-label="Something wrong with this assessment?">
+      <select className="select" style={{ width: "auto", padding: "4px 8px", fontSize: 12.5 }} value={kind} onChange={(e) => { setKind(e.target.value); if (e.target.value && staff) flag.mutate(e.target.value); }} aria-label="Something wrong with this assessment?">
         <option value="">Something wrong?</option>
         {FLAG_KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
       </select>
+      {kind && !staff ? (
+        <Dialog
+          open
+          onClose={() => setKind("")}
+          title="Ask an ITS recruiter to check this reading?"
+          sub={`You chose: ${label}.`}
+          footer={<><Button variant="ghost" onClick={() => setKind("")} disabled={flag.isPending}>Cancel</Button><Button variant="primary" loading={flag.isPending} onClick={() => flag.mutate(kind)}>Send for a check</Button></>}
+        >
+          <p>{FLAG_SHARE}</p>
+          <p className="small muted">Nothing changes for the candidate, and they are not told.</p>
+        </Dialog>
+      ) : null}
     </span>
   );
 }
@@ -124,6 +148,7 @@ export function AssessmentCard({ assessment, detail, roleId, labels, title }: { 
   const result: AssessmentResult = assessment.result;
   const mustHave = (key: string) => labels.mustHaves.find((m) => m.key === key)?.text ?? key.replace(/^mh_\d+_/, "").replace(/_/g, " ");
   const competency = (key: string) => labels.competencies.find((c) => c.key === key)?.name ?? key.replace(/_/g, " ");
+  const skills = skillLabels({ packetLabels: labels });
   const question = (key: string) => screenQuestionText(detail, key) ?? key.replace(/_/g, " ");
   // The reading the "closer look" check was made on carries the mark (plan A8): the résumé's while it waits for review,
   // the screen's once the screen is complete; with the reason when the reading disagrees with its own findings.
@@ -144,9 +169,37 @@ export function AssessmentCard({ assessment, detail, roleId, labels, title }: { 
           {result.availability?.stated ? <><dt>Availability</dt><dd>{result.availability.stated} <Chip tone={MET_TONE[result.availability.matchesSchedule] ?? "neutral"}>{result.availability.matchesSchedule.replace("_", " ")}</Chip></dd></> : null}
         </dl>
       ) : null}
-      {result.requirementFindings?.length ? <div className="block"><h3>Must-haves</h3><ul>{result.requirementFindings.map((r, j) => <li key={j}>{mustHave(r.requirementKey)} <Chip tone={MET_TONE[r.met] ?? "neutral"}>{r.met}</Chip>{r.evidence?.quote ? <span className="small muted"> "{r.evidence.quote}"</span> : requirementUnquoted(r) ? <NoQuote /> : null}</li>)}</ul></div> : null}
+      {/* the most serious finding first, then what counts most (plan F2) */}
+      {result.requirementFindings?.length ? (
+        <div className="block">
+          <h3>Must-haves</h3>
+          <ul>
+            {orderRequirementFindings(result.requirementFindings, labels.mustHaves).map((r, j) => {
+              const chip = requirementChip(r);
+              return <li key={`${r.requirementKey}:${j}`}>{mustHave(r.requirementKey)} <Chip tone={chip.tone}>{chip.words}</Chip>{r.evidence?.quote ? <span className="small muted"> "{r.evidence.quote}"</span> : requirementUnquoted(r) ? <NoQuote /> : null}</li>;
+            })}
+          </ul>
+        </div>
+      ) : null}
       {result.questionFindings?.length ? <div className="block"><h3>Answers</h3><ul>{result.questionFindings.map((f, j) => <li key={j}><span className="muted small">{question(f.questionKey)}</span><br />{f.finding} {f.answered ? <Chip tone={MET_TONE[f.meetsModelAnswer] ?? "neutral"}>{f.meetsModelAnswer === "unknown" ? "recorded" : f.meetsModelAnswer}</Chip> : null}</li>)}</ul></div> : null}
-      {result.competencyFindings?.length ? <div className="block"><h3>Competencies</h3><div className="row">{result.competencyFindings.map((c, j) => <Chip key={j} tone={MET_TONE[c.finding] ?? "neutral"}>{competency(c.competencyKey)}: {c.finding.replace(/_/g, " ")}{competencyUnquoted(c) ? ` (${NO_QUOTE_LABEL})` : ""}</Chip>)}</div></div> : null}
+      {result.competencyFindings?.length ? (
+        <div className="block">
+          <h3>Skills</h3>
+          <ul>
+            {orderCompetencyFindings(result.competencyFindings, skills).map((c, j) => {
+              const chip = competencyChip(c);
+              const tag = importanceTag(skills, c.competencyKey);
+              return (
+                <li key={`${c.competencyKey}:${j}`}>
+                  {competency(c.competencyKey)} {tag ? <span className="sbar-tag">{tag}</span> : null} <Chip tone={chip.tone}>{chip.words}</Chip>
+                  {c.evidence?.quote ? <span className="small muted"> "{c.evidence.quote}"</span> : competencyUnquoted(c) ? <NoQuote /> : null}
+                  {c.note ? <><br /><span className="small muted">{c.note}</span></> : null}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
       <div className="block"><h3>Strengths</h3>{result.strengths.length ? <ul>{result.strengths.map((s, j) => <li key={j}>{s.claim} <EvidenceChip source={s.evidence.source} />{s.evidence.quote ? <span className="small muted"> "{s.evidence.quote}"</span> : isUnquoted(s.evidence) ? <NoQuote /> : null}</li>)}</ul> : <p className="muted small">None recorded.</p>}</div>
       <div className="block"><h3>Concerns</h3>{result.concerns.length ? <ul>{result.concerns.map((s, j) => <li key={j}>{s.claim} <EvidenceChip source={s.evidence.source} />{s.evidence.quote ? <span className="small muted"> "{s.evidence.quote}"</span> : isUnquoted(s.evidence) ? <NoQuote /> : null}</li>)}</ul> : <p className="muted small">None recorded.</p>}</div>
       <div className="block"><h3>Open questions</h3>{result.unknowns.length ? <ul>{result.unknowns.map((u, j) => <li key={j}>{u.question} <span className="muted small">({u.whyItMatters})</span></li>)}</ul> : <p className="muted small">Nothing outstanding.</p>}{triage ? <AskInScreen detail={detail} roleId={roleId} unknowns={result.unknowns.length} /> : null}</div>

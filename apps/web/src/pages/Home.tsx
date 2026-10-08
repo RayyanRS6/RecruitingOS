@@ -16,6 +16,7 @@ import { presetOf, requestSentText } from "../recruiter-access";
 import { START_HIRE_HREF } from "../start-hire";
 import { briefDecisionToast } from "../talent-actions";
 import { TODAY_REFRESH, nextStep, setupActionToast } from "../today";
+import { POOL_CARD_NOTE, boardPersonPath, poolCardView } from "./board/board-model";
 import { isDiscardDraft } from "./new-role/rules";
 import { TodayStart } from "./new-role/TodayStart";
 
@@ -64,7 +65,7 @@ export function Home() {
       {canChangeCompany(myRole) ? <AllowanceCard onSentToRecruiter={setSentToRecruiter} /> : null}
       {brief.isLoading ? <Skeleton lines={3} /> : brief.error ? <ErrorState message="Could not load your brief." onRetry={() => brief.refetch()} /> : (
         <div className="stack">
-          {brief.data!.cards.map((card, i) => card.kind === "getting_started" ? <GettingStartedCard key={`setup-${i}`} card={card} onSentToRecruiter={setSentToRecruiter} /> : <BriefCardView key={i} card={card} onSentToRecruiter={setSentToRecruiter} />)}
+          {brief.data!.cards.map((card, i) => card.kind === "getting_started" ? <GettingStartedCard key={`setup-${i}`} card={card} onSentToRecruiter={setSentToRecruiter} /> : card.kind === "pool_ready" && card.pool && card.roleId ? <PoolReadyCard key={`pool-${card.roleId}`} card={card} /> : <BriefCardView key={i} card={card} onSentToRecruiter={setSentToRecruiter} />)}
         </div>
       )}
 
@@ -168,7 +169,42 @@ function cardTone(kind: string, needsYou: boolean): Tone {
 }
 
 function label(kind: string): string {
-  return { new_applicants: "New applicants", needs_review: "Needs you", decision: "Decision", posting_action: "One step", escalation: "Recruiter", stuck: "Stuck", screening: "Screening", interviews: "Your interviews", empty: "Nothing waiting", getting_started: "Getting started", draft: "Draft", closing_date: "Closing date", share: "Live today" }[kind] ?? kind;
+  return { new_applicants: "New applicants", needs_review: "Needs you", decision: "Decision", posting_action: "One step", escalation: "Recruiter", stuck: "Stuck", screening: "Screening", interviews: "Your interviews", empty: "Nothing waiting", getting_started: "Getting started", draft: "Draft", closing_date: "Closing date", share: "Live today", pool_ready: "Ready to sort" }[kind] ?? kind;
+}
+
+/**
+ * A role's pool, sorted on the board and waiting for a person (plan F7): two plain sentences from the board's summary,
+ * up to three next steps naming people (each opens their panel over the board), then the board and Review and apply.
+ * The card suggests; nothing moves until someone applies it, and nobody is emailed.
+ */
+function PoolReadyCard({ card }: { card: BriefCard }) {
+  const view = poolCardView(card.pool!);
+  return (
+    <Card lift>
+      <div className="card-title">
+        <h2 style={{ fontSize: 16 }}>{card.title}</h2>
+        <Pill size="sm" tone="good">{label(card.kind)}</Pill>
+      </div>
+      {view.sentences.length ? <p className="small" style={{ color: "var(--ink-2)" }}>{view.sentences.join(" ")}</p> : null}
+      {view.steps.length ? (
+        <div style={{ marginTop: 10 }}>
+          <p className="small muted" style={{ margin: 0 }}>Suggested next steps</p>
+          <ul className="pool-steps" style={{ marginTop: 6 }}>
+            {view.steps.map((s) => (
+              <li key={s.applicationId}>
+                <span className="next-step-tag">{s.label}</span>
+                <span className="small"><Link to={boardPersonPath(card.roleId!, s.applicationId)}>{s.name}</Link>: {s.reason}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      <div className="row" style={{ marginTop: 12 }}>
+        {card.actions.filter((a) => a.method === "GET").map((a, i) => <Link key={a.path} to={a.path} className={`btn ${i === 0 ? "secondary" : "primary"} sm`}>{a.label}</Link>)}
+      </div>
+      <p className="small muted" style={{ marginTop: 8 }}>{POOL_CARD_NOTE}</p>
+    </Card>
+  );
 }
 
 /**

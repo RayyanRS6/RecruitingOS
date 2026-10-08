@@ -13,6 +13,7 @@ import { assertMayShareDraft } from "./intake";
 import { settleMessageApproval } from "../services/messages";
 import { declineSent, sendApprovedDecline } from "../services/application-actions";
 import { approverRolesOf, mayDecideByRole } from "../services/approvers";
+import { attachBoardSnapshot, emailItsQueue } from "../services/escalation-queue";
 
 export const approvalRoutes = new Hono<Vars>();
 
@@ -148,6 +149,9 @@ escalationRoutes.post("/", requireTenant, async (c) => {
       await assertMayShareDraft(tx, t, body.intakeSessionId);
     }
     const created = await createEscalation(tx, { companyId: t.companyId, roleId, applicationId, kind: body.kind, question: body.question, requestedBy: actor, urgency: body.urgency, intakeSessionId: body.intakeSessionId ?? null });
+    // "Have a recruiter check this" from the pool board (plan F9): the recruiter opens the board as it stood when asked,
+    // with the summary and where each person was placed and why, beside the role's own record.
+    if (body.kind === "review" && roleId && !applicationId) await attachBoardSnapshot(tx, { escalationId: created.id, roleId, tenant: t, now: container.engine.clock() });
     // The plan's recruiter requests count only what the team itself asks for, and going over never refuses one (Q33). A
     // talk about the plan itself (more roles) is not recruiting help and is never counted.
     const allowance = actor.kind === "user" && body.topic !== "plan" ? await entitlements.recordRecruiterAsk(tx, t.companyId, { escalationId: created.id }) : null;
@@ -159,16 +163,7 @@ escalationRoutes.post("/", requireTenant, async (c) => {
   });
   // Past the allowance: ITS is told, for billing; the request itself went ahead like any other.
   if (allowance?.over) await withPlatform(container.db, (tx) => entitlements.flagRecruiterAsksOver(tx, { companyId: t.companyId, companyName, standing: allowance, escalationId: created.id }));
-  const { timeZone } = calendar;
-  // The queue notification is pre-acceptance context (correction 11): category, urgency, expertise and the generic summary. Never the customer's words.
-  await container.integrations.email.send({
-    to: container.env.ITS_QUEUE_EMAIL,
-    from: `${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`,
-    subject: `[${body.kind}] ${preview.urgency} urgency: respond by ${new Date(created.slaDueAt).toLocaleString("en-US", { timeZone })} (${timeZone})`,
-    text: `A customer asked for a recruiter.\n\nCategory: ${body.kind}\nUrgency: ${preview.urgency}\nNeeds: ${preview.requiredExpertise}\nSummary: ${preview.summary}\n\nAccept it in the queue to open the full request: ${container.env.APP_BASE_URL}/recruiter/queue/${created.id}`,
-    idempotencyKey: `escalation:${created.id}`,
-    tags: { template: "escalation" },
-  });
+  await emailItsQueue(container, { id: created.id, kind: body.kind, slaDueAt: created.slaDueAt, urgency: preview.urgency, requiredExpertise: preview.requiredExpertise, summary: preview.summary, timeZone: calendar.timeZone });
   const over = allowance?.over && allowance.limit !== null ? ` Your plan includes ${allowance.limit} recruiter ${allowance.limit === 1 ? "request" : "requests"} and this is number ${allowance.used}. It goes ahead as usual; ITS will talk with you about the extra.` : "";
   return c.json({ id: created.id, slaDueAt: created.slaDueAt, scope, message: `A recruiter will respond by ${deadlineWords(new Date(created.slaDueAt), calendar)} (business hours are ${describeHours(calendar)}).${isUrgent(preview.urgency) ? ` ${URGENT_WORDS}` : ""} They will see ${accessWords(scope)}. ${ACCESS_LIMITS}${over}` }, 201);
 });

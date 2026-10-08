@@ -16,6 +16,7 @@ import { canApproveRole, canEditPacket, canEditPacketJson, canManageRole, canRec
 import { outdatedBoardsLine } from "../publishing";
 import { payShownLabel } from "../role-words";
 import { roleStatus } from "../role-status";
+import { MUST_HAVES_SCORE_LINE, SCORE_WEIGHTS_LINE, checkedInLabel, editorFocusFrom, importanceLabel, type EditorFocus } from "../skills-form";
 import { closeRoleToast } from "../talent-actions";
 import { AfterApproval } from "./AfterApproval";
 import { AcceptingSwitch, ClosedBanner, PostingTab, StillUpAlert } from "./RolePosting";
@@ -57,7 +58,8 @@ export function RoleDetail() {
   const myRole = membership?.role ?? null;
   const companyName = membership?.companyName ?? me.data?.staffAccess?.companyName ?? null;
   // The editor is mounted only while open and starts from the version it was opened on (the one waiting for approval, when there is one).
-  const [editBase, setEditBase] = useState<{ version: number; packet: RolePacket; proposed: boolean; newestAtOpen: number } | null>(null);
+  // `focus` opens it at the must-haves or the skills.
+  const [editBase, setEditBase] = useState<{ version: number; packet: RolePacket; proposed: boolean; newestAtOpen: number; focus: EditorFocus | null } | null>(null);
   // "Show vN" on the approval card: the tabs show the version waiting for approval instead of the one the role runs on.
   const [showProposed, setShowProposed] = useState(false);
   // An open role of a company ITS has not confirmed yet is not public (founder decision B7): the page says so at the top.
@@ -84,6 +86,19 @@ export function RoleDetail() {
     const mine = me.data.memberships.find((m) => m.companyId === me.data?.activeCompanyId)?.role ?? null;
     if (canRecordOutcome(mine) && ["open", "paused"].includes(role.data.status)) setClosing({ outcome: "no_hire", reason: "" });
   }, [wantsClose, role.data, me.data]);
+  // `?edit=must-haves` (the role report's and the pool summary's "stricter than needed" prompt) or `?edit=skills` opens
+  // the editor at that section for someone who may edit; nothing is saved until they save a new version.
+  const wantsEdit = editorFocusFrom(search.get("edit"));
+  const editAsked = useRef(false);
+  useEffect(() => {
+    if (!wantsEdit || editAsked.current || !role.data || !me.data) return;
+    editAsked.current = true;
+    const mine = me.data.memberships.find((m) => m.companyId === me.data?.activeCompanyId)?.role ?? null;
+    const d = role.data;
+    const pending = d.packetApproval?.pending?.editWhileOpen ? d.proposedPacket : null;
+    const from = pending ?? d.currentPacket;
+    if (canEditPacket(mine) && from) setEditBase({ version: from.version, packet: from.packet, proposed: !!pending, newestAtOpen: Math.max(0, ...d.packetVersions.map((v) => v.version)), focus: wantsEdit });
+  }, [wantsEdit, role.data, me.data]);
   const closeWithOutcome = useMutation({
     mutationFn: (body: { outcome: string; reason: string }) => api.post<{ movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number }>(`/api/v1/roles/${id}/outcome`, { outcome: body.outcome, confirm: true, reason: body.reason || undefined }),
     // says who moved to the talent pool privately, which interviews ended, and who was told only that theirs is off (founder decision B6)
@@ -104,7 +119,7 @@ export function RoleDetail() {
   const head = current?.packet;
   const editSource = proposed ?? current;
   const newestVersion = Math.max(0, ...r.packetVersions.map((v) => v.version));
-  const openEditor = () => { if (editSource) setEditBase({ version: editSource.version, packet: editSource.packet, proposed: !!proposed && editSource === proposed, newestAtOpen: newestVersion }); };
+  const openEditor = (focus: EditorFocus | null = null) => { if (editSource) setEditBase({ version: editSource.version, packet: editSource.packet, proposed: !!proposed && editSource === proposed, newestAtOpen: newestVersion, focus }); };
   const share = canShareJob(myRole);
   // "Apply by …" (plan D7): the line the job and careers pages show, beside the role's facts.
   const applyBy = r.closingDate?.closesOn && r.status !== "closed" ? r.closingDate.applyBy : null;
@@ -155,7 +170,7 @@ export function RoleDetail() {
         </Card>
       ) : null}
 
-      {p ? <PacketApprovalCard role={r} onEdit={openEditor} canEdit={editPacket} canManage={manage} canSeePay={canSeePay(myRole)} showingProposed={shown === proposed && !!proposed} onShowProposed={setShowProposed} onApproved={(info) => { setShowProposed(false); setAfterApproval(info); }} /> : null}
+      {p ? <PacketApprovalCard role={r} onEdit={() => openEditor()} canEdit={editPacket} canManage={manage} canSeePay={canSeePay(myRole)} showingProposed={shown === proposed && !!proposed} onShowProposed={setShowProposed} onApproved={(info) => { setShowProposed(false); setAfterApproval(info); }} /> : null}
 
       {p ? (
         <>
@@ -166,7 +181,7 @@ export function RoleDetail() {
             <div className="row">
               <Chip>Packet v{shown!.version}</Chip>
               {talent ? <Button size="sm" icon="eye" onClick={() => setPreviewOpen(true)}>Candidate view</Button> : null}
-              {editPacket ? <Button size="sm" icon="edit" onClick={openEditor}>Edit</Button> : null}
+              {editPacket ? <Button size="sm" icon="edit" onClick={() => openEditor()}>Edit</Button> : null}
               {talent ? <Link to={`/roles/${r.id}/talent`} className="btn primary sm">Talent ({r.counts ? Object.values(r.counts).reduce((a, b) => a + b, 0) : 0})</Link> : null}
             </div>
           </div>
@@ -205,7 +220,12 @@ export function RoleDetail() {
 
             {visibleTab === "requirements" ? (
               <div className="grid-2">
-                <Card title="Must-haves" aside={<CandidatesSeeThis />}><RequirementList items={p.requirements.mustHaves} empty="None listed." /><p className="small muted" style={{ marginTop: 8 }}>The job page lists each one in these words; why it matters and where it is checked stay with your team. "Evidenced in" says where each one is checked; a must-have marked "screen" is asked about in the screening conversation.</p></Card>
+                <Card title="Must-haves" aside={<CandidatesSeeThis />}>
+                  <RequirementList items={p.requirements.mustHaves} empty="None listed." />
+                  <p className="small muted" style={{ marginTop: 8 }}>The job page lists each one in these words; why it matters and where it is checked stay with your team. "Evidenced in" says where each one is checked; a must-have marked "screen" is asked about in the screening conversation.</p>
+                  <p className="small muted" style={{ marginTop: 6 }}>{MUST_HAVES_SCORE_LINE}</p>
+                  {editPacket ? <div className="row" style={{ marginTop: 8 }}><Button size="sm" icon="edit" onClick={() => openEditor("must-haves")}>Change the must-haves</Button></div> : null}
+                </Card>
                 <Card title="Nice-to-haves" aside={<CandidatesSeeThis />}><RequirementList items={p.requirements.niceToHaves} empty="None listed." /></Card>
                 <Card title="Eligibility questions (the only automatic holds)">
                   <p className="small muted" style={{ marginBottom: 8 }}>Candidates answer these when they apply. A "no" on a required one holds the application for your decision: you are reminded, and nothing is sent to the candidate, even if you decline, until someone sends the decision message. Nothing is ever declined automatically.</p>
@@ -218,7 +238,9 @@ export function RoleDetail() {
             {visibleTab === "evaluation" ? (
               <div className="grid-2">
                 <Card title="What we look for">
-                  <ul style={{ paddingLeft: 18, margin: 0 }}>{p.competencies.map((c) => <li key={c.key}><strong>{c.name}</strong> <Chip>{c.evaluatedIn}</Chip><br /><span className="small muted">{c.definition}</span></li>)}</ul>
+                  <ul style={{ paddingLeft: 18, margin: 0 }}>{p.competencies.map((c) => <li key={c.key}><strong>{c.name}</strong> <span className="sbar-tag">{importanceLabel(c)}</span> <Chip>{checkedInLabel(c.evaluatedIn)}</Chip><br /><span className="small muted">{c.definition}</span></li>)}</ul>
+                  <p className="small muted" style={{ marginTop: 8 }}>{SCORE_WEIGHTS_LINE}</p>
+                  {editPacket ? <div className="row" style={{ marginTop: 8 }}><Button size="sm" icon="edit" onClick={() => openEditor("skills")}>Change the skills or how much each counts</Button></div> : null}
                 </Card>
                 <Card title={`Screening questions (about ${p.screening.maxMinutes} minutes)`}>
                   <ol style={{ paddingLeft: 18, margin: 0 }}>{p.screening.questions.map((q) => <li key={q.key}>{q.question} <Chip>{q.kind}</Chip></li>)}</ol>
@@ -250,7 +272,7 @@ export function RoleDetail() {
         </>
       ) : null}
 
-      {editBase ? <EditPacket key={editBase.version} open onClose={() => setEditBase(null)} roleId={r.id} packet={editBase.packet} version={editBase.version} proposed={editBase.proposed} currentVersion={current?.version ?? null} newerVersion={newestVersion > editBase.newestAtOpen ? newestVersion : null} advanced={canEditPacketJson(myRole)} roleStatus={r.status} mayApprove={canApproveRole(myRole)} whoPosts={r.whoPosts} closingDate={r.closingDate ?? null} canManage={manage} /> : null}
+      {editBase ? <EditPacket key={editBase.version} open onClose={() => setEditBase(null)} roleId={r.id} packet={editBase.packet} version={editBase.version} proposed={editBase.proposed} currentVersion={current?.version ?? null} newerVersion={newestVersion > editBase.newestAtOpen ? newestVersion : null} advanced={canEditPacketJson(myRole)} roleStatus={r.status} mayApprove={canApproveRole(myRole)} whoPosts={r.whoPosts} closingDate={r.closingDate ?? null} canManage={manage} focus={editBase.focus} /> : null}
       {afterApproval ? <AfterApproval open onClose={() => setAfterApproval(null)} roleId={r.id} roleTitle={r.title} companyName={companyName} editWhileOpen={afterApproval.editWhileOpen} canManage={manage} canShare={share} canEditPacket={editPacket} onOpenTab={(t) => pickTab(t)} /> : null}
       {/* The preview shows pay, so it is offered to the roles that see pay (everyone but an interviewer). */}
       {shown && talent ? <CandidatePreview open={previewOpen} onClose={() => setPreviewOpen(false)} path={`/api/v1/roles/${r.id}/preview?version=${shown.version}`} /> : null}

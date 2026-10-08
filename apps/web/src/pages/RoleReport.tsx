@@ -26,6 +26,12 @@ export type RoleReport = {
   escalations: { total: number; open: number; resolved: number; overdue: number; medianResponseHours: number | null };
   messages: { total: number; sent: number; failed: number; bounced: number; unknown: number; pending: number; candidatesAffected: number };
   outcomes: { statement: string; hired: number; withdrew: number; declinedByEmployer: number; declinedOffer: number; noHire: number; talentPool: number; corrections: number; role: { outcome: string; recordedAt: string } | null; rolesByOutcome: Record<string, number>; declineReasons: Array<{ reason: string; label: string; count: number }> };
+  /**
+   * How the pool meets each must-have (plan F7), from the same findings as the match score: counts only. Each must-have's
+   * `total` is the people read against a version of the role that had it. `stricter` is the gentle "stricter than
+   * needed?" note. Only on one role's report; an older answer has none.
+   */
+  mustHaves?: { people: number; showEveryMustHave: number; byMustHave: Array<{ key: string; label: string; shown: number; partly: number; notShown: number; unknown: number; total: number }>; stricter: { words: string; editPath: string } | null };
 };
 
 const GROUP_LABEL: Record<string, string> = { waiting_on_you: "Waiting on you", in_process: "In process", not_moving_forward: "Not moving forward", hired: "Hired" };
@@ -51,9 +57,34 @@ export function ReportTab({ roleId }: { roleId: string }) {
       </div>
       {r.applicants.total === 0 ? <EmptyState title="No applicants yet" body="The figures fill in as people apply. The downloads work now; they will be mostly empty." /> : null}
       <ReportFigures report={r} talentHref={`/roles/${roleId}/talent`} />
+      {r.mustHaves ? <MustHavesCard mustHaves={r.mustHaves} links /> : null}
       <ScreeningCard roleId={roleId} />
       <ReportDefinitions />
     </div>
+  );
+}
+
+/**
+ * How the pool meets the must-haves (plan F7): for each must-have, how many people's evidence shows it, partly shows it,
+ * shows it is not met (their own words only) or does not say yet, how many show every one, and the gentle "stricter
+ * than needed?" note with the way to the must-haves. Counts only, never a name; it never declines anyone.
+ */
+export function MustHavesCard({ mustHaves: m, links }: { mustHaves: NonNullable<RoleReport["mustHaves"]>; links?: boolean }) {
+  return (
+    <Card title="How the pool meets the must-haves">
+      {!m.people || !m.byMustHave.length ? <p className="small muted">{m.byMustHave.length ? "Nobody has been read against the must-haves yet." : "This role lists no must-haves."}</p> : (
+        <>
+          <p className="small" style={{ color: "var(--ink-2)" }}><strong>{m.showEveryMustHave} of {plural(m.people, "person", "people")}</strong> {m.people === 1 ? "shows" : "show"} every must-have.</p>
+          <div style={{ marginTop: 8 }}>
+            <Table head={["Must-have", "Shown", "Partly shown", "Not met", "Not known yet", "People read against it"]} label="How the pool meets each must-have">
+              {m.byMustHave.map((x) => <tr key={x.key}><td>{x.label}</td><td>{x.shown}</td><td>{x.partly}</td><td>{x.notShown}</td><td>{x.unknown}</td><td>{x.total}</td></tr>)}
+            </Table>
+          </div>
+          {m.stricter ? <p className="small" style={{ marginTop: 8, color: "var(--ink-2)" }}>{m.stricter.words} {links ? <Link to={m.stricter.editPath}>Look at the must-haves</Link> : null}</p> : null}
+          <p className="small muted" style={{ marginTop: 8 }}>"Not met" counts only when the candidate's own words show it; anything else is "not known yet" and is never held against anyone. Someone read before a must-have was added is left out of its count. Counts only; nobody is named here.</p>
+        </>
+      )}
+    </Card>
   );
 }
 
@@ -294,6 +325,7 @@ export function ReportDefinitions() {
         <dt>Recruiter help</dt><dd>Your requests for an ITS recruiter on this role: open, resolved, past the promised response time, and the typical hours until a recruiter picked one up.</dd>
         <dt>Messages</dt><dd>Emails and texts to candidates about this role: sent, could not be sent, bounced, delivery unknown, waiting to go out; and how many candidates were affected.</dd>
         <dt>Outcomes</dt><dd>What people recorded: hires, withdrawals, declines, offers declined, closed without a hire, and the reasons candidates were declined. Offers happen outside the platform.</dd>
+        <dt>The must-haves</dt><dd>For each must-have, how many applicants' evidence shows it, partly shows it, shows it is not met in their own words, or does not say yet, from the same checked findings as the match score. When most people do not show one, a note asks whether it is stricter than the job needs; nobody is turned down because of it.</dd>
       </dl>
     </Card>
   );

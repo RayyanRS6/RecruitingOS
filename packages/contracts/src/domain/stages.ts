@@ -117,3 +117,15 @@ export const RejectReason = z.enum([
   "other",
 ]);
 export type RejectReason = z.infer<typeof RejectReason>;
+/** The fixed reasons as the team reads them (the role report uses the same words). Never shown to the candidate. */
+export const DECLINE_REASON_LABEL: Record<RejectReason, string> = {
+  eligibility: "Did not meet an eligibility rule",
+  not_a_match_experience: "Experience not a match",
+  not_a_match_skills: "Skills not a match",
+  compensation_mismatch: "Pay expectations did not match",
+  location_or_schedule: "Location or schedule",
+  position_filled: "Position filled",
+  role_closed: "Role closed",
+  candidate_unresponsive: "Candidate did not respond",
+  other: "Other",
+};

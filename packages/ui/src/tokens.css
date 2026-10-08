@@ -527,13 +527,15 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
 /* an open menu sits over the rows below it (two rules: a browser without :has() still keeps the first) */
 .talent-row .menu-wrap:focus-within { z-index: 3; }
 .talent-row .menu-wrap:has(.menu) { z-index: 3; }
-/* Room kept for the match score (Wave F), so the rows do not shift when it arrives. */
-.score-slot { display: inline-block; min-width: 64px; }
+/* The match score badge (founder decision B2), in a column of its own so the rows line up. */
+.score-slot { display: inline-flex; justify-content: flex-end; min-width: 64px; }
 @media (max-width: 640px) {
-  .talent-row { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "avatar main stage" ". chips chips"; gap: 8px 12px; padding: 12px 14px; }
+  /* On a phone the score moves to the second line, under the stage button, beside the chips. */
+  .talent-row { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "avatar main stage" ". chips score"; gap: 8px 12px; padding: 12px 14px; }
   .talent-row > .talent-row-chips { justify-content: flex-start; }
   .talent-row > .talent-row-chips:empty { display: none; }
-  .score-slot { display: none; }
+  .score-slot { min-width: 0; }
+  .score-slot:empty { display: none; }
 }
 
 /* The candidate panel: what needs you sits under the header, then the sections. */
@@ -764,6 +766,41 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
   .draft-body { padding: 14px 14px 24px; }
   .builder-head-actions { margin-left: 0; width: 100%; }
   .start { margin-top: 2vh; }
+}
+
+/* The match score on the candidate panel (Wave F): the score and its band, the coverage line, and the bars per
+   requirement (ScoreBars), the costliest first. The bar only helps a glance; the words beside it carry the meaning. */
+.match-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.match-coverage { margin: 6px 0 0; color: var(--ink-2); font-size: 13.5px; font-variant-numeric: tabular-nums; }
+.match-section { margin-top: 14px; }
+.match-section > h3 { font-family: var(--ui); font-size: 11.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 8px; }
+.sbars-wrap { display: grid; gap: 12px; }
+.sbars { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none; }
+.sbar { display: grid; gap: 5px; min-width: 0; }
+.sbar-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 13.5px; }
+.sbar-label { min-width: 0; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.sbar-tag { padding: 0 6px; border: 1px solid var(--line-2); border-radius: var(--r-pill); color: var(--ink-3); font-size: 10.5px; font-weight: 700; letter-spacing: 0.12em; line-height: 1.6; text-transform: uppercase; white-space: nowrap; }
+.sbar-tag.must { border-color: var(--line-strong); color: var(--ink); }
+.sbar-figures { display: inline-flex; gap: 10px; margin-left: auto; color: var(--ink-2); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sbar-lost { color: var(--ink-3); }
+.sbar-track { display: block; height: 6px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--surface-2); }
+.sbar-track.sm { height: 4px; }
+.sbar-track.critical { border-color: var(--critical-line); background: var(--critical-soft); }
+.sbar-fill { display: block; height: 100%; border-radius: inherit; background: var(--ink-3); }
+.sbar-fill.good { background: var(--good-dot); }
+.sbar-fill.caution { background: var(--caution-dot); }
+.sbar-fill.critical { background: var(--critical-dot); }
+.sbar-detail { color: var(--ink-2); font-size: 13px; }
+.sbar-detail details > summary { width: fit-content; color: var(--ink-2); cursor: pointer; }
+.sbar-detail blockquote { margin: 6px 0 0; padding: 2px 0 2px 10px; border-left: 2px solid var(--line-2); color: var(--ink-2); }
+.sbars-more > summary { width: fit-content; color: var(--ink-2); font-size: 13px; cursor: pointer; }
+.sbars-more[open] > summary { margin-bottom: 12px; }
+/* The comparison view's cells: the finding, a small bar, and the numbers under it. */
+.cmp-cell { display: grid; gap: 4px; min-width: 120px; }
+.cmp-cell .cmp-figures { color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.cmp-cell .chip { width: fit-content; max-width: 220px; white-space: normal; }
+@media (max-width: 520px) {
+  .sbar-figures { margin-left: 0; width: 100%; }
 }
 
 /* Visually hidden, still read by assistive technology. */

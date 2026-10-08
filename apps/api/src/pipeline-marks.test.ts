@@ -531,7 +531,9 @@ describe("the stage strip, private marks and private decisions", () => {
       expect(waiting[0].id).toBe(old);
       expect(waiting.map((r) => r.stageChangedAt)).toEqual([...waiting.map((r) => r.stageChangedAt)].sort());
       expect(waiting.every((r) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(r.stageChangedAt))).toBe(true);
-      expect((await json(owner, "GET", `/api/v1/roles/${roleId}/applications?order=score`)).status).toBe(400);
+      // by match score too (founder decision B2; pool-board.test.ts has the order itself), but nothing else
+      expect((await json(owner, "GET", `/api/v1/roles/${roleId}/applications?order=score`)).status).toBe(200);
+      expect((await json(owner, "GET", `/api/v1/roles/${roleId}/applications?order=reading`)).status).toBe(400);
       // the roles list carries the strip too, and agrees, group counts included
       const now = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/applications?counts=1`)).json()) as { counts: { total: number; byOwnerStage: Record<string, number>; byGroup: Record<string, number> } };
       const roles = (await (await json(owner, "GET", "/api/v1/roles")).json()) as Array<{ id: string; stageCounts: Record<string, number>; counts: Record<string, number> }>;

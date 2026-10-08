@@ -224,10 +224,38 @@ export function redactPerson(text: string, patterns: IdentifyingPatterns, nameWo
   return patterns.contact.reduce((t, p) => t.replace(p, "[removed]"), named);
 }
 
+type SnapshotRef = { applicationId?: unknown; name?: unknown };
+type SnapshotBoard = { people?: SnapshotRef[]; summary?: { longestWaiting?: SnapshotRef | null; nextSteps?: SnapshotRef[]; sentences?: unknown[] } & Record<string, unknown> } & Record<string, unknown>;
+
+/**
+ * The pool board kept on a role review (`contextSnapshot.board`, plan F9) without the person: their row (name, score,
+ * reason, what needed an eye) and their next step go, "longest waiting" no longer points at them, and the summary's
+ * sentences lose their name. Counts stay, as numbers. `changed` is false when the snapshot never held them.
+ */
+export function scrubBoardSnapshot(board: unknown, appIds: readonly string[], patterns: IdentifyingPatterns): { changed: boolean; value: unknown } {
+  if (!board || typeof board !== "object") return { changed: false, value: board };
+  const b = board as SnapshotBoard;
+  const theirs = (x: SnapshotRef | null | undefined) => typeof x?.applicationId === "string" && appIds.includes(x.applicationId);
+  const longest = b.summary?.longestWaiting ?? null;
+  const longestName = theirs(longest) && typeof longest?.name === "string" ? longest.name : null;
+  const people = Array.isArray(b.people) ? b.people.filter((p) => !theirs(p)) : b.people;
+  const summary = b.summary
+    ? {
+        ...b.summary,
+        longestWaiting: theirs(longest) ? null : longest,
+        nextSteps: Array.isArray(b.summary.nextSteps) ? b.summary.nextSteps.filter((s) => !theirs(s)) : b.summary.nextSteps,
+        sentences: Array.isArray(b.summary.sentences) ? b.summary.sentences.filter((s) => !(longestName && typeof s === "string" && s.startsWith(`${longestName} has waited longest`))).map((s) => (typeof s === "string" ? redactPerson(s, patterns, "a candidate") : s)) : b.summary.sentences,
+      }
+    : b.summary;
+  const value = { ...b, people, summary };
+  return { changed: JSON.stringify(value) !== JSON.stringify(board), value };
+}
+
 /**
  * A deletion reaches the recruiter's copy too (Q31 family, step 13): a request about one of the person's applications
  * keeps the company and role context but loses everything about the candidate, and its question is removed; any other
- * request, recruiter answer or in-app notice that names them has the name, email and phone replaced.
+ * request, recruiter answer or in-app notice that names them has the name, email and phone replaced, and a role
+ * review's board snapshot loses them too (`scrubBoardSnapshot`).
  */
 async function scrubRecruiterCopies(q: Queryable, input: { companyId: string; appIds: string[]; candidate: { firstName: string; lastName: string; email: string | null; phone: string | null }; now: Date }): Promise<{ escalations: number; notifications: number }> {
   const patterns = identifyingPatterns(input.candidate);
@@ -241,11 +269,14 @@ async function scrubRecruiterCopies(q: Queryable, input: { companyId: string; ap
       escalationCount++;
       continue;
     }
-    if (!patterns.name.length && !patterns.contact.length) continue;
+    // A review of a whole role carries the pool board as it stood (plan F9): the person's own row goes, and the summary
+    // loses their name wherever it named them.
+    const board = scrubBoardSnapshot((e.contextSnapshot as { board?: unknown } | null)?.board, input.appIds, patterns);
+    if (!board.changed && !patterns.name.length && !patterns.contact.length) continue;
     const question = redactPerson(e.question, patterns, "a candidate");
     const resolution = e.resolution === null ? null : redactPerson(e.resolution, patterns, "a candidate");
-    if (question !== e.question || resolution !== e.resolution) {
-      await q.update(recruiterEscalations).set({ question, resolution }).where(eq(recruiterEscalations.id, e.id));
+    if (question !== e.question || resolution !== e.resolution || board.changed) {
+      await q.update(recruiterEscalations).set({ question, resolution, ...(board.changed ? { contextSnapshot: { ...e.contextSnapshot, board: board.value } } : {}) }).where(eq(recruiterEscalations.id, e.id));
       escalationCount++;
     }
   }

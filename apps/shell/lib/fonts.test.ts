@@ -16,6 +16,8 @@ describe("the application's self-hosted fonts", () => {
   it("loads app/fonts.css, which is exactly the list in fonts.ts, and no outside font host", () => {
     const layout = read("apps/shell/app/layout.tsx");
     expect(layout).toContain('import "./fonts.css";');
+    // the pool board's styles load with the tokens they are built from
+    expect(layout.indexOf('import "@ros/ui/board.css";')).toBeGreaterThan(layout.indexOf('import "@ros/ui/tokens.css";'));
     expect(layout).not.toMatch(/fonts\.googleapis\.com|fonts\.gstatic\.com/);
     const css = read("apps/shell/app/fonts.css");
     expect(css).toBe(appFontCss());
@@ -25,7 +27,7 @@ describe("the application's self-hosted fonts", () => {
   });
 
   it("has a face for every family and weight the application's styles use", () => {
-    const styles = stripComments(`${read("packages/ui/src/tokens.css")}\n${read("apps/shell/components/app-shell.css")}`);
+    const styles = stripComments(`${read("packages/ui/src/tokens.css")}\n${read("packages/ui/src/board.css")}\n${read("apps/shell/components/app-shell.css")}`);
     const weights = new Set([...styles.matchAll(/font-weight: (\d+)|font: (\d+) /g)].map((m) => Number(m[1] ?? m[2])));
     const faces = (family: string) => new Set(APP_FONTS.filter((f) => f.family === family).map((f) => f.weight));
     // text and labels in Plex Sans (700 renders as 600, the heaviest Plex weight loaded, as it did with Google Fonts)

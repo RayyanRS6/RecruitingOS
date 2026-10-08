@@ -306,6 +306,8 @@ export function Table(props: { head: string[]; children: ReactNode; label?: stri
 }
 
 export { Icon, ICON_NAMES, type IconName } from "./icons";
+// The match score's breakdown (Wave F): bars per requirement, no hooks.
+export { barFigures, barTone, ScoreBar, type ScoreBarItem, ScoreBars } from "./score-bars";
 export { cx, initials, normalizeToast, OWNER_STAGES, type OwnerStage, ownerStage, SCORE_BANDS, type ScoreBand, scoreBand, scoreLabel, type StageChoice, stageMenuItems, type StepState, TOAST_EVENT, type ToastMessage, type ToastTone, type Tone, toastDuration, toastPayload } from "./helpers";
 
 // The pieces below listen to the keyboard or keep state, which needs React hooks, so each lives in its own client

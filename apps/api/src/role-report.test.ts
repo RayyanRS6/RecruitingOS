@@ -308,7 +308,8 @@ describe("role report", () => {
   });
 
   it("counts recruiter requests: open, resolved, past the promised time, and the typical first response", () => {
-    expect(report.escalations).toEqual({ total: 3, open: 2, resolved: 1, overdue: 1, medianResponseHours: 3 });
+    // the three asked for, and Ana's flagged assessment, which reached the ITS queue as a review request (plan F11)
+    expect(report.escalations).toEqual({ total: 4, open: 3, resolved: 1, overdue: 1, medianResponseHours: 3 });
   });
 
   it("counts messages from the outbox's own statuses and names how many candidates could not be reached", async () => {
