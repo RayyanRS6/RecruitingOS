@@ -60,7 +60,7 @@ These cannot run on the team's Windows machine (pnpm, Biome and the browsers are
 
 ### Decisions still open from this branch
 
-1. When a candidate with a booked interview is declined privately, they are told at once that the interview is off (no reason). Or should nothing be said until someone sends the decision, even if the interview time passes first? (Counsel item 23(c) asks too.)
+1. Decided 9 October: when a candidate with a booked or offered interview is declined privately, they are told at once, with no reason, that the interview is off, so nobody turns up to an interview that no longer exists; the decision itself waits until someone sends it (as built; counsel item 23(c) still reviews the wording).
 2. Decided 9 October: the hiring team sees a conversation's answers only once the candidate sends them, nothing sends them on the candidate's behalf, and unfinished ones (including someone who answered everything but never pressed Send) are never shown or read (built; counsel item 20 records it).
 3. Handing a draft to ITS still gives the recruiter company-wide access, as the form says; a grant limited to the draft is deferred security work.
 4. "Who interviews" counts as answered once a decision maker is named, shown as an assumption. Keep it?
