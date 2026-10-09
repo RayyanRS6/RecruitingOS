@@ -27,6 +27,7 @@ regexes = [
   '''fake-issuer-development-secret-not-for-prod''',
   '''whsec-test''',
   '''wh-secret-for-tests-1234567890''',
+  '''wh-secret-for-notification-tests-123''',
   '''AbCdEfGh1234567890abcdefghijk''',
   '''example\.(com|test|invalid)''',
 ]
