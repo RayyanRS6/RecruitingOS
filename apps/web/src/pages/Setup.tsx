@@ -133,7 +133,7 @@ export function Setup() {
                           ) : <Chip tone="neutral">{levelLabel(p.level)}</Chip>}
                         </div>
                         {p.does ? <p className="small muted" style={{ margin: "4px 0 0" }}>{p.does}</p> : null}
-                        {p.actionType === "message.still_reviewing" ? <p className="small muted" style={{ margin: "4px 0 0" }}>{STILL_REVIEWING_NOTE[p.level] ?? STILL_REVIEWING_NOTE.auto}</p> : null}
+                        {p.actionType === "message.still_reviewing" ? <p className="small muted" style={{ margin: "4px 0 0" }}>{STILL_REVIEWING_NOTE[p.level] ?? STILL_REVIEWING_NOTE.human_only}</p> : null}
                         {loosening?.row.actionType === p.actionType ? (
                           <div style={{ marginTop: 8 }}>
                             <Alert tone="caution">

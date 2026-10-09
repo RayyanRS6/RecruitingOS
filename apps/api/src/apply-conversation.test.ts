@@ -236,11 +236,13 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect(today.cards.find((c) => c.kind === "screening" && c.roleId === roleId)?.title).toMatch(/: 1 completed since yesterday$/);
   });
 
-  it("E3: 'Send without the conversation' sends the application on to the team, is counted, and reads what was answered as not finished", async () => {
+  it("E3: 'Send without the conversation' sends the application on to the team and is counted; what was answered before is never read or shown", async () => {
     const { outcome, applicationId } = await applyNow({ first: "Ana", last: "Silva", email: "ana@onevisit.test" });
     const ref = await refOf(outcome);
     await conversationStart(container, ref);
     await answer(ref, { tap: true });
+    const assessRuns = async () => (await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.assess"))).length;
+    const before = await assessRuns();
     expect(await conversationPerson(container, ref, "send_without")).toMatchObject({ message: expect.stringMatching(/without the conversation/) });
     await container.drain();
     const scr = await screenOf(applicationId);
@@ -248,11 +250,12 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect((await reload(applicationId)).stage).toBe("triaged");
     const counted = (await container.db.select().from(usageEvents).where(eq(usageEvents.key, "screen_person_requests"))).filter((u) => u.ref.screenId === scr.id);
     expect(counted).toMatchObject([{ ref: { choice: "send_without" } }]);
-    const asmt = (await container.db.select().from(assessments).where(and(eq(assessments.applicationId, applicationId), eq(assessments.kind, "screen"))))[0];
-    expect(asmt.result.anomalies.some((x) => x.kind === "incomplete_screen")).toBe(true);
-    expect((asmt.result as { recommendation: string }).recommendation).not.toBe("strong_interview");
+    // she never sent her answers (founder decision of 9 October 2026): nothing is read from them, and the reading stays the résumé's
+    expect(await container.db.select().from(assessments).where(and(eq(assessments.applicationId, applicationId), eq(assessments.kind, "screen")))).toHaveLength(0);
+    expect(await assessRuns()).toBe(before);
+    expect(scr.assessmentId).toBeNull();
     const notes = await notesAbout("Ana Silva");
-    expect(notes.some((n) => /part-way through the screening conversation/.test(n.title))).toBe(true);
+    expect(notes.filter((n) => n.kind === "screen.declined_by_candidate").map((n) => n.title)).toEqual(["Ana Silva sent their application without the conversation"]);
     expect(notes.some((n) => n.kind === "candidate.recommended")).toBe(false);
     // never invited a second time
     expect(mail().filter((m) => m.to === "ana@onevisit.test" && /screening conversation/i.test(m.subject))).toHaveLength(0);
@@ -352,7 +355,7 @@ describe("Wave E: applying and the conversation in one visit", () => {
     container.fake!.clearScripts();
   });
 
-  it("E4: someone who stops part-way is reminded once, then the conversation closes with what they said, flagged not finished", async () => {
+  it("E4: someone who stops part-way is reminded once, then the conversation closes as unfinished; what they never sent is never read", async () => {
     const { outcome, applicationId } = await applyNow({ first: "Priya", last: "Shah", email: "priya@onevisit.test" });
     const ref = await refOf(outcome);
     await conversationStart(container, ref);
@@ -367,10 +370,16 @@ describe("Wave E: applying and the conversation in one visit", () => {
     scr = await screenOf(applicationId);
     expect(scr.status).toBe("unfinished");
     expect((await reload(applicationId)).stage).toBe("triaged");
-    expect(mail().filter((m) => m.to === "priya@onevisit.test" && /^Your application for/.test(m.subject))).toHaveLength(1);
-    const asmt = (await container.db.select().from(assessments).where(and(eq(assessments.applicationId, applicationId), eq(assessments.kind, "screen"))))[0];
-    expect(asmt.result.anomalies.some((x) => x.kind === "incomplete_screen")).toBe(true);
-    expect((await notesAbout("Priya Shah")).some((n) => /did not finish the screening conversation/.test(n.title))).toBe(true);
+    const closing = mail().filter((m) => m.to === "priya@onevisit.test" && /^Your application for/.test(m.subject));
+    expect(closing).toHaveLength(1);
+    expect(closing[0].text).toContain("answers you did not send are not passed on");
+    // never read (founder decision of 9 October 2026): no scorecard, and the latest reading is still the résumé's
+    expect(await container.db.select().from(assessments).where(and(eq(assessments.applicationId, applicationId), eq(assessments.kind, "screen")))).toHaveLength(0);
+    const [latest] = await container.db.select().from(assessments).where(eq(assessments.id, (await reload(applicationId)).latestAssessmentId!));
+    expect(latest.kind).toBe("triage");
+    const told = (await notesAbout("Priya Shah")).filter((n) => n.kind === "screen.unfinished");
+    expect(told.map((n) => n.title)).toEqual(["Priya Shah didn't finish the screening conversation"]);
+    expect(told[0].body).toContain("They did not send their answers, even after a reminder, so you won't see them");
     // the run is over: no wait repeated for ever
     const run = (await container.db.select().from(workflowRuns).where(eq(workflowRuns.id, scr.workflowRunId!)))[0];
     expect(run.status).toBe("completed");
@@ -511,7 +520,7 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect(await conversationPerson(container, ref, "send_without")).toMatchObject({ message: expect.stringMatching(/without the conversation/) });
     await container.drain();
     const ack = mail().find((m) => m.to === "sol@onevisit.test" && /We received your application/.test(m.subject))!;
-    expect(ack.text).toContain("1. The hiring team at One Visit Dental reviews your application, with anything you answered in the short written conversation.");
+    expect(ack.text).toContain("1. The hiring team at One Visit Dental reviews your application, with your answers from the short written conversation if you sent them.");
     expect(ack.text).not.toMatch(/Possibly a short written conversation|pick it up here/);
   });
 
@@ -546,7 +555,7 @@ describe("Wave E: applying and the conversation in one visit", () => {
     container.fake!.clearScripts();
   });
 
-  it("E4, E10: someone who answered everything but did not press Send is reminded to send; then the answers go as they are, never as 'unfinished'", async () => {
+  it("E4, E10: someone who answered everything but did not press Send is reminded to send; nothing sends them for her, so it closes as unfinished, never shown or read (founder decision of 9 October 2026)", async () => {
     const { outcome, applicationId } = await applyNow({ first: "Tess", last: "Moore", email: "tess@onevisit.test" });
     const ref = await refOf(outcome);
     await conversationStart(container, ref);
@@ -558,20 +567,40 @@ describe("Wave E: applying and the conversation in one visit", () => {
     await advance(25 * HOUR);
     const toTess = () => mail().filter((m) => m.to === "tess@onevisit.test");
     expect(toTess().filter((m) => /are ready to send/.test(m.subject))).toHaveLength(1);
-    expect(toTess().find((m) => /are ready to send/.test(m.subject))!.text).toMatch(/If you do nothing, we will send your answers to the hiring team as they are on /);
-    // the team can already see her answers, so the reminder never says they are unsent; only that she has not pressed Send
-    expect(toTess().find((m) => /are ready to send/.test(m.subject))!.text).toContain("but you have not pressed Send yet.");
-    expect(toTess().find((m) => /are ready to send/.test(m.subject))!.text).not.toMatch(/have not been sent/);
+    const reminder = toTess().find((m) => /are ready to send/.test(m.subject))!.text;
+    // the reminder says the team sees them only once she sends them, and what happens if she does not: never "we send them"
+    expect(reminder).toContain("but you have not pressed Send yet. The hiring team sees your answers only once you send them.");
+    expect(reminder).toMatch(/If you do not press Send by .+, the conversation closes and your application goes to the hiring team without these answers\. Answers you have not sent are not passed on\./);
+    expect(reminder).not.toMatch(/as they are/);
+    await signIn(); // the clock has moved by days since the last sign-in
+    const tessScreen = await screenOf(applicationId);
+    type Detail = { screens: Array<{ id: string; status: string; answersShared: boolean; answers: Record<string, string>; transcript: unknown[] }>; communications: Array<{ subject: string | null; bodyText: string | null }>; assessments: Array<{ kind: string }> };
+    const unsentView = (await (await json("GET", `/api/v1/applications/${applicationId}`)).json()) as Detail;
+    expect(unsentView.screens.find((s) => s.id === tessScreen.id)).toMatchObject({ answersShared: false, answers: {} });
+    // the reminder says how far she got ("you answered every question"), so the Messages tab does not show it either
+    expect(unsentView.communications.some((m) => /are ready to send/.test(m.subject ?? "") || /answered every question/.test(m.bodyText ?? ""))).toBe(false);
     expect(toTess().filter((m) => /Pick up your screening conversation/.test(m.subject))).toHaveLength(0);
     await advance(49 * HOUR);
     const scr = await screenOf(applicationId);
-    expect(scr.status).toBe("completed");
-    expect(scr.progress.submittedAt).toBeTruthy();
-    expect((await container.db.select().from(events).where(and(eq(events.subjectId, scr.id), eq(events.type, "screen.completed"))))[0].payload).toMatchObject({ via: "review_timeout" });
-    const asmt = (await container.db.select().from(assessments).where(and(eq(assessments.applicationId, applicationId), eq(assessments.kind, "screen"))))[0];
-    expect(asmt.result.anomalies.some((x) => x.kind === "incomplete_screen")).toBe(false);
-    expect((await reload(applicationId)).stage).toMatch(/screen_complete|interview_recommended/);
-    expect(toTess().filter((m) => /^Your application for/.test(m.subject))).toHaveLength(0); // no "we passed on what you told us"
+    expect(scr.status).toBe("unfinished");
+    expect(scr.progress.submittedAt).toBeUndefined();
+    expect(await container.db.select().from(events).where(and(eq(events.subjectId, scr.id), eq(events.type, "screen.completed")))).toHaveLength(0);
+    // never read: no scorecard, no model run
+    expect(await container.db.select().from(assessments).where(and(eq(assessments.applicationId, applicationId), eq(assessments.kind, "screen")))).toHaveLength(0);
+    expect((await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.assess"))).filter((r) => (r.inputRef as { screenId?: string }).screenId === scr.id)).toHaveLength(0);
+    expect((await reload(applicationId)).stage).toBe("triaged");
+    // she is told it closed, and that what she did not send was not passed on
+    expect(toTess().filter((m) => /^Your application for/.test(m.subject) && m.text.includes("answers you did not send are not passed on"))).toHaveLength(1);
+    expect(await (await app.request(`/c/screen/${ref.token}`)).text()).toContain("It closed before you sent your answers.");
+    // the team hears it in the same words as for anyone who stopped part-way: nothing says she answered everything
+    const told = (await notesAbout("Tess Moore")).filter((n) => n.kind === "screen.unfinished");
+    expect(told.map((n) => n.title)).toEqual(["Tess Moore didn't finish the screening conversation"]);
+    expect(told[0].body).not.toMatch(/every question|answered/);
+    await signIn();
+    const closedView = (await (await json("GET", `/api/v1/applications/${applicationId}`)).json()) as Detail;
+    expect(closedView.screens.find((s) => s.id === tessScreen.id)).toMatchObject({ status: "unfinished", answersShared: false, answers: {}, transcript: [] });
+    expect(closedView.assessments.map((a) => a.kind)).not.toContain("screen");
+    expect(closedView.communications.some((m) => /are ready to send/.test(m.subject ?? ""))).toBe(false);
   });
 
   it("E4: someone who never starts the conversation that goes with the application is reminded once; then the application goes to the team without it, and they are told nothing else is needed", async () => {
@@ -622,6 +651,9 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect(stuck?.applicationIds).toContain(applicationId);
     expect(stuck?.title).toMatch(/stuck in the screening conversation/);
     expect(stuck?.body).toContain("Quinn Hale");
+    // never sends the team looking for answers that stay hidden until they are sent (founder decision of 9 October 2026)
+    expect(stuck?.body).toContain("Their answers appear only once they send them; a recruiter can contact them.");
+    expect(stuck?.body).not.toContain("see what they sent");
     // the rule: started and idle past the reminder and the close, paused past the hand-over, never started past the link
     const at = (hoursAgo: number) => new Date(now.getTime() - hoursAgo * HOUR).toISOString();
     const base = { expiresAt: null, startedAt: null, lastCandidateMessageAt: null, progress: { askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0 } };

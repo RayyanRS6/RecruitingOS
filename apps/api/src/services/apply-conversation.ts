@@ -596,6 +596,8 @@ export type ConversationView = {
   withdrawPending: boolean;
   personExpectation: string;
   personAsked: { dueWords: string; overdue: boolean } | null;
+  /** Closed as complete by a recruiter's notes from a call: the candidate never sent their own answers, so the page never says they did. */
+  finishedOnACall: boolean;
 };
 
 function viewOf(input: { token: string; status: string; channel: string; progress: ScreenProgress; answers: Record<string, string>; transcript: ScreenTranscriptEntry[]; companyName: string; notices: Company["settings"]["notices"]; packet: RolePacket; firstName: string; expectation: string; personAsked: ConversationView["personAsked"] }): ConversationView {
@@ -626,6 +628,7 @@ function viewOf(input: { token: string; status: string; channel: string; progres
     withdrawPending: open && withdrawPending(input.transcript),
     personExpectation: input.expectation,
     personAsked: status === "human_requested" ? input.personAsked : null,
+    finishedOnACall: status === "completed" && progress.completedBy === "recruiter_call",
   };
 }
 

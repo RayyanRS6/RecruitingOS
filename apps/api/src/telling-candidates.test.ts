@@ -55,7 +55,7 @@ describe("telling candidates", () => {
     });
   const decline = async (id: string, reason = "not_a_match_experience") => expect((await act(owner, id, { action: "reject", reason, note: "Private note." })).status).toBe(200);
   const age = (id: string, days: number) => container.db.update(applications).set({ rejectedAt: new Date(Date.now() - days * DAY).toISOString(), stageChangedAt: new Date(Date.now() - days * DAY).toISOString() }).where(eq(applications.id, id));
-  const setPolicy = (actionType: string, level: "approval" | "human_only" | null) =>
+  const setPolicy = (actionType: string, level: "auto" | "approval" | "human_only" | null) =>
     withTenant(container.db, companyId, async (tx) => {
       await tx.delete(policies).where(and(eq(policies.companyId, companyId), eq(policies.actionType, actionType)));
       if (level) await tx.insert(policies).values({ companyId, roleId: null, actionType, level, approverRoles: ["owner"], createdBy: { kind: "user", id: ownerId } });
@@ -777,7 +777,7 @@ describe("telling candidates", () => {
   });
 
   describe("courtesy notes and the watchers (plan G10)", () => {
-    it("a long wait gets one 'still reviewing' note under 'Do it' and none under 'Only a person'; the product's own note cannot be undone", async () => {
+    it("the 'still reviewing' note is off unless the company switches it on; then a long wait gets one note under 'Do it' and none under 'Only a person'; the product's own note cannot be undone", async () => {
       const long = new Date(Date.now() - 31 * DAY).toISOString();
       const sam = await seed("Sam", { createdAt: long });
       const recent = await seed("Sue");
@@ -786,6 +786,17 @@ describe("telling candidates", () => {
       const backlog = await seed("Wren", { createdAt: new Date(Date.now() - 90 * DAY).toISOString() });
       const pastCatchUp = await seed("Xavi", { createdAt: new Date(Date.now() - 38 * DAY).toISOString() });
       const notes = () => withTenant(container.db, companyId, (tx) => sendStillReviewingNotes(tx, { integrations: container.integrations, statusBaseUrl: container.env.JOBS_BASE_URL, now: new Date(), actor: { kind: "system", id: "still_reviewing" } }, companyId));
+      const stillReviewing = () => container.db.select().from(communications).where(and(eq(communications.companyId, companyId), eq(communications.templateKey, "still_reviewing")));
+      // Off by default (founder decision of 9 October 2026: with many applicants a team picks the best few, so no
+      // automatic notes): Setup shows "Only a person" as the default, and nobody is written to, however long they waited
+      await setPolicy("message.still_reviewing", null);
+      const rules = (await (await json(owner, "GET", "/api/v1/policies")).json()) as Array<{ actionType: string; level: string; source: string; defaultLevel: string; settable: boolean }>;
+      expect(rules.find((r) => r.actionType === "message.still_reviewing")).toMatchObject({ level: "human_only", source: "default", defaultLevel: "human_only", settable: true });
+      // (the daily check calls this same function)
+      expect(await notes()).toEqual([]);
+      expect(await stillReviewing()).toHaveLength(0);
+      // a company that switches it on ("Do it") keeps that choice
+      await setPolicy("message.still_reviewing", "auto");
       const noted = await notes();
       expect(noted).toContain(sam);
       expect(noted).not.toContain(recent);
@@ -798,10 +809,14 @@ describe("telling candidates", () => {
       expect(row.disclosureIncluded).toBe(true);
       expect((await notes()).includes(sam)).toBe(false);
       expect((await errorOf(await json(owner, "POST", `/api/v1/applications/${sam}/messages/${row.id}/undo`, {}))).code).toBe("not_yours");
+      const sentWhileOn = (await stillReviewing()).length;
       await setPolicy("message.still_reviewing", "human_only");
       const tia = await seed("Tia", { createdAt: long });
       expect((await notes()).includes(tia)).toBe(false);
+      // back to no saved choice: the default, off
       await setPolicy("message.still_reviewing", null);
+      expect(await notes()).toEqual([]);
+      expect(await stillReviewing()).toHaveLength(sentWhileOn);
       await container.drain();
     });
 

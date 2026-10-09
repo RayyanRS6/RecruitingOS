@@ -182,9 +182,13 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
   it("E10: check your answers lists every answer with Change, marks the skipped one with Answer it, marks a change, and Send ends it; only then does the team hear", async () => {
     const base = `/c/screen/${mariaToken}`;
     let html = await page(base);
-    // honest about both things that happen without Send: the team already sees the answers, and they go as they are
-    expect(html).toContain('<p class="lead">This is what you told the assistant. The hiring team can see your answers as you give them, including any you change. Change any answer you like, then press Send to tell them you are finished.</p>');
-    expect(html).toContain("<p>If you do not press Send, we send your answers as they are a few days after your last answer or change. If we have not reminded you yet, we email you once before then.</p>");
+    // honest about both things: the team sees the answers only once she sends them, and nothing sends them for her:
+    // without Send the conversation closes a few days later and the application goes on without them (founder decision
+    // of 9 October 2026, "hide them until they send")
+    expect(html).toContain('<p class="lead">This is what you told the assistant. The hiring team sees your answers only once you send them. Change any answer you like, then press Send.</p>');
+    expect(html).not.toContain("can see your answers as you give them");
+    expect(html).toContain("<p>If you do not press Send, the conversation closes a few days after your last answer or change, and your application goes to the hiring team without these answers. If we have not reminded you yet, we email you once before then.</p>");
+    expect(html).not.toContain("we send your answers as they are");
     expect(html).not.toContain("Nothing is sent until you do");
     for (const q of packet.screening.questions) expect(html).toContain(`<p class="answer-q">${packet.screening.questions.indexOf(q) + 1}. ${q.question}</p>`);
     const skipped = html.slice(html.indexOf('<li class="answer" id="a-hard_moment">'));
@@ -276,7 +280,9 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     await container.db.update(screens).set({ status: "unfinished" }).where(eq(screens.id, scr.id));
     html = await page(`/c/screen/${luisToken}`);
     expect(html).toContain("<h1>This conversation has closed</h1>");
-    expect(html).toContain("What you said has gone to the hiring team at Visit Dental with your application, which carries on.");
+    // what they never sent stays theirs (founder decision of 9 October 2026); the application carries on without it
+    expect(html).toContain("Your application has gone to the hiring team at Visit Dental and carries on; the answers you did not send were not passed on.");
+    expect(html).not.toContain("What you said has gone to the hiring team");
     expect((await app.request(`/c/screen/${luisToken}/person`)).headers.get("location")).toBe(`/c/screen/${luisToken}`);
   });
 

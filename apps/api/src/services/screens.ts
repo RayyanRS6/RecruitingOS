@@ -1,8 +1,8 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Actor, RecruiterCallNotes, ScreeningFunnel, ScreenTranscriptEntry } from "@ros/contracts";
-import { audit, disclosureLine, emit, isStillApplying, screeningFunnel, transition } from "@ros/core";
+import { audit, disclosureLine, emit, isStillApplying, screeningFunnel, transition, unsentScreenReadings } from "@ros/core";
 import { createScreen, deliver, loadScreenBundle, type ScreenDeps } from "@ros/agents";
-import { applications, candidates, companies, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
+import { applications, assessments, candidates, companies, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
 import { exitCleanup } from "./exit-cleanup";
@@ -55,7 +55,8 @@ const NOTES_ALLOWED: readonly string[] = ["invited", "reminded", "in_progress", 
  * adds what they learned, per question where it fits. The notes go on the transcript as a recruiter's notes (role
  * `recruiter`, source `recruiter_call`), never as the candidate's words: the scorecard quotes them only as
  * `recruiter_note` evidence, checked against the notes, and they can never support a must-have "no". With `complete`
- * the conversation closes as complete and the scorecard is written as for any finished conversation.
+ * the conversation closes as complete and the scorecard is written from the notes alone: anything the candidate typed
+ * before was never sent, so neither the team nor the recruiter sees it (founder decision of 9 October 2026).
  */
 export async function addRecruiterCallNotes(tx: Tx, container: Container, input: { app: App; notes: RecruiterCallNotes["notes"]; complete: boolean; actor: Actor }): Promise<{ screenId: string; completed: boolean }> {
   const { app, actor } = input;
@@ -73,9 +74,21 @@ export async function addRecruiterCallNotes(tx: Tx, container: Container, input:
   const by = actor.name ?? actor.id;
   const entries: ScreenTranscriptEntry[] = input.notes.map((n) => ({ role: "recruiter", content: n.text, at: now.toISOString(), source: "recruiter_call", by, ...(n.questionKey && keys.has(n.questionKey) ? { questionKey: n.questionKey } : {}) }));
   const patch: Partial<typeof screens.$inferInsert> = { transcript: [...b.screen.transcript, ...entries] };
-  // A finished conversation is written up afresh with the notes, even one that had a reading of what the candidate typed.
-  if (input.complete) Object.assign(patch, { status: "completed", completedAt: now.toISOString(), assessmentId: null, startedAt: b.screen.startedAt ?? now.toISOString() });
+  // A finished conversation is written up afresh from the notes alone, even one that had a reading of what the candidate
+  // typed: the candidate never sent it, so it stays theirs (`completedBy`, founder decision of 9 October 2026).
+  if (input.complete) Object.assign(patch, { status: "completed", completedAt: now.toISOString(), assessmentId: null, startedAt: b.screen.startedAt ?? now.toISOString(), progress: { ...b.screen.progress, completedBy: "recruiter_call" } });
   await tx.update(screens).set(patch).where(eq(screens.id, scr.id));
+  if (input.complete && b.screen.assessmentId) {
+    // That older reading (written before 9 October 2026 from what they typed) is no longer linked to the screen, and
+    // stays hidden because it says itself what it was read from (`unsentScreenReadings` with the readings). Until the
+    // notes' scorecard is written, the application's latest reading goes back to the newest one the team may see.
+    const [cur] = await tx.select({ latest: applications.latestAssessmentId }).from(applications).where(eq(applications.id, app.id)).limit(1);
+    if (cur?.latest === b.screen.assessmentId) {
+      const readings = await tx.select({ id: assessments.id, kind: assessments.kind, result: assessments.result }).from(assessments).where(eq(assessments.applicationId, app.id)).orderBy(desc(assessments.createdAt));
+      const hidden = unsentScreenReadings([{ status: b.screen.status, assessmentId: b.screen.assessmentId }], readings);
+      await tx.update(applications).set({ latestAssessmentId: readings.find((r) => !hidden.has(r.id))?.id ?? null }).where(eq(applications.id, app.id));
+    }
+  }
   await emit(tx, { type: "screen.recruiter_notes_added", companyId: app.companyId, actor, subject: { type: "screen", id: scr.id }, payload: { applicationId: app.id, notes: entries.length, complete: input.complete } });
   await audit(tx, { companyId: app.companyId, actor, action: "screen.recruiter_notes_added", target: { type: "application", id: app.id }, reason: "notes from a call with the candidate", details: { screenId: scr.id, notes: entries.length, complete: input.complete } });
   if (!input.complete) return { screenId: scr.id, completed: false };
@@ -94,9 +107,9 @@ export async function addRecruiterCallNotes(tx: Tx, container: Container, input:
 }
 
 /**
- * How the conversation goes for a role (plan E13): offered, started, finished, the median time to finish, the question
- * most people stopped at, how many chose a person, and the questions people skipped. From the latest screen of each
- * application; counts only, never a name or an answer.
+ * How the conversation goes for a role (plan E13): offered, started, finished, the median time to finish, how many
+ * chose a person, and the questions people skipped in the answers they sent. From the latest screen of each
+ * application; counts only, never a name or an answer, and nothing from a conversation nobody sent (`screeningFunnel`).
  */
 export async function roleScreeningFunnel(tx: Tx, roleId: string): Promise<ScreeningFunnel> {
   const rows = await tx.select({ applicationId: screens.applicationId, status: screens.status, invitedVia: screens.invitedVia, startedAt: screens.startedAt, completedAt: screens.completedAt, progress: screens.progress, transcript: screens.transcript, createdAt: screens.createdAt }).from(screens).innerJoin(applications, eq(applications.id, screens.applicationId)).where(eq(applications.roleId, roleId)).orderBy(desc(screens.createdAt));

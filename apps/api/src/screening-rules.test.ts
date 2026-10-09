@@ -175,18 +175,19 @@ describe("screening rules: the follow-up cap and the web hand-off to a person", 
     expect(html).not.toContain('name="message"'); // the conversation is closed to the assistant
     // counted, as ITS covers it (Q16), never against the company's recruiter requests
     expect((await container.db.select().from(usageEvents).where(eq(usageEvents.key, "screen_person_requests"))).filter((u) => u.ref.screenId === screenId)).toMatchObject([{ ref: { choice: "contact_me" } }]);
-    // the request for a person carries the whole conversation and the candidate's answers so far
+    // the request for a person carries the application and the conversation's state, but not the answers he never sent
+    // (founder decision of 9 October 2026, "hide them until they send"): the recruiter goes through the questions on a call
     const escs = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, application.id));
     expect(escs).toHaveLength(1);
     expect(escs[0]).toMatchObject({ kind: "candidate_issue", status: "open", roleId });
     expect(escs[0].question).toContain("Luis Ortega needs a person");
     expect(escs[0].question).toContain("chose 'Have a person contact me'");
     expect(Date.parse(escs[0].slaDueAt!)).toBeGreaterThan(Date.now());
-    const snapshot = escs[0].contextSnapshot as { screens: Array<{ status: string; transcript: Array<{ role: string; content: string }>; answers: Record<string, string> }>; candidate: { name: string } };
+    const snapshot = escs[0].contextSnapshot as { screens: Array<{ status: string; transcript: Array<{ role: string; content: string }>; answers: Record<string, string>; answersShared: boolean }>; candidate: { name: string } };
     expect(snapshot.candidate.name).toBe("Luis Ortega");
     expect(snapshot.screens).toHaveLength(1);
-    expect(snapshot.screens[0].transcript.some((t) => t.role === "candidate" && t.content === answer)).toBe(true);
-    expect(Object.values(snapshot.screens[0].answers)).toContain(answer);
+    expect(snapshot.screens[0]).toMatchObject({ status: "human_requested", answersShared: false, answers: {}, transcript: [] });
+    expect(JSON.stringify(snapshot)).not.toContain(answer);
     // the facts and the owner's notification
     expect(await eventsFor("screen.human_requested", screenId)).toHaveLength(1);
     expect((await eventsFor("screen.human_requested", screenId))[0].payload).toMatchObject({ reason: "candidate chose 'Have a person contact me'" });

@@ -100,7 +100,7 @@ export async function sendAcknowledgment(q: Queryable, integrations: Integration
     : conv?.state === "by_email"
       ? `1. We email you a link to a short written conversation with ${company.name}'s AI assistant (about ${conv.minutes} minutes). Answer it whenever suits you, or ask for a person instead.`
       : conv?.state === "closed"
-        ? `1. The hiring team at ${company.name} reviews your application, with anything you answered in the short written conversation.`
+        ? `1. The hiring team at ${company.name} reviews your application, with your answers from the short written conversation if you sent them.`
         : `1. Possibly a short written conversation with ${company.name}'s AI assistant (${screenHow}, about ${packet.screening.maxMinutes} minutes). If so, we email you the link.`;
   const text = `Hi ${candidate.firstName},
 
@@ -431,9 +431,13 @@ export async function deliverSms(
   });
 }
 
-/** Records a message the candidate sent us (SMS reply, web chat turn) so the thread is complete. */
-export async function recordInbound(q: Queryable, input: { companyId: string; candidateId: string; applicationId: string; channel: "sms" | "web" | "email"; text: string; from?: string | null; provider?: string | null; providerMessageId?: string | null; actor: Actor; correlationId?: string | null }): Promise<string> {
-  const [row] = await q.insert(communications).values({ companyId: input.companyId, candidateId: input.candidateId, applicationId: input.applicationId, direction: "inbound", channel: input.channel, fromAddress: input.from ?? null, toAddress: null, subject: null, bodyText: input.text, provider: input.provider ?? null, providerMessageId: input.providerMessageId ?? null, status: "received", disclosureIncluded: false, sentBy: input.actor }).returning({ id: communications.id });
+/**
+ * Records a message the candidate sent us (SMS reply, web chat turn) so the thread is complete. `screenId`: it was
+ * typed or texted in that screening conversation, so the team sees it only once the conversation's answers are sent
+ * (`withoutUnsentConversation` in @ros/core).
+ */
+export async function recordInbound(q: Queryable, input: { companyId: string; candidateId: string; applicationId: string; channel: "sms" | "web" | "email"; text: string; from?: string | null; provider?: string | null; providerMessageId?: string | null; actor: Actor; correlationId?: string | null; screenId?: string | null }): Promise<string> {
+  const [row] = await q.insert(communications).values({ companyId: input.companyId, candidateId: input.candidateId, applicationId: input.applicationId, direction: "inbound", channel: input.channel, fromAddress: input.from ?? null, toAddress: null, subject: null, bodyText: input.text, provider: input.provider ?? null, providerMessageId: input.providerMessageId ?? null, status: "received", disclosureIncluded: false, sentBy: input.actor, ...(input.screenId ? { tags: { screenId: input.screenId } } : {}) }).returning({ id: communications.id });
   await emit(q, { type: "message.received", companyId: input.companyId, actor: input.actor, subject: { type: "communication", id: row.id }, payload: { channel: input.channel, applicationId: input.applicationId }, correlationId: input.correlationId ?? null });
   return row.id;
 }

@@ -27,8 +27,10 @@ describe("the 'still reviewing' note in Setup (plan G10)", () => {
     expect(STILL_REVIEWING_NOTE.auto).toMatch(/^One short, courteous email per applicant, once/);
     expect(STILL_REVIEWING_NOTE.auto).toMatch(/carries the same AI notice/);
     expect(STILL_REVIEWING_NOTE.auto_notify).toBe(STILL_REVIEWING_NOTE.auto);
-    expect(STILL_REVIEWING_NOTE.approval).toMatch(/^No note goes by itself/);
-    expect(STILL_REVIEWING_NOTE.human_only).toMatch(/^No note goes by itself/);
+    expect(STILL_REVIEWING_NOTE.approval).toMatch(/^Off: no note goes by itself/);
+    expect(STILL_REVIEWING_NOTE.human_only).toMatch(/^Off: no note goes by itself/);
+    // it starts off (founder decision of 9 October 2026), and says how to switch it on
+    expect(STILL_REVIEWING_NOTE.human_only).toContain("It starts off; choose \"Do it\" if you want the note sent for you.");
   });
 });
 

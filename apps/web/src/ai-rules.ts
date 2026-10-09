@@ -12,10 +12,12 @@ export const STILL_REVIEWING_LABEL = "Send a short \"we are still reviewing\" no
 
 /**
  * What each level does for the "still reviewing" note, said under the rule: only "Do it" and "Do it and tell me" send it,
- * once per application, never to someone set aside as not a fit for now; any other choice sends none.
+ * once per application, never to someone set aside as not a fit for now; any other choice sends none. It starts off
+ * ("Only a person"; founder decision of 9 October 2026): a team with many applicants picks the best few and tells the
+ * rest itself, so nothing goes unless the company switches it on.
  */
 const STILL_REVIEWING_SENDS = "One short, courteous email per applicant, once: their application is still being reviewed, no decision has been made, and people on your team decide. It carries the same AI notice as every automatic email, and says nothing about how they are doing.";
-const STILL_REVIEWING_NONE = "No note goes by itself under this choice: keep in touch with people who have waited a long time yourself.";
+const STILL_REVIEWING_NONE = "Off: no note goes by itself, so keep in touch with people who have waited a long time yourself. It starts off; choose \"Do it\" if you want the note sent for you.";
 export const STILL_REVIEWING_NOTE: Record<PolicyLevel, string> = { auto: STILL_REVIEWING_SENDS, auto_notify: STILL_REVIEWING_SENDS, approval: STILL_REVIEWING_NONE, human_only: STILL_REVIEWING_NONE };
 
 /** Loosening: a level that leaves more to happen without a person (Only a person, Ask me first, Do it and tell me, Do it). */

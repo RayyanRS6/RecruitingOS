@@ -162,12 +162,13 @@ describe("the candidate panel (plan E3, E10, E11)", () => {
 describe("the role report and the ITS controls", () => {
   it("shows how the conversation goes for the role (plan E13), counts only", () => {
     const qc = client();
-    qc.setQueryData(["role", "r1", "screening"], { offered: 10, started: 8, finished: 6, unfinished: 1, stillApplying: 2, medianMinutes: 6.4, dropOff: { key: "q_pay", question: "What pay are you looking for?", count: 2 }, personChosen: { contactMe: 1, sendWithout: 1 }, skipped: [{ key: "q_pay", question: "What pay are you looking for?", count: 3 }] });
+    qc.setQueryData(["role", "r1", "screening"], { offered: 10, started: 8, finished: 6, unfinished: 1, stillApplying: 2, medianMinutes: 6.4, personChosen: { contactMe: 1, sendWithout: 1 }, skipped: [{ key: "q_pay", question: "What pay are you looking for?", count: 3 }] });
     const words = text(render(qc, createElement(ScreeningCard, { roleId: "r1" })));
     expect(words).toContain("The screening conversation");
     expect(words).toContain("Started it 8 of 10 (80%)");
     expect(words).toContain("Typical time to finish about 6 minutes");
-    expect(words).toContain('Most people who stopped did so at "What pay are you looking for?" (2 people).');
+    // never where anyone stopped: a conversation that stopped was never sent (founder decision of 9 October 2026)
+    expect(words).not.toContain("Most people who stopped");
     expect(words).toContain("Chose a person instead 2: 1 asked to be contacted, 1 sent their application without it");
     expect(words).toContain("What pay are you looking for? 3");
     expect(render(qc, createElement(ScreeningCard, { roleId: "r1" }))).toContain('href="/roles/r1/talent?applying=1"');

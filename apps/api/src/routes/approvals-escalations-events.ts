@@ -1,8 +1,8 @@
 import { Hono, type Context } from "hono";
-import { and, desc, eq, inArray, isNull, like, notInArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, like, notInArray, or } from "drizzle-orm";
 import { ConfirmBoardUpdated, CreateEscalation, DecideApproval, EscalationEstimateQuery, EscalationReply, RecordPostingUrl, ReopenEscalation, ResolveEscalation, VerifyPosting, type Actor, type CandidateNotice, type EscalationScope, type InterviewDraft, type RecruiterRequestView } from "@ros/contracts";
-import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, assertCan, audit, can, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, isBoardChannel, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, scopeAllows, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
-import { applications, approvalRequests, candidates, companies, escalationMessages, events, memberships, postings, recruiterEscalations, rolePackets, roles, staffAccessGrants, users, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
+import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, assertCan, audit, can, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, isBoardChannel, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, scopeAllows, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, unsentScreenReadings, withoutSentimentWords, withoutUnsentInContext, withoutUnsentScreenEvents, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
+import { applications, approvalRequests, assessments, candidates, companies, escalationMessages, events, memberships, postings, recruiterEscalations, rolePackets, roles, screens, staffAccessGrants, users, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
 import { confirmPostingByHand, postingTaskDetail, queuePostingCheck, recordBoardAddress } from "./postings";
 import { actorOf, clientIp, requireRecruiterOrAdmin, requireTenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
@@ -221,7 +221,9 @@ escalationRoutes.get("/mine", requireTenant, async (c) => {
     return { rows, messages, titles, people };
   });
   const names = await recruiterNames(container.db, found.rows.map((r) => r.assignedToUserId));
-  return c.json(found.rows.map((r): RecruiterRequestView => {
+  return c.json(found.rows.map((row): RecruiterRequestView => {
+    // A hand-over reason from before 9 October 2026 in today's words: never how the candidate sounded.
+    const r = { ...row, question: withoutSentimentWords(row.question) };
     const own = found.messages.filter((m) => m.escalationId === r.id);
     const recruiterName = r.assignedToUserId ? names.get(r.assignedToUserId) ?? null : [...own].reverse().find((m) => m.side === "recruiter")?.author.name ?? null;
     return {
@@ -404,8 +406,10 @@ escalationRoutes.get("/:id", requireRecruiterOrAdmin, async (c) => {
     await recordStaffAccess(tx, { grant, userName: actor.name, method: "GET", path: `/api/v1/escalations/${e.id}`, ip: clientIp(c) });
     // The thread (plan B5): the team's notes, the recruiter's replies, every answer and why it was reopened.
     const messages = await tx.select().from(escalationMessages).where(eq(escalationMessages.escalationId, e.id));
-    const thread = escalationThread(e, messages, actor.name, { forRecruiter: true });
-    const full = { companyId: e.companyId, roleId: e.roleId, applicationId: e.applicationId, firstResponseAt: e.firstResponseAt, accessExpiresAt: e.accessExpiresAt, resolution: e.resolution, resolvedAt: e.resolvedAt, minutesSpent: e.minutesSpent, question: e.question, contextSnapshot: e.contextSnapshot, thread, reopenedCount: messages.filter((m) => m.kind === "reopen").length, grant: { id: grant.id, purpose: grant.purpose, expiresAt: grant.expiresAt, scope: { roleId: grant.roleId, applicationId: grant.applicationId } } };
+    // A hand-over reason from before 9 October 2026 in today's words: never how the candidate sounded.
+    const question = withoutSentimentWords(e.question);
+    const thread = escalationThread({ ...e, question }, messages, actor.name, { forRecruiter: true });
+    const full = { companyId: e.companyId, roleId: e.roleId, applicationId: e.applicationId, firstResponseAt: e.firstResponseAt, accessExpiresAt: e.accessExpiresAt, resolution: e.resolution, resolvedAt: e.resolvedAt, minutesSpent: e.minutesSpent, question, contextSnapshot: withoutUnsentInContext(e.contextSnapshot), thread, reopenedCount: messages.filter((m) => m.kind === "reopen").length, grant: { id: grant.id, purpose: grant.purpose, expiresAt: grant.expiresAt, scope: { roleId: grant.roleId, applicationId: grant.applicationId } } };
     return { previewRow, full, why: null as string | null };
   });
   if (!row) throw new HttpError(404, "not_found", "Escalation not found.");
@@ -678,7 +682,12 @@ escalationRoutes.post("/:id/posting/removed", requireRecruiterOrAdmin, async (c)
 
 export const eventRoutes = new Hono<Vars>();
 
-/** The activity list. A recruiter under a grant for one role or one candidate reads only the events about it. */
+/**
+ * The activity list. A recruiter under a grant for one role or one candidate reads only the events about it. A screening
+ * conversation the candidate has not sent (or never did) shows no entry about a single answer and no count of what was
+ * answered, and no entry about a reading written of one before 9 October 2026 ("scorecard written", its recommendation)
+ * (founder decision of 9 October 2026, `withoutUnsentScreenEvents`).
+ */
 eventRoutes.get("/", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "events.read");
@@ -693,9 +702,16 @@ eventRoutes.get("/", requireTenant, async (c) => {
     if (type) conds.push(eq(events.type, type));
     // Scoped: read further back, keep what the grant covers, and answer with the same 200 at most.
     const found = await tx.select().from(events).where(and(...conds)).orderBy(desc(events.occurredAt)).limit(scope ? 2000 : 200);
-    if (!scope) return found;
-    const targets = await eventTargets(tx, found);
-    return found.filter((e) => inStaffScope(scope, targets.get(e.id) ?? {})).slice(0, 200);
+    // The screens the entries are about, and the readings they name with the screens of those readings' applications.
+    const screenIds = [...new Set(found.filter((e) => e.subjectType === "screen").map((e) => e.subjectId))];
+    const readingIds = [...new Set(found.map((e) => (e.payload as { assessmentId?: unknown } | null)?.assessmentId).filter((x): x is string => typeof x === "string" && UUID.test(x)))];
+    const readings = readingIds.length ? await tx.select({ id: assessments.id, kind: assessments.kind, result: assessments.result, applicationId: assessments.applicationId }).from(assessments).where(inArray(assessments.id, readingIds)) : [];
+    const readingApps = [...new Set(readings.map((r) => r.applicationId))];
+    const scr = screenIds.length || readingApps.length ? await tx.select({ id: screens.id, status: screens.status, progress: screens.progress, assessmentId: screens.assessmentId }).from(screens).where(or(screenIds.length ? inArray(screens.id, screenIds) : undefined, readingApps.length ? inArray(screens.applicationId, readingApps) : undefined)) : [];
+    const shown = scr.length || readings.length ? withoutUnsentScreenEvents(found, scr, unsentScreenReadings(scr, readings)) : found;
+    if (!scope) return shown;
+    const targets = await eventTargets(tx, shown);
+    return shown.filter((e) => inStaffScope(scope, targets.get(e.id) ?? {})).slice(0, 200);
   });
   return c.json(rows);
 });

@@ -61,9 +61,11 @@ export const DEFAULT_POLICIES: Record<ActionType, { level: PolicyLevel; approver
   /**
    * The courtesy note to someone still waiting for a decision `afterDays` after they applied (plan G10): one short,
    * disclosed "still reviewing" note, once per application. "Do it" sends it; any other level sends none (the team, or a
-   * recruiter running the role, keeps in touch themselves).
+   * recruiter running the role, keeps in touch themselves). Off unless a company switches it on in Setup (founder
+   * decision of 9 October 2026: with many applicants a team picks the best few, so automatic notes are not wanted). A
+   * company that saved a level keeps it: its row overrides this default.
    */
-  "message.still_reviewing": { level: "auto", approverRoles: [], params: { afterDays: 30 } },
+  "message.still_reviewing": { level: "human_only", approverRoles: [], params: { afterDays: 30 } },
   "application.triage": { level: "auto", approverRoles: [] },
   /** The hold is operational, never permission for adverse action: notify, review timer, reminders, escalation of an overdue review. */
   "application.hold_ineligible": { level: "auto_notify", approverRoles: [], params: { reviewWindowHours: 24, remindEveryHours: 24, escalateAfterHours: 72 } },

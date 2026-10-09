@@ -6,7 +6,7 @@ import { audit, emit, entitlements, gate, humanResponseExpectation, isOneVisitFl
 import { applications, assessments, candidates, companies, rolePackets, roles, screens, withPlatform, type Tx } from "@ros/db";
 import {
   answersOf, applyScreenOpening, assessScreen, createScreen, finishScreenTurn, focusQuestionsFrom, loadScreenBundle, packetForFocusedInvite, prepareScreenOpening, requestHuman, screenContextOf, sendConversationHandedOver, sendConversationIdleReminder,
-  sendConversationNotOfferedNote, sendConversationNotStartedNote, sendConversationNotStartedReminder, sendConversationResume, sendConversationReviewReminder, sendConversationUnfinishedNote, sendScreenExpiredNote, sendScreenInvite, sendScreenReminder, submitScreenAnswers, type FocusQuestion, type ScreenDeps,
+  sendConversationNotOfferedNote, sendConversationNotStartedNote, sendConversationNotStartedReminder, sendConversationResume, sendConversationReviewReminder, sendConversationUnfinishedNote, sendScreenExpiredNote, sendScreenInvite, sendScreenReminder, type FocusQuestion, type ScreenDeps,
 } from "@ros/agents";
 import { twoPhase, type StepContext, type WorkflowDefinition } from "../types";
 import { SUGGESTION_WINDOW_HOURS, settleSuggestion, waitForSuggestion, type SuggestionState } from "../suggestions";
@@ -23,7 +23,10 @@ type State = { applicationId: string; roleId: string; screenId?: string; channel
 
 /** A screen that is over without a scorecard: handed to a person, left, stopped by the team or closed with the application. Nothing more is sent. */
 const ENDED = ["human_requested", "abandoned", "cancelled", "expired"];
-/** Over before the end, with what the candidate said so far: read for that, flagged incomplete (E3, E4). */
+/**
+ * Over before the end without the candidate sending their answers (E3, E4): never read and never shown ("hide them until
+ * they send", founder decision of 9 October 2026). The team is told it happened; the reading stays the résumé's.
+ */
 const PARTIAL = ["unfinished", "declined_by_candidate"];
 
 const INVITE_WAIT_HOURS = 48;
@@ -52,8 +55,10 @@ function depsOf(ctx: { services: StepContext["services"] }): ScreenDeps {
  * phase with no transaction open.
  *
  * Wave E: a screen created with the application starts here without an invitation; someone who starts and stops is
- * reminded once and then closed with what they said (E4), and someone who answered everything but did not press Send
- * is reminded once and their answers then go as they are; someone who never starts the conversation that goes with the
+ * reminded once and then closed as unfinished (E4), their unsent answers never shown or read; someone who answered
+ * everything but did not press Send is reminded once to send them, and is then closed the same way, since only the
+ * candidate sends their answers ("hide them until they send", founder decision of 9 October 2026); someone who never
+ * starts the conversation that goes with the
  * application is reminded once, then the application goes to the team without it and they are told nothing else is
  * needed (no silent expiry); an outage pauses the conversation and the run tries again until the assistant answers,
  * then emails the candidate to finish, or after a day hands it to a person and tells them (E5); and when the plan's
@@ -178,7 +183,8 @@ export const screen: WorkflowDefinition<State> = {
       if (!scr) return { kind: "fail", error: "screen missing", retryable: false };
       if (ENDED.includes(scr.status)) return { kind: "complete" };
       if (scr.status === "completed") return { kind: "next", step: "assess" };
-      if (PARTIAL.includes(scr.status)) return Object.keys(answersOf(scr)).length && !scr.assessmentId ? { kind: "next", step: "assess" } : { kind: "complete" };
+      // Sent without the conversation (the team was told then) or closed unfinished (told at the close): nothing to read.
+      if (PARTIAL.includes(scr.status)) return { kind: "complete" };
       if (scr.status === "paused") return { kind: "next", step: "retry_paused" };
       if (scr.status === "in_progress") {
         // E4: no longer a 72-hour wait repeated for ever. A day without an answer brings one reminder; two more days close it.
@@ -248,7 +254,8 @@ export const screen: WorkflowDefinition<State> = {
 
     /**
      * E4: one reminder to someone who started and stopped part-way, with their answers kept. Someone who answered every
-     * question and did not press Send (E10) is reminded to send them instead, with the day they go as they are.
+     * question and did not press Send (E10) is reminded to send them instead, with the day the conversation closes if
+     * they do not; answers nobody sent are never passed on (founder decision of 9 October 2026).
      */
     async idle_remind(ctx) {
       const b = await load(ctx.q, ctx.state.applicationId);
@@ -257,36 +264,34 @@ export const screen: WorkflowDefinition<State> = {
       if (scr.status !== "in_progress" || scr.idleRemindedAt) return { kind: "next", step: "after_invite" };
       const packet = (await loadScreenBundle(ctx.q, scr.id))?.packet ?? b.packet;
       const link = { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet, actor: ctx.actor, correlationId: ctx.run.id, appBaseUrl: ctx.services.env.jobsBaseUrl, screen: { id: scr.id, token: scr.token }, questions: packet.screening.questions.length, minutes: packet.screening.maxMinutes };
-      if (scr.progress.phase === "review") await sendConversationReviewReminder(ctx.q, ctx.services.integrations, { ...link, sendOn: dayWords(new Date(ctx.now.getTime() + IDLE_CLOSE_HOURS * HOUR), b.company.timezone) });
+      if (scr.progress.phase === "review") await sendConversationReviewReminder(ctx.q, ctx.services.integrations, { ...link, closesOn: dayWords(new Date(ctx.now.getTime() + IDLE_CLOSE_HOURS * HOUR), b.company.timezone) });
       else await sendConversationIdleReminder(ctx.q, ctx.services.integrations, link);
       await ctx.q.update(screens).set({ idleRemindedAt: ctx.now.toISOString() }).where(eq(screens.id, scr.id));
       await emit(ctx.q, { type: "screen.idle_reminded", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "screen", id: scr.id }, payload: { applicationId: b.app.id, answered: Object.keys(answersOf(scr)).length }, correlationId: ctx.run.id });
-      return { kind: "wait", wait: { kind: "event", eventTypes: ["completed", "human", "paused"], subjectId: `screen:${scr.id}`, until: new Date(ctx.now.getTime() + IDLE_CLOSE_HOURS * HOUR).toISOString(), reason: "reminded once; closing with what they said if they do not come back" }, resumeStep: "after_invite" };
+      return { kind: "wait", wait: { kind: "event", eventTypes: ["completed", "human", "paused"], subjectId: `screen:${scr.id}`, until: new Date(ctx.now.getTime() + IDLE_CLOSE_HOURS * HOUR).toISOString(), reason: "reminded once; closing unsent if they do not come back" }, resumeStep: "after_invite" };
     },
 
     /**
      * E4: still nothing two days after the reminder. The conversation closes as unfinished, the application goes on to
-     * the team ("ready for your review"), the candidate gets a short note that nothing else is needed, and whatever they
-     * answered is read for the team, flagged as not finished. Someone who answered everything and only did not press
-     * Send is not "unfinished": their answers go as they are, as the reminder said, and are read like anyone's.
+     * the team ("ready for your review"), and the candidate gets a short note that nothing else is needed. They never
+     * sent their answers, so nothing they said is shown to the team or read for it (founder decision of 9 October 2026,
+     * "hide them until they send"): the team sees "Didn't finish the conversation", and the reading and the match score
+     * stay the résumé's. Someone who answered everything and only did not press Send closes the same way: only the
+     * candidate sends their answers, never the software on their behalf, and the reminder told them so. The team's
+     * alert, history and page use the same words whatever they answered, so nothing says how far they got.
      */
     async close_unfinished(ctx) {
       const b = await load(ctx.q, ctx.state.applicationId);
       const [scr] = await ctx.q.select().from(screens).where(eq(screens.id, ctx.state.screenId!)).limit(1);
       if (!scr || !b) return { kind: "fail", error: "screen missing", retryable: false };
       if (scr.status !== "in_progress") return { kind: "next", step: "after_invite" };
-      if (scr.progress.phase === "review") {
-        await submitScreenAnswers(ctx.q, depsOf(ctx), { screenId: scr.id, actor: ctx.actor, via: "review_timeout" });
-        return { kind: "next", step: "assess" };
-      }
+      // The counts stay on the record for ITS; the team's history never shows them (withoutUnsentScreenEvents).
       const answered = Object.keys(answersOf(scr)).length;
       await ctx.q.update(screens).set({ status: "unfinished", completedAt: ctx.now.toISOString() }).where(eq(screens.id, scr.id));
       await emit(ctx.q, { type: "screen.unfinished", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "screen", id: scr.id }, payload: { applicationId: b.app.id, answered, questions: b.packet.screening.questions.length, stoppedAt: scr.progress.currentQuestionKey ?? null }, correlationId: ctx.run.id });
-      if (["screen_invited", "screening"].includes(b.app.stage)) await transition(ctx.q, { applicationId: b.app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, reason: "stopped part-way through the screening conversation", correlationId: ctx.run.id });
+      if (["screen_invited", "screening"].includes(b.app.stage)) await transition(ctx.q, { applicationId: b.app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, reason: "did not finish the screening conversation", correlationId: ctx.run.id });
       await sendConversationUnfinishedNote(ctx.q, ctx.services.integrations, { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet: b.packet, actor: ctx.actor, correlationId: ctx.run.id, screen: { id: scr.id } });
-      if (answered) return { kind: "next", step: "assess" };
-      const name = `${b.candidate.firstName} ${b.candidate.lastName}`;
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.unfinished", title: `${name} did not finish the screening conversation`, body: `They started it but answered none of the questions, and did not come back after a reminder. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
+      await notifyUnfinished(ctx, b);
       return { kind: "complete" };
     },
 
@@ -345,11 +350,12 @@ export const screen: WorkflowDefinition<State> = {
       },
     }),
 
+    /** Only a complete conversation is read (`assessScreen`); one the candidate did not send never is. */
     assess: twoPhase<State, { screenId: string; out: RunOutcome<ScreenAssessment> } | null>({
       async prepare(ctx) {
         const pending = await ctx.read(async (q) => {
           const [scr] = await q.select().from(screens).where(eq(screens.id, ctx.state.screenId!)).limit(1);
-          return scr && !scr.assessmentId ? scr.id : null;
+          return scr && !scr.assessmentId && scr.status === "completed" ? scr.id : null;
         });
         if (!pending) return null;
         const out = await assessScreen(ctx.db, ctx.services.ai, { companyId: ctx.companyId, screenId: pending, workflowRunId: ctx.run.id });
@@ -359,6 +365,14 @@ export const screen: WorkflowDefinition<State> = {
         const [scr] = await ctx.q.select().from(screens).where(eq(screens.id, ctx.state.screenId!)).limit(1);
         if (!scr) return { kind: "fail", error: "screen missing", retryable: false };
         if (scr.assessmentId) return { kind: "next", step: "recommend" };
+        if (scr.status !== "completed") {
+          // A run that reached this step for a conversation closed without being sent (one under way when this rule
+          // came in, 9 October 2026): nothing is read, and the team hears it happened, as it now does at the close.
+          const b = PARTIAL.includes(scr.status) ? await load(ctx.q, ctx.state.applicationId) : null;
+          if (b && scr.status === "unfinished") await notifyUnfinished(ctx, b);
+          if (b && scr.status === "declined_by_candidate") await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.declined_by_candidate", title: `${b.candidate.firstName} ${b.candidate.lastName} sent their application without the conversation`, body: `They chose not to go through the screening questions for ${b.packet.identity.title}, which is never held against them. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
+          return { kind: "complete" };
+        }
         if (!prepared || prepared.screenId !== scr.id) return { kind: "fail", error: "the screen changed after the read phase; assessing again", retryable: true };
         const out = prepared.out;
         if (!out.ok) {
@@ -383,8 +397,8 @@ export const screen: WorkflowDefinition<State> = {
     /**
      * The scorecard's suggestion, under policy `application.recommend_interview`. The software check comes first (plan
      * A8): a scorecard that disagrees with its own must-have findings holds the step for a person, with the reason. A
-     * suggestion that waits for approval expires after a week (plan A6). A conversation that was not finished suggests
-     * nothing: the team reads what the candidate did say and decides (E3, E4).
+     * suggestion that waits for approval expires after a week (plan A6). A conversation that was not sent is never read,
+     * so it never comes here; a reading made of one before 9 October 2026 suggests nothing and is never quoted.
      */
     async recommend(ctx) {
       const b = await load(ctx.q, ctx.state.applicationId);
@@ -397,8 +411,8 @@ export const screen: WorkflowDefinition<State> = {
       // They left the process while the scorecard was being written: nothing to suggest or announce.
       if (["hired", "withdrawn", "rejected", "declined", "talent_pool"].includes(app.stage)) return { kind: "complete" };
       if (PARTIAL.includes(scr.status)) {
-        const why = scr.status === "unfinished" ? "did not finish the screening conversation" : "sent their application part-way through the screening conversation";
-        await notify(ctx.q, { companyId: ctx.companyId, kind: scr.status === "unfinished" ? "screen.unfinished" : "screen.declined_by_candidate", title: `${name} ${why}`, body: `${asmt.result.summary} This reading covers only what they answered. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
+        if (scr.status === "unfinished") await notifyUnfinished(ctx, b);
+        else await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.declined_by_candidate", title: `${name} sent their application without the conversation`, body: `They chose not to go through the screening questions for ${packet.identity.title}, which is never held against them. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
         return { kind: "complete" };
       }
       const check = readingConsistency(asmt, packet);
@@ -430,6 +444,16 @@ export const screen: WorkflowDefinition<State> = {
     },
   },
 };
+
+/**
+ * The team's one alert for a conversation closed unfinished: that it happened, never how far they got or what they
+ * said, since they never sent it (founder decision of 9 October 2026). The same words for someone who stopped at the
+ * first question and someone who answered everything and never pressed Send.
+ */
+async function notifyUnfinished(ctx: { q: Tx; companyId: string }, b: NonNullable<Awaited<ReturnType<typeof load>>>): Promise<void> {
+  const name = `${b.candidate.firstName} ${b.candidate.lastName}`;
+  await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.unfinished", title: `${name} didn't finish the screening conversation`, body: "They did not send their answers, even after a reminder, so you won't see them, and their reading and match score come from their application alone. Their application is ready for your review.", action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
+}
 
 /** The open questions of the latest résumé assessment, as the first questions of a focused screen. */
 async function focusQuestionsFor(q: Tx, applicationId: string): Promise<FocusQuestion[]> {

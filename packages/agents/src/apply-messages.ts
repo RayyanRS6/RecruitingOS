@@ -37,7 +37,10 @@ ${signOff(input)}`;
   return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_later", subject: `Your screening conversation for ${packet.identity.title}, for when you are ready`, text, idempotencyKey: `screen_later:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
-/** Started and stopped part-way (E4): one reminder, with their answers kept. */
+/**
+ * Started and stopped part-way (E4): one reminder, with their answers kept. Answers they never send stay with them
+ * (founder decision of 9 October 2026): the conversation then closes and the application carries on without it.
+ */
 export async function sendConversationIdleReminder(q: Queryable, integrations: Integrations, input: ConversationLinkInput): Promise<SendResult> {
   const { candidate, company, packet } = input;
   const text = `Hi ${candidate.firstName},
@@ -46,18 +49,21 @@ You started the screening conversation for the ${packet.identity.title} position
 
 ${conversationUrl(input)}
 
-If you would rather not finish it, you do not need to do anything: in a couple of days we will pass on what you have told us so far, and your application carries on.
+If you would rather not finish it, you do not need to do anything: in a couple of days the conversation closes and your application carries on without it. Answers you have not sent are not passed to the hiring team.
 
 ${signOff(input)}`;
   return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_idle_reminder", subject: `Pick up your screening conversation for ${packet.identity.title}`, text, idempotencyKey: `screen_idle_reminder:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
-/** Closed part-way after the reminder (E4): a short note that nothing else is needed. */
+/**
+ * Closed part-way after the reminder (E4): a short note that nothing else is needed. The answers they never sent are
+ * not passed on (founder decision of 9 October 2026); the application is.
+ */
 export async function sendConversationUnfinishedNote(q: Queryable, integrations: Integrations, input: MessageInput & { screen: { id: string } }): Promise<SendResult> {
   const { candidate, company, packet } = input;
   const text = `Hi ${candidate.firstName},
 
-We have passed what you told us in the screening conversation for the ${packet.identity.title} position to the hiring team at ${company.name}, and closed the conversation. Nothing else is needed from you. People on the team review your application and decide on next steps; you will hear from them either way.
+We have closed the screening conversation for the ${packet.identity.title} position at ${company.name}. Your application has gone to the hiring team without it: answers you did not send are not passed on. Nothing else is needed from you. People on the team review your application and decide on next steps; you will hear from them either way.
 
 If you would like to add something, reply to this email.
 
@@ -67,17 +73,20 @@ ${signOff(input)}`;
 
 /**
  * Every question answered, but "Send" not pressed (E10, E4): one reminder to check the answers and send them, and the
- * day they go to the team as they are if nothing happens (`sendOn`, in the company's time zone).
+ * day the conversation closes if nothing happens (`closesOn`, in the company's time zone). Only the candidate sends
+ * their answers (founder decision of 9 October 2026, "hide them until they send"): if they do not, the application goes
+ * on without them and the answers are never passed on. Keep it in step with the "Check your answers" page
+ * (apps/api/src/pages/candidate.tsx, `ReviewPage`) and counsel register item 20.
  */
-export async function sendConversationReviewReminder(q: Queryable, integrations: Integrations, input: ConversationLinkInput & { sendOn: string }): Promise<SendResult> {
+export async function sendConversationReviewReminder(q: Queryable, integrations: Integrations, input: ConversationLinkInput & { closesOn: string }): Promise<SendResult> {
   const { candidate, company, packet } = input;
   const text = `Hi ${candidate.firstName},
 
-You answered every question in the screening conversation for the ${packet.identity.title} position at ${company.name}, but you have not pressed Send yet. You can check them, change any of them, and press Send here:
+You answered every question in the screening conversation for the ${packet.identity.title} position at ${company.name}, but you have not pressed Send yet. The hiring team sees your answers only once you send them. You can check them, change any of them, and press Send here:
 
 ${conversationUrl(input)}
 
-If you do nothing, we will send your answers to the hiring team as they are on ${input.sendOn}, so your application is not held up.
+If you do not press Send by ${input.closesOn}, the conversation closes and your application goes to the hiring team without these answers. Answers you have not sent are not passed on.
 
 ${signOff(input)}`;
   return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_review_reminder", subject: `Your answers for ${packet.identity.title} are ready to send`, text, idempotencyKey: `screen_review_reminder:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
@@ -140,7 +149,7 @@ export async function sendConversationHandedOver(q: Queryable, integrations: Int
   const { candidate, company, packet } = input;
   const text = `Hi ${candidate.firstName},
 
-Sorry about the trouble with the screening conversation for the ${packet.identity.title} position at ${company.name}. We have passed your application and your answers so far to a person working with the hiring team, who will contact you ${input.expectation}. Nothing else is needed from you.
+Sorry about the trouble with the screening conversation for the ${packet.identity.title} position at ${company.name}. We have passed your application to a person working with the hiring team, who will contact you ${input.expectation} to go through the questions with you. The answers you started were not sent, so they are not passed on. Nothing else is needed from you.
 
 ${packet.communication.signature || `The hiring team at ${company.name}`}
 

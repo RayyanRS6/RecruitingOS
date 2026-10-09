@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { createHash } from "node:crypto";
-import { desc, eq, sql } from "drizzle-orm";
-import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, suppressAddress, describeHours, APPLY_FLOW_FALLBACK } from "@ros/core";
+import { desc, eq, inArray, sql } from "drizzle-orm";
+import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, suppressAddress, describeHours, unsentScreenReadings, withoutUnsentRunOutput, withoutUnsentScreenEvents, APPLY_FLOW_FALLBACK } from "@ros/core";
 import { ApplyFlowDefaultChange, BreakGlass, BusinessCalendarInput, CompanyVerificationChange, JobBoardAccessChange, PlanChange, RecalculateDeadlines, companyOnboarding, companyVerifiedAt, type Actor } from "@ros/contracts";
 import { HELD_STATUS } from "@ros/agents";
-import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, integrations, jobs, recruiterEscalations, roles, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
+import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, integrations, jobs, recruiterEscalations, roles, screens, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
 import { requirePlatformAdmin, type Vars } from "../middleware/session";
 import { OUTCOME_STATEMENT, OutcomeError, PlatformRoleError, raiseAlert, correctOutcome, countActiveAdmins, grantPlatformRole, listPlatformRoleGrants, revokeAllSessions, revokePlatformRole, type PlatformRole } from "@ros/core";
 import { CorrectOutcome } from "@ros/contracts";
@@ -68,8 +68,6 @@ function recruiterAsksOf(row: { used: number; limit: number | null } | undefined
   if (!row) return { used: 0, limit: null, over: false };
   return { used: row.used, limit: row.limit, over: row.limit !== null && row.used > row.limit };
 }
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * The one-time ITS check (founder decision B7, plan B1): an administrator confirms a company that signed itself up, after
@@ -160,14 +158,33 @@ adminRoutes.get("/runs", async (c) => {
   return c.json(rows);
 });
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * "Hide them until they send" on the operations console too (founder decision of 9 October 2026; counsel register item
+ * 20): the console is not the hiring team, but nobody at ITS reads answers a candidate never sent. An AI run about a
+ * screening conversation that was not sent keeps its timings, tokens, status and error, and its output is withheld
+ * (`withoutUnsentRunOutput`); history entries about it say nothing about single answers, how far the candidate got, or a
+ * reading written of it before that day (`withoutUnsentScreenEvents`). The screens are read across companies, as the
+ * console reads.
+ */
+async function withoutUnsentAnswers<R extends typeof aiRuns.$inferSelect, E extends typeof events.$inferSelect>(db: Container["db"], input: { runs: R[]; events: E[] }): Promise<{ runs: R[]; events: E[] }> {
+  const ids = [...new Set([...input.runs.map((r) => r.inputRef?.screenId), ...input.events.filter((e) => e.subjectType === "screen").map((e) => e.subjectId)].filter((x): x is string => typeof x === "string" && UUID.test(x)))];
+  if (!ids.length) return input;
+  const scr = await withPlatform(db, (tx) => tx.select({ id: screens.id, status: screens.status, progress: screens.progress, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.id, ids)));
+  return { runs: input.runs.map((r) => withoutUnsentRunOutput(r, scr)), events: withoutUnsentScreenEvents(input.events, scr, unsentScreenReadings(scr)) };
+}
+
 adminRoutes.get("/runs/:id", async (c) => {
   const db = c.get("container").db;
   const [run] = await db.select().from(workflowRuns).where(eq(workflowRuns.id, c.req.param("id"))).limit(1);
   if (!run) throw new HttpError(404, "not_found", "Run not found.");
   const steps = await db.select().from(workflowSteps).where(eq(workflowSteps.runId, run.id)).orderBy(workflowSteps.seq);
-  const runAi = await db.select().from(aiRuns).where(eq(aiRuns.workflowRunId, run.id)).orderBy(aiRuns.createdAt);
-  const evs = await db.select().from(events).where(eq(events.correlationId, run.id)).orderBy(events.occurredAt);
-  return c.json({ run, steps, aiRuns: runAi, events: evs });
+  const shown = await withoutUnsentAnswers(db, {
+    runs: await db.select().from(aiRuns).where(eq(aiRuns.workflowRunId, run.id)).orderBy(aiRuns.createdAt),
+    events: await db.select().from(events).where(eq(events.correlationId, run.id)).orderBy(events.occurredAt),
+  });
+  return c.json({ run, steps, aiRuns: shown.runs, events: shown.events });
 });
 
 adminRoutes.post("/runs/:id/retry", async (c) => {
@@ -183,7 +200,7 @@ adminRoutes.post("/runs/:id/retry", async (c) => {
 adminRoutes.get("/ai-runs", async (c) => {
   const db = c.get("container").db;
   const rows = await db.select().from(aiRuns).orderBy(desc(aiRuns.createdAt)).limit(200);
-  return c.json(rows);
+  return c.json((await withoutUnsentAnswers(db, { runs: rows, events: [] })).runs);
 });
 
 adminRoutes.get("/ai-runs/:id", async (c) => {
@@ -191,14 +208,15 @@ adminRoutes.get("/ai-runs/:id", async (c) => {
   const [row] = await db.select().from(aiRuns).where(eq(aiRuns.id, c.req.param("id"))).limit(1);
   if (!row) throw new HttpError(404, "not_found", "AI run not found.");
   const related = row.workflowRunId ? await db.select().from(events).where(eq(events.correlationId, row.workflowRunId)).orderBy(events.occurredAt) : [];
-  return c.json({ run: row, events: related });
+  const shown = await withoutUnsentAnswers(db, { runs: [row], events: related });
+  return c.json({ run: shown.runs[0], events: shown.events });
 });
 
 adminRoutes.get("/failures", async (c) => {
   const db = c.get("container").db;
   const failedRuns = await db.select().from(workflowRuns).where(eq(workflowRuns.status, "failed")).orderBy(desc(workflowRuns.updatedAt)).limit(100);
   const failedJobs = await db.select().from(jobs).where(eq(jobs.status, "failed")).orderBy(desc(jobs.createdAt)).limit(100);
-  const failedAi = await db.select().from(aiRuns).where(sql`${aiRuns.status} <> 'ok'`).orderBy(desc(aiRuns.createdAt)).limit(100);
+  const failedAi = (await withoutUnsentAnswers(db, { runs: await db.select().from(aiRuns).where(sql`${aiRuns.status} <> 'ok'`).orderBy(desc(aiRuns.createdAt)).limit(100), events: [] })).runs;
   const alerts = await openAlerts(db);
   const pendingDeletions = await pendingCredentialDeletions(db);
   return c.json({ failedRuns, failedJobs, failedAi, alerts, pendingDeletions });

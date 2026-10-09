@@ -8,7 +8,7 @@ import { ACCESS_LIMITS, accessWords } from "../../recruiter-access";
 import { toast } from "../../toast";
 import { AskRecruiter } from "../../components/AskRecruiter";
 import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, NO_QUOTE_LABEL, RESUME_UNREADABLE_TEXT, SCORECARD_UNAVAILABLE_TEXT, closerLook, competencyUnquoted, isUnquoted, openScreenOf, requirementUnquoted, resumeUnreadable, scorecardUnavailable, screenQuestionText } from "../../evidence";
-import { APPLIED_IN_ONE_VISIT, DECLINED_WORDS, EDITED_WORDS, SCREEN_STATUS_LABEL, TAPPED_WORDS, answerLines, generalNotes, recruiterNoteLabel, screenOrigin, transcriptBubble, unansweredWords } from "../../screen-view";
+import { APPLIED_IN_ONE_VISIT, DECLINED_WORDS, EDITED_WORDS, SCREEN_STATUS_LABEL, TAPPED_WORDS, answerLines, generalNotes, hiddenAnswersLine, isRecruiterNote, recruiterNoteLabel, screenOrigin, transcriptBubble, unansweredWords } from "../../screen-view";
 import { actionToast } from "../../talent-actions";
 import { REC_LABEL } from "./helpers";
 import { competencyChip, importanceTag, orderCompetencyFindings, orderRequirementFindings, requirementChip, skillLabels } from "./match-view";
@@ -95,7 +95,7 @@ function AskInScreen({ detail, roleId, unknowns }: { detail: ApplicationDetail; 
   });
   if (!unknowns) return null;
   const open = openScreenOf(detail);
-  if (open) return <p className="small muted" style={{ marginTop: 6 }}>{open.progress.focusQuestions?.length ? "A screen that starts with these questions is already open; the answers appear here as they come in." : "A screen is already open; these questions are part of its follow-ups, so there is nothing more to send."}</p>;
+  if (open) return <p className="small muted" style={{ marginTop: 6 }}>{open.progress.focusQuestions?.length ? "A screen that starts with these questions is already open; the answers appear here once they finish it." : "A screen is already open; these questions are part of its follow-ups, so there is nothing more to send."}</p>;
   if (!detail.allowedActions.includes("invite_screen")) return null;
   return (
     <div className="row" style={{ marginTop: 8 }}>
@@ -213,7 +213,9 @@ export function AssessmentCard({ assessment, detail, roleId, labels, title }: { 
 /**
  * One screening conversation: its state and how it reached them ("Applied and talked in one visit"), the open
  * questions' answers first, each question with what the candidate did with it (chose not to answer, changed it before
- * sending, picked it from the choices), a recruiter's call notes labelled as theirs, and the whole transcript.
+ * sending, picked it from the choices), a recruiter's call notes labelled as theirs, and the whole transcript. Until the
+ * candidate sends their answers, and for good if they never did, none of that is here (founder decision of 9 October
+ * 2026): a calm line says why (`hiddenAnswersLine`), and a recruiter's call notes still show.
  */
 export function ScreenCard({ screen, open, action, questions = [], timeline = [] }: { screen: Screen; open?: boolean; action?: ReactNode; questions?: ReadonlyArray<{ key: string; question: string }>; timeline?: ApplicationDetail["timeline"] }) {
   // A screen that opened with the open questions keeps their answers beside the questions; they count, and they are shown first.
@@ -224,10 +226,22 @@ export function ScreenCard({ screen, open, action, questions = [], timeline = []
   const origin = screenOrigin(screen, timeline);
   const lines = answerLines(screen, questions);
   const general = generalNotes(screen, questions);
+  const hidden = hiddenAnswersLine(screen, timeline);
+  const notes = screen.transcript.filter(isRecruiterNote).map((t) => ({ text: t.content, by: t.by ?? null, question: t.questionKey ? questions.find((q) => q.key === t.questionKey)?.question ?? null : null }));
+  const counts = screen.answersShared === false ? "" : ` · ${answered} answered${skipped ? `, ${skipped} not answered by choice` : ""}${asked > answered + skipped ? `, ${asked - answered - skipped} asked` : ""}`;
   return (
     <Card title="Screening conversation" aside={<div className="row">{origin ? <Chip tone={origin === APPLIED_IN_ONE_VISIT ? "good" : "neutral"}>{origin}</Chip> : null}<Chip>{screen.channel === "sms" ? "text + web" : "web chat"}</Chip><Chip tone={screen.status === "completed" ? "good" : screen.status === "human_requested" ? "needs" : screen.status === "expired" ? "caution" : "accent"}>{SCREEN_STATUS_LABEL[screen.status] ?? screen.status.replace(/_/g, " ")}</Chip></div>}>
-      <p className="small muted">{screen.invitedAt ? `${origin ? "Offered" : "Invited"} ${new Date(screen.invitedAt).toLocaleDateString()}` : ""}{screen.remindedAt ? ` · reminded ${new Date(screen.remindedAt).toLocaleDateString()}` : ""}{screen.completedAt ? ` · ${screen.status === "completed" ? "completed" : "closed"} ${new Date(screen.completedAt).toLocaleDateString()}` : ""} · {answered} answered{skipped ? `, ${skipped} not answered by choice` : ""}{asked > answered + skipped ? `, ${asked - answered - skipped} asked` : ""}</p>
+      <p className="small muted">{screen.invitedAt ? `${origin ? "Offered" : "Invited"} ${new Date(screen.invitedAt).toLocaleDateString()}` : ""}{screen.remindedAt ? ` · reminded ${new Date(screen.remindedAt).toLocaleDateString()}` : ""}{screen.completedAt ? ` · ${screen.status === "completed" ? "completed" : "closed"} ${new Date(screen.completedAt).toLocaleDateString()}` : ""}{counts}</p>
+      {hidden ? <p className="small" style={{ marginTop: 8 }}>{hidden}</p> : null}
       {action}
+      {screen.answersShared === false ? (
+        // Nothing the candidate said: a recruiter's call notes alone, each with the question it is about.
+        notes.length ? (
+          <div className="stack" style={{ gap: 6, marginTop: 8 }}>
+            {notes.map((n, i) => <div key={i} className="bubble recruiter" style={{ whiteSpace: "pre-wrap" }}><span className="bubble-label">{recruiterNoteLabel(n.by)}{n.question ? ` About: ${n.question}` : ""}</span>{n.text}</div>)}
+          </div>
+        ) : null
+      ) : <>
       {focusAnswered.length ? (
         <div style={{ marginTop: 8 }}>
           <p className="small muted">What they said about the open questions:</p>
@@ -268,6 +282,7 @@ export function ScreenCard({ screen, open, action, questions = [], timeline = []
           </div>
         </details>
       ) : <p className="small muted" style={{ marginTop: 6 }}>They have not opened it yet.</p>}
+      </>}
     </Card>
   );
 }

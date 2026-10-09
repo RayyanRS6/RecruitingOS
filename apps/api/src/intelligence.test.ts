@@ -317,6 +317,20 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: RolePacket } };
     const packet = role.currentPacket.packet;
     const licence = "Can you tell me about your active CA RDH license?";
+    // while the conversation is still under way, nobody on the team or at ITS reads them (founder decision of
+    // 9 October 2026, "hide them until they send"; an emailed conversation is sent when it ends normally)
+    const open = await withTenant(container.db, a.companyId, async (tx) => ({
+      ctx: await buildEscalationContext(tx, a.companyId, roleId, rileyId),
+      brief: await composeInterviewerBrief(tx, { applicationId: rileyId, candidateFirstName: "Riley", packet, roundKey: packet.interviews.plan[0].key }),
+    }));
+    expect((await screenOf(rileyId)).status).toBe("in_progress");
+    expect(JSON.stringify(open)).not.toContain("RDH55555");
+    expect((open.ctx.screens as Array<{ answersShared: boolean }>)[0].answersShared).toBe(false);
+    const d = await detail(rileyId);
+    expect(JSON.stringify(d)).not.toContain("RDH55555");
+    expect(d.screens[0].progress.focusQuestions?.map((f) => f.key)).toEqual(["unknown_1", "unknown_2"]);
+    // the conversation ends normally (set directly here; the flow itself is tested with the screening suites)
+    await container.db.update(screens).set({ status: "completed", completedAt: new Date().toISOString() }).where(eq(screens.applicationId, rileyId));
     // what a person reads: the recruiter's context and the interviewer's brief carry the answers, the brief with the questions in the words they were asked
     const ctx = await withTenant(container.db, a.companyId, (tx) => buildEscalationContext(tx, a.companyId, roleId, rileyId));
     expect((ctx.screens as Array<{ answers: Record<string, string> }>)[0].answers.unknown_1).toMatch(/RDH55555/);

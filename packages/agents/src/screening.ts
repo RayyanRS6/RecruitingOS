@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, type Actor, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreenChannel, type ScreeningQuestion, type ScreenInvitedVia, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
 import { runPromptDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type RunOutcome, type ScreenContext } from "@ros/ai";
-import { createEscalation, emit, entitlements, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, tapAnswerText, tapFormatFor, transition } from "@ros/core";
+import { HANDED_TO_A_PERSON, createEscalation, emit, entitlements, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, tapAnswerText, tapFormatFor, teamScreenView, transition } from "@ros/core";
 import { applications, assessments, candidates, companies, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { deliverSms, recordInbound, sendPersonRequestedNote } from "./coordinator";
@@ -374,7 +374,8 @@ export async function beginScreenTurn(q: Queryable, deps: ScreenDeps, input: Tur
   const tapped = input.tap ? tapWords(packet, screen.progress, input.tap) : null;
   if (input.tap && !tapped) return { kind: "done", result: { kind: "error", message: "That answer does not fit this question. Please type it instead." } };
   const said = input.skip ? null : tapped ?? input.message;
-  if (said !== null) await recordInbound(q, { companyId: company.id, candidateId: candidate.id, applicationId: app.id, channel: input.channel, text: said, from: input.channel === "sms" ? candidate.phone : null, provider: input.channel === "sms" ? deps.integrations.sms.id : null, providerMessageId: input.providerMessageId ?? null, actor: candidateActor, correlationId: screen.workflowRunId });
+  // Kept with the conversation's id: the team sees it only once the conversation's answers are sent (9 October 2026).
+  if (said !== null) await recordInbound(q, { companyId: company.id, candidateId: candidate.id, applicationId: app.id, channel: input.channel, text: said, from: input.channel === "sms" ? candidate.phone : null, provider: input.channel === "sms" ? deps.integrations.sms.id : null, providerMessageId: input.providerMessageId ?? null, actor: candidateActor, correlationId: screen.workflowRunId, screenId: screen.id });
 
   if (!ACTIVE_STATUSES.has(screen.status)) {
     const msg = closedMessage(screen.status, company.name);
@@ -639,7 +640,10 @@ export async function finishScreenTurn(q: Queryable, deps: ScreenDeps, input: Tu
     await q.update(screens).set({ transcript: [...fresh.transcript, reply], answers, progress }).where(eq(screens.id, screen.id));
     if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: pending.b.role, company, packet, actor: { kind: "agent", id: "screening", runId: out.runId }, text: turn.messageToCandidate, idempotencyKey: `screen_turn:${screen.id}:${fresh.transcript.length + 1}`, templateKey: "screen_turn", disclosureIncluded: false, aiRunId: out.runId, correlationId: screen.workflowRunId });
     // A turn retried after an outage (E5) that hands over is told by the hand-over email instead: one email, not two.
-    await requestHuman(q, deps, { screenId: screen.id, reason: turn.sentiment === "distressed" || turn.sentiment === "frustrated" ? `candidate sounded ${turn.sentiment}` : "candidate asked for a person", actor: input.actor, reply: null, replyChannel: input.channel, confirmByEmail: fresh.status !== "paused" });
+    // One reason for every hand-over the assistant makes in the conversation, whether they asked for a person in their
+    // own words or it judged they needed one: either comes from words they have not sent, so the team and the recruiter
+    // never learn which, nor how the candidate sounded (9 October 2026). The AI run keeps its own reading.
+    await requestHuman(q, deps, { screenId: screen.id, reason: HANDED_TO_A_PERSON, actor: input.actor, reply: null, replyChannel: input.channel, confirmByEmail: fresh.status !== "paused" });
     return { kind: "reply", message: turn.messageToCandidate, done: false, humanRequested: true };
   }
   return writeReply(q, deps, b, { channel: input.channel, actor: input.actor, transcript: fresh.transcript, answers, progress, message: turn.messageToCandidate, questionKey: turn.questionKey, done: turn.done, aiRunId: out.runId });
@@ -690,7 +694,9 @@ export async function requestHuman(q: Queryable, deps: ScreenDeps, input: { scre
   await emit(q, { type: "screen.human_requested", companyId: company.id, actor: { kind: "candidate", id: candidate.id }, subject: { type: "screen", id: screen.id }, payload: { reason: input.reason }, correlationId: screen.workflowRunId });
   if (byCandidate) await entitlements.record(q, company.id, entitlements.PERSON_REQUESTS, 1, "request", { screenId: screen.id, choice: "contact_me" });
   await createEscalation(q, { companyId: company.id, roleId: app.roleId, applicationId: app.id, kind: "candidate_issue", summaryOrigin: byCandidate ? "candidate" : "system", question: `${candidate.firstName} ${candidate.lastName} needs a person during the ${packet.identity.title} screening (${input.reason}). Please reach out by ${candidate.phone ? "phone or " : ""}email and finish the screen.`, requestedBy: input.actor, workflowRunId: screen.workflowRunId });
-  await notify(q, { companyId: company.id, kind: "screen.human_requested", title: `${candidate.firstName} asked for a person`, body: `During the ${packet.identity.title} screening. A recruiter has the conversation; you can also reply directly.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
+  // Their answers so far were never sent, so neither the team nor the recruiter reads them (9 October 2026): the
+  // recruiter calls and adds notes from the call.
+  await notify(q, { companyId: company.id, kind: "screen.human_requested", title: `${candidate.firstName} asked for a person`, body: `During the ${packet.identity.title} screening. A recruiter will contact them and add notes from the call. Anything they typed before asking was not sent, so it stays private. You can also reply to them directly.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
   if (input.reply && input.replyChannel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: input.reply, idempotencyKey: `screen_human:${screen.id}`, templateKey: "screen_human", disclosureIncluded: false });
   const textSaidWhen = !!input.reply && input.replyChannel === "sms";
   if (byCandidate && input.confirmByEmail !== false && !textSaidWhen && candidate.email) {
@@ -702,9 +708,10 @@ export async function requestHuman(q: Queryable, deps: ScreenDeps, input: { scre
 
 /**
  * "Send without the conversation" (E3, Q16): the candidate would rather not answer the questions. The conversation
- * closes as declined (answers given so far are kept for the team), the application goes on to the team as "ready for
- * your review", and the choice is counted. The team hears about it once: now, or after the reading of what they did
- * answer. Null when the conversation is no longer open.
+ * closes as declined, the application goes on to the team as "ready for your review", and the choice is counted. Any
+ * answers given so far were never sent, so the team never sees them and nothing is read from them (founder decision of
+ * 9 October 2026, "hide them until they send"); the team hears about it once, now, in the same words whatever was
+ * answered. Null when the conversation is no longer open.
  */
 export async function declineConversation(q: Queryable, deps: ScreenDeps, input: { screenId: string; actor: Actor }): Promise<{ message: string } | null> {
   const b = await loadScreenBundle(q, input.screenId);
@@ -718,7 +725,7 @@ export async function declineConversation(q: Queryable, deps: ScreenDeps, input:
   await entitlements.record(q, company.id, entitlements.PERSON_REQUESTS, 1, "request", { screenId: screen.id, choice: "send_without" });
   const [cur] = await q.select({ stage: applications.stage }).from(applications).where(eq(applications.id, app.id)).limit(1);
   if (cur && ["screen_invited", "screening"].includes(cur.stage)) await transition(q, { applicationId: app.id, companyId: company.id, to: "triaged", by: "system", actor: input.actor, reason: "sent without the screening conversation", correlationId: screen.workflowRunId });
-  if (!answered) await notify(q, { companyId: company.id, kind: "screen.declined_by_candidate", title: `${candidate.firstName} ${candidate.lastName} sent their application without the conversation`, body: `They chose not to answer the screening questions for ${packet.identity.title}. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
+  await notify(q, { companyId: company.id, kind: "screen.declined_by_candidate", title: `${candidate.firstName} ${candidate.lastName} sent their application without the conversation`, body: `They chose not to go through the screening questions for ${packet.identity.title}, which is never held against them. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
   await deps.signal?.(q, { companyId: company.id, key: `screen:${screen.id}:completed`, payload: { declined: true } });
   return { message: msg };
 }
@@ -767,11 +774,13 @@ export async function editScreenAnswer(q: Queryable, input: { screenId: string; 
 }
 
 /**
- * "Send" on the "check your answers" page (E10): the conversation is complete and the team's scorecard follows. `via`
- * "review_timeout": nobody pressed Send, and the answers went as they were after the reminder said they would (E4). The
- * row is locked first, so two presses at once complete it once.
+ * "Send" on the "check your answers" page (E10), pressed by the candidate: the conversation is complete, the team sees
+ * the answers from now on, and the team's scorecard follows. Nothing else calls it: answers nobody pressed Send on are
+ * never sent for the candidate (founder decision of 9 October 2026; before it, `via: "review_timeout"` sent them after
+ * the reminder, and the history still reads such an entry). The row is locked first, so two presses at once complete it
+ * once.
  */
-export async function submitScreenAnswers(q: Queryable, deps: ScreenDeps, input: { screenId: string; actor: Actor; via?: "review" | "review_timeout" }): Promise<{ ok: boolean }> {
+export async function submitScreenAnswers(q: Queryable, deps: ScreenDeps, input: { screenId: string; actor: Actor }): Promise<{ ok: boolean }> {
   await q.select({ id: screens.id }).from(screens).where(eq(screens.id, input.screenId)).for("update");
   const b = await loadScreenBundle(q, input.screenId);
   if (!b) return { ok: false };
@@ -779,7 +788,7 @@ export async function submitScreenAnswers(q: Queryable, deps: ScreenDeps, input:
   if (b.screen.status !== "in_progress" || b.screen.progress.phase !== "review") return { ok: false };
   const progress: ScreenProgress = { ...b.screen.progress, submittedAt: nowOf(deps).toISOString() };
   await q.update(screens).set({ progress }).where(eq(screens.id, b.screen.id));
-  await completeScreen(q, deps, { ...b, screen: { ...b.screen, progress } }, { answers: b.screen.answers, progress, channel: b.screen.channel as ScreenChannel, actor: input.actor, via: input.via ?? "review" });
+  await completeScreen(q, deps, { ...b, screen: { ...b.screen, progress } }, { answers: b.screen.answers, progress, channel: b.screen.channel as ScreenChannel, actor: input.actor, via: "review" });
   return { ok: true };
 }
 
@@ -861,28 +870,25 @@ export function recruiterNotesOf(screen: Pick<ScreenRow, "transcript">): string 
 }
 
 /**
- * The scorecard for a screen, called with no transaction open. Quotes are verified against the transcript in code. A
- * conversation the candidate did not finish (closed after the reminder, or sent without finishing) is read for what it
- * has: flagged incomplete, and never "strong interview".
+ * The scorecard for a screen, called with no transaction open. Quotes are verified against the transcript in code.
+ * Only a complete conversation is read ("hide them until they send", founder decision of 9 October 2026): one the
+ * candidate did not send (stopped part-way, never pressed Send, sent the application without it) is never read, and its
+ * reading is the résumé's. One a
+ * recruiter finished from a call is read from the notes alone (`teamScreenView`): whatever the candidate typed before
+ * asking for a person was never sent, so the model never sees it and no quote of it passes the check.
  */
 export async function assessScreen(db: Db, ai: AiRuntime, input: { companyId: string; screenId: string; workflowRunId?: string | null }): Promise<RunOutcome<ScreenAssessment>> {
   const b = await withTenant(db, input.companyId, (q) => loadScreenBundle(q, input.screenId));
   if (!b) throw new Error("screen not found");
-  const answered = Object.keys(answersOf(b.screen)).length;
-  const total = b.packet.screening.questions.length;
-  const reason = b.screen.status === "unfinished" ? "unfinished" : b.screen.status === "declined_by_candidate" ? "declined_by_candidate" : null;
-  const ctx: ScreenContext = { ...contextOf(b, b.screen, null), incomplete: reason ? { reason, answered, total } : null };
-  const out = await runPromptDetached(db, ai, screenAssessPrompt, ctx, { companyId: b.company.id, workflowRunId: input.workflowRunId ?? b.screen.workflowRunId, inputRef: { screenId: b.screen.id, turns: b.screen.transcript.length } });
+  if (b.screen.status !== "completed") throw new Error(`a conversation the candidate did not send is never read (it is ${b.screen.status})`);
+  const screen = teamScreenView(b.screen);
+  const ctx: ScreenContext = { ...contextOf(b, screen, null), incomplete: null };
+  const out = await runPromptDetached(db, ai, screenAssessPrompt, ctx, { companyId: b.company.id, workflowRunId: input.workflowRunId ?? b.screen.workflowRunId, inputRef: { screenId: b.screen.id, turns: screen.transcript.length } });
   if (!out.ok) return out;
-  let checked = verifyScreenQuotes(out.output, candidateWordsOf(b.screen), { recruiterNotes: recruiterNotesOf(b.screen), declined: b.screen.progress.declined ?? [], answered: Object.keys(answersOf(b.screen)) });
-  if (reason) {
-    checked = {
-      ...checked,
-      recommendation: checked.recommendation === "strong_interview" ? "interview" : checked.recommendation,
-      anomalies: [...checked.anomalies, { kind: "incomplete_screen", detail: `${reason === "unfinished" ? "The candidate stopped part-way and did not come back" : "The candidate sent their application without finishing the conversation"}: ${answered} of ${total} questions answered.` }],
-    };
-  }
-  return { ...out, output: checked };
+  const checked = verifyScreenQuotes(out.output, candidateWordsOf(screen), { recruiterNotes: recruiterNotesOf(screen), declined: screen.progress.declined ?? [], answered: Object.keys(answersOf(screen)) });
+  // "incomplete_screen" marks a reading of a conversation nobody sent, written before 9 October 2026, which stays hidden
+  // (`isUnsentConversationReading` in @ros/core): never on a reading of a sent one, whatever the model wrote.
+  return { ...out, output: { ...checked, anomalies: checked.anomalies.filter((a) => a.kind !== "incomplete_screen") } };
 }
 
 /**

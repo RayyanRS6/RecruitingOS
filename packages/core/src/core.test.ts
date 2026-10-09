@@ -189,6 +189,9 @@ describe("policy defaults", () => {
     expect(DEFAULT_POLICIES["message.send_templated"].level).toBe("auto");
     // founder decision B6: declining sends nothing; the decision message goes when a person presses Send
     expect(DEFAULT_POLICIES["disposition.send"].level).toBe("auto");
+    // founder decision of 9 October 2026: the 30-day "still reviewing" note is off unless a company switches it on
+    expect(DEFAULT_POLICIES["message.still_reviewing"].level).toBe("human_only");
+    expect(DEFAULT_POLICIES["message.still_reviewing"].params).toEqual({ afterDays: 30 });
   });
 });
 

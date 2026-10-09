@@ -68,6 +68,12 @@ export const ScreenProgress = z.object({
   edits: z.record(z.string(), z.number()).optional(),
   /** When the candidate pressed Send on the "check your answers" page (E10). */
   submittedAt: z.string().optional(),
+  /**
+   * "recruiter_call": closed as complete by a recruiter's notes from a call (E3), not by the candidate. Whatever the
+   * candidate typed before was never sent, so the team reads the notes alone (founder decision of 9 October 2026, "hide
+   * them until they send"; `screenAnswersSent` in @ros/core).
+   */
+  completedBy: z.enum(["recruiter_call"]).optional(),
   /** When this conversation was counted against the plan's allowance: at the first answer, never at the invitation (E9). */
   countedAt: z.string().optional(),
   /** When it was paused because the assistant was not working (E5), and the last time the software tried again. */
@@ -204,17 +210,19 @@ export const RecruiterCallNotes = z.object({
 }).strict();
 export type RecruiterCallNotes = z.infer<typeof RecruiterCallNotes>;
 
-/** GET /api/v1/roles/:id/screening (E13): how the conversation goes for this role, from the screens alone. */
+/**
+ * GET /api/v1/roles/:id/screening (E13): how the conversation goes for this role, from the screens alone. Nothing is
+ * worked out from a conversation the candidate did not send (founder decision of 9 October 2026), so there is no "where
+ * people stopped": every conversation that stopped was never sent.
+ */
 export type ScreeningFunnel = {
   offered: number;
   started: number;
   finished: number;
   unfinished: number;
   stillApplying: number;
-  /** Minutes from the first answer to sending, the middle value of the finished conversations. */
+  /** Minutes from the first answer to sending, the middle value of the conversations the candidates sent. */
   medianMinutes: number | null;
-  /** The question most people stopped at, among those who started and did not finish. */
-  dropOff: { key: string; question: string; count: number } | null;
   /** People who chose a person: asked a person to contact them, or sent the application without the conversation. */
   personChosen: { contactMe: number; sendWithout: number };
   skipped: Array<{ key: string; question: string; count: number }>;

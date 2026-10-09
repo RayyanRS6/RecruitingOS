@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { BOARD_COLUMN_LABEL, BoardColumn, type ActiveMark, type BoardCard, type BoardPlacement, type BoardView, type MatchScore, type MustHaveSummary, type ReadingVersion, type RolePacket } from "@ros/contracts";
-import { CLOSER_LOOK_LABEL, STAGE_LABEL, activeMarksFor, baseOwnerStage, boardPlacement, daysSince, evidenceView, matchScore, mustHaveSummary, ownerStage, ownerStageLabel, poolSummary, readingPair, readingVersion, type EvidenceView, type PoolPerson } from "@ros/core";
+import { CLOSER_LOOK_LABEL, STAGE_LABEL, activeMarksFor, baseOwnerStage, boardPlacement, daysSince, evidenceView, matchScore, mustHaveSummary, ownerStage, ownerStageLabel, poolSummary, readingPair, readingVersion, unsentScreenReadings, type EvidenceView, type PoolPerson } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, documents, events, interviews, rolePackets, roles, screens, type Tx } from "@ros/db";
 import { HttpError } from "../middleware/errors";
 import type { Tenant } from "../middleware/session";
@@ -22,6 +22,48 @@ export async function packetsOf(tx: Tx, role: Pick<typeof roles.$inferSelect, "i
   const byVersion = new Map(rows.map((r) => [r.version, r.packet]));
   const currentVersion = role.currentPacketVersion ?? rows[0]?.version ?? null;
   return { byVersion, current: currentVersion ? byVersion.get(currentVersion) ?? null : null, currentVersion };
+}
+
+/**
+ * A person's readings as the team may see them: never one written from a conversation they did not send (founder
+ * decision of 9 October 2026; `unsentScreenReadings` in @ros/core), so the reading and the match score rest on the
+ * résumé and the application alone. The latest reading falls back to the newest one left.
+ */
+export function shownReadings<A extends Pick<AppRow, "latestAssessmentId">>(app: A, own: readonly AssessmentRow[], hidden: ReadonlySet<string>): { app: A; assessments: AssessmentRow[] } {
+  if (!hidden.size || !own.some((x) => hidden.has(x.id))) return { app, assessments: [...own] };
+  const left = own.filter((x) => !hidden.has(x.id));
+  const latestAssessmentId = app.latestAssessmentId && hidden.has(app.latestAssessmentId) ? (left[0]?.id ?? null) : app.latestAssessmentId;
+  return { app: { ...app, latestAssessmentId }, assessments: left };
+}
+
+/** A person's latest reading in brief, for counts over many people. */
+export type LatestReading = { id: string; applicationId: string; createdAt: string; overall: string | null; recommendation: string | null };
+
+/**
+ * Each application's latest reading as the team may see it, for counts over many people (Today's strong count, the role
+ * report): the latest one, unless it was written from a conversation the candidate never sent, then the newest one left
+ * (their résumé's), as `shownReadings` does for the list, the board and the candidate's page. One query for the latest
+ * readings, one for the screens that point at a reading without being complete, and one more only for those who fall
+ * back. `roleIds` narrows it to some roles; every application of the company otherwise.
+ */
+export async function shownLatestReadings(tx: Tx, input: { companyId: string; roleIds?: readonly string[] | null }): Promise<Map<string, LatestReading>> {
+  if (input.roleIds && !input.roleIds.length) return new Map();
+  const columns = { id: assessments.id, applicationId: assessments.applicationId, createdAt: assessments.createdAt, overall: assessments.overall, recommendation: sql<string | null>`${assessments.result}->>'recommendation'`, kind: assessments.kind, anomalies: sql<unknown>`${assessments.result}->'anomalies'` };
+  const ofCompany = input.roleIds ? and(eq(applications.companyId, input.companyId), inArray(applications.roleId, [...input.roleIds])) : eq(applications.companyId, input.companyId);
+  const latest = await tx.select(columns).from(applications).innerJoin(assessments, eq(assessments.id, applications.latestAssessmentId)).where(ofCompany);
+  if (!latest.length) return new Map();
+  // A screen still pointing at a reading without being complete: few, so the whole company's are read.
+  const links = await tx.select({ status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(and(eq(screens.companyId, input.companyId), isNotNull(screens.assessmentId), ne(screens.status, "completed")));
+  const asReading = (r: (typeof latest)[number]) => ({ id: r.id, kind: r.kind, result: { anomalies: r.anomalies } });
+  const hidden = unsentScreenReadings(links, latest.map(asReading));
+  const fallBack = latest.filter((r) => hidden.has(r.id)).map((r) => r.applicationId);
+  const earlier = fallBack.length ? await tx.select(columns).from(assessments).where(and(eq(assessments.companyId, input.companyId), inArray(assessments.applicationId, fallBack))).orderBy(desc(assessments.createdAt)) : [];
+  const hiddenEarlier = unsentScreenReadings(links, earlier.map(asReading));
+  const out = new Map<string, LatestReading>();
+  const keep = (r: (typeof latest)[number]) => out.set(r.applicationId, { id: r.id, applicationId: r.applicationId, createdAt: r.createdAt, overall: r.overall, recommendation: r.recommendation });
+  for (const r of latest) if (!hidden.has(r.id)) keep(r);
+  for (const r of earlier) if (!out.has(r.applicationId) && !hidden.has(r.id) && !hiddenEarlier.has(r.id)) keep(r);
+  return out;
 }
 
 /** What the score, the must-have line and the placement of one person rest on, from rows already loaded. */
@@ -91,15 +133,16 @@ export async function loadPool(tx: Tx, input: { roleId: string; tenant?: Pick<Te
   const docIds = apps.filter((a) => a.resumeDocumentId).map((a) => a.resumeDocumentId!);
   const docs = docIds.length ? await tx.select({ id: documents.id, status: documents.status, hasText: sql<boolean>`${documents.textExtracted} is not null` }).from(documents).where(inArray(documents.id, docIds)) : [];
   const marks = await activeMarksFor(tx, appIds);
-  const scr = await tx.select({ id: screens.id, applicationId: screens.applicationId, status: screens.status }).from(screens).where(inArray(screens.applicationId, appIds)).orderBy(desc(screens.createdAt));
+  const scr = await tx.select({ id: screens.id, applicationId: screens.applicationId, status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.applicationId, appIds)).orderBy(desc(screens.createdAt));
+  const hidden = unsentScreenReadings(scr, asmts);
   const applying = await stillApplyingFor(tx, appIds);
   // Who sent the screening invitation: the assistant on its own ("invited automatically") or a person.
   const invites = scr.length ? await tx.select({ subjectId: events.subjectId, payload: events.payload }).from(events).where(and(eq(events.type, "screen.invited"), inArray(events.subjectId, scr.map((s) => s.id)))) : [];
   const automatic = new Set(invites.filter((e) => (e.payload as { invitedBy?: unknown }).invitedBy === "system").map((e) => e.subjectId));
   const ivs = await tx.select({ applicationId: interviews.applicationId, status: interviews.status }).from(interviews).where(inArray(interviews.applicationId, appIds));
   const waiting = new Set((await tx.select({ applicationId: approvalRequests.applicationId }).from(approvalRequests).where(and(inArray(approvalRequests.applicationId, appIds), inArray(approvalRequests.actionType, ["application.invite_screen", "application.recommend_interview"]), eq(approvalRequests.status, "pending")))).map((r) => r.applicationId));
-  const rows = apps.map((app): PoolRow => {
-    const own = asmts.filter((x) => x.applicationId === app.id);
+  const rows = apps.map((loaded): PoolRow => {
+    const { app, assessments: own } = shownReadings(loaded, asmts.filter((x) => x.applicationId === loaded.id), hidden);
     const doc = docs.find((d) => d.id === app.resumeDocumentId);
     const mark = marks.get(app.id) ?? null;
     const ownScreens = scr.filter((s) => s.applicationId === app.id);

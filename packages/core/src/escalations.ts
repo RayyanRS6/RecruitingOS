@@ -9,7 +9,7 @@ import { escalationReplyBy, type CalendarSource } from "./business-hours";
 import { loadBusinessCalendar } from "./business-calendar";
 import { ESCALATION_ACCESS_DAYS, endStaffGrant, grantStaffAccess, type StaffGrant } from "./staff-access";
 import { defaultUrgency, genericSummary, requiredExpertise, type EscalationUrgency } from "./escalation-preview";
-import { screenAnswersOf } from "./screen-answers";
+import { screenAnswersOf, teamScreenView, unsentScreenReadings, withoutUnsentConversation, withoutUnsentScreenEvents } from "./screen-answers";
 
 /**
  * "Ask a recruiter." Captures the complete context so the recruiter never has to ask
@@ -205,12 +205,16 @@ export async function buildEscalationContext(q: Queryable, companyId: string, ro
       ctx.application = { id: app.id, stage: app.stage, source: app.source, packetVersion: app.packetVersion, answers: app.answers, eligibility: app.eligibility };
       ctx.candidate = cand ? { id: cand.id, name: `${cand.firstName} ${cand.lastName}`, email: cand.email, phone: cand.phone, locationText: cand.locationText, consent: cand.consent, preferences: cand.preferences } : null;
       ctx.resumeText = docs.find((d) => d.kind === "resume")?.textExtracted ?? null;
-      ctx.assessments = asmts.map((a) => ({ kind: a.kind, overall: a.overall, confidence: a.confidence, result: a.result, createdAt: a.createdAt }));
-      ctx.screens = scr.map((s) => ({ channel: s.channel, status: s.status, transcript: s.transcript, answers: screenAnswersOf(s) }));
+      // "Hide them until they send" (9 October 2026): the recruiter reads what the team may read. A conversation the
+      // candidate has not sent (or never will) shows a recruiter's call notes alone, with no reading built on it and
+      // none of the messages they typed in it; nor does the history say a reading of it was written.
+      const hiddenReadings = unsentScreenReadings(scr, asmts);
+      ctx.assessments = asmts.filter((a) => !hiddenReadings.has(a.id)).map((a) => ({ kind: a.kind, overall: a.overall, confidence: a.confidence, result: a.result, createdAt: a.createdAt }));
+      ctx.screens = scr.map(teamScreenView).map((s) => ({ channel: s.channel, status: s.status, transcript: s.transcript, answers: screenAnswersOf(s), answersShared: s.answersShared }));
       ctx.interviews = ivs.map((i) => ({ roundKey: i.roundKey, title: i.title, status: i.status, startsAt: i.startsAt }));
       ctx.scorecards = cards.map((c) => ({ interviewId: c.interviewId, status: c.status, entries: c.entries, recommendation: c.recommendation }));
-      ctx.communications = comms.map((c) => ({ direction: c.direction, channel: c.channel, subject: c.subject, body: c.bodyText, status: c.status, at: c.createdAt }));
-      ctx.timeline = evs.map((e) => ({ type: e.type, at: e.occurredAt, actor: e.actor, payload: e.payload }));
+      ctx.communications = withoutUnsentConversation(comms, scr).map((c) => ({ direction: c.direction, channel: c.channel, subject: c.subject, body: c.bodyText, status: c.status, at: c.createdAt }));
+      ctx.timeline = withoutUnsentScreenEvents(evs, scr, hiddenReadings).map((e) => ({ type: e.type, at: e.occurredAt, actor: e.actor, payload: e.payload }));
     }
   }
   return ctx;

@@ -187,7 +187,9 @@ describe("History: who did what, why, and what the candidate was told", () => {
     expect(historyItem(ev("screen.answer_tapped", { questionKey: "q_days" }, cand))).toBeNull();
     expect(historyItem(ev("screen.declined_by_candidate", { answered: 0, questions: 5 }, cand))).toMatchObject({ what: "Sent the application without the screening conversation", why: "Their own choice; it is never held against them." });
     expect(historyItem(ev("screen.idle_reminded", { answered: 2 }, { kind: "system", id: "wf" }))?.what).toBe("Reminded once to finish the screening conversation");
-    expect(historyItem(ev("screen.unfinished", { answered: 2, questions: 5 }, { kind: "system", id: "wf" }))).toMatchObject({ what: "The screening conversation was closed part-way, after one reminder", why: "2 of 5 questions answered; what they said is kept." });
+    // never how far they got: they did not send their answers (founder decision of 9 October 2026)
+    expect(historyItem(ev("screen.unfinished", { answered: 2, questions: 5 }, { kind: "system", id: "wf" }))).toMatchObject({ what: "Didn't finish the screening conversation; it closed after one reminder", why: "They never sent their answers, so they are not shown." });
+    expect(JSON.stringify(historyItem(ev("screen.unfinished", { answered: 2, questions: 5 }, { kind: "system", id: "wf" })))).not.toContain("2 of 5");
     expect(historyItem(ev("screen.paused", { reason: "model down" }, { kind: "system", id: "screening" }))?.told).toBe("They are emailed a link to finish once it is back.");
     expect(historyItem(ev("screen.resumed", {}, { kind: "system", id: "screening" }))?.what).toBe("The screening conversation is back on");
     // the most model calls a conversation may make: to checking the answers, or closed with what was said

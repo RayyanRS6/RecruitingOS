@@ -1,12 +1,12 @@
 import { Hono } from "hono";
 import { and, count, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome, OwnerGroup, OwnerStage, PoolQuestionQuery, RoleBatchRequest, SendDecisionMessages, SetClosingDate, ApplyModeChange, DecisionMessagePreviewRequest, SendClosingMessage, RecordOfferMade, importanceOf, type ActiveMark, type AssessmentFlagKind, type CandidateNotice, type ClosingMessagePreview, type DecisionMessagePreview, type PoolAnswer } from "@ros/contracts";
-import { ESCALATION_ACCESS_DAYS, PoolQuestionError, activeStaffGrant, addEscalationReply, answerPoolQuestion, createEscalation, maskCandidateLinks, poolQuestions, resolveApplyMode } from "@ros/core";
+import { ESCALATION_ACCESS_DAYS, PoolQuestionError, activeStaffGrant, addEscalationReply, answerPoolQuestion, createEscalation, maskCandidateLinks, poolQuestions, resolveApplyMode, teamScreenView, unsentScreenReadings, withoutUnsentConversation, withoutUnsentScreenEvents } from "@ros/core";
 import { withPlatform, type Tx } from "@ros/db";
 import { requireRecruiterOrAdmin } from "../middleware/session";
 import { stillApplyingFor } from "../services/screens";
 import { CLOSER_LOOK_LABEL, CLOSING_DATE_REASON, DECISION_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeMarksFor, assertCan, audit, boardPostingOf, can, closingDateProblem, closingDateRequired, closingDayWords, closingMoment, emit, groupFor, holdEnded, jobNoticesFor, listOutcomes, notify, ownerStage, ownerStageLabel, ownerTags, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows, showsOldVersion } from "@ros/core";
-import { boardView, loadPool, openPath, packetsOf, poolPersonOf, scoreFields, scorePerson } from "../services/pool";
+import { boardView, loadPool, openPath, packetsOf, poolPersonOf, scoreFields, scorePerson, shownReadings } from "../services/pool";
 import { applyBatch, previewBatch } from "../services/review-apply";
 import { emailHolderAboutNote, emailItsQueue, queueNoticeOf, type HeldNote, type QueueNotice } from "../services/escalation-queue";
 import { COMPARE_MAX, compareCandidates } from "./compare";
@@ -360,14 +360,16 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
     const docs = docIds.length ? await tx.select({ id: documents.id, status: documents.status, hasText: sql<boolean>`${documents.textExtracted} is not null` }).from(documents).where(inArray(documents.id, docIds)) : [];
     // What the stage button needs, for every row at once: marks, screens, interviews, decision messages waiting for approval.
     const marks = await activeMarksFor(tx, appIds);
-    const scr = appIds.length ? await tx.select({ applicationId: screens.applicationId, status: screens.status }).from(screens).where(inArray(screens.applicationId, appIds)) : [];
+    const scr = appIds.length ? await tx.select({ applicationId: screens.applicationId, status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.applicationId, appIds)) : [];
+    // Never a reading of a conversation the candidate did not send ("hide them until they send", 9 October 2026).
+    const hiddenReadings = unsentScreenReadings(scr, asmts);
     const ivs = appIds.length ? await tx.select({ applicationId: interviews.applicationId, status: interviews.status, decision: interviews.decision }).from(interviews).where(inArray(interviews.applicationId, appIds)) : [];
     const waitingToTell = await pendingDecisionMessages(tx, appIds);
     // "Still applying" (plan E6): offered the conversation with the application and not finished yet; shown apart.
     const applying = await stillApplyingFor(tx, appIds);
-    const rows = apps.map((a) => {
-      const cand = cands.find((x) => x.id === a.candidateId);
-      const own = asmts.filter((x) => x.applicationId === a.id);
+    const rows = apps.map((loaded) => {
+      const cand = cands.find((x) => x.id === loaded.candidateId);
+      const { app: a, assessments: own } = shownReadings(loaded, asmts.filter((x) => x.applicationId === loaded.id), hiddenReadings);
       const asmt = own.find((x) => x.id === a.latestAssessmentId);
       const doc = docs.find((d) => d.id === a.resumeDocumentId);
       const mark: ActiveMark | null = marks.get(a.id) ?? null;
@@ -566,15 +568,24 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     if (interviewerOnly) return interviewerApplicationView(tx, { app, tenant: t, actor: actorOf(c) });
     const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
     const docs = await tx.select({ id: documents.id, kind: documents.kind, filename: documents.filename, mime: documents.mime, sizeBytes: documents.sizeBytes, hasText: documents.textExtracted, status: documents.status, uploadedVia: documents.uploadedVia, rejectedReason: documents.rejectedReason, validatedAt: documents.validatedAt }).from(documents).where(eq(documents.applicationId, app.id));
-    const asmts = await tx.select().from(assessments).where(eq(assessments.applicationId, app.id)).orderBy(desc(assessments.createdAt));
-    const comms = await tx.select().from(communications).where(eq(communications.applicationId, app.id)).orderBy(desc(communications.createdAt));
-    const own = await tx.select().from(events).where(and(eq(events.subjectType, "application"), eq(events.subjectId, app.id))).orderBy(desc(events.occurredAt)).limit(100);
     const scr = await tx.select().from(screens).where(eq(screens.applicationId, app.id)).orderBy(desc(screens.createdAt));
+    // "Hide them until they send" (founder decision of 9 October 2026): while they are still in the conversation, and for
+    // good when it closed without being sent, the team gets none of what they said in it: no answer or transcript line
+    // (a recruiter's call notes excepted), no message they typed in it, no reading of it, and no history entry about a
+    // single answer, nor one about a reading of it ("scorecard written", its recommendation, a flag on it). A reading of
+    // a conversation nobody sent stays hidden however it is reached (`unsentScreenReadings` with the readings: one a
+    // recruiter's call notes unlinked from its screen too). `screens[].answersShared` says which.
+    const readings = await tx.select().from(assessments).where(eq(assessments.applicationId, app.id)).orderBy(desc(assessments.createdAt));
+    const hiddenReadings = unsentScreenReadings(scr, readings);
+    const shown = shownReadings(app, readings, hiddenReadings);
+    const asmts = shown.assessments;
+    const comms = withoutUnsentConversation(await tx.select().from(communications).where(eq(communications.applicationId, app.id)).orderBy(desc(communications.createdAt)), scr);
+    const own = await tx.select().from(events).where(and(eq(events.subjectType, "application"), eq(events.subjectId, app.id))).orderBy(desc(events.occurredAt)).limit(100);
     // History (plan A10) also tells what happened to the assistant's suggestions about them (asked, approved by whom,
     // "Not now", closed) and to their screens, which are recorded on the request and the screen, not the application.
     const requestIds = (await tx.select({ id: approvalRequests.id }).from(approvalRequests).where(eq(approvalRequests.applicationId, app.id))).map((r) => r.id);
     const related = requestIds.length || scr.length ? await tx.select().from(events).where(or(and(eq(events.subjectType, "approval_request"), inArray(events.subjectId, requestIds.length ? requestIds : [""])), and(eq(events.subjectType, "screen"), inArray(events.subjectId, scr.length ? scr.map((s) => s.id) : [""])))).orderBy(desc(events.occurredAt)).limit(100) : [];
-    const timeline = [...own, ...related].sort((x, y) => Date.parse(y.occurredAt) - Date.parse(x.occurredAt));
+    const timeline = withoutUnsentScreenEvents([...own, ...related], scr, hiddenReadings).sort((x, y) => Date.parse(y.occurredAt) - Date.parse(x.occurredAt));
     const ivs = await tx.select({ id: interviews.id, roundKey: interviews.roundKey, title: interviews.title, status: interviews.status, startsAt: interviews.startsAt, endsAt: interviews.endsAt, timezone: interviews.timezone, meetingUrl: interviews.meetingUrl, attempt: interviews.attempt, outcome: interviews.outcome, decision: interviews.decision, offeredSlots: interviews.offeredSlots, createdAt: interviews.createdAt }).from(interviews).where(eq(interviews.applicationId, app.id)).orderBy(desc(interviews.createdAt));
     const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
     const packetLabels = pv ? { mustHaves: pv.packet.requirements.mustHaves.map((m) => ({ key: m.key, text: m.text })), competencies: pv.packet.competencies.map((c) => ({ key: c.key, name: c.name, importance: importanceOf(c) })), questions: pv.packet.screening.questions.map((q) => ({ key: q.key, question: q.question })) } : { mustHaves: [], competencies: [], questions: [] };
@@ -592,7 +603,9 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const { allowed: allowedActions, blockedReasons } = applicationActionState(facts);
     // What a Send of the decision message does under the company's settings: it goes, waits for approval, or is not sent.
     const declineMessage = await declineMessagePolicy(tx, { companyId: t.companyId, roleId: app.roleId });
-    const scorecards = await screenScorecards(tx, scr);
+    // A scorecard only for a complete conversation: one closed without being sent has none to show.
+    const shownScorecard = (s: { status: string; assessmentId: string | null }) => s.status === "completed" && !(s.assessmentId && hiddenReadings.has(s.assessmentId));
+    const scorecards = await screenScorecards(tx, scr.map((s) => (shownScorecard(s) ? s : { ...s, assessmentId: null })));
     const now = c.get("container").engine.clock();
     // The day the untold safety net acts on a decision nobody has told (Q27), in the company's calendar: its time zone,
     // its working days and the ITS holidays, as the daily check counts them.
@@ -603,14 +616,14 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const [roleRow] = await tx.select({ id: roles.id, currentPacketVersion: roles.currentPacketVersion }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
     const packets = roleRow ? await packetsOf(tx, roleRow) : { byVersion: new Map(), currentVersion: null };
     const resumeDoc = docs.find((d) => d.id === app.resumeDocumentId);
-    const scored = scorePerson({ app, assessments: asmts, packets: packets.byVersion, currentVersion: packets.currentVersion, mark, stillApplying: (await stillApplyingFor(tx, [app.id])).has(app.id), resumeUnreadable: !!resumeDoc && resumeDoc.status === "clean" && !resumeDoc.hasText && !app.extraction, openScreen: scr.some((s) => SCREEN_OPEN_STATUSES.includes(s.status)) });
+    const scored = scorePerson({ app: shown.app, assessments: asmts, packets: packets.byVersion, currentVersion: packets.currentVersion, mark, stillApplying: (await stillApplyingFor(tx, [app.id])).has(app.id), resumeUnreadable: !!resumeDoc && resumeDoc.status === "clean" && !resumeDoc.hasText && !app.extraction, openScreen: scr.some((s) => SCREEN_OPEN_STATUSES.includes(s.status)) });
     // The status token opens the candidate's status page and the reply token is all that authenticates a reply, so neither leaves the server.
-    const { statusToken: _statusToken, replyToken: _replyToken, ...appOut } = app;
+    const { statusToken: _statusToken, replyToken: _replyToken, ...appOut } = shown.app;
     // Nor does any other candidate link in the messages we sent them (status, conversation, scheduling, confirming the
     // answers given after applying again): each body is shown with the tokens hidden, without the reply address (it
     // carries the reply token) and with attachments named only. Links outlive any team member's or recruiter's access.
     const thread = comms.map(({ replyTo: _replyTo, attachments, ...m }) => ({ ...m, bodyText: maskCandidateLinks(m.bodyText), bodyHtml: maskCandidateLinks(m.bodyHtml), attachments: attachments ? attachments.map((a) => ({ filename: a.filename, contentType: a.contentType })) : null }));
-    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: groupFor(app, mark, now), ownerStage: strip, ownerStageLabel: ownerStageLabel(strip, mark), mark, tags: ownerTags(app, mark, now), stageMoves: stageMoves(facts), toldState: DECISION_STAGES.includes(app.stage) ? app.toldState : null, decisionMessageWaiting, untoldFallbackOn, allowedActions, blockedReasons, declineMessage, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: thread, timeline, screens: scr.map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedVia: s.invitedVia ?? null, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, assessmentId: s.assessmentId, ...scorecards.get(s.id) })), pendingApprovals, packetLabels, matchScore: scored.match, mustHaves: scored.mustHaves, placement: scored.placement, readingVersion: scored.readingVersion };
+    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: groupFor(app, mark, now), ownerStage: strip, ownerStageLabel: ownerStageLabel(strip, mark), mark, tags: ownerTags(app, mark, now), stageMoves: stageMoves(facts), toldState: DECISION_STAGES.includes(app.stage) ? app.toldState : null, decisionMessageWaiting, untoldFallbackOn, allowedActions, blockedReasons, declineMessage, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: thread, timeline, screens: scr.map(teamScreenView).map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedVia: s.invitedVia ?? null, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, answersShared: s.answersShared, assessmentId: shownScorecard(s) ? s.assessmentId : null, ...scorecards.get(s.id) })), pendingApprovals, packetLabels, matchScore: scored.match, mustHaves: scored.mustHaves, placement: scored.placement, readingVersion: scored.readingVersion };
   });
   if (!row) throw new HttpError(404, "not_found", "Application not found.");
   return c.json(row);
@@ -757,6 +770,8 @@ applicationRoutes.post("/:id/assessments/:assessmentId/flag", requireTenant, asy
   const { out, notice, note } = await withTenant(container.db, t.companyId, async (tx): Promise<{ out: Record<string, unknown>; notice: QueueNotice | null; note: HeldNote | null }> => {
     const [asmt] = await tx.select().from(assessments).where(and(eq(assessments.id, c.req.param("assessmentId")), eq(assessments.applicationId, c.req.param("id")))).limit(1);
     if (!asmt) throw new HttpError(404, "not_found", "Assessment not found.");
+    // A reading of a conversation the candidate never sent is never shown, so it is never flagged either (9 October 2026).
+    if (asmt.kind === "screen" && unsentScreenReadings(await tx.select({ status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(eq(screens.applicationId, asmt.applicationId)), [asmt]).has(asmt.id)) throw new HttpError(404, "not_found", "Assessment not found.");
     const at = new Date().toISOString();
     const flag = { kind: body.kind, note: body.note ?? null, by: actor, at };
     if (asmt.aiRunId) await tx.update(aiRuns).set({ humanOverride: flag }).where(eq(aiRuns.id, asmt.aiRunId));

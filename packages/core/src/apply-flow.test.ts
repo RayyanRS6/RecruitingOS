@@ -78,16 +78,27 @@ describe("how the conversation goes for a role (plan E13)", () => {
   const rows: FunnelScreen[] = [
     { status: "completed", invitedVia: "apply", startedAt: at(0), completedAt: at(8), progress: progress({ submittedAt: at(8) }), transcript: said(0) },
     { status: "completed", invitedVia: "apply", startedAt: at(0), completedAt: at(12), progress: progress({ declined: ["pay"] }), transcript: said(2) },
-    { status: "unfinished", invitedVia: "apply", startedAt: at(0), completedAt: null, progress: progress({ currentQuestionKey: "experience", askedKeys: ["license", "experience"] }), transcript: said(0) },
-    { status: "declined_by_candidate", invitedVia: "apply", startedAt: at(0), completedAt: null, progress: progress({ askedKeys: ["license", "experience"] }), transcript: said(0) },
+    // a skip in a conversation nobody sent is never counted, even in a figure (founder decision of 9 October 2026)
+    { status: "unfinished", invitedVia: "apply", startedAt: at(0), completedAt: null, progress: progress({ currentQuestionKey: "experience", askedKeys: ["license", "experience"], declined: ["license"] }), transcript: said(0) },
+    { status: "declined_by_candidate", invitedVia: "apply", startedAt: at(0), completedAt: null, progress: progress({ askedKeys: ["license", "experience"], declined: ["pay"] }), transcript: said(0) },
     { status: "human_requested", invitedVia: null, startedAt: null, completedAt: null, progress: progress(), transcript: [] },
     { status: "invited", invitedVia: "apply", startedAt: null, completedAt: null, progress: progress(), transcript: [] },
   ];
-  it("counts offered, started, finished, the median time, where people stopped, who chose a person, and skips", () => {
-    const f = screeningFunnel(rows, [{ key: "license", question: "Is your license active?" }, { key: "experience", question: "Tell me about your work." }, { key: "pay", question: "What range?" }]);
+  const questions = [{ key: "license", question: "Is your license active?" }, { key: "experience", question: "Tell me about your work." }, { key: "pay", question: "What range?" }];
+  it("counts offered, started, finished, the median time, who chose a person, and skips", () => {
+    const f = screeningFunnel(rows, questions);
     expect(f).toMatchObject({ offered: 6, started: 4, finished: 2, unfinished: 1, stillApplying: 1, medianMinutes: 9, personChosen: { contactMe: 1, sendWithout: 1 } });
-    expect(f.dropOff).toEqual({ key: "experience", question: "Tell me about your work.", count: 2 });
     expect(f.skipped).toEqual([{ key: "pay", question: "What range?", count: 1 }]);
-    expect(screeningFunnel([], [])).toMatchObject({ offered: 0, medianMinutes: null, dropOff: null });
+    expect(screeningFunnel([], [])).toMatchObject({ offered: 0, medianMinutes: null });
+  });
+
+  it("never says where anyone stopped, or times a conversation the candidate did not send (founder decision of 9 October 2026)", () => {
+    // one person who didn't finish: the team sees that on her, so a "stopped at" figure would say how far she got
+    const f = screeningFunnel(rows, questions);
+    expect(f).not.toHaveProperty("dropOff");
+    expect(JSON.stringify(f)).not.toContain("Tell me about your work.");
+    // finished on a recruiter's call: the candidate never sent anything, so it is not timed
+    const byCall = screeningFunnel([...rows, { status: "completed", invitedVia: "apply", startedAt: at(0), completedAt: at(50), progress: progress({ completedBy: "recruiter_call" }), transcript: said(0) }], questions);
+    expect(byCall).toMatchObject({ finished: 3, medianMinutes: 9 });
   });
 });

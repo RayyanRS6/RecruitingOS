@@ -1,9 +1,9 @@
 import { and, asc, desc, eq, inArray, notInArray, or, sql } from "drizzle-orm";
 import { ApplicationStage as ApplicationStageEnum, MARK_LABEL, OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum, type ApplicationStage, type MarkKind, type OwnerGroup, type OwnerStage, type PoolMustHaveCount, type PoolSummary, type ToldState } from "@ros/contracts";
 import { DECISION_STAGES, OUTCOME_STATEMENT, POSTING_TASK_KINDS, SOURCES, SOURCE_LABEL, STAGE_LABEL, groupFor, holdEnded, isSource, ownerGroup, ownerStage } from "@ros/core";
-import { applicationMarks, applications, approvalRequests, assessments, candidates, communications, companies, events, hiringOutcomes, interviews, recruiterEscalations, roles, type Tx } from "@ros/db";
+import { applicationMarks, applications, approvalRequests, candidates, communications, companies, events, hiringOutcomes, interviews, recruiterEscalations, roles, type Tx } from "@ros/db";
 import { localDays } from "@ros/workflows";
-import { boardView, loadPool } from "./pool";
+import { boardView, loadPool, shownLatestReadings } from "./pool";
 
 /**
  * The role report (docs/spec/21 section 7, P1): the ten figures an owner asked for, computed from the system of record
@@ -116,10 +116,9 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
     : Promise.resolve([] as EventRow[]);
   const stageEvents = await eventsOf("application.stage_changed");
   const overrides = await eventsOf("human.override");
-  const latestIds = apps.map((a) => a.latestAssessmentId).filter((x): x is string => !!x);
-  const asmts = latestIds.length
-    ? await tx.select({ id: assessments.id, applicationId: assessments.applicationId, createdAt: assessments.createdAt, recommendation: sql<string | null>`${assessments.result}->>'recommendation'` }).from(assessments).where(and(eq(assessments.companyId, companyId), inArray(assessments.id, latestIds)))
-    : [];
+  // Never a reading of a conversation the candidate did not send (founder decision of 9 October 2026): someone whose
+  // latest reading is one counts with the newest reading left (their résumé's), as the Talent list and the board show them.
+  const asmts: AssessmentRow[] = ids.length ? [...(await shownLatestReadings(tx, { companyId, roleIds })).values()].map((r) => ({ id: r.id, applicationId: r.applicationId, createdAt: r.createdAt, recommendation: r.recommendation })) : [];
   const ivs = ids.length
     ? await tx.select({ applicationId: interviews.applicationId, status: interviews.status, outcome: interviews.outcome, roundKey: interviews.roundKey, title: interviews.title, rescheduleCountCandidate: interviews.rescheduleCountCandidate, decision: interviews.decision }).from(interviews).where(and(eq(interviews.companyId, companyId), inArray(interviews.applicationId, ids))).orderBy(asc(interviews.createdAt), asc(interviews.id))
     : [];

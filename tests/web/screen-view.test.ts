@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Screen, ScreeningFunnel, TimelineEvent } from "../../apps/web/src/api/client";
-import { APPLIED_IN_ONE_VISIT, SCREEN_STATUS_LABEL, answerLines, callNotesBody, callNotesMayStayOpen, callNotesState, callNotesToast, dropOffWords, funnelLines, generalNotes, isRecruiterNote, minutesWords, offeredWithApplication, overviewScreenLine, recruiterNoteLabel, screenOrigin, shareWords, transcriptBubble, unansweredWords } from "../../apps/web/src/screen-view";
+import { APPLIED_IN_ONE_VISIT, DIDNT_FINISH_LINE, SCREEN_STATUS_LABEL, STILL_APPLYING_LINE, answerLines, callNotesBody, callNotesMayStayOpen, callNotesState, callNotesToast, funnelLines, generalNotes, hiddenAnswersLine, isRecruiterNote, minutesWords, offeredWithApplication, overviewScreenLine, recruiterNoteLabel, screenOrigin, shareWords, transcriptBubble, unansweredWords } from "../../apps/web/src/screen-view";
 
 /**
  * The screening conversation as the team reads it (plan Wave E): "Applied and talked in one visit", questions the
@@ -45,8 +45,9 @@ describe("how the conversation reached them", () => {
     expect(screenOrigin(screen({ invitedVia: "apply", status: "paused" }))).toBe("Still applying");
     expect(screenOrigin(screen({ invitedVia: "apply", status: "declined_by_candidate" }))).toBe("Sent the application without the conversation");
     expect(screenOrigin(screen({ invitedVia: "apply", status: "human_requested" }))).toBe("Asked for a person while applying");
-    expect(screenOrigin(screen({ invitedVia: "apply", status: "unfinished" }))).toBe("Stopped part-way while applying");
+    expect(screenOrigin(screen({ invitedVia: "apply", status: "unfinished" }))).toBe("Didn't finish while applying");
     expect(screenOrigin(screen({ invitedVia: "apply", transcript: [{ role: "recruiter", content: "Can do Saturdays.", at, source: "recruiter_call", by: "Rae" }] }))).toBe("Finished on a call with a recruiter");
+    expect(screenOrigin(screen({ invitedVia: "apply", answersShared: false, progress: { askedKeys: [], currentQuestionKey: null, completedBy: "recruiter_call" } }))).toBe("Finished on a call with a recruiter");
     expect(screenOrigin(screen({ invitedVia: "confirmed_repeat" }))).toBe("Added after they confirmed a second application");
     expect(screenOrigin(screen({ invitedVia: null }))).toBeNull();
   });
@@ -54,18 +55,62 @@ describe("how the conversation reached them", () => {
   it("puts one plain sentence on the Overview", () => {
     const a = (s: Screen) => ({ screens: [s], timeline: [], candidate: { firstName: "Sofia" } });
     expect(overviewScreenLine(a(screen({ invitedVia: "apply" })))).toMatch(/^Applied and talked in one visit/);
-    expect(overviewScreenLine(a(screen({ invitedVia: "apply", status: "invited" })))).toBe("Still applying: Sofia is answering the screening questions. Nothing about them waits on you until they finish.");
+    expect(overviewScreenLine(a(screen({ invitedVia: "apply", status: "invited" })))).toBe("Still applying: their answers appear here once they send them. Nothing about Sofia waits on you until then.");
     expect(overviewScreenLine(a(screen({ invitedVia: "apply", status: "paused" })))).toContain("paused while the assistant is not working");
     expect(overviewScreenLine(a(screen({ status: "declined_by_candidate" })))).toContain("never held against them");
     expect(overviewScreenLine(a(screen({ status: "human_requested" })))).toContain("A recruiter contacts them");
+    expect(overviewScreenLine(a(screen({ status: "human_requested" })))).toContain("was not sent, so you won't see it");
+    // closed unfinished: that it happened, never what they said nor how far they got (founder decision of 9 October 2026)
+    expect(overviewScreenLine(a(screen({ status: "unfinished" })))).toBe("Didn't finish the conversation: they did not send their answers, even after one reminder, so you won't see them. The reading and match score use their application only.");
+    // closed part-way when they withdrew or were declined while still applying
+    expect(overviewScreenLine(a(screen({ status: "cancelled", answersShared: false })))).toBe("The screening conversation closed before they sent their answers, so you won't see them. The reading and match score use their application only.");
+    expect(overviewScreenLine(a(screen({ status: "cancelled", answersShared: false, startedAt: null })))).toBeNull();
     expect(overviewScreenLine(a(screen({ invitedVia: null })))).toBeNull();
     expect(overviewScreenLine({ screens: [], timeline: [], candidate: { firstName: "Sofia" } })).toBeNull();
   });
 
   it("names every state in plain words", () => {
     expect(SCREEN_STATUS_LABEL.declined_by_candidate).toBe("Sent without it");
-    expect(SCREEN_STATUS_LABEL.unfinished).toBe("Stopped part-way");
+    expect(SCREEN_STATUS_LABEL.unfinished).toBe("Didn't finish the conversation");
     expect(SCREEN_STATUS_LABEL.paused).toBe("Paused");
+  });
+});
+
+describe("answers the candidate has not sent (founder decision of 9 October 2026)", () => {
+  const hidden = (over: Partial<Screen>) => screen({ answersShared: false, completedAt: null, ...over });
+
+  it("says calmly why there is nothing to read while they are still applying", () => {
+    expect(STILL_APPLYING_LINE).toBe("Still applying: their answers appear here once they send them.");
+    for (const status of ["invited", "reminded", "in_progress", "paused"]) expect(hiddenAnswersLine(hidden({ invitedVia: "apply", status })), status).toBe(STILL_APPLYING_LINE);
+    // a conversation from an emailed invitation: shown once it ends normally
+    expect(hiddenAnswersLine(hidden({ invitedVia: null, status: "in_progress" }))).toBe("Still answering: their answers appear here once they finish the conversation.");
+    expect(hiddenAnswersLine(hidden({ invitedVia: null, status: "invited" }))).toBe("Not started yet: their answers appear here once they finish the conversation.");
+    // paused while the assistant is down: an emailed conversation is never called "still applying"
+    expect(hiddenAnswersLine(hidden({ invitedVia: null, status: "paused" }))).toBe("Still answering: their answers appear here once they finish the conversation.");
+  });
+
+  it("says what happened when it closed without being sent, never what they said", () => {
+    expect(hiddenAnswersLine(hidden({ status: "unfinished" }))).toBe(DIDNT_FINISH_LINE);
+    expect(DIDNT_FINISH_LINE).toMatch(/^Didn't finish the conversation/);
+    expect(hiddenAnswersLine(hidden({ status: "declined_by_candidate" }))).toBe("They sent their application without the conversation, so there are no answers to show.");
+    expect(hiddenAnswersLine(hidden({ status: "human_requested" }))).toContain("a recruiter adds notes from the call");
+    expect(hiddenAnswersLine(hidden({ status: "completed", progress: { askedKeys: [], currentQuestionKey: null, completedBy: "recruiter_call" } }))).toContain("only the recruiter's notes are shown");
+    expect(hiddenAnswersLine(hidden({ status: "abandoned" }))).toContain("not sent");
+    // started, then closed when they withdrew from their status page or the team declined them while still applying
+    expect(hiddenAnswersLine(hidden({ status: "cancelled" }))).toBe("The conversation closed before they sent their answers, so you won't see them.");
+    // nothing was ever there to hide: no line
+    expect(hiddenAnswersLine(hidden({ status: "expired" }))).toBeNull();
+    expect(hiddenAnswersLine(hidden({ status: "cancelled", startedAt: null }))).toBeNull();
+  });
+
+  it("says the same whether they stopped at the first question or answered everything and never pressed Send", () => {
+    expect(DIDNT_FINISH_LINE).toBe("Didn't finish the conversation: they did not send their answers, even after one reminder, so you won't see them.");
+    expect(DIDNT_FINISH_LINE).not.toMatch(/part-way|every question|answered/);
+  });
+
+  it("says nothing once the answers are sent, or for an older answer that does not say", () => {
+    expect(hiddenAnswersLine(screen({ answersShared: true }))).toBeNull();
+    expect(hiddenAnswersLine(screen({}))).toBeNull();
   });
 });
 
@@ -158,28 +203,28 @@ describe("a recruiter's notes from a call (plan E3)", () => {
 });
 
 describe("how the conversation goes for a role (plan E13)", () => {
-  const funnel: ScreeningFunnel = { offered: 10, started: 8, finished: 6, unfinished: 1, stillApplying: 1, medianMinutes: 6.4, dropOff: { key: "q_pay", question: "What pay are you looking for?", count: 2 }, personChosen: { contactMe: 1, sendWithout: 1 }, skipped: [{ key: "q_pay", question: "What pay are you looking for?", count: 3 }] };
+  const funnel: ScreeningFunnel = { offered: 10, started: 8, finished: 6, unfinished: 1, stillApplying: 1, medianMinutes: 6.4, personChosen: { contactMe: 1, sendWithout: 1 }, skipped: [{ key: "q_pay", question: "What pay are you looking for?", count: 3 }] };
 
-  it("puts the figures in plain words, with each share of the step before", () => {
+  it("puts the figures in plain words, with each share of the step before, and never where anyone stopped", () => {
     expect(funnelLines(funnel)).toEqual([
       { label: "Offered the conversation", value: "10" },
       { label: "Started it", value: "8 of 10 (80%)" },
       { label: "Finished it", value: "6 of 8 (75%)" },
       { label: "Typical time to finish", value: "about 6 minutes" },
       { label: "Still applying now", value: "1" },
-      { label: "Stopped part-way and did not come back", value: "1" },
+      { label: "Didn't finish the conversation", value: "1" },
       { label: "Chose a person instead", value: "2: 1 asked to be contacted, 1 sent their application without it" },
     ]);
-    expect(dropOffWords(funnel)).toBe('Most people who stopped did so at "What pay are you looking for?" (2 people).');
+    // every conversation that stopped was never sent, so where it stopped is theirs (founder decision of 9 October 2026)
+    expect(JSON.stringify(funnelLines(funnel))).not.toMatch(/stopped/i);
   });
 
   it("says nothing while nobody has been offered it, and copes with nothing finished yet", () => {
     expect(funnelLines({ ...funnel, offered: 0 })).toEqual([]);
-    const none = funnelLines({ offered: 2, started: 0, finished: 0, unfinished: 0, stillApplying: 2, medianMinutes: null, dropOff: null, personChosen: { contactMe: 0, sendWithout: 0 }, skipped: [] });
+    const none = funnelLines({ offered: 2, started: 0, finished: 0, unfinished: 0, stillApplying: 2, medianMinutes: null, personChosen: { contactMe: 0, sendWithout: 0 }, skipped: [] });
     expect(none.find((l) => l.label === "Typical time to finish")?.value).toBe("nobody has finished yet");
     expect(none.find((l) => l.label === "Finished it")?.value).toBe("0");
     expect(none.find((l) => l.label === "Chose a person instead")?.value).toBe("nobody");
-    expect(dropOffWords({ dropOff: null })).toBeNull();
   });
 
   it("says minutes and shares the way people say them", () => {

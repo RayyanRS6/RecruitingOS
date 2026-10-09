@@ -321,7 +321,8 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     [s] = await container.db.select().from(screens).where(eq(screens.id, scr.id));
     expect(s.progress.failures).toBe(0);
     expect(s.answers.license_confirm).toMatch(/active/);
-    // HUMAN: the conversation stops, a recruiter gets the whole context with a 4-hour SLA, the owner is told
+    // HUMAN: the conversation stops, a recruiter gets the context with a 4-hour SLA, the owner is told. What Sam texted
+    // was never sent as his answers, so neither the recruiter nor the team reads it (founder decision of 9 October 2026).
     expect((await reply("Can I talk to a real person please")).status).toBe(200);
     [s] = await container.db.select().from(screens).where(eq(screens.id, scr.id));
     expect(s.status).toBe("human_requested");
@@ -329,8 +330,9 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     expect(esc.kind).toBe("candidate_issue");
     // Four business hours (Monday to Friday, 9 to 5 Pacific), never wall-clock hours (founder decision F12).
     expect(Math.abs(Date.parse(esc.slaDueAt!) - addBusinessHours(new Date(), 4).getTime())).toBeLessThanOrEqual(2 * 60_000);
-    const ctx = esc.contextSnapshot as { screens: Array<{ transcript: unknown[] }> };
-    expect(ctx.screens[0].transcript.length).toBeGreaterThanOrEqual(3);
+    const ctx = esc.contextSnapshot as { screens: Array<{ transcript: unknown[]; answers: Record<string, string>; answersShared: boolean }> };
+    expect(ctx.screens[0]).toMatchObject({ answersShared: false, answers: {}, transcript: [] });
+    expect(JSON.stringify(ctx)).not.toContain("license is active in California");
     expect(await eventsOf("screen.human_requested")).toHaveLength(1);
     expect((container.integrations.sms as FakeSmsAdapter).sent.filter((m) => m.to === "+19495550177").at(-1)!.body).toMatch(/person/);
   });

@@ -1,14 +1,14 @@
 import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
-import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeMarksFor, addCalendarDays, boardPostingOf, can, closingDayWords, companyToday, groupFor, isBoardChannel, isPostingTask, isStillApplying, mayDecideApproval, openFlagsMessage, ownerGroup, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unresolvedFlags } from "@ros/core";
+import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeMarksFor, addCalendarDays, boardPostingOf, can, closingDayWords, companyToday, groupFor, isBoardChannel, isPostingTask, isStillApplying, mayDecideApproval, openFlagsMessage, ownerGroup, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unresolvedFlags, withoutSentimentWords } from "@ros/core";
 import { legalCheckFor, legalCheckMessage } from "./packet-approval";
 import { HELD_STATUS, UNTOLD_SEND_WORKING_DAYS, decisionsWaitingApproval, detectStuckRoles, isClosingProposal, removedCandidates } from "@ros/agents";
 import { DECISION_WORDING_LABEL, companyOnboarding, companyVerifiedAt, type CompanyOnboarding, type DecisionWording, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
-import { applications, approvalRequests, assessments, candidates, communications, companies, events, intakeSessions, integrations, interviewParticipants, interviewerAvailability, interviews, invitations, memberships, postings, recruiterEscalations, rolePackets, roles, screens, type Tx } from "@ros/db";
+import { applications, approvalRequests, candidates, communications, companies, events, intakeSessions, integrations, interviewParticipants, interviewerAvailability, interviews, invitations, memberships, postings, recruiterEscalations, rolePackets, roles, screens, type Tx } from "@ros/db";
 import type { Tenant } from "../middleware/session";
 import { mayDecideByRole } from "./approvers";
 import { APPROVAL_LABEL } from "./role-report";
 import { escalationInScope, inStaffScope, staffMayAsk, staffScopeOf, type StaffScope } from "./staff-scope";
-import { boardView, loadPool } from "./pool";
+import { boardView, loadPool, shownLatestReadings } from "./pool";
 import { backupsWarmCards } from "./hire-sheet";
 
 /**
@@ -314,7 +314,8 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   // the answer in full are; answered requests are shown there for two weeks, so the brief needs no card of its own.
   const readsRequests = !viewer || can(viewer.role, "escalation.create");
   for (const e of escalations) {
-    cards.push({ kind: "escalation", title: e.status === "open" ? "A recruiter will pick this up" : "A recruiter is on it", body: e.question.slice(0, 200), roleId: e.roleId ?? undefined, applicationId: e.applicationId ?? undefined, actions: readsRequests ? [{ label: "See the request", method: "GET", path: `/?request=${e.id}` }] : [] });
+    // A hand-over reason from before 9 October 2026 in today's words: never how the candidate sounded.
+    cards.push({ kind: "escalation", title: e.status === "open" ? "A recruiter will pick this up" : "A recruiter is on it", body: withoutSentimentWords(e.question).slice(0, 200), roleId: e.roleId ?? undefined, applicationId: e.applicationId ?? undefined, actions: readsRequests ? [{ label: "See the request", method: "GET", path: `/?request=${e.id}` }] : [] });
   }
   // Getting started leads Today until the company is set up; its steps step aside once real decisions are waiting. Its
   // "Start your first role" makes the empty card's "Start a hire" redundant, so that card is left out while it shows.
@@ -328,8 +329,10 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   }
   // Today answers four questions (docs/FOUNDER-CONTEXT.md §08): what needs me, who is worth a look, what is at risk, what was done for me.
   const needsMe = cards.filter((c) => c.kind === "decision" || c.kind === "needs_review").length;
-  // Strong by each person's latest reading only (plan F5): an earlier Strong résumé reading a scorecard has since replaced does not count.
-  const strongIds = new Set((await tx.select({ id: applications.id }).from(applications).innerJoin(assessments, eq(assessments.id, applications.latestAssessmentId)).where(and(eq(applications.companyId, companyId), eq(assessments.overall, "strong")))).map((r) => r.id));
+  // Strong by each person's latest reading only (plan F5): an earlier Strong résumé reading a scorecard has since replaced
+  // does not count. A reading of a conversation the candidate never sent is never theirs to be counted by (9 October
+  // 2026): they count by the newest reading left, their résumé's, as the Talent list and the board show them.
+  const strongIds = new Set([...(await shownLatestReadings(tx, { companyId })).values()].filter((r) => r.overall === "strong").map((r) => r.applicationId));
   const companyApps = (await tx.select({ id: applications.id, roleId: applications.roleId, stage: applications.stage }).from(applications).where(eq(applications.companyId, companyId))).filter((a) => inStaffScope(scope, { roleId: a.roleId, applicationId: a.id }));
   const companyMarks = await activeMarksFor(tx, companyApps.filter((a) => strongIds.has(a.id)).map((a) => a.id));
   const strongWaiting = companyApps.filter((a) => strongIds.has(a.id) && groupFor(a, companyMarks.get(a.id), now) === "waiting_on_you").length;

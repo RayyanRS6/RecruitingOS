@@ -19,7 +19,7 @@ export const SCREEN_STATUS_LABEL: Record<string, string> = {
   abandoned: "Withdrawn",
   human_requested: "Asked for a person",
   cancelled: "Stopped",
-  unfinished: "Stopped part-way",
+  unfinished: "Didn't finish the conversation",
   declined_by_candidate: "Sent without it",
   paused: "Paused",
 };
@@ -64,14 +64,14 @@ function addedAfterConfirming(s: Pick<Screen, "id" | "invitedVia">, timeline: re
  * How the conversation reached the candidate, in a few words for the Screen tab; null for an invitation sent by email
  * (nothing to say). "Applied and talked in one visit" once a conversation offered with the application is complete.
  */
-export function screenOrigin(s: Pick<Screen, "id" | "invitedVia" | "status" | "transcript">, timeline: readonly EventLike[] = []): string | null {
+export function screenOrigin(s: Pick<Screen, "id" | "invitedVia" | "status" | "transcript"> & { progress?: Pick<Screen["progress"], "completedBy"> }, timeline: readonly EventLike[] = []): string | null {
   if (addedAfterConfirming(s, timeline)) return "Added after they confirmed a second application";
   if (!offeredWithApplication(s, timeline)) return null;
-  if (s.status === "completed") return s.transcript.some(isRecruiterNote) ? "Finished on a call with a recruiter" : APPLIED_IN_ONE_VISIT;
+  if (s.status === "completed") return s.progress?.completedBy === "recruiter_call" || s.transcript.some(isRecruiterNote) ? "Finished on a call with a recruiter" : APPLIED_IN_ONE_VISIT;
   if (STILL_APPLYING.includes(s.status)) return "Still applying";
   if (s.status === "declined_by_candidate") return "Sent the application without the conversation";
   if (s.status === "human_requested") return "Asked for a person while applying";
-  if (s.status === "unfinished") return "Stopped part-way while applying";
+  if (s.status === "unfinished") return "Didn't finish while applying";
   return "Offered with the application";
 }
 
@@ -81,11 +81,55 @@ export function overviewScreenLine(a: Pick<ApplicationDetail, "screens" | "timel
   if (!s) return null;
   const origin = screenOrigin(s, a.timeline);
   if (origin === APPLIED_IN_ONE_VISIT) return `${APPLIED_IN_ONE_VISIT}: the screening questions were answered right after the form.`;
-  if (origin === "Still applying") return `Still applying: ${a.candidate.firstName} is answering the screening questions${s.status === "paused" ? ", paused while the assistant is not working" : ""}. Nothing about them waits on you until they finish.`;
+  if (origin === "Still applying") return `${STILL_APPLYING_LINE}${s.status === "paused" ? " The conversation is paused while the assistant is not working." : ""} Nothing about ${a.candidate.firstName} waits on you until then.`;
   if (s.status === "declined_by_candidate") return "Sent the application without the screening conversation, by their own choice. It is never held against them.";
-  if (s.status === "human_requested") return "Asked to talk to a person instead of the assistant. A recruiter contacts them and adds notes from the call.";
-  if (s.status === "unfinished") return "Stopped part-way through the screening conversation and did not come back after one reminder. What they said is kept.";
+  if (s.status === "human_requested") return "Asked to talk to a person instead of the assistant. A recruiter contacts them and adds notes from the call. Anything they typed before asking was not sent, so you won't see it.";
+  if (s.status === "unfinished") return `${DIDNT_FINISH_LINE} The reading and match score use their application only.`;
+  if (s.status === "cancelled" && s.startedAt && s.answersShared === false) return "The screening conversation closed before they sent their answers, so you won't see them. The reading and match score use their application only.";
   return null;
+}
+
+/* ------------------------------------------------------------------------------------------------------------ */
+/* "Hide them until they send" (founder decision, 9 October 2026)                                                */
+/* ------------------------------------------------------------------------------------------------------------ */
+
+/** The calm line the panel shows while the candidate is still in the conversation offered with the application. */
+export const STILL_APPLYING_LINE = "Still applying: their answers appear here once they send them.";
+/**
+ * ...and once it closed unfinished: the team sees that it happened, never what they said, nor how far they got (the
+ * same words for someone who stopped at the first question and someone who answered everything but never pressed Send).
+ */
+export const DIDNT_FINISH_LINE = "Didn't finish the conversation: they did not send their answers, even after one reminder, so you won't see them.";
+
+/**
+ * Why a conversation has nothing to read yet, or never will (the API sends `answersShared: false` and leaves the
+ * candidate's words out): null when the answers are there to read, or when there was never anything to hide (a link
+ * that lapsed unopened, an invitation the team stopped before it was started).
+ */
+export function hiddenAnswersLine(s: Pick<Screen, "id" | "invitedVia" | "status" | "transcript" | "answersShared" | "startedAt"> & { progress?: Pick<Screen["progress"], "completedBy"> }, timeline: readonly EventLike[] = []): string | null {
+  if (s.answersShared !== false) return null;
+  if (STILL_APPLYING.includes(s.status)) {
+    if (offeredWithApplication(s, timeline)) return STILL_APPLYING_LINE;
+    // a conversation from an emailed invitation: shown once it ends normally
+    return s.status === "invited" || s.status === "reminded" ? "Not started yet: their answers appear here once they finish the conversation." : "Still answering: their answers appear here once they finish the conversation.";
+  }
+  switch (s.status) {
+    case "unfinished":
+      return DIDNT_FINISH_LINE;
+    case "declined_by_candidate":
+      return "They sent their application without the conversation, so there are no answers to show.";
+    case "human_requested":
+      return "They asked for a person. Anything they typed before asking was not sent, so you won't see it; a recruiter adds notes from the call.";
+    case "completed":
+      return "Finished on a call with a recruiter: only the recruiter's notes are shown, never anything the candidate typed without sending it.";
+    case "abandoned":
+      return "They withdrew during the conversation. Their answers were not sent, so you won't see them.";
+    case "cancelled":
+      // Closed part-way when they withdrew or were declined while still applying; never started, there was nothing to hide.
+      return s.startedAt ? "The conversation closed before they sent their answers, so you won't see them." : null;
+    default:
+      return null;
+  }
 }
 
 /** One question of the conversation with what the candidate did with it, and any notes a recruiter added from a call. */
@@ -204,14 +248,9 @@ export function funnelLines(f: ScreeningFunnel): Array<{ label: string; value: s
     { label: "Typical time to finish", value: minutesWords(f.medianMinutes) ?? "nobody has finished yet" },
   ];
   if (f.stillApplying) lines.push({ label: "Still applying now", value: String(f.stillApplying) });
-  if (f.unfinished) lines.push({ label: "Stopped part-way and did not come back", value: String(f.unfinished) });
+  if (f.unfinished) lines.push({ label: "Didn't finish the conversation", value: String(f.unfinished) });
   const person = f.personChosen.contactMe + f.personChosen.sendWithout;
   lines.push({ label: "Chose a person instead", value: person ? `${person}: ${f.personChosen.contactMe} asked to be contacted, ${f.personChosen.sendWithout} sent their application without it` : "nobody" });
   return lines;
 }
 
-/** Where people stop, in a sentence; null when nobody has stopped part-way. */
-export function dropOffWords(f: Pick<ScreeningFunnel, "dropOff">): string | null {
-  if (!f.dropOff) return null;
-  return `Most people who stopped did so at "${f.dropOff.question}" (${f.dropOff.count} ${f.dropOff.count === 1 ? "person" : "people"}).`;
-}

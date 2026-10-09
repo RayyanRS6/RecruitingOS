@@ -365,6 +365,7 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
     case "screen.started":
       return { ...base, what: "Started the screening conversation" };
     case "screen.completed":
+      // Before 9 October 2026 only: answers nobody pressed Send on are no longer sent for the candidate ("hide them until they send").
       if (p.via === "review_timeout") return { ...base, what: "Their screening answers were sent as they were", who: "The system", why: "They answered every question but did not press Send; a reminder said the answers would go two days later." };
       return { ...base, what: p.via === "recruiter_call" ? "Screening finished with a recruiter's notes from a call" : "Finished the screening conversation" };
     // Wave E: the conversation in the same visit as applying.
@@ -373,7 +374,8 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
     case "screen.idle_reminded":
       return { ...base, what: "Reminded once to finish the screening conversation", who: "The system" };
     case "screen.unfinished":
-      return { ...base, what: "The screening conversation was closed part-way, after one reminder", who: "The system", ...(typeof p.answered === "number" && typeof p.questions === "number" ? { why: `${p.answered} of ${p.questions} questions answered; what they said is kept.` } : {}) };
+      // They never sent their answers, so the history says nothing about how far they got (9 October 2026).
+      return { ...base, what: "Didn't finish the screening conversation; it closed after one reminder", who: "The system", why: "They never sent their answers, so they are not shown." };
     case "screen.paused":
       return { ...base, what: "The screening conversation paused: the assistant was not working", who: "The system", told: "They are emailed a link to finish once it is back." };
     case "screen.resumed":

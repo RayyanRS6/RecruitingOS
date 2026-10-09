@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Alert, Card, EmptyState, ErrorState, OWNER_STAGES, PipelineBar, Pill, Skeleton, Table } from "@ros/ui";
 import { Link } from "../nav";
 import { api, type ScreeningFunnel } from "../api/client";
-import { dropOffWords, funnelLines } from "../screen-view";
+import { funnelLines } from "../screen-view";
 
 /** The role report as the API answers it (apps/api/src/services/role-report.ts). Counts and days only; never a name. */
 export type RoleReport = {
@@ -91,8 +91,9 @@ export function MustHavesCard({ mustHaves: m, links }: { mustHaves: NonNullable<
 
 /**
  * How the screening conversation goes for this role (plan E13): how many were offered it, started and finished, the
- * typical time to finish, the question where people stop, how many chose a person instead, and the questions people
- * chose not to answer. From each person's latest conversation; counts only, never a name or an answer.
+ * typical time to finish, how many chose a person instead, and the questions people chose not to answer in the answers
+ * they sent. From each person's latest conversation; counts only, never a name or an answer, and nothing from a
+ * conversation nobody sent, so not where anyone stopped (founder decision of 9 October 2026).
  */
 export function ScreeningCard({ roleId }: { roleId: string }) {
   const q = useQuery({ queryKey: ["role", roleId, "screening"], queryFn: () => api.get<ScreeningFunnel>(`/api/v1/roles/${roleId}/screening`) });
@@ -100,7 +101,6 @@ export function ScreeningCard({ roleId }: { roleId: string }) {
   if (q.error || !q.data) return <Card title="The screening conversation"><ErrorState message="Could not load how the screening conversation is going." onRetry={() => q.refetch()} /></Card>;
   const f = q.data;
   const lines = funnelLines(f);
-  const stop = dropOffWords(f);
   return (
     <Card title="The screening conversation">
       {!lines.length ? <p className="small muted">Nobody has been offered the screening conversation for this role yet.</p> : (
@@ -113,7 +113,6 @@ export function ScreeningCard({ roleId }: { roleId: string }) {
           <dl className="kv" style={{ marginTop: 10 }}>
             {lines.map((l) => <Fragment key={l.label}><dt>{l.label}</dt><dd>{l.value}</dd></Fragment>)}
           </dl>
-          {stop ? <p className="small" style={{ marginTop: 8, color: "var(--ink-2)" }}>{stop}</p> : null}
           {f.skipped.length ? (
             <div style={{ marginTop: 10 }}>
               <Table head={["Question", "Chose not to answer"]} label="Questions people chose not to answer">

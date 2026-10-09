@@ -36,9 +36,11 @@ test("still applying on the list, the panel and the report; ITS switches the com
   // The panel says what is going on, and that nothing waits on the owner yet
   await page.getByRole("button", { name: "Maria Reyes" }).click();
   const panel = page.getByRole("dialog", { name: "Maria Reyes" });
-  await expect(panel.getByText(/Still applying: Maria is answering the screening questions\. Nothing about them waits on you until they finish\./)).toBeVisible({ timeout: 30_000 });
+  // her answers are hidden until she sends them (founder decision of 9 October 2026)
+  await expect(panel.getByText(/Still applying: their answers appear here once they send them\. Nothing about Maria waits on you until then\./)).toBeVisible({ timeout: 30_000 });
   await panel.getByRole("tab", { name: /^Screen/ }).click();
   await expect(panel.getByText("Still applying", { exact: true }).first()).toBeVisible();
+  await expect(panel.getByText("Still applying: their answers appear here once they send them.", { exact: true })).toBeVisible();
   await expectAccessible(page, "candidate panel while they are still applying");
   await page.keyboard.press("Escape");
 

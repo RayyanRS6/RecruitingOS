@@ -48,6 +48,8 @@ Inspecting an AI run must answer, on one screen:
 5. **What did the human do?** The approval decision or override, with actor, time, and note.
 6. **What action occurred?** The resulting events, with links.
 
+One exception, from the founder decision of 9 October 2026 ("hide them until they send"; counsel register item 20): a run about a screening conversation the candidate has not sent (still under way, closed unfinished, sent without it, handed to a person) shows its timings, tokens, status and error, but its structured output is withheld, and the related events say nothing about single answers or how far the candidate got. Nobody at ITS reads answers a candidate never sent (`withoutUnsentRunOutput` in `packages/core/src/screen-answers.ts`). The scorecard of a conversation a recruiter finished on a call is read from the notes alone, and is shown.
+
 ## Operational alerts
 
 Failed run rate above threshold; queue age above 5 minutes; adapter health failing; AI error or refusal rate spike; cost per tenant per day anomaly; escalation SLA breach; unmatched inbound emails growing.

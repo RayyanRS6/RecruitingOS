@@ -1,4 +1,5 @@
 import type { ApplyMode, PolicyLevel, RolePacket, ScreeningFunnel, ScreeningQuestion, ScreenInvitedVia, ScreenProgress, ScreenTranscriptEntry, TapAnswer, TapFormat } from "@ros/contracts";
+import { screenAnswersSent } from "./screen-answers";
 
 /**
  * Applying and the screening conversation in one visit (plan Wave E; founder decision B1/Q15). The pure rules: which
@@ -117,11 +118,19 @@ export function tapAnswerText(format: TapFormat, answer: TapAnswer, now: Date = 
 
 export type FunnelScreen = { status: string; invitedVia?: string | null; startedAt: string | null; completedAt: string | null; progress: ScreenProgress; transcript: ScreenTranscriptEntry[] };
 
-/** The figures from a role's screens (the latest per application). Counts only: never a name or an answer. */
+/**
+ * The figures from a role's screens (the latest per application). Counts only: never a name, an answer, or anything
+ * worked out from a conversation nobody sent (founder decision of 9 October 2026): no skip, no time taken, and no
+ * question where someone stopped. Every conversation that stopped was, by definition, never sent, so where people stop
+ * is not counted at all; even a count could point at the one person the team sees "Didn't finish the conversation" on.
+ */
 export function screeningFunnel(rows: FunnelScreen[], questions: Array<{ key: string; question: string }>): ScreeningFunnel {
   const started = rows.filter((r) => r.startedAt);
   const finished = rows.filter((r) => r.status === "completed");
+  // The time to finish, from conversations the candidates sent: one finished on a recruiter's call is timed from words
+  // the candidate typed and never sent.
   const minutes = finished
+    .filter((r) => screenAnswersSent(r))
     .map((r) => {
       const first = r.transcript.find((t) => t.role === "candidate")?.at ?? r.startedAt;
       const end = r.progress.submittedAt ?? r.completedAt;
@@ -130,15 +139,10 @@ export function screeningFunnel(rows: FunnelScreen[], questions: Array<{ key: st
     .filter((m): m is number => m !== null && m >= 0)
     .sort((a, b) => a - b);
   const median = minutes.length ? (minutes.length % 2 ? minutes[(minutes.length - 1) / 2] : (minutes[minutes.length / 2 - 1] + minutes[minutes.length / 2]) / 2) : null;
-  const stoppedAt = new Map<string, number>();
-  for (const r of started) {
-    if (["completed", "in_progress", "paused"].includes(r.status)) continue;
-    const key = r.progress.currentQuestionKey ?? r.progress.askedKeys.at(-1);
-    if (key) stoppedAt.set(key, (stoppedAt.get(key) ?? 0) + 1);
-  }
-  const top = [...stoppedAt.entries()].sort((a, b) => b[1] - a[1])[0];
+  // Skips are counted from conversations the candidates sent: what someone did with a question they never sent stays
+  // theirs (founder decision of 9 October 2026), even in a count.
   const skippedCount = new Map<string, number>();
-  for (const r of rows) for (const k of r.progress.declined ?? []) skippedCount.set(k, (skippedCount.get(k) ?? 0) + 1);
+  for (const r of rows) if (screenAnswersSent(r)) for (const k of r.progress.declined ?? []) skippedCount.set(k, (skippedCount.get(k) ?? 0) + 1);
   const label = (key: string) => questions.find((q) => q.key === key)?.question ?? key;
   return {
     offered: rows.length,
@@ -147,7 +151,6 @@ export function screeningFunnel(rows: FunnelScreen[], questions: Array<{ key: st
     unfinished: rows.filter((r) => r.status === "unfinished").length,
     stillApplying: rows.filter((r) => isStillApplying(r)).length,
     medianMinutes: median === null ? null : Math.round(median * 10) / 10,
-    dropOff: top ? { key: top[0], question: label(top[0]), count: top[1] } : null,
     personChosen: { contactMe: rows.filter((r) => r.status === "human_requested").length, sendWithout: rows.filter((r) => r.status === "declined_by_candidate").length },
     skipped: [...skippedCount.entries()].sort((a, b) => b[1] - a[1]).map(([key, count]) => ({ key, question: label(key), count })),
   };

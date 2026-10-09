@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Actor, EvidenceAssessment, MatchScore, NoteView, OwnerStage, ReadingVersion, ScreenAssessment } from "@ros/contracts";
-import { STAGE_LABEL, activeMarksFor, assertCan, audit, groupFor, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion } from "@ros/core";
-import { applications, assessments, candidates, rolePackets, roles, withTenant, type Tx } from "@ros/db";
+import { STAGE_LABEL, activeMarksFor, assertCan, audit, groupFor, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion, unsentScreenReadings } from "@ros/core";
+import { applications, assessments, candidates, rolePackets, roles, screens, withTenant, type Tx } from "@ros/db";
 import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { notesForApplications } from "../services/notes";
@@ -68,7 +68,10 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
   const mustHaves = packet?.requirements.mustHaves.map((m) => ({ key: m.key, text: m.text })) ?? [];
   const competencies = packet?.competencies.map((x) => ({ key: x.key, name: x.name, definition: x.definition })) ?? [];
   const cands = apps.length ? await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, apps.map((a) => a.candidateId))) : [];
-  const asmts = apps.length ? await tx.select().from(assessments).where(inArray(assessments.applicationId, apps.map((a) => a.id))).orderBy(desc(assessments.createdAt)) : [];
+  // Never a reading of a conversation the candidate did not send (founder decision of 9 October 2026).
+  const all = apps.length ? await tx.select().from(assessments).where(inArray(assessments.applicationId, apps.map((a) => a.id))).orderBy(desc(assessments.createdAt)) : [];
+  const hidden = unsentScreenReadings(apps.length ? await tx.select({ status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.applicationId, apps.map((a) => a.id))) : [], all);
+  const asmts = all.filter((x) => !hidden.has(x.id));
   const marks = await activeMarksFor(tx, apps.map((a) => a.id));
   const notes = await notesForApplications(tx, { applicationIds: apps.map((a) => a.id), tenant: t });
   const rows: CompareCandidate[] = [];
