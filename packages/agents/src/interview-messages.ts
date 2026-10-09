@@ -31,12 +31,26 @@ function slotsText(slots: OfferedSlot[], tz: string): string {
   return groupSlotsByDay(slots, tz).map((g) => `${g.label}\n${g.slots.map((s) => `  - ${s.label}`).join("\n")}`).join("\n");
 }
 
-export async function sendSlotsOffered(q: Queryable, integrations: Integrations, input: InterviewMessageInput): Promise<SendResult> {
+/**
+ * A personal line on the invitation (founder decision Q28): written by the person who approved the interview, or
+ * suggested by the assistant and kept by them, in which case the email says the assistant helped. Checked before it
+ * gets here (`checkPersonalLine`).
+ */
+export type InvitationNote = { text: string; aiHelped: boolean; senderName: string };
+
+/** The note's paragraph in the invitation, empty when there is none. */
+export function invitationNoteText(note: InvitationNote | null | undefined): string {
+  if (!note?.text.trim()) return "";
+  const help = note.aiHelped ? ` (${note.senderName} wrote this note with help from an AI assistant.)` : "";
+  return `\n\nA note from ${note.senderName}: ${note.text.trim()}${help}`;
+}
+
+export async function sendSlotsOffered(q: Queryable, integrations: Integrations, input: InterviewMessageInput & { note?: InvitationNote | null }): Promise<SendResult> {
   const { candidate, company, packet, interview } = input;
   const who = input.interviewerFirstNames.length ? ` with ${input.interviewerFirstNames.join(" and ")}` : "";
   const text = `Hi ${candidate.firstName},
 
-Good news: ${company.name} would like to interview you for the ${packet.identity.title} position. ${interview.title}${who}, ${interview.durationMinutes} minutes, ${interview.format.replace("_", " ")}.
+Good news: ${company.name} would like to interview you for the ${packet.identity.title} position. ${interview.title}${who}, ${interview.durationMinutes} minutes, ${interview.format.replace("_", " ")}.${invitationNoteText(input.note)}
 
 Pick a time that works for you (times shown in ${input.candidateTimezone}; you can change the time zone on the page):
 ${slotsText(interview.offeredSlots, input.candidateTimezone)}

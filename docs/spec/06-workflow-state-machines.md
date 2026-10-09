@@ -29,6 +29,9 @@ stateDiagram-v2
   interview_complete --> interview_scheduled: human next round → booked
   interview_complete --> finalist: human (D10): owner, admin, hiring manager, recruiter (the roles that hold interview.decide)
   finalist --> hired: human, recorded outside the product (D10)
+  finalist --> offer_sent: human "Offer made", record-only (Q29, plan H2): owner, admin, hiring manager, HR (outcome.record)
+  offer_sent --> hired: human, accepted (hire sheet, start date)
+  offer_sent --> declined: human, the candidate turned it down (offer_declined_externally)
   interview_complete --> rejected: human with reason
   finalist --> rejected: human with reason
   applied --> withdrawn: candidate or human, any active stage
@@ -36,7 +39,7 @@ stateDiagram-v2
   withdrawn --> talent_pool: human
 ```
 
-Rules that hold in code (`packages/core/src/stages.ts`): `rejected` from any active stage requires a human, including from `ineligible` (correction 6); `withdrawn` from any active stage by the candidate, a human, or the system on the candidate's behalf; `talent_pool` from rejected, declined, withdrawn, or any active stage. Release 1 adds: `interview_recommended` → `interview_scheduled` by system only after an `interviews` row exists with a human `created_by` (the approval); `interview_complete` → `finalist` and `finalist` → `hired` by human only (already true); `interview_complete` → `interview_scheduled` by system after a new booking. As built (30 Sep 2026, audit fixes): `interview_scheduled` → `interview_complete` is open to every membership role including HR, because recording that an interview ended is a fact any member who sat on it may state (the outcome route checks they did, or that they hold `interview.manage`); `interview_complete` → `finalist` lists exactly the roles that hold `interview.decide` (owner, admin, hiring manager, recruiter), so the permission and the state machine agree.
+Rules that hold in code (`packages/core/src/stages.ts`): `rejected` from any active stage requires a human, including from `ineligible` (correction 6); `withdrawn` from any active stage by the candidate, a human, or the system on the candidate's behalf; `talent_pool` from rejected, declined, withdrawn, or any active stage. Release 1 adds: `interview_recommended` → `interview_scheduled` by system only after an `interviews` row exists with a human `created_by` (the approval); `interview_complete` → `finalist` and `finalist` → `hired` by human only (already true); `interview_complete` → `interview_scheduled` by system after a new booking. As built (30 Sep 2026, audit fixes): `interview_scheduled` → `interview_complete` is open to every membership role including HR, because recording that an interview ended is a fact any member who sat on it may state (the outcome route checks they did, or that they hold `interview.manage`); `interview_complete` → `finalist` lists exactly the roles that hold `interview.decide` (owner, admin, hiring manager, recruiter), so the permission and the state machine agree. Plan H2 (founder decision Q29): `finalist` (or `reference_check`) → `offer_sent` is "Offer made", recorded by the roles that hold `outcome.record` (owner, admin, hiring manager, HR), never the system; the app writes, approves and sends no offer, and the candidate's answer is recorded as an outcome (accepted: `hired` with the start date; declined: `declined`). Someone at `offer_sent` is in the owner group "waiting on the candidate".
 
 ## 2. Role, packet, screen, interview, escalation, run
 

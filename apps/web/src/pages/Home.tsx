@@ -5,11 +5,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearchParams } from "../nav";
 import { Alert, Button, Card, ErrorState, Icon, PageHeader, Pill, Skeleton, type Tone } from "@ros/ui";
 import type { GettingStartedAction } from "@ros/contracts";
-import { api, ApiError, type Brief, type BriefCard, type ClosingDateResponse, type Me, type Notification } from "../api/client";
+import { api, ApiError, type Brief, type BriefCard, type ClosingDateResponse, type InterviewDraft, type Me, type Notification } from "../api/client";
 import { ALLOWANCE_ASK, screeningAllowanceWarning, type UsageLine } from "../allowance";
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
 import { RecruiterRequests } from "../components/RecruiterRequests";
+import { interviewDraftPath } from "../hiring";
 import { closingDateToast, isClosingDateAction } from "../publishing";
 import { canChangeCompany, canStartHire } from "../roles";
 import { presetOf, requestSentText } from "../recruiter-access";
@@ -110,6 +111,7 @@ function greeting() {
 
 function BriefCardView({ card, onSentToRecruiter }: { card: BriefCard; onSentToRecruiter: (message: string) => void }) {
   const qc = useQueryClient();
+  const nav = useNavigate();
   const needsYou = ["decision", "needs_review", "stuck"].includes(card.kind);
   // A company's first screen (nothing yet, and this person may start a hire) is a first step, not "nothing waiting" (plan C18).
   const firstRun = card.kind === "empty" && card.actions.some((a) => a.path === START_HIRE_HREF);
@@ -128,6 +130,10 @@ function BriefCardView({ card, onSentToRecruiter }: { card: BriefCard; onSentToR
       qc.invalidateQueries({ queryKey: ["brief"] }); qc.invalidateQueries({ queryKey: ["notifications"] });
       if (card.roleId) { qc.invalidateQueries({ queryKey: ["applications", card.roleId] }); qc.invalidateQueries({ queryKey: ["roles"] }); }
       if (card.applicationId) qc.invalidateQueries({ queryKey: ["application", card.applicationId] });
+      // "Yes, interview" (plan H4): straight on to the interview approval, filled in from the plan, on the candidate's panel.
+      const draft = (r as { interviewDraft?: InterviewDraft | null } | null)?.interviewDraft ?? null;
+      const next = interviewDraftPath(draft);
+      if (draft && next) { qc.setQueryData(["interview-draft", draft.applicationId], draft); nav(next); }
     },
     onError: (err) => toast(err instanceof ApiError ? err.message : "That didn't work."),
   });
@@ -165,11 +171,12 @@ function BriefCardView({ card, onSentToRecruiter }: { card: BriefCard; onSentToR
  */
 function cardTone(kind: string, needsYou: boolean): Tone {
   if (needsYou || kind === "closing_date") return "caution";
-  return kind === "escalation" ? "accent" : kind === "empty" || kind === "share" ? "good" : "neutral";
+  return kind === "escalation" ? "accent" : kind === "empty" || kind === "share" || kind === "hire" ? "good" : "neutral";
 }
 
+/** `hire`: "keep your backups warm" until a new hire starts (plan H1). */
 function label(kind: string): string {
-  return { new_applicants: "New applicants", needs_review: "Needs you", decision: "Decision", posting_action: "One step", escalation: "Recruiter", stuck: "Stuck", screening: "Screening", interviews: "Your interviews", empty: "Nothing waiting", getting_started: "Getting started", draft: "Draft", closing_date: "Closing date", share: "Live today", pool_ready: "Ready to sort" }[kind] ?? kind;
+  return { new_applicants: "New applicants", needs_review: "Needs you", decision: "Decision", posting_action: "One step", escalation: "Recruiter", stuck: "Stuck", screening: "Screening", interviews: "Your interviews", empty: "Nothing waiting", getting_started: "Getting started", draft: "Draft", closing_date: "Closing date", share: "Live today", pool_ready: "Ready to sort", hire: "New hire" }[kind] ?? kind;
 }
 
 /**

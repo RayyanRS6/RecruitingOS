@@ -1,13 +1,17 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { and, desc, eq, gte, inArray, isNull, lte } from "drizzle-orm";
-import { BookOnBehalf, CancelInterview, InterviewOutcome, InterviewerAvailabilityInput, RecordDecision, RequestInterview, RescheduleInterview, type CandidateNotice } from "@ros/contracts";
-import { STAGE_LABEL, assertCan, audit, availabilityFor, calendarConnectionFor, can, defaultSchedulingWindow, emit, endMarkOnMove, notify, publicConnection, scopeAllows, transition, upsertAvailability } from "@ros/core";
-import { applications, approvalRequests, candidates, companies, events, interviewParticipants, interviews, jobs, memberships, rolePackets, roles, users, withTenant } from "@ros/db";
+import { BookOnBehalf, CancelInterview, InterviewOutcome, InterviewerAvailabilityInput, RecordInterviewDecision, RequestInterviewWithLine, RescheduleInterview, type CandidateNotice, type HireFollowUp, type InterviewDraft } from "@ros/contracts";
+import { checkPersonalLine, type InvitationNote } from "@ros/agents";
+import { OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, assertCan, audit, availabilityFor, calendarConnectionFor, can, defaultSchedulingWindow, emit, endMarkOnMove, notify, publicConnection, recordApplicationOutcome, scopeAllows, transition, upsertAvailability } from "@ros/core";
+import { applications, approvalRequests, candidates, companies, events, interviewParticipants, interviews, jobs, memberships, rolePackets, roles, users, withTenant, type Tx } from "@ros/db";
 import { actorOf, applicationScopeGuard, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { cancelInterviewInTx } from "../services/interview-cancel";
 import { exitCleanup } from "../services/exit-cleanup";
 import { interviewBriefFor } from "../services/interviewer-view";
+import { hireFollowUp } from "../services/hire-sheet";
+import { settleOutsideOffer, tellRecruiterAboutOutcome } from "../services/offers";
+import { staffScopeOf } from "../services/staff-scope";
 
 /**
  * Interviews (docs/07 §Interviews and calendars; slice 5 step 9). A person approves every interview (policy
@@ -217,6 +221,10 @@ interviewRoutes.post("/:id/book-on-behalf", requireTenant, async (c) => {
   return c.json(row);
 });
 
+/** The steps from which a person may approve an interview round. */
+const INTERVIEW_FROM: readonly string[] = ["triaged", "screen_complete", "interview_recommended", "interview_complete", "eligible", "screen_invited", "screening"];
+const OPEN_INTERVIEW: string[] = ["proposed", "scheduling", "scheduled"];
+
 /** Routes under /applications/:id that create interviews and record decisions. */
 export const applicationInterviewRoutes = new Hono<Vars>();
 applicationInterviewRoutes.use("/:id/*", applicationScopeGuard);
@@ -224,19 +232,27 @@ applicationInterviewRoutes.use("/:id/*", applicationScopeGuard);
 applicationInterviewRoutes.post("/:id/interviews", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "interview.request");
-  const body = RequestInterview.parse(await c.req.json());
+  const body = RequestInterviewWithLine.parse(await c.req.json());
   const container = c.get("container");
   const now = container.engine.clock();
+  // A personal line on the invitation (Q28), the person's own or one the assistant suggested and they kept: checked like
+  // a decision message's line, and refused with what to take out. The invitation says so when the assistant helped.
+  let invitationNote: InvitationNote | null = null;
+  if (body.invitationLine) {
+    const checked = checkPersonalLine(body.invitationLine.text);
+    if (!checked.ok) throw new HttpError(400, "personal_line_refused", checked.message, { problems: checked.problems });
+    invitationNote = { text: checked.text, aiHelped: body.invitationLine.aiHelped, senderName: actorOf(c).name ?? "A member of the hiring team" };
+  }
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     const [app] = await tx.select().from(applications).where(and(eq(applications.id, c.req.param("id")), eq(applications.companyId, t.companyId))).limit(1);
     if (!app) throw new HttpError(404, "not_found", "Application not found.");
-    if (!["triaged", "screen_complete", "interview_recommended", "interview_complete", "eligible", "screen_invited", "screening"].includes(app.stage)) throw new HttpError(409, "interview_not_schedulable", `A candidate at "${STAGE_LABEL[app.stage]}" cannot be moved to an interview from here.`);
+    if (!INTERVIEW_FROM.includes(app.stage)) throw new HttpError(409, "interview_not_schedulable", `A candidate at "${STAGE_LABEL[app.stage]}" cannot be moved to an interview from here.`);
     const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
     const round = pv?.packet.interviews.plan.find((r) => r.key === body.roundKey);
     if (!round) throw new HttpError(400, "round_unknown", "That round is not in the approved interview plan.");
     const members = await tx.select({ userId: memberships.userId }).from(memberships).where(and(eq(memberships.companyId, t.companyId), eq(memberships.status, "active"), inArray(memberships.userId, body.interviewerUserIds)));
     if (members.length !== body.interviewerUserIds.length) throw new HttpError(400, "interviewer_unknown", "Every interviewer must be an active member of the company.");
-    const open = await tx.select({ id: interviews.id }).from(interviews).where(and(eq(interviews.applicationId, app.id), inArray(interviews.status, ["proposed", "scheduling", "scheduled"])));
+    const open = await tx.select({ id: interviews.id }).from(interviews).where(and(eq(interviews.applicationId, app.id), inArray(interviews.status, OPEN_INTERVIEW)));
     if (open.length) throw new HttpError(409, "interview_open", "An interview is already being scheduled for this candidate. Reschedule or cancel it first.");
     const [company] = await tx.select().from(companies).where(eq(companies.id, t.companyId)).limit(1);
     const window = { ...defaultSchedulingWindow(now, company.timezone), ...(body.window ?? {}) };
@@ -255,9 +271,10 @@ applicationInterviewRoutes.post("/:id/interviews", requireTenant, async (c) => {
     // Already at the interview step there is no move, but a person approving an interview still moves them on: a hold
     // (or any other private mark) ends here, as it would with the move (founder decision B3).
     else await endMarkOnMove(tx, { applicationId: app.id, companyId: t.companyId, actor, to: app.stage });
-    await emit(tx, { type: "interview.requested", companyId: t.companyId, actor, subject: { type: "interview", id: iv.id }, payload: { applicationId: app.id, roundKey: round.key, interviewers: body.interviewerUserIds, linkSource: body.linkSource, window, approvedBy: t.userId } });
+    // The fact says whether the invitation carries a personal line and whether the assistant helped; the words are in the invitation itself.
+    await emit(tx, { type: "interview.requested", companyId: t.companyId, actor, subject: { type: "interview", id: iv.id }, payload: { applicationId: app.id, roundKey: round.key, interviewers: body.interviewerUserIds, linkSource: body.linkSource, window, approvedBy: t.userId, invitationLine: invitationNote ? { aiHelped: invitationNote.aiHelped, suggestionRunId: body.invitationLine?.suggestionRunId ?? null } : null } });
     await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "interview.request", roundKey: round.key, note: body.note ?? null } });
-    await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: t.companyId, subject: { type: "interview", id: iv.id }, state: { interviewId: iv.id, applicationId: app.id, roleId: app.roleId, roundKey: round.key, attempt: 1 }, idempotencyKey: `schedule:${iv.id}:1`, actor });
+    await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: t.companyId, subject: { type: "interview", id: iv.id }, state: { interviewId: iv.id, applicationId: app.id, roleId: app.roleId, roundKey: round.key, attempt: 1, ...(invitationNote ? { invitationNote } : {}) }, idempotencyKey: `schedule:${iv.id}:1`, actor });
     return iv.id;
   });
   await container.kick();
@@ -266,23 +283,74 @@ applicationInterviewRoutes.post("/:id/interviews", requireTenant, async (c) => {
 });
 
 /**
+ * The interview approval card filled in (plan H4): the next round of the approved plan (the first, or the one after the
+ * newest interview that is over), the plan's interviewers who are still active members (the role's current plan when it
+ * still has the round, as the page's own defaults do), the calendar link and the company's scheduling window. Null when
+ * no interview can be approved now (their step, or one already being set up) or the plan has no round left. Posting it
+ * to `requestPath` is the one approval; nothing is approved here.
+ */
+export async function interviewDraftFor(tx: Tx, input: { app: Pick<typeof applications.$inferSelect, "id" | "roleId" | "companyId" | "packetVersion" | "stage">; now: Date }): Promise<InterviewDraft | null> {
+  const { app } = input;
+  if (!INTERVIEW_FROM.includes(app.stage)) return null;
+  if ((await tx.select({ id: interviews.id }).from(interviews).where(and(eq(interviews.applicationId, app.id), inArray(interviews.status, OPEN_INTERVIEW))).limit(1)).length) return null;
+  const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
+  const plan = pv?.packet.interviews.plan ?? [];
+  if (!plan.length) return null;
+  const [done] = await tx.select({ roundKey: interviews.roundKey }).from(interviews).where(and(eq(interviews.applicationId, app.id), inArray(interviews.status, ["completed", "no_show"]))).orderBy(desc(interviews.createdAt)).limit(1);
+  const idx = done ? plan.findIndex((r) => r.key === done.roundKey) : -1;
+  const round = done ? plan[idx + 1] : plan[0];
+  if (!round) return null;
+  const [role] = await tx.select({ currentPacketVersion: roles.currentPacketVersion }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
+  const [current] = role?.currentPacketVersion && role.currentPacketVersion !== app.packetVersion ? await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, role.currentPacketVersion))).limit(1) : [];
+  const ids = current?.packet.interviews.plan.find((r) => r.key === round.key)?.interviewerUserIds ?? round.interviewerUserIds ?? [];
+  const active = ids.length ? new Set((await tx.select({ userId: memberships.userId }).from(memberships).where(and(eq(memberships.companyId, app.companyId), eq(memberships.status, "active"), inArray(memberships.userId, ids)))).map((m) => m.userId)) : new Set<string>();
+  const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, app.companyId)).limit(1);
+  return {
+    applicationId: app.id, roleId: app.roleId, roundKey: round.key, roundTitle: round.title, durationMinutes: round.durationMinutes, format: round.format,
+    interviewerUserIds: [...new Set(ids)].filter((id) => active.has(id)), linkSource: "calendar", window: defaultSchedulingWindow(input.now, company?.timezone ?? "America/Los_Angeles"),
+    requestPath: `/api/v1/applications/${app.id}/interviews`, nextRound: !!done,
+  };
+}
+
+/**
+ * GET /applications/:id/interview-draft: the approval card filled in, for those who approve interviews. 409 with the
+ * reason when no interview can be approved now, 404 when the plan has no round left.
+ */
+applicationInterviewRoutes.get("/:id/interview-draft", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  assertCan(t.role, "interview.request");
+  const container = c.get("container");
+  const draft = await withTenant(container.db, t.companyId, async (tx) => {
+    const [app] = await tx.select().from(applications).where(and(eq(applications.id, c.req.param("id")), eq(applications.companyId, t.companyId))).limit(1);
+    if (!app) throw new HttpError(404, "not_found", "Application not found.");
+    if (!INTERVIEW_FROM.includes(app.stage)) throw new HttpError(409, "interview_not_schedulable", `A candidate at "${STAGE_LABEL[app.stage]}" cannot be moved to an interview from here.`);
+    if ((await tx.select({ id: interviews.id }).from(interviews).where(and(eq(interviews.applicationId, app.id), inArray(interviews.status, OPEN_INTERVIEW))).limit(1)).length) throw new HttpError(409, "interview_open", "An interview is already being scheduled for this candidate. Reschedule or cancel it first.");
+    return interviewDraftFor(tx, { app, now: container.engine.clock() });
+  });
+  if (!draft) throw new HttpError(404, "no_round", "The interview plan has no round left for this candidate.");
+  return c.json(draft);
+});
+
+/**
  * The human decision after an interview (HARD human-only in spirit: there is no automated path to any of these). It is
  * recorded on the newest interview that is over and still undecided, so a second decision never overwrites the first
  * one's, and a "not moving forward" is filed privately like every decline (founder decision B6): the decision is not sent
  * until a person sends the decision message. `candidateNotice` ("not_told") and `dispositionSent` (false) say so on the
  * page. An interview still to come is called off, and a candidate who held a booked time or was offered times is told
- * at once, with no reason, that it is off (`interviewOffNotes`).
+ * at once, with no reason, that it is off (`interviewOffNotes`). "Hired" is the hire sheet (plan H1): the outcome
+ * service records it with the start date (`hireDate`, and `offerAcceptedAt` if given), for those who record outcomes,
+ * and the answer carries the backups to keep warm and closing the role (`hire`).
  */
 applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "interview.decide");
-  const body = RecordDecision.parse(await c.req.json());
+  const body = RecordInterviewDecision.parse(await c.req.json());
   const container = c.get("container");
+  const actor = actorOf(c);
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     const [app] = await tx.select().from(applications).where(and(eq(applications.id, c.req.param("id")), eq(applications.companyId, t.companyId))).limit(1);
     if (!app) throw new HttpError(404, "not_found", "Application not found.");
     const [last] = await tx.select().from(interviews).where(and(eq(interviews.applicationId, app.id), inArray(interviews.status, ["completed", "no_show"]), isNull(interviews.decision))).orderBy(desc(interviews.createdAt)).limit(1);
-    const actor = actorOf(c);
     if (last) await tx.update(interviews).set({ decision: body.decision, decisionNote: body.note ?? null }).where(eq(interviews.id, last.id));
     let stage = app.stage;
     let nextRoundKey: string | null = null;
@@ -290,6 +358,7 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
     let candidateNotice: CandidateNotice | undefined;
     let interviewsCancelled = 0;
     let interviewOffNotes = 0;
+    let hired: { outcomeId: string; roleId: string; hire: HireFollowUp } | null = null;
     if (body.decision === "not_moving_forward") {
       if (!body.reason) throw new HttpError(400, "reason_required", "A reason is required to decline a candidate.");
       assertCan(t.role, "application.reject");
@@ -312,14 +381,26 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
       nextRoundKey = plan[idx + 1]?.key ?? null;
       if (!nextRoundKey) throw new HttpError(409, "no_next_round", "The interview plan has no further round; choose finalist or not moving forward.");
     } else if (body.decision === "hired") {
-      throw new HttpError(409, "not_in_release", "Offers and hiring are not part of this release; mark the candidate a finalist.");
+      // The offer was made and accepted outside the app (founder decision Q29): recorded as an outcome, like the hire
+      // sheet's, so the hire has its start date and the same record whichever card it came from.
+      assertCan(t.role, "outcome.record");
+      if (!body.hireDate) throw new HttpError(400, "hire_date_required", "Enter the start date you agreed with them.");
+      const now = container.engine.clock();
+      const r = await recordApplicationOutcome(tx, { companyId: t.companyId, applicationId: app.id, outcome: "hired_externally", by: t.role, actor, hireDate: body.hireDate, offerAcceptedAt: body.offerAcceptedAt, note: body.note, now }).catch((e: unknown) => {
+        if (e instanceof OutcomeError) throw new HttpError(e.code === "not_found" ? 404 : ["already_recorded", "not_active"].includes(e.code) ? 409 : 400, e.code, e.message);
+        throw e;
+      });
+      await settleOutsideOffer(tx, { applicationId: app.id, companyId: t.companyId, outcome: "hired_externally", actor, now });
+      hired = { outcomeId: r.row.id, roleId: r.roleId, hire: await hireFollowUp(tx, { roleId: r.roleId, hiredApplicationId: app.id, startDate: r.row.hireDate, role: t.role, scope: staffScopeOf(t) }) };
+      stage = "hired";
     }
     await emit(tx, { type: "interview.decision_recorded", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { decision: body.decision, interviewId: last?.id ?? null, note: body.note ?? null, nextRoundKey } });
     await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "interview.decision", decision: body.decision } });
-    return { ok: true, stage, nextRoundKey, ...(dispositionSent === undefined ? {} : { dispositionSent, candidateNotice, interviewsCancelled, interviewOffNotes }) };
+    return { out: { ok: true, stage, nextRoundKey, ...(dispositionSent === undefined ? {} : { dispositionSent, candidateNotice, interviewsCancelled, interviewOffNotes }), ...(hired ? { outcomeId: hired.outcomeId, hire: hired.hire, statement: OUTCOME_STATEMENT } : {}) }, hired };
   });
+  if (result.hired) await tellRecruiterAboutOutcome(container, t.companyId, result.hired.roleId, c.req.param("id") ?? null, `${actor.name ?? "The customer"} recorded a hire (offer accepted outside the platform).`, `outcome:${result.hired.outcomeId}`);
   await container.kick();
-  return c.json(result);
+  return c.json(result.out);
 });
 
 /** Interviews of one role. */

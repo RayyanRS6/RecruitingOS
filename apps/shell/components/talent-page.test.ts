@@ -33,7 +33,7 @@ const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString
 
 const maria = {
   id: "a1", stage: "triaged", stageLabel: "Ready for your review", group: "waiting_on_you", source: "careers_page", createdAt: daysAgo(4), eligibility: { passed: true, failedRules: [], unverifiable: [] },
-  ownerStage: "new", ownerStageLabel: "New", mark: null, tags: [] as string[], stageMoves: moves("new", { offer: "Offers are made outside the app for now; when they accept, choose Hired." }), toldState: null as string | null,
+  ownerStage: "new", ownerStageLabel: "New", mark: null, tags: [] as string[], stageMoves: moves("new", { offer: 'Record an offer once they are a finalist (they are at "Ready for your review").' }), toldState: null as string | null,
   candidate: { id: "c1", name: "Maria Reyes", email: "maria@example.com", phone: null, locationText: "Tustin, CA" }, extractionSummary: null,
   assessment: { overall: "strong", confidence: "high", summary: "Active RDH license.", strengths: [], concerns: [] }, evidence,
   appliedAt: daysAgo(4), stageChangedAt: daysAgo(3), daysInStage: 3, candidateToldAt: null, decisionMessageWaiting: false, score: 91 as number | null,
@@ -42,7 +42,7 @@ const luis = {
   ...maria, id: "a2", stage: "rejected", stageLabel: "Not moving forward", group: "not_moving_forward", ownerStage: "not_moving_forward", ownerStageLabel: "Not moving forward", stageMoves: moves("not_moving_forward"), toldState: "not_told",
   candidate: { id: "c2", name: "Luis Ortega", email: "luis@example.com", phone: null, locationText: null }, assessment: null, daysInStage: 1, score: null,
 };
-const counts = { total: 2, byOwnerStage: { new: 1, longlist: 0, shortlist: 0, interviewing: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 1 }, byGroup: { waiting_on_you: 1, in_process: 0, not_moving_forward: 1, hired: 0 }, notTold: 1, holdsEnded: 0 };
+const counts = { total: 2, byOwnerStage: { new: 1, longlist: 0, shortlist: 0, interviewing: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 1 }, byGroup: { waiting_on_you: 1, waiting_on_candidate: 0, in_process: 0, not_moving_forward: 1, hired: 0 }, notTold: 1, holdsEnded: 0 };
 
 type Row = { id: string; stage: string; candidate: { name: string; email: string; locationText: string | null }; assessment: unknown; [field: string]: unknown };
 function detail(row: Row, over: Record<string, unknown> = {}) {
@@ -185,10 +185,12 @@ describe("the steps a stage choice opens", () => {
     expect(text(html)).toContain("Confirm: not moving forward");
   });
 
-  it("Interviewing opens the interview approval, and Hired the hire record", () => {
+  it("Interviewing opens the interview approval, and Hired the one-sheet hire (plan H1)", () => {
     expect(text(panel("interview"))).toContain("Approve an interview");
     const hire = text(panel("hire"));
-    expect(hire).toContain("Record the hire");
-    expect(hire).toContain("Hired (offer accepted outside the platform)");
+    expect(hire).toContain("Hire Maria Reyes");
+    expect(hire).toContain("Start date (agreed with them)");
+    expect(hire).toContain("The day they accepted the offer (optional)");
+    expect(hire).toContain("the platform never makes or sends an offer");
   });
 });

@@ -147,6 +147,50 @@ export function applyNoticeOverrides(
   return { notices, changed };
 }
 
+/**
+ * The line a decision message carries for a candidate covered by Colorado's rules on adverse decisions (plan G5): the
+ * job is in Colorado, or the candidate is. DRAFT WORDING PENDING COUNSEL (docs/spec/11-counsel-register.md item 24): the
+ * text, its version and the 30-day window are placeholders until counsel answers; nothing goes to real candidates first.
+ * A reply asking for the explanation reaches the ITS compliance queue (a human-review request), never the assistant.
+ */
+export const ADVERSE_DECISION_LINE = {
+  key: "adverse_decision_explanation" as const,
+  version: "2026-10-09-draft",
+  counselStatus: "draft" as const,
+  jurisdictions: ["US-CO"],
+  text: "Colorado: you may ask us to explain the main reasons for this decision and to have a person review it. Reply to this email with the word EXPLAIN within 30 days, and someone who was not part of the decision will answer you.",
+};
+
+const STATE_CODES: Record<string, string> = {
+  alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA", colorado: "CO", connecticut: "CT", delaware: "DE", "district of columbia": "DC", "washington dc": "DC", florida: "FL", georgia: "GA",
+  hawaii: "HI", idaho: "ID", illinois: "IL", indiana: "IN", iowa: "IA", kansas: "KS", kentucky: "KY", louisiana: "LA", maine: "ME", maryland: "MD", massachusetts: "MA", michigan: "MI",
+  minnesota: "MN", mississippi: "MS", missouri: "MO", montana: "MT", nebraska: "NE", nevada: "NV", "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+  "north carolina": "NC", "north dakota": "ND", ohio: "OH", oklahoma: "OK", oregon: "OR", pennsylvania: "PA", "rhode island": "RI", "south carolina": "SC", "south dakota": "SD",
+  tennessee: "TN", texas: "TX", utah: "UT", vermont: "VT", virginia: "VA", washington: "WA", "west virginia": "WV", wisconsin: "WI", wyoming: "WY",
+};
+const STATE_CODE_SET = new Set(Object.values(STATE_CODES));
+
+/**
+ * The US state a candidate wrote as their location ("Denver, CO", "Boulder, Colorado 80302", "Colorado"), or null when
+ * it cannot be told. Free text: only a state code after a comma or a state's full name counts, never a guess.
+ */
+export function regionFromLocationText(text: string | null | undefined): string | null {
+  const t = (text ?? "").trim();
+  if (!t) return null;
+  const code = t.match(/,\s*([A-Za-z]{2})\.?(?:\s+\d{5}(?:-\d{4})?)?\s*(?:,\s*(?:US|USA|United States))?\s*$/)?.[1]?.toUpperCase();
+  if (code && STATE_CODE_SET.has(code)) return code;
+  const lower = t.toLowerCase();
+  const named = Object.keys(STATE_CODES).filter((name) => new RegExp(`(^|[^a-z])${name}($|[^a-z])`).test(lower)).sort((a, b) => b.length - a.length)[0];
+  // "West Virginia" contains "virginia", "Washington DC" contains "washington": the longest name that matches wins.
+  return named ? STATE_CODES[named] : null;
+}
+
+/** Whether a decision message carries Colorado's line: the job is in Colorado, or the candidate wrote a Colorado location. */
+export function adverseDecisionLineApplies(input: { jobLocations: Array<Location | null | undefined>; candidateLocationText?: string | null }): boolean {
+  const places = resolveJurisdictions(input.jobLocations, regionFromLocationText(input.candidateLocationText));
+  return places.some((p) => ADVERSE_DECISION_LINE.jurisdictions.includes(p));
+}
+
 /** The disclosure line every automated candidate message carries. */
 export function disclosureLine(companyName: string): string {
   return `This message was sent by the hiring team at ${companyName} with help from an AI recruiting assistant. Reply HUMAN at any time to reach a person.`;

@@ -10,6 +10,7 @@ import { RoleApplyMode } from "../components/ApplyMode";
 import { RECRUITER_ASKS_OVER_CHIP, recruiterAsksLine, type RecruiterAskStanding } from "../recruiter-requests";
 import { toast } from "../toast";
 import { CustomerReportSheet } from "./AdminCustomerReport";
+import { DECLINE_REASONS } from "./candidate-panel/helpers";
 
 type Tab = "customers" | "runs" | "ai" | "failures" | "costs" | "queue" | "calendar" | "privacy" | "admins" | "outcomes";
 const reason = { headers: { "x-admin-reason": "admin console" } };
@@ -663,8 +664,9 @@ type OutcomeRow = { id: string; companyName: string; applicationId: string | nul
 function Outcomes() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["admin", "outcomes"], queryFn: () => api.get<{ statement: string; outcomes: OutcomeRow[] }>("/api/v1/admin/outcomes", reason) });
-  const [fix, setFix] = useState<{ id: string; outcome: string; hireDate: string; reason: string } | null>(null);
-  const correct = useMutation({ mutationFn: (f: { id: string; outcome: string; hireDate: string; reason: string }) => api.post(`/api/v1/admin/outcomes/${f.id}/correct`, { confirm: true, reason: f.reason, outcome: f.outcome === "voided" ? undefined : f.outcome, hireDate: f.hireDate || undefined }, reason), onSuccess: () => { toast("Corrected. The original record stays, marked corrected."); setFix(null); qc.invalidateQueries({ queryKey: ["admin", "outcomes"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not correct.") });
+  // A correction to "employer declined" is filed under one of the fixed decline reasons (plan G2).
+  const [fix, setFix] = useState<{ id: string; outcome: string; hireDate: string; reason: string; declineReason: string } | null>(null);
+  const correct = useMutation({ mutationFn: (f: { id: string; outcome: string; hireDate: string; reason: string; declineReason: string }) => api.post(`/api/v1/admin/outcomes/${f.id}/correct`, { confirm: true, reason: f.reason, outcome: f.outcome === "voided" ? undefined : f.outcome, hireDate: f.hireDate || undefined, declineReason: f.outcome === "employer_declined" ? f.declineReason : undefined }, reason), onSuccess: () => { toast("Corrected. The original record stays, marked corrected."); setFix(null); qc.invalidateQueries({ queryKey: ["admin", "outcomes"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not correct.") });
   if (q.isLoading) return <Skeleton lines={4} />;
   if (q.error) return <ErrorState message="Could not load outcomes." onRetry={() => q.refetch()} />;
   return (
@@ -686,10 +688,11 @@ function Outcomes() {
                   {o.applicationId ? <><option value="hired_externally">Hired (outside the platform)</option><option value="offer_declined_externally">Declined an external offer</option><option value="candidate_withdrew">Candidate withdrew</option><option value="employer_declined">Employer declined</option><option value="no_hire">No hire</option></> : <><option value="filled">Filled</option><option value="filled_outside_platform">Filled outside the platform</option><option value="role_cancelled">Cancelled</option><option value="no_hire">No hire</option></>}
                 </select></Field>
                 {fix.outcome === "hired_externally" ? <Field label="Hire date" htmlFor={`fx-d-${o.id}`}><input id={`fx-d-${o.id}`} className="input" type="date" value={fix.hireDate} onChange={(e) => setFix({ ...fix, hireDate: e.target.value })} /></Field> : null}
+                {fix.outcome === "employer_declined" ? <Field label="Decline reason" htmlFor={`fx-dr-${o.id}`}><select id={`fx-dr-${o.id}`} className="select" value={fix.declineReason} onChange={(e) => setFix({ ...fix, declineReason: e.target.value })}>{DECLINE_REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field> : null}
                 <Field label="Reason for the correction" htmlFor={`fx-r-${o.id}`}><input id={`fx-r-${o.id}`} className="input" value={fix.reason} onChange={(e) => setFix({ ...fix, reason: e.target.value })} /></Field>
                 <div className="row"><Button size="sm" variant="primary" disabled={fix.reason.trim().length < 5} loading={correct.isPending} onClick={() => correct.mutate(fix)}>Confirm correction</Button><Button size="sm" variant="quiet" onClick={() => setFix(null)}>Cancel</Button></div>
               </div>
-            ) : <Button size="sm" variant="secondary" onClick={() => setFix({ id: o.id, outcome: "voided", hireDate: "", reason: "" })}>Correct</Button>) : null}</td>
+            ) : <Button size="sm" variant="secondary" onClick={() => setFix({ id: o.id, outcome: "voided", hireDate: "", reason: "", declineReason: DECLINE_REASONS[0][0] })}>Correct</Button>) : null}</td>
           </tr>
         ))}
       </Table>

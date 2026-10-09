@@ -2,11 +2,16 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { MembershipRole } from "@ros/contracts";
 import { can, computeSlots, createEscalation, emit, notify, slotStillFree, transition } from "@ros/core";
 import { applications, candidates, companies, interviewParticipants, interviews, memberships, rolePackets, roles } from "@ros/db";
-import { composeInterviewerBrief, constraintsFor, createInterviewEvents, participantsOf, queueCommunication, redactBriefPay, renderInterviewerBriefText, sendInterviewConfirmation, sendInterviewReminder, sendSlotsOffered, sendSlotsReminder } from "@ros/agents";
+import { composeInterviewerBrief, constraintsFor, createInterviewEvents, participantsOf, queueCommunication, redactBriefPay, renderInterviewerBriefText, sendInterviewConfirmation, sendInterviewReminder, sendSlotsOffered, sendSlotsReminder, type InvitationNote } from "@ros/agents";
 import { randomToken } from "@ros/db";
 import type { StepContext, WorkflowDefinition } from "../types";
 
-type State = { interviewId: string; applicationId: string; roleId: string; roundKey: string; attempt: number; remindedAt?: string; offeredAt?: string };
+/**
+ * `invitationNote`: a personal line for the invitation (founder decision Q28), written by the person who approved the
+ * interview or suggested by the assistant and kept by them (`aiHelped`; the email then says so). The interview request
+ * route checks it (`checkPersonalLine`) and puts it here; the first attempt's invitation carries it.
+ */
+type State = { interviewId: string; applicationId: string; roleId: string; roundKey: string; attempt: number; remindedAt?: string; offeredAt?: string; invitationNote?: InvitationNote | null };
 
 const OFFER_WAIT_HOURS = 48;
 const REMIND_WAIT_HOURS = 48;
@@ -114,7 +119,7 @@ export const scheduleInterview: WorkflowDefinition<State> = {
         await ctx.q.update(interviews).set({ scheduleToken: randomToken(24), scheduleTokenExpiresAt: new Date(ctx.now.getTime() + TOKEN_DAYS * 86_400_000).toISOString() }).where(eq(interviews.id, b.iv.id));
       }
       const fresh = (await load(ctx))!;
-      const sent = await sendSlotsOffered(ctx.q, ctx.services.integrations, messageInput(fresh, ctx));
+      const sent = await sendSlotsOffered(ctx.q, ctx.services.integrations, { ...messageInput(fresh, ctx), note: ctx.state.invitationNote ?? null });
       if (sent.status === "failed" && sent.retryable) return { kind: "fail", error: `slots email failed: ${sent.error}`, retryable: true };
       if (sent.status === "failed") {
         await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.unreachable", title: `${b.candidate.firstName} ${b.candidate.lastName} cannot be reached by email`, body: "Offer the times by phone, or pick one on their behalf from the interview page.", action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });

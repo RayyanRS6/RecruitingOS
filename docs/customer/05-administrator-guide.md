@@ -124,7 +124,8 @@ The defaults are the recommended settings. The ones you are most likely to touch
 - **Invite an applicant to a screen** (default: Do it and tell me). Set it to Ask me first if you want to approve every screening invitation.
 - **Recommend who to interview** (default: Do it and tell me).
 - **Send a message a team member wrote to a candidate** (default: Do it and tell me: the message goes at once and owners are told). Set it to Ask me first or Only a person and an owner or admin reads each message before it goes out. Messages from owners and admins always go at once.
-- **Send the decision message** (default: Do it: the message goes when someone on your team presses Send; declining never sends anything by itself).
+- **Send the decision message** (default: Do it: the message goes when someone on your team presses Send, after 30 seconds in which they can undo it; declining never sends anything by itself). Under Do it, someone nobody has told five working days after the decision gets the standard message by itself and you are told; under Ask me first or Only a person, or while an ITS recruiter runs the role, an ITS recruiter is brought in instead and nothing is sent. The same setting covers the one closing message when a role closes (Ask me first: one approval for the whole group).
+- **Send a "still reviewing" note** (default: Do it: someone still waiting for a decision 30 days after applying gets one short note saying a person is still reviewing it; any other choice sends none).
 
 Only owners and admins can change these settings, and only after a recent sign-in (**Confirm it's you**, above). Choosing a level that lets more happen without a person asks you to confirm first; choosing a stricter one saves at once. Every change is recorded. Actions that are not part of release 1 (offers, background checks, references, payroll, outreach) are listed under **Coming later**, with nothing to choose.
 
@@ -216,15 +217,20 @@ The product also brings in a recruiter on its own in three cases: a candidate as
 
 The product never makes or sends an offer. When something happens outside the product, your team records it.
 
-**On a candidate.** Open the candidate in **Talent** and find **Record what happened**. Press **Record an outcome** and choose:
+**An offer.** When your team has made a finalist an offer, they press **Offer made** on the candidate (or choose **Offer** on the stage button) and record the day. Nothing is sent to the candidate and no term of the offer is kept; the candidate shows as waiting on their answer, and you are reminded if none is recorded after five days. **They accepted** opens the hire sheet; **They declined** records it.
 
-- **Hired (offer accepted outside the platform)**, with the hire date and, optionally, the date the offer was accepted
-- **Declined an offer made outside the platform**
+**A hire.** The hire sheet asks for the start date (and, optionally, the day they accepted), records the hire under your name and sends nothing to anyone. It then lists the other people still in the running and offers **Close it now** (the role, as filled: see section 10) or **Keep the role open**, in which case Today shows a "Keep your backups warm" card until the start date.
+
+**Other outcomes.** Open the candidate in **Talent** and choose **Record an outcome** from the page's menu. Under **Record what happened** choose:
+
+- **They declined the offer made outside the platform**
 - **The candidate withdrew**
 - **We declined the candidate**, with a reason (only for people who may decline candidates; the step says what the candidate will get under your settings)
 - **No hire for this candidate**
 
-Press **Continue**, then **Yes, record it**. The record carries your name. Only an ITS administrator can correct it, and the original is kept. After recording a hire, the product asks **Close the role too?**; closing is a separate decision.
+Press **Continue**, then **Yes, record it**. The record carries your name. Only an ITS administrator can correct it, and the original is kept. Nothing about an outcome is sent to the candidate; an interview they had booked or times they were offered are called off with a short note saying only that it is off.
+
+**Team notes.** Each person on the hiring team can keep one private note on a candidate. Owners, admins, hiring managers, HR and an ITS recruiter you brought in read every note; an interviewer writes and reads only their own, on someone they interviewed. Notes are never shown to the candidate and never given to the AI assistant; a deletion request empties them.
 
 **On a role.** See section 10.
 
@@ -237,7 +243,7 @@ On the role page press **Close**. Under **Close this role** choose the outcome:
 - **Cancelled**
 - **Closed without a hire**
 
-Add a reason if you like and press **Confirm and close the role**. Candidates who were still active are kept in your talent pool, privately: nobody is told the decision until someone sends them the decision message. Anyone with an interview booked or times offered gets a short note straight away saying only that the interview is off (no reason given). The role leaves your careers page and the job listings; the job page itself says the position is closed, and search engines drop it on their own. Every posting on the **Posting** tab closes. The role then names the boards where the posting is still up, in a red alert at the top and on **Today**; ITS takes each one down and ticks **Removed from this board** on the Posting tab.
+Add a reason if you like and press **Confirm and close the role**. Candidates who were still active are kept in your talent pool, privately, unless they asked not to be kept: nobody is told the decision until someone sends the message. The close card then shows how many were still in process and one courteous closing message for all of them; one **Send** tells everyone (each once, with **Undo all** for 30 seconds), or one approval under Ask me first. A role closed from the hire sheet works the same way. Anyone with an interview booked or times offered gets a short note straight away saying only that the interview is off (no reason given). The role leaves your careers page and the job listings; the job page itself says the position is closed, and search engines drop it on their own. Every posting on the **Posting** tab closes. The role then names the boards where the posting is still up, in a red alert at the top and on **Today**; ITS takes each one down and ticks **Removed from this board** on the Posting tab.
 
 Hiring managers can close a role too. Pausing a role and stopping applications are for owners and admins (section 7).
 

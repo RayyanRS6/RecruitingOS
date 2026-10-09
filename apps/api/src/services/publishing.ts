@@ -1,7 +1,8 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { isCompanyVerified, type AutoActionLine, type AutoActionsOnOpen, type BoardChoice, type BoardChoiceView, type ClosingDateView, type PostingTaskKind, type PostingTaskView, type PublishingState, type RolePacket, type SharePlace, type ShareView } from "@ros/contracts";
 import { BOARD_CHANNELS, BOARD_NAME, SHARE_PLACES, chosenBoards, closingDateRequired, closingDateView, isPostingTask, postingTaskLabel, publishChannelsFor, resolvePolicy, zipRecruiterOffered, type ApplicationLinkRow, type PostingRow, type PostingTaskRow } from "@ros/core";
-import { approvalRequests, companies, workflowRuns, type Tx } from "@ros/db";
+import { approvalRequests, companies, roles, workflowRuns, type Tx } from "@ros/db";
+import { applyFlowOf } from "./job-preview";
 
 /**
  * What the role page and the screen right after approval show about publishing (plan Wave D, items D2, D6, D7, D8,
@@ -17,14 +18,21 @@ export const AI_RULES_HREF = "/setup#setup-rules";
 /** The confirmation email is the same for every company (routes/policies.ts lists it as fixed), so it is not looked up. */
 const CONFIRMATION_LINE: AutoActionLine = { actionType: "message.send_templated", level: "auto", text: "Every applicant gets an email confirming their application, sent on its own in the approved wording." };
 
+/** The line for a role on the one-visit flow (founder decision B1): the conversation is part of applying, not a later invitation. */
+export const ONE_VISIT_LINE = "Applicants have a short written conversation with the AI assistant as part of applying, right after the form. They can skip a question, finish later or ask for a person instead, and a person still makes every decision.";
+
 /**
  * One plain line per action that can start on its own once the job is live (D9): the confirmation email every
- * applicant gets (the same for every company, routes/policies.ts lists it as fixed), and the invitation to a short
- * screening conversation, from the company's rules for this role. The invitation follows the assistant's reading of
+ * applicant gets (the same for every company, routes/policies.ts lists it as fixed), and the screening conversation, from
+ * the company's rules for this role. On the one-visit flow (B1) the conversation comes with the application, by the same
+ * rule the apply page follows (job-preview.ts `applyFlowOf`); otherwise the invitation follows the assistant's reading of
  * each application (application-intake.ts), and the line says so: the AI's part is never hidden (docs/01).
  */
 export async function autoActionsOnOpen(tx: Tx, companyId: string, roleId: string): Promise<AutoActionsOnOpen> {
   const invite = await resolvePolicy(tx, companyId, roleId, "application.invite_screen");
+  const [company] = await tx.select({ id: companies.id, settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1);
+  const [role] = await tx.select({ applyMode: roles.applyMode }).from(roles).where(eq(roles.id, roleId)).limit(1);
+  const oneVisit = !!company && (await applyFlowOf(tx, company, { id: roleId, applyMode: role?.applyMode ?? null })) === "one_visit";
   const reading = "When the assistant's reading of an application suggests a good fit,";
   const inviteText: Record<string, string> = {
     auto: `${reading} the applicant is invited to a short screening conversation on their own. A person still makes every decision.`,
@@ -34,7 +42,7 @@ export async function autoActionsOnOpen(tx: Tx, companyId: string, roleId: strin
   };
   const lines: AutoActionLine[] = [
     CONFIRMATION_LINE,
-    { actionType: "application.invite_screen", level: invite.level, text: inviteText[invite.level] },
+    { actionType: "application.invite_screen", level: invite.level, text: oneVisit ? ONE_VISIT_LINE : inviteText[invite.level] },
   ];
   return { lines, changeHref: AI_RULES_HREF };
 }

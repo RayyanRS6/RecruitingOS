@@ -38,11 +38,13 @@ Permissions are capabilities checked by `assertCan(role, permission)` in every r
 | interview.request | ✓ | ✓ | ✓ | | | ✓ | The human interview approval (also gated by the `interview.request` policy); the `interview` capability on the application detail follows it |
 | interview.manage | ✓ | ✓ | ✓ | | | ✓ | Re-offer times, cancel, book on the candidate's behalf, record whether any interview took place. Any member who is on an interview, whatever their role (an interviewer, or HR sitting in), records its outcome without it (object-level rule in the route, and the state machine lets every role record that an interview ended); the interview sheet hides reschedule and cancel from roles without it. Built 30 Sep 2026 with HR and interviewer unticked (the earlier draft ticked both); a founder decision reopens that |
 | interview.decide | ✓ | ✓ | ✓ | | | ✓ | Record the decision after an interview (D10); the `record_decision` capability on the application detail follows it, so HR never sees the card, and Today's "Decide after the interview" card goes only to these roles. The state machine's `interview_complete → finalist` row lists exactly these roles (the recruiter was added 30 Sep 2026 so the permission means what it says) |
+| note.read | ✓ | ✓ | ✓ | ✓ | * | ✓ | Private team notes on a candidate (founder decision Q24; plan H3). *Interviewer: only their own note, on a candidate they are interviewing (`services/interviewer-view.ts`). An ITS recruiter only while a grant gives them the candidate |
+| note.write | ✓ | ✓ | ✓ | ✓ | * | ✓ | One note each per candidate, changed only by its author. *Interviewer: their own note once an interview of theirs with the candidate has started. Notes never reach the candidate or an AI prompt (counsel register item 25 before real candidates) |
 | calendar.connect (new) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Each user connects their own calendar or declares availability |
 | candidate.search | ✓ | ✓ | | ✓ | | ✓ | Talent across roles |
 | compensation.read | ✓ | ✓ | ✓ | ✓ | | ✓ | Interviewers never see pay |
 | scorecard.write | ✓ | ✓ | ✓ | | ✓ | ✓ | Release 2; kept in the matrix |
-| offer.manage | ✓ | ✓ | | ✓ | | ✓ | Release 2 |
+| offer.manage | ✓ | ✓ | | ✓ | | ✓ | Release 2. "Offer made" (record-only, founder decision Q29; plan H2) needs `outcome.record` instead: owner, admin, hiring manager, HR |
 | policy.manage | ✓ | ✓ | | | | | Human-only, audited, re-authentication required (D12) |
 | escalation.create | ✓ | ✓ | ✓ | ✓ | | ✓ | "Bring in a recruiter" |
 | escalation.work | | | | | | ✓ | Tenant recruiters; ITS recruiters via platform role |

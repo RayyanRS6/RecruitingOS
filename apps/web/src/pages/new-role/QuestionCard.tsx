@@ -75,7 +75,8 @@ export function QuestionCard(props: {
               const isNew = o.value === SOMEONE_NEW;
               return (
                 <label key={o.value} className="team-chip" data-checked={checked ? "true" : undefined}>
-                  <input type={one ? "radio" : "checkbox"} name={name} checked={checked} onChange={() => onState(togglePick(state, q, o.value))} />
+                  {/* named by its option, so a screen reader never reads the input's default value ("on") */}
+                  <input type={one ? "radio" : "checkbox"} name={name} value={o.value} aria-label={o.label} checked={checked} onChange={() => onState(togglePick(state, q, o.value))} />
                   {isNew ? <span className="avatar sm" aria-hidden="true"><Icon name="plus" size={12} /></span> : <Avatar name={o.label} size="sm" />}
                   <span>{o.label}</span>
                 </label>
@@ -106,7 +107,7 @@ export function QuestionCard(props: {
               const checked = a.selected.includes(o.value);
               return (
                 <label key={o.value} className="qopt" data-checked={checked ? "true" : undefined}>
-                  <input type={one ? "radio" : "checkbox"} name={name} checked={checked} onChange={() => onState(togglePick(state, q, o.value))} />
+                  <input type={one ? "radio" : "checkbox"} name={name} value={o.value} aria-label={o.label} checked={checked} onChange={() => onState(togglePick(state, q, o.value))} />
                   <span className="qopt-label">{o.label}</span>
                   {ORIGIN[o.origin] ? <span className="qopt-origin">{ORIGIN[o.origin]}</span> : null}
                 </label>

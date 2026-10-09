@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { and, desc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { applicationMarks, applications, approvalRequests, candidates, communications, dataRequests, documents, escalationMessages, events, interviewParticipants, interviews, jobs, notifications, recruiterEscalations, screens, unconfirmedScreens, type Queryable } from "@ros/db";
+import { applicationMarks, applicationNotes, applications, approvalRequests, candidates, communications, dataRequests, documents, escalationMessages, events, interviewParticipants, interviews, jobs, notifications, recruiterEscalations, screens, unconfirmedScreens, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { emit } from "./events";
 import { raiseAlert, resolveAlertsFor } from "./alerts";
@@ -70,7 +70,11 @@ export async function recordCounselDecision(q: Queryable, row: DataRequestRow, i
   return u;
 }
 
-/** Everything the person gave us or we sent them; never the assessment's internal rationale, never anyone else's data. */
+/**
+ * Everything the person gave us or we sent them; never the assessment's internal rationale, never anyone else's data.
+ * The team's private notes (application_notes, plan H3) are left out: the counsel default until register item 25 is
+ * answered.
+ */
 export async function exportCandidateData(q: Queryable, companyId: string, candidateId: string): Promise<Record<string, unknown>> {
   const [cand] = await q.select().from(candidates).where(and(eq(candidates.id, candidateId), eq(candidates.companyId, companyId))).limit(1);
   if (!cand) throw new Error("candidate not found");
@@ -116,9 +120,11 @@ const DELETION_REASON = "the candidate asked for their information to be deleted
 /**
  * A deletion ends the person's part in every process (plan A9): their interviews still to come are cancelled (the
  * interviewers are told, the calendar events are queued for removal; nobody writes to the candidate, whose address goes
- * in the same transaction), their open screens close, the assistant's waiting suggestions and any decision message
- * waiting for approval are withdrawn, and an application still in the process is withdrawn. Private marks lose their
- * notes. The scheduling and screening runs end on their own at their next step, since what they wait on is gone.
+ * in the same transaction), their open screens close, the assistant's waiting suggestions and any message to them
+ * waiting for approval are withdrawn (and a closed role's closing message no longer names them), and an application
+ * still in the process is withdrawn. Private marks lose their notes. A decision nobody told them stays untold: nothing
+ * is ever sent to them, and nobody is reminded or asked to (decision-messages.ts). The scheduling and screening runs end
+ * on their own at their next step, since what they wait on is gone.
  */
 async function closeProcessOnDeletion(q: Queryable, input: { companyId: string; appIds: string[]; actor: Actor; now: Date }): Promise<void> {
   const { companyId, appIds, actor, now } = input;
@@ -138,14 +144,42 @@ async function closeProcessOnDeletion(q: Queryable, input: { companyId: string; 
     await q.update(screens).set({ status: "cancelled" }).where(eq(screens.id, s.id));
     await emit(q, { type: "screen.cancelled", companyId, actor, subject: { type: "screen", id: s.id }, payload: { reason: "deletion_request" } });
   }
-  const waiting = await q.select({ id: approvalRequests.id, actionType: approvalRequests.actionType, applicationId: approvalRequests.applicationId }).from(approvalRequests).where(and(inArray(approvalRequests.applicationId, appIds), inArray(approvalRequests.actionType, ["application.invite_screen", "application.recommend_interview", "disposition.send"]), eq(approvalRequests.status, "pending")));
+  const waiting = await q.select({ id: approvalRequests.id, actionType: approvalRequests.actionType, applicationId: approvalRequests.applicationId }).from(approvalRequests).where(and(inArray(approvalRequests.applicationId, appIds), inArray(approvalRequests.actionType, ["application.invite_screen", "application.recommend_interview", "disposition.send", "message.send_freeform"]), eq(approvalRequests.status, "pending")));
   for (const p of waiting) {
     await q.update(approvalRequests).set({ status: "cancelled", decidedAt: now.toISOString(), decisionNote: DELETION_REASON }).where(eq(approvalRequests.id, p.id));
     await emit(q, { type: "approval.cancelled", companyId, actor, subject: { type: "approval_request", id: p.id }, payload: { actionType: p.actionType, applicationId: p.applicationId, by: "deletion_request" } });
   }
+  // A message kept on an approval request, waiting or decided, carries the team's words about them (a decision
+  // message's personal line, Q28; a message someone wrote them, F11): the words and their name go. Who asked, and what
+  // was decided, stay.
+  const worded = await q.select({ id: approvalRequests.id, proposal: approvalRequests.proposal }).from(approvalRequests).where(and(inArray(approvalRequests.applicationId, appIds), inArray(approvalRequests.actionType, ["disposition.send", "message.send_freeform"])));
+  for (const r of worded) {
+    const p = (r.proposal ?? {}) as Record<string, unknown>;
+    const scrubbed = { ...p, ...("personalLine" in p ? { personalLine: null } : {}), ...("text" in p ? { text: "[removed at the candidate's request]" } : {}), ...("subject" in p ? { subject: null } : {}), ...("candidateName" in p ? { candidateName: "a candidate" } : {}) };
+    await q.update(approvalRequests).set({ proposal: scrubbed, rationale: null }).where(eq(approvalRequests.id, r.id));
+  }
+  // A closed role's one closing message (Q30) names everyone it is for: they come off it, and a request left with
+  // nobody on it is cancelled.
+  const batches = await q.select({ id: approvalRequests.id, proposal: approvalRequests.proposal }).from(approvalRequests).where(and(eq(approvalRequests.companyId, companyId), isNull(approvalRequests.applicationId), eq(approvalRequests.actionType, "disposition.send"), eq(approvalRequests.status, "pending")));
+  for (const b of batches) {
+    const p = (b.proposal ?? {}) as { kind?: unknown; applicationIds?: unknown };
+    if (p.kind !== "role_closed" || !Array.isArray(p.applicationIds)) continue;
+    const left = p.applicationIds.filter((id) => !appIds.includes(String(id)));
+    if (left.length === p.applicationIds.length) continue;
+    if (left.length) {
+      await q.update(approvalRequests).set({ proposal: { ...p, applicationIds: left, count: left.length } }).where(eq(approvalRequests.id, b.id));
+      continue;
+    }
+    await q.update(approvalRequests).set({ status: "cancelled", decidedAt: now.toISOString(), decisionNote: DELETION_REASON }).where(eq(approvalRequests.id, b.id));
+    await emit(q, { type: "approval.cancelled", companyId, actor, subject: { type: "approval_request", id: b.id }, payload: { actionType: "disposition.send", applicationId: null, by: "deletion_request" } });
+  }
   const apps = await q.select({ id: applications.id, stage: applications.stage }).from(applications).where(inArray(applications.id, appIds));
   for (const a of apps) if (canTransition(a.stage, "withdrawn", "system")) await transition(q, { applicationId: a.id, companyId, to: "withdrawn", by: "system", actor, reason: DELETION_REASON });
   await q.update(applicationMarks).set({ note: null }).where(inArray(applicationMarks.applicationId, appIds));
+  // The team's private notes (plan H3) lose their words, earlier versions included (the counsel default, register item
+  // 25), and so does the note recorded with each decision after an interview. Who wrote a note, and when, stays.
+  await q.update(applicationNotes).set({ body: "", previousVersions: [], deletedAt: sql`coalesce(${applicationNotes.deletedAt}, ${now.toISOString()}::timestamptz)` }).where(inArray(applicationNotes.applicationId, appIds));
+  await q.update(interviews).set({ decisionNote: null }).where(inArray(interviews.applicationId, appIds));
   // The team's free-text notes were copied into the history as it happened (a mark, a decline, "I told them myself", a
   // decision after an interview): they are blanked there too. What happened, who did it and when stay.
   await q.update(events).set({ payload: sql`jsonb_set(${events.payload}, '{note}', 'null'::jsonb)` }).where(and(eq(events.subjectType, "application"), inArray(events.subjectId, appIds), sql`${events.payload}->>'note' is not null`));
@@ -153,8 +187,8 @@ async function closeProcessOnDeletion(q: Queryable, input: { companyId: string; 
 
 /**
  * Anonymization in place of deletion (runbook step 5): identity fields become tokens; resumes and their text, screening
- * transcripts and answers (the answers to a screen's opening questions included), and message bodies are removed, and so
- * is everything about them in a recruiter's copy and in requests and notices that name them; stage history, audit
+ * transcripts and answers (the answers to a screen's opening questions included), message bodies and the team's private
+ * notes are removed, and so is everything about them in a recruiter's copy and in requests and notices that name them; stage history, audit
  * records and aggregate counts stay. The person's part in every process ends first (`closeProcessOnDeletion`).
  * Refused unless counsel recorded an approval on this request and the administrator confirmed.
  */

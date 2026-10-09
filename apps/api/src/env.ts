@@ -99,6 +99,11 @@ export type Env = {
    * NODE_ENV=test, and for local journeys that need a public page straight away). Recorded either way.
    */
   COMPANY_CHECK: "its" | "auto";
+  /**
+   * The Undo window (plan G9): how many seconds a message a person sent waits in the outbox before it goes, so they can
+   * take it back. 30 by default; 0 under NODE_ENV=test unless set, so tests that send and drain see it leave at once.
+   */
+  MESSAGE_UNDO_SECONDS: number;
   WORKER_INLINE: boolean;
   WORKER_POLL_MS: number;
   raw: Record<string, string | undefined>;
@@ -147,6 +152,7 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     RATE_LIMIT_OVERRIDES: (() => { try { const v = JSON.parse(get("RATE_LIMIT_OVERRIDES", "{}")) as Record<string, unknown>; return Object.fromEntries(Object.entries(v).filter(([, n]) => typeof n === "number")) as Record<string, number>; } catch { return {}; } })(),
     CSP_MODE: get("CSP_MODE", "report-only") === "enforce" ? "enforce" : "report-only",
     COMPANY_CHECK: get("COMPANY_CHECK", get("NODE_ENV", "development") === "test" ? "auto" : "its") === "auto" ? "auto" : "its",
+    MESSAGE_UNDO_SECONDS: Math.min(120, Math.max(0, Number(get("MESSAGE_UNDO_SECONDS", get("NODE_ENV", "development") === "test" ? "0" : "30")) || 0)),
     TRUST_PROXY_HOPS: Math.max(0, Number(get("TRUST_PROXY_HOPS", "1")) || 0),
     SMS_ENABLED: get("SMS_ENABLED", get("SMS_PROVIDER", "fake") === "twilio" ? "true" : "false") === "true",
     STORAGE_DIR: fromRoot(get("STORAGE_DIR", "./.data/files")),

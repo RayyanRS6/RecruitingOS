@@ -7,12 +7,14 @@ import type { ApplicationDetail, TimelineEvent } from "../../api/client";
  * did what, why, and what the candidate was told).
  */
 
-export type PanelTab = "overview" | "screen" | "resume" | "messages" | "history";
+/** `notes`: the team's private notes (founder decision Q24; plan H3), never shown to the candidate. */
+export type PanelTab = "overview" | "screen" | "resume" | "messages" | "notes" | "history";
 export const PANEL_TABS: ReadonlyArray<{ id: PanelTab; label: string }> = [
   { id: "overview", label: "Overview" },
   { id: "screen", label: "Screen" },
   { id: "resume", label: "Résumé" },
   { id: "messages", label: "Messages" },
+  { id: "notes", label: "Notes" },
   { id: "history", label: "History" },
 ];
 
@@ -24,10 +26,13 @@ export function panelTabFrom(value: string | null | undefined): PanelTab {
 /**
  * The page's query string with the panel's state in it (`?open=<id>&tab=…`), the rest of the address kept. Closing
  * (`open: null`) also drops `tab` and `message`: `?message=1` belongs to the link it came in on, and left in the
- * address every panel opened next would start with the text box open.
+ * address every panel opened next would start with the text box open. `step` and `round` (Today's "Yes, interview",
+ * plan H4) open a step once, so any change of the panel drops them too.
  */
 export function panelSearch(current: URLSearchParams | string, change: { open: string | null; tab?: PanelTab }): string {
   const next = new URLSearchParams(current);
+  next.delete("step");
+  next.delete("round");
   if (change.open) {
     next.set("open", change.open);
     if (change.tab && change.tab !== "overview") next.set("tab", change.tab);
@@ -106,10 +111,37 @@ export function holdDateBounds(now: Date = new Date()): { min: string; max: stri
   return { min: plus(1), max: plus(55), initial: plus(14) };
 }
 
+/**
+ * How a file shows inside the panel (plan H5): a PDF as itself, a Word or text file as its words (the API serves the text
+ * it read), anything else only in a new tab. Both ways go through the API, which records each opening. `frame` is null
+ * when nothing can be shown inside the panel.
+ */
+export function resumeView(applicationId: string, doc: Pick<ApplicationDetail["documents"][number], "id" | "filename" | "status" | "hasText"> & { mime?: string }): { frame: string | null; asText: boolean; open: string } {
+  const base = `/api/v1/applications/${applicationId}/documents/${doc.id}`;
+  const open = `${base}/file`;
+  if (doc.status !== "clean") return { frame: null, asText: false, open };
+  const pdf = doc.mime ? doc.mime === "application/pdf" : /\.pdf$/i.test(doc.filename);
+  if (pdf) return { frame: `${base}/inline`, asText: false, open };
+  if (doc.hasText) return { frame: `${base}/inline`, asText: true, open };
+  return { frame: null, asText: false, open };
+}
+
+/** The file the Résumé tab shows first: the application's résumé when it is clean, else the first clean file. */
+export function resumeToShow<T extends { id: string; status: string; kind: string }>(documents: readonly T[], resumeDocumentId?: string | null): T | null {
+  const clean = documents.filter((d) => d.status === "clean");
+  return clean.find((d) => d.id === resumeDocumentId) ?? clean.find((d) => d.kind === "resume") ?? clean[0] ?? null;
+}
+
 const ACTIVE_INTERVIEWS = ["proposed", "scheduling", "scheduled"];
 /** Interviews a decision would call off: requested, being scheduled or booked. */
 export function activeInterviews<T extends { status: string }>(interviews: readonly T[]): T[] {
   return interviews.filter((i) => ACTIVE_INTERVIEWS.includes(i.status));
+}
+
+const ROLE_WORDS: Record<string, string> = { owner: "an owner", admin: "an admin", hiring_manager: "a hiring manager", recruiter: "a recruiter", hr: "HR", interviewer: "an interviewer" };
+/** "an owner or an admin": who a waiting message is waiting for, in the reader's words. */
+export function whoDecides(roles: readonly string[]): string {
+  return roles.length ? roles.map((r) => ROLE_WORDS[r] ?? r.replace(/_/g, " ")).join(" or ") : "an owner or an admin";
 }
 
 /** Text typed into the panel and not sent yet, by where it was typed. */
@@ -178,7 +210,7 @@ const shortDay = (iso: unknown) => (typeof iso === "string" && !Number.isNaN(Dat
 const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
 
 /** A person's decision already said by its own event: the matching "human decision" record would only repeat it. */
-const SAID_ELSEWHERE = new Set(["reject", "set_mark", "clear_mark", "hold", "advance_to_interview", "told_in_person", "send_decision", "interview.decision"]);
+const SAID_ELSEWHERE = new Set(["reject", "set_mark", "clear_mark", "hold", "advance_to_interview", "told_in_person", "send_decision", "interview.decision", "offer_made"]);
 
 export type HistoryItem = { key: string; when: string; what: string; who: string; why?: string; told?: string };
 
@@ -264,8 +296,26 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
     case "application.told":
       if (p.how === "before_tracking") return { ...base, what: "Counted as told: decided before decisions became private", told: "Their status page already showed the decision." };
       return { ...base, what: p.how === "in_person" ? "Recorded telling the candidate in person" : "The decision message reached the candidate", told: p.how === "in_person" ? "Told in person." : "Told by the decision message." };
+    case "application.untold_fallback":
+      // The safety net (Q27): five working days after the decision, the standard message went by itself, or a recruiter was brought in.
+      if (p.action === "sent") return { ...base, what: "Nobody had told them for five working days, so the standard decision message went by itself", who: "The system", told: "Told by the decision message." };
+      return { ...base, what: "Nobody had told them for five working days, so an ITS recruiter was brought in", who: "The system", ...(str(p.why) ? { why: `Nothing was sent, because ${String(p.why)}.` } : {}) };
     case "application.hold_reminded":
       return { ...base, what: "Reminded the team about the hold" };
+    // Offers made outside the app (founder decision Q29): recorded by a person, never written or sent by the app.
+    case "offer.created":
+      return { ...base, what: `Recorded an offer made outside the app${str(p.madeOn) ? ` on ${shortDay(`${String(p.madeOn)}T12:00:00`)}` : ""}`, ...(note ? { why: note } : {}), told: "Nothing was sent to the candidate." };
+    case "offer.accepted":
+      return { ...base, what: "Recorded that they accepted the offer" };
+    case "offer.declined":
+      return { ...base, what: p.outcome === "candidate_withdrew" ? "Recorded that they withdrew while the offer was open" : "Recorded that they declined the offer" };
+    case "offer.rescinded":
+      return { ...base, what: "The recorded offer was closed" };
+    // Private team notes (Q24): the fact only, never the words.
+    case "note.added":
+      return { ...base, what: "Added a private team note" };
+    case "note.updated":
+      return { ...base, what: p.removed ? "Removed their private team note" : "Changed their private team note" };
     case "application.withdrawn":
       return { ...base, what: "Withdrew", ...(str(p.reason) ? { why: String(p.reason) } : {}) };
     case "application.moved_to_talent_pool":

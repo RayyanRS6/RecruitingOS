@@ -151,6 +151,21 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(html).toMatch(/<details class="no-resume">/);
     for (const name of ["nr_recentWork", "nr_dayToDay", "nr_skills", "nr_lookingFor"]) expect(html).toContain(`name="${name}"`);
     expect(html).not.toContain('name="noResume"');
+    // every one of the four boxes is named by its own question and described by its hint, inside one named group (polish list)
+    expect(html).toContain('<fieldset aria-describedby="no-resume-note"><legend class="sr-only">Four short questions about your work, instead of a resume</legend>');
+    for (const [key, label] of [["recentWork", "Your most recent job or work"], ["dayToDay", "What you did day to day"], ["skills", "Skills, licenses or tools that fit this job"], ["lookingFor", "What you are looking for in your next job"]]) {
+      expect(html).toContain(`<label id="nr_${key}-label" for="nr_${key}">${label}</label><textarea id="nr_${key}" name="nr_${key}" rows="3" maxlength="1000" aria-labelledby="nr_${key}-label" aria-describedby="nr_${key}-hint">`);
+      expect(html).toContain(`<small id="nr_${key}-hint">`);
+    }
+    // no label on the form points at nothing, and every field a person fills in has one (the honeypot is hidden from everyone)
+    const ids = new Set([...html.matchAll(/ id="([^"]+)"/g)].map((m) => m[1]));
+    for (const m of html.matchAll(/<label[^>]* for="([^"]+)"/g)) expect(ids.has(m[1]), `label for="${m[1]}"`).toBe(true);
+    const labelled = new Set([...html.matchAll(/<label[^>]* for="([^"]+)"/g)].map((m) => m[1]));
+    for (const m of html.matchAll(/<(textarea|select|input)\b([^>]*)>/g)) {
+      const attrs = m[2];
+      if (/type="(hidden|checkbox|radio)"/.test(attrs) || /name="website"/.test(attrs)) continue;
+      expect(labelled.has(attrs.match(/ id="([^"]+)"/)?.[1] ?? ""), `${m[1]} ${attrs.slice(0, 60)}`).toBe(true);
+    }
     expect(html).toMatch(/<input type="hidden" name="formOpened" value="v1\.[^"]+"/);
     // the job page
     const job = decodeEntities(await (await app.request(`/careers/${slug}/jobs/${roleId}`)).text());

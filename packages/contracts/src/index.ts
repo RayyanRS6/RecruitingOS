@@ -17,6 +17,7 @@ export * from "./api/board";
 export * from "./api/notifications";
 export * from "./api/packet-tools";
 export * from "./api/publishing";
+export * from "./api/hiring";
 export * from "./security/redact";
 export * from "./security/file-inspection";
 export * from "./security/observability";

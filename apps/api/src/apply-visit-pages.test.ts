@@ -121,7 +121,9 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     expect(html).toContain("It is a conversation, not a test.");
     expect(html).toContain(`About ${packet.screening.questions.length} questions and ${packet.screening.maxMinutes} minutes, one question at a time.`);
     expect(html).toContain("You can skip any question, or stop and come back later: this page keeps your place.");
-    expect(html).toContain(packet.communication.humanAlternativeText);
+    // on the web a person is one press away: the packet's email lines ("Reply HUMAN…", "This message was sent by…") give way to that (polish list)
+    expect(html).toContain('<p>Would you rather talk to a person? Press "I\'d rather talk to a person" at any time.</p>');
+    expect(html).not.toMatch(/Reply HUMAN at any time|This message was sent by/);
     expect(html).toContain(`<form method="post" action="/c/screen/${mariaToken}/start"><button class="btn" type="submit">Start</button></form>`);
     expect(html).toContain(`<form method="post" action="/c/screen/${mariaToken}/later"><button class="btn secondary" type="submit">Do this later</button></form>`);
     expect(html).toContain(`<a class="btn secondary" href="/c/screen/${mariaToken}/person">I'd rather talk to a person</a>`);
@@ -331,6 +333,47 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     expect(await page(`/c/confirm-answers/${raw}`)).toContain("<h1>Nothing was added</h1>");
     expect((await screenOf(first)).status).toBe("in_progress");
     expect((await app.request("/c/confirm-answers/not-a-real-link")).status).toBe(404);
+  });
+
+  it("polish list: 'Earlier in the conversation' holds the candidate's own answers, typed or tapped, beside the assistant's lines; email wording reads as the page's own way to a person", async () => {
+    const token = tokenOf(await apply({ first: "Ina", last: "Park", email: "ina.park@example.com" }));
+    await post(`/c/screen/${token}/start`);
+    const typed = "At Smile Bright I see nine patients a day and chart every visit in Dentrix; 6 years so far.";
+    // answer two questions: a tap where the page offers one, words otherwise
+    const answered: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      const html = await page(`/c/screen/${token}`);
+      const key = keyOf(html)!;
+      answered.push(question(key).question);
+      if (html.includes('<input type="hidden" name="tap" value="yes_no"/>')) await post(`/c/screen/${token}`, { tap: "yes_no", choice: "yes" });
+      else await post(`/c/screen/${token}`, { message: typed });
+    }
+    const html = await page(`/c/screen/${token}`);
+    const earlier = html.slice(html.indexOf('<details class="earlier">'), html.indexOf("</details>"));
+    expect(earlier).toContain('<ol class="thread" aria-label="Earlier questions and your answers">');
+    // both questions asked (on the left) and both answers (on the right, in the candidate's own words), in order
+    const mine = [...earlier.matchAll(/<li class="msg candidate"><span class="sr-only">You said: <\/span>([^<]*)<\/li>/g)].map((m) => m[1]);
+    expect(mine).toHaveLength(2);
+    expect(mine).toEqual(expect.arrayContaining([typed]));
+    for (const q of answered) expect(earlier).toMatch(new RegExp(`<li class="msg assistant"><span class="sr-only">The assistant said: </span>[^<]*${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    expect(earlier.indexOf(answered[0])).toBeLessThan(earlier.indexOf(mine[0]));
+    expect(earlier.indexOf(mine[0])).toBeLessThan(earlier.indexOf(answered[1]));
+    expect(earlier.indexOf(answered[1])).toBeLessThan(earlier.indexOf(mine[1]));
+
+    // a line the assistant wrote for email or text ("Reply HUMAN…") reads as the button on this page, and by email once it closed; the transcript keeps its words
+    const scr = await screenOf(token);
+    const first = scr.transcript.findIndex((t) => t.role === "assistant");
+    const transcript = scr.transcript.map((t, i) => (i === first ? { ...t, content: `Hi Ina, this is the hiring team. Reply HUMAN at any time to reach a person.\n\n${t.content}` } : t));
+    await container.db.update(screens).set({ transcript }).where(eq(screens.id, scr.id));
+    let open = await page(`/c/screen/${token}`);
+    expect(open).toContain('Hi Ina, this is the hiring team. Press "I\'d rather talk to a person" at any time.');
+    expect(open).not.toContain("Reply HUMAN");
+    await container.db.update(screens).set({ status: "completed" }).where(eq(screens.id, scr.id));
+    open = await page(`/c/screen/${token}`);
+    expect(open).toContain("<summary>See the conversation</summary>");
+    expect(open).toContain("Hi Ina, this is the hiring team. To reach a person, reply to any of our emails.");
+    expect(open).not.toContain("Reply HUMAN");
+    expect((await screenOf(token)).transcript[first].content).toContain("Reply HUMAN at any time to reach a person.");
   });
 
   it("the conversation pages need no script and every action is a plain form or link", async () => {

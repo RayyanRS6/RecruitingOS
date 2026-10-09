@@ -1,5 +1,5 @@
 import { and, count, eq, gte, lt, sql } from "drizzle-orm";
-import { detectStuckRoles, runInterventionLadder } from "@ros/agents";
+import { detectStuckRoles, runInterventionLadder, runUntoldSafetyNet, sendStillReviewingNotes } from "@ros/agents";
 import { emit, notify } from "@ros/core";
 import { applications, companies, events, roles } from "@ros/db";
 import type { StepContext, WorkflowDefinition } from "../types";
@@ -7,12 +7,13 @@ import { DEFAULT_VOLUME_ALERT_PER_DAY, localDays } from "../volume-days";
 import { startNotificationDigest } from "./notification-digest";
 
 type VolumeAlert = { roleId: string; day: string; count: number; threshold: number };
-type State = { companyId: string; lastRunAt?: string; lastResults?: unknown; lastVolumeAlerts?: VolumeAlert[] };
+type State = { companyId: string; lastRunAt?: string; lastResults?: unknown; lastVolumeAlerts?: VolumeAlert[]; lastSafetyNet?: unknown; lastStillReviewing?: number };
 
 const EVERY_HOURS = 24;
 
 /**
- * docs/06 `stuck_role_detector`: one run per company, forever. Detects, applies the intervention ladder, checks
+ * docs/06 `stuck_role_detector`: one run per company, forever. Detects, applies the intervention ladder, runs the untold
+ * safety net (Q27: a decision nobody told for five working days) and the "still reviewing" notes (plan G10), checks
  * yesterday's application volume, sleeps a day. Started when the company is created; idempotent by company.
  */
 export const stuckRoleDetector: WorkflowDefinition<State> = {
@@ -28,9 +29,13 @@ export const stuckRoleDetector: WorkflowDefinition<State> = {
       await startNotificationDigest(ctx.services.engine, ctx.q, ctx.companyId, ctx.actor);
       const detections = await detectStuckRoles(ctx.q, ctx.companyId, ctx.now);
       const results = await runInterventionLadder(ctx.q, { integrations: ctx.services.integrations, appBaseUrl: ctx.services.env.appBaseUrl, itsQueueEmail: ctx.services.env.itsQueueEmail, now: ctx.now, actor: ctx.actor }, ctx.companyId, detections);
+      // The candidate's status link lives on the job-page host, like the acknowledgment's.
+      const courtesy = { integrations: ctx.services.integrations, statusBaseUrl: ctx.services.env.jobsBaseUrl, now: ctx.now, actor: { kind: "system" as const, id: "untold_safety_net" } };
+      const safetyNet = await runUntoldSafetyNet(ctx.q, courtesy, ctx.companyId);
+      const stillReviewing = await sendStillReviewingNotes(ctx.q, { ...courtesy, actor: { kind: "system", id: "still_reviewing" } }, ctx.companyId);
       const volumeAlerts = await checkApplicationVolume(ctx);
       const until = new Date(ctx.now.getTime() + EVERY_HOURS * 3600_000).toISOString();
-      return { kind: "wait", wait: { kind: "timer", until, reason: "daily stuck-role check" }, state: { lastRunAt: ctx.now.toISOString(), lastResults: results, lastVolumeAlerts: volumeAlerts }, resumeStep: "detect" };
+      return { kind: "wait", wait: { kind: "timer", until, reason: "daily stuck-role check" }, state: { lastRunAt: ctx.now.toISOString(), lastResults: results, lastVolumeAlerts: volumeAlerts, lastSafetyNet: safetyNet, lastStillReviewing: stillReviewing.length }, resumeStep: "detect" };
     },
   },
 };

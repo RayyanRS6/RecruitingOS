@@ -34,7 +34,8 @@ export type RoleReport = {
   mustHaves?: { people: number; showEveryMustHave: number; byMustHave: Array<{ key: string; label: string; shown: number; partly: number; notShown: number; unknown: number; total: number }>; stricter: { words: string; editPath: string } | null };
 };
 
-const GROUP_LABEL: Record<string, string> = { waiting_on_you: "Waiting on you", in_process: "In process", not_moving_forward: "Not moving forward", hired: "Hired" };
+// "Waiting on the candidate": an offer made outside the app with no answer recorded yet (plan H2).
+const GROUP_LABEL: Record<string, string> = { waiting_on_you: "Waiting on you", waiting_on_candidate: "Waiting on the candidate", in_process: "In process", not_moving_forward: "Not moving forward", hired: "Hired" };
 const ROLE_OUTCOME_LABEL: Record<string, string> = { filled: "Filled", filled_outside_platform: "Filled outside the platform", role_cancelled: "Cancelled", no_hire: "Closed without a hire", voided: "Recorded in error" };
 
 const days = (n: number | null) => (n === null ? "none yet" : n === 1 ? "1 day" : `${n} days`);
@@ -153,7 +154,7 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
       <Card title="Where everyone is">
         <PipelineBar counts={r.stages.byGroup} total={r.stages.total} />
         <div className="row" style={{ marginTop: 8 }}>
-          {(["waiting_on_you", "in_process", "not_moving_forward", "hired"] as const).map((g) => <Pill key={g} size="sm" tone={g === "waiting_on_you" ? "caution" : g === "hired" ? "good" : g === "in_process" ? "accent" : "neutral"}>{GROUP_LABEL[g]}: <span className="tabular">{r.stages.byGroup[g] ?? 0}</span></Pill>)}
+          {(["waiting_on_you", "waiting_on_candidate", "in_process", "not_moving_forward", "hired"] as const).filter((g) => g !== "waiting_on_candidate" || (r.stages.byGroup[g] ?? 0) > 0).map((g) => <Pill key={g} size="sm" tone={g === "waiting_on_you" ? "caution" : g === "hired" ? "good" : g === "in_process" ? "accent" : "neutral"}>{GROUP_LABEL[g]}: <span className="tabular">{r.stages.byGroup[g] ?? 0}</span></Pill>)}
         </div>
         {r.stages.byOwnerStage ? (
           <div style={{ marginTop: 10 }}>

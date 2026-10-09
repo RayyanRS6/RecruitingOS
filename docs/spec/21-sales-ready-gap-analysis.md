@@ -323,8 +323,8 @@ step has a pass condition and a piece of evidence (screenshot, record id, run id
 | 15 | Owner requests an interview; candidate picks a time in their zone; ICS attached; candidate reschedules once and cancels once | calendar events created and removed; team told each time |
 | 16 | Interviewer receives the booking notice and reminders | 24-hour and 2-hour reminders sent |
 | 17 | Hiring manager records the post-interview decision from the screen: next round, then finalist | stage changes visible in the timeline with a human actor |
-| 18 | Owner declines another candidate with a reason | decline email sent after the decision; audit record with the reason |
-| 19 | Outcome recorded as hired; role closed; closure checklist names the three boards; ITS ticks each as removed | active candidates in the talent pool; role page shows nothing still up |
+| 18 | Owner declines another candidate with a reason, then tells them: previews the message, picks an approved wording, adds a personal line, sends (founder decisions B6, Q28) | the decline is private until the Send; the decline email leaves after the 30-second Undo window, in the chosen wording with the checked line and the locked footer; audit record with the reason; nobody told after five working days gets the standard message by itself (Q27) |
+| 19 | Outcome recorded as hired; role closed; closure checklist names the three boards; ITS ticks each as removed; the closing message is sent once to everyone still untold (Q30) | active candidates in the talent pool unless they opted out; each told once; role page shows nothing still up |
 | 20 | Candidate asks for access and then deletion from the status page; administrator fulfils with confirmation | export excludes rationale; anonymized; the link answers 410 |
 | 21 | Owner brings in a recruiter; recruiter claims from the queue; owner ends access | grant visible, then ended; recruiter's next request refused; queue entry back |
 | 22 | Hard bounce and spam complaint through Postmark webhooks | address suppressed; owner told; nothing sent to a suppressed address |

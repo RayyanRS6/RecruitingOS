@@ -366,7 +366,8 @@ describe("repeat applications, lost links and the talent-pool opt-out", () => {
     expect(before).toContain(`action="/c/status/${tessApp.statusToken}/talent-pool"`);
     const pressed = await form(`/c/status/${tessApp.statusToken}/talent-pool`, {});
     expect(pressed.status).toBe(302);
-    expect(pressed.headers.get("location")).toBe(`/c/status/${tessApp.statusToken}`);
+    // back at the choice itself, which says it was saved (the decision and closing messages link there too, Q30)
+    expect(pressed.headers.get("location")).toBe(`/c/status/${tessApp.statusToken}?pool=out#future-roles`);
     await container.drain();
     expect((await person("tess.ward@example.com")).preferences.talentPoolOptOut).toBe(true);
     expect((await container.db.select().from(events).where(and(eq(events.type, "consent.revoked"), eq(events.subjectId, tess.id))))[0].payload).toMatchObject({ purpose: "talent_pool", source: "status_page" });

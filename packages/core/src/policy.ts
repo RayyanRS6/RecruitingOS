@@ -58,6 +58,12 @@ export const DEFAULT_POLICIES: Record<ActionType, { level: PolicyLevel; approver
   "message.send_templated": { level: "auto", approverRoles: [] },
   /** A message a team member wrote to a candidate (F11). Under "approval" and "human_only", owners and admins decide; their own messages go at once, since their click is the approval. */
   "message.send_freeform": { level: "auto_notify", approverRoles: ["owner", "admin"] },
+  /**
+   * The courtesy note to someone still waiting for a decision `afterDays` after they applied (plan G10): one short,
+   * disclosed "still reviewing" note, once per application. "Do it" sends it; any other level sends none (the team, or a
+   * recruiter running the role, keeps in touch themselves).
+   */
+  "message.still_reviewing": { level: "auto", approverRoles: [], params: { afterDays: 30 } },
   "application.triage": { level: "auto", approverRoles: [] },
   /** The hold is operational, never permission for adverse action: notify, review timer, reminders, escalation of an overdue review. */
   "application.hold_ineligible": { level: "auto_notify", approverRoles: [], params: { reviewWindowHours: 24, remindEveryHours: 24, escalateAfterHours: 72 } },
@@ -82,6 +88,9 @@ export const DEFAULT_POLICIES: Record<ActionType, { level: PolicyLevel; approver
    * person presses Send. This policy says what that Send does: "auto" (the default) sends it then; "approval" holds it
    * for a second person; "human_only" means the product sends no decision messages and the team tells candidates
    * themselves. Saved send-at-once settings moved to the new default in migration 0026; "Ask me first" and "only a person" stayed.
+   * It also governs the untold safety net (Q27): under "auto", someone not told five working days after the decision
+   * gets the standard message by itself; under any other level, or during a recruiter takeover, a recruiter is brought
+   * in instead and nothing is sent. And the closing message for a closed role (Q30), approved once for everyone.
    */
   "disposition.send": { level: "auto", approverRoles: [] },
   "reference.request": { level: "auto_notify", approverRoles: [] },

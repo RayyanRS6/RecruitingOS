@@ -588,6 +588,9 @@ export const offers = pgTable(
     respondedAt: ts("responded_at"),
     declineReason: text("decline_reason"),
     negotiationLog: jsonb("negotiation_log").$type<Array<Record<string, unknown>>>().notNull().default([]),
+    /** "Offer made" (migration 0034; founder decision Q29): a person recorded an offer made outside the app, on `madeOn`. Terms stay empty. */
+    madeOutside: boolean("made_outside").notNull().default(false),
+    madeOn: date("made_on"),
     createdBy: jsonb("created_by").$type<Actor>().notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

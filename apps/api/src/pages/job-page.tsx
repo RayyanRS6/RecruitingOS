@@ -325,37 +325,47 @@ function ApplyFields(props: ApplyFormProps) {
       <label for="resume">Resume (PDF, Word, or text; up to 8 MB, or up to 4 MB without JavaScript)</label>
       <input id="resume" type="file" name="resume" accept=".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" />
       <small id="upload-note" aria-live="polite">{kept ? `Your resume ${kept.filename} is still attached. Choose a file only if you want to replace it.` : props.state?.resumeLost ? "Your resume is not attached any more. Please choose the file again." : ""}</small>
+      {/* Each of the four boxes is named by its own question and described by its hint, and the four are one named group,
+          so a screen reader and voice control find every box by its words (polish list). */}
       <details class="no-resume" open={noResumeOpen}>
         <summary>No resume? Answer four short questions instead</summary>
-        <p class="meta" id="no-resume-note">Answer what you can; one answer is enough to apply. Nobody expects a cover letter.</p>
-        {NO_RESUME_QUESTIONS.map((q) => (
-          <>
-            <label for={`nr_${q.key}`}>{q.label}</label>
-            <textarea id={`nr_${q.key}`} name={`nr_${q.key}`} rows={3} maxlength={NO_RESUME_ANSWER_MAX} aria-describedby={`nr_${q.key}-hint`} aria-invalid={q.key === "recentWork" ? invalid("noResume") : undefined}>{guided(q.key)}</textarea>
-            <small id={`nr_${q.key}-hint`}>{q.hint}</small>
-          </>
-        ))}
+        <fieldset aria-describedby="no-resume-note">
+          <legend class="sr-only">Four short questions about your work, instead of a resume</legend>
+          <p class="meta" id="no-resume-note">Answer what you can; one answer is enough to apply. Nobody expects a cover letter.</p>
+          {NO_RESUME_QUESTIONS.map((q) => (
+            <div>
+              <label id={`nr_${q.key}-label`} for={`nr_${q.key}`}>{q.label}</label>
+              <textarea id={`nr_${q.key}`} name={`nr_${q.key}`} rows={3} maxlength={NO_RESUME_ANSWER_MAX} aria-labelledby={`nr_${q.key}-label`} aria-describedby={`nr_${q.key}-hint`} aria-invalid={q.key === "recentWork" ? invalid("noResume") : undefined}>{guided(q.key)}</textarea>
+              <small id={`nr_${q.key}-hint`}>{q.hint}</small>
+            </div>
+          ))}
+        </fieldset>
       </details>
       {eligibility.length ? <h2>A few quick questions</h2> : null}
-      {eligibility.map((rule) => (
-        <div class="card">
-          <label for={`elig_${rule.key}`}>{rule.question}</label>
-          {rule.type === "schedule_availability" && Array.isArray((rule.expectation as { days?: string[] }).days) && ((rule.expectation as { days?: string[] }).days ?? []).length > 0 ? (
+      {/* A yes-or-no question is a labelled select; the days of a schedule question are one group named by the question. */}
+      {eligibility.map((rule) =>
+        rule.type === "schedule_availability" && Array.isArray((rule.expectation as { days?: string[] }).days) && ((rule.expectation as { days?: string[] }).days ?? []).length > 0 ? (
+          <fieldset class="card" aria-describedby={`elig_${rule.key}-why`}>
+            <legend class="question-legend">{rule.question}</legend>
             <div>
               {(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const).map((d) => (
                 <label class="check"><input type="checkbox" name={`elig_${rule.key}`} value={d} checked={chosenDays(rule.key).includes(d)} /> {d}</label>
               ))}
             </div>
-          ) : (
-            <select id={`elig_${rule.key}`} name={`elig_${rule.key}`} required>
+            <small id={`elig_${rule.key}-why`}>{rule.rationale}</small>
+          </fieldset>
+        ) : (
+          <div class="card">
+            <label for={`elig_${rule.key}`}>{rule.question}</label>
+            <select id={`elig_${rule.key}`} name={`elig_${rule.key}`} required aria-describedby={`elig_${rule.key}-why`}>
               <option value="" selected={chosen(rule.key) === ""}>Choose…</option>
               <option value="yes" selected={chosen(rule.key) === "yes"}>Yes</option>
               <option value="no" selected={chosen(rule.key) === "no"}>No</option>
             </select>
-          )}
-          <small>{rule.rationale}</small>
-        </div>
-      ))}
+            <small id={`elig_${rule.key}-why`}>{rule.rationale}</small>
+          </div>
+        ),
+      )}
       <TransparencyBlock company={props.company} notices={shown} privacyEmail={props.privacyEmail} acknowledged={!!props.state?.acknowledged} missing={missing.has("acknowledged")} resumeLost={!!props.state?.resumeLost} />
     </>
   );

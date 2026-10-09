@@ -1,8 +1,8 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { emit, notify, transition } from "@ros/core";
 import { sendInterviewCancelled } from "@ros/agents";
-import { applications, candidates, companies, events, interviewParticipants, interviews, jobs, rolePackets, roles, type Tx } from "@ros/db";
+import { applications, candidates, companies, interviewParticipants, interviews, jobs, rolePackets, roles, type Tx } from "@ros/db";
 import type { Container } from "../container";
 
 type InterviewRow = typeof interviews.$inferSelect;
@@ -65,14 +65,4 @@ export async function cancelInterviewInTx(
   await emit(tx, { type: "interview.cancelled", companyId, actor, subject: { type: "interview", id: iv.id }, payload: { reason: input.reason, byCandidate: !!input.byCandidate, hadEvents, candidateTold, ...(input.cause ? { cause: input.cause } : {}) } });
   if (hadEvents) await tx.insert(jobs).values({ kind: "interview.cancel_events", payload: { interviewId: iv.id, companyId, actor }, runAt: input.now.toISOString(), maxAttempts: 5 });
   return { hadEvents, candidateTold };
-}
-
-/**
- * The interviews among these whose cancellation the candidate was already told about (the `interview.cancelled` event
- * records it). The decision message leaves them out, so nobody is told twice that an interview is off.
- */
-export async function cancellationAlreadyTold(tx: Tx, interviewIds: string[]): Promise<Set<string>> {
-  if (!interviewIds.length) return new Set();
-  const rows = await tx.select({ id: events.subjectId }).from(events).where(and(eq(events.type, "interview.cancelled"), inArray(events.subjectId, interviewIds), sql`${events.payload}->>'candidateTold' = 'true'`));
-  return new Set(rows.map((r) => r.id));
 }

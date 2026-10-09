@@ -6,7 +6,7 @@ import { audit, emit, entitlements, gate, humanResponseExpectation, isOneVisitFl
 import { applications, assessments, candidates, companies, rolePackets, roles, screens, withPlatform, type Tx } from "@ros/db";
 import {
   answersOf, applyScreenOpening, assessScreen, createScreen, finishScreenTurn, focusQuestionsFrom, loadScreenBundle, packetForFocusedInvite, prepareScreenOpening, requestHuman, screenContextOf, sendConversationHandedOver, sendConversationIdleReminder,
-  sendConversationNotStartedNote, sendConversationNotStartedReminder, sendConversationResume, sendConversationReviewReminder, sendConversationUnfinishedNote, sendScreenInvite, sendScreenReminder, submitScreenAnswers, type FocusQuestion, type ScreenDeps,
+  sendConversationNotStartedNote, sendConversationNotStartedReminder, sendConversationResume, sendConversationReviewReminder, sendConversationUnfinishedNote, sendScreenExpiredNote, sendScreenInvite, sendScreenReminder, submitScreenAnswers, type FocusQuestion, type ScreenDeps,
 } from "@ros/agents";
 import { twoPhase, type StepContext, type WorkflowDefinition } from "../types";
 import { SUGGESTION_WINDOW_HOURS, settleSuggestion, waitForSuggestion, type SuggestionState } from "../suggestions";
@@ -230,7 +230,10 @@ export const screen: WorkflowDefinition<State> = {
         await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.expired", title: `${name} applied without the screening conversation`, body: "They did not start the short conversation that goes with the application, after one reminder. Their application is ready for your review as it is; you can also ask a recruiter to call them.", action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
         return { kind: "complete" };
       }
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.expired", title: `${name} did not respond to the screen`, body: `Invited ${scr.invitedAt?.slice(0, 10)} and reminded once. You can decline with a reason, keep them in the talent pool, or ask a recruiter to call.`, action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
+      // No silent expiry (plan G10): the candidate is told the link closed, that the application is still with the team,
+      // and that a reply brings a new link from a person.
+      await sendScreenExpiredNote(ctx.q, ctx.services.integrations, { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet: b.packet, actor: ctx.actor, correlationId: ctx.run.id, screen: { id: scr.id } });
+      await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.expired", title: `${name} did not respond to the screen`, body: `Invited ${scr.invitedAt?.slice(0, 10)} and reminded once. They were told the link has closed and that they can reply for a new one. You can invite them again, decline with a reason, keep them in the talent pool, or ask a recruiter to call.`, action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
       return { kind: "complete" };
     },
 

@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, triageAssessPrompt, type AiRuntime, type IntakeContext, type ScreenContext } from "@ros/ai";
+import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, messageLinePrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, triageAssessPrompt, type AiRuntime, type IntakeContext, type ScreenContext } from "@ros/ai";
 import {
   REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, advanceProgress, basisFor, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, mergeFacts, mergeRevision, redactProtected, registerFakeHandlers,
   resolveBenchmark, verifyQuotes, type BenchmarkResult,
@@ -9,7 +9,7 @@ import {
 import type { EvidenceAssessment, IntakeFacts, IntakeMessage, RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
 import { createDb, migrate } from "@ros/db";
 import { findPlaybook, matchPlaybookRole } from "@ros/playbooks";
-import { CONSISTENCY_READS, EMPTY_FACTS, RDH_FACTS, aboutCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, quotesAreGrounded, resumeCases, reviseCases, screenAssessCases, screenPersonas, triageEdgeCases, type IntakeCase } from "./suites";
+import { CONSISTENCY_READS, EMPTY_FACTS, RDH_FACTS, aboutCases, lineCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, quotesAreGrounded, resumeCases, reviseCases, screenAssessCases, screenPersonas, triageEdgeCases, type IntakeCase } from "./suites";
 
 /**
  * Evaluation runner (docs/11). `pnpm eval` runs every suite against the configured provider
@@ -220,6 +220,18 @@ async function main() {
       out.push({ id: c.id, pass: f.length === 0, failures: f });
     }
     results["company.about"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
+  }
+
+  // The line the assistant suggests for an invitation or an update (Q28): judged as the candidate would read it.
+  if (!onlySuite || onlySuite === "message.suggest_line") {
+    const out: (typeof results)[string]["cases"] = [];
+    for (const c of lineCases) {
+      const r = await runPrompt(q, rt, messageLinePrompt, c.input, { companyId: null, inputRef: { eval: c.id } });
+      if (!r.ok) { out.push({ id: c.id, pass: false, failures: [`suggestion failed: ${r.error}`] }); continue; }
+      const f = c.expect(r.output.line);
+      out.push({ id: c.id, pass: f.length === 0, failures: f });
+    }
+    results["message.suggest_line"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
   }
 
   if (!onlySuite || onlySuite.startsWith("screen")) {

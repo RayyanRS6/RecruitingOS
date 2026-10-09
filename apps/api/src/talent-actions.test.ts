@@ -36,11 +36,11 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       // an interviewer is offered nothing, and told why on each
       const interviewer = applicationActionState(facts({ role: "interviewer" }));
       expect(interviewer.allowed).toEqual([]);
-      expect(Object.keys(interviewer.blockedReasons)).toHaveLength(16);
+      expect(Object.keys(interviewer.blockedReasons)).toHaveLength(17);
       // every choice not allowed has a reason, for every role
       for (const role of ["owner", "admin", "hiring_manager", "hr", "recruiter", "interviewer"] as MembershipRole[]) {
         const s = applicationActionState(facts({ role }));
-        expect(s.allowed.length + Object.keys(s.blockedReasons).length, role).toBe(16);
+        expect(s.allowed.length + Object.keys(s.blockedReasons).length, role).toBe(17);
         for (const reason of Object.values(s.blockedReasons)) expect(reason, role).not.toMatch(/_|undefined/);
       }
     });
@@ -90,7 +90,13 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect(owner.interviewing).toMatchObject({ allowed: true, via: "interview" });
       expect(owner.hired).toMatchObject({ allowed: true, via: "record_hire" });
       expect(owner.not_moving_forward).toMatchObject({ allowed: true, via: "decline" });
-      expect(owner.offer).toMatchObject({ allowed: false, via: "offer", blockedReason: "Offers are made outside the app for now; when they accept, choose Hired." });
+      // Offer opens the record-only "Offer made" (plan H2): for a finalist, by those who record outcomes; before that, why not
+      expect(owner.offer).toMatchObject({ allowed: false, via: "offer", blockedReason: 'Record an offer once they are a finalist (they are at "Ready for your review").' });
+      expect(moves({ stage: "finalist" }).offer).toMatchObject({ allowed: true, via: "offer" });
+      expect(moves({ stage: "reference_check" }).offer).toMatchObject({ allowed: true, via: "offer" });
+      expect(moves({ stage: "finalist", role: "recruiter" }).offer).toMatchObject({ allowed: false, blockedReason: "Your role can't record that an offer was made; ask an owner, an admin, a hiring manager or HR." });
+      expect(moves({ stage: "rejected" }).offer).toMatchObject({ allowed: false, blockedReason: "Not available at this step (Not moving forward)." });
+      expect(applicationActionState(facts({ stage: "finalist" })).allowed).toContain("record_offer");
       // on the shortlist, choosing New takes the mark off
       const listed = moves({ mark: "shortlist" });
       expect(listed.shortlist.current).toBe(true);
@@ -264,7 +270,7 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
 
     it("recording 'we declined the candidate' as an outcome is private like the Decline button, and says so", async () => {
       const id = await seed("Oli");
-      const r = (await (await json(owner, "POST", `/api/v1/applications/${id}/outcome`, { outcome: "employer_declined", confirm: true, reason: "Went with someone closer" })).json()) as { dispositionSent: boolean; candidateNotice: string };
+      const r = (await (await json(owner, "POST", `/api/v1/applications/${id}/outcome`, { outcome: "employer_declined", confirm: true, reason: "location_or_schedule", note: "Went with someone closer" })).json()) as { dispositionSent: boolean; candidateNotice: string };
       expect(r).toMatchObject({ dispositionSent: false, candidateNotice: "not_told" });
       expect(await container.db.select().from(communications).where(and(eq(communications.applicationId, id), like(communications.templateKey, "disposition:%")))).toHaveLength(0);
       expect((await detail(owner, id)).allowedActions).toContain("send_decision");

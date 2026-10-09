@@ -4,12 +4,12 @@ import { Hono, type Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { ApplyRequest, CANDIDATE_STEP_LABEL, CandidateSmsPreference, CandidateStep, MAX_RESUME_BYTES, SCREEN_PERSON_ROUTE_STATUSES, TapAnswer, inspectResumeFile, isCompanyVerified, type ApplicationStage, type ReviewItem, type RolePacket, type TapFormat } from "@ros/contracts";
+import { ApplyRequest, CANDIDATE_STEP_LABEL, CandidateSmsPreference, CandidateStep, MAX_RESUME_BYTES, SCREEN_PERSON_ROUTE_STATUSES, TapAnswer, inspectResumeFile, isCompanyVerified, type ApplicationStage, type DecisionWording, type ReviewItem, type RolePacket, type TapFormat } from "@ros/contracts";
 import { MOVED_ON_MESSAGE, SKIPPED_MESSAGE, WITHDRAW_CONFIRM_KEY } from "@ros/agents";
 import { CLOSING_DATE_REASON, DECISION_STAGES, applyByLabel, audit, benefitsDescriptionFor, candidateStep, closingDayWords, createDataRequest, decisionTold, emit, fulfilSmsOptOut, fulfilWithdrawal, jobNoticesFor, mayWithdraw, noticesFor, notify, openHumanReview, openPayload, sealPayload, transition, type Notice } from "@ros/core";
 import { CandidatePrivacyRequest } from "@ros/contracts";
 import { sendPrivacyAcknowledgment, sendPrivacyCompletion } from "@ros/agents";
-import { applications, candidates, communications, companies, dataRequests, events, interviews, rolePackets, roles, screens, uuidv7, withPlatform, withTenant } from "@ros/db";
+import { applications, candidates, companies, dataRequests, events, interviews, rolePackets, roles, screens, uuidv7, withPlatform, withTenant } from "@ros/db";
 import { LOGO_FILE, jobPostingJsonLd, refFor } from "@ros/integrations";
 import { randomToken } from "@ros/db";
 import { UPLOAD_GRANT_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS, checkUploadIntent, quarantineKey } from "../uploads";
@@ -30,6 +30,8 @@ import { JobFacts, payShown, publicPay, roleValidThrough } from "./job-facts";
 import { ApplyFormPage, CompanyLine, HelpLine, JobPage, NO_RESUME_QUESTIONS, keptSentence, noResumeAnswersFrom, noticeVersionsFor, type ApplyFormProps, type ApplyFormState, type JobPageCompany, type JobPageRole } from "./job-page";
 import { Layout } from "./layout";
 import { clearApplicationSource, resolveApplicationSource } from "./links";
+import { MessageThread, THREAD_CSS, threadOf, toldWording } from "./thread";
+import { PERSON_BY_EMAIL, PERSON_ON_THE_WEB, forTheWeb } from "./web-wording";
 
 export const candidatePages = new Hono<Vars>();
 
@@ -572,14 +574,17 @@ candidatePages.post("/c/link-request", rateLimit(POLICIES.linkRequest), async (c
   return c.redirect("/c/link-request?sent=1", 303);
 });
 
-/** The candidate's four steps (plan A1), drawn as a quiet bar under each word; the current one is announced as such. */
+/**
+ * The candidate's four steps (plan A1), drawn as a quiet bar under each word; the current one is announced as such.
+ * The messages about the application read as a conversation (plan G7), in the screening conversation's look.
+ */
 export const STATUS_CSS = `
 .track { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 20px 0 4px; padding: 0; list-style: none; }
 .track li { position: relative; padding-top: 14px; color: var(--ink-3); font-size: 14px; font-weight: 600; line-height: 1.3; }
 .track li::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px; border-radius: var(--r-pill); background: var(--surface-2); }
 .track li.done::before, .track li.current::before { background: var(--ink); }
 .track li.current { color: var(--ink); }
-`;
+${THREAD_CSS}`;
 
 /**
  * What the candidate may see of a decision (founder decision B6): a decline or a move to the talent pool shows only once
@@ -595,8 +600,31 @@ async function visibleStage(container: Container, app: typeof applications.$infe
   return { hidden: true, before, since: i >= 0 ? moves[i].at : app.createdAt };
 }
 
+/**
+ * A decision in the words of the message that told it (plan G6): the closing message of a closed role (Q30), a filled
+ * position, a decline after an interview or on an eligibility answer. Any other approved wording, and a decision a
+ * person told them themselves, read the standard way. Never a reason beyond the eligibility answer, which the candidate
+ * can correct, and never before they were told (founder decision B6).
+ */
+function decisionLine(input: { stage: ApplicationStage; wording: DecisionWording | null; poolOptOut: boolean; companyName: string }): string {
+  const { wording, poolOptOut, companyName } = input;
+  if (input.stage === "talent_pool") {
+    const pool = poolOptOut ? "As you asked, nobody will contact you about future openings." : "We are keeping you in mind for future openings.";
+    if (wording === "role_closed") return `${companyName} has closed this position, so your application for it will not go any further. ${pool}`;
+    if (wording === "position_filled") return `The position has been filled, so this role is not moving forward for you. ${pool}`;
+    if (wording === "after_interview") return `Thank you for meeting the team. This role is not moving forward for you. ${pool}`;
+    return `This role is not moving forward for you. ${pool}`;
+  }
+  const keep = poolOptOut ? "" : " We will keep you in mind for future openings unless you ask us not to.";
+  if (wording === "eligibility") return `Based on your answers to the eligibility questions, this role needs something you said you do not have right now. If that has changed, or you answered in error, reply to our email and a person will take a look.${keep}`;
+  if (wording === "role_closed") return `${companyName} has closed this position, so your application for it will not go any further.${keep}`;
+  if (wording === "position_filled") return `The position has been filled, so your application for this role will not go any further. Thank you for applying.${keep}`;
+  if (wording === "after_interview") return `Thank you for meeting the team. They have decided not to move forward with your application for this role.${keep}`;
+  return poolOptOut ? "Thank you for applying. This role did not work out." : "Thank you for applying. This role did not work out, and we will keep you in mind for future openings unless you ask us not to.";
+}
+
 /** The line under the steps, in the candidate's words: what is happening now and what they can do. */
-function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOptOut: boolean; screen: { status: string } | null; interview: "booked" | "offered" | null }): string {
+function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOptOut: boolean; screen: { status: string } | null; interview: "booked" | "offered" | null; wording: DecisionWording | null; companyName: string }): string {
   const { step, stage, poolOptOut } = input;
   if (step === "received") return stage === "applied" ? "We are confirming your application now." : "Your application is in. We are checking the basics.";
   if (step === "under_review") {
@@ -613,18 +641,20 @@ function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOpt
   }
   if (stage === "hired") return "You are on the team.";
   if (stage === "accepted" || stage === "onboarding") return "Welcome aboard.";
-  if (stage === "offer_sent" || stage === "negotiation") return "Check your messages for the offer.";
+  // "Offer made" is a record the team keeps (founder decision Q29): the offer itself comes from them, never from this page or our emails.
+  if (stage === "offer_sent" || stage === "negotiation") return "The team has made you an offer. They will go through it with you directly. If you have a question, reply to any of our emails.";
   if (stage === "declined") return "You turned down the offer. Thank you for your time with us.";
   if (stage === "withdrawn") return "You withdrew this application. Thank you for your time.";
-  if (stage === "talent_pool") return poolOptOut ? "This role is not moving forward for you. As you asked, nobody will contact you about future openings." : "This role is not moving forward for you. We are keeping you in mind for future openings.";
-  return poolOptOut ? "Thank you for applying. This role did not work out." : "Thank you for applying. This role did not work out, and we will keep you in mind for future openings unless you ask us not to.";
+  return decisionLine({ stage, wording: input.wording, poolOptOut, companyName: input.companyName });
 }
 
 /**
  * The candidate's status page (plan A1). It speaks in four candidate steps (Received, Under review, Interview,
  * Decision), never the team's stage names: the assistant's suggestions, an eligibility hold and "finalist" read as Under
- * review. A decision shows only once the candidate was told (founder decision B6); until then the page stands where it
- * was and withdrawing stays open. Only messages that actually left are listed. A line says a person decides.
+ * review. A decision shows only once the candidate was told (founder decision B6), in the words of the message that
+ * told it (plan G6); until then the page stands where it was and withdrawing stays open. The messages about the
+ * application read as a conversation (plan G7): only messages that actually reached them, and their own replies. A line
+ * says a person decides.
  */
 candidatePages.get("/c/status/:token", async (c) => {
   const container = c.get("container");
@@ -635,8 +665,12 @@ candidatePages.get("/c/status/:token", async (c) => {
   const [cand] = await db.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
   const [role] = await db.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
   const [company] = await db.select().from(companies).where(eq(companies.id, app.companyId)).limit(1);
-  const msgs = await db.select().from(communications).where(and(eq(communications.applicationId, app.id), eq(communications.direction, "outbound"), inArray(communications.status, ["sent", "delivered"]))).orderBy(desc(communications.createdAt)).limit(5);
   const view = await visibleStage(container, app);
+  const told = !view.hidden && DECISION_STAGES.includes(app.stage);
+  const { thread, wording } = await withTenant(container.db, app.companyId, async (tx) => ({
+    thread: await threadOf(tx, app.id),
+    wording: told ? await toldWording(tx, { applicationId: app.id, decidedAt: app.stageChangedAt }) : null,
+  }));
   // Nothing about a private decision shows, and nothing it closed is offered (its screens and interviews were cancelled with it).
   // A conversation paused while the assistant is down (plan E5) is mentioned, without a link: an email brings it back.
   const latestScreen = view.hidden ? undefined : (await db.select().from(screens).where(eq(screens.applicationId, app.id)).orderBy(desc(screens.createdAt)).limit(1))[0];
@@ -656,6 +690,9 @@ candidatePages.get("/c/status/:token", async (c) => {
   const baseStep = candidateStep(app.stage, app.toldState, view.before);
   const step: CandidateStep = baseStep === "under_review" && (offered || booked) ? "interview" : baseStep;
   const steps = CandidateStep.options;
+  // "Don't keep me for future roles", from the decision message's link (#future-roles) or the button: it says it was saved.
+  const pool = c.req.query("pool");
+  const poolSaved = (pool === "out" && poolOptOut) || (pool === "in" && !poolOptOut);
   return c.html(
     <Layout title={`Your application at ${company?.name ?? ""}`} extraCss={STATUS_CSS}>
       <p class="eyebrow">{company?.name ? `${company.name} · ` : ""}Your application</p>
@@ -669,13 +706,13 @@ candidatePages.get("/c/status/:token", async (c) => {
         <div><span>Last update</span><span>{new Date(view.since).toLocaleDateString()}</span></div>
       </div>
       <h2>What happens next</h2>
-      <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null })}</p>
+      <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null, wording, companyName: company?.name ?? "The company" })}</p>
+      {/* The choice the decision message points to (Q30), one click away from the decision itself. */}
+      {told && !poolOptOut ? <p>Would you rather we did not keep your details for future roles? <a href="#future-roles">Say so below</a>; it takes one click.</p> : null}
       <p class="meta">People on the hiring team at {company?.name ?? "the company"} make every decision about your application. An AI assistant reads applications and runs the screening conversation for them; who is interviewed, hired or turned down is always a person's decision.</p>
       {openScreen_ ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue the screening conversation" : "Start the screening conversation"}</a> : null}
       {offered ? <div class="card"><strong>Pick a time for your {iv!.title.toLowerCase()}.</strong><p>{company?.name} would like to interview you.</p><a class="btn" href={`/c/schedule/${iv!.scheduleToken}`}><Icon name="calendar" />Choose a time</a></div> : null}
       {booked ? <div class="card"><strong>Your interview: {iv!.title}</strong><p>{new Intl.DateTimeFormat("en-US", { timeZone: ivTz, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(iv!.startsAt!))}{iv!.meetingUrl ? <span> · <a href={iv!.meetingUrl}>Join link</a></span> : null}</p>{prepare ? <p><strong>What to prepare:</strong> {prepare} Bring examples from your own work, and any questions you have for the team.</p> : null}<p><a href={`/c/schedule/${iv!.scheduleToken}/confirmed`}>Details, calendar file, reschedule or cancel</a></p></div> : null}
-      {msgs.length ? <h2>Messages we sent you</h2> : null}
-      {msgs.map((m) => <div class="card"><strong>{m.subject}</strong><p class="pre">{m.bodyText}</p></div>)}
       {c.req.query("withdrawn") === "1" ? <div class="card" role="status"><strong>Your application is withdrawn.</strong><p>Thank you for your time. If you have a question, reply to any of our emails.</p></div> : null}
       <h2>Your choices</h2>
       {smsEnabled || smsOn ? (
@@ -697,19 +734,23 @@ candidatePages.get("/c/status/:token", async (c) => {
           <button class="btn secondary" type="submit">Withdraw my application</button>
         </form>
       ) : null}
-      {/* Wave 0 item 0.11: the talent-pool choice is one click either way, and it only ever affects future roles. */}
+      {/* Wave 0 item 0.11: the talent-pool choice is one click either way, and it only ever affects future roles. The
+          decision and closing messages link straight here (#future-roles, Q30). */}
       {poolOptOut ? (
-        <form method="post" action={`/c/status/${app.statusToken}/talent-pool`} class="card">
+        <form method="post" action={`/c/status/${app.statusToken}/talent-pool`} class="card" id="future-roles">
+          {poolSaved ? <p role="status"><strong>Saved.</strong></p> : null}
           <p><strong>Future roles:</strong> you asked us not to keep your details for future roles, so nobody will contact you about other openings at {company?.name}.</p>
           <input type="hidden" name="pref" value="in" />
           <button class="btn secondary" type="submit">Keep me for future roles again</button>
         </form>
       ) : (
-        <form method="post" action={`/c/status/${app.statusToken}/talent-pool`} class="card">
+        <form method="post" action={`/c/status/${app.statusToken}/talent-pool`} class="card" id="future-roles">
+          {poolSaved ? <p role="status"><strong>Saved.</strong></p> : null}
           <p><strong>Future roles:</strong> {company?.name} may keep your details to tell you about other openings later. This does not change your current application.</p>
           <button class="btn secondary" type="submit">Don't keep me for future roles</button>
         </form>
       )}
+      <MessageThread messages={thread.messages} more={thread.more} companyName={company?.name ?? "The hiring team"} timeZone={cand?.location?.timezone ?? company?.timezone ?? "America/Los_Angeles"} />
       <h2>Need something?</h2>
       <p>Reply to any of our emails with HUMAN to reach a person, or use the form below. To request, correct, or delete your information you can also email <a href={`mailto:${c.get("container").env.PRIVACY_EMAIL}`}>{c.get("container").env.PRIVACY_EMAIL}</a>; see <a href="/privacy">how we handle your information</a>.</p>
       {c.req.query("request") ? <div class="card" role="status"><strong>We have your request.</strong><p>A confirmation with the completion date is on its way to {cand?.email ?? "your email"}. Reference {c.req.query("request")}.</p></div> : null}
@@ -761,7 +802,7 @@ candidatePages.get("/privacy", async (c) => {
       <ul class="steps">
         <li>Ask what we hold about you, correct it, or delete it: <a href="/c/privacy-request">use the request form</a> with the address you applied with (we confirm it is you by email), or write to <a href={`mailto:${privacyEmail}`}>{privacyEmail}</a> from that address. A person records the request, confirms receipt within one business day, and completes it within the legal deadline.</li>
         <li>Stop text messages any time by replying STOP.</li>
-        <li>Ask to talk to a person instead of an automated conversation by replying HUMAN.</li>
+        <li>Talk to a person instead of the AI assistant: press "I'd rather talk to a person" on the conversation's page, or reply HUMAN to any of our emails.</li>
         <li>Ask not to be kept for future roles: use the button on your status page, or reply "no thanks" to any of our emails.</li>
         <li>Lost the link to your status page? <a href="/c/link-request">We can email it to you again</a>, only ever to the address you applied with.</li>
       </ul>
@@ -779,7 +820,7 @@ candidatePages.get("/privacy", async (c) => {
 /**
  * The conversation's own styles, on top of the page stylesheet: the line on top of every page saying it is the
  * company's AI assistant, the question in large type, the assistant's messages on the left in a sunken box and the
- * candidate's own in near-black on the right, a thin progress bar (a native progress element, so no inline style), the
+ * candidate's own in near-black on the right (shared with the status page's messages, thread.tsx), a thin progress bar (a native progress element, so no inline style), the
  * tap answers, the quiet actions (skip, a person, later) and the "check your answers" list. Buttons and their secondary
  * look come from the page stylesheet, like every other candidate page.
  */
@@ -788,11 +829,7 @@ export const SCREEN_CSS = `
 .ai-tag { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: var(--r-pill); background: var(--ink); color: var(--ground); font-size: 12px; font-weight: 600; letter-spacing: 0.04em; }
 h1.question { margin: 12px 0 18px; font-size: 28px; line-height: 1.22; }
 .lead-in { margin: 20px 0 0; color: var(--ink-2); }
-.thread { display: flex; flex-direction: column; gap: 10px; margin: 20px 0; padding: 0; list-style: none; }
-.msg { max-width: 88%; padding: 12px 16px; border-radius: 16px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
-.msg.assistant { align-self: flex-start; background: var(--ground); border: 1px solid var(--line); color: var(--ink); border-bottom-left-radius: 6px; }
-.msg.candidate { align-self: flex-end; background: var(--ink); color: var(--ground); border-bottom-right-radius: 6px; }
-.msg.system { align-self: center; background: transparent; color: var(--ink-3); font-size: 14px; }
+${THREAD_CSS}
 .progress { display: flex; align-items: center; gap: 12px; margin: 0 0 4px; color: var(--ink-3); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .progress label { flex: none; margin: 0; color: inherit; font-size: inherit; font-weight: inherit; }
 .progress progress { flex: 1; min-width: 0; height: 6px; overflow: hidden; border: 0; border-radius: var(--r-pill); background: var(--surface-2); color: var(--ink); -webkit-appearance: none; appearance: none; }
@@ -818,7 +855,7 @@ details.earlier > summary, details.own-words > summary { color: var(--ink-2); fo
 .answer > p { margin: 8px 0 0; }
 .answer > a { display: inline-block; margin-top: 8px; font-weight: 600; }
 .pill { display: inline-flex; align-items: center; padding: 2px 10px; border: 1px solid var(--line-2); border-radius: var(--r-pill); background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 600; }
-@media (max-width: 600px) { h1.question { font-size: 23px; } .msg { max-width: 94%; } }
+@media (max-width: 600px) { h1.question { font-size: 23px; } }
 `;
 
 /**
@@ -865,11 +902,24 @@ function aroundQuestion(view: ConversationView): { earlier: Line[]; leadIn: stri
   return { earlier: t.slice(0, at), leadIn: leadIn || null, exchange: t.slice(at + 1) };
 }
 
-/** One message: the assistant's on the left, the candidate's own on the right, a skipped question as a quiet note. */
-function Bubble(props: { line: Line }) {
+/**
+ * What the assistant said, as this page shows it: a line written for email or text ("Reply HUMAN at any time…") reads
+ * as this page's own way to a person (`open`: the "I'd rather talk to a person" button is on the page), or by email once
+ * the conversation has closed (polish list). The transcript itself is not changed.
+ */
+function assistantWords(content: string, open: boolean): string {
+  return forTheWeb(content, open ? PERSON_ON_THE_WEB : PERSON_BY_EMAIL);
+}
+
+/**
+ * One message: the assistant's on the left, the candidate's own on the right (their answers in their own words, taps
+ * and changes included), a skipped question as a quiet note.
+ */
+function Bubble(props: { line: Line; open: boolean }) {
   const { line } = props;
-  if (line.role === "system") return <li class="msg system">{line.content === SKIPPED_MESSAGE ? "You skipped this question." : line.content === MOVED_ON_MESSAGE ? "You moved on. Your answer is kept." : line.content}</li>;
-  return <li class={`msg ${line.role}`}><span class="sr-only">{line.role === "candidate" ? "You said: " : "The assistant said: "}</span>{line.content}</li>;
+  if (line.role === "system") return <li class="msg system">{line.content === SKIPPED_MESSAGE ? "You skipped this question." : line.content === MOVED_ON_MESSAGE ? "You moved on. Your answer is kept." : assistantWords(line.content, props.open)}</li>;
+  if (line.role === "candidate") return <li class="msg candidate"><span class="sr-only">You said: </span>{line.content}</li>;
+  return <li class="msg assistant"><span class="sr-only">The assistant said: </span>{assistantWords(line.content, props.open)}</li>;
 }
 
 /** On top of every conversation page (plan E2): who the candidate is talking to, before anything else. */
@@ -1032,6 +1082,10 @@ function IntroPage(props: { view: ConversationView; applied: string | null }) {
   const { view } = props;
   const { intro } = view;
   const base = screenPath(view.token);
+  // The packet's lines are written for email ("Reply HUMAN…", "This message was sent by…"): on this page a person is one
+  // press away, so it says that, and keeps whatever else the company wrote (polish list).
+  const teamLine = forTheWeb(intro.humanAlternative);
+  const disclosure = forTheWeb(intro.packetDisclosure);
   return (
     <ConversationPage view={view} title="Before you start">
       {props.applied ? (
@@ -1048,23 +1102,24 @@ function IntroPage(props: { view: ConversationView; applied: string | null }) {
         <li><Icon name="check" /><span>You can skip any question, or stop and come back later: this page keeps your place.</span></li>
         <li><Icon name="eye" /><span>It helps the hiring team at {view.companyName} learn about your work beyond your resume. Your answers go to them, and people decide.</span></li>
       </ul>
-      {intro.humanAlternative ? <p>{intro.humanAlternative}</p> : null}
+      {teamLine ? <p class="pre">{teamLine}</p> : null}
+      <p>Would you rather talk to a person? {PERSON_ON_THE_WEB}</p>
       <div class="actions">
         <form method="post" action={`${base}/start`}><button class="btn" type="submit">Start</button></form>
         <form method="post" action={`${base}/later`}><button class="btn secondary" type="submit">Do this later</button></form>
         <a class="btn secondary" href={`${base}/person`}>I'd rather talk to a person</a>
       </div>
       <p class="meta">"Do this later" emails you the link. "I'd rather talk to a person" lets you send your application without the conversation, or have a person contact you.</p>
-      {intro.packetDisclosure ? <p class="notice">{intro.packetDisclosure}</p> : null}
+      {disclosure ? <p class="notice">{disclosure}</p> : null}
     </ConversationPage>
   );
 }
 
 /**
- * One question at a time: "Question 2 of 5" and a thin bar, the earlier questions folded away, the question in large
- * type, the candidate's answers as their own messages and the assistant's follow-ups quoting them, then the answer:
- * taps for the factual questions (E12), words otherwise, with a quiet "Skip this question" (E11). A person, or finishing
- * later, is always one click away.
+ * One question at a time: "Question 2 of 5" and a thin bar, the earlier questions folded away with the candidate's own
+ * answers beside the assistant's lines (polish list), the question in large type, the candidate's answers as their own
+ * messages and the assistant's follow-ups quoting them, then the answer: taps for the factual questions (E12), words
+ * otherwise, with a quiet "Skip this question" (E11). A person, or finishing later, is always one click away.
  */
 function QuestionPage(props: { view: ConversationView; error?: string | null }) {
   const { view } = props;
@@ -1074,20 +1129,21 @@ function QuestionPage(props: { view: ConversationView; error?: string | null }) 
   const { earlier, leadIn, exchange } = aroundQuestion(view);
   const last = exchange.at(-1);
   // The assistant asked a follow-up about this question: the answer is to that, in words.
-  const followUp = q && last?.role === "assistant" && !view.withdrawPending ? last.content : null;
+  const followUp = q && last?.role === "assistant" && !view.withdrawPending ? assistantWords(last.content, true) : null;
   const heading = q?.question ?? "Your conversation";
+  const said = leadIn ? assistantWords(leadIn, true) : null;
   return (
     <ConversationPage view={view} title={q ? `Question ${n} of ${view.total}` : "Your conversation"}>
       <Progress at={q ? n : view.answered} total={view.total} text={q ? `Question ${n} of ${view.total}` : `${view.answered} of ${view.total} answered`} />
       {earlier.length ? (
         <details class="earlier">
           <summary>Earlier in the conversation</summary>
-          <ol class="thread">{earlier.map((l) => <Bubble line={l} />)}</ol>
+          <ol class="thread" aria-label="Earlier questions and your answers">{earlier.map((l) => <Bubble line={l} open />)}</ol>
         </details>
       ) : null}
-      {leadIn ? <p class="lead-in"><span class="sr-only">The assistant said: </span>{leadIn}</p> : null}
+      {said ? <p class="lead-in"><span class="sr-only">The assistant said: </span>{said}</p> : null}
       <h1 class="question" id="question">{heading}</h1>
-      {exchange.length ? <ol class="thread" aria-label="This question so far">{exchange.map((l) => <Bubble line={l} />)}</ol> : null}
+      {exchange.length ? <ol class="thread" aria-label="This question so far">{exchange.map((l) => <Bubble line={l} open />)}</ol> : null}
       {view.withdrawPending ? (
         // WITHDRAW asked first (Wave 0 item 0.7): nothing is withdrawn until the candidate presses the first button.
         <div class="card" role="status">
@@ -1197,7 +1253,7 @@ function ClosedPage(props: { view: ConversationView }) {
       {view.transcript.length ? (
         <details class="earlier">
           <summary>See the conversation</summary>
-          <ol class="thread">{view.transcript.map((l) => <Bubble line={l} />)}</ol>
+          <ol class="thread" aria-label="The questions and your answers">{view.transcript.map((l) => <Bubble line={l} open={false} />)}</ol>
         </details>
       ) : null}
     </ConversationPage>
@@ -1620,7 +1676,8 @@ candidatePages.post("/c/status/:token/sms", rateLimit(POLICIES.smsPref), async (
 
 /**
  * "Don't keep me for future roles" (Wave 0 item 0.11): one click on the status link, confirmed by email; a repeat
- * changes nothing. `pref=in` ("Keep me for future roles again") takes the choice back, with nothing sent.
+ * changes nothing. `pref=in` ("Keep me for future roles again") takes the choice back, with nothing sent. Either way the
+ * page comes back at the choice, saying it was saved.
  */
 candidatePages.post("/c/status/:token/talent-pool", rateLimit(POLICIES.talentPoolPref), async (c) => {
   const container = c.get("container");
@@ -1628,7 +1685,8 @@ candidatePages.post("/c/status/:token/talent-pool", rateLimit(POLICIES.talentPoo
   if (!app) return c.notFound();
   if (await anonymizedFor(container, app.candidateId)) return linkGone(c);
   const body = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
-  if (body.pref === "in") await withTenant(container.db, app.companyId, (tx) => optBackIntoTalentPool(tx, { application: app }));
+  const back = body.pref === "in";
+  if (back) await withTenant(container.db, app.companyId, (tx) => optBackIntoTalentPool(tx, { application: app }));
   else if (await withTenant(container.db, app.companyId, (tx) => optOutOfTalentPool(tx, container, { application: app, source: "status_page" }))) await container.kick();
-  return c.redirect(`/c/status/${app.statusToken}`);
+  return c.redirect(`/c/status/${app.statusToken}?pool=${back ? "in" : "out"}#future-roles`);
 });

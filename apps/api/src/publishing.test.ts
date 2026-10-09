@@ -264,7 +264,7 @@ describe("publishing: boards, ITS posting tasks, live edits, the legal check, th
     const made = await withTenant(container.db, companyId, (tx) => createApplication(tx, container, applicant, { kind: "candidate", id: "applicant" }));
     await container.drain();
     const sentBefore = emails().length;
-    expect((await post(owner, `/api/v1/applications/${made.application.id}/outcome`, { outcome: "employer_declined", confirm: true, reason: "Not enough bookkeeping experience" })).status).toBe(201);
+    expect((await post(owner, `/api/v1/applications/${made.application.id}/outcome`, { outcome: "employer_declined", confirm: true, reason: "not_a_match_experience", note: "Not enough bookkeeping experience" })).status).toBe(201);
     expect(emails().slice(sentBefore).filter((m) => /recorded an outcome/.test(m.subject))).toEqual([]);
 
     // "Cannot do it?": the recruiter closes the task with a note; nothing on the board changes

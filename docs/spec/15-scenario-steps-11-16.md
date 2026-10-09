@@ -52,7 +52,7 @@ Each step is defined with the sixteen fields the founder asked for.
 - **AI action (release 1):** none. **Deferred:** debrief that shows disagreements between scorecards and the calibration memory.
 - **Data changes:** `interviews.decision`, `decision_note`; `applications.stage`; `applications.reject_note`.
 - **Audit events:** `interview.decision_recorded`, `human.override`, `application.rejected` (with `afterInterview: true`).
-- **Communications:** decline message after a human decision only; finalist gets no automated message in release 1 (the owner talks to them).
+- **Communications:** decline message after a human decision only, and only when a person sends it (founder decision B6): the Send screen suggests the approved "after an interview" wording, with an optional checked personal line (Q28); five working days untold, the standard message goes by itself or a recruiter is brought in (Q27). A finalist gets no automated message in release 1 (the owner talks to them); a finalist waiting three days or more, and an offer with no answer recorded for five, are named on Today (plan G10).
 - **Failure states:** no next round in the plan (409 with guidance); decline without a reason (400).
 - **Retry behavior:** not applicable (synchronous human action).
 - **Cancellation:** a finalist can still be declined later with a reason.

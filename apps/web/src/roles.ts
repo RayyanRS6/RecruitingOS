@@ -71,6 +71,13 @@ export const canRecordOutcome = (role: string | null | undefined): boolean => !!
 const DECLINE_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin", "hiring_manager", "recruiter"]);
 export const canDecline = (role: string | null | undefined): boolean => !!role && DECLINE_ROLES.has(role);
 
+/**
+ * note.read and note.write: read every private team note on a candidate and write one's own (founder decision Q24).
+ * Interviewers hold neither: they write and read only their own note, on people they interviewed.
+ */
+const NOTE_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin", "hiring_manager", "hr", "recruiter"]);
+export const canReadNotes = (role: string | null | undefined): boolean => !!role && NOTE_ROLES.has(role);
+
 /** events.read: the role's Activity tab. Everyone but an interviewer. */
 export const canSeeActivity = (role: string | null | undefined): boolean => !!role && role !== "interviewer";
 

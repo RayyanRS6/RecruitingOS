@@ -7,6 +7,17 @@ import { LEVELS, type PolicyLevel } from "./policy-levels";
 
 const RANK: Record<PolicyLevel, number> = { auto: 0, auto_notify: 1, approval: 2, human_only: 3 };
 
+/** The "still reviewing" note (plan G10) as Setup names it. */
+export const STILL_REVIEWING_LABEL = "Send a short \"we are still reviewing\" note to anyone still waiting for a decision 30 days after applying";
+
+/**
+ * What each level does for the "still reviewing" note, said under the rule: only "Do it" and "Do it and tell me" send it,
+ * once per application, never to someone set aside as not a fit for now; any other choice sends none.
+ */
+const STILL_REVIEWING_SENDS = "One short, courteous email per applicant, once: their application is still being reviewed, no decision has been made, and people on your team decide. It carries the same AI notice as every automatic email, and says nothing about how they are doing.";
+const STILL_REVIEWING_NONE = "No note goes by itself under this choice: keep in touch with people who have waited a long time yourself.";
+export const STILL_REVIEWING_NOTE: Record<PolicyLevel, string> = { auto: STILL_REVIEWING_SENDS, auto_notify: STILL_REVIEWING_SENDS, approval: STILL_REVIEWING_NONE, human_only: STILL_REVIEWING_NONE };
+
 /** Loosening: a level that leaves more to happen without a person (Only a person, Ask me first, Do it and tell me, Do it). */
 export function loosens(from: PolicyLevel, to: PolicyLevel): boolean {
   return RANK[to] < RANK[from];

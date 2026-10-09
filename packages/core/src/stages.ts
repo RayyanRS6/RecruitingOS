@@ -36,6 +36,9 @@ const T: Array<{ from: ApplicationStage[]; to: ApplicationStage; by: Mover[] }> 
   { from: ["interview_complete"], to: "debrief", by: ["system", "owner", "admin", "hiring_manager", "recruiter"] },
   { from: ["debrief", "interview_complete"], to: "finalist", by: ["owner", "admin", "hiring_manager", "recruiter"] }, // the roles that hold interview.decide
   { from: ["finalist"], to: "reference_check", by: ["owner", "admin", "hr", "recruiter"] },
+  // "Offer made" (founder decision Q29; plan H2): a person records an offer made outside the app, by the roles that
+  // record outcomes (outcome.record). Record-only: the app never drafts, approves or sends it.
+  { from: ["finalist", "reference_check"], to: "offer_sent", by: ["owner", "admin", "hiring_manager", "hr"] },
   { from: ["finalist", "reference_check"], to: "offer_draft", by: ["system", "owner", "admin", "hr", "recruiter"] },
   { from: ["offer_draft"], to: "offer_approval", by: ["system"] },
   { from: ["offer_approval"], to: "offer_sent", by: ["system"] },
@@ -159,6 +162,8 @@ export async function withdrawQueuedDecision(q: Queryable, input: { applicationI
 export function ownerGroup(stage: ApplicationStage): OwnerGroup {
   if (["hired"].includes(stage)) return "hired";
   if (["rejected", "withdrawn", "declined", "talent_pool"].includes(stage)) return "not_moving_forward";
+  // An offer is out (made outside the app, plan H2): the next move is the candidate's answer.
+  if (stage === "offer_sent") return "waiting_on_candidate";
   // interview_complete waits on a person too: the interview is over and nobody has recorded next round, finalist or not moving forward.
   if (["ineligible", "triaged", "screen_complete", "interview_recommended", "interview_complete", "debrief", "finalist", "offer_draft", "offer_approval", "negotiation"].includes(stage)) return "waiting_on_you";
   return "in_process";

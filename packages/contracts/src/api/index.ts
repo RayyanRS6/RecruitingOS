@@ -2,8 +2,9 @@ import { z } from "zod";
 import { Location } from "../domain/common";
 import { CompensationBasis, RolePacket } from "../domain/role-packet";
 import { INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX } from "../domain/intake";
-import { ApplicationStage, MarkKind, OwnerStage, RejectReason, ToldState } from "../domain/stages";
+import { ApplicationStage, DecisionWording, MarkKind, OwnerStage, PERSONAL_LINE_MAX, RejectReason, ToldState, type CandidateNotice } from "../domain/stages";
 import { ActionType, PolicyLevel } from "../domain/policy";
+import { RequestInterview } from "../domain/interview";
 
 /** Slice 1 API request and response schemas. docs/12 is the map. */
 
@@ -195,16 +196,90 @@ export const ApplicationAction = z.object({
   mark: MarkKind.optional(),
   /** set_mark on_hold and hold: when the hold ends and they come back to Today; 14 days when left out, 56 at most. */
   remindAt: RemindAt.optional(),
+  /** send_decision: one of the approved wordings (Q28); the suggested one when left out. The eligibility wording is fixed. */
+  wording: DecisionWording.optional(),
+  /** send_decision: an optional personal line, written by the person and checked before sending (no scores, reasons or personal characteristics). */
+  personalLine: z.string().trim().max(PERSONAL_LINE_MAX).optional(),
 });
 export type ApplicationAction = z.infer<typeof ApplicationAction>;
 
-/** POST /roles/:id/decision-messages: send the decision message to several people at once; each gets its own result. */
-export const SendDecisionMessages = z.object({ applicationIds: z.array(z.string().min(1)).min(1).max(100) });
+/** POST /roles/:id/decision-messages: send the decision message to several people at once; each gets its own result. `wording`: one approved wording for all; each person's suggested one when left out. */
+export const SendDecisionMessages = z.object({ applicationIds: z.array(z.string().min(1)).min(1).max(100), wording: DecisionWording.optional() });
 export type SendDecisionMessages = z.infer<typeof SendDecisionMessages>;
 
-/** POST /applications/:id/messages: a message a person writes to a candidate (F11). The product adds the sending name and the footer; no disclosure line, since no AI wrote it. */
-export const SendCandidateMessage = z.object({ subject: z.string().trim().max(200).optional(), text: z.string().trim().min(1, "Write the message first.").max(5000) });
+/** POST /applications/:id/decision-message/preview: the exact message with a chosen wording and personal line, checked, before Send. */
+export const DecisionMessagePreviewRequest = z.object({ wording: DecisionWording.optional(), personalLine: z.string().trim().max(PERSONAL_LINE_MAX).optional() }).strict();
+export type DecisionMessagePreviewRequest = z.infer<typeof DecisionMessagePreviewRequest>;
+
+/** One approved wording as the Send screen offers it. */
+export type DecisionWordingOption = { id: DecisionWording; label: string; suggested: boolean };
+/**
+ * The decision message before Send (GET /applications/:id/decision-message, POST .../preview): the exact words, the
+ * address, the wording used and the others on offer, whether a personal line was added, whether Colorado's line is in it,
+ * and what Send does under the company's settings (`policy`). `undoSeconds`: how long the Undo lasts after Send.
+ */
+export type DecisionMessagePreview = {
+  to: string | null; subject: string; text: string; wording: DecisionWording; wordings: DecisionWordingOption[];
+  personalLine: string | null; adverseDecisionLine: boolean; policy: "sends" | "needs_approval" | "not_sent";
+  toldState: ToldState; candidateToldAt: string | null; waitingApproval: boolean; undoSeconds: number;
+};
+
+/**
+ * POST /roles/:id/closing-message: the one closing message for everyone a closed role left untold (Q30), approved once
+ * for all of them. `applicationIds` narrows it to some of the people the preview listed; everyone listed when left out.
+ */
+export const SendClosingMessage = z.object({ confirm: z.literal(true, { message: "Confirm sending the closing message." }), applicationIds: z.array(z.string().min(1)).min(1).max(500).optional() }).strict();
+export type SendClosingMessage = z.infer<typeof SendClosingMessage>;
+/**
+ * The closing message's preview (GET /roles/:id/closing-message; also `closingMessage` on POST /roles/:id/outcome):
+ * who it goes to (`people`, with `hasEmail` and `optedOut`), the words for one of them with "[first name]" in place of
+ * the name, those left out because they were already told or a message waits for approval, and what Send does.
+ * `waitingApprovalId` names the one approval request when the batch already waits for it.
+ */
+export type ClosingMessagePreview = {
+  roleId: string; roleTitle: string; count: number; people: Array<{ applicationId: string; name: string; hasEmail: boolean; optedOut: boolean }>;
+  subject: string; text: string; alreadyTold: number; waitingApproval: number; noEmail: number; optedOut: number;
+  policy: "sends" | "needs_approval" | "not_sent"; waitingApprovalId: string | null; sendPath: string;
+};
+/**
+ * What POST /roles/:id/closing-message did: sent to each (per-person results), or one approval request for all, or
+ * nothing under "only a person", or nothing because the role was reopened (`role_reopened`, when an approval comes after
+ * an administrator voided the role's outcome). Each message still waiting out a person's Undo window carries its
+ * `communicationId` and `undoUntil` (plan G9: POST /applications/:id/messages/:communicationId/undo).
+ */
+export type ClosingMessageResult = {
+  status: "sent" | "waiting_approval" | "not_sent_settings" | "role_reopened"; approvalRequestId?: string; queued: number; held: number; notSent: number;
+  results: Array<{ applicationId: string; ok: boolean; candidateNotice?: CandidateNotice; communicationId?: string | null; undoUntil?: string | null; code?: string; message?: string }>;
+};
+
+/**
+ * POST /applications/:id/messages: a message a person writes to a candidate (F11). The product adds the sending name and
+ * the footer. No disclosure line, since no AI wrote it, unless `aiHelped`: the person used a line the assistant suggested
+ * (Q28; POST /applications/:id/messages/suggest), and the footer then says the assistant helped. `suggestionRunId`: the
+ * suggestion's AI run, kept on the message for the record.
+ */
+export const SendCandidateMessage = z.object({ subject: z.string().trim().max(200).optional(), text: z.string().trim().min(1, "Write the message first.").max(5000), aiHelped: z.boolean().optional(), suggestionRunId: z.string().min(1).max(64).optional() });
 export type SendCandidateMessage = z.infer<typeof SendCandidateMessage>;
+
+/**
+ * POST /applications/:id/messages/suggest: the assistant suggests one line for an interview invitation (`roundKey`: the
+ * round being approved, for its title) or an update (Q28); never for a decision.
+ */
+export const SuggestMessageLine = z.object({ purpose: z.enum(["interview_invite", "update"]), roundKey: z.string().min(1).max(60).optional() }).strict();
+export type SuggestMessageLine = z.infer<typeof SuggestMessageLine>;
+/** What the suggestion answers: the line (checked like a personal line), the AI run, and the note the page shows. Null `line` when nothing usable came back. */
+export type SuggestedLine = { line: string | null; aiHelped: true; suggestionRunId: string | null; note: string };
+
+/**
+ * A personal line on an interview invitation (Q28): written by the person, or suggested by the assistant and kept by the
+ * person (`aiHelped`, and the email then says the assistant helped). Checked like a decision message's personal line.
+ * The interview request (POST /applications/:id/interviews) carries it to the invitation.
+ */
+export const InvitationLine = z.object({ text: z.string().trim().min(1).max(PERSONAL_LINE_MAX), aiHelped: z.boolean().default(false), suggestionRunId: z.string().min(1).max(64).optional() }).strict();
+export type InvitationLine = z.infer<typeof InvitationLine>;
+/** POST /applications/:id/interviews: the interview approval (`RequestInterview`), with an optional personal line for the invitation (Q28). */
+export const RequestInterviewWithLine = RequestInterview.extend({ invitationLine: InvitationLine.optional() });
+export type RequestInterviewWithLine = z.infer<typeof RequestInterviewWithLine>;
 
 /**
  * Human-recorded hiring outcomes (21 Sep, item 4). A person records what happened; the platform never generates,
@@ -212,18 +287,27 @@ export type SendCandidateMessage = z.infer<typeof SendCandidateMessage>;
  */
 export const ApplicationOutcome = z.enum(["hired_externally", "candidate_withdrew", "employer_declined", "offer_declined_externally", "no_hire"]);
 const OutcomeDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a date like 2026-10-01").refine((d) => { const t = new Date(`${d}T00:00:00Z`); return !Number.isNaN(t.getTime()) && t.toISOString().slice(0, 10) === d; }, "That date does not exist");
+/**
+ * `reason` is one of the fixed reasons every decline uses (plan G2), required for "We declined the candidate"; anything
+ * the person wants to add in their own words goes in `note`, kept internally.
+ */
 export const RecordApplicationOutcome = z.object({
   outcome: ApplicationOutcome,
   confirm: z.literal(true, { message: "Confirm the outcome." }),
   hireDate: OutcomeDate.optional(),
   offerAcceptedAt: OutcomeDate.optional(),
-  reason: z.string().max(500).optional(),
+  reason: RejectReason.optional(),
   note: z.string().max(2000).optional(),
 }).strict();
 export const RoleOutcome = z.enum(["filled", "filled_outside_platform", "role_cancelled", "no_hire"]);
 export const RecordRoleOutcome = z.object({ outcome: RoleOutcome, confirm: z.literal(true, { message: "Confirm the outcome." }), reason: z.string().max(500).optional() }).strict();
-export const CorrectOutcome = z.object({ confirm: z.literal(true), reason: z.string().min(5).max(1000), outcome: z.enum([...ApplicationOutcome.options, ...RoleOutcome.options, "voided"]).optional(), hireDate: OutcomeDate.optional(), offerAcceptedAt: OutcomeDate.optional() }).strict()
-  .refine((v) => v.outcome !== "hired_externally" || !!v.hireDate, { message: "A corrected hire needs the hire date.", path: ["hireDate"] });
+/**
+ * An administrator's correction of a recorded outcome. `declineReason`: when the corrected outcome is "we declined the
+ * candidate" (`employer_declined`), the fixed reason it is filed under (plan G2); the original's reason when left out.
+ */
+export const CorrectOutcome = z.object({ confirm: z.literal(true), reason: z.string().min(5).max(1000), outcome: z.enum([...ApplicationOutcome.options, ...RoleOutcome.options, "voided"]).optional(), hireDate: OutcomeDate.optional(), offerAcceptedAt: OutcomeDate.optional(), declineReason: RejectReason.optional() }).strict()
+  .refine((v) => v.outcome !== "hired_externally" || !!v.hireDate, { message: "A corrected hire needs the hire date.", path: ["hireDate"] })
+  .refine((v) => !v.declineReason || v.outcome === "employer_declined", { message: "A decline reason goes only with \"we declined the candidate\".", path: ["declineReason"] });
 
 /**
  * GET /roles/:id/applications. `ownerStage` narrows to one column of the stage strip and `told` to decisions in that told
@@ -232,7 +316,7 @@ export const CorrectOutcome = z.object({ confirm: z.literal(true), reason: z.str
  * answers `{ applications, counts }` with the strip's counts over every visible applicant instead of the bare list.
  */
 export const OwnerGroupQuery = z.object({
-  group: z.enum(["waiting_on_you", "in_process", "not_moving_forward", "hired"]).optional(),
+  group: z.enum(["waiting_on_you", "waiting_on_candidate", "in_process", "not_moving_forward", "hired"]).optional(),
   stage: ApplicationStage.optional(),
   ownerStage: OwnerStage.optional(),
   told: ToldState.optional(),

@@ -115,7 +115,7 @@ Done. ${company.name} will not keep your details for future roles, and nobody wi
 This does not change an application you have open right now: it carries on as before, and your status link still works.
 
 If you change your mind, your status page has a button to be kept for future roles again:
-${statusUrlFor(input.appBaseUrl, application)}
+${statusUrlFor(input.appBaseUrl, application)}#future-roles
 
 The hiring team at ${company.name}`;
   return queueCommunication(q, integrations, {

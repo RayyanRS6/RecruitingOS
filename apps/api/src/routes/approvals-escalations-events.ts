@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, isNull, like, notInArray } from "drizzle-orm";
-import { ConfirmBoardUpdated, CreateEscalation, DecideApproval, EscalationEstimateQuery, EscalationReply, RecordPostingUrl, ReopenEscalation, ResolveEscalation, VerifyPosting, type Actor, type CandidateNotice, type EscalationScope, type RecruiterRequestView } from "@ros/contracts";
-import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, assertCan, audit, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, isBoardChannel, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, scopeAllows, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
+import { ConfirmBoardUpdated, CreateEscalation, DecideApproval, EscalationEstimateQuery, EscalationReply, RecordPostingUrl, ReopenEscalation, ResolveEscalation, VerifyPosting, type Actor, type CandidateNotice, type EscalationScope, type InterviewDraft, type RecruiterRequestView } from "@ros/contracts";
+import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, assertCan, audit, can, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, isBoardChannel, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, scopeAllows, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
 import { applications, approvalRequests, candidates, companies, escalationMessages, events, memberships, postings, recruiterEscalations, rolePackets, roles, staffAccessGrants, users, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
 import { confirmPostingByHand, postingTaskDetail, queuePostingCheck, recordBoardAddress } from "./postings";
 import { actorOf, clientIp, requireRecruiterOrAdmin, requireTenant, type Vars } from "../middleware/session";
@@ -12,8 +12,10 @@ import { assertMayApprovePacket } from "../services/packet-approval";
 import { assertMayShareDraft } from "./intake";
 import { settleMessageApproval } from "../services/messages";
 import { declineSent, sendApprovedDecline } from "../services/application-actions";
+import { sendApprovedClosingMessages } from "../services/closing-messages";
 import { approverRolesOf, mayDecideByRole } from "../services/approvers";
 import { attachBoardSnapshot, emailItsQueue } from "../services/escalation-queue";
+import { interviewDraftFor } from "./interviews";
 
 export const approvalRoutes = new Hono<Vars>();
 
@@ -71,9 +73,13 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
     // it here; "Do not send" leaves the candidate not told, and the team can send it again or tell them themselves.
     let decisionMessage: { dispositionSent: boolean; candidateNotice: CandidateNotice } | undefined;
     if (req.actionType === "disposition.send" && status === "approved" && req.applicationId) {
-      const sent = await sendApprovedDecline(tx, container, { applicationId: req.applicationId, actor: actorOf(c) });
+      // The wording and personal line the Send chose travel on the request (Q28).
+      const sent = await sendApprovedDecline(tx, container, { applicationId: req.applicationId, actor: actorOf(c), proposal: req.proposal });
       decisionMessage = sent ? { dispositionSent: declineSent(sent.notice), candidateNotice: sent.notice } : { dispositionSent: false, candidateNotice: "not_told" };
     }
+    // A closed role's one closing message, approved once for everyone (Q30): each person still untold gets it now.
+    const closing = req.actionType === "disposition.send" && status === "approved" && !req.applicationId ? await sendApprovedClosingMessages(tx, container, { req, actor: actorOf(c) }) : null;
+    let interviewDraft: InterviewDraft | null = null;
     if (status === "approved" && req.applicationId) {
       const [app] = await tx.select().from(applications).where(eq(applications.id, req.applicationId)).limit(1);
       if (app && req.actionType === "application.invite_screen") {
@@ -83,8 +89,10 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
         await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "interview_recommended", by: t.role, actor: actorOf(c), reason: body.note ?? "approved the recommendation" });
         await emit(tx, { type: "candidate.recommended", companyId: t.companyId, actor: actorOf(c), subject: { type: "application", id: app.id }, payload: { by: "approval", approvalRequestId: req.id } });
       }
+      // "Yes, interview" (plan H4): the answer carries the interview approval card filled in, so the next click books it.
+      if (app && req.actionType === "application.recommend_interview" && can(t.role, "interview.request")) interviewDraft = await interviewDraftFor(tx, { app, now: container.engine.clock() });
     }
-    return { ok: true, status, ...(decisionMessage ?? {}), ...(messageStatus ? { messageStatus } : {}) };
+    return { ok: true, status, ...(decisionMessage ?? {}), ...(messageStatus ? { messageStatus } : {}), ...(closing ? { closingMessage: closing } : {}), ...(interviewDraft ? { interviewDraft } : {}) };
   });
   await container.kick();
   return c.json(result);

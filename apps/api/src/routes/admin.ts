@@ -501,7 +501,7 @@ adminRoutes.post("/outcomes/:id/correct", async (c) => {
   const container = c.get("container");
   const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
   try {
-    const result = await withPlatform(container.db, (tx) => correctOutcome(tx, { outcomeId: c.req.param("id") ?? "", actor, reason: body.reason, outcome: body.outcome, hireDate: body.hireDate, offerAcceptedAt: body.offerAcceptedAt, now: container.engine.clock() }));
+    const result = await withPlatform(container.db, (tx) => correctOutcome(tx, { outcomeId: c.req.param("id") ?? "", actor, reason: body.reason, outcome: body.outcome, hireDate: body.hireDate, offerAcceptedAt: body.offerAcceptedAt, declineReason: body.declineReason, now: container.engine.clock() }));
     return c.json({ ok: true, originalId: result.original.id, correctionId: result.correction.id, outcome: result.correction.outcome });
   } catch (e) {
     if (e instanceof OutcomeError) throw new HttpError(e.code === "not_found" ? 404 : ["bad_outcome", "hire_date_required"].includes(e.code) ? 400 : 409, e.code, e.message);

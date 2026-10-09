@@ -77,6 +77,14 @@ export function versionNotes(cands: readonly CompareCandidateView[]): string[] {
   return cands.filter((c) => c.readingVersion).map((c) => `${c.name}: ${c.readingVersion!.label}`);
 }
 
+/**
+ * Whether the table shows the team's private notes (plan H3): when anyone compared has one. The API sends notes only to
+ * those who read them (an empty list to everyone else), so nobody else ever sees the row.
+ */
+export function hasTeamNotes(cands: ReadonlyArray<Pick<CompareCandidateView, "notes">>): boolean {
+  return cands.some((c) => Array.isArray(c.notes) && c.notes.length > 0);
+}
+
 /** The line under the table: how the columns are ordered, and that people decide. */
 export function orderLine(order: CompareOrder, count: number): string {
   const who = count === 1 ? "1 person" : `${count} people`;

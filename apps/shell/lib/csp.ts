@@ -20,6 +20,8 @@ export function buildAppCsp(input: { nonce: string; dev: boolean; reportPath?: s
     "base-uri 'self'",
     "form-action 'self'",
     "frame-ancestors 'none'",
+    // The résumé inside the candidate panel (plan H5) is a frame of this origin's own API route; nothing else is framed.
+    "frame-src 'self'",
     "object-src 'none'",
     "img-src 'self' data: blob:",
     "font-src 'self'",

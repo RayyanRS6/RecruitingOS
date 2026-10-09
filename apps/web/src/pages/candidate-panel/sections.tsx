@@ -1,24 +1,27 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, EvidenceChip, Field, Skeleton } from "@ros/ui";
-import { api, ApiError, type ApplicationDetail, type MessagePreview, type SendMessageResult, type TimelineEvent } from "../../api/client";
+import { api, ApiError, type ApplicationDetail, type MessagePreview, type SendMessageResult, type SuggestedLine, type TimelineEvent } from "../../api/client";
 import { Link } from "../../nav";
 import { toast } from "../../toast";
 import { AskRecruiter } from "../../components/AskRecruiter";
+import { useUndoToast } from "../../components/use-undo";
 import { LOW_CONFIDENCE_LABEL, LOW_CONFIDENCE_TEXT, closerLook, openScreenOf } from "../../evidence";
+import { offerMadeOn, plainDayWords } from "../../hiring";
 import { callNotesState, overviewScreenLine } from "../../screen-view";
 import { holdDay } from "../../talent-actions";
+import { sentWithUndoToast, threadItems, threadWhen, undoMillisLeft } from "../../telling";
 import { AssessmentCard, NoAssessmentCard, ScorecardUnavailableCard, ScreenCard } from "./assessment";
 import { CallNotesCard } from "./call-notes";
 import { MatchCard } from "./match";
-import { historyItems, recruiterEventsFor, suggestionAndDecision, type Compose, type HistoryItem } from "./helpers";
+import { historyItems, recruiterEventsFor, resumeToShow, resumeView, suggestionAndDecision, type Compose, type HistoryItem } from "./helpers";
 
 export type { Compose } from "./helpers";
 import { useCandidateAction, useRefreshCandidate } from "./hooks";
 
-/** The candidate panel's sections (plan A10): Overview, Screen, Résumé, Messages and History. */
+/** The candidate panel's sections (plan A10): Overview, Screen, Résumé, Messages and History; the Notes tab is notes.tsx. */
 
 /**
  * Overview: where they are, the match score against your must-haves with its breakdown (founder decision B2), the
@@ -64,6 +67,8 @@ function WhereTheyAre({ a }: { a: ApplicationDetail }) {
   if (a.toldState === "sent") lines.push(`Told the decision by message${a.candidateToldAt ? ` on ${new Date(a.candidateToldAt).toLocaleDateString()}` : ""}.`);
   if (a.toldState === "told_in_person") lines.push(`Told the decision in person${a.candidateToldAt ? ` (recorded ${new Date(a.candidateToldAt).toLocaleDateString()})` : ""}.`);
   if (a.toldState === "before_tracking") lines.push("Decided before decisions became private: their status page already showed it, so nothing more is sent.");
+  // An offer made outside the app (plan H2): the next move is the candidate's.
+  if (a.stage === "offer_sent") lines.push(`Offer made on ${plainDayWords(offerMadeOn(a))}, outside the app: waiting on their answer.`);
   const interviews = a.interviews;
   if (!lines.length && !interviews.length && !recorded) return null;
   return (
@@ -188,11 +193,70 @@ export function NoResumeAnswers({ answers }: { answers: Record<string, string> }
   );
 }
 
-/** Résumé: what the résumé says, the files (each opening is recorded), and any earlier résumé readings. */
+/**
+ * The résumé inside the panel (plan H5): the file in a frame of this site's own address (each opening is recorded, as
+ * the file's is), full screen on a click, or in a new tab. Mounted only while the Résumé tab is open. A Word file shows
+ * the words it was read as; a file nothing could be read from opens in a new tab only.
+ */
+function ResumeViewer({ a, doc }: { a: ApplicationDetail; doc: ApplicationDetail["documents"][number] }) {
+  const [full, setFull] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  const v = resumeView(a.id, doc);
+  const focusables = () => [...(box.current?.querySelectorAll<HTMLElement>("button, a[href], iframe") ?? [])];
+  // Full screen is a dialog: focus moves into it and stays there, Escape leaves it first (before it would close the
+  // panel), and focus goes back to where it was.
+  useEffect(() => {
+    if (!full) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    focusables()[0]?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setFull(false);
+        return;
+      }
+      const items = focusables();
+      if (e.key !== "Tab" || !items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      opener?.focus();
+    };
+  }, [full]);
+  if (!v.frame) return null;
+  return (
+    <div ref={box} className={full ? "resume-viewer full" : "resume-viewer"} role={full ? "dialog" : undefined} aria-modal={full || undefined} aria-label={full ? `Résumé: ${doc.filename}` : undefined}>
+      <div className="resume-viewer-bar">
+        <span className="resume-viewer-name">{doc.filename}{v.asText ? <span className="muted"> (the words we read from it)</span> : null}</span>
+        <span className="row" style={{ gap: 6 }}>
+          <Button size="sm" icon={full ? "shrink" : "expand"} onClick={() => setFull(!full)}>{full ? "Exit full screen" : "Full screen"}</Button>
+          <a href={v.open} target="_blank" rel="noopener noreferrer" className="btn secondary sm">Open in a new tab</a>
+        </span>
+      </div>
+      <iframe src={v.frame} title={`Résumé: ${doc.filename}`} className="resume-frame" referrerPolicy="same-origin" />
+      {/* Tab out of the framed file lands here and goes back to the top, so focus stays in the full-screen résumé */}
+      {full ? <span tabIndex={0} onFocus={() => focusables()[0]?.focus()} /> : null}
+    </div>
+  );
+}
+
+/** Résumé: the file itself (plan H5), what the résumé says, the files (each opening is recorded), and any earlier readings. */
 export function ResumeTab({ a, roleId }: { a: ApplicationDetail; roleId: string }) {
   const readings = a.assessments.filter((x) => x.kind === "triage" && x.id !== a.assessments[0]?.id);
+  const shown = resumeToShow(a.documents, a.resumeDocumentId);
   return (
     <div className="stack" style={{ gap: 14 }}>
+      {shown ? <ResumeViewer a={a} doc={shown} /> : null}
       <Card title="What the résumé says">
         {a.extraction ? (
           <div className="stack" style={{ gap: 8 }}>
@@ -225,29 +289,74 @@ export function ResumeTab({ a, roleId }: { a: ApplicationDetail; roleId: string 
   );
 }
 
+/** The assistant's suggested line the person kept (Q28): the line itself, and the run it came from, for the record. */
+type KeptSuggestion = { line: string; runId: string | null };
+
 /**
- * Messages: writing to the candidate (F11: the person's own words, under the hiring team's name with theirs in the
- * footer, no AI disclosure line) and every message both ways.
+ * Messages (plan G7): the conversation with the candidate, oldest first, as a thread (what the team sent and who sent it,
+ * what went by itself, an ITS recruiter's answers, and the candidate's replies in their own words), then writing to them
+ * (F11: the person's own words, under the hiring team's name with theirs in the footer). The assistant can suggest an
+ * opening line (Q28); kept, the footer says the assistant helped. Send waits out the Undo window (plan G9).
  */
 export function MessagesTab({ a, roleId, compose, setCompose }: { a: ApplicationDetail; roleId: string; compose: Compose; setCompose: (next: Compose) => void }) {
   const refresh = useRefreshCandidate(a.id, roleId);
+  const undoToast = useUndoToast();
   const { open, subject, text } = compose;
   const setOpen = (v: boolean) => setCompose({ ...compose, open: v });
   const preview = useQuery({ queryKey: ["message-preview", a.id], queryFn: () => api.get<MessagePreview>(`/api/v1/applications/${a.id}/messages/preview`), enabled: open });
+  const [kept, setKept] = useState<KeptSuggestion | null>(null);
+  // The assistant helped only while its line is still in the words that go.
+  const aiHelped = !!kept && text.includes(kept.line);
+  const suggest = useMutation({
+    mutationFn: () => api.post<SuggestedLine>(`/api/v1/applications/${a.id}/messages/suggest`, { purpose: "update" }),
+    onError: (e) => toast(e instanceof ApiError ? e.message : "The assistant could not suggest a line just now."),
+  });
   const send = useMutation({
-    mutationFn: () => api.post<SendMessageResult>(`/api/v1/applications/${a.id}/messages`, { subject: subject.trim() || undefined, text }),
+    mutationFn: () => api.post<SendMessageResult>(`/api/v1/applications/${a.id}/messages`, { subject: subject.trim() || undefined, text, ...(aiHelped ? { aiHelped: true, suggestionRunId: kept?.runId ?? undefined } : {}) }),
     onSuccess: async (r) => {
-      if (r.status === "queued") toast(`Sent to ${a.candidate.firstName}.`, "It is on its way.");
-      else if (r.status === "held") toast("Saved.", "It goes out as soon as ITS confirms your company.");
+      if (r.status === "queued") {
+        const seconds = Math.round(undoMillisLeft(r.undoUntil) / 1000);
+        const t = sentWithUndoToast({ firstName: a.candidate.firstName, seconds, kind: "message" });
+        undoToast({ applicationId: a.id, roleId, communicationId: r.communicationId, undoUntil: r.undoUntil, firstName: a.candidate.firstName, kind: "message", title: t.title, detail: t.detail ?? "", plain: { title: `Sent to ${a.candidate.firstName}.`, detail: "It is on its way." } });
+      } else if (r.status === "held") toast("Saved.", "It goes out as soon as ITS confirms your company.");
       else toast("Saved for approval.", "An owner or admin reads it before it goes out; you will be told.");
       setCompose({ open: false, subject: "", text: "" });
+      setKept(null);
+      suggest.reset();
       await refresh();
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send the message."),
   });
   const first = a.candidate.firstName;
+  const thread = threadItems(a.communications, first);
+  const suggestion = suggest.data;
+  const keepSuggestion = (line: string) => {
+    setCompose({ ...compose, text: text.trim() ? `${line}\n\n${text}` : `${line}\n\n` });
+    setKept({ line, runId: suggestion?.suggestionRunId ?? null });
+  };
   return (
     <div className="stack" style={{ gap: 14 }}>
+      <Card title="Conversation" aside={thread.length ? <span className="small muted">Oldest first</span> : null}>
+        {thread.length ? (
+          <ol className="msg-thread" aria-label={`Messages with ${first}`}>
+            {thread.map((m) => (
+              <li key={m.id} className={`msg-item ${m.from}`}>
+                <p className="msg-head">
+                  <strong>{m.who}</strong>{m.channel === "sms" ? " (text message)" : ""}<span aria-hidden="true"> · </span><span className="sr-only">, </span><time dateTime={new Date(m.at).toISOString()}>{threadWhen(m.at)}</time>
+                  {m.status ? <> <Chip tone={m.statusTone}>{m.status}</Chip></> : null}
+                </p>
+                <p className="msg-subject">{m.subject ?? m.label}</p>
+                {m.long ? (
+                  <details className="msg-more">
+                    <summary>{m.text.slice(0, 160).trimEnd()}… <span className="link-like">Show all</span></summary>
+                    <p className="msg-body">{m.text}</p>
+                  </details>
+                ) : <p className="msg-body">{m.text}</p>}
+              </li>
+            ))}
+          </ol>
+        ) : <p className="muted small">No messages yet.</p>}
+      </Card>
       <Card title={`Write to ${first}`}>
         {!open ? (
           <div className="row">
@@ -256,27 +365,25 @@ export function MessagesTab({ a, roleId, compose, setCompose }: { a: Application
           </div>
         ) : (
           <div className="stack" style={{ gap: 8 }}>
-            <p className="small muted" style={{ margin: 0 }}>Your own words, sent as {preview.data?.fromName ?? "the hiring team"} to {preview.data?.to ?? a.candidate.email}. {preview.data ? (preview.data.repliesComeBack ? "Replies come back to this panel." : "Replies reach the ITS mailbox, where a person reads them.") : ""}{preview.data?.needsApproval ? " An owner or admin reads your message before it goes out." : ""}</p>
+            <p className="small muted" style={{ margin: 0 }}>Your own words, sent as {preview.data?.fromName ?? "the hiring team"} to {preview.data?.to ?? a.candidate.email}. {preview.data ? (preview.data.repliesComeBack ? "Replies come back to this panel." : "Replies reach the ITS mailbox, where a person reads them.") : ""}{preview.data?.needsApproval ? " An owner or admin reads your message before it goes out." : ""}{preview.data?.undoSeconds ? ` After Send you have ${preview.data.undoSeconds} seconds to undo it.` : ""}</p>
             <Field label="Subject (optional)" htmlFor="msg-subject"><input id="msg-subject" className="input" value={subject} onChange={(e) => setCompose({ ...compose, subject: e.target.value })} maxLength={200} /></Field>
             <Field label="Message" htmlFor="msg-text"><textarea id="msg-text" className="input" rows={6} value={text} onChange={(e) => setCompose({ ...compose, text: e.target.value })} maxLength={5000} placeholder={`Hi ${first},`} /></Field>
-            {preview.data ? <div className="small muted" style={{ whiteSpace: "pre-wrap", borderTop: "1px solid var(--line)", paddingTop: 8 }}>{preview.data.footer}</div> : null}
+            {suggestion?.line && !kept ? (
+              <div className="suggested-line">
+                <p className="small" style={{ margin: 0 }}><q>{suggestion.line}</q></p>
+                <p className="small muted" style={{ margin: "4px 0 0" }}>{suggestion.note}</p>
+                <div className="row" style={{ marginTop: 6 }}><Button size="sm" onClick={() => keepSuggestion(suggestion.line!)}>Use this line</Button><Button size="sm" variant="quiet" onClick={() => suggest.reset()}>No thanks</Button></div>
+              </div>
+            ) : suggestion && !suggestion.line ? <p className="small muted" style={{ margin: 0 }}>{suggestion.note}</p> : null}
+            {preview.data ? <div className="small muted" style={{ whiteSpace: "pre-wrap", borderTop: "1px solid var(--line)", paddingTop: 8 }}>{aiHelped && preview.data.aiFooter ? preview.data.aiFooter : preview.data.footer}</div> : null}
             <div className="row">
               <Button size="sm" variant="primary" loading={send.isPending} disabled={!text.trim()} onClick={() => send.mutate()}>{preview.data?.needsApproval ? "Send for approval" : "Send"}</Button>
+              {!kept ? <Button size="sm" variant="secondary" icon="sparkle" loading={suggest.isPending} onClick={() => suggest.mutate()} title="The assistant suggests one opening line; if you keep it, the email says the assistant helped">Suggest an opening line</Button> : null}
               <Button size="sm" variant="quiet" onClick={() => setOpen(false)}>Cancel</Button>
             </div>
+            {aiHelped ? <p className="small muted" style={{ margin: 0 }}>You kept a line the AI assistant suggested, so the footer says the assistant helped write it.</p> : null}
           </div>
         )}
-      </Card>
-      <Card title="Messages">
-        {a.communications.length ? a.communications.map((m) => (
-          <div key={m.id} className="small" style={{ borderTop: "1px solid var(--line)", padding: "8px 0" }}>
-            <strong>{m.direction === "outbound" ? "We sent" : "They wrote"}: {m.subject ?? (m.direction === "inbound" ? `"${m.bodyText.slice(0, 90)}${m.bodyText.length > 90 ? "…" : ""}"` : (m.templateKey ?? "a message").replace(/[:_]/g, " "))}</strong>{" "}
-            <Chip tone={m.status === "sent" || m.status === "received" || m.status === "delivered" ? "good" : m.status === "failed" ? "critical" : "neutral"}>{m.channel}{m.status === "failed" ? " · failed" : m.status === "queued" ? " · waiting to go out" : m.status === "held" ? " · waiting for the ITS check" : ""}</Chip>
-            <br />
-            <span className="muted">{new Date(m.createdAt).toLocaleString()}</span>
-            {m.direction === "inbound" ? <p style={{ margin: "4px 0 0", whiteSpace: "pre-wrap" }}>{m.bodyText}</p> : null}
-          </div>
-        )) : <p className="muted small">No messages yet.</p>}
       </Card>
     </div>
   );

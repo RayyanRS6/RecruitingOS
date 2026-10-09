@@ -11,6 +11,7 @@ import { NO_COMPOSE, PANEL_TABS, composeFor, hasUnsent, latestByTab, markSeen, n
 import { DraftContext, useCandidateAction, useViewer } from "./hooks";
 import { matchOf } from "./match-view";
 import { NeedsYou } from "./needs-you";
+import { NotesTab } from "./notes";
 import { type Compose, HistoryTab, MessagesTab, OverviewTab, ResumeTab, ScreenTab } from "./sections";
 
 /**
@@ -181,12 +182,13 @@ export function CandidatePanel(props: PanelProps) {
       {q.error && !a ? <ErrorState message="Could not load this candidate. They may have been removed, or you may not have access." onRetry={() => q.refetch()} /> : !a ? <Skeleton lines={6} /> : (
         <DraftContext.Provider value={report}>
           <div key={id}>
-            <NeedsYou a={a} roleId={roleId} myRole={viewer.role} myUserId={viewer.userId} step={props.step} setStep={props.onStep} roundKey={props.roundKey} />
+            <NeedsYou a={a} roleId={roleId} myRole={viewer.role} myUserId={viewer.userId} step={props.step} setStep={props.onStep} roundKey={props.roundKey} onTab={onTab} />
             <TabPanel idBase="candidate-panel" value={tab}>
               {tab === "overview" ? <OverviewTab a={a} roleId={roleId} onHistory={() => onTab("history")} /> : null}
               {tab === "screen" ? <ScreenTab a={a} roleId={roleId} myRole={viewer.role} /> : null}
               {tab === "resume" ? <ResumeTab a={a} roleId={roleId} /> : null}
               {tab === "messages" ? <MessagesTab a={a} roleId={roleId} compose={composing} setCompose={setCompose} /> : null}
+              {tab === "notes" ? <NotesTab applicationId={a.id} firstName={a.candidate.firstName} /> : null}
               {tab === "history" ? <HistoryTab a={a} mayReadActivity={canSeeActivity(viewer.role)} /> : null}
             </TabPanel>
           </div>

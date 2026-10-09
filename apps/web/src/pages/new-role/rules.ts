@@ -277,10 +277,20 @@ export type ChecklistItem = { key: string; label: string; done: boolean; value: 
 export function readinessList(r: Pick<IntakeReadiness, "essentials" | "payConfirmed">): { known: ChecklistItem[]; missing: ChecklistItem[]; complete: boolean } {
   const items: ChecklistItem[] = r.essentials.map((e) => {
     if (e.key === "compensation_range" && e.done && !r.payConfirmed) return { key: e.key, label: e.label, done: false, value: e.value, note: "Confirm it on the pay card." };
-    return { key: e.key, label: e.label, done: e.done, value: e.value, note: e.note };
+    return { key: e.key, label: e.label, done: e.done, value: essentialWords(e.key, e.value), note: e.note };
   });
   const missing = items.filter((i) => !i.done);
   return { known: items.filter((i) => i.done), missing, complete: missing.length === 0 };
+}
+
+/**
+ * An essential's value in the team's words: the server keeps some as codes ("new_position"), which "What we know" shows
+ * by their label ("A new position"). Anything the person typed in their own words stays as it is.
+ */
+export function essentialWords(key: string, value: string | null): string | null {
+  if (!value) return value;
+  if (key === "reason_for_hire") return REASON_WORD[value] ?? value;
+  return value;
 }
 
 /** What the disabled "Ask for approval" says when pointed at or pressed: everything still in the way, from the server. */

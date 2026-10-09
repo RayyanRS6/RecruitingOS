@@ -31,8 +31,11 @@ export type ApplicationStage = z.infer<typeof ApplicationStage>;
 
 export const TERMINAL_STAGES: ReadonlySet<ApplicationStage> = new Set(["hired", "withdrawn", "rejected", "talent_pool", "declined"]);
 
-/** Owner Mode groups stages into plain language. */
-export const OwnerGroup = z.enum(["waiting_on_you", "in_process", "not_moving_forward", "hired"]);
+/**
+ * Owner Mode groups stages into plain language. `waiting_on_candidate`: an offer made outside the app with no answer
+ * recorded yet (plan H2); the next move is the candidate's, so it is neither waiting on you nor simply in process.
+ */
+export const OwnerGroup = z.enum(["waiting_on_you", "waiting_on_candidate", "in_process", "not_moving_forward", "hired"]);
 export type OwnerGroup = z.infer<typeof OwnerGroup>;
 
 /**
@@ -93,8 +96,9 @@ export type CandidateNotice = z.infer<typeof CandidateNotice>;
 
 /**
  * How a choice on the stage button is carried out. `set_mark` / `clear_mark`: POST /applications/:id/actions with that
- * action (one click, private). `interview`: open the interview approval card. `offer`: not available yet (offers are made
- * outside the app). `record_hire`: open the hire sheet (POST /applications/:id/outcome, hired_externally). `decline`:
+ * action (one click, private). `interview`: open the interview approval card. `offer`: record that an offer was made
+ * outside the app (POST /applications/:id/offer, plan H2; the app never writes or sends it). `record_hire`: open the hire
+ * sheet (POST /applications/:id/outcome, hired_externally). `decline`:
  * open the private decline (POST /applications/:id/actions, reject, reason required). `none`: where they are now.
  */
 export const StageMoveVia = z.enum(["none", "set_mark", "clear_mark", "interview", "offer", "record_hire", "decline"]);
@@ -117,6 +121,28 @@ export const RejectReason = z.enum([
   "other",
 ]);
 export type RejectReason = z.infer<typeof RejectReason>;
+/**
+ * The approved wordings of the decision message (founder decision Q28; plan G6). The wording is always ours, never the
+ * AI's: `v1` (the standard wording), `v2` (warmer) and `v3` (shorter) after any decision; `after_interview` for someone
+ * who met the team; `position_filled` once the job went to someone else; `role_closed`, the closing message when a role
+ * closes (Q30); `eligibility`, fixed, after a decline on an eligibility answer. Draft wording, counsel register item 23.
+ */
+export const DecisionWording = z.enum(["v1", "v2", "v3", "after_interview", "position_filled", "role_closed", "eligibility"]);
+export type DecisionWording = z.infer<typeof DecisionWording>;
+export const DECISION_WORDING_LABEL: Record<DecisionWording, string> = {
+  v1: "Standard",
+  v2: "Warmer",
+  v3: "Shorter",
+  after_interview: "After an interview",
+  position_filled: "Position filled",
+  role_closed: "Role closed",
+  eligibility: "Eligibility answer",
+};
+/** The wordings a person may choose on the Send screen; the eligibility wording and the closing message are chosen for them. */
+export const CHOOSABLE_WORDINGS: readonly DecisionWording[] = ["v1", "v2", "v3", "after_interview", "position_filled"];
+/** A personal line added to a decision message or another message (Q28): one or two sentences. */
+export const PERSONAL_LINE_MAX = 300;
+
 /** The fixed reasons as the team reads them (the role report uses the same words). Never shown to the candidate. */
 export const DECLINE_REASON_LABEL: Record<RejectReason, string> = {
   eligibility: "Did not meet an eligibility rule",

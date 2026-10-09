@@ -384,7 +384,7 @@ describe("the stage strip, private marks and private decisions", () => {
 
     it("correcting an outcome from one decision to the other keeps whether they were told, so nobody is written to twice", async () => {
       const id = await seed("Flo");
-      const r = await json(owner, "POST", `/api/v1/applications/${id}/outcome`, { outcome: "employer_declined", confirm: true, reason: "Not the right fit" });
+      const r = await json(owner, "POST", `/api/v1/applications/${id}/outcome`, { outcome: "employer_declined", confirm: true, reason: "not_a_match_experience", note: "Not the right fit" });
       expect(r.status).toBe(201);
       const { outcomeId } = (await r.json()) as { outcomeId: string };
       expect((await act(owner, id, { action: "told_in_person" })).status).toBe(200);
@@ -445,7 +445,9 @@ describe("the stage strip, private marks and private decisions", () => {
       expect(found).toHaveLength(1);
       expect(found[0].applicationIds).toContain(id);
       expect(found[0].body).toContain("Hal Moss");
-      expect(found[0].body).toMatch(/nothing goes out by itself/);
+      // the reminder says what happens at five working days (Q27): the standard message by itself, or a recruiter instead
+      expect(found[0].body).toMatch(/after 5 working days, the standard message goes by itself and you are told/);
+      expect(found[0].body).toMatch(/a recruiter is brought in instead and nothing is sent/);
       expect(found[0].action.href).toBe(`/roles/${roleId}/talent?ownerStage=not_moving_forward&told=not_told`);
       const deps = { integrations: container.integrations, appBaseUrl: "http://localhost:3000", itsQueueEmail: "queue@its.test", now: new Date(), actor: { kind: "system" as const, id: "test" } };
       expect(await withTenant(container.db, companyId, (tx) => runInterventionLadder(tx, deps, companyId, found))).toContainEqual(expect.objectContaining({ detector: "decisions_untold", level: "brief" }));

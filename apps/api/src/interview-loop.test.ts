@@ -205,16 +205,17 @@ describe("the loop after an interview", () => {
     expect(outbox().filter((m) => m.to === cand.email).slice(before)).toHaveLength(0);
     const decisionRows = () => container.db.select().from(communications).where(and(eq(communications.applicationId, cand.id), like(communications.templateKey, "disposition:%")));
     expect(await decisionRows()).toHaveLength(0);
-    // a person sends it: one respectful message, and the interview that already took place is not called off in it
-    expect(await (await json(owner, "POST", `/api/v1/applications/${cand.id}/actions`, { action: "send_decision" })).json()).toMatchObject({ candidateNotice: "queued" });
+    // a person sends it: one respectful message in the wording suggested for someone who met the team (Q28), and the
+    // interview that already took place is not called off in it
+    expect(await (await json(owner, "POST", `/api/v1/applications/${cand.id}/actions`, { action: "send_decision" })).json()).toMatchObject({ candidateNotice: "queued", wording: "after_interview" });
     const queued = await decisionRows();
     expect(queued).toHaveLength(1);
-    expect(queued[0].templateKey).toBe("disposition:human");
+    expect(queued[0].templateKey).toBe("disposition:after_interview");
     await container.drain();
     const mail = outbox().filter((m) => m.to === cand.email).slice(before);
     expect(mail).toHaveLength(1);
     expect(mail[0].subject).toBe("Your application to Smile Bright Dental");
-    expect(mail[0].text).toMatch(/decided not to move forward/);
+    expect(mail[0].text).toMatch(/Thank you for taking the time to meet the team at Smile Bright Dental\. After the interviews, the team has decided not to move forward/);
     expect(mail[0].text).not.toMatch(/cancelled/);
     expect((await application(cand.id)).toldState).toBe("sent");
     expect((await interview(iv.id)).decision).toBe("not_moving_forward");
@@ -465,9 +466,10 @@ describe("the loop after an interview", () => {
     const pick = await app.request(`/c/schedule/${offered.scheduleToken}`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ slotId: offered.offeredSlots[0].id, timezone: "America/New_York" }).toString() });
     expect(pick.status).toBe(410);
     expect((await interview(iv.id)).selectedSlot).toBeNull();
-    // the offer's reminder never goes
+    // the offer's reminder never goes (this suite's clock runs days ahead of the decision, so the untold safety net,
+    // Q27, may have sent the decision message by now: that is not the offer's reminder)
     await advance(3 * DAY);
-    expect(mailTo(cand.email, before)).toHaveLength(1);
+    expect(mailTo(cand.email, before).filter((m) => !/^Your application to/.test(m.subject))).toHaveLength(1);
     // the decision message, when someone sends it, does not say the times are gone a second time
     const preview = (await (await json(owner, "GET", `/api/v1/applications/${cand.id}/decision-message`)).json()) as { text: string };
     expect(preview.text).not.toContain(`The times we offered you for the ${offered.title}`);
@@ -499,7 +501,7 @@ describe("the loop after an interview", () => {
     const iv = await requestInterview(cand.id);
     await book(iv.id);
     const before = sentTo(cand.email);
-    const r = await json(owner, "POST", `/api/v1/applications/${cand.id}/outcome`, { outcome: "candidate_withdrew", confirm: true, reason: "Took another job." });
+    const r = await json(owner, "POST", `/api/v1/applications/${cand.id}/outcome`, { outcome: "candidate_withdrew", confirm: true, note: "Took another job." });
     expect(r.status, await r.clone().text()).toBe(201);
     await container.drain();
     expect((await interview(iv.id)).status).toBe("cancelled");
@@ -525,7 +527,8 @@ describe("the loop after an interview", () => {
     expect((await interview(iv.id)).status).toBe("cancelled");
     const mail = mailTo(cand.email, before);
     expect(mail).toHaveLength(1);
-    expect(mail[0].text).toMatch(/decided not to move forward/);
+    // declined as "position filled", so the wording suggested for that reason (Q28)
+    expect(mail[0].text).toMatch(/The position has now been filled/);
     expect(mail[0].text).toMatch(/is cancelled, so there is no need to attend\./);
   });
 

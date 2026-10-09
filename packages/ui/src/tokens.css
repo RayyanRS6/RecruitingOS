@@ -485,6 +485,11 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
 .toast.critical svg.icon { color: var(--critical-dot); }
 .toast-title { display: block; font-weight: 600; }
 .toast-detail { display: block; margin-top: 1px; font-size: 13px; opacity: 0.8; }
+/* An action on a toast ("Undo"): outlined in the toast's own ink, at the end of the line. */
+.toast.has-action { align-items: center; }
+.toast-action { flex: none; margin-left: 6px; padding: 5px 12px; border: 1px solid currentColor; border-radius: var(--r-control); background: transparent; color: inherit; font: 600 13px/1.2 var(--ui); cursor: pointer; }
+.toast-action:hover { background: var(--ground); color: var(--ink); }
+.toast-action:focus-visible { outline-color: var(--ground); }
 
 /* A dot on a tab with something new in it (the candidate panel's unread markers). */
 .tab .tab-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--caution-dot); }
@@ -551,11 +556,68 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
   .history li { grid-template-columns: minmax(0, 1fr); }
 }
 
+/* Telling a candidate (Wave G): the Send screen's approved wordings, the message as it will read, the safety net line. */
+.wording-picker { display: grid; gap: 6px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.wording-picker legend { margin-bottom: 4px; font-weight: 600; }
+.wording-option { display: flex; align-items: flex-start; gap: 10px; padding: 9px 12px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); cursor: pointer; font-size: 14px; }
+.wording-option:hover { border-color: var(--ink-3); }
+.wording-option[data-checked="true"] { border-color: var(--ink); background: var(--surface-2); }
+.wording-option input { margin: 3px 0 0; flex: none; }
+.message-preview { padding: 12px 14px; background: var(--ground); }
+.safety-net { padding-left: 10px; border-left: 2px solid var(--line-2); }
+.interview-filled { padding: 8px 10px; border-radius: var(--r-control); background: var(--surface-2); color: var(--ink-2); }
+/* People named on a card (who is still in process, who gets the closing message, the backups after a hire). */
+.people-list { display: grid; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; }
+.people-list li { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 14px; }
+/* The hire sheet's two ways on: close the role now, or keep the backups warm. */
+.hire-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 12px; }
+.hire-choice { display: grid; gap: 6px; align-content: start; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--ground); }
+.hire-choice .btn { justify-self: start; }
+
+/* The conversation thread on the Messages tab (Wave G): the team's messages on the left, the candidate's on the right. */
+.msg-thread { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.msg-item { max-width: 88%; padding: 10px 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--ground); overflow-wrap: anywhere; align-self: flex-start; border-bottom-left-radius: 6px; }
+.msg-item.candidate { align-self: flex-end; background: var(--ink); border-color: var(--ink); color: var(--ground); border-bottom-left-radius: 14px; border-bottom-right-radius: 6px; }
+.msg-item.candidate .msg-head, .msg-item.candidate .msg-subject { color: inherit; opacity: 0.85; }
+.msg-item.recruiter { border-color: var(--line-2); background: var(--surface-2); }
+.msg-head { margin: 0 0 3px; color: var(--ink-3); font-size: 12.5px; }
+.msg-head strong { color: var(--ink-2); font-weight: 600; }
+.msg-item.candidate .msg-head strong { color: inherit; }
+.msg-subject { margin: 0 0 4px; font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.msg-body { margin: 0; font-size: 13.5px; white-space: pre-wrap; }
+.msg-more summary { cursor: pointer; font-size: 13.5px; color: var(--ink-2); }
+.link-like { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+.suggested-line { padding: 10px 12px; border: 1px dashed var(--line-strong); border-radius: var(--r-control); background: var(--ground); }
+@media (max-width: 640px) {
+  .msg-item { max-width: 96%; }
+}
+
+/* Private team notes (Wave H): your own note with its starters, everyone else's, and the summary on a decision card. */
+.note-box { min-height: 120px; }
+.note-problem { color: var(--critical); }
+.note-list, .note-versions, .note-lines { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.note-item { display: flex; align-items: flex-start; gap: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.note-item:first-child { padding-top: 0; border-top: 0; }
+.note-body { margin: 2px 0 0; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
+.note-versions { margin-top: 8px; }
+.notes-summary { display: grid; gap: 4px; justify-items: start; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-control); background: var(--ground); }
+.note-lines { gap: 3px; }
+
+/* The résumé inside the candidate panel (Wave H): a frame of this site's own address, or the whole window. */
+.resume-viewer { display: grid; gap: 8px; }
+.resume-viewer-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 10px; }
+.resume-viewer-name { min-width: 0; font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+.resume-frame { display: block; width: 100%; height: min(70vh, 760px); border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); }
+.resume-viewer.full { position: fixed; inset: 0; z-index: var(--z-toast); grid-template-rows: auto minmax(0, 1fr); padding: 12px 16px 16px; background: var(--ground); }
+.resume-viewer.full .resume-frame { height: 100%; }
+
 /* The job builder (Wave C, /roles/new): the conversation on the left with the question card docked at its foot, the
    draft on the right, both the height of the window on a desk; one at a time on a phone (SplitView's switch). */
 .main:has(.builder), .main:has(.start) { max-width: 1440px; }
 .autogrow { display: block; width: 100%; resize: none; overflow-y: hidden; }
-.builder { display: grid; gap: 14px; }
+/* minmax(0, 1fr) and min-width: 0 on every part, so nothing in the builder can push the page wider than the window. */
+.builder { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.builder > * { min-width: 0; }
 .builder-head { display: flex; align-items: flex-end; gap: 10px 16px; flex-wrap: wrap; }
 .builder-head-title { display: grid; gap: 4px; min-width: 0; flex: 1 1 260px; }
 .builder-head h1 { font-size: var(--text-xl); min-width: 0; overflow-wrap: anywhere; }
@@ -764,7 +826,8 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
   .chat, .draft { height: calc(100dvh - 250px); min-height: 420px; }
   .chat-log { padding: 14px 12px 8px; }
   .draft-body { padding: 14px 14px 24px; }
-  .builder-head-actions { margin-left: 0; width: 100%; }
+  /* the actions keep to the right on their own line, so More's menu and the approval tip open inside the window */
+  .builder-head-actions { margin-left: 0; width: 100%; justify-content: flex-end; }
   .start { margin-top: 2vh; }
 }
 

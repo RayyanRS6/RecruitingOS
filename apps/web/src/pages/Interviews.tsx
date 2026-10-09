@@ -7,8 +7,9 @@ import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, Fiel
 import { api, ApiError, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me } from "../api/client";
 import { toast } from "../toast";
 import { activeCompanyOf } from "../rail";
-import { canDecideInterviews, canManageInterviews, canSeeTalent } from "../roles";
+import { canDecideInterviews, canManageInterviews, canReadNotes, canSeeTalent } from "../roles";
 import { interviewCancelToast } from "../talent-actions";
+import { MyNote, useNotes } from "./candidate-panel/notes";
 
 const STATUS_LABEL: Record<string, string> = { proposed: "Preparing times", scheduling: "Waiting on the candidate", scheduled: "Scheduled", completed: "Completed", cancelled: "Cancelled", no_show: "No-show", offer_expired: "Times expired" };
 const DECISION_LABEL: Record<string, string> = { next_round: "Next round", finalist: "Finalist", not_moving_forward: "Not moving forward", hired: "Hired" };
@@ -114,6 +115,7 @@ function InterviewSheet({ id, role, userId }: { id: string; role: string | null;
             {canSeeTalent(role) ? <Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}&message=1`} className="btn secondary sm">Message the candidate</Link> : null}
           </div>
           {i.brief ? <BriefCard brief={i.brief} /> : null}
+          {participant || canReadNotes(role) ? <InterviewNote applicationId={i.applicationId} roleId={i.roleId} firstName={i.candidate.firstName} seesTalent={canSeeTalent(role)} /> : null}
           {finished ? (
             <Card needsYou={!i.decision && canDecideInterviews(role)} title="After the interview">
               {i.decision ? (
@@ -165,6 +167,25 @@ function InterviewSheet({ id, role, userId }: { id: string; role: string | null;
         </div>
       )}
     </Drawer>
+  );
+}
+
+/**
+ * Your own private note on the candidate (founder decision Q24; plan H3), beside the interview: an interviewer writes
+ * theirs once the interview has started and never sees anyone else's; the hiring team reads everyone's on the
+ * candidate's page. Never shown to the candidate, never given to the AI assistant.
+ */
+function InterviewNote({ applicationId, roleId, firstName, seesTalent }: { applicationId: string; roleId: string; firstName: string; seesTalent: boolean }) {
+  const q = useNotes(applicationId);
+  if (q.isLoading) return <Skeleton lines={2} />;
+  // a refusal (not on this candidate's interviews) shows nothing here; every other error says so
+  if (q.error instanceof ApiError && q.error.status === 403) return null;
+  if (q.error || !q.data) return <ErrorState message="Could not load your note." onRetry={() => q.refetch()} />;
+  return (
+    <div className="stack" style={{ gap: 6 }}>
+      <MyNote applicationId={applicationId} view={q.data} firstName={firstName} compact />
+      {seesTalent && q.data.canRead === "all" ? <p className="small muted" style={{ margin: 0 }}>Everyone's notes are on <Link to={`/roles/${roleId}/talent?open=${applicationId}&tab=notes`}>{firstName}'s page</Link>.</p> : <p className="small muted" style={{ margin: 0 }}>Only you and the hiring team read your note; {firstName} never does.</p>}
+    </div>
   );
 }
 

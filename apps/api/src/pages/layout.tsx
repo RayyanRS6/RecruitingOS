@@ -159,6 +159,7 @@ input[type=checkbox], input[type=radio] { accent-color: var(--ink); }
 form small, .form-preview small { display: block; margin-top: 6px; }
 fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 legend { padding: 0; color: var(--ink-3); font-size: 14.5px; }
+legend.question-legend { margin: 0 0 6px; color: var(--ink); font-size: 15px; font-weight: 600; }
 /* A QR code needs a light background in both themes to scan. */
 .qr { padding: 8px; border-radius: var(--r-control); background: white; }
 
@@ -259,7 +260,7 @@ ul.checks .icon { margin-top: 4px; color: var(--ink-2); }
 /* Applying without a resume: four short questions behind a disclosure that works without script */
 details.no-resume { margin: 20px 0 0; padding: 14px 16px; border: 1px solid var(--line-2); border-radius: var(--r-card); background: var(--surface); }
 details.no-resume > summary { color: var(--ink); font-weight: 600; cursor: pointer; }
-details.no-resume > p { margin: 10px 0 0; }
+details.no-resume fieldset > p { margin: 10px 0 0; }
 details.no-resume label { margin-top: 16px; }
 @media (max-width: 600px) {
   main { width: auto; margin: 12px; padding: 24px 18px 28px; border-radius: var(--r-card); }

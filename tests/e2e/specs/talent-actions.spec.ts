@@ -50,15 +50,39 @@ test.describe("the candidate panel's choices", () => {
     await maria.getByRole("button", { name: "Confirm: not moving forward" }).click();
     await expect(page.getByRole("status").filter({ hasText: /Moved to Not moving forward\..*Private: the candidate was not told\./ })).toBeVisible();
 
-    // Telling them is a separate act: the exact message first, then Send
+    // Telling them is a separate act (founder decisions B6, Q27, Q28): the card says when the safety net acts; the Send
+    // screen offers the approved wordings and a personal line, checked before anything goes; the exact message; then Send
     await expect(maria.getByRole("heading", { name: "Maria has not been told yet" })).toBeVisible({ timeout: 30_000 });
+    await expect(maria.getByText(/^Safety net: the standard message goes to Maria by itself on \w+day, /)).toBeVisible();
     await maria.getByRole("button", { name: "Send message" }).click();
-    await expect(maria.getByText(/Your application to/)).toBeVisible({ timeout: 30_000 });
-    await expect(maria.getByText(/It goes as soon as you press Send\./)).toBeVisible();
+    await expect(maria.getByText("What Maria gets")).toBeVisible({ timeout: 30_000 });
+    await expect(maria.getByText(/It goes when you press Send, after \d+ seconds in which you can still undo it\./)).toBeVisible();
+    await maria.getByRole("radio", { name: "Warmer" }).check();
+    // a personal line that hints at a score is refused, saying what to take out, and Send waits
+    const line = maria.getByLabel("A personal line (optional)");
+    await line.fill("Your score was very close.");
+    await expect(maria.getByRole("alert").filter({ hasText: /A personal line can't mention a score or rating/ })).toBeVisible({ timeout: 15_000 });
+    await expect(maria.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+    await line.fill("It was a pleasure to read about your work.");
+    await expect(maria.locator(".message-preview").getByText(/It was a pleasure to read about your work\./)).toBeVisible({ timeout: 15_000 });
     await expectAccessible(page, "candidate panel with the decision message preview");
     await maria.getByRole("button", { name: "Send", exact: true }).click();
-    await expect(page.getByRole("status").filter({ hasText: /Decision message sent\./ })).toBeVisible();
+    // Undo takes it back while it waits out its window: she is not told
+    const sent = page.getByRole("status").filter({ hasText: /Decision message sent \(Warmer\)\./ });
+    await expect(sent).toBeVisible();
+    await sent.getByRole("button", { name: "Undo" }).click();
+    await expect(page.getByRole("status").filter({ hasText: /Taken back\..*Maria has not been told\./ })).toBeVisible();
+    await expect(maria.getByRole("heading", { name: "Maria has not been told yet" })).toBeVisible({ timeout: 30_000 });
+    // sent again, it goes; the conversation on the Messages tab shows both, the first one taken back
+    await maria.getByRole("button", { name: "Send message" }).click();
+    await expect(maria.getByText("What Maria gets")).toBeVisible({ timeout: 30_000 });
+    await maria.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.getByRole("status").filter({ hasText: /Decision message sent/ })).toBeVisible();
     await expect(maria.getByRole("heading", { name: "Maria has not been told yet" })).toHaveCount(0, { timeout: 30_000 });
+    await maria.getByRole("tab", { name: "Messages" }).click();
+    await expect(maria.getByRole("list", { name: "Messages with Maria" })).toBeVisible();
+    await expect(maria.getByText("Taken back before it was sent")).toBeVisible();
+    await expectAccessible(page, "candidate panel conversation thread");
     await page.keyboard.press("Escape");
     await expect(page).not.toHaveURL(/open=/);
 

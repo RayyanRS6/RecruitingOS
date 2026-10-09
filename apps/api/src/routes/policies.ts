@@ -17,7 +17,7 @@ const LEVEL_WORDS: Record<string, string> = { auto: "Do it", auto_notify: "Do it
 const GROUPS: Record<string, string[]> = {
   "Roles and posting": ["role_packet.approve", "posting.sponsor_spend"],
   "Applicants": ["application.triage", "application.hold_ineligible", "application.reject_ineligible", "application.reject_on_assessment", "application.invite_screen", "screen.conduct", "application.recommend_interview"],
-  "Messages": ["message.send_templated", "message.send_freeform", "disposition.send"],
+  "Messages": ["message.send_templated", "message.send_freeform", "disposition.send", "message.still_reviewing"],
   "Interviews": ["interview.request", "interview.schedule", "interview.reschedule", "interview.record", "scorecard.draft", "debrief.recommend", "candidate.hire_decision"],
   "Offers": ["offer.draft", "offer.send", "offer.negotiate", "offer.revise"],
   "After the offer": ["reference.request", "background_check.order", "background_check.adverse_action", "employee.create_in_hris", "welcome.send", "checkin.request"],
@@ -32,7 +32,7 @@ const GROUPS: Record<string, string[]> = {
  */
 export const SETTABLE: ReadonlySet<string> = new Set([
   "role_packet.approve", "application.hold_ineligible", "application.invite_screen", "application.recommend_interview",
-  "message.send_freeform", "disposition.send", "intervention.nudge", "intervention.offer_recruiter",
+  "message.send_freeform", "disposition.send", "message.still_reviewing", "intervention.nudge", "intervention.offer_recruiter",
 ]);
 
 /**

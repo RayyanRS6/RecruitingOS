@@ -11,6 +11,8 @@ export const ActionType = z.enum([
   "posting.sponsor_spend",
   "message.send_templated",
   "message.send_freeform",
+  /** A short "still reviewing" note to someone who has waited a long time for a decision (plan G10). */
+  "message.still_reviewing",
   "application.triage",
   "application.hold_ineligible",
   "application.reject_ineligible",

@@ -1,24 +1,34 @@
 import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeMarksFor, addCalendarDays, boardPostingOf, can, closingDayWords, companyToday, groupFor, isBoardChannel, isPostingTask, mayDecideApproval, openFlagsMessage, ownerGroup, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unresolvedFlags } from "@ros/core";
 import { legalCheckFor, legalCheckMessage } from "./packet-approval";
-import { HELD_STATUS, detectStuckRoles } from "@ros/agents";
-import { companyOnboarding, companyVerifiedAt, type CompanyOnboarding, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
+import { HELD_STATUS, UNTOLD_SEND_WORKING_DAYS, detectStuckRoles, isClosingProposal, removedCandidates } from "@ros/agents";
+import { DECISION_WORDING_LABEL, companyOnboarding, companyVerifiedAt, type CompanyOnboarding, type DecisionWording, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
 import { applications, approvalRequests, assessments, candidates, communications, companies, events, intakeSessions, integrations, interviewParticipants, interviewerAvailability, interviews, invitations, memberships, postings, recruiterEscalations, rolePackets, roles, screens, type Tx } from "@ros/db";
 import type { Tenant } from "../middleware/session";
 import { mayDecideByRole } from "./approvers";
 import { APPROVAL_LABEL } from "./role-report";
 import { escalationInScope, inStaffScope, staffMayAsk, staffScopeOf, type StaffScope } from "./staff-scope";
 import { boardView, loadPool } from "./pool";
+import { backupsWarmCards } from "./hire-sheet";
 
 /**
  * What a decision card says for an approval that has no card of its own: a question in plain words (never an action
  * key), who and what it is about, and buttons named for what they do. Unknown action types still get a readable title.
  */
-function approvalCardWords(actionType: string, ctx: { who: string; roleTitle: string | null; rationale: string | null; requestedBy: string | null }): { title: string; body: string; approve: string; reject: string } {
+function approvalCardWords(actionType: string, ctx: { who: string; roleTitle: string | null; rationale: string | null; requestedBy: string | null; closing?: { count: number } | null; proposal?: Record<string, unknown> | null }): { title: string; body: string; approve: string; reject: string } {
   const about = ctx.roleTitle ? ` for ${ctx.roleTitle}` : "";
+  if (actionType === "disposition.send" && ctx.closing) {
+    // The one closing message of a closed role (Q30), approved once for everyone it names.
+    const people = ctx.closing.count === 1 ? "1 person" : `${ctx.closing.count} people`;
+    return { title: `Send the closing message to ${people}${ctx.roleTitle ? ` (${ctx.roleTitle})` : ""}?`, body: `${ctx.requestedBy ?? "Someone on your team"} wants to tell ${people} who were still in process when the role closed, with one courteous closing message. They stay in your talent pool unless they asked not to be kept. Nobody is told until someone approves it; "Do not send" leaves them not told.`, approve: "Yes, send it to everyone", reject: "Do not send" };
+  }
   if (actionType === "disposition.send") {
-    // A Send under "ask me first" (founder decision B6): the decision was private; this is the message telling them.
-    return { title: `Send the decision message to ${ctx.who}?`, body: ctx.rationale ?? `${ctx.requestedBy ?? "Someone on your team"} wants to tell ${ctx.who} that they are not moving forward${about}, with the standard message. It goes only once someone approves it; until then they have not been told.`, approve: "Yes, send it", reject: "Do not send" };
+    // A Send under "ask me first" (founder decision B6): the decision was private; this is the message telling them, in
+    // the approved wording the person chose, with their personal line if they wrote one (Q28).
+    const wording = typeof ctx.proposal?.wording === "string" && ctx.proposal.wording in DECISION_WORDING_LABEL ? DECISION_WORDING_LABEL[ctx.proposal.wording as DecisionWording] : null;
+    const line = (ctx.proposal?.personalLine as { text?: string } | null | undefined)?.text;
+    const which = wording ? `the approved "${wording}" message` : "the standard message";
+    return { title: `Send the decision message to ${ctx.who}?`, body: ctx.rationale ?? `${ctx.requestedBy ?? "Someone on your team"} wants to tell ${ctx.who} that they are not moving forward${about}, with ${which}.${line ? ` They added a personal line: "${line}"` : ""} It goes only once someone approves it; until then they have not been told.`, approve: "Yes, send it", reject: "Do not send" };
   }
   const label = APPROVAL_LABEL[actionType] ?? "A decision is waiting for you";
   return { title: ctx.roleTitle ? `${label} (${ctx.roleTitle})` : label, body: ctx.rationale ?? "", approve: "Approve", reject: "Decline" };
@@ -30,9 +40,10 @@ const CHANNEL_NAME: Record<string, string> = { careers_page: "your careers page"
  * `closing_date`: a role's closing date stopped applications, or stops them tonight or tomorrow night (plan D7), with
  * "Extend by two weeks" (a POST), another date, or closing the role. `share`: the day a job opens, the moment to share it (D8).
  * `pool_ready`: a role's pool is sorted on the board and waiting for Review and apply (plan F7), with the summary.
+ * `hire`: a recorded hire whose start date has not passed, with the people still in the running to keep warm (plan H1).
  */
 export type BriefCard = {
-  kind: "new_applicants" | "needs_review" | "decision" | "posting_action" | "escalation" | "stuck" | "screening" | "interviews" | "empty" | "getting_started" | "draft" | "closing_date" | "share" | "pool_ready";
+  kind: "new_applicants" | "needs_review" | "decision" | "posting_action" | "escalation" | "stuck" | "screening" | "interviews" | "empty" | "getting_started" | "draft" | "closing_date" | "share" | "pool_ready" | "hire";
   title: string;
   body: string;
   roleId?: string;
@@ -144,7 +155,10 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
       if (viewer && !mayDecideByRole(p.requiredRoles, viewer.role)) continue;
       const where = p.applicationId ? `/roles/${p.roleId}/talent?open=${p.applicationId}` : p.roleId ? `/roles/${p.roleId}` : null;
       const n = p.applicationId ? pendingNames.find((x) => x.id === p.applicationId) : undefined;
-      const words = approvalCardWords(p.actionType, { who: n ? `${n.firstName} ${n.lastName}`.trim() || "the candidate" : "the candidate", roleTitle: role?.title ?? null, rationale: p.rationale, requestedBy: p.requestedBy.kind === "user" || p.requestedBy.kind === "recruiter" ? p.requestedBy.name ?? null : null });
+      // A closed role is not among the open ones: its closing message's card names it from the request.
+      const closing = p.actionType === "disposition.send" && !p.applicationId && isClosingProposal(p.proposal) ? { count: p.proposal.applicationIds.length } : null;
+      const [closedRole] = closing && !role && p.roleId ? await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, p.roleId)).limit(1) : [];
+      const words = approvalCardWords(p.actionType, { who: n ? `${n.firstName} ${n.lastName}`.trim() || "the candidate" : "the candidate", roleTitle: role?.title ?? closedRole?.title ?? null, rationale: closing ? null : p.rationale, requestedBy: p.requestedBy.kind === "user" || p.requestedBy.kind === "recruiter" ? p.requestedBy.name ?? null : null, closing, proposal: p.proposal as Record<string, unknown> });
       cards.push({ kind: "decision", title: words.title, body: words.body, roleId: p.roleId ?? undefined, applicationId: p.applicationId ?? undefined, approvalRequestId: p.id, actions: [{ label: words.approve, method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "approve" } }, { label: words.reject, method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "reject" } }, ...(where ? [{ label: "Review first", method: "GET" as const, path: where }] : [])] });
     }
   }
@@ -176,7 +190,10 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     const parked = (id: string) => { const m = marks.get(id); return m?.mark === "on_hold" || m?.mark === "not_a_fit_for_now"; };
     const waiting = apps.filter((a) => !parked(a.id) && ((ownerGroup(a.stage) === "waiting_on_you" && a.stage !== "interview_complete" && a.stage !== "ineligible") || a.stage === "eligible"));
     const ineligible = apps.filter((a) => a.stage === "ineligible");
-    const notTold = tells ? apps.filter((a) => DECISION_STAGES.includes(a.stage) && a.toldState === "not_told") : [];
+    const decidedNotTold = tells ? apps.filter((a) => DECISION_STAGES.includes(a.stage) && a.toldState === "not_told") : [];
+    // someone whose details were deleted at their request is never written to, so nobody is asked to tell them
+    const removed = await removedCandidates(tx, decidedNotTold.map((a) => a.candidateId));
+    const notTold = decidedNotTold.filter((a) => !removed.has(a.candidateId));
     for (const card of await afterInterviewCards(tx, role, apps.filter((a) => a.stage === "interview_complete"), afterInterview)) cards.push(card);
     if (fresh.length) {
       cards.push({ kind: "new_applicants", title: `${fresh.length} ${fresh.length === 1 ? "person" : "people"} applied to ${role.title} since yesterday`, body: waiting.length ? `${waiting.length} ${waiting.length === 1 ? "is" : "are"} ready for your review.` : "They are being acknowledged and checked for eligibility.", roleId: role.id, actions: [{ label: "See applicants", method: "GET", path: `/roles/${role.id}/talent` }] });
@@ -212,9 +229,9 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   // however long ago it closed, so nobody drops out of sight (the untold safety net). One query for every closed role.
   if (tells) {
     const closedRoles = (await tx.select({ id: roles.id, title: roles.title }).from(roles).where(and(eq(roles.companyId, companyId), eq(roles.status, "closed")))).filter((r) => inStaffScope(scope, { roleId: r.id }));
-    const untoldClosed = closedRoles.length ? await tx.select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId }).from(applications).where(and(inArray(applications.roleId, closedRoles.map((r) => r.id)), inArray(applications.stage, [...DECISION_STAGES]), eq(applications.toldState, "not_told"))) : [];
+    const untoldClosed = closedRoles.length ? await tx.select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(inArray(applications.roleId, closedRoles.map((r) => r.id)), inArray(applications.stage, [...DECISION_STAGES]), eq(applications.toldState, "not_told"), isNull(candidates.anonymizedAt))) : [];
     for (const role of closedRoles) {
-      const card = await notToldCard(tx, role, untoldClosed.filter((a) => a.roleId === role.id && inStaffScope(scope, { roleId: role.id, applicationId: a.id })));
+      const card = await notToldCard(tx, role, untoldClosed.filter((a) => a.roleId === role.id && inStaffScope(scope, { roleId: role.id, applicationId: a.id })), { closed: true });
       if (card) cards.push(card);
     }
   }
@@ -256,9 +273,28 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
       cards.push({ kind: "needs_review", title: narrowed ? `A hold has ended (${d.roleTitle})` : d.title, body: narrowed ? "You put them on hold until now; decide what comes next. Nothing has been sent to them." : d.body, roleId: d.roleId, ...(own.length === 1 ? { applicationId: own[0] } : {}), actions: [{ label: d.action.label, method: "GET", path: own.length === 1 ? `/roles/${d.roleId}/talent?open=${own[0]}` : d.action.href }] });
       continue;
     }
+    // An offer made outside the app with no answer recorded (plan G10): the team's own follow-up, not a role at risk.
+    if (d.detector === "offers_waiting") {
+      const own = scope?.applicationId ? (d.applicationIds ?? []).filter((id) => id === scope.applicationId) : d.applicationIds ?? [];
+      if (!own.length) continue;
+      const narrowed = own.length !== (d.applicationIds ?? []).length;
+      cards.push({ kind: "needs_review", title: narrowed ? `An offer has had no answer recorded (${d.roleTitle})` : d.title, body: narrowed ? "Check in with them, then record whether they accepted or declined. The app never sends or changes an offer." : d.body, roleId: d.roleId, ...(own.length === 1 ? { applicationId: own[0] } : {}), actions: [{ label: d.action.label, method: "GET", path: own.length === 1 ? `/roles/${d.roleId}/talent?open=${own[0]}` : d.action.href }] });
+      continue;
+    }
+    // A long wait (plan G10): the person waiting longest, named, with the three ways forward on their page: decide, hold
+    // with a date, or send them a note. A recruiter given one candidate hears about that candidate only.
+    if (d.detector === "candidates_waiting" && d.applicationIds?.length) {
+      const own = scope?.applicationId ? d.applicationIds.filter((id) => id === scope.applicationId) : d.applicationIds;
+      if (!own.length) continue;
+      const card = await longWaitCard(tx, d, own, scope?.applicationId ? null : mayAskAboutRole(d.roleId));
+      if (card) cards.push(card);
+      continue;
+    }
     cards.push({ kind: "stuck", title: d.title, body: d.body, roleId: d.roleId, actions: [{ label: d.action.label, method: "GET", path: d.action.href }, ...(mayAskAboutRole(d.roleId) ? [{ label: "Have a recruiter review", method: "POST" as const, path: `/api/v1/escalations`, body: { kind: "review", roleId: d.roleId } }] : [])] });
   }
 
+  // "Keep your backups warm" until a new hire starts (plan H1); the cards filter by application.read and the staff scope.
+  for (const card of await backupsWarmCards(tx, { companyId, viewer: { role: viewer?.role ?? "owner", scope }, now })) cards.push(card);
   for (const card of await draftCards(tx, companyId, viewer)) cards.push(card);
 
   // ITS posting tasks are ITS's own work, shown with each board on the Posting tab, not as the team's requests (plan D3).
@@ -508,13 +544,47 @@ async function openFlagsOf(tx: Tx, req: typeof approvalRequests.$inferSelect): P
 
 /**
  * Decisions are private until a person tells the candidate (founder decision B6): the people of one role nobody has told
- * yet, named (five at most), with the way to check the message and send it. Null when there is nobody.
+ * yet, named (five at most), with the way to check the message and send it, and what the safety net does if nobody
+ * does (Q27). A closed role's card also leads to its one closing message (Q30). Null when there is nobody.
  */
-async function notToldCard(tx: Tx, role: { id: string; title: string }, apps: Array<{ candidateId: string }>): Promise<BriefCard | null> {
+async function notToldCard(tx: Tx, role: { id: string; title: string }, apps: Array<{ candidateId: string }>, opts: { closed?: boolean } = {}): Promise<BriefCard | null> {
   if (!apps.length) return null;
   const names = await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, apps.slice(0, 5).map((a) => a.candidateId)));
   const list = apps.slice(0, 5).map((a) => { const n = names.find((x) => x.id === a.candidateId); return `${n?.firstName ?? ""} ${n?.lastName ?? ""}`.trim() || "A candidate"; }).join(", ");
-  return { kind: "needs_review", title: `${apps.length} ${apps.length === 1 ? "person has" : "people have"} not been told your decision yet (${role.title})`, body: `${list}${apps.length > 5 ? ` and ${apps.length - 5} more` : ""}. Your decision is private until someone sends the decision message, or records telling them in person. Check the message first; it goes to each of them separately.`, roleId: role.id, actions: [{ label: "Review and send", method: "GET", path: `/roles/${role.id}/talent?ownerStage=not_moving_forward&told=not_told` }] };
+  const how = opts.closed
+    ? "The role is closed: one courteous closing message tells everyone it left in your talent pool, and you approve it once for all of them. Or send each person their own message, or record telling them in person."
+    : "Check the message first; it goes to each of them separately. Or record telling them in person.";
+  return { kind: "needs_review", title: `${apps.length} ${apps.length === 1 ? "person has" : "people have"} not been told your decision yet (${role.title})`, body: `${list}${apps.length > 5 ? ` and ${apps.length - 5} more` : ""}. Your decision is private until someone tells them. ${how} If nobody has after ${UNTOLD_SEND_WORKING_DAYS} working days, the standard message goes by itself and you are told (when your settings ask for approval or keep decision messages with a person, or a recruiter runs the role, a recruiter is brought in instead and nothing is sent).`, roleId: role.id, actions: [{ label: "Review and send", method: "GET", path: `/roles/${role.id}/talent?ownerStage=not_moving_forward&told=not_told` }, ...(opts.closed ? [{ label: "Send the closing message", method: "GET" as const, path: `/roles/${role.id}?closingMessage=1` }] : [])] };
+}
+
+/**
+ * The long-wait card (plan G10): people have waited on the team for days. It names the one waiting longest and opens
+ * them on the three ways forward: decide, put them on hold until a date (they come back to Today then), or send them a
+ * note in your own words. Nothing is sent from here. `askRecruiter`: whether to offer a recruiter's review of the role
+ * (null for a recruiter given one candidate, whose card names nobody else).
+ */
+async function longWaitCard(tx: Tx, d: { roleId: string; roleTitle: string; title: string; body: string; days: number; action: { href: string } }, applicationIds: string[], askRecruiter: boolean | null): Promise<BriefCard | null> {
+  const [first] = await tx.select({ id: applications.id, stageChangedAt: applications.stageChangedAt, firstName: candidates.firstName, lastName: candidates.lastName }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(eq(applications.id, applicationIds[0])).limit(1);
+  if (!first) return null;
+  const name = `${first.firstName} ${first.lastName}`.trim() || "A candidate";
+  const days = Math.max(0, Math.floor((Date.now() - Date.parse(first.stageChangedAt)) / 86_400_000));
+  const others = applicationIds.length - 1;
+  const open = `/roles/${d.roleId}/talent?open=${first.id}`;
+  const narrowed = askRecruiter === null;
+  return {
+    kind: "stuck",
+    title: narrowed ? `${name} has been waiting on you for ${days} days (${d.roleTitle})` : d.title,
+    body: `${narrowed ? "" : `${d.body} `}${name} has waited longest, ${days} ${days === 1 ? "day" : "days"}${!narrowed && others ? `; ${others} more ${others === 1 ? "is" : "are"} waiting too` : ""}. Decide what comes next, put them on hold until a date (they come back to Today then), or send them a note in your own words. Nothing is sent until you do.`,
+    roleId: d.roleId,
+    applicationId: first.id,
+    actions: [
+      { label: "Decide", method: "GET", path: open },
+      { label: "Hold until a date", method: "GET", path: `${open}&step=hold` },
+      { label: "Send a note", method: "GET", path: `${open}&message=1` },
+      ...(!narrowed && others ? [{ label: "See everyone waiting", method: "GET" as const, path: d.action.href }] : []),
+      ...(askRecruiter ? [{ label: "Have a recruiter review", method: "POST" as const, path: `/api/v1/escalations`, body: { kind: "review", roleId: d.roleId } }] : []),
+    ],
+  };
 }
 
 const whenIn = (iso: string, timeZone: string) => new Date(iso).toLocaleString("en-US", { timeZone, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });

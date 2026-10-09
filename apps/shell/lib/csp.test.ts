@@ -15,6 +15,9 @@ describe("application content-security policy", () => {
     expect(csp).toContain(`style-src 'self' 'nonce-${nonce}';`);
     expect(csp).not.toMatch(/fonts\.googleapis\.com|fonts\.gstatic\.com/);
     expect(csp).toContain("frame-ancestors 'none'");
+    // the résumé in the candidate panel is framed from this origin only (plan H5); no outside document is ever framed
+    expect(csp).toContain("frame-src 'self';");
+    expect(csp).toContain("object-src 'none'");
     expect(csp).toContain("report-uri /api/csp-report");
     expect(csp).toContain("upgrade-insecure-requests");
     // no analytics or tag-manager origin, ever

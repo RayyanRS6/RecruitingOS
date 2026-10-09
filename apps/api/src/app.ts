@@ -18,6 +18,7 @@ import { draftPacketRoutes, rolePacketRoutes } from "./routes/role-packets";
 import { reportRoutes } from "./routes/reports";
 import { messageRoutes } from "./routes/messages";
 import { compareRoutes } from "./routes/compare";
+import { noteRoutes } from "./routes/notes";
 import { approvalRoutes, briefRoutes, escalationRoutes, eventRoutes } from "./routes/approvals-escalations-events";
 import { adminRoutes } from "./routes/admin";
 import { policyRoutes } from "./routes/policies";
@@ -118,6 +119,7 @@ export function createApp(container: Container) {
   app.route("/api/v1/roles", compareRoutes);
   app.route("/api/v1/applications", messageRoutes);
   app.route("/api/v1/applications", applicationRoutes);
+  app.route("/api/v1/applications", noteRoutes);
   app.route("/api/v1/approvals", approvalRoutes);
   app.route("/api/v1/escalations", escalationRoutes);
   app.route("/api/v1/events", eventRoutes);

@@ -46,7 +46,7 @@ postmarkWebhook.post("/inbound", async (c) => {
   const replyToken = extractReplyToken(mail.to, container.integrations.env.intakeDomain);
   if (replyToken) {
     const outcome = await receiveCandidateReply(container, { inbound, mail, replyToken });
-    return c.json(outcome.body, outcome.status as 200 | 202);
+    return c.json(outcome.body, outcome.status as 200 | 202 | 503);
   }
   if (!token) {
     await container.db.update(inboundEmails).set({ status: "unmatched", error: "no intake token in recipient address" }).where(eq(inboundEmails.id, inbound.id));

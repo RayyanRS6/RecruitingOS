@@ -1,7 +1,7 @@
 import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import { isCompanyVerified, type Actor } from "@ros/contracts";
 import { emit, nextContactWindow, notify, raiseAlert } from "@ros/core";
-import { applications, candidates, communications, companies, jobs, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
+import { applications, candidates, communications, companies, events, jobs, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations, SendResult } from "@ros/integrations";
 
 /**
@@ -45,6 +45,11 @@ type QueueBase = {
   aiRunId?: string | null;
   retryOf?: string | null;
   retryAttempt?: number;
+  /**
+   * When the send job may run (plan G9): a message a person sent waits a few seconds so they can press Undo; while it is
+   * still queued, `undoQueuedMessage` withdraws it. Now when left out.
+   */
+  sendAt?: Date | null;
 };
 export type QueueEmailInput = QueueBase & {
   channel: "email";
@@ -70,6 +75,8 @@ export const HELD_REASON = "held until ITS confirms the company";
 export function sendResultOf(row: Pick<CommunicationRow, "status" | "providerMessageId" | "error">): SendResult {
   if (row.status === "sent" || row.status === "delivered") return { status: "sent", providerMessageId: row.providerMessageId ?? "" };
   if (row.status === "failed" || row.status === "bounced" || row.status === "complained" || row.status === "unknown") return { status: "failed", error: row.error ?? "delivery failed", retryable: false };
+  // Withdrawn before it left (Undo, or the reason for it went away): it will never go.
+  if (row.status === "cancelled") return { status: "failed", error: row.error ?? "withdrawn before it was sent", retryable: false };
   if (row.status === HELD_STATUS) return { status: "pending", reason: HELD_REASON };
   return { status: "pending", reason: "queued for delivery" };
 }
@@ -99,9 +106,10 @@ export async function companyConfirmed(q: Queryable, companyId: string): Promise
 
 /**
  * Invitations to a next step: pointless, and confusing, once the person has left the process. The links and reminders
- * of the conversation that goes with the application (plan Wave E) are among them.
+ * of the conversation that goes with the application (plan Wave E) are among them, and so are the courtesy notes that
+ * say the application is still with the team (plan G10).
  */
-const NEXT_STEP_TEMPLATES = new Set(["screen_invite", "screen_reminder", "interview_slots", "interview_slots_reminder", "interview_confirmation", "screen_later", "screen_idle_reminder", "screen_review_reminder", "screen_not_started_reminder", "screen_resume", "screen_repeat_later", "screen_repeat_resume"]);
+const NEXT_STEP_TEMPLATES = new Set(["screen_invite", "screen_reminder", "interview_slots", "interview_slots_reminder", "interview_confirmation", "screen_later", "screen_idle_reminder", "screen_review_reminder", "screen_not_started_reminder", "screen_resume", "screen_repeat_later", "screen_repeat_resume", "still_reviewing", "screen_expired"]);
 /** Where an application has left the process: the candidate withdrew, or a decision was made. */
 const LEFT_PROCESS = new Set(["withdrawn", "rejected", "declined", "talent_pool"]);
 
@@ -184,9 +192,46 @@ export async function queueCommunication(q: Queryable, integrations: Integration
     await emit(q, { type: "message.held", companyId: input.companyId, actor: input.actor, subject: { type: "communication", id: row.id }, payload: { template: input.templateKey, channel: input.channel, applicationId: input.applicationId ?? null, reason: "company_check" }, correlationId: input.correlationId ?? null });
     return { status: "pending", reason: HELD_REASON, communicationId: row.id };
   }
-  await q.insert(jobs).values({ kind: SEND_JOB_KIND, payload: { communicationId: row.id, companyId: input.companyId }, runAt: now.toISOString(), maxAttempts: SEND_MAX_ATTEMPTS });
-  await emit(q, { type: "message.queued", companyId: input.companyId, actor: input.actor, subject: { type: "communication", id: row.id }, payload: { template: input.templateKey, channel: input.channel, applicationId: input.applicationId ?? null }, correlationId: input.correlationId ?? null });
+  const runAt = input.sendAt && input.sendAt.getTime() > now.getTime() ? input.sendAt : now;
+  await q.insert(jobs).values({ kind: SEND_JOB_KIND, payload: { communicationId: row.id, companyId: input.companyId }, runAt: runAt.toISOString(), maxAttempts: SEND_MAX_ATTEMPTS });
+  await emit(q, { type: "message.queued", companyId: input.companyId, actor: input.actor, subject: { type: "communication", id: row.id }, payload: { template: input.templateKey, channel: input.channel, applicationId: input.applicationId ?? null, ...(runAt !== now ? { sendAt: runAt.toISOString() } : {}) }, correlationId: input.correlationId ?? null });
   return { status: "pending", reason: "queued for delivery", communicationId: row.id };
+}
+
+/** Why an Undo was refused, in the sender's words. */
+export class UndoError extends Error {
+  constructor(public readonly code: "not_found" | "already_sent" | "not_yours" | "not_undoable", message: string) {
+    super(message);
+  }
+}
+
+/** The messages a person's Send holds for the Undo window: one they wrote, and a decision or closing message. */
+export function heldForUndo(templateKey: string | null | undefined): boolean {
+  return templateKey === "freeform" || !!templateKey?.startsWith("disposition:");
+}
+
+/**
+ * Undo (plan G9): a message a person sent (someone on the team, or an ITS recruiter working under a grant) is withdrawn
+ * during its Undo window, while it still waits in the outbox. Only the messages a person's Send holds for that window
+ * (`heldForUndo`), and only until the moment its Send set (`sendAt` on its `message.queued` fact): an invitation or a
+ * note a workflow sent for them, a message an approver let go at once, or one saved for the ITS company check has no
+ * window, so a waiting workflow never waits for a message that was taken back. A decision message withdrawn this way
+ * leaves the candidate not told, as before the Send. Recorded as `message.cancelled` with the reason "undone".
+ */
+export async function undoQueuedMessage(q: Queryable, input: { communicationId: string; applicationId: string; actor: Actor; now: Date }): Promise<{ templateKey: string | null }> {
+  const [row] = await q.select().from(communications).where(and(eq(communications.id, input.communicationId), eq(communications.applicationId, input.applicationId), eq(communications.direction, "outbound"))).limit(1);
+  if (!row) throw new UndoError("not_found", "That message was not found.");
+  if ((row.sentBy.kind !== "user" && row.sentBy.kind !== "recruiter") || !heldForUndo(row.templateKey)) throw new UndoError("not_yours", "Only a message someone on the team sent can be undone; this one was sent by the product.");
+  if (row.status === "cancelled") throw new UndoError("already_sent", "That message was already withdrawn.");
+  if (row.status === HELD_STATUS) throw new UndoError("not_undoable", "This message is saved until ITS confirms your company, and Undo works only in the seconds after Send.");
+  const [queued] = await q.select({ payload: events.payload }).from(events).where(and(eq(events.type, "message.queued"), eq(events.subjectId, row.id))).limit(1);
+  const sendAt = typeof queued?.payload.sendAt === "string" ? Date.parse(queued.payload.sendAt) : Number.NaN;
+  if (row.status !== "queued" || !(sendAt > input.now.getTime())) throw new UndoError("already_sent", "Too late to undo: the message has already gone.");
+  const [done] = await q.update(communications).set({ status: "cancelled", error: "undone by the team before it was sent" }).where(and(eq(communications.id, row.id), eq(communications.status, "queued"))).returning({ id: communications.id });
+  if (!done) throw new UndoError("already_sent", "Too late to undo: the message has already gone.");
+  await emit(q, { type: "message.cancelled", companyId: row.companyId, actor: input.actor, subject: { type: "communication", id: row.id }, payload: { template: row.templateKey, channel: row.channel, applicationId: row.applicationId, reason: "undone", by: "undo" }, correlationId: row.correlationId });
+  await settleDecisionTold(q, row, "failed", input.now);
+  return { templateKey: row.templateKey };
 }
 
 /**

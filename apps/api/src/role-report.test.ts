@@ -89,7 +89,7 @@ describe("role report", () => {
   const activeMarks = async () => new Map((await container.db.select().from(applicationMarks).where(isNull(applicationMarks.clearedAt))).map((m) => [m.applicationId, m]));
   const groupCounts = async (rows: Array<{ id: string; stage: string }>) => {
     const marks = await activeMarks();
-    const out: Record<string, number> = { waiting_on_you: 0, in_process: 0, not_moving_forward: 0, hired: 0 };
+    const out: Record<string, number> = { waiting_on_you: 0, waiting_on_candidate: 0, in_process: 0, not_moving_forward: 0, hired: 0 };
     for (const a of rows) out[groupFor({ stage: a.stage as never }, marks.get(a.id), new Date(BASE))] += 1;
     return out;
   };
@@ -220,7 +220,7 @@ describe("role report", () => {
     expect(report.applicants.byDay.reduce((n, d) => n + d.count, 0)).toBe(expectedInWindow);
   });
 
-  it("counts every stage with its plain label and the four owner groups, exactly as the applications stand", async () => {
+  it("counts every stage with its plain label and the owner groups, exactly as the applications stand", async () => {
     const rows = await roleApps();
     expect(report.stages.total).toBe(8);
     expect(report.stages.byGroup).toEqual(await groupCounts(rows));
@@ -336,7 +336,7 @@ describe("role report", () => {
     const list = (await (await json(owner, "GET", "/api/v1/roles")).json()) as Array<{ id: string; counts: Record<string, number> }>;
     const mine = list.find((r) => r.id === roleId)!;
     expect(mine.counts.total).toBe(8);
-    for (const g of ["waiting_on_you", "in_process", "not_moving_forward", "hired"] as const) expect(mine.counts[g] ?? 0, g).toBe(report.stages.byGroup[g]);
+    for (const g of ["waiting_on_you", "waiting_on_candidate", "in_process", "not_moving_forward", "hired"] as const) expect(mine.counts[g] ?? 0, g).toBe(report.stages.byGroup[g]);
     expect((mine as unknown as { stageCounts: Record<string, number> }).stageCounts).toEqual(report.stages.byOwnerStage);
     // the brief's four numbers, from the same facts
     const brief = (await (await json(owner, "GET", "/api/v1/brief")).json()) as { summary: string; cards: Array<{ kind: string }> };
@@ -529,7 +529,7 @@ describe("role report arithmetic on hand-made rows", () => {
     expect(stage("screen_invited")).toMatchObject({ completed: 0, medianDays: null, averageDays: null, nowHere: 1, longestDays: 1 });
     expect(r.timeInStage.waitingOnYou).toEqual({ count: 1, averageDays: 4, medianDays: 4, longestDays: 4 });
     expect(r.role).toMatchObject({ title: "Bookkeeper", daysOpen: 10 });
-    expect(r.stages.byGroup).toEqual({ waiting_on_you: 1, in_process: 1, not_moving_forward: 1, hired: 0 });
+    expect(r.stages.byGroup).toEqual({ waiting_on_you: 1, waiting_on_candidate: 0, in_process: 1, not_moving_forward: 1, hired: 0 });
     expect(r.applicants.byDay.filter((x) => x.count).map((x) => x.count)).toEqual([1, 1, 1]);
     expect(r.applicants.last30Days).toBe(3);
   });
@@ -570,7 +570,7 @@ describe("role report arithmetic on hand-made rows", () => {
     const withMarks = (marks: NonNullable<ReportData["marks"]>, apps = data.apps) => composeRoleReport({ ...data, apps, marks }, new Date(BASE));
     // a1 (ready for review) on hold until next week: nothing waits on you, and the strip says On hold
     const running = withMarks([mark("a1", "on_hold", d(7)), mark("a1", "shortlist", null, d(-2))]);
-    expect(running.stages.byGroup).toEqual({ waiting_on_you: 0, in_process: 2, not_moving_forward: 1, hired: 0 });
+    expect(running.stages.byGroup).toEqual({ waiting_on_you: 0, waiting_on_candidate: 0, in_process: 2, not_moving_forward: 1, hired: 0 });
     expect(running.stages.byOwnerStage).toMatchObject({ new: 1, on_hold: 1, not_moving_forward: 1 });
     expect(running.stages.marks).toEqual({ longlist: 0, shortlist: 0, onHold: 1, holdsEnded: 0, notAFitForNow: 0, holdsEverSet: 1 });
     expect(running.timeInStage.waitingOnYou.count).toBe(0);

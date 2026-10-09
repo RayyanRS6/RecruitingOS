@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "../nav";
-import { Alert, Button, Card, Chip, ErrorState, Field, PageHeader, Pill, Skeleton, TabPanel, Tabs } from "@ros/ui";
+import { Alert, Button, Card, Chip, ErrorState, PageHeader, Pill, Skeleton, TabPanel, Tabs } from "@ros/ui";
 import { formatPayRange } from "@ros/contracts";
 import { api, ApiError, type Me, type RoleDetail as RoleDetailT, type RolePacket } from "../api/client";
 import { toast } from "../toast";
@@ -12,12 +12,13 @@ import { isItsStaff } from "../apply-flow";
 import { AskRecruiter } from "../components/AskRecruiter";
 import { RoleApplyMode } from "../components/ApplyMode";
 import { useCompanyCheck } from "../components/use-company-check";
-import { canApproveRole, canEditPacket, canEditPacketJson, canManageRole, canRecordOutcome, canSeeActivity, canSeePay, canSeeTalent, canShareJob, canStartHire } from "../roles";
+import { canApproveRole, canDecline, canEditPacket, canEditPacketJson, canManageRole, canRecordOutcome, canSeeActivity, canSeePay, canSeeTalent, canShareJob, canStartHire } from "../roles";
 import { outdatedBoardsLine } from "../publishing";
 import { payShownLabel } from "../role-words";
+import { REASON_WORD } from "./new-role/rules";
 import { roleStatus } from "../role-status";
 import { MUST_HAVES_SCORE_LINE, SCORE_WEIGHTS_LINE, checkedInLabel, editorFocusFrom, importanceLabel, type EditorFocus } from "../skills-form";
-import { closeRoleToast } from "../talent-actions";
+import { CloseRoleCard, ClosingMessageCard } from "../components/ClosingMessage";
 import { AfterApproval } from "./AfterApproval";
 import { AcceptingSwitch, ClosedBanner, PostingTab, StillUpAlert } from "./RolePosting";
 import { ActivityTab, CandidatesSeeThis, InterviewPlanTab, PacketApprovalCard, PreferencesCard, RequirementList, workModelLabel } from "./RolePlan";
@@ -76,7 +77,7 @@ export function RoleDetail() {
     onSuccess: async () => { await qc.invalidateQueries({ queryKey: ["role", id] }); await qc.invalidateQueries({ queryKey: ["roles"] }); },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not change the role."),
   });
-  const [closing, setClosing] = useState<{ outcome: string; reason: string } | null>(null);
+  const [closing, setClosing] = useState<{ outcome: string } | null>(null);
   // "Close the role" on Today's closing-date card links here with `?close=1`: the close form opens, nothing is closed yet.
   const wantsClose = search.get("close") === "1";
   const closeAsked = useRef(false);
@@ -84,8 +85,12 @@ export function RoleDetail() {
     if (!wantsClose || closeAsked.current || !role.data || !me.data) return;
     closeAsked.current = true;
     const mine = me.data.memberships.find((m) => m.companyId === me.data?.activeCompanyId)?.role ?? null;
-    if (canRecordOutcome(mine) && ["open", "paused"].includes(role.data.status)) setClosing({ outcome: "no_hire", reason: "" });
+    if (canRecordOutcome(mine) && ["open", "paused"].includes(role.data.status)) setClosing({ outcome: "no_hire" });
   }, [wantsClose, role.data, me.data]);
+  // "Send the closing message" on Today's card for a closed role links here with `?closingMessage=1` (founder decision Q30).
+  const wantsClosingMessage = search.get("closingMessage") === "1";
+  const [closingMessage, setClosingMessage] = useState(wantsClosingMessage);
+  useEffect(() => { if (wantsClosingMessage) setClosingMessage(true); }, [wantsClosingMessage]);
   // `?edit=must-haves` (the role report's and the pool summary's "stricter than needed" prompt) or `?edit=skills` opens
   // the editor at that section for someone who may edit; nothing is saved until they save a new version.
   const wantsEdit = editorFocusFrom(search.get("edit"));
@@ -99,12 +104,6 @@ export function RoleDetail() {
     const from = pending ?? d.currentPacket;
     if (canEditPacket(mine) && from) setEditBase({ version: from.version, packet: from.packet, proposed: !!pending, newestAtOpen: Math.max(0, ...d.packetVersions.map((v) => v.version)), focus: wantsEdit });
   }, [wantsEdit, role.data, me.data]);
-  const closeWithOutcome = useMutation({
-    mutationFn: (body: { outcome: string; reason: string }) => api.post<{ movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number }>(`/api/v1/roles/${id}/outcome`, { outcome: body.outcome, confirm: true, reason: body.reason || undefined }),
-    // says who moved to the talent pool privately, which interviews ended, and who was told only that theirs is off (founder decision B6)
-    onSuccess: async (res) => { const t = closeRoleToast(res, "Role closed; the outcome is recorded with your name."); toast(t.title, t.detail); setClosing(null); await qc.invalidateQueries({ queryKey: ["role", id] }); await qc.invalidateQueries({ queryKey: ["roles"] }); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not close the role."),
-  });
   if (role.isLoading) return <Skeleton lines={5} />;
   if (role.error || !role.data) return <ErrorState message="Could not load this role." onRetry={() => role.refetch()} />;
   const r = role.data;
@@ -141,7 +140,8 @@ export function RoleDetail() {
             {manage ? <AcceptingSwitch role={r} /> : null}
             {manage && r.status === "open" ? <Button loading={status.isPending} onClick={() => status.mutate("pause")}>Pause</Button> : null}
             {manage && r.status === "paused" ? <Button loading={status.isPending} onClick={() => status.mutate("resume")}>Resume</Button> : null}
-            {canRecordOutcome(myRole) && ["open", "paused"].includes(r.status) ? <Button variant="danger" onClick={() => setClosing({ outcome: "filled_outside_platform", reason: "" })}>Close</Button> : null}
+            {canRecordOutcome(myRole) && ["open", "paused"].includes(r.status) ? <Button variant="danger" onClick={() => setClosing({ outcome: "filled_outside_platform" })}>Close</Button> : null}
+            {r.status === "closed" && canDecline(myRole) && !closingMessage ? <Button icon="send" onClick={() => setClosingMessage(true)}>Closing message</Button> : null}
           </>
         }
       />
@@ -154,21 +154,9 @@ export function RoleDetail() {
       <ClosedBanner role={r} canManage={manage} onOpenPosting={() => pickTab("posting")} />
       {check === "waiting" && ["open", "paused"].includes(r.status) ? <Alert tone="caution">{ROLE_WAITS_FOR_CHECK}</Alert> : null}
 
-      {closing ? (
-        <Card needsYou title="Close this role">
-          <p className="small" style={{ color: "var(--ink-2)" }}>Say what happened. It is recorded with your name; active candidates are kept in your talent pool, privately. Anyone with an interview booked or times offered is told now, in a short note that gives no reason, that it is off. The platform made no offer.</p>
-          <div className="stack" style={{ gap: 8, marginTop: 8, maxWidth: 520 }}>
-            <Field label="Outcome" htmlFor="rc-outcome"><select id="rc-outcome" className="select" value={closing.outcome} onChange={(e) => setClosing({ ...closing, outcome: e.target.value })}>
-              <option value="filled_outside_platform">Filled outside the platform</option>
-              <option value="filled">Filled with a candidate from here (already recorded on the candidate)</option>
-              <option value="role_cancelled">Cancelled</option>
-              <option value="no_hire">Closed without a hire</option>
-            </select></Field>
-            <Field label="Reason (optional)" htmlFor="rc-reason"><input id="rc-reason" className="input" value={closing.reason} onChange={(e) => setClosing({ ...closing, reason: e.target.value })} /></Field>
-            <div className="row"><Button variant="destructive" loading={closeWithOutcome.isPending} onClick={() => closeWithOutcome.mutate(closing)}>Confirm and close the role</Button><Button variant="quiet" onClick={() => setClosing(null)}>Keep it open</Button></div>
-          </div>
-        </Card>
-      ) : null}
+      {/* Closing lists who is still in process, then shows the one closing message for them all (founder decision Q30). */}
+      {closing ? <CloseRoleCard roleId={r.id} initialOutcome={closing.outcome} onClose={() => setClosing(null)} /> : null}
+      {closingMessage && !closing && r.status === "closed" && canDecline(myRole) ? <ClosingMessageCard roleId={r.id} onDone={() => { setClosingMessage(false); if (search.get("closingMessage")) navigate(`/roles/${r.id}`, { replace: true }); }} /> : null}
 
       {p ? <PacketApprovalCard role={r} onEdit={() => openEditor()} canEdit={editPacket} canManage={manage} canSeePay={canSeePay(myRole)} showingProposed={shown === proposed && !!proposed} onShowProposed={setShowProposed} onApproved={(info) => { setShowProposed(false); setAfterApproval(info); }} /> : null}
 
@@ -205,7 +193,7 @@ export function RoleDetail() {
                   </Card>
                   <Card title="Why and when">
                     <dl className="kv">
-                      <dt>Reason</dt><dd>{p.business.reason.replace("_", " ")}{p.business.reasonDetail ? ` · ${p.business.reasonDetail}` : ""}</dd>
+                      <dt>Reason</dt><dd>{REASON_WORD[p.business.reason] ?? p.business.reason.replace(/_/g, " ")}{p.business.reasonDetail ? ` · ${p.business.reasonDetail}` : ""}</dd>
                       <dt>Target start</dt><dd>{p.business.timeline.targetStartDate ?? "Flexible"}</dd>
                       <dt>Urgency</dt><dd>{p.business.timeline.urgency}</dd>
                       <dt>Schedule</dt><dd>{p.identity.schedule ?? "As posted"}</dd>

@@ -447,9 +447,11 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     expect((await container.db.select().from(aiRuns)).some((run) => /interview|scorecard/.test(run.task))).toBe(false);
   });
 
-  it("Step 13, Decision: the decision after the interview is a person's; 'hired' is refused in release 1; declining still needs a reason (debrief deferred to release 2)", async () => {
+  it("Step 13, Decision: the decision after the interview is a person's; 'hired' needs the start date agreed outside the app (plan H1); declining still needs a reason (debrief deferred to release 2)", async () => {
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
-    expect(((await json("POST", `/api/v1/applications/${a.id}/decision`, { decision: "hired" })).status)).toBe(409);
+    const hired = await json("POST", `/api/v1/applications/${a.id}/decision`, { decision: "hired" });
+    expect(hired.status).toBe(400);
+    expect(((await hired.json()) as { error: { code: string } }).error.code).toBe("hire_date_required");
     expect(((await json("POST", `/api/v1/applications/${a.id}/decision`, { decision: "not_moving_forward" })).status)).toBe(400);
     const r = await json("POST", `/api/v1/applications/${a.id}/decision`, { decision: "finalist", note: "Calm under pressure; strong charting." });
     expect(r.status).toBe(200);

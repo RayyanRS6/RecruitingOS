@@ -96,6 +96,10 @@ export type AuditAction =
   /** A person wrote to a candidate from the sheet (F11): who, which application, whether it went at once or waited for an approval, and who approved it. Never the text. */
   | "message.sent"
   | "message.approval_requested"
+  /** Undo (plan G9): a person took back a message while it waited in the outbox. Which message, never the text. */
+  | "message.undone"
+  /** The one closing message of a closed role (Q30): sent to everyone untold, or put to one approval, by whom, how many. */
+  | "role.closing_message"
   /** A person changed which email alerts they get (plan B3): the groups, before and after. Never anything else. */
   | "notification.preferences_changed"
   /** Wave E: a recruiter added notes from a call to a screening conversation; ITS changed how a role or a company's roles meet the conversation. Never the notes. */

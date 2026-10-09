@@ -176,7 +176,11 @@ export function briefDecisionToast(action: { label: string; body?: Record<string
   }
   if (notice) return sendDecisionToast(notice);
   if (/invite to a screen/i.test(action.label)) return { title: "Invitation on its way.", detail: "The screen goes to the candidate by email, or by text when they agreed to texts." };
-  if (/^Yes, interview/i.test(action.label)) return { title: "Moved to Interviewing.", detail: "Open the candidate to choose the round and the interviewers; times go out from there." };
+  if (/^Yes, interview/i.test(action.label)) {
+    // The answer carries the interview approval filled in (plan H4): the page opens it on the candidate's panel.
+    const filled = !!(response as { interviewDraft?: unknown } | null)?.interviewDraft;
+    return { title: "Moved to Interviewing.", detail: filled ? "Check the interview filled in from your plan and approve it; times go out to the candidate from there." : "Open the candidate to choose the round and the interviewers; times go out from there." };
+  }
   if (action.label === "Yes, send it") {
     // a message a team member wrote, approved: on its way, or saved until ITS confirms the company (founder decision B7)
     if ((response as { messageStatus?: string } | null)?.messageStatus === "held") return { title: "Approved and saved.", detail: "It goes out under the writer's name as soon as ITS confirms your company." };
@@ -218,6 +222,17 @@ export function declineConfirmText(policy: DeclineMessagePolicy, input: { hasEma
   return parts.join(" ");
 }
 
+/**
+ * What "Record what happened" says the candidate gets: nothing about the outcome, but an interview they know of (a booked
+ * time, or times to pick from) is called off by any outcome but a hire, and they are told now, in a short note with no
+ * reason, that it is off.
+ */
+export function outcomeNoticeText(interviews: readonly InterviewRef[]): string {
+  const known = interviews.filter(candidateKnowsOf);
+  if (!known.length) return "Nothing is sent to the candidate.";
+  return `Nothing about the outcome is sent to the candidate. Unless it is a hire, ${listWords(known.map(interviewWords))} ${known.length === 1 ? "is" : "are"} called off, and they are told now, in a short note that gives no reason, that ${known.length === 1 ? "it is" : "they are"} off.`;
+}
+
 /** "the Phone screen on Tuesday, October 14, 2:00 PM": an interview the decision would call off, named. */
 export function interviewWords(iv: InterviewRef): string {
   if (iv.startsAt) {
@@ -235,11 +250,11 @@ export function interviewCancelToast(r: { candidateTold?: boolean; interviewersT
 /**
  * The toast after closing a role (POST /roles/:id/outcome): who moved, privately, and the interviews it called off. A
  * candidate who had a booked time or times to pick from was sent a short note at once saying only that the interview is
- * off (`interviewOffNotes`); the decision stays private until someone sends the decision message.
+ * off (`interviewOffNotes`); the decision stays private until someone sends the one closing message (Q30).
  */
 export function closeRoleToast(r: { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number }, title = "Role closed as filled."): ToastParts {
   const moved = Math.max(0, (r.movedToTalentPool ?? 0) - (r.heldEmailsAddedToTalentPool ?? 0));
-  const who = moved ? `${moved === 1 ? "The one person" : `The ${moved} people`} still in the process moved to your talent pool, privately: nobody is told the decision until someone sends them the decision message.` : "Nobody else was still in the process.";
+  const who = moved ? `${moved === 1 ? "The one person" : `The ${moved} people`} still in the process moved to your talent pool, privately: nobody is told until you send the closing message.` : "Nobody else was still in the process.";
   return { title, detail: `${who}${closedInterviewsText(r.interviewsCancelled ?? 0, r.interviewOffNotes ?? 0)}` };
 }
 
@@ -257,8 +272,14 @@ function listWords(items: string[]): string {
   return items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}` : items[0];
 }
 
-/** A panel step a stage choice opens; Longlist and Shortlist need none. */
-export type PanelStep = "hold" | "interview" | "decline" | "hire" | "outcome";
+/** A panel step a stage choice opens; Longlist and Shortlist need none. `offer` is the record-only "Offer made" (plan H2). */
+export type PanelStep = "hold" | "interview" | "decline" | "hire" | "outcome" | "offer";
+const PANEL_STEPS: readonly PanelStep[] = ["hold", "interview", "decline", "hire", "outcome", "offer"];
+
+/** `?step=` on a link to the panel (Today's "Yes, interview" opens the interview approval, plan H4); anything else opens none. */
+export function panelStepFrom(value: string | null | undefined): PanelStep | null {
+  return value && (PANEL_STEPS as readonly string[]).includes(value) ? (value as PanelStep) : null;
+}
 
 /** How a choice on the stage button is carried out on the page: at once (a private mark), by opening a step, or not at all. */
 export type StageIntent = { kind: "none" } | { kind: "action"; body: { action: "set_mark"; mark: MarkKind } | { action: "clear_mark" } } | { kind: "step"; step: PanelStep };
@@ -266,7 +287,8 @@ export type StageIntent = { kind: "none" } | { kind: "action"; body: { action: "
 /**
  * The stage button's choice turned into what the page does (plan adjustments §2): Longlist and Shortlist set the mark in
  * one click; the step under a mark takes it off; On hold asks for the date it ends; Interviewing opens the interview
- * approval; Offer and Hired open the outcome step; Not moving forward opens the private decline.
+ * approval; Offer opens the record-only "Offer made" (plan H2); Hired opens the hire sheet (H1); Not moving forward opens
+ * the private decline.
  */
 export function stageIntent(move: StageMove): StageIntent {
   if (!move.allowed || move.current) return { kind: "none" };
@@ -279,7 +301,7 @@ export function stageIntent(move: StageMove): StageIntent {
     case "interview":
       return { kind: "step", step: "interview" };
     case "offer":
-      return { kind: "step", step: "outcome" };
+      return { kind: "step", step: "offer" };
     case "record_hire":
       return { kind: "step", step: "hire" };
     case "decline":

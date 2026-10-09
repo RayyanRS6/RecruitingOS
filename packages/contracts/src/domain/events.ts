@@ -35,8 +35,13 @@ export const EventType = z.enum([
   "application.moved_to_talent_pool",
   // Private marks (Longlist, Shortlist, On hold, Not a fit for now) and the candidate being told a decision (founder decisions B3, B6).
   "application.marked", "application.mark_cleared", "application.told",
+  // The untold safety net (Q27): five working days on, the standard message went by itself, or a recruiter was brought
+  // in instead; and the one closing message for everyone a closed role left untold (Q30), sent or put to one approval.
+  "application.untold_fallback", "role.closing_message",
   // Review and apply on the pool board (plan F8): one fact per batch, with what the board suggested and what a person chose.
   "pool.batch_applied",
+  // A private team note on a candidate written, changed or removed by its author (plan H3). Never carries the note's words.
+  "note.added", "note.updated",
   "screen.invited", "screen.started", "screen.completed", "screen.abandoned", "screen.expired", "screen.human_requested", "screen.assessed", "screen.cancelled",
   // Wave E: the conversation in the same visit as applying. Sent without it, closed part-way after a reminder, paused while
   // the assistant is down and resumed, a question skipped or tapped, an answer changed before sending, a recruiter's call

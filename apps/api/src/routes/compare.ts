@@ -1,10 +1,11 @@
 import { Hono } from "hono";
 import { and, desc, eq, inArray } from "drizzle-orm";
-import type { Actor, EvidenceAssessment, MatchScore, OwnerStage, ReadingVersion, ScreenAssessment } from "@ros/contracts";
+import type { Actor, EvidenceAssessment, MatchScore, NoteView, OwnerStage, ReadingVersion, ScreenAssessment } from "@ros/contracts";
 import { STAGE_LABEL, activeMarksFor, assertCan, audit, groupFor, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion } from "@ros/core";
 import { applications, assessments, candidates, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
+import { notesForApplications } from "../services/notes";
 import { currentVersionOf } from "../services/packet-versions";
 
 /**
@@ -12,7 +13,8 @@ import { currentVersionOf } from "../services/packet-versions";
  * competency as a row with the evidence's finding as a chip, and each person's match score (founder decision B2). The
  * columns come back in the order the person chose. Interviewers cannot open it (no application.read). A reading made
  * against an earlier version of the role is labelled (plan F4): its rows are matched by the current version's keys, so a
- * must-have that changed shows blank rather than borrowing an answer to a different question.
+ * must-have that changed shows blank rather than borrowing an answer to a different question. The team's private notes
+ * on each person come along for those who read notes (plan H3).
  */
 export const COMPARE_MAX = 5;
 /** Postgres refuses anything else for the id column; an id that is not one is left out, like an unknown id, rather than answered with a 500. */
@@ -42,6 +44,8 @@ export type CompareCandidate = {
   score: MatchScore | null;
   /** Set when the reading was made against an earlier version of the role than the one shown. */
   readingVersion: ReadingVersion | null;
+  /** The team's private notes on them (plan H3), oldest first; empty for anyone who does not read notes. */
+  notes: NoteView[];
   open: string;
 };
 
@@ -66,6 +70,7 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
   const cands = apps.length ? await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, apps.map((a) => a.candidateId))) : [];
   const asmts = apps.length ? await tx.select().from(assessments).where(inArray(assessments.applicationId, apps.map((a) => a.id))).orderBy(desc(assessments.createdAt)) : [];
   const marks = await activeMarksFor(tx, apps.map((a) => a.id));
+  const notes = await notesForApplications(tx, { applicationIds: apps.map((a) => a.id), tenant: t });
   const rows: CompareCandidate[] = [];
   for (const id of ids) {
     const a = apps.find((x) => x.id === id);
@@ -107,6 +112,7 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
       unknownCount,
       score: scorePacket ? matchScore(readingPair(own), scorePacket, { packetVersion: readAgainst }) : null,
       readingVersion: newest ? readingVersion(readAgainst, currentRow?.version ?? null, { then: byVersion.get(readAgainst), now: packet }) : null,
+      notes: notes.get(a.id) ?? [],
       open: `/roles/${role.id}/talent?open=${a.id}`,
     });
   }

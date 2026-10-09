@@ -169,19 +169,30 @@ export const TOAST_EVENT = "ros:toast";
 
 export type ToastTone = "neutral" | "good" | "critical";
 
+/**
+ * A button on a toast that takes back what was just done while it still can ("Undo" after a message is sent, plan G9).
+ * The toast then stays for `durationMs`, the time the action is still possible.
+ */
+export type ToastAction = { label: string; onAction: () => void };
+
 /** A toast: what happened, and optionally a second line on what did or did not follow ("The candidate was not told."). */
-export type ToastMessage = { title: string; detail?: string; tone?: ToastTone };
+export type ToastMessage = { title: string; detail?: string; tone?: ToastTone; action?: ToastAction; durationMs?: number };
+
+/** The longest a toast with an action stays: an Undo window is 30 seconds by default and two minutes at most. */
+export const TOAST_ACTION_MAX_MS = 120_000;
 
 /**
  * What toast() puts on the event: a plain string when there is only a title (the shape every Toaster has understood
- * from the start), a ToastMessage when there is a second line or a tone.
+ * from the start), a ToastMessage when there is a second line, a tone or an action.
  */
-export function toastPayload(title: string, more?: string | { detail?: string; tone?: ToastTone }): string | ToastMessage {
+export function toastPayload(title: string, more?: string | { detail?: string; tone?: ToastTone; action?: ToastAction; durationMs?: number }): string | ToastMessage {
   const extra = typeof more === "string" ? { detail: more } : (more ?? {});
-  if (!extra.detail && !extra.tone) return title;
+  if (!extra.detail && !extra.tone && !extra.action) return title;
   const message: ToastMessage = { title };
   if (extra.detail) message.detail = extra.detail;
   if (extra.tone) message.tone = extra.tone;
+  if (extra.action) message.action = extra.action;
+  if (extra.action && extra.durationMs) message.durationMs = extra.durationMs;
   return message;
 }
 
@@ -194,11 +205,22 @@ export function normalizeToast(input: unknown): ToastMessage | null {
   const message: ToastMessage = { title: o.title };
   if (typeof o.detail === "string" && o.detail.trim()) message.detail = o.detail;
   if (o.tone === "neutral" || o.tone === "good" || o.tone === "critical") message.tone = o.tone;
+  // An action needs words and something to do; its toast stays as long as the action is possible.
+  const action = o.action as Record<string, unknown> | null | undefined;
+  if (action && typeof action === "object" && typeof action.label === "string" && action.label.trim() && typeof action.onAction === "function") {
+    message.action = { label: action.label, onAction: action.onAction as () => void };
+    if (typeof o.durationMs === "number" && Number.isFinite(o.durationMs) && o.durationMs > 0) message.durationMs = Math.min(TOAST_ACTION_MAX_MS, Math.max(1000, o.durationMs));
+  }
   return message;
 }
 
-/** How long a toast stays: never less than the old 2.6 seconds, plus reading time for longer messages, at most 9 seconds. */
+/**
+ * How long a toast stays: never less than the old 2.6 seconds, plus reading time for longer messages, at most 9 seconds.
+ * A toast with an action stays for as long as the action is possible (`durationMs`), and at least as long as reading it.
+ */
 export function toastDuration(m: ToastMessage): number {
   const words = `${m.title} ${m.detail ?? ""}`.trim().split(/\s+/).length;
-  return Math.min(9000, Math.max(2600, 1200 + words * 260));
+  const reading = Math.min(9000, Math.max(2600, 1200 + words * 260));
+  if (m.action && m.durationMs) return Math.min(TOAST_ACTION_MAX_MS, Math.max(1000, m.durationMs));
+  return m.action ? Math.max(reading, 9000) : reading;
 }

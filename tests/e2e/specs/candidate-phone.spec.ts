@@ -130,6 +130,9 @@ test.describe("candidate journey on a phone", () => {
     await expect(page.getByText(/It is a conversation, not a test\./)).toBeVisible();
     await expect(page.getByText(/About \d+ questions and \d+ minutes, one question at a time\./)).toBeVisible();
     await expect(page.getByRole("button", { name: "Do this later" })).toBeVisible();
+    // on the web a person is one press away: the page says so, never the email wording "Reply HUMAN" (polish list)
+    await expect(page.getByText("Would you rather talk to a person? Press \"I'd rather talk to a person\" at any time.")).toBeVisible();
+    await expect(page.getByText(/Reply HUMAN at any time|This message was sent by/)).toHaveCount(0);
     await expectAccessible(page, "conversation introduction");
     await noHorizontalOverflow(page, "conversation introduction");
     // "I'd rather talk to a person": two equal choices, and a way back without choosing (E3)
@@ -152,6 +155,17 @@ test.describe("candidate journey on a phone", () => {
     // every question: a tap where one is offered (E12), words otherwise, and the example question skipped (E11)
     for (let i = 0; i < 20; i++) {
       if (await page.getByRole("heading", { level: 1, name: "Check your answers" }).isVisible()) break;
+      // "Earlier in the conversation" holds Maria's own answers beside the assistant's lines (polish list), from the keyboard
+      if (i === 2) {
+        await page.locator("details.earlier > summary").focus();
+        await page.keyboard.press("Enter");
+        const earlier = page.getByRole("list", { name: "Earlier questions and your answers" });
+        await expect(earlier).toBeVisible();
+        await expect(earlier.locator("li.msg.assistant").first()).toBeVisible();
+        expect(await earlier.locator("li.msg.candidate").count()).toBeGreaterThanOrEqual(1);
+        await expectAccessible(page, "earlier in the conversation");
+        await noHorizontalOverflow(page, "earlier in the conversation");
+      }
       const heading = (await page.getByRole("heading", { level: 1 }).textContent()) ?? "";
       if (/difficult moment/i.test(heading)) {
         await page.getByRole("button", { name: "Skip this question" }).first().click();
@@ -206,11 +220,19 @@ test.describe("candidate journey on a phone", () => {
     await noHorizontalOverflow(page, "status page");
     // withdrawing is an outlined secondary button here too, not the near-black main action
     await expect(page.getByRole("button", { name: "Withdraw my application" })).toHaveCSS("background-color", "rgb(255, 255, 255)");
-    // "Future roles" is one click either way, and the page says which way it stands (Wave 0 item 0.11)
+    // the messages read as a conversation (plan G7): what we sent, oldest first, and no reply box (replies go by email)
+    await expect(page.getByRole("heading", { level: 2, name: "Messages about your application" })).toBeVisible();
+    await expect(page.locator("ol.thread li.msg.team").first()).toContainText(/We received your application/);
+    await expect(page.getByRole("textbox")).toHaveCount(1); // the privacy request's details, nothing else
+    // "Future roles" is one click either way, lands back at the choice (where the decision messages link) and says it was saved (Wave 0 item 0.11, Q30)
     await page.getByRole("button", { name: "Don't keep me for future roles" }).click();
+    await page.waitForURL(/\?pool=out#future-roles$/);
+    await expect(page.locator("#future-roles")).toBeInViewport();
+    await expect(page.locator("#future-roles").getByRole("status")).toHaveText("Saved.");
     await expect(page.getByText(/you asked us not to keep your details for future roles/)).toBeVisible();
     await expectAccessible(page, "status page after opting out of future roles");
     await page.getByRole("button", { name: "Keep me for future roles again" }).click();
+    await page.waitForURL(/\?pool=in#future-roles$/);
     await expect(page.getByRole("button", { name: "Don't keep me for future roles" })).toBeVisible();
 
     // the owner approves an interview through the API; the candidate picks a time on the phone

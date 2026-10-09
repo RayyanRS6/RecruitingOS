@@ -6,7 +6,7 @@ import { buildCandidateCsp, entitlements } from "@ros/core";
 import { applications, roles, screens } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { SCREEN_CSS } from "./pages/candidate";
+import { SCREEN_CSS, STATUS_CSS } from "./pages/candidate";
 import { CANDIDATE_FONTS, FONT_DIR, FONT_LOCK_FILE, type FontLock, fontLicenceFile } from "./pages/fonts";
 import { CSS } from "./pages/layout";
 import { statusTokenFor, useOneVisitApplyFlow } from "./test-helpers";
@@ -47,14 +47,18 @@ describe("candidate pages: design tokens and fonts", () => {
   });
 
   it("uses only tokens it declares, and no colour outside the token blocks", () => {
-    const used = new Set([...`${CSS}${SCREEN_CSS}`.matchAll(/var\((--[a-z0-9-]+)\)/g)].map((m) => m[1]));
+    const used = new Set([...`${CSS}${SCREEN_CSS}${STATUS_CSS}`.matchAll(/var\((--[a-z0-9-]+)\)/g)].map((m) => m[1]));
     for (const name of used) expect(pageLight.has(name), `${name} is used but not declared`).toBe(true);
-    const outside = `${pageCss.slice(0, pageCss.indexOf(":root {"))}${pageCss.slice(pageCss.indexOf("* {"))}${stripComments(SCREEN_CSS)}`;
+    const outside = `${pageCss.slice(0, pageCss.indexOf(":root {"))}${pageCss.slice(pageCss.indexOf("* {"))}${stripComments(SCREEN_CSS)}${stripComments(STATUS_CSS)}`;
     expect(outside).not.toMatch(/#[0-9a-f]{3,8}\b/i);
     // the near-black primary button and the outlined secondary one, on every page (the screening page used to be the only one with a secondary look)
     expect(pageCss).toMatch(/\.btn \{[^}]*background: var\(--primary\); color: var\(--on-primary\);/);
     expect(pageCss).toMatch(/\.btn\.secondary \{ background: var\(--surface\); border-color: var\(--line-2\); color: var\(--ink\); \}/);
     expect(SCREEN_CSS).not.toContain(".btn");
+    expect(STATUS_CSS).not.toContain(".btn");
+    // the status page's messages and the screening conversation are one look: the candidate's own on the right in near-black (plan G7)
+    for (const css of [SCREEN_CSS, STATUS_CSS]) expect(css).toContain(".msg.candidate { align-self: flex-end; background: var(--ink); color: var(--ground);");
+    expect(STATUS_CSS).toContain(".msg.assistant, .msg.team { align-self: flex-start; background: var(--ground);");
   });
 
   it("declares IBM Plex Sans and Bricolage Grotesque from this deployment's own /fonts/ folder, and the policy still names no outside host", () => {
@@ -239,6 +243,11 @@ describe("candidate pages: the look, page by page", () => {
     expect(html).toContain('<button class="btn secondary" type="submit">Don&#39;t keep me for future roles</button>');
     expect(html).toContain('<button class="btn secondary" type="submit">Send request</button>');
     expect(html).toMatch(/<a class="btn" href="\/c\/screen\/[^"]+">(Start|Continue) the screening conversation<\/a>/);
+    // the messages read as a conversation in the page's own styles, with no style attribute and no script (plan G7)
+    expect(html).toContain('<h2 id="messages">Messages about your application</h2>');
+    expect(html).toMatch(/<li class="msg team"><p class="msg-head">Look Dental<span aria-hidden="true"> · <\/span>/);
+    expect(html).not.toMatch(/ style="/);
+    expect(html).not.toContain("<script");
   });
 
   it("the screening page carries its own styles in the head with the request's nonce; its introduction says first that it is the company's AI assistant, with Start as the one near-black button and the other two outlined", async () => {

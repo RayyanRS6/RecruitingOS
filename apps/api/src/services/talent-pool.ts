@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { sendTalentPoolOptOutConfirmation } from "@ros/agents";
 import { emit } from "@ros/core";
@@ -9,11 +9,25 @@ type Application = typeof applications.$inferSelect;
 
 /**
  * The person asked not to be kept for future roles. Every way into the talent pool checks this first (the team's "move
- * to the talent pool" today, the pool board and any future-role outreach later): they may leave a role's active list,
- * but they are never marked as kept, and nobody contacts them about other openings.
+ * to the talent pool", a "no hire" outcome, a role closing, the pool board and any future-role outreach later): they may
+ * leave a role's active list, but they are never marked as kept, and nobody contacts them about other openings.
  */
 export function leftOutOfTalentPool(candidate: { preferences: CandidatePreferences }): boolean {
   return !!candidate.preferences.talentPoolOptOut;
+}
+
+/**
+ * Keeps these people in the talent pool (founder decision Q30: they stay unless they said "Don't keep me"), except those
+ * who asked not to be kept. Returns who was kept and who stayed out by their own choice. Inside the company's transaction.
+ */
+export async function keepInTalentPool(tx: Tx, candidateIds: string[]): Promise<{ kept: string[]; optedOut: string[] }> {
+  const ids = [...new Set(candidateIds)];
+  if (!ids.length) return { kept: [], optedOut: [] };
+  const rows = await tx.select({ id: candidates.id, preferences: candidates.preferences, anonymizedAt: candidates.anonymizedAt }).from(candidates).where(inArray(candidates.id, ids));
+  const optedOut = rows.filter((c) => leftOutOfTalentPool(c)).map((c) => c.id);
+  const kept = rows.filter((c) => !leftOutOfTalentPool(c) && !c.anonymizedAt).map((c) => c.id);
+  if (kept.length) await tx.update(candidates).set({ inTalentPool: true }).where(and(inArray(candidates.id, kept), eq(candidates.inTalentPool, false)));
+  return { kept, optedOut };
 }
 
 /**

@@ -275,7 +275,8 @@ export function Timeline(props: { items: Array<{ when: string; what: string; who
 }
 
 export function PipelineBar(props: { counts: Record<string, number>; total: number }) {
-  const parts: Array<[string, string]> = [["in_process", "var(--ink-2)"], ["waiting_on_you", "var(--caution-dot)"], ["hired", "var(--good-dot)"], ["not_moving_forward", "var(--line-2)"]];
+  // `waiting_on_candidate`: an offer made outside the app, waiting on the candidate's answer (plan H2)
+  const parts: Array<[string, string]> = [["in_process", "var(--ink-2)"], ["waiting_on_you", "var(--caution-dot)"], ["waiting_on_candidate", "var(--ink-3)"], ["hired", "var(--good-dot)"], ["not_moving_forward", "var(--line-2)"]];
   return (
     <div className="pipeline" role="img" aria-label={`Pipeline: ${parts.map(([k]) => `${k.replace(/_/g, " ")} ${props.counts[k] ?? 0}`).join(", ")}`}>
       {parts.map(([k, color]) => {
@@ -308,7 +309,7 @@ export function Table(props: { head: string[]; children: ReactNode; label?: stri
 export { Icon, ICON_NAMES, type IconName } from "./icons";
 // The match score's breakdown (Wave F): bars per requirement, no hooks.
 export { barFigures, barTone, ScoreBar, type ScoreBarItem, ScoreBars } from "./score-bars";
-export { cx, initials, normalizeToast, OWNER_STAGES, type OwnerStage, ownerStage, SCORE_BANDS, type ScoreBand, scoreBand, scoreLabel, type StageChoice, stageMenuItems, type StepState, TOAST_EVENT, type ToastMessage, type ToastTone, type Tone, toastDuration, toastPayload } from "./helpers";
+export { cx, initials, normalizeToast, OWNER_STAGES, type OwnerStage, ownerStage, SCORE_BANDS, type ScoreBand, scoreBand, scoreLabel, type StageChoice, stageMenuItems, type StepState, TOAST_ACTION_MAX_MS, TOAST_EVENT, type ToastAction, type ToastMessage, type ToastTone, type Tone, toastDuration, toastPayload } from "./helpers";
 
 // The pieces below listen to the keyboard or keep state, which needs React hooks, so each lives in its own client
 // module: the rest of this file stays usable from server components.

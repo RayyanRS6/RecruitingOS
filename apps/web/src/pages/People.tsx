@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "../nav";
-import { Alert, Avatar, Button, Card, Chip, EmptyState, ErrorState, Icon, PageHeader, Pill, ScoreBadge, Sheet, Skeleton, StageButton, TabPanel, Tabs, type OwnerStage } from "@ros/ui";
+import { Alert, Avatar, Button, Card, Chip, EmptyState, ErrorState, Field, Icon, PageHeader, Pill, ScoreBadge, Sheet, Skeleton, StageButton, TabPanel, Tabs, type OwnerStage } from "@ros/ui";
+import { CHOOSABLE_WORDINGS, DECISION_WORDING_LABEL, type DecisionWording } from "@ros/contracts";
 import { api, ApiError, type ActionResult, type ApplicationSummary, type ApplicationsWithCounts, type BoardView, type DecisionMessagePreview, type DecisionMessagesResponse, type Me, type RoleSummary } from "../api/client";
 import { toast } from "../toast";
 import { messageOnItsWayChip } from "../company-check";
@@ -14,7 +15,10 @@ import { LOW_CONFIDENCE_LABEL } from "../evidence";
 import { activeCompanyOf } from "../rail";
 import { canDecline, canSeeTalent, canShareJob } from "../roles";
 import { roleStatus } from "../role-status";
-import { actionToast, batches, bulkSendToast, holdDay, mergeDecisionResults, noticeText, stageBlocked, stageIntent, type PanelStep } from "../talent-actions";
+import { actionToast, batches, bulkSendToast, holdDay, mergeDecisionResults, noticeText, panelStepFrom, stageBlocked, stageIntent, type PanelStep } from "../talent-actions";
+import { useBulkUndoToast } from "../components/use-undo";
+import { waitingOnCandidateRow } from "../hiring";
+import { WORDING_HINT, bulkUndoMillis, undoable } from "../telling";
 import { ORDERS, READING, READING_FILTERS, STILL_APPLYING_LABEL, STILL_APPLYING_TEXT, appliedWhen, applyView, defaultView, emptyText, isStillApplying, readingCounts, readingOf, stillApplyingCount, stripItems, waitingOnYouCount, waitingText, type Order, type ReadingFilter, type TalentView } from "../talent-list";
 import { CandidatePanel } from "./candidate-panel/CandidatePanel";
 import { STAGE_LABEL, panelSearch, panelTabFrom, type PanelTab } from "./candidate-panel/helpers";
@@ -105,7 +109,8 @@ export function People() {
 
   // The candidate panel, mirrored in the address with replace, so Back leaves the page as before.
   const openParam = search.get("open");
-  const fromLink = (): PanelState | null => (openParam ? { id: openParam, tab: search.get("message") === "1" ? "messages" : panelTabFrom(search.get("tab")), step: null, ids: null, compose: search.get("message") === "1" } : null);
+  // `step` and `round` open a step once (Today's "Yes, interview" opens the interview approval, filled in; plan H4).
+  const fromLink = (): PanelState | null => (openParam ? { id: openParam, tab: search.get("message") === "1" ? "messages" : panelTabFrom(search.get("tab")), step: panelStepFrom(search.get("step")), roundKey: search.get("round") ?? undefined, ids: null, compose: search.get("message") === "1" } : null);
   const [panel, setPanel] = useState<PanelState | null>(fromLink);
   // A notification or a Today card followed while this page is open changes only the address: follow it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: only a new `?open=` in the address re-reads it
@@ -245,7 +250,8 @@ export function People() {
 function TalentRow({ a, busy, onOpen, onMove }: { a: ApplicationSummary; busy: boolean; onOpen: () => void; onMove: (to: OwnerStage) => void }) {
   const name = a.candidate?.name ?? "Unknown";
   const reading = readingOf(a);
-  const waiting = waitingText(a);
+  // waiting on you, or (an offer made outside the app, plan H2) waiting on the candidate's answer
+  const waiting = waitingText(a) ?? waitingOnCandidateRow(a);
   // A decision message in the outbox of a company ITS has not confirmed yet waits for the check (founder decision B7).
   const check = useCompanyCheck();
   return (
@@ -278,27 +284,40 @@ function TalentRow({ a, busy, onOpen, onMove }: { a: ApplicationSummary; busy: b
   );
 }
 
+/** The wordings a person may choose for several people at once (Q28): each person's suggested one, or one approved wording for all. */
+const BULK_WORDINGS: ReadonlyArray<DecisionWording> = CHOOSABLE_WORDINGS;
+
 /**
- * "Not told yet" for several people at once (founder decision B6): the standard wording shown first, each person ticked
- * by default, then one Send that sends to each of them separately, with every person's own result.
+ * "Not told yet" for several people at once (founder decisions B6 and Q28): one approved wording for all of them, or each
+ * person's suggested one, the message shown first, each person ticked by default, then one Send that sends to each of
+ * them separately, with every person's own result and "Undo all" while the messages wait out the Undo window (plan G9).
+ * A personal line is written on each person's own page.
  */
 function TellSheet({ roleId, people, onClose }: { roleId: string; people: ApplicationSummary[]; onClose: () => void }) {
   const qc = useQueryClient();
+  const bulkUndo = useBulkUndoToast();
   const [picked, setPicked] = useState<string[]>(people.map((p) => p.id));
+  const [wording, setWording] = useState<DecisionWording | "each">("each");
   const [results, setResults] = useState<DecisionMessagesResponse | null>(null);
   const sample = picked[0] ?? null;
-  const preview = useQuery({ queryKey: ["decision-message", sample], queryFn: () => api.get<DecisionMessagePreview>(`/api/v1/applications/${sample}/decision-message`), enabled: !!sample && !results });
+  const preview = useQuery({
+    queryKey: ["decision-message", sample, wording],
+    queryFn: () => (wording === "each" ? api.get<DecisionMessagePreview>(`/api/v1/applications/${sample}/decision-message`) : api.post<DecisionMessagePreview>(`/api/v1/applications/${sample}/decision-message/preview`, { wording })),
+    enabled: !!sample && !results,
+    retry: false,
+  });
   const send = useMutation({
     // in requests of at most a hundred people each, one after the other, so a long list after a role close goes out whole
     mutationFn: async () => {
       const parts: DecisionMessagesResponse[] = [];
-      for (const ids of batches(picked)) parts.push(await api.post<DecisionMessagesResponse>(`/api/v1/roles/${roleId}/decision-messages`, { applicationIds: ids }));
+      for (const ids of batches(picked)) parts.push(await api.post<DecisionMessagesResponse>(`/api/v1/roles/${roleId}/decision-messages`, { applicationIds: ids, ...(wording === "each" ? {} : { wording }) }));
       return mergeDecisionResults(parts);
     },
     onSuccess: async (r) => {
       setResults(r);
       const t = bulkSendToast(r);
-      toast(t.title, t.detail);
+      const items = undoable(r.results);
+      bulkUndo({ roleId, items, ms: bulkUndoMillis(r.results), title: t.title, detail: items.length ? [t.detail, "Undo all takes back every message still waiting."].filter(Boolean).join(" ") : t.detail });
       await Promise.all([qc.invalidateQueries({ queryKey: ["applications", roleId] }), qc.invalidateQueries({ queryKey: ["brief"] }), qc.invalidateQueries({ queryKey: ["application"] })]);
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send the messages."),
@@ -316,7 +335,13 @@ function TellSheet({ roleId, people, onClose }: { roleId: string; people: Applic
         </div>
       ) : (
         <div className="stack">
-          <p className="small" style={{ margin: 0 }}>Each person gets the standard decision message on its own, with their own name. Untick anyone you would rather tell yourself.</p>
+          <p className="small" style={{ margin: 0 }}>Each person gets the decision message on its own, with their own name. Untick anyone you would rather tell yourself. To add a personal line, send from that person's own page.</p>
+          <Field label="Wording" htmlFor="bulk-wording" hint={wording === "each" ? "Each person gets the wording that fits their decision: after an interview, position filled, or the standard one." : WORDING_HINT[wording]}>
+            <select id="bulk-wording" className="select" value={wording} onChange={(e) => setWording(e.target.value as DecisionWording | "each")}>
+              <option value="each">The suggested wording for each person</option>
+              {BULK_WORDINGS.map((w) => <option key={w} value={w}>{DECISION_WORDING_LABEL[w]} for everyone</option>)}
+            </select>
+          </Field>
           <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
             <legend className="small muted">Who gets it</legend>
             {people.map((p) => (
@@ -331,12 +356,15 @@ function TellSheet({ roleId, people, onClose }: { roleId: string; people: Applic
               <Card title={`What ${nameOf(sample).split(" ")[0]} will get`}>
                 <p className="small" style={{ margin: 0 }}><strong>{preview.data.subject}</strong></p>
                 <p className="small" style={{ margin: "6px 0 0", whiteSpace: "pre-wrap" }}>{preview.data.text}</p>
-                <p className="small muted" style={{ marginTop: 8 }}>People declined on an eligibility answer get the version about their answers.</p>
+                <p className="small muted" style={{ marginTop: 8 }}>People declined on an eligibility answer always get the version about their answers.</p>
               </Card>
+            ) : preview.error instanceof ApiError && preview.error.code === "wording_not_allowed" ? (
+              <Alert tone="info">{nameOf(sample)} gets the wording for their own decision instead: {preview.error.message}</Alert>
             ) : <ErrorState message="Could not load the message." onRetry={() => preview.refetch()} />
           ) : null}
           {policy === "not_sent" ? <Alert tone="caution">Under your settings no decision messages are sent. Tell each person yourself, then record it on their page.</Alert> : null}
           {policy === "needs_approval" ? <p className="small muted" style={{ margin: 0 }}>Under your settings each message waits for approval before it goes out.</p> : null}
+          {policy === "sends" && preview.data?.undoSeconds ? <p className="small muted" style={{ margin: 0 }}>Each message waits {preview.data.undoSeconds} seconds before it goes, so you can undo the Send.</p> : null}
           <Button variant="primary" icon="send" disabled={!picked.length || policy === "not_sent"} loading={send.isPending} onClick={() => send.mutate()}>{policy === "needs_approval" ? `Send ${picked.length} for approval` : `Send to ${picked.length} ${picked.length === 1 ? "person" : "people"}`}</Button>
         </div>
       )}

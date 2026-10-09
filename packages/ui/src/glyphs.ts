@@ -61,6 +61,9 @@ export const GLYPHS = {
   grid: { stroke: ["M4 4h6v6H4z", "M14 4h6v6h-6z", "M4 14h6v6H4z", "M14 14h6v6h-6z"] },
   pin: { stroke: ["M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z", circle(12, 10, 2.5)] },
   dollar: { stroke: ["M12 3v18", "M16.5 7.5c-.6-1.5-2.3-2.5-4.5-2.5-2.5 0-4.5 1.3-4.5 3.3 0 4.7 9.5 2.4 9.5 7.2 0 2-2 3.5-4.8 3.5-2.4 0-4.2-1.1-4.8-2.8"] },
+  // Full screen and back (the résumé inside the candidate panel, plan H5).
+  expand: { stroke: ["M4 9V4h5", "M20 9V4h-5", "M4 15v5h5", "M20 15v5h-5"] },
+  shrink: { stroke: ["M9 4v5H4", "M15 4v5h5", "M9 20v-5H4", "M15 20v-5h5"] },
 } satisfies Record<string, Glyph>;
 
 /** Second names for the same drawing, matching the places they stand for (the rail's Today, Roles, Talent, Interviews). */

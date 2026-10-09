@@ -144,7 +144,8 @@ Press **Review** (or the name) to open the candidate.
 - **Contact and consent**: email, phone, location, text-message consent (off in release 1) and when the AI notice was shown.
 - **Screening conversation**: the status and, when there is one, **Read the conversation**.
 - **Resume assessment** and, after a screen, **Screen scorecard** (section 9).
-- **What the resume says**: the positions with dates and a quoted line from the resume for each, licenses, skills, and any flags. Below, **Open (file name)** opens the actual resume; the opening is recorded. A file that is still being checked says so; a refused file says why.
+- **Résumé**: the résumé itself, shown on the page when you open this section (a Word file shows the words it was read as), with **Full screen** and **Open in a new tab**; each opening is recorded. Below it, **What the résumé says**: the positions with dates and a quoted line from the résumé for each, licenses, skills, and any flags. A file that is still being checked says so; a refused file says why.
+- **Notes**: your hiring team's private notes on the candidate (section 12).
 - **Eligibility answers**: which required answers were met.
 - **Messages**: everything sent to the candidate and whether it arrived, and anything they wrote back, including email replies once ITS has connected incoming mail.
 - **What happened**: the full timeline with who did what.
@@ -198,14 +199,15 @@ Read the evidence, not just the chips. Unknowns are questions to ask; under them
 
 ## 10. Approving an interview and picking interviewers
 
-Nothing schedules until a person approves it. Open the candidate and press **Interview**. If the assistant proposed it, you see **The assistant suggests an interview** and press **Yes, interview** first.
+Nothing schedules until a person approves it. Open the candidate and press **Interview** (or choose **Interviewing** on the stage button). If the assistant proposed it, you see **The assistant suggests an interview**; **Yes, interview** (there or on Today) opens the approval below already filled in from your interview plan, so it is one more look and one click, never a second approval.
 
 Under **Approve an interview**:
 
 1. **Round**: the next round from the interview plan is selected. Change it if needed. A round must be in the approved plan.
-2. **Interviewers**: tick the people. Each shows **availability known** or **no calendar or hours yet**. Someone with no availability cannot be offered times; they will be asked to set it in Setup, and scheduling waits for them.
+2. **Interviewers**: the round's interviewers from the plan who are still on your team are ticked. Each shows **availability known** or **no calendar or hours yet**. Someone with no availability cannot be offered times; they will be asked to set it in Setup, and scheduling waits for them.
 3. **Meeting link**: **Create it with the calendar event**, or **I'll paste a link** and paste your own video or phone details.
-4. Press **Approve and offer times**.
+4. **A personal line for the invitation** (optional): one or two sentences that go with the times, under your name. **Suggest a line** asks the assistant for one; change it or leave it out, and if you keep it the invitation says the assistant helped. It is checked like the personal line on a decision message (section 13).
+5. Press **Approve and offer times**.
 
 Times are worked out from each interviewer's connected calendar or declared hours, within a scheduling window, on business days, respecting the buffer and daily maximum. If the interviewers have no common free time, you are told and can widen the window, change interviewers or free some time.
 
@@ -240,8 +242,11 @@ Once the interview is over, the candidate waits on you: they appear under **Wait
 - **Next round**: the candidate moves on. The page opens the interview approval for the next round with its interviewers; check them and approve, and times go out from there.
 - **Finalist**: write what stood out under **What stood out (kept internally)** and press **Confirm finalist**.
 - **Not moving forward**: pick a reason, add a note if you like, and press **Confirm: not moving forward**. The decision is private: nothing reaches the candidate until someone sends the decision message (section 13).
+- **Hired**: opens the hire sheet (section 14), which asks for the start date.
 
 Release 1 has no interviewer scorecards. Record what matters in the note. The decision shows on the interview page too.
+
+**Team notes.** Each person on the hiring team keeps one private note on a candidate, under **Notes** on their page and on the **How did the interview go?** card. Start from a prompt (**Before the interview**, **After the interview**, **For and against**) or write freely. It saves when you stop typing; changes made in one sitting count as one version, and your own earlier versions are listed under your note. Only you can change your note. Owners, admins, hiring managers, HR and an ITS recruiter you brought in read every note, also side by side in **Compare**; an interviewer writes and reads only their own note, on someone they interviewed, once the interview has started. Notes are private to your hiring team: the candidate never sees them, and they are never given to the AI assistant. Stick to job-related facts, and write nothing you would not want the candidate to read.
 
 Owners, admins and hiring managers record these decisions (and an ITS recruiter you brought in). HR and interviewers can say whether an interview took place but cannot decide.
 
@@ -258,27 +263,47 @@ At any stage, open the candidate, press the stage button and choose **Not moving
 
 Add a **Note (kept internally)** if you like and press **Confirm: not moving forward**. The decision is private: it is not sent to the candidate, and their status page still shows the step they were at. If they had an interview booked or times offered, it is cancelled now, and they get a short note straight away saying only that the interview is off (no reason given), so nobody turns up to an interview that no longer exists. The confirmation names that interview, with its day and time, before you press the button. The decision message you send later does not mention the interview again. Declined candidates appear under **Not moving forward** with **Not told yet**, and the reason is on their timeline. A candidate is never declined by software.
 
-**Telling the candidate.** Telling is a separate step, by a person. On the candidate's page, **Send message** shows the exact standard message first; **Send** sends it (under **Ask me first** it waits for a second person to approve it; under **Only a person** the product sends no decision messages). To tell several people at once, use **Not told yet** on the Talent page, then **Review and send**: each person gets their own message, and you see what happened for each. If you told them yourself (by phone, say), press **I told them myself** and nothing more is sent. Only once they were told does their status page show the decision. Anyone not told after two working days is listed on **Today** and you get a reminder; nothing goes out by itself.
+**Telling the candidate.** Telling is a separate step, by a person. On the candidate's page, **Send message** shows the exact message first. You can pick one of a few approved versions of the wording (the screen suggests the one that fits, for example "After an interview" or "Position filled"); the message never gives your reason. You can also add a short **personal line** of your own, one or two sentences. It is checked before anything is sent: it can't mention scores or ratings, what the assistant found, the reason you recorded, or anything personal such as age, family, health, religion or background, and if it does you are told exactly what to take out. The bottom of every message stays the same and can't be edited: whether we keep their details for future roles and how to say no, how to reach a person, and the AI notice.
+
+**Send** sends it (under **Ask me first** it waits for a second person to approve it, with your wording and line; under **Only a person** the product sends no decision messages). For 30 seconds after you press Send you can press **Undo**: the message is taken back and they stay not told. To tell several people at once, use **Not told yet** on the Talent page, then **Review and send**: each person gets their own message, in the wording that fits their decision unless you pick one for everyone, you see what happened for each, and **Undo all** takes back every message still waiting. If you told them yourself (by phone, say), press **I told them myself** and nothing more is sent. Only once they were told does their status page show the decision.
+
+**If nobody tells them.** Anyone not told after two working days is listed on **Today** and you get a reminder. After five working days (Monday to Friday, holidays left out), the standard message goes to them by itself and you are told who got it. If your settings ask for approval of decision messages, keep them to a person, or an ITS recruiter is running the role, nothing is sent: an ITS recruiter is brought in to make sure they hear from you. The candidate's page names the day this happens. Someone whose details were deleted at their request is never written to.
+
+**Candidates in Colorado** get one more line at the bottom of the message saying they can ask for the main reasons for the decision and for a person to review it. If they reply asking, the request goes to the ITS privacy and compliance team, who answer them. You are told that they asked, and their reply is on their page like any reply to your email; ITS handles the answer. (The wording is a draft our lawyer is reviewing.)
 
 **On hold** keeps a candidate where they are while you think, until a date you choose (two weeks unless you change it); they come back to **Today** then. It sends nothing.
 
 ## 14. Recording the outcome
 
-The product never makes or sends an offer, and it asks for no pay, tax, identity or banking details. When you have made an offer your own way, record what happened. On the candidate's page under **Record what happened**, press **Record an outcome** and choose:
+The product never makes or sends an offer, and it asks for no pay, tax, identity or banking details. You make offers your own way and record what happened.
 
-- **Hired (offer accepted outside the platform)**: add the hire date, and the date the offer was accepted if you know it
-- **Declined an offer made outside the platform**
+**Offer made.** When you have made a finalist (or someone whose references you are checking) an offer, open them and press **Offer made**, or choose **Offer** on the stage button. Pick the day it was made (today unless you change it), add a private note if you like, and press **Record the offer**. Nothing is sent to them, and no term of the offer is kept. They move to **Offer**, under **Waiting on the candidate**, and if no answer is recorded after five days you are reminded to check in with them. When they answer, record it on their page: **They accepted** opens the hire sheet; **They declined** (or **They withdrew**) records that. Owners, admins, hiring managers and HR record offers and outcomes.
+
+**The hire sheet.** **Hire**, **They accepted**, **Hired** after an interview, or **Hired** on the stage button all open it. Enter the start date (and the day they accepted, if you know it), press **Continue**, then **Yes, record the hire**: it is recorded under your name, and nothing is sent to anyone. The sheet then lists the other people still in the running for the role and offers two choices:
+
+- **Close it now** (the role, as filled): everyone still in process moves to your talent pool, privately, unless they asked not to be kept; anyone with an interview booked or times offered gets a short note straight away saying only that the interview is off; and you see the closing message before it goes (below).
+- **Keep the role open**: nobody is told anything, and **Today** shows a "Keep your backups warm" card until the start date, in case the start falls through.
+
+**Record an outcome** (in the candidate page's menu) opens **Record what happened** for the other outcomes. **Open the hire sheet** is at the top; otherwise choose:
+
+- **They declined the offer made outside the platform**
 - **The candidate withdrew**
-- **We declined the candidate**: add a reason. Like any decline it is private until someone sends the decision message (section 13). Shown only to people who may decline candidates.
-- **No hire for this candidate**
+- **We declined the candidate**: pick a reason from the same list as **Not moving forward** (section 13), and add a note if you like. Like any decline it is private until someone sends the decision message (section 13). Shown only to people who may decline candidates.
+- **No hire for this candidate**: they stay in your talent pool unless they asked not to be kept; their page then offers **Send message**, with the message you can send them when you are ready.
 
-Press **Continue**, then **Yes, record it**. The record carries your name and can only be corrected by an ITS administrator, with the original kept. After a hire, the product asks **Close the role too?**. Closing the role is a separate decision, made from the role page, and candidates who were still active stay in your talent pool, privately. Anyone among them with an interview booked or times offered gets a short note straight away saying only that the interview is off.
+The card says before you confirm whether anything goes to the candidate: nothing about the outcome ever does, but an interview they had booked or times they were offered are called off with a short note saying only that it is off. Press **Continue**, then **Yes, record it**. The record carries your name and can only be corrected by an ITS administrator, with the original kept. Closing a role is always a separate decision, from the hire sheet or the role page.
+
+**The closing message.** When you close a role, the close card says how many people were still in process and shows one courteous closing message for all of them (emailed applications that were waiting are included). Press **Send** once to tell everyone: each person gets their own copy, and nobody is told twice (anyone you already told is left out). For 30 seconds, **Undo all** takes every one of them back. Under **Ask me first**, one approval covers the whole group. They stay in your talent pool unless they click "Don't keep me for future roles" on their status page or reply "no thanks".
+
+**While they wait.** When people have waited on you for days, **Today** names whoever has waited longest, with **Decide**, **Hold until a date** and **Send a note** (in your own words); nothing is sent from the card. Someone still waiting for a decision 30 days after applying gets one short note saying their application is still being reviewed and that a person decides; you can switch this off under **Send a "still reviewing" note** in Setup. A candidate whose screening link closed without being started is told so, and that they can reply for a new one.
 
 ## 15. Writing to a candidate
 
 On the candidate's page, the **Message (first name)** card has **Write to (first name)**. (From an interview, **Message the candidate** opens it for you.) Add a subject if you like, write your message, and press **Send**.
 
 - It goes out under your company's hiring-team name, with your name at the bottom. It is your own words, so it carries no AI notice. The card shows who it goes to and the footer before you send.
+- **Suggest an opening line** asks the assistant for one friendly sentence for an update (the interview approval has **Suggest a line** for the invitation, section 10). Change it or leave it out; if you keep it, the email says the assistant helped you write it. The assistant never writes a decline.
+- For 30 seconds after you press **Send** you can press **Undo** and nothing goes.
 - Under the default settings it goes at once and the owners are told. If your owner has set **Send a message a team member wrote to a candidate** to Ask me first or Only a person, the button says **Send for approval**: an owner or admin reads it first, on **Today** or on the candidate's page, and presses **Yes, send it** or **Do not send**. You are told either way. Messages from owners and admins always go at once.
 - A candidate with no email address on file cannot be written to; the card says so.
 - Replies: once ITS has connected incoming mail for your workspace, the candidate's reply appears under **Messages** on their page and you are told. Until then, replies reach an ITS mailbox that a person reads. The card tells you which.

@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Avatar, Button, Card, Chip, ErrorState, Field, PageHeader, Pill, Segmented, Skeleton, Table, type Tone } from "@ros/ui";
 import { api, ApiError, type MyCalendar } from "../api/client";
 import { useSearchParams } from "../nav";
-import { hasChoice, loosens, looseningQuestion, splitRules } from "../ai-rules";
+import { STILL_REVIEWING_LABEL, STILL_REVIEWING_NOTE, hasChoice, loosens, looseningQuestion, splitRules } from "../ai-rules";
 import { CAREERS_PAGE_WAITS, companyCheckOf } from "../company-check";
 import { ABOUT_MAX, LOGO_TYPES, aboutCheckOf, aboutDraftOf, aboutProblem, logoProblem, logoUrlOf } from "../publishing";
 import { LEVELS, allowedLevels, type PolicyLevel } from "../policy-levels";
@@ -133,6 +133,7 @@ export function Setup() {
                           ) : <Chip tone="neutral">{levelLabel(p.level)}</Chip>}
                         </div>
                         {p.does ? <p className="small muted" style={{ margin: "4px 0 0" }}>{p.does}</p> : null}
+                        {p.actionType === "message.still_reviewing" ? <p className="small muted" style={{ margin: "4px 0 0" }}>{STILL_REVIEWING_NOTE[p.level] ?? STILL_REVIEWING_NOTE.auto}</p> : null}
                         {loosening?.row.actionType === p.actionType ? (
                           <div style={{ marginTop: 8 }}>
                             <Alert tone="caution">
@@ -258,7 +259,9 @@ function actionLabel(a: string): string {
     "application.triage": "Read and assess applicants (information only)", "application.hold_ineligible": "Hold an applicant who answers no to an eligibility question, and remind you (never declines)", "application.reject_ineligible": "Decline an applicant held on an eligibility answer",
     "application.reject_on_assessment": "Decline a candidate on judgment", "application.invite_screen": "Invite an applicant to a screen", "screen.conduct": "Run a screening conversation",
     "application.recommend_interview": "Recommend who to interview", "message.send_templated": "Send confirmations and reminders", "message.send_freeform": "Send a message a team member wrote to a candidate (set to approval or only a person, an owner or admin reads it first; their own go at once)",
-    "disposition.send": "Send the decision message when someone on your team presses Send (declining never sends anything by itself; Do it: it goes then; Ask me first: a second person approves it; Only a person: the app sends none and you tell candidates yourself)", "interview.request": "Advance someone to an interview", "interview.schedule": "Book interviews on calendars",
+    "disposition.send": "Send the decision message when someone on your team presses Send (declining never sends anything by itself; Do it: it goes then, and if nobody has told someone five working days after a decision, the standard message goes by itself and you are told; Ask me first: a second person approves it, and a recruiter is brought in instead of the message going by itself; Only a person: the app sends none and you tell candidates yourself, and if nobody has after five working days a recruiter is brought in to make sure they hear from you)",
+    "message.still_reviewing": STILL_REVIEWING_LABEL,
+    "interview.request": "Advance someone to an interview", "interview.schedule": "Book interviews on calendars",
     "interview.reschedule": "Reschedule an interview", "interview.record": "Record an interview (with consent)", "scorecard.draft": "Draft scorecards for interviewers",
     "debrief.recommend": "Recommend a finalist", "candidate.hire_decision": "Decide who to hire", "offer.draft": "Draft an offer", "offer.send": "Send an offer",
     "offer.negotiate": "Negotiate an offer", "offer.revise": "Revise an offer", "reference.request": "Request references", "background_check.order": "Order a background check",

@@ -300,7 +300,7 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
   // stage strip with the private marks, and whether the people a decision was made about have been told.
   const marks = activeMarkOf(data);
   const stageCount = new Map<ApplicationStage, number>();
-  const byGroup: Record<OwnerGroup, number> = { waiting_on_you: 0, in_process: 0, not_moving_forward: 0, hired: 0 };
+  const byGroup: Record<OwnerGroup, number> = { waiting_on_you: 0, waiting_on_candidate: 0, in_process: 0, not_moving_forward: 0, hired: 0 };
   const byOwnerStage = Object.fromEntries(OwnerStageEnum.options.map((s) => [s, 0])) as Record<OwnerStage, number>;
   const markCounts: MarkCounts = { longlist: 0, shortlist: 0, onHold: 0, holdsEnded: 0, notAFitForNow: 0, holdsEverSet: (data.marks ?? []).filter((m) => m.mark === "on_hold").length };
   const told: ToldCounts = { decisions: 0, notTold: 0, queued: 0, sent: 0, toldInPerson: 0, beforeTracking: 0 };
@@ -587,6 +587,7 @@ export function summaryRows(r: RoleReport): Array<[string, string, string | numb
   for (const s of r.applicants.bySource) add("Applicants by source", s.sourceDetail ? `${s.label}: ${s.sourceDetail}` : s.label, s.count);
   for (const d of r.applicants.byDay) if (d.count) add("Applicants by day", d.day, d.count);
   add("Stages", "Waiting on you", r.stages.byGroup.waiting_on_you);
+  add("Stages", "Waiting on the candidate", r.stages.byGroup.waiting_on_candidate);
   add("Stages", "In process", r.stages.byGroup.in_process);
   add("Stages", "Not moving forward", r.stages.byGroup.not_moving_forward);
   add("Stages", "Hired", r.stages.byGroup.hired);

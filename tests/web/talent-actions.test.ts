@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveMark, ApplicationDetail, CandidateNotice, StageMove } from "../../apps/web/src/api/client";
 import { LOW_CONFIDENCE_LABEL, NO_QUOTE_LABEL, closerLook, competencyUnquoted, isUnquoted, lowConfidence, requirementUnquoted, scorecardUnavailable } from "../../apps/web/src/evidence";
-import { NOT_NOW_TOAST, NOT_TOLD, PRIVATE_DECISION, actionToast, batches, briefDecisionToast, bulkSendToast, closeRoleToast, declineConfirmText, decisionToast, interviewCancelToast, interviewWords, mergeDecisionResults, noticeText, outcomeToast, sendDecisionToast, stageBlocked, stageIntent } from "../../apps/web/src/talent-actions";
+import { NOT_NOW_TOAST, NOT_TOLD, PRIVATE_DECISION, actionToast, batches, briefDecisionToast, bulkSendToast, closeRoleToast, declineConfirmText, decisionToast, interviewCancelToast, interviewWords, mergeDecisionResults, noticeText, outcomeNoticeText, outcomeToast, sendDecisionToast, stageBlocked, stageIntent } from "../../apps/web/src/talent-actions";
 
 /**
  * The Talent page's words (plans 0.5, 0.6, 0.9, A4, A6 and A9; founder decisions B3 and B6: moves and decisions are
@@ -129,6 +129,11 @@ describe("the private decline step", () => {
     expect(notOffered).toMatch(/It is private: nothing is sent to the candidate now\./);
     expect(notOffered).not.toMatch(/told now/);
     expect(declineConfirmText("sends", { hasEmail: true, interviews: [] })).not.toMatch(/cancels|stops/);
+    // "Record what happened" says the same: nothing about the outcome goes, but an interview they knew of is called off
+    expect(outcomeNoticeText([])).toBe("Nothing is sent to the candidate.");
+    expect(outcomeNoticeText([proposed])).toBe("Nothing is sent to the candidate.");
+    expect(outcomeNoticeText([booked])).toBe(`Nothing about the outcome is sent to the candidate. Unless it is a hire, ${iv} is called off, and they are told now, in a short note that gives no reason, that it is off.`);
+    expect(outcomeNoticeText([booked, offered])).toMatch(/ are called off, and they are told now, in a short note that gives no reason, that they are off\.$/);
   });
 
   it("the decline's toast says the interview was called off and the candidate was told only that it is off", () => {
@@ -143,7 +148,7 @@ describe("the private decline step", () => {
   });
 
   it("closing a role says who moved privately, which interviews ended, and who was told only that theirs is off", () => {
-    expect(closeRoleToast({ movedToTalentPool: 3, heldEmailsAddedToTalentPool: 1, interviewsCancelled: 1, interviewOffNotes: 1 })).toEqual({ title: "Role closed as filled.", detail: "The 2 people still in the process moved to your talent pool, privately: nobody is told the decision until someone sends them the decision message. 1 interview was cancelled; the candidate was sent a short note now saying only that it is off." });
+    expect(closeRoleToast({ movedToTalentPool: 3, heldEmailsAddedToTalentPool: 1, interviewsCancelled: 1, interviewOffNotes: 1 })).toEqual({ title: "Role closed as filled.", detail: "The 2 people still in the process moved to your talent pool, privately: nobody is told until you send the closing message. 1 interview was cancelled; the candidate was sent a short note now saying only that it is off." });
     expect(closeRoleToast({ movedToTalentPool: 2, interviewsCancelled: 2, interviewOffNotes: 2 }).detail).toMatch(/2 interviews were cancelled; each candidate was sent a short note now saying only that their interview is off\.$/);
     expect(closeRoleToast({ movedToTalentPool: 3, interviewsCancelled: 3, interviewOffNotes: 2 }).detail).toMatch(/3 interviews were cancelled; the 2 candidates who had a time booked or offered were sent a short note now saying only that their interview is off\.$/);
     expect(closeRoleToast({ movedToTalentPool: 1, interviewsCancelled: 1, interviewOffNotes: 0 }).detail).toMatch(/1 interview was cancelled; no times had gone to the candidate, so nothing was sent about it\.$/);
@@ -183,7 +188,8 @@ describe("the stage button's choices", () => {
     expect(stageIntent(move({ to: "on_hold", mark: "on_hold" }))).toEqual({ kind: "step", step: "hold" });
     expect(stageIntent(move({ to: "interviewing", via: "interview", mark: undefined }))).toEqual({ kind: "step", step: "interview" });
     expect(stageIntent(move({ to: "hired", via: "record_hire", mark: undefined }))).toEqual({ kind: "step", step: "hire" });
-    expect(stageIntent(move({ to: "offer", via: "offer", mark: undefined }))).toEqual({ kind: "step", step: "outcome" });
+    // Offer opens the record-only "Offer made" (plan H2): the app never writes or sends the offer
+    expect(stageIntent(move({ to: "offer", via: "offer", mark: undefined }))).toEqual({ kind: "step", step: "offer" });
     expect(stageIntent(move({ to: "not_moving_forward", via: "decline", mark: undefined }))).toEqual({ kind: "step", step: "decline" });
   });
 
@@ -195,11 +201,11 @@ describe("the stage button's choices", () => {
   it("greys out every move that is not allowed, with its reason, and never the current stage", () => {
     const blocked = stageBlocked([
       move({ to: "new", via: "none", allowed: false, current: true, blockedReason: "They are here now." }),
-      move({ to: "offer", via: "offer", allowed: false, blockedReason: "Offers are made outside the app for now; when they accept, choose Hired." }),
+      move({ to: "offer", via: "offer", allowed: false, blockedReason: 'Record an offer once they are a finalist (they are at "Ready for your review").' }),
       move({ to: "hired", via: "record_hire", allowed: false }),
       move({}),
     ]);
-    expect(blocked).toEqual({ offer: "Offers are made outside the app for now; when they accept, choose Hired.", hired: "Not available at this step." });
+    expect(blocked).toEqual({ offer: 'Record an offer once they are a finalist (they are at "Ready for your review").', hired: "Not available at this step." });
   });
 });
 

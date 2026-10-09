@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
-import type { Actor, ApplicationStage } from "@ros/contracts";
-import { applications, hiringOutcomes, postings, recruiterEscalations, roles, type Queryable } from "@ros/db";
+import { RejectReason, type Actor, type ApplicationStage } from "@ros/contracts";
+import { applications, approvalRequests, hiringOutcomes, postings, recruiterEscalations, roles, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { emit } from "./events";
 import { POSTING_TASK_KINDS } from "./posting-tasks";
@@ -38,9 +38,19 @@ export class OutcomeError extends Error {
   }
 }
 
+/** A stored reason read back as one of the fixed reasons (plan G2); anything older or unknown reads as "other". */
+export function rejectReasonOf(value: unknown): RejectReason {
+  const parsed = RejectReason.safeParse(value);
+  return parsed.success ? parsed.data : "other";
+}
+
+/**
+ * `reason` is one of the fixed decline reasons (plan G2), the same list as the Decline button's: a decline recorded as an
+ * outcome files that reason on the application exactly as a decline does; the person's own words go in `note`.
+ */
 export async function recordApplicationOutcome(
   q: Queryable,
-  input: { companyId: string; applicationId: string; outcome: ApplicationOutcome; by: Mover; actor: Actor; hireDate?: string; offerAcceptedAt?: string; reason?: string; note?: string; now?: Date },
+  input: { companyId: string; applicationId: string; outcome: ApplicationOutcome; by: Mover; actor: Actor; hireDate?: string; offerAcceptedAt?: string; reason?: RejectReason; note?: string; now?: Date },
 ): Promise<{ row: OutcomeRow; from: ApplicationStage; to: ApplicationStage; roleId: string; roleStillOpen: boolean; app: typeof applications.$inferSelect }> {
   const now = input.now ?? new Date();
   const [app] = await q.select().from(applications).where(and(eq(applications.id, input.applicationId), eq(applications.companyId, input.companyId))).limit(1);
@@ -51,9 +61,11 @@ export async function recordApplicationOutcome(
   const duplicate = await q.select({ id: hiringOutcomes.id }).from(hiringOutcomes).where(and(eq(hiringOutcomes.applicationId, app.id), eq(hiringOutcomes.outcome, input.outcome), isNull(hiringOutcomes.correctedAt))).limit(1);
   if (duplicate.length) throw new OutcomeError("already_recorded", "This outcome is already recorded for this candidate.");
   if (input.outcome === "hired_externally" && !input.hireDate) throw new OutcomeError("hire_date_required", "Enter the hire date (the start date agreed outside the platform).");
-  if (input.outcome === "employer_declined" && !input.reason) throw new OutcomeError("reason_required", "Say why the employer declined; it is recorded with your name.");
+  if (input.outcome === "employer_declined" && !input.reason) throw new OutcomeError("reason_required", "Choose why you declined them; it is recorded with your name.");
   const to = OUTCOME_STAGE[input.outcome];
-  const moved = await transition(q, { applicationId: app.id, companyId: input.companyId, to, by: input.by, actor: input.actor, reason: input.outcome, payload: { outcome: input.outcome, recordedOutsidePlatform: true } });
+  // A decline keeps its reason on the application (the role report counts it, the decision message's wording follows it).
+  const reason = input.outcome === "employer_declined" ? input.reason : input.outcome;
+  const moved = await transition(q, { applicationId: app.id, companyId: input.companyId, to, by: input.by, actor: input.actor, reason, payload: { outcome: input.outcome, recordedOutsidePlatform: true, ...(input.reason ? { declineReason: input.reason } : {}) } });
   const [row] = await q.insert(hiringOutcomes).values({
     companyId: input.companyId, applicationId: app.id, roleId: app.roleId, milestone: "final", outcome: input.outcome, notes: input.note ?? null,
     hireDate: input.outcome === "hired_externally" ? input.hireDate ?? null : null, offerAcceptedAt: input.outcome === "hired_externally" ? input.offerAcceptedAt ?? null : null,
@@ -79,7 +91,7 @@ export type ClosureRequired = { postingId: string; channel: string; externalUrl:
 export async function recordRoleOutcome(
   q: Queryable,
   input: { companyId: string; roleId: string; outcome: RoleOutcome; by: Mover; actor: Actor; reason?: string; now?: Date },
-): Promise<{ row: OutcomeRow; role: typeof roles.$inferSelect; movedToTalentPool: number; movedApplicationIds: string[]; closureRequired: ClosureRequired[] }> {
+): Promise<{ row: OutcomeRow; role: typeof roles.$inferSelect; movedToTalentPool: number; movedApplicationIds: string[]; movedCandidateIds: string[]; closureRequired: ClosureRequired[] }> {
   const now = input.now ?? new Date();
   const [role] = await q.select().from(roles).where(and(eq(roles.id, input.roleId), eq(roles.companyId, input.companyId))).limit(1);
   if (!role) throw new OutcomeError("not_found", "Role not found.");
@@ -90,12 +102,15 @@ export async function recordRoleOutcome(
   // active candidates are kept in the talent pool, as the page promises; hired and closed candidates are untouched. The
   // move is a private decision like any other (founder decision B6): nobody is told the decision until a person sends the
   // message (the caller's exit cleanup tells someone with a booked time or offered times only that the interview is off).
-  const open = await q.select({ id: applications.id, stage: applications.stage }).from(applications).where(eq(applications.roleId, role.id));
+  // The caller keeps them in the talent pool unless they asked not to be kept, and offers the one closing message (Q30).
+  const open = await q.select({ id: applications.id, stage: applications.stage, candidateId: applications.candidateId }).from(applications).where(eq(applications.roleId, role.id));
   const movedApplicationIds: string[] = [];
+  const movedCandidateIds: string[] = [];
   for (const a of open) {
     if (!ACTIVE_STAGES.has(a.stage)) continue;
     await transition(q, { applicationId: a.id, companyId: input.companyId, to: "talent_pool", by: input.by, actor: input.actor, reason: `role closed: ${input.outcome}` });
     movedApplicationIds.push(a.id);
+    movedCandidateIds.push(a.candidateId);
   }
   const movedToTalentPool = movedApplicationIds.length;
   // every posting closes with the role; a board that is up on the outside is named for manual removal
@@ -114,16 +129,19 @@ export async function recordRoleOutcome(
   await audit(q, { companyId: input.companyId, actor: input.actor, action: "role.outcome_recorded", target: { type: "role", id: role.id }, reason: input.reason ?? input.outcome, details: { outcomeId: row.id, outcome: input.outcome, previousStatus: role.status, closureRequired: closureRequired.map((c) => c.channel) } });
   await emit(q, { type: "role.closed", companyId: input.companyId, actor: input.actor, subject: { type: "role", id: role.id }, payload: { reason: input.outcome, closureRequired: closureRequired.map((c) => c.channel) } });
   await emit(q, { type: "outcome.recorded", companyId: input.companyId, actor: input.actor, subject: { type: "role", id: role.id }, payload: { outcome: input.outcome, level: "role", outcomeId: row.id, roleId: role.id, movedToTalentPool } });
-  return { row, role: updated, movedToTalentPool, movedApplicationIds, closureRequired };
+  return { row, role: updated, movedToTalentPool, movedApplicationIds, movedCandidateIds, closureRequired };
 }
 
 /**
  * An administrator corrects a recorded outcome. The original row stays, marked corrected; a new row points back to it;
  * the application returns to the stage the corrected outcome implies (or the stage it had before, when the outcome is voided).
+ * A correction to "we declined the candidate" is filed under one of the fixed reasons (`declineReason`, plan G2; the
+ * original's when left out). A role outcome voided reopens the role, and its closing message waiting for approval (Q30)
+ * is withdrawn: the closing message is only for a closed role.
  */
 export async function correctOutcome(
   q: Queryable,
-  input: { outcomeId: string; actor: Actor; reason: string; outcome?: string; hireDate?: string; offerAcceptedAt?: string; now?: Date },
+  input: { outcomeId: string; actor: Actor; reason: string; outcome?: string; hireDate?: string; offerAcceptedAt?: string; declineReason?: RejectReason; now?: Date },
 ): Promise<{ original: OutcomeRow; correction: OutcomeRow }> {
   const now = input.now ?? new Date();
   const [original] = await q.select().from(hiringOutcomes).where(eq(hiringOutcomes.id, input.outcomeId)).limit(1);
@@ -138,7 +156,7 @@ export async function correctOutcome(
   const [correction] = await q.insert(hiringOutcomes).values({
     companyId: original.companyId, applicationId: original.applicationId, roleId: original.roleId, milestone: original.milestone, outcome: newOutcome,
     hireDate: input.hireDate ?? (newOutcome === "hired_externally" ? original.hireDate : null), offerAcceptedAt: input.offerAcceptedAt ?? (newOutcome === "hired_externally" ? original.offerAcceptedAt : null),
-    details: { ...original.details, correctionReason: input.reason }, correctionOf: original.id, recordedBy: input.actor, recordedAt: now.toISOString(),
+    details: { ...original.details, ...(input.declineReason ? { reason: input.declineReason } : {}), correctionReason: input.reason }, correctionOf: original.id, recordedBy: input.actor, recordedAt: now.toISOString(),
   }).returning();
   let stageTo: ApplicationStage | null = null;
   if (original.applicationId) {
@@ -154,7 +172,7 @@ export async function correctOutcome(
     if (wasDecision && !DECISION_STAGES.includes(stageTo)) await withdrawQueuedDecision(q, { applicationId: original.applicationId, companyId: original.companyId, actor: input.actor, reason: "the recorded outcome was corrected" });
     await q.update(applications).set({
       stage: stageTo, stageChangedAt: stamp,
-      rejectedAt: stageTo === "rejected" ? stamp : null, rejectReason: stageTo === "rejected" ? "employer_declined" : null,
+      rejectedAt: stageTo === "rejected" ? stamp : null, rejectReason: stageTo === "rejected" ? (input.declineReason ?? rejectReasonOf((original.details as { reason?: unknown }).reason)) : null,
       withdrawnAt: stageTo === "withdrawn" ? stamp : null, withdrawReason: stageTo === "withdrawn" ? "candidate_withdrew" : null,
       ...(newDecision ? { toldState: "not_told" as const, candidateToldAt: null } : {}),
     }).where(eq(applications.id, original.applicationId));
@@ -163,6 +181,11 @@ export async function correctOutcome(
     if (newOutcome === "voided") {
       const previous = (original.details as { previousStatus?: string }).previousStatus ?? "open";
       await q.update(roles).set({ status: previous, closedAt: null, closeReason: null }).where(eq(roles.id, original.roleId));
+      const closing = (await q.select({ id: approvalRequests.id, proposal: approvalRequests.proposal }).from(approvalRequests).where(and(eq(approvalRequests.roleId, original.roleId), isNull(approvalRequests.applicationId), eq(approvalRequests.actionType, "disposition.send"), eq(approvalRequests.status, "pending")))).filter((r) => (r.proposal as { kind?: unknown }).kind === "role_closed");
+      for (const r of closing) {
+        await q.update(approvalRequests).set({ status: "cancelled", decidedAt: now.toISOString(), decisionNote: "the role was reopened" }).where(eq(approvalRequests.id, r.id));
+        await emit(q, { type: "approval.cancelled", companyId: original.companyId, actor: input.actor, subject: { type: "approval_request", id: r.id }, payload: { actionType: "disposition.send", applicationId: null, by: "outcome_corrected" } });
+      }
     } else {
       await q.update(roles).set({ closeReason: newOutcome }).where(eq(roles.id, original.roleId));
     }

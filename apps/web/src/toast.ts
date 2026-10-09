@@ -1,12 +1,13 @@
 "use client";
 
-import { TOAST_EVENT, type ToastTone, toastPayload } from "@ros/ui";
+import { TOAST_EVENT, type ToastAction, type ToastTone, toastPayload } from "@ros/ui";
 
 /**
  * A short confirmation at the bottom of the screen; the shell's Toaster (packages/ui) announces it with role="status".
  * The optional second line says what did or did not follow: toast("Moved to Shortlist.", "Private: the candidate was not
- * told."). Pass { tone: "good" } or { tone: "critical" } for a tick or an alert mark beside the words.
+ * told."). Pass { tone: "good" } or { tone: "critical" } for a tick or an alert mark beside the words, and { action,
+ * durationMs } for an Undo that stays while it still works (plan G9).
  */
-export function toast(title: string, more?: string | { detail?: string; tone?: ToastTone }): void {
+export function toast(title: string, more?: string | { detail?: string; tone?: ToastTone; action?: ToastAction; durationMs?: number }): void {
   if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(TOAST_EVENT, { detail: toastPayload(title, more) }));
 }

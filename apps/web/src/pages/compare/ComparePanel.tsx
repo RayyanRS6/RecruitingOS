@@ -3,11 +3,12 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button, Card, Chip, ErrorState, ScoreBadge, ScoreBar, Segmented, Skeleton, StatusChip, Table } from "@ros/ui";
-import { api } from "../../api/client";
+import { api, type NoteView } from "../../api/client";
 import { Link } from "../../nav";
+import { noteExcerpt } from "../../notes";
 import { overallLabel } from "../candidate-panel/assessment";
 import { REC_LABEL } from "../candidate-panel/helpers";
-import { COMPARE_MAX, COMPARE_ORDERS, cellFigures, criterionCell, orderCandidates, orderLine, scoreSummary, skillTag, togglePick, versionNotes, type CompareCandidateView, type CompareOrder, type CompareView } from "./compare-view";
+import { COMPARE_MAX, COMPARE_ORDERS, cellFigures, criterionCell, hasTeamNotes, orderCandidates, orderLine, scoreSummary, skillTag, togglePick, versionNotes, type CompareCandidateView, type CompareOrder, type CompareView } from "./compare-view";
 
 /**
  * Compare (docs/spec/21 F10; founder decision B2): tick up to five people, then see them side by side: each one's
@@ -60,11 +61,27 @@ function Cell({ c, keyName, mustHave }: { c: CompareCandidateView; keyName: stri
   );
 }
 
+/** One person's team notes in a cell: who wrote each, a line of it, and the whole note one click away. */
+function NotesCell({ notes }: { notes: NoteView[] }) {
+  if (!notes.length) return <span className="small muted">No notes yet</span>;
+  return (
+    <div className="cmp-cell">
+      {notes.map((n) => (
+        <details key={n.id} className="small">
+          <summary><strong>{n.mine ? "You" : n.author.name}</strong>{n.starterLabel ? ` · ${n.starterLabel}` : ""}: {noteExcerpt(n.body, 80)}</summary>
+          <p className="note-body">{n.body}</p>
+        </details>
+      ))}
+    </div>
+  );
+}
+
 /** People as columns, their scores on top, then must-haves and skills as rows; a link back to each person's panel. */
 export function CompareTable({ data }: { data: CompareView }) {
   const [order, setOrder] = useState<CompareOrder>("chosen");
   const cands = orderCandidates(data.candidates, order);
   const notes = versionNotes(cands);
+  const withNotes = hasTeamNotes(cands);
   return (
     <div style={{ marginTop: 12 }}>
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
@@ -96,6 +113,8 @@ export function CompareTable({ data }: { data: CompareView }) {
         <tr><td className="small muted">Screen</td>{cands.map((c) => <td key={c.applicationId} className="small">{c.screen ? REC_LABEL[c.screen.recommendation] ?? c.screen.recommendation.replace(/_/g, " ") : <span className="muted">no screen yet</span>}</td>)}</tr>
         <tr><td className="small muted">Résumé</td>{cands.map((c) => <td key={c.applicationId} className="small">{c.resume ? overallLabel(c.resume.overall) : <span className="muted">not read yet</span>}</td>)}</tr>
         <tr><td className="small muted">Still unknown</td>{cands.map((c) => <td key={c.applicationId} className="small">{c.unknownCount}</td>)}</tr>
+        {/* The team's private notes (plan H3), for those who read notes; never the candidate's, never the AI's. */}
+        {withNotes ? <tr><td className="small muted">Team notes <span className="sr-only">(private)</span></td>{cands.map((c) => <td key={c.applicationId}><NotesCell notes={c.notes ?? []} /></td>)}</tr> : null}
         <tr><td className="small muted">Their panel</td>{cands.map((c) => <td key={c.applicationId}><Link to={c.open} className="btn quiet sm">Open</Link></td>)}</tr>
       </Table>
       {notes.length ? <ul className="small" style={{ margin: "8px 0 0", paddingLeft: 18, color: "var(--caution)" }}>{notes.map((n) => <li key={n}>{n}</li>)}</ul> : null}

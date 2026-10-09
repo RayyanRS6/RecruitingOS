@@ -4,7 +4,7 @@ import { runPromptDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime
 import { createEscalation, emit, entitlements, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, tapAnswerText, tapFormatFor, transition } from "@ros/core";
 import { applications, assessments, candidates, companies, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
-import { deliverSms, recordInbound } from "./coordinator";
+import { deliverSms, recordInbound, sendPersonRequestedNote } from "./coordinator";
 import { FOCUS_INTRO, answersOf, focusedPacket, isFocusKey, withFocusAnswer, type FocusQuestion } from "./screen-focus";
 import { applyEvidenceRules } from "./triage";
 
@@ -581,7 +581,8 @@ export async function finishScreenTurn(q: Queryable, deps: ScreenDeps, input: Tu
     const reply: ScreenTranscriptEntry = { role: "assistant", content: turn.messageToCandidate, at: nowOf(deps).toISOString(), channel: input.channel, aiRunId: out.runId };
     await q.update(screens).set({ transcript: [...fresh.transcript, reply], answers, progress }).where(eq(screens.id, screen.id));
     if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: pending.b.role, company, packet, actor: { kind: "agent", id: "screening", runId: out.runId }, text: turn.messageToCandidate, idempotencyKey: `screen_turn:${screen.id}:${fresh.transcript.length + 1}`, templateKey: "screen_turn", disclosureIncluded: false, aiRunId: out.runId, correlationId: screen.workflowRunId });
-    await requestHuman(q, deps, { screenId: screen.id, reason: turn.sentiment === "distressed" || turn.sentiment === "frustrated" ? `candidate sounded ${turn.sentiment}` : "candidate asked for a person", actor: input.actor, reply: null, replyChannel: input.channel });
+    // A turn retried after an outage (E5) that hands over is told by the hand-over email instead: one email, not two.
+    await requestHuman(q, deps, { screenId: screen.id, reason: turn.sentiment === "distressed" || turn.sentiment === "frustrated" ? `candidate sounded ${turn.sentiment}` : "candidate asked for a person", actor: input.actor, reply: null, replyChannel: input.channel, confirmByEmail: fresh.status !== "paused" });
     return { kind: "reply", message: turn.messageToCandidate, done: false, humanRequested: true };
   }
   return writeReply(q, deps, b, { channel: input.channel, actor: input.actor, transcript: fresh.transcript, answers, progress, message: turn.messageToCandidate, questionKey: turn.questionKey, done: turn.done, aiRunId: out.runId });
@@ -618,8 +619,10 @@ export async function runScreenTurn(db: Db, companyId: string, deps: ScreenDeps,
 /**
  * The candidate asked for a person (or the assistant could not continue): a recruiter gets the whole context with a
  * 4-hour SLA. A request the candidate made is counted (Q16: ITS covers it; it never uses the company's recruiter requests).
+ * The candidate also gets an email that says when to expect the person, from the business hours (plan G8), unless a
+ * text already said so, or the caller answers them itself (`confirmByEmail: false`: the reply to their email does).
  */
-export async function requestHuman(q: Queryable, deps: ScreenDeps, input: { screenId: string; reason: string; actor: Actor; reply: string | null; replyChannel: ScreenChannel }): Promise<void> {
+export async function requestHuman(q: Queryable, deps: ScreenDeps, input: { screenId: string; reason: string; actor: Actor; reply: string | null; replyChannel: ScreenChannel; confirmByEmail?: boolean }): Promise<void> {
   const b = await loadScreenBundle(q, input.screenId);
   if (!b) return;
   const { screen, app, candidate, company, packet } = b;
@@ -632,6 +635,11 @@ export async function requestHuman(q: Queryable, deps: ScreenDeps, input: { scre
   await createEscalation(q, { companyId: company.id, roleId: app.roleId, applicationId: app.id, kind: "candidate_issue", summaryOrigin: byCandidate ? "candidate" : "system", question: `${candidate.firstName} ${candidate.lastName} needs a person during the ${packet.identity.title} screening (${input.reason}). Please reach out by ${candidate.phone ? "phone or " : ""}email and finish the screen.`, requestedBy: input.actor, workflowRunId: screen.workflowRunId });
   await notify(q, { companyId: company.id, kind: "screen.human_requested", title: `${candidate.firstName} asked for a person`, body: `During the ${packet.identity.title} screening. A recruiter has the conversation; you can also reply directly.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
   if (input.reply && input.replyChannel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: input.reply, idempotencyKey: `screen_human:${screen.id}`, templateKey: "screen_human", disclosureIncluded: false });
+  const textSaidWhen = !!input.reply && input.replyChannel === "sms";
+  if (byCandidate && input.confirmByEmail !== false && !textSaidWhen && candidate.email) {
+    const expectation = humanResponseExpectation(nowOf(deps), await loadBusinessCalendar(q, nowOf(deps)));
+    await sendPersonRequestedNote(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, correlationId: screen.workflowRunId, expectation, key: screen.id });
+  }
   await deps.signal?.(q, { companyId: company.id, key: `screen:${screen.id}:human` });
 }
 

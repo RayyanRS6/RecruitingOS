@@ -149,6 +149,24 @@ describe("toasts", () => {
     expect(long).toBeGreaterThan(2600);
     expect(toastDuration({ title: "word ".repeat(200) })).toBe(9000);
   });
+  it("carries an action (Undo) and stays as long as it can still be used, two minutes at most (plan G9)", () => {
+    const onAction = () => undefined;
+    const sent = toastPayload("Decision message sent.", { detail: "It leaves in 30 seconds.", action: { label: "Undo", onAction }, durationMs: 30_000 });
+    expect(sent).toEqual({ title: "Decision message sent.", detail: "It leaves in 30 seconds.", action: { label: "Undo", onAction }, durationMs: 30_000 });
+    // the action alone is enough to send the full message; a duration without an action means nothing
+    expect(toastPayload("Sent.", { action: { label: "Undo", onAction } })).toEqual({ title: "Sent.", action: { label: "Undo", onAction } });
+    expect(toastPayload("Sent.", { durationMs: 30_000 })).toBe("Sent.");
+    const read = normalizeToast(sent)!;
+    expect(read.action?.label).toBe("Undo");
+    expect(toastDuration(read)).toBe(30_000);
+    // never shorter than a second, never longer than two minutes; an action with no window stays long enough to reach
+    expect(toastDuration(normalizeToast({ title: "Sent.", action: { label: "Undo", onAction }, durationMs: 50 })!)).toBe(1000);
+    expect(toastDuration(normalizeToast({ title: "Sent.", action: { label: "Undo", onAction }, durationMs: 10 * 60_000 })!)).toBe(120_000);
+    expect(toastDuration({ title: "Sent.", action: { label: "Undo", onAction } })).toBe(9000);
+    // an action without words or without something to do is dropped, and so is its duration
+    expect(normalizeToast({ title: "Sent.", action: { label: "", onAction }, durationMs: 30_000 })).toEqual({ title: "Sent." });
+    expect(normalizeToast({ title: "Sent.", action: { label: "Undo", onAction: "nope" }, durationMs: 30_000 })).toEqual({ title: "Sent." });
+  });
 });
 
 describe("the page behind an open drawer", () => {
