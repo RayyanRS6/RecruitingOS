@@ -163,21 +163,23 @@ export function mentionsPhrase(text: string, requested: string): boolean {
 function readableText(p: DraftRolePacket): Array<{ path: string; at: string; text: string }> {
   const out: Array<{ path: string; at: string; text: string }> = [];
   const add = (path: string, at: string, text: string | undefined) => {
-    if (text && text.trim()) out.push({ path, at, text });
+    if (text?.trim()) out.push({ path, at, text });
   };
   const one = (path: string, text: string | undefined) => add(path, path, text);
   one("identity.title", p.identity.title);
   one("description.publicJobDescription", p.description.publicJobDescription);
   one("description.internalNotes", p.description.internalNotes);
-  p.requirements.mustHaves.forEach((m, i) => add(`requirements.mustHaves[${i}].text`, `requirements.mustHaves[${m.key}].text`, m.text));
-  p.requirements.niceToHaves.forEach((m, i) => add(`requirements.niceToHaves[${i}].text`, `requirements.niceToHaves[${m.key}].text`, m.text));
-  p.requirements.eligibility.forEach((e, i) => add(`requirements.eligibility[${i}].question`, `requirements.eligibility[${e.key}].question`, e.question));
-  p.screening.questions.forEach((q, i) => add(`screening.questions[${i}].question`, `screening.questions[${q.key}].question`, q.question));
-  p.competencies.forEach((c, i) => add(`competencies[${i}].definition`, `competencies[${c.key}].definition`, c.definition));
-  p.evaluation.criteria.forEach((c, i) => add(`evaluation.criteria[${i}]`, `evaluation.criteria[${slug(c)}]`, c));
-  p.evaluation.redFlags.forEach((c, i) => add(`evaluation.redFlags[${i}]`, `evaluation.redFlags[${slug(c)}]`, c));
-  p.interviews.plan.forEach((r, i) => r.suggestedQuestions.forEach((q, j) => add(`interviews.plan[${i}].suggestedQuestions[${j}]`, `interviews.plan[${r.key}].suggestedQuestions[${slug(q)}]`, q)));
-  p.preferences.dealBreakersInTheirWords.forEach((d, i) => add(`preferences.dealBreakersInTheirWords[${i}]`, `preferences.dealBreakersInTheirWords[${slug(d)}]`, d));
+  for (const [i, m] of p.requirements.mustHaves.entries()) add(`requirements.mustHaves[${i}].text`, `requirements.mustHaves[${m.key}].text`, m.text);
+  for (const [i, m] of p.requirements.niceToHaves.entries()) add(`requirements.niceToHaves[${i}].text`, `requirements.niceToHaves[${m.key}].text`, m.text);
+  for (const [i, e] of p.requirements.eligibility.entries()) add(`requirements.eligibility[${i}].question`, `requirements.eligibility[${e.key}].question`, e.question);
+  for (const [i, q] of p.screening.questions.entries()) add(`screening.questions[${i}].question`, `screening.questions[${q.key}].question`, q.question);
+  for (const [i, c] of p.competencies.entries()) add(`competencies[${i}].definition`, `competencies[${c.key}].definition`, c.definition);
+  for (const [i, c] of p.evaluation.criteria.entries()) add(`evaluation.criteria[${i}]`, `evaluation.criteria[${slug(c)}]`, c);
+  for (const [i, c] of p.evaluation.redFlags.entries()) add(`evaluation.redFlags[${i}]`, `evaluation.redFlags[${slug(c)}]`, c);
+  for (const [i, r] of p.interviews.plan.entries()) {
+    for (const [j, q] of r.suggestedQuestions.entries()) add(`interviews.plan[${i}].suggestedQuestions[${j}]`, `interviews.plan[${r.key}].suggestedQuestions[${slug(q)}]`, q);
+  }
+  for (const [i, d] of p.preferences.dealBreakersInTheirWords.entries()) add(`preferences.dealBreakersInTheirWords[${i}]`, `preferences.dealBreakersInTheirWords[${slug(d)}]`, d);
   one("communication.companyBlurb", p.communication.companyBlurb);
   return out;
 }

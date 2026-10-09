@@ -2,7 +2,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { sendTalentPoolOptOutConfirmation } from "@ros/agents";
 import { emit } from "@ros/core";
-import { applications, candidates, companies, type CandidatePreferences, type Tx } from "@ros/db";
+import { type applications, candidates, companies, type CandidatePreferences, type Tx } from "@ros/db";
 import type { Container } from "../container";
 
 type Application = typeof applications.$inferSelect;

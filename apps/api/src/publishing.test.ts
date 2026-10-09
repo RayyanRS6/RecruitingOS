@@ -413,7 +413,7 @@ describe("publishing: boards, ITS posting tasks, live edits, the legal check, th
     expect(refused.status).toBe(409);
     const err = await errorOf(refused);
     expect(err.code).toBe("legal_check");
-    expect((err.details?.missing as Array<{ key: string }>).map((m) => m.key)).toEqual(["benefits"]);
+    expect((err.details?.missing as Array<{ key: string }> | undefined)?.map((m) => m.key)).toEqual(["benefits"]);
     // the company describes its benefits once, in Setup
     await settings({ benefitsSummary: "Health and dental insurance, 401(k) with match, paid time off." });
     expect((await post(owner, `/api/v1/roles/${roleC}/approve`, { version: 1 })).status).toBe(200);

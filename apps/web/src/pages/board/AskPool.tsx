@@ -33,14 +33,14 @@ export function AskPool(props: { roleId: string; board: BoardView; onClose: () =
       <div className="ask">
         <p className="ask-intro">{ASK_INTRO}</p>
         {questions.isLoading ? <Skeleton lines={3} /> : questions.error ? <ErrorState message="Could not load the questions." onRetry={() => questions.refetch()} /> : (
-          <div className="ask-questions" role="group" aria-label="Questions you can ask">
+          <fieldset className="ask-questions" aria-label="Questions you can ask">
             {(questions.data?.questions ?? []).map((q) => (
               <button key={q.id} type="button" className="ask-question" aria-pressed={asked?.id === q.id} onClick={() => ask(q)}>
                 <Icon name={q.kind === "compare" ? "grid" : "search"} size={16} />
                 <span>{q.label}</span>
               </button>
             ))}
-          </div>
+          </fieldset>
         )}
         {asked?.kind === "compare" && !compareIds.length ? (
           <fieldset className="ask-pick">

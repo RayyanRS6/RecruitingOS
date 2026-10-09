@@ -1,7 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { Actor, ApplicationStage, MembershipRole, OfferMadeResult, RecordOfferMade } from "@ros/contracts";
 import { STAGE_LABEL, audit, companyToday, emit, openEscalationsFor, transition } from "@ros/core";
-import { applications, companies, offers, roles, users, withPlatform, type Tx } from "@ros/db";
+import { type applications, companies, offers, roles, users, withPlatform, type Tx } from "@ros/db";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
 

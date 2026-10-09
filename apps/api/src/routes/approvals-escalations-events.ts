@@ -312,7 +312,7 @@ escalationRoutes.post("/mine/:id/reopen", requireTenant, async (c) => {
   // The request is locked, so a double click or two people reopening at once give one fresh access, not two.
   const done = await withPlatform(container.db, async (tx) => {
     const [fresh] = await tx.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.id, e.id), eq(recruiterEscalations.companyId, t.companyId))).limit(1).for("update");
-    if (!fresh || fresh.status !== "resolved") throw new HttpError(409, "not_resolved", "This request is no longer answered; refresh the page.");
+    if (fresh?.status !== "resolved") throw new HttpError(409, "not_resolved", "This request is no longer answered; refresh the page.");
     const r = await reopenEscalation(tx, { escalation: fresh, actor, note: body.note, calendar: await loadBusinessCalendar(tx, now), now });
     // Fresh access for someone outside the company is always told at once, to the whole team that hears about recruiters
     // (Q31), not only to the person who reopened it.

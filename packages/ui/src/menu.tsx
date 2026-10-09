@@ -143,8 +143,7 @@ export function Menu(props: { label: ReactNode; items: MenuItem[]; onSelect: (id
                   items.current[i] = el;
                 }}
                 type="button"
-                role={oneOfMany ? "menuitemradio" : "menuitem"}
-                aria-checked={oneOfMany ? !!item.current : undefined}
+                {...(oneOfMany ? { role: "menuitemradio", "aria-checked": !!item.current } : { role: "menuitem" })}
                 aria-disabled={item.disabled || undefined}
                 tabIndex={i === active ? 0 : -1}
                 className={cx("menu-item", item.danger && "danger")}

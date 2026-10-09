@@ -405,7 +405,7 @@ async function detachedWithdraw(tx: Tx, deps: ConversationDeps, d: Detached, con
 async function retryDetached(deps: ConversationDeps, input: { id: string; companyId: string; now: Date }): Promise<void> {
   const plan = await withTenant(deps.db, input.companyId, async (tx) => {
     const d = await loadDetached(tx, input.id);
-    if (!d || d.row.status !== "paused" || d.row.discardedAt) return null;
+    if (d?.row.status !== "paused" || d.row.discardedAt) return null;
     const last = d.row.transcript.map((t) => t.role).lastIndexOf("candidate");
     if (last < 0) return null;
     const transcript = d.row.transcript.slice(0, last + 1);
@@ -415,7 +415,7 @@ async function retryDetached(deps: ConversationDeps, input: { id: string; compan
   const out = await runPromptDetached(deps.db, deps.ai, screenTurnPrompt, plan.ctx, { companyId: input.companyId, workflowRunId: null, inputRef: { unconfirmedScreenId: input.id, retry: true } });
   await withTenant(deps.db, input.companyId, async (tx) => {
     const before = await loadDetached(tx, input.id, { lock: true });
-    if (!before || before.row.status !== "paused") return;
+    if (before?.row.status !== "paused") return;
     const pausedAt = before.row.progress.pausedAt ?? input.now.toISOString();
     await finishDetachedTurn(tx, deps, input.id, out);
     const after = (await loadDetached(tx, input.id))!;

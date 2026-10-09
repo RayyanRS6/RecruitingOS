@@ -135,7 +135,7 @@ function SkillRows({ rows, onChange, packet }: { rows: SkillRow[]; onChange: (ro
                 </div>
               </Alert>
             ) : null}
-            <div className="row"><Button size="sm" variant="quiet" disabled={filled <= SKILLS_MIN && !!r.name.trim()} title={filled <= SKILLS_MIN && !!r.name.trim() ? `A role needs at least ${SKILLS_MIN} skills` : undefined} onClick={() => (words && r.key ? setAsking(r.key) : remove(i))}>Remove</Button></div>
+            <div className="row"><Button size="sm" variant="quiet" disabled={filled <= SKILLS_MIN && !!r.name.trim()} title={filled <= SKILLS_MIN && r.name.trim() ? `A role needs at least ${SKILLS_MIN} skills` : undefined} onClick={() => (words && r.key ? setAsking(r.key) : remove(i))}>Remove</Button></div>
           </div>
         );
       })}

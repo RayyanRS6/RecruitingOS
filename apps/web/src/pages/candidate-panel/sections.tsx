@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, EvidenceChip, Field, Skeleton } from "@ros/ui";
 import { api, ApiError, type ApplicationDetail, type MessagePreview, type SendMessageResult, type SuggestedLine, type TimelineEvent } from "../../api/client";
@@ -203,7 +203,7 @@ function ResumeViewer({ a, doc }: { a: ApplicationDetail; doc: ApplicationDetail
   const [full, setFull] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   const v = resumeView(a.id, doc);
-  const focusables = () => [...(box.current?.querySelectorAll<HTMLElement>("button, a[href], iframe") ?? [])];
+  const focusables = useCallback(() => [...(box.current?.querySelectorAll<HTMLElement>("button, a[href], iframe") ?? [])], []);
   // Full screen is a dialog: focus moves into it and stays there, Escape leaves it first (before it would close the
   // panel), and focus goes back to where it was.
   useEffect(() => {
@@ -233,10 +233,10 @@ function ResumeViewer({ a, doc }: { a: ApplicationDetail; doc: ApplicationDetail
       document.removeEventListener("keydown", onKey, true);
       opener?.focus();
     };
-  }, [full]);
+  }, [full, focusables]);
   if (!v.frame) return null;
   return (
-    <div ref={box} className={full ? "resume-viewer full" : "resume-viewer"} role={full ? "dialog" : undefined} aria-modal={full || undefined} aria-label={full ? `Résumé: ${doc.filename}` : undefined}>
+    <div ref={box} className={full ? "resume-viewer full" : "resume-viewer"} {...(full ? { role: "dialog", "aria-modal": true, "aria-label": `Résumé: ${doc.filename}` } : {})}>
       <div className="resume-viewer-bar">
         <span className="resume-viewer-name">{doc.filename}{v.asText ? <span className="muted"> (the words we read from it)</span> : null}</span>
         <span className="row" style={{ gap: 6 }}>
@@ -245,8 +245,10 @@ function ResumeViewer({ a, doc }: { a: ApplicationDetail; doc: ApplicationDetail
         </span>
       </div>
       <iframe src={v.frame} title={`Résumé: ${doc.filename}`} className="resume-frame" referrerPolicy="same-origin" />
-      {/* Tab out of the framed file lands here and goes back to the top, so focus stays in the full-screen résumé */}
-      {full ? <span tabIndex={0} onFocus={() => focusables()[0]?.focus()} /> : null}
+      {full ? (
+        // biome-ignore lint/a11y: a focus guard: Tab out of the framed file lands here and goes back to the top, so focus stays in the full-screen résumé (key presses inside the frame never reach this page)
+        <span tabIndex={0} onFocus={() => focusables()[0]?.focus()} />
+      ) : null}
     </div>
   );
 }

@@ -23,7 +23,7 @@ export function lateApplicationAllowed(input: { role: { id: string; status: stri
   const { role } = input;
   if (role.status !== "open" || role.acceptingApplications || role.applicationsClosedReason !== CLOSING_DATE_REASON || !role.applicationsClosedAt) return false;
   const opened = openPayload<FormOpened>(PURPOSE, input.sealed, input.secret, input.now.getTime());
-  if (!opened || opened.v !== 1 || opened.roleId !== role.id) return false;
+  if (opened?.v !== 1 || opened.roleId !== role.id) return false;
   const closedAt = Date.parse(role.applicationsClosedAt);
   return opened.openedAt < closedAt && input.now.getTime() < closedAt + CLOSING_GRACE_HOURS * 3600_000;
 }

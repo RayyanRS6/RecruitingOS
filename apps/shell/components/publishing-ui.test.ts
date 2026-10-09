@@ -69,6 +69,7 @@ function client(): QueryClient {
 
 describe("the confirmation dialog", () => {
   it("is a named modal dialog with a decorative tick, the title, the line under it, the body and the buttons at the foot", () => {
+    // biome-ignore lint/correctness/noChildrenProp: createElement's types want a required children prop among the props
     const out = renderToStaticMarkup(createElement(Dialog, { open: true, onClose: () => undefined, title: "Your job is approved", sub: "Getting it ready.", mark: "check", markTone: "good", footer: createElement("button", { type: "button" }, "Go to your role"), children: "body" }));
     expect(out).toContain('role="dialog" aria-modal="true" aria-label="Your job is approved" tabindex="-1"');
     expect(out).toContain('<span class="dialog-mark good" aria-hidden="true">');
@@ -80,7 +81,9 @@ describe("the confirmation dialog", () => {
   });
 
   it("draws nothing while closed, and no foot without buttons", () => {
+    // biome-ignore lint/correctness/noChildrenProp: createElement's types want a required children prop among the props
     expect(renderToStaticMarkup(createElement(Dialog, { open: false, onClose: () => undefined, title: "x", children: "body" }))).toBe("");
+    // biome-ignore lint/correctness/noChildrenProp: createElement's types want a required children prop among the props
     expect(renderToStaticMarkup(createElement(Dialog, { open: true, onClose: () => undefined, title: "x", children: "body" }))).not.toContain("dialog-foot");
   });
 });
@@ -189,7 +192,7 @@ describe("the Posting tab when ITS posts (D3, D6, D7, D8)", () => {
     // focusable from code only: following Today's link scrolls there and puts the keyboard there too
     expect(html).toContain('<section id="share" class="setup-section" tabindex="-1">');
     expect(html).toContain('<section id="closing-date" class="setup-section" tabindex="-1">');
-    expect(html).toContain('role="group" aria-label="Share the job"');
+    expect(html).toContain('<fieldset class="share-buttons" aria-label="Share the job">');
     // a place that has its link is a plain link to the network's own share page, in a new tab
     expect(html).toContain('href="https://wa.me/?text=');
     expect(html).toMatch(/href="https:\/\/wa\.me\/\?text=[^"]+" target="_blank" rel="noopener noreferrer"/);
@@ -312,6 +315,6 @@ describe("the empty applicant list of a live job (D8)", () => {
     qc.setQueryData(["applications", "r1"], { applications: [], counts: { total: 0, byOwnerStage: { new: 0, longlist: 0, shortlist: 0, interviewing: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 0, in_process: 0, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0 } });
     const html = render(qc, createElement(People));
     expect(text(html)).toContain("Nobody has applied yet");
-    expect(html).toContain('role="group" aria-label="Share the job"');
+    expect(html).toContain('<fieldset class="share-buttons" aria-label="Share the job">');
   });
 });

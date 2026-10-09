@@ -166,7 +166,7 @@ describe("Ask about this pool", () => {
     expect(html).toMatch(/role="dialog" aria-modal="true" aria-label="Ask about this pool"/);
     expect(html).toContain('<span class="ask-mark" aria-hidden="true">');
     expect(words).toContain("Answers come from the checked findings already on file for everyone who finished applying. Pick a question; each answer says what it looked at.");
-    expect(html).toContain('role="group" aria-label="Questions you can ask"');
+    expect(html).toContain('<fieldset class="ask-questions" aria-label="Questions you can ask">');
     expect(words).toContain("Who is missing a must-have, and why?");
     expect(words).toContain("Strongest evidence for \"Active CA RDH license\"");
     expect(words).toContain("Who might I be overlooking?");

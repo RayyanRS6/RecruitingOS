@@ -43,8 +43,10 @@ describe("the candidate panel's pieces (Wave A)", () => {
   });
 
   it("puts a drawer's banner in the sticky header, under the title row", () => {
+    // biome-ignore lint/correctness/noChildrenProp: createElement's types want a required children prop among the props
     const out = renderToStaticMarkup(createElement(Drawer, { open: true, onClose: () => undefined, title: "Maria Reyes", banner: "You have text here that is not sent or saved.", children: "body" }));
     expect(out).toMatch(/<div class="drawer-head">.*<div class="drawer-banner">You have text here that is not sent or saved\.<\/div>.*<\/div><div class="drawer-body">body<\/div>/);
+    // biome-ignore lint/correctness/noChildrenProp: createElement's types want a required children prop among the props
     expect(renderToStaticMarkup(createElement(Drawer, { open: true, onClose: () => undefined, title: "Maria Reyes", children: "body" }))).not.toContain("drawer-banner");
   });
 });

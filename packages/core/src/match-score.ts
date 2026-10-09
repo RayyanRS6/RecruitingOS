@@ -177,9 +177,9 @@ function mustHaveWords(s: { total: number; shown: number; partly: number; notSho
  * The label when a reading was made against an earlier version of the role (plan F4); null when it is the current one.
  * With both packets, it also says whether the must-haves changed between them (added, removed or reworded).
  */
-export function readingVersion(readAgainst: number | null | undefined, current: number | null | undefined, packets?: { then: Pick<RolePacket, "requirements"> | null | undefined; now: Pick<RolePacket, "requirements"> | null | undefined }): ReadingVersion | null {
+export function readingVersion(readAgainst: number | null | undefined, current: number | null | undefined, packets?: { was: Pick<RolePacket, "requirements"> | null | undefined; now: Pick<RolePacket, "requirements"> | null | undefined }): ReadingVersion | null {
   if (!readAgainst || !current || readAgainst === current) return null;
-  const changed = packets?.then && packets.now ? mustHavesKey(packets.then) !== mustHavesKey(packets.now) : undefined;
+  const changed = packets?.was && packets.now ? mustHavesKey(packets.was) !== mustHavesKey(packets.now) : undefined;
   return { readAgainst, current, label: `Read against version ${readAgainst} of the role; the role is now on version ${current}.${changed ? " Its must-haves have changed since." : ""}`, ...(changed === undefined ? {} : { mustHavesChanged: changed }) };
 }
 

@@ -142,7 +142,7 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     let html = await page(`/c/screen/${mariaToken}`);
     expect(html).toContain(`<h1 class="question" id="question">${q1.question}</h1>`);
     expect(html).toContain(`<label for="progress">Question 1 of ${packet.screening.questions.length}</label>`);
-    expect(html).toContain(`<input type="hidden" name="tap" value="yes_no"/><div class="actions" role="group" aria-label="Your answer to: ${q1.question}"><button class="btn secondary" type="submit" name="choice" value="yes">Yes</button><button class="btn secondary" type="submit" name="choice" value="no">No</button><button class="link-action" type="submit" name="action" value="skip" formnovalidate="">Skip this question</button></div>`);
+    expect(html).toContain(`<input type="hidden" name="tap" value="yes_no"/><fieldset class="actions" aria-label="Your answer to: ${q1.question}"><button class="btn secondary" type="submit" name="choice" value="yes">Yes</button><button class="btn secondary" type="submit" name="choice" value="no">No</button><button class="link-action" type="submit" name="action" value="skip" formnovalidate="">Skip this question</button></fieldset>`);
     expect(html).toContain("<summary>Answer in your own words instead</summary>");
     expect(html).toContain(`<label for="message">Your answer<span class="sr-only"> to: ${q1.question}</span></label>`);
     expect(html).toContain(`<a class="link-action" href="/c/screen/${mariaToken}/person">I'd rather talk to a person</a>`);

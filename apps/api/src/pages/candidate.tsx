@@ -989,11 +989,11 @@ function TapAnswerForm(props: { action: string; tap: TapFormat; about: string; s
     return (
       <form method="post" action={props.action}>
         <input type="hidden" name="tap" value="yes_no" />
-        <div class="actions" role="group" aria-label={`Your answer to: ${props.about}`}>
+        <fieldset class="actions" aria-label={`Your answer to: ${props.about}`}>
           <button class="btn secondary" type="submit" name="choice" value="yes">Yes</button>
           <button class="btn secondary" type="submit" name="choice" value="no">No</button>
           {skip}
-        </div>
+        </fieldset>
       </form>
     );
   }

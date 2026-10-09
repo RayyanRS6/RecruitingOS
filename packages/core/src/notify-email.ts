@@ -102,7 +102,7 @@ export function interviewIdFromHref(href: string | null | undefined): string | n
 
 /** Where an email's link goes: the update's own page in the app, or the list of updates when it has none. */
 export function alertLink(appBaseUrl: string, href: string | null | undefined): string {
-  const path = href && href.startsWith("/") && !href.startsWith("//") ? href : "/updates";
+  const path = href?.startsWith("/") && !href.startsWith("//") ? href : "/updates";
   return `${appBaseUrl.replace(/\/+$/, "")}${path}`;
 }
 

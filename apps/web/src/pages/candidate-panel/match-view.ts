@@ -28,7 +28,7 @@ export function mustHaveLineOf(a: ApplicationDetail): string | null {
  */
 export function suggestedStepOf(a: ApplicationDetail): { label: string; reason: string; needsYourEye: boolean } | null {
   const p = (a as ApplicationDetail & ScoredDetail).placement;
-  if (!p || p.state !== "suggested" || !p.nextStep) return null;
+  if (p?.state !== "suggested" || !p.nextStep) return null;
   return { label: p.nextStep.label, reason: p.needsYourEye ?? p.nextStep.reason, needsYourEye: !!p.needsYourEye };
 }
 /** A skill's label with its importance, as GET /applications/:id gives it since Wave F (plan F3). */

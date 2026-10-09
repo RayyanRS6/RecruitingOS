@@ -121,6 +121,7 @@ export function CandidatePanel(props: PanelProps) {
   // After a move, focus that fell out of the panel comes back to it: the pressed button turned disabled at the end of
   // the list, or a section tab was focused while the next person loaded. The dialog itself takes it, so its new name
   // is read. Nothing happens when focus is still inside (the usual case: Previous and Next stay mounted).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: it runs again for each person shown (id), though the body does not read id
   useEffect(() => {
     if (!loaded) return;
     const dialog = navBox.current?.closest<HTMLElement>('[role="dialog"]');

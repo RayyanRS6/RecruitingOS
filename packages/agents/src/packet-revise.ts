@@ -185,7 +185,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export async function loadRevision(q: Queryable, runId: string): Promise<StoredRevision | null> {
   if (!UUID.test(runId)) return null;
   const [row] = await q.select().from(aiRuns).where(eq(aiRuns.id, runId)).limit(1);
-  if (!row || row.task !== "packet.revise" || row.status !== "ok" || !row.structuredOutput) return null;
+  if (row?.task !== "packet.revise" || row.status !== "ok" || !row.structuredOutput) return null;
   const parsed = PacketRevisionSchema.safeParse(row.structuredOutput);
   if (!parsed.success) return null;
   const ref = row.inputRef as Record<string, unknown>;

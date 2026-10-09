@@ -752,7 +752,7 @@ export function reviewItems(screen: Pick<ScreenRow, "answers" | "progress">, pac
  */
 export async function editScreenAnswer(q: Queryable, input: { screenId: string; questionKey: string; text?: string | null; tap?: TapAnswer | null; actor: Actor; now?: Date }): Promise<{ ok: true; answer: string } | { ok: false; error: string }> {
   const b = await loadScreenBundle(q, input.screenId);
-  if (!b || b.screen.status !== "in_progress" || b.screen.progress.phase !== "review") return { ok: false, error: "These answers can no longer be changed." };
+  if (b?.screen.status !== "in_progress" || b.screen.progress.phase !== "review") return { ok: false, error: "These answers can no longer be changed." };
   const { screen, packet, company, candidate } = b;
   const question = packet.screening.questions.find((x) => x.key === input.questionKey);
   if (!question) return { ok: false, error: "That question is not part of this conversation." };
@@ -920,7 +920,7 @@ export function verifyScreenQuotes(a: ScreenAssessment, candidateText: string, o
     return { ...e, quote: undefined };
   });
   // Every quote in a scorecard is checked against the words it names: the candidate's, or a recruiter's notes (which pass as not the candidate's own).
-  const checked = applyEvidenceRules({ ...a, questionFindings, eligibilityConfirmations }, (e) => (e.source === "recruiter_note" ? (notes && notes.includes(norm(e.quote ?? "")) ? null : false) : src.includes(norm(e.quote ?? ""))));
+  const checked = applyEvidenceRules({ ...a, questionFindings, eligibilityConfirmations }, (e) => (e.source === "recruiter_note" ? (notes?.includes(norm(e.quote ?? "")) ? null : false) : src.includes(norm(e.quote ?? ""))));
   if (!stripped) return checked;
   return { ...checked, anomalies: [...checked.anomalies, { kind: "unverified_quote", detail: `${stripped} answer quote${stripped === 1 ? "" : "s"} not found in the transcript; discarded` }] };
 }

@@ -822,7 +822,7 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
 .share { display: grid; gap: 12px; }
 .share-link { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 5px 5px 12px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); }
 .share-link code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
-.share-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.share-buttons { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .share-places { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .share-place { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-control); background: var(--ground); }
 .share-place-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; }

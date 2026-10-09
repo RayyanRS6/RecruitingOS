@@ -34,7 +34,7 @@ const KIND_WORDS: Record<string, string> = { access: "a copy of the information"
 
 function openVerifyToken(secret: string, token: string | undefined, now: Date): VerifyToken | null {
   const p = openPayload<VerifyToken>(VERIFY_PURPOSE, token, secret, now.getTime());
-  if (!p || p.v !== 2 || typeof p.id !== "string" || !UUID.test(p.id) || typeof p.email !== "string" || !p.email || !KIND_WORDS[p.kind] || typeof p.companyId !== "string") return null;
+  if (p?.v !== 2 || typeof p.id !== "string" || !UUID.test(p.id) || typeof p.email !== "string" || !p.email || !KIND_WORDS[p.kind] || typeof p.companyId !== "string") return null;
   return p;
 }
 

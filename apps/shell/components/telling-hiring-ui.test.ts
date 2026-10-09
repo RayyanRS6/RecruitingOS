@@ -162,7 +162,7 @@ describe("interviews to hire (Wave H)", () => {
     expect(t).toContain("Private to your hiring team. The candidate never sees notes, and they are never given to the AI assistant.");
     expect(t).toContain("Stick to job-related facts");
     expect(t).toContain("Your note");
-    expect(html).toContain('role="group" aria-label="Start from"');
+    expect(html).toMatch(/<fieldset class="row" style="[^"]*" aria-label="Start from"><button/);
     expect(t).toMatch(/Before the interview After the interview For and against/);
     // the starter the note is filed under is heard as pressed, not only seen by its fill, and said in words
     expect(html).toMatch(/<button type="button" class="btn primary sm" title="What do you want to find out\?" aria-pressed="true">Before the interview<\/button>/);

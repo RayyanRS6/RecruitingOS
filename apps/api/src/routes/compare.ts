@@ -114,7 +114,7 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
       resume: resume ? { overall: resume.overall, recommendation: resume.result.recommendation, summary: resume.result.summary } : null,
       unknownCount,
       score: scorePacket ? matchScore(readingPair(own), scorePacket, { packetVersion: readAgainst }) : null,
-      readingVersion: newest ? readingVersion(readAgainst, currentRow?.version ?? null, { then: byVersion.get(readAgainst), now: packet }) : null,
+      readingVersion: newest ? readingVersion(readAgainst, currentRow?.version ?? null, { was: byVersion.get(readAgainst), now: packet }) : null,
       notes: notes.get(a.id) ?? [],
       open: `/roles/${role.id}/talent?open=${a.id}`,
     });

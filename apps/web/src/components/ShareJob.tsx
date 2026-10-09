@@ -74,7 +74,7 @@ export function ShareJob(props: { roleId: string; roleTitle: string; companyName
         <code title={share.jobUrl}>{share.jobUrl}</code>
         <Button size="sm" icon="copy" onClick={() => copy(share.jobUrl, "the job's address")}>Copy</Button>
       </div>
-      <div className="share-buttons" role="group" aria-label="Share the job">
+      <fieldset className="share-buttons" aria-label="Share the job">
         {SHARE_BUTTONS.map((b) => {
           const link = placeOf(b.key)?.link ?? null;
           if (link) {
@@ -85,7 +85,7 @@ export function ShareJob(props: { roleId: string; roleTitle: string; companyName
           }
           return <Button key={b.key} size="sm" icon={b.icon} disabled={make.isPending} onClick={() => void tap(b.key)}>{b.label}</Button>;
         })}
-      </div>
+      </fieldset>
       {props.compact ? null : (
         <>
           <p className="small muted" style={{ margin: 0 }}>Each place gets its own link, so you can see where applicants come from. The message starts with:</p>

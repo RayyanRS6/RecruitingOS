@@ -298,7 +298,7 @@ export function previewOfEdit(base: JobPreview, packet: RolePacket): JobPreview 
     apply: {
       ...base.apply,
       questions: packet.requirements.eligibility.map((rule) => {
-        const days = ((rule as unknown as { expectation?: { days?: unknown } }).expectation ?? {}).days;
+        const days = (rule as unknown as { expectation?: { days?: unknown } }).expectation?.days;
         return { key: rule.key, question: rule.question, help: rule.rationale, answer: rule.type === "schedule_availability" && Array.isArray(days) && days.length > 0 ? ("days" as const) : ("yes_no" as const) };
       }),
     },

@@ -132,8 +132,8 @@ describe("mustHaveSummary and the version label", () => {
     expect(readingVersion(null, 3)).toBeNull();
     // with both versions it says whether the must-haves changed in between (added, removed or reworded)
     const v1 = { requirements: { mustHaves: [packet.requirements.mustHaves[0]] } } as Pick<RolePacket, "requirements">;
-    expect(readingVersion(1, 2, { then: v1, now: packet })).toEqual({ readAgainst: 1, current: 2, label: "Read against version 1 of the role; the role is now on version 2. Its must-haves have changed since.", mustHavesChanged: true });
-    expect(readingVersion(1, 2, { then: packet, now: packet })).toMatchObject({ mustHavesChanged: false, label: "Read against version 1 of the role; the role is now on version 2." });
+    expect(readingVersion(1, 2, { was: v1, now: packet })).toEqual({ readAgainst: 1, current: 2, label: "Read against version 1 of the role; the role is now on version 2. Its must-haves have changed since.", mustHavesChanged: true });
+    expect(readingVersion(1, 2, { was: packet, now: packet })).toMatchObject({ mustHavesChanged: false, label: "Read against version 1 of the role; the role is now on version 2." });
   });
 
   it("picks the newest résumé reading and the newest scorecard", () => {

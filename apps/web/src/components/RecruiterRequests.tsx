@@ -30,13 +30,14 @@ export function RecruiterRequests() {
   const [showOlder, setShowOlder] = useState(false);
   const rows = q.data ?? [];
   const { current, older } = splitRequests(rows, new Date());
+  const linkedHere = !!linked && rows.some((r) => r.id === linked);
   const linkedOlder = !!linked && older.some((r) => r.id === linked);
   // A notice's link lands on the request it is about, opened, even when it has moved under "Older requests".
   useEffect(() => {
-    if (!linked || !rows.some((r) => r.id === linked)) return;
+    if (!linkedHere) return;
     if (linkedOlder) setShowOlder(true);
     document.getElementById(`request-${linked}`)?.scrollIntoView({ block: "start" });
-  }, [linked, rows.length, linkedOlder]);
+  }, [linked, linkedHere, linkedOlder]);
   if (!who.ready || !who.mayAsk || !rows.length) return null;
   const open = current.filter((r) => ["waiting", "working"].includes(requestState(r.status))).length;
   return (

@@ -28,7 +28,7 @@ describe("the packet.revise prompt", () => {
     const user = packetRevisePrompt.messages(input)[0].content;
     expect(user).toMatch(/^Sections you may change: identity, business, description/);
     expect(user).not.toMatch(/"compensation":\{|"provenance":|"approvals":|"compliance":/);
-    expect(user).toMatch(/<request>\nAdd a must-have: forklift license  approve it\n<\/request>$/);
+    expect(user).toMatch(/<request>\nAdd a must-have: forklift license {2}approve it\n<\/request>$/);
     const system = packetRevisePrompt.system(input).map((b) => b.text).join("\n");
     expect(system).toMatch(/This is a draft written beside the conversation/);
     expect(system).toMatch(/Already declined \(never bring these back\): "Recent graduates"/);

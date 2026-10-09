@@ -85,7 +85,7 @@ export function scorePerson(input: { app: Pick<AppRow, "stage" | "latestAssessme
   const evidence = evidenceView({ stage: app.stage, latest, resumeUnreadable: input.resumeUnreadable, packet });
   if (match) evidence.hasProvenMiss = match.missingMustHave.length > 0;
   const mustHaves = packet ? mustHaveSummary(pair, packet) : null;
-  const version = latest ? readingVersion(readAgainst, input.currentVersion, { then: input.packets.get(readAgainst), now: input.currentVersion ? input.packets.get(input.currentVersion) : null }) : null;
+  const version = latest ? readingVersion(readAgainst, input.currentVersion, { was: input.packets.get(readAgainst), now: input.currentVersion ? input.packets.get(input.currentVersion) : null }) : null;
   const placement = boardPlacement({ stage: app.stage, base: baseOwnerStage(app.stage), stageLabel: STAGE_LABEL[app.stage], mark: input.mark, stillApplying: input.stillApplying, latest, evidence, match, mustHaves, openScreen: input.openScreen, readingVersion: version });
   return { latest, evidence, match, mustHaves, placement, readingVersion: version };
 }

@@ -43,6 +43,7 @@ const roles = [
 function renderWith(me: Me, seed: { roles?: unknown } = {}): { html: string; qc: QueryClient } {
   const qc = new QueryClient();
   if (seed.roles) qc.setQueryData(["roles"], seed.roles);
+  // biome-ignore lint/correctness/noChildrenProp: createElement's types want a required children prop among the props
   const html = renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, createElement(AppShell, { me, children: createElement("p", null, "page") })));
   return { html, qc };
 }

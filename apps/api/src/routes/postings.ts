@@ -464,7 +464,7 @@ postingRoutes.post("/:id/postings/:channel/prepare", requireTenant, async (c) =>
     if (channel === "ziprecruiter" && !zipRecruiterOffered(company?.settings)) throw new HttpError(409, "ziprecruiter_needs_plan", "ZipRecruiter needs your company's own paid ZipRecruiter plan. Say you have one in Setup first.");
     const [existing] = await tx.select().from(postings).where(and(eq(postings.roleId, role.id), eq(postings.channel, channel))).limit(1);
     if (existing && existing.status !== "closed") throw new HttpError(409, "already_prepared", `${CHANNEL_NAME[channel]} is already prepared for this role ("${stateLabel(existing.status)}").`);
-    if (existing && existing.closureRequired && !existing.closureConfirmedAt) throw new HttpError(409, "still_up", `The earlier ${CHANNEL_NAME[channel]} listing still has to be taken down. Confirm it was removed, then prepare the board again.`);
+    if (existing?.closureRequired && !existing.closureConfirmedAt) throw new HttpError(409, "still_up", `The earlier ${CHANNEL_NAME[channel]} listing still has to be taken down. Confirm it was removed, then prepare the board again.`);
     const [pv] = role.currentPacketVersion ? await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, role.currentPacketVersion))).limit(1) : [];
     const current = pv ? chosenBoards(role, pv.packet, company?.settings) : [];
     const ticked = [...new Set<string>([...current, channel])];
