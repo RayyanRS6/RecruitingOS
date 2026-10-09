@@ -5,14 +5,17 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Avatar, Button, Card, Chip, ErrorState, Field, Skeleton } from "@ros/ui";
 import { api, ApiError, type ApplicationsWithCounts, type ClosingMessagePreview, type ClosingMessageResult } from "../api/client";
 import { toast } from "../toast";
-import { closeRoleToast } from "../talent-actions";
-import { bulkUndoMillis, closingResultToast, closingSendLabel, closingSheetLines, undoable } from "../telling";
-import { useBulkUndoToast } from "./use-undo";
+import { CLOSING_SENDERS, closeRoleToast } from "../talent-actions";
+import { bulkUndoMillis, closingResultToast, closingSendLabel, closingSheetLines, safetyNetPromise, undoable } from "../telling";
+import { InlineUndo } from "./InlineUndo";
+import { useBulkTakeBack, useBulkUndoToast } from "./use-undo";
 
 /**
  * Closing a role and telling the people it leaves (founder decisions B6 and Q30; plan G4). The close card lists who is
  * still in process; closing moves them to the talent pool privately, and then one courteous closing message, seen first,
- * tells all of them with a single approval. Nothing is sent until that one press; "Not now" leaves it on Today.
+ * tells all of them with a single approval. Nothing is sent now; "Not now" leaves it on Today, and if nobody tells them
+ * the safety net acts after five working days (Q27). Someone who may close a role but not tell candidates (HR) is told
+ * who sends it instead of being shown a Send they could not use.
  */
 
 /** What POST /roles/:id/outcome answers that the close card reads. */
@@ -34,7 +37,7 @@ const ROLE_OUTCOMES: ReadonlyArray<[string, string]> = [
  * pool privately, and anyone with an interview booked or times offered is told now that it is off), then the closing
  * message for them all.
  */
-export function CloseRoleCard({ roleId, initialOutcome, onClose }: { roleId: string; initialOutcome: string; onClose: () => void }) {
+export function CloseRoleCard({ roleId, initialOutcome, mayTell, onClose }: { roleId: string; initialOutcome: string; /** May tell candidates a decision (application.reject); HR closes roles but does not send the closing message. */ mayTell: boolean; onClose: () => void }) {
   const qc = useQueryClient();
   const [outcome, setOutcome] = useState(initialOutcome);
   const [reason, setReason] = useState("");
@@ -45,10 +48,10 @@ export function CloseRoleCard({ roleId, initialOutcome, onClose }: { roleId: str
     mutationFn: () => api.post<RoleClosed>(`/api/v1/roles/${roleId}/outcome`, { outcome, confirm: true, reason: reason.trim() || undefined }),
     // says who moved to the talent pool privately, which interviews ended, and who was told only that theirs is off (founder decision B6)
     onSuccess: async (res) => {
-      const t = closeRoleToast(res, "Role closed; the outcome is recorded with your name.");
+      const t = closeRoleToast(res, "Role closed; the outcome is recorded with your name.", mayTell);
       toast(t.title, t.detail);
       await Promise.all([qc.invalidateQueries({ queryKey: ["role", roleId] }), qc.invalidateQueries({ queryKey: ["roles"] }), qc.invalidateQueries({ queryKey: ["applications", roleId] }), qc.invalidateQueries({ queryKey: ["brief"] })]);
-      if (res.closingMessage && (res.closingMessage.count > 0 || res.closingMessage.waitingApprovalId)) setClosed(res.closingMessage);
+      if (mayTell && res.closingMessage && (res.closingMessage.count > 0 || res.closingMessage.waitingApprovalId)) setClosed(res.closingMessage);
       else onClose();
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not close the role."),
@@ -71,7 +74,7 @@ export function CloseRoleCard({ roleId, initialOutcome, onClose }: { roleId: str
                   <li key={a.id}><Avatar name={a.candidate?.name ?? "?"} size="sm" /><span>{a.candidate?.name ?? "A candidate"}</span><span className="muted small">{a.ownerStageLabel}</span></li>
                 ))}
               </ul>
-              <p className="small muted" style={{ margin: "6px 0 0" }}>{still.length === 1 ? "They move" : `These ${still.length} people move`} to your talent pool, privately: nobody is told the decision yet. Anyone with an interview booked or times offered is told now, in a short note that gives no reason, that it is off. Next you see the one closing message for all of them before anything goes.</p>
+              <p className="small muted" style={{ margin: "6px 0 0" }}>{still.length === 1 ? "They move" : `These ${still.length} people move`} to your talent pool, privately: nobody is told the decision yet. Anyone with an interview booked or times offered is told now, in a short note that gives no reason, that it is off. {mayTell ? "Next you see the one closing message for all of them before anything goes." : `${CLOSING_SENDERS} then sends them the one closing message; it waits on their Today.`}</p>
             </>
           ) : <p className="small muted" style={{ margin: 0 }}>Nobody is still in process.</p>}
         </div>
@@ -89,6 +92,10 @@ export function CloseRoleCard({ roleId, initialOutcome, onClose }: { roleId: str
 export function ClosingMessageCard({ roleId, preview, onDone }: { roleId: string; preview?: ClosingMessagePreview | null; onDone: () => void }) {
   const qc = useQueryClient();
   const bulkUndo = useBulkUndoToast();
+  const bulkTakeBack = useBulkTakeBack();
+  // After Send, while the messages wait out their Undo window, the card stays with "Undo all" (the keyboard reaches it
+  // here, not always on the toast) and a Close button; with nothing to take back it goes at once.
+  const [sent, setSent] = useState<{ title: string; detail?: string; items: Array<{ applicationId: string; communicationId: string }>; until: string } | null>(null);
   const q = useQuery({ queryKey: ["closing-message", roleId], queryFn: () => api.get<ClosingMessagePreview>(`/api/v1/roles/${roleId}/closing-message`), enabled: !preview, retry: false });
   const p = preview ?? q.data ?? null;
   const send = useMutation({
@@ -97,12 +104,25 @@ export function ClosingMessageCard({ roleId, preview, onDone }: { roleId: string
       // each message waits out the Undo window (plan G9): "Undo all" takes back every one still waiting
       const t = closingResultToast(r);
       const items = undoable(r.results);
-      bulkUndo({ roleId, items, ms: bulkUndoMillis(r.results), title: t.title, detail: items.length ? [t.detail, "Undo all takes back every closing message still waiting."].filter(Boolean).join(" ") : t.detail });
+      const ms = bulkUndoMillis(r.results);
+      bulkUndo({ roleId, items, ms, title: t.title, detail: items.length ? [t.detail, "Undo all takes back every closing message still waiting."].filter(Boolean).join(" ") : t.detail });
       await Promise.all([qc.invalidateQueries({ queryKey: ["closing-message", roleId] }), qc.invalidateQueries({ queryKey: ["applications", roleId] }), qc.invalidateQueries({ queryKey: ["brief"] }), qc.invalidateQueries({ queryKey: ["application"] })]);
-      onDone();
+      if (items.length && ms > 0) setSent({ title: t.title, detail: t.detail, items, until: new Date(Date.now() + ms).toISOString() });
+      else onDone();
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send the closing message."),
   });
+  if (sent) {
+    return (
+      <Card lift title={sent.title}>
+        {sent.detail ? <p className="small" style={{ color: "var(--ink-2)" }}>{sent.detail}</p> : null}
+        <div className="row" style={{ marginTop: 10 }}>
+          <InlineUndo autoFocus label="Undo all" ariaLabel={`Undo all: take back the ${sent.items.length === 1 ? "closing message" : `${sent.items.length} closing messages`} still waiting`} undoUntil={sent.until} onUndo={async () => { await bulkTakeBack(roleId, sent.items); onDone(); }} />
+          <Button size="sm" variant="quiet" onClick={onDone}>Close</Button>
+        </div>
+      </Card>
+    );
+  }
   if (!p) {
     if (q.isLoading) return <Card title="The closing message"><Skeleton lines={4} /></Card>;
     return <Card title="The closing message"><ErrorState message={q.error instanceof ApiError ? q.error.message : "Could not load the closing message."} onRetry={() => q.refetch()} /><div className="row" style={{ marginTop: 8 }}><Button size="sm" variant="quiet" onClick={onDone}>Close</Button></div></Card>;
@@ -132,7 +152,7 @@ export function ClosingMessageCard({ roleId, preview, onDone }: { roleId: string
         {sendable ? <Button size="sm" variant="primary" icon="send" loading={send.isPending} onClick={() => send.mutate()}>{closingSendLabel(p)}</Button> : null}
         <Button size="sm" variant="quiet" onClick={onDone}>{sendable ? "Not now" : "Close"}</Button>
       </div>
-      {sendable ? <p className="small muted" style={{ marginTop: 6 }}>Not now leaves them on Today as not told yet; nothing is sent until someone sends it.</p> : null}
+      {sendable ? <p className="small muted" style={{ marginTop: 6 }}>Not now leaves them on Today as not told yet. {safetyNetPromise(p.policy, "the closing message")}</p> : null}
     </Card>
   );
 }

@@ -186,8 +186,9 @@ describe("the Posting tab when ITS posts (D3, D6, D7, D8)", () => {
   });
 
   it("has the share block, the board ticks and the closing date, each where Today's cards link to", () => {
-    expect(html).toContain('<section id="share" class="setup-section">');
-    expect(html).toContain('<section id="closing-date" class="setup-section">');
+    // focusable from code only: following Today's link scrolls there and puts the keyboard there too
+    expect(html).toContain('<section id="share" class="setup-section" tabindex="-1">');
+    expect(html).toContain('<section id="closing-date" class="setup-section" tabindex="-1">');
     expect(html).toContain('role="group" aria-label="Share the job"');
     // a place that has its link is a plain link to the network's own share page, in a new tab
     expect(html).toContain('href="https://wa.me/?text=');

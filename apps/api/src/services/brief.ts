@@ -1,7 +1,7 @@
 import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
-import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeMarksFor, addCalendarDays, boardPostingOf, can, closingDayWords, companyToday, groupFor, isBoardChannel, isPostingTask, mayDecideApproval, openFlagsMessage, ownerGroup, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unresolvedFlags } from "@ros/core";
+import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeMarksFor, addCalendarDays, boardPostingOf, can, closingDayWords, companyToday, groupFor, isBoardChannel, isPostingTask, isStillApplying, mayDecideApproval, openFlagsMessage, ownerGroup, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unresolvedFlags } from "@ros/core";
 import { legalCheckFor, legalCheckMessage } from "./packet-approval";
-import { HELD_STATUS, UNTOLD_SEND_WORKING_DAYS, detectStuckRoles, isClosingProposal, removedCandidates } from "@ros/agents";
+import { HELD_STATUS, UNTOLD_SEND_WORKING_DAYS, decisionsWaitingApproval, detectStuckRoles, isClosingProposal, removedCandidates } from "@ros/agents";
 import { DECISION_WORDING_LABEL, companyOnboarding, companyVerifiedAt, type CompanyOnboarding, type DecisionWording, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
 import { applications, approvalRequests, assessments, candidates, communications, companies, events, intakeSessions, integrations, interviewParticipants, interviewerAvailability, interviews, invitations, memberships, postings, recruiterEscalations, rolePackets, roles, screens, type Tx } from "@ros/db";
 import type { Tenant } from "../middleware/session";
@@ -107,6 +107,9 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   // Posting work (post on a board and record its address, tick a board off once taken down) needs role.manage; every
   // posting route refuses anyone else, so a hiring manager or HR never gets a card they cannot act on.
   const managesPostings = !viewer || can(viewer.role, "role.manage");
+  // Closing a role records its outcome (outcome.record): an owner, an admin, the hiring manager or HR. A recruiter, an
+  // ITS recruiter under a grant among them, manages the closing date but is never offered "Close the role".
+  const closesRoles = !viewer || can(viewer.role, "outcome.record");
   // "Bring in a recruiter" about a whole role is offered only to someone POST /escalations accepts it from: an ITS recruiter
   // given one candidate may not ask about the whole role (staff-scope.ts, staffMayAsk).
   const mayAskAboutRole = (roleId: string) => staffMayAsk(scope, { roleId, applicationId: null });
@@ -172,7 +175,7 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   const teamPosts = boardPostingOf(company?.settings) === "self";
   // Sharing a job is open to those who manage postings and those who approve roles (routes/postings.ts, share-links).
   const shares = !viewer || can(viewer.role, "role.manage") || can(viewer.role, "role.approve");
-  for (const card of closingDateCards(openRoles, company?.timezone ?? null, now, managesPostings)) cards.push(card);
+  for (const card of closingDateCards(openRoles, company?.timezone ?? null, now, managesPostings, closesRoles)) cards.push(card);
   // Nothing is public before the ITS company check (founder decision B7), so a job goes public at the later of its opening and that check.
   const verifiedAt = companyVerifiedAt(company?.settings);
   for (const role of openRoles.filter((r) => r.status === "open")) {
@@ -193,7 +196,11 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     const decidedNotTold = tells ? apps.filter((a) => DECISION_STAGES.includes(a.stage) && a.toldState === "not_told") : [];
     // someone whose details were deleted at their request is never written to, so nobody is asked to tell them
     const removed = await removedCandidates(tx, decidedNotTold.map((a) => a.candidateId));
-    const notTold = decidedNotTold.filter((a) => !removed.has(a.candidateId));
+    const untold = decidedNotTold.filter((a) => !removed.has(a.candidateId));
+    // a decision message waiting for an approver is on the approver's card, not this one (the same rule as the
+    // reminder, the safety net and the Talent page's "Review and send")
+    const waitingApproval = await decisionsWaitingApproval(tx, untold.map((a) => a.id));
+    const notTold = untold.filter((a) => !waitingApproval.has(a.id));
     for (const card of await afterInterviewCards(tx, role, apps.filter((a) => a.stage === "interview_complete"), afterInterview)) cards.push(card);
     if (fresh.length) {
       cards.push({ kind: "new_applicants", title: `${fresh.length} ${fresh.length === 1 ? "person" : "people"} applied to ${role.title} since yesterday`, body: waiting.length ? `${waiting.length} ${waiting.length === 1 ? "is" : "are"} ready for your review.` : "They are being acknowledged and checked for eligibility.", roleId: role.id, actions: [{ label: "See applicants", method: "GET", path: `/roles/${role.id}/talent` }] });
@@ -217,8 +224,10 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     const pool = sortsPools && apps.length >= POOL_READY_MIN ? await poolReadyCard(tx, role, scope) : null;
     if (pool) cards.push(pool);
     const scr = apps.length ? await tx.select().from(screens).where(and(eq(screens.companyId, companyId), inArray(screens.applicationId, apps.map((a) => a.id)))) : [];
-    const invited = scr.filter((s) => s.status === "invited" || s.status === "reminded").length;
-    const talking = scr.filter((s) => s.status === "in_progress").length;
+    // Someone still applying (offered the conversation with the application, plan E6) was invited by nobody, and the team
+    // hears about them once they finish ("completed" below), as the Talent page and the reminders treat them.
+    const invited = scr.filter((s) => !isStillApplying(s) && (s.status === "invited" || s.status === "reminded")).length;
+    const talking = scr.filter((s) => !isStillApplying(s) && s.status === "in_progress").length;
     const doneToday = scr.filter((s) => s.status === "completed" && (s.completedAt ?? "") >= since).length;
     if (invited + talking + doneToday > 0) {
       const parts = [invited ? `${invited} invited` : "", talking ? `${talking} answering now` : "", doneToday ? `${doneToday} completed since yesterday` : ""].filter(Boolean);
@@ -230,8 +239,10 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   if (tells) {
     const closedRoles = (await tx.select({ id: roles.id, title: roles.title }).from(roles).where(and(eq(roles.companyId, companyId), eq(roles.status, "closed")))).filter((r) => inStaffScope(scope, { roleId: r.id }));
     const untoldClosed = closedRoles.length ? await tx.select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(inArray(applications.roleId, closedRoles.map((r) => r.id)), inArray(applications.stage, [...DECISION_STAGES]), eq(applications.toldState, "not_told"), isNull(candidates.anonymizedAt))) : [];
+    // whose message (their own, or the closing message's one request) waits for an approver: on the approver's card instead
+    const waitingClosed = await decisionsWaitingApproval(tx, untoldClosed.map((a) => a.id));
     for (const role of closedRoles) {
-      const card = await notToldCard(tx, role, untoldClosed.filter((a) => a.roleId === role.id && inStaffScope(scope, { roleId: role.id, applicationId: a.id })), { closed: true });
+      const card = await notToldCard(tx, role, untoldClosed.filter((a) => a.roleId === role.id && !waitingClosed.has(a.id) && inStaffScope(scope, { roleId: role.id, applicationId: a.id })), { closed: true });
       if (card) cards.push(card);
     }
   }
@@ -336,8 +347,9 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
  * The closing-date cards (founder decision Q12, plan D7), for those who manage postings: a role whose date stopped
  * applications (extend it, choose another date, or close the role, which stays a person's decision), and a role whose
  * date ends tonight or tomorrow night. "Extend by two weeks" posts the new date straight to the closing-date route.
+ * "Close the role" goes only to those who may close one (`closes`: outcome.record); the others are told who can.
  */
-function closingDateCards(list: ReadonlyArray<typeof roles.$inferSelect>, timeZone: string | null, now: Date, manages: boolean): BriefCard[] {
+function closingDateCards(list: ReadonlyArray<typeof roles.$inferSelect>, timeZone: string | null, now: Date, manages: boolean, closes: boolean): BriefCard[] {
   if (!manages) return [];
   const out: BriefCard[] = [];
   const today = companyToday(now, timeZone);
@@ -349,9 +361,9 @@ function closingDateCards(list: ReadonlyArray<typeof roles.$inferSelect>, timeZo
       out.push({
         kind: "closing_date",
         title: `${role.title} stopped taking applications`,
-        body: `Its closing date${closesOn ? `, ${closingDayWords(closesOn)},` : ""} has passed. Nobody was turned away: people who had started could finish, and everyone who applied is where they were. Extend the date to take applications again, or close the role when you are ready.`,
+        body: `Its closing date${closesOn ? `, ${closingDayWords(closesOn)},` : ""} has passed. Nobody was turned away: people who had started could finish, and everyone who applied is where they were. ${closes ? "Extend the date to take applications again, or close the role when you are ready." : "Extend the date to take applications again. Closing the role is up to the company's owner, an admin, the hiring manager or HR."}`,
         roleId: role.id,
-        actions: [{ label: "Extend by two weeks", method: "POST", path: `/api/v1/roles/${role.id}/closing-date`, body: { closesOn: addCalendarDays(today, 14) } }, pickDate, { label: "Close the role", method: "GET", path: `/roles/${role.id}?close=1` }],
+        actions: [{ label: "Extend by two weeks", method: "POST", path: `/api/v1/roles/${role.id}/closing-date`, body: { closesOn: addCalendarDays(today, 14) } }, pickDate, ...(closes ? [{ label: "Close the role", method: "GET" as const, path: `/roles/${role.id}?close=1` }] : [])],
       });
     } else if (closesOn && role.acceptingApplications && closesOn >= today && closesOn <= addCalendarDays(today, 1)) {
       out.push({
@@ -616,7 +628,7 @@ async function afterInterviewCards(tx: Tx, role: { id: string; title: string }, 
       continue;
     }
     const latest = mine.find((i) => ["completed", "no_show"].includes(i.status));
-    if (who.requests && latest?.decision === "next_round") out.push({ kind: "decision", title: `Set up the next round: ${name}`, body: `You chose the next round after ${latest.title}. Approve it from the candidate's page and times go out to them.`, roleId: role.id, applicationId: app.id, actions: [{ label: "Open the candidate", method: "GET", path: open }] });
+    if (who.requests && latest?.decision === "next_round") out.push({ kind: "decision", title: `Set up the next round: ${name}`, body: `You chose the next round after ${latest.title}. Approve it from the candidate's page and times go out to them.`, roleId: role.id, applicationId: app.id, actions: [{ label: "Approve the next round", method: "GET", path: `${open}&step=interview` }] });
   }
   return out;
 }

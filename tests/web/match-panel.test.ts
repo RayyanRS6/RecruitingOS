@@ -176,7 +176,10 @@ describe("the panel's wiring", () => {
     expect(card).not.toContain("improve the system");
     // choosing a kind asks first, saying what the recruiter will see and for how long; only an ITS recruiter's own flag goes at once
     expect(card).toContain('title="Ask an ITS recruiter to check this reading?"');
-    expect(card).toContain("if (e.target.value && staff) flag.mutate(e.target.value);");
+    expect(card).toContain("const choose = (k: string) => { if (staff) flag.mutate(k); else setKind(k); };");
+    // a menu, not a dropdown: an arrow key only moves through the kinds; Enter or a click chooses (WCAG 3.2.2)
+    expect(card).toContain('<Menu label="Something wrong?" ariaLabel="Something wrong with this assessment?"');
+    expect(card).not.toContain("<select");
     expect(card).toContain('export const FLAG_SHARE = `This asks an ITS recruiter to check the reading. Once they pick it up they see ${accessWords("application")}. ${ACCESS_LIMITS}`;');
   });
 

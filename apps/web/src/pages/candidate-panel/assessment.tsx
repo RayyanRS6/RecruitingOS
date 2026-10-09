@@ -2,7 +2,7 @@
 
 import { type ReactNode, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, Dialog, EvidenceChip } from "@ros/ui";
+import { Alert, Button, Card, Chip, Dialog, EvidenceChip, Menu } from "@ros/ui";
 import { api, ApiError, type ApplicationDetail, type AssessmentResult, type Me, type Screen } from "../../api/client";
 import { ACCESS_LIMITS, accessWords } from "../../recruiter-access";
 import { toast } from "../../toast";
@@ -58,12 +58,13 @@ function FlagAssessment({ applicationId, assessmentId }: { applicationId: string
   });
   if (done) return <span className="small muted">Flagged, thank you.</span>;
   const label = FLAG_KINDS.find(([v]) => v === kind)?.[1] ?? "";
+  // A menu, not a dropdown: the arrow keys only move through the kinds, and a kind is acted on with Enter or a click
+  // (a dropdown acts on its first arrow press on Windows). The menu hands the focus back to its button before the
+  // dialog opens, so closing the dialog lands there.
+  const choose = (k: string) => { if (staff) flag.mutate(k); else setKind(k); };
   return (
     <span className="row" style={{ gap: 6 }}>
-      <select className="select" style={{ width: "auto", padding: "4px 8px", fontSize: 12.5 }} value={kind} onChange={(e) => { setKind(e.target.value); if (e.target.value && staff) flag.mutate(e.target.value); }} aria-label="Something wrong with this assessment?">
-        <option value="">Something wrong?</option>
-        {FLAG_KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-      </select>
+      <Menu label="Something wrong?" ariaLabel="Something wrong with this assessment?" heading="What looks wrong?" items={FLAG_KINDS.map(([id, l]) => ({ id, label: l }))} onSelect={choose} align="end" disabled={flag.isPending} />
       {kind && !staff ? (
         <Dialog
           open

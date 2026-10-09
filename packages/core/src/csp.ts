@@ -43,11 +43,23 @@ export function cspHeaderName(mode: CspMode): "Content-Security-Policy" | "Conte
 
 export type NormalizedCspReport = { mode: string; surface: "candidate" | "app"; documentPath: string; violatedDirective: string; effectiveDirective: string | null; blockedOrigin: string | null; sourceFile: string | null; lineNumber: number | null; userAgent: string | null };
 
-const TOKEN_PATH = /\/c\/(status|screen|schedule|privacy-request\/verify)\/[^/?#]+/g;
+const TOKEN_PATH = /\/c\/(status|screen|schedule|confirm-answers|privacy-request\/verify)\/[^/?#]+/g;
 
 /** A request path with every candidate link token replaced by `[token]`: safe for audit records, error reports and logs. */
 export function maskTokenPath(path: string): string {
   return path.replace(TOKEN_PATH, "/c/$1/[token]");
+}
+
+/** The same candidate links inside free text (an email's body): the tokens are base64url, so the match stops at anything else. */
+const CANDIDATE_LINK_IN_TEXT = /\/c\/(status|screen|schedule|confirm-answers|privacy-request\/verify)\/[A-Za-z0-9_-]+/g;
+
+/**
+ * A message's text with every candidate link's token replaced by `[link]`, for showing a message we sent to the team.
+ * A link's token is all that lets someone act as the candidate (withdraw, opt out, confirm answers given after applying
+ * again, ask for their data), and some never expire, so it stays with the candidate: never in what the team is shown.
+ */
+export function maskCandidateLinks<T extends string | null | undefined>(text: T): T {
+  return (typeof text === "string" ? text.replace(CANDIDATE_LINK_IN_TEXT, "/c/$1/[link]") : text) as T;
 }
 
 function pathOnly(value: unknown): string | null {

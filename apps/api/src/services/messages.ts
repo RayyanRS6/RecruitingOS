@@ -78,8 +78,12 @@ export async function composeMessagePreview(tx: Tx, container: Container, input:
   };
 }
 
-/** A suggestion the message says it used must be one of this company's own suggestions; anything else is dropped. */
-async function suggestionRunOf(tx: Tx, runId: string | null | undefined): Promise<string | null> {
+/**
+ * A suggestion the message says it used must be one of this company's own suggestions; anything else is dropped. A valid
+ * one also means the assistant helped (Q28), whatever the page said: the disclosure never rests on the client's flag
+ * alone (routes/interviews.ts uses it for an invitation's line too).
+ */
+export async function suggestionRunOf(tx: Tx, runId: string | null | undefined): Promise<string | null> {
   if (!runId || !/^[0-9a-f-]{36}$/i.test(runId)) return null;
   const [run] = await tx.select({ id: aiRuns.id }).from(aiRuns).where(and(eq(aiRuns.id, runId), eq(aiRuns.promptKey, "message.suggest_line"))).limit(1);
   return run?.id ?? null;
@@ -117,7 +121,12 @@ export async function sendCandidateMessage(tx: Tx, container: Container, input: 
   if (!b.candidate.email) throw new HttpError(409, "no_email", "This candidate has no email address on file, so a message cannot be sent.");
   const candidateName = `${b.candidate.firstName} ${b.candidate.lastName}`.trim();
   const senderName = actor.name ?? "A member of the hiring team";
-  const proposal: MessageProposal = { subject: input.body.subject?.trim() || null, text: input.body.text.trim(), senderName, senderUserId: t.userId, candidateName, ...(input.body.aiHelped ? { aiHelped: true, suggestionRunId: input.body.suggestionRunId ?? null } : {}) };
+  // A line the assistant suggested, kept and then changed, is still mostly its words: a valid suggestion sent with the
+  // message means the footer says the assistant helped, even when the page left the flag out (product thesis: every
+  // candidate touch is disclosed).
+  const suggestionRunId = await suggestionRunOf(tx, input.body.suggestionRunId);
+  const aiHelped = !!input.body.aiHelped || !!suggestionRunId;
+  const proposal: MessageProposal = { subject: input.body.subject?.trim() || null, text: input.body.text.trim(), senderName, senderUserId: t.userId, candidateName, ...(aiHelped ? { aiHelped: true, suggestionRunId: suggestionRunId ?? input.body.suggestionRunId ?? null } : {}) };
   const subject = { type: "application", id: app.id } as const;
   const rationale = `${senderName} wrote to ${candidateName} about ${b.role.title}.`;
   const d = await gate(tx, { companyId: t.companyId, roleId: app.roleId, applicationId: app.id, actionType: "message.send_freeform", subject, proposal, rationale, requestedBy: actor });

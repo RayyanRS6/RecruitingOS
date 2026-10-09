@@ -120,7 +120,7 @@ test.describe("the pool board", () => {
     const review = page.getByRole("dialog", { name: "Review and apply" });
     await expect(review).toBeVisible({ timeout: 30_000 });
     await expect(review.getByText("This files people into your pipeline privately. Nobody is emailed.")).toBeVisible();
-    await expect(review.getByText("Filed privately. Nobody is emailed until you send the decision message from the Talent page; you will be reminded.")).toBeVisible();
+    await expect(review.getByText(/^Filed privately\. Nobody is emailed now; you will be reminded to send the decision message from the Talent page\. If nobody tells them within 5 working days, the standard message goes by itself/)).toBeVisible();
     await expect(review.getByText("Untick anyone you want to decide yourself, change a reason if needed, then apply. Unticked people stay where they are.")).toBeVisible();
     await expect(review.getByRole("checkbox", { name: "Cleo Park" })).toBeChecked();
     await expect(review.getByLabel("Reason for Cleo Park (change it if you disagree)")).toBeVisible();

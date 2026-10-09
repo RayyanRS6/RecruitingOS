@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { HELD_STATUS, detectStuckRoles, queueCommunication, releaseHeldCommunications } from "@ros/agents";
 import type { ApplicationStage, GettingStarted } from "@ros/contracts";
 import { createApplicationLink } from "@ros/core";
-import { applications, auditRecords, candidates, communications, companies, events, jobs, notifications, postings, randomToken, roles, uuidv7, withPlatform, withTenant, workflowRuns } from "@ros/db";
+import { applications, auditRecords, candidates, communications, companies, events, interviews, jobs, notifications, postings, randomToken, roles, screens, uuidv7, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { COMPANY_CHECK_WAIT_REASON } from "@ros/workflows";
 import { createApp } from "./app";
@@ -307,6 +307,32 @@ describe("releasing held messages", () => {
     expect(await statusOf(text)).toMatchObject({ status: "cancelled", error: "the candidate stopped text messages" });
     for (const id of [invite, lateInvite]) expect(await statusOf(id)).toMatchObject({ status: "cancelled", error: "the candidate has left the process since it was written" });
     expect((await container.db.select().from(events).where(eq(events.type, "message.cancelled"))).map((e) => e.subjectId).sort()).toEqual([text, invite, lateInvite].sort());
+  });
+
+  it("cancels a held link to a step that ended while it waited (a screen that lapsed, interview times no longer on offer); the closing note still goes, and an open step's link goes", async () => {
+    const screen = (who: { applicationId: string }, status: string) => withTenant(container.db, companyId, (tx) => tx.insert(screens).values({ companyId, applicationId: who.applicationId, channel: "web", status, token: randomToken(24) }));
+    const offer = (who: { applicationId: string }, status: string) => withTenant(container.db, companyId, (tx) => tx.insert(interviews).values({ companyId, applicationId: who.applicationId, roundKey: "first", title: "First interview", format: "video", durationMinutes: 30, status }));
+    // invited the day the check was taken back; the link lapsed a week later, while every message waited
+    const lapsed = await person("screen_invited");
+    await screen(lapsed, "expired");
+    const deadInvite = await heldFor(lapsed, "email", "screen_invite");
+    const deadReminder = await heldFor(lapsed, "email", "screen_reminder");
+    const closingNote = await heldFor(lapsed, "email", "screen_expired");
+    // still open: its invitation goes
+    const open = await person("screen_invited");
+    await screen(open, "invited");
+    const liveInvite = await heldFor(open, "email", "screen_invite");
+    // interview times offered, never picked, and the offer lapsed; another's offer is still open
+    const missed = await person("interview_recommended");
+    await offer(missed, "offer_expired");
+    const deadSlots = await heldFor(missed, "email", "interview_slots");
+    const deadSlotsReminder = await heldFor(missed, "email", "interview_slots_reminder");
+    const picking = await person("interview_recommended");
+    await offer(picking, "scheduling");
+    const liveSlots = await heldFor(picking, "email", "interview_slots");
+    await withTenant(container.db, companyId, (tx) => releaseHeldCommunications(tx, { companyId, actor, now: new Date() }));
+    for (const id of [deadInvite, deadReminder, deadSlots, deadSlotsReminder]) expect(await statusOf(id)).toMatchObject({ status: "cancelled", error: "the step it invites to has ended since it was written" });
+    for (const id of [closingNote, liveInvite, liveSlots]) expect((await statusOf(id)).status).toBe("queued");
   });
 
   it("once confirmed: a text waiting for its hour is cancelled at send time if the candidate stopped texts meanwhile, and a quiet role is worth a nudge", async () => {

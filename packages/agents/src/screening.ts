@@ -60,6 +60,38 @@ export const REVIEW_MESSAGE = "That is every question. Check your answers below:
 export const SKIPPED_MESSAGE = "Skipped this question.";
 export const MOVED_ON_MESSAGE = "Moved on to the next question; the answer given is kept.";
 
+/**
+ * How many replies the model has written in this conversation. Each call that worked writes exactly one, carrying its
+ * run; a reply worked out in code (the first question, a skip, a tap, a command) carries none, and a call that failed
+ * writes none (two failures in a row pause the conversation or hand it to a person).
+ */
+export function modelTurnsUsed(transcript: readonly ScreenTranscriptEntry[]): number {
+  return transcript.filter((t) => t.role === "assistant" && !!t.aiRunId).length;
+}
+
+/**
+ * The most model calls one conversation may make: for every question the ask and two follow-ups (MAX_FOLLOW_UPS), plus
+ * five for the candidate's own questions. `packet` is the conversation's own (with the open questions it starts with).
+ * A candidate answering normally stays well under it; a conversation that only ever chats never reaches the end of
+ * the questions, so without a cap it would call the model for as long as the link lasts.
+ */
+export function modelTurnCap(packet: Pick<RolePacket, "screening">): number {
+  return 3 * packet.screening.questions.length + 5;
+}
+
+/** What the conversation says when it reaches that cap on the web in the one-visit flow: the candidate checks their answers next (E10). */
+export const TURN_CAP_REVIEW_MESSAGE = "We have covered as much as we can in this conversation. Check your answers below: you can change any of them and answer any question still open. When they look right, press Send.";
+/**
+ * What happens next, in every closing line of the conversation: people decide, and the candidate hears either way. Never
+ * a time: decisions are private with no deadline (founder decision B6), so nothing could keep a promise of "a few days"
+ * (the decision log of 14 September 2026 bans it in candidate copy).
+ */
+export const SCREEN_NEXT_LINE = "People on the hiring team review your answers and make every decision; you will hear from them either way.";
+/** The reply to anything said after the screening is complete (by text, or on the conversation page). */
+export const SCREEN_COMPLETE_MESSAGE = `Thanks, this screening is complete. ${SCREEN_NEXT_LINE} Reply HUMAN to reach a person.`;
+/** ...and where the conversation closes instead (an invitation by text, or on the web outside the one-visit flow). */
+export const TURN_CAP_CLOSE_MESSAGE = "Thank you for your time. That is as much as we can cover in this conversation. People on the hiring team review what you shared and make every decision; you will hear from them either way. Reply HUMAN at any time to reach a person.";
+
 /** What the conversation says when the assistant stops working part-way (E5). */
 export function pausedMessage(companyName: string): string {
   return `Sorry, our assistant has stopped working for the moment. Your answers so far are saved. We will email you a link to finish as soon as it is working again, usually within a few hours. If you would rather not wait, you can ask for a person from ${companyName} instead.`;
@@ -281,7 +313,7 @@ export type BegunTurn = ({ kind: "done"; result: TurnResult } | { kind: "pending
 
 /** The holding answer to a conversation that is not open, by its status. */
 function closedMessage(status: string, companyName: string): string {
-  if (status === "completed") return "Thanks, this screening is complete. The hiring team is reviewing and you will hear back within a few days. Reply HUMAN to reach a person.";
+  if (status === "completed") return SCREEN_COMPLETE_MESSAGE;
   if (status === "human_requested") return "A person from the hiring team will follow up with you shortly.";
   if (status === "paused") return `This conversation is paused while we fix a problem on our end. Your answers are saved, and we will email you a link to finish. If you would rather talk to a person from ${companyName}, reply HUMAN.`;
   return "This screening has closed. Reply HUMAN if you would like a person to follow up.";
@@ -321,6 +353,10 @@ export async function flagAllowance(db: Db, note: AllowanceNote | null | undefin
  * left for the model.
  */
 export async function beginScreenTurn(q: Queryable, deps: ScreenDeps, input: TurnInput): Promise<BegunTurn> {
+  // The screen row is locked before anything is read, as `submitScreenAnswers` does: two first answers at the same moment
+  // (two quick texts, a double Send) take turns, so the conversation is counted once (`countedAt`) and neither turn
+  // writes over the other's transcript. The lock lasts this short transaction only, never the model call.
+  await q.select({ id: screens.id }).from(screens).where(eq(screens.id, input.screenId)).for("update");
   let b = await loadScreenBundle(q, input.screenId);
   if (!b) return { kind: "done", result: { kind: "error", message: "This conversation is no longer available." } };
   // An answer posted on the web before Start (an old page, a reload): the first question is put first, as Start does,
@@ -398,6 +434,11 @@ export async function beginScreenTurn(q: Queryable, deps: ScreenDeps, input: Tur
     const result = await answerInCode(q, deps, { ...b, screen: { ...screen, transcript, progress } }, { channel: input.channel, actor: input.actor, words: tapped, key: current! });
     return { kind: "done", result, allowance };
   }
+  // A conversation cannot call the model for ever (`modelTurnCap`): at the cap it ends without another call.
+  if (modelTurnsUsed(transcript) >= modelTurnCap(packet)) {
+    const result = await endAtTurnCap(q, deps, { ...b, screen: { ...screen, transcript, progress } }, { channel: input.channel, actor: input.actor });
+    return { kind: "done", result, allowance };
+  }
 
   const fresh = (await q.select().from(screens).where(eq(screens.id, screen.id)).limit(1))[0];
   return { kind: "pending", b: { ...b, screen: fresh }, transcript, ctx: contextOf(b, { ...fresh, transcript }, input.message), allowance };
@@ -431,18 +472,34 @@ async function answerInCode(q: Queryable, deps: ScreenDeps, b: ScreenBundle, inp
     return writeReply(q, deps, b, { channel: input.channel, actor: input.actor, transcript: screen.transcript, answers, progress, message, questionKey: next.key, done: false });
   }
   progress = advanceProgress(progress, { ...SILENT_TURN, done: true });
-  const message = `${lead} That is everything I needed. The hiring team will review and you will hear back within a few days. Reply HUMAN at any time to reach a person.`;
+  const message = `${lead} That is everything I needed. ${SCREEN_NEXT_LINE} Reply HUMAN at any time to reach a person.`;
   return writeReply(q, deps, b, { channel: input.channel, actor: input.actor, transcript: screen.transcript, answers, progress, message, questionKey: null, done: true });
 }
 
 /**
- * Writes the assistant's reply and the recorded answers, sends it by text on that channel, and settles the end of the
- * questions: a conversation offered with the application goes to "check your answers" (E10); any other closes.
+ * The conversation reached `modelTurnCap` with the candidate's latest message already recorded: it ends the way the end
+ * of the questions does, in code, without calling the model again. On the web in the one-visit flow the candidate
+ * checks their answers next (E10), where they can change any of them, answer one still open, and press Send, none of
+ * which calls the model; any other conversation closes with what was said, and the scorecard reads only that.
+ * Recorded as `screen.turn_cap_reached`.
  */
-async function writeReply(q: Queryable, deps: ScreenDeps, b: ScreenBundle, s: { channel: ScreenChannel; actor: Actor; transcript: ScreenTranscriptEntry[]; answers: Record<string, string>; progress: ScreenProgress; message: string; questionKey: string | null; done: boolean; aiRunId?: string }): Promise<TurnResult> {
+async function endAtTurnCap(q: Queryable, deps: ScreenDeps, b: ScreenBundle, input: { channel: ScreenChannel; actor: Actor }): Promise<TurnResult> {
+  const { screen, company, packet } = b;
+  const progress = advanceProgress(screen.progress, { ...SILENT_TURN, done: true });
+  const review = isOneVisitFlow(progress) && input.channel === "web";
+  await emit(q, { type: "screen.turn_cap_reached", companyId: company.id, actor: { kind: "system", id: "screening" }, subject: { type: "screen", id: screen.id }, payload: { modelTurns: modelTurnsUsed(screen.transcript), cap: modelTurnCap(packet), ending: review ? "review" : "closed", channel: input.channel }, correlationId: screen.workflowRunId });
+  return writeReply(q, deps, b, { channel: input.channel, actor: input.actor, transcript: screen.transcript, answers: screen.answers, progress, message: TURN_CAP_CLOSE_MESSAGE, reviewMessage: TURN_CAP_REVIEW_MESSAGE, questionKey: null, done: true });
+}
+
+/**
+ * Writes the assistant's reply and the recorded answers, sends it by text on that channel, and settles the end of the
+ * questions: a conversation offered with the application goes to "check your answers" (E10), saying `reviewMessage`
+ * (REVIEW_MESSAGE unless given); any other closes.
+ */
+async function writeReply(q: Queryable, deps: ScreenDeps, b: ScreenBundle, s: { channel: ScreenChannel; actor: Actor; transcript: ScreenTranscriptEntry[]; answers: Record<string, string>; progress: ScreenProgress; message: string; questionKey: string | null; done: boolean; aiRunId?: string; reviewMessage?: string }): Promise<TurnResult> {
   const { screen, app, candidate, company, packet } = b;
   const review = s.done && isOneVisitFlow(s.progress) && s.channel === "web";
-  const message = review ? REVIEW_MESSAGE : s.message;
+  const message = review ? s.reviewMessage ?? REVIEW_MESSAGE : s.message;
   const progress: ScreenProgress = review ? { ...s.progress, phase: "review", currentQuestionKey: null } : s.progress;
   const reply: ScreenTranscriptEntry = { role: "assistant", content: message, at: nowOf(deps).toISOString(), questionKey: s.questionKey ?? undefined, channel: s.channel, aiRunId: s.aiRunId };
   const transcript = [...s.transcript, reply];
@@ -756,10 +813,11 @@ export function enforceTurnRules(turn: ScreenTurn, packet: RolePacket, progress:
       const q = packet.screening.questions.find((x) => x.key === next)!;
       t = { ...t, messageToCandidate: `Thanks, that helps. Next: ${q.question}`, questionKey: next, followUpReason: null, answerRecorded: t.answerRecorded ?? (current ? { questionKey: current, answer: "", complete: false } : null) };
     } else {
-      t = { ...t, done: true, followUpReason: null, questionKey: null, messageToCandidate: `Thanks, that is everything I needed. The hiring team will review and you will hear back within a few days. Reply HUMAN at any time to reach a person.` };
+      t = { ...t, done: true, followUpReason: null, questionKey: null, messageToCandidate: `Thanks, that is everything I needed. ${SCREEN_NEXT_LINE} Reply HUMAN at any time to reach a person.` };
     }
   }
-  // A conversation cannot run forever: after four turns per question, close politely.
+  // Every question answered, skipped or asked, and the model asked nothing more: close politely. (How many times a
+  // conversation may call the model at all is `modelTurnCap`, checked before each call.)
   const candidateTurns = Object.keys(answers).length + declined.size + (t.answerRecorded ? 1 : 0);
   if (!t.done && !t.humanRequested && candidateTurns >= keys.length && remaining.length === 0 && !t.questionKey) {
     t = { ...t, done: true, followUpReason: null };

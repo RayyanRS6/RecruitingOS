@@ -8,7 +8,8 @@ import { api, ApiError, type ActionResult, type ApplicationDetail, type Candidat
 import { toast } from "../../toast";
 import { decisionOnItsWayText } from "../../company-check";
 import { useCompanyCheck } from "../../components/use-company-check";
-import { useUndoToast } from "../../components/use-undo";
+import { InlineUndo } from "../../components/InlineUndo";
+import { useTakeBack, useUndoToast } from "../../components/use-undo";
 import { sendDecisionToast } from "../../talent-actions";
 import { PERSONAL_LINE_HINT, PERSONAL_LINE_MAX, WORDING_HINT, safetyNetLine, sendButtonLabel, sendPolicyLine, sentWithUndoToast, undoMillisLeft, wordingChoices } from "../../telling";
 import { whoDecides } from "./helpers";
@@ -37,11 +38,15 @@ type WaitingProposal = { wording?: DecisionWording | null; personalLine?: { text
 
 export function TellCard({ a, roleId, myRole }: { a: ApplicationDetail; roleId: string; myRole: string | null }) {
   const refresh = useRefreshCandidate(a.id, roleId);
+  const takeBack = useTakeBack();
   const [sending, setSending] = useState(false);
   const [inPerson, setInPerson] = useState(false);
+  const [takingBack, setTakingBack] = useState(false);
   const [note, setNote] = useState("");
+  // The message this card's Send queued, while it waits out its Undo window: Undo is offered here as well as on the toast.
+  const [sent, setSent] = useState<{ communicationId: string; undoUntil: string } | null>(null);
   useDraft("told-note", note);
-  const act = useCandidateAction(a.id, roleId, () => { setSending(false); setInPerson(false); });
+  const act = useCandidateAction(a.id, roleId, () => { setSending(false); setInPerson(false); setTakingBack(false); });
   const waiting = a.pendingApprovals.find((p) => p.actionType === "disposition.send");
   // In the outbox of a company ITS has not confirmed yet, the message waits for the check (founder decision B7).
   const check = useCompanyCheck();
@@ -61,7 +66,10 @@ export function TellCard({ a, roleId, myRole }: { a: ApplicationDetail; roleId: 
       <Alert tone="info">
         <div className="row" style={{ justifyContent: "space-between" }}>
           <span>{decisionOnItsWayText(first, check)}</span>
-          {a.allowedActions.includes("told_in_person") ? <Button size="sm" variant="quiet" loading={act.isPending} onClick={() => act.mutate({ action: "told_in_person", note: "Told them while the message was on its way" })}>I told them myself</Button> : null}
+          <span className="row">
+            {sent ? <InlineUndo autoFocus undoUntil={sent.undoUntil} ariaLabel={`Undo the decision message to ${first}`} onUndo={async () => { await takeBack({ applicationId: a.id, roleId, communicationId: sent.communicationId, firstName: first, kind: "decision" }); setSent(null); }} /> : null}
+            {a.allowedActions.includes("told_in_person") ? <Button size="sm" variant="quiet" loading={act.isPending} onClick={() => act.mutate({ action: "told_in_person", note: "Told them while the message was on its way" })}>I told them myself</Button> : null}
+          </span>
         </div>
       </Alert>
     );
@@ -70,6 +78,8 @@ export function TellCard({ a, roleId, myRole }: { a: ApplicationDetail; roleId: 
   const mayApprove = !!waiting && !!myRole && (waiting.requiredRoles.length ? waiting.requiredRoles.includes(myRole) : ["owner", "admin"].includes(myRole));
   const canSend = a.allowedActions.includes("send_decision");
   const canTell = a.allowedActions.includes("told_in_person");
+  // Quiet undo (plan G1): the decision goes, and they are back at the step it was made from; the stage button offers the same.
+  const backTo = a.allowedActions.includes("undo_decision") ? a.stageMoves.find((m) => m.via === "undo_decision" && m.allowed) : undefined;
   const proposal = (waiting?.proposal ?? {}) as WaitingProposal;
   const chosen = proposal.wording && proposal.wording in DECISION_WORDING_LABEL ? `the "${DECISION_WORDING_LABEL[proposal.wording]}" wording` : "the standard wording";
   const line = proposal.personalLine?.text?.trim();
@@ -92,15 +102,25 @@ export function TellCard({ a, roleId, myRole }: { a: ApplicationDetail; roleId: 
           <Button size="sm" variant="quiet" loading={decide.isPending} onClick={() => decide.mutate("reject")}>Do not send</Button>
         </div>
       ) : null}
-      {!waiting && !sending && !inPerson ? (
+      {!waiting && !sending && !inPerson && !takingBack ? (
         <div className="row" style={{ marginTop: 10 }}>
           <Button size="sm" variant="primary" icon="send" disabled={!canSend} title={canSend ? "Shows the message before anything is sent" : a.blockedReasons.send_decision} onClick={() => setSending(true)}>Send message</Button>
           <Button size="sm" disabled={!canTell} title={canTell ? "Records it; nothing is sent" : a.blockedReasons.told_in_person} onClick={() => setInPerson(true)}>I told them myself</Button>
+          {backTo ? <Button size="sm" variant="quiet" title="If this was a mistake: they go back to where they were" onClick={() => setTakingBack(true)}>Take back this decision</Button> : null}
+        </div>
+      ) : null}
+      {takingBack && backTo ? (
+        <div className="stack" style={{ gap: 8, marginTop: 10 }}>
+          <p className="small" style={{ margin: 0 }}>Take back this decision? {first} goes back to {backTo.label}. Nothing was sent to them, and nothing will be.</p>
+          <div className="row">
+            <Button size="sm" variant="primary" loading={act.isPending} onClick={() => act.mutate({ action: "undo_decision" })}>Yes, take it back</Button>
+            <Button size="sm" variant="quiet" onClick={() => setTakingBack(false)}>Cancel</Button>
+          </div>
         </div>
       ) : null}
       {waiting && !inPerson && canTell ? <div className="row" style={{ marginTop: 8 }}><Button size="sm" variant="quiet" onClick={() => setInPerson(true)}>I told them myself</Button></div> : null}
       {!canSend && !canTell && a.blockedReasons.send_decision ? <p className="small muted" style={{ marginTop: 6 }}>{a.blockedReasons.send_decision}</p> : null}
-      {sending ? <SendDecisionStep a={a} roleId={roleId} onClose={() => setSending(false)} /> : null}
+      {sending ? <SendDecisionStep a={a} roleId={roleId} onClose={() => setSending(false)} onSent={setSent} /> : null}
       {inPerson ? (
         <div className="stack" style={{ gap: 8, marginTop: 10 }}>
           <p className="small" style={{ margin: 0 }}>Record that you told {first} yourself? Nothing more will be sent to them about this decision.</p>
@@ -118,9 +138,10 @@ export function TellCard({ a, roleId, myRole }: { a: ApplicationDetail; roleId: 
 /**
  * The Send screen (Q28): the approved wordings, the suggested one chosen to start with; an optional personal line, checked
  * as it is typed exactly as Send checks it (a refusal says what to take out, and Send waits); and the exact message the
- * candidate gets. Send under "Do it" waits out the Undo window, with Undo on the toast.
+ * candidate gets. Send under "Do it" waits out the Undo window, with Undo on the toast and, through `onSent`, on the
+ * card that opened this step (where the keyboard can reach it inside the panel).
  */
-export function SendDecisionStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId: string; onClose: () => void }) {
+export function SendDecisionStep({ a, roleId, onClose, onSent }: { a: ApplicationDetail; roleId: string; onClose: () => void; onSent?: (sent: { communicationId: string; undoUntil: string }) => void }) {
   const refresh = useRefreshCandidate(a.id, roleId);
   const undoToast = useUndoToast();
   const base = useQuery({ queryKey: ["decision-message", a.id], queryFn: () => api.get<DecisionMessagePreview>(`/api/v1/applications/${a.id}/decision-message`) });
@@ -148,6 +169,7 @@ export function SendDecisionStep({ a, roleId, onClose }: { a: ApplicationDetail;
       const seconds = Math.round(undoMillisLeft(r.undoUntil) / 1000);
       const t = sentWithUndoToast({ firstName: a.candidate.firstName, seconds, wording: r.wording ?? chosen, kind: "decision" });
       undoToast({ applicationId: a.id, roleId, communicationId: notice === "queued" ? r.communicationId : null, undoUntil: r.undoUntil, firstName: a.candidate.firstName, kind: "decision", title: t.title, detail: t.detail ?? "", plain });
+      if (notice === "queued" && r.communicationId && r.undoUntil && undoMillisLeft(r.undoUntil) > 0) onSent?.({ communicationId: r.communicationId, undoUntil: r.undoUntil });
       onClose();
       await refresh();
     },

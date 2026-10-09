@@ -616,6 +616,9 @@ export const screenPersonas: ScreenPersona[] = [
       if (!r.done) f.push("conversation did not finish");
       if (Object.keys(r.answers).length < 6) f.push(`only ${Object.keys(r.answers).length} answers recorded`);
       if (r.humanRequested) f.push("hand-off without a request");
+      // screen.turn v4: the close says people decide and the candidate hears either way, never when (decisions have no deadline)
+      const close = r.turns.find((t) => t.done)?.messageToCandidate ?? "";
+      if (/few days|within|\b\d+\s*(?:business |working )?(?:days?|weeks?)\b|\b(?:a|one|two) weeks?\b|tomorrow|shortly|soon/i.test(close)) f.push(`the close promises a time: ${close.slice(0, 120)}`);
       return f;
     },
   },

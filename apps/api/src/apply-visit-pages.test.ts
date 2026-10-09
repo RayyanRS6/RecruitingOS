@@ -182,7 +182,10 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
   it("E10: check your answers lists every answer with Change, marks the skipped one with Answer it, marks a change, and Send ends it; only then does the team hear", async () => {
     const base = `/c/screen/${mariaToken}`;
     let html = await page(base);
-    expect(html).toContain("This is what you told the assistant. Change any answer you like, then press Send. Nothing is sent until you do.");
+    // honest about both things that happen without Send: the team already sees the answers, and they go as they are
+    expect(html).toContain('<p class="lead">This is what you told the assistant. The hiring team can see your answers as you give them, including any you change. Change any answer you like, then press Send to tell them you are finished.</p>');
+    expect(html).toContain("<p>If you do not press Send, we send your answers as they are a few days after your last answer or change. If we have not reminded you yet, we email you once before then.</p>");
+    expect(html).not.toContain("Nothing is sent until you do");
     for (const q of packet.screening.questions) expect(html).toContain(`<p class="answer-q">${packet.screening.questions.indexOf(q) + 1}. ${q.question}</p>`);
     const skipped = html.slice(html.indexOf('<li class="answer" id="a-hard_moment">'));
     expect(skipped.slice(0, skipped.indexOf("</li>"))).toContain('<span class="pill">Skipped</span></div><p class="pre">You skipped this question.</p><a href="/c/screen/');

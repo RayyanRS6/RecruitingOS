@@ -13,27 +13,44 @@ function focusablesIn(root: HTMLElement): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => el.getClientRects().length > 0);
 }
 
-/** Tab and Shift+Tab go round the panel's controls; focus that slipped out of the panel comes back in. */
+/**
+ * Where Tab goes in an open panel's round: the panel's own controls (`own` of them), then the controls on a toast showing
+ * now (`toasts`: an Undo after Send, which sits outside every panel), then back to the first. `at` is the focused
+ * control's place in that round, -1 when focus is elsewhere; `onPanel` when it is on the panel itself. Returns the place
+ * to move focus to, or null to leave the move to the browser (between two of the panel's own controls).
+ */
+export function tabStep(input: { own: number; toasts: number; at: number; onPanel: boolean; back: boolean }): number | null {
+  const { own, at, back } = input;
+  const n = own + input.toasts;
+  if (n === 0) return null;
+  if (at < 0) return back ? n - 1 : input.onPanel && own > 0 ? null : 0;
+  if (back) return at === 0 ? n - 1 : at >= own ? at - 1 : null;
+  return at === n - 1 ? 0 : at >= own - 1 ? at + 1 : null;
+}
+
+/**
+ * Tab and Shift+Tab go round the panel's controls and any on the toast showing now (its Undo can be reached from the
+ * keyboard while a panel is open); focus that slipped out of the panel comes back in.
+ */
 function keepTabInside(e: globalThis.KeyboardEvent, root: HTMLElement) {
-  const items = focusablesIn(root);
+  const own = focusablesIn(root);
+  const region = document.querySelector<HTMLElement>(".toast-region");
+  const toasts = region ? focusablesIn(region) : [];
+  const round = [...own, ...toasts];
   const active = document.activeElement;
-  if (items.length === 0) {
+  if (round.length === 0) {
     e.preventDefault();
     root.focus();
     return;
   }
-  const first = items[0];
-  const last = items[items.length - 1];
-  if (!root.contains(active)) {
-    e.preventDefault();
-    (e.shiftKey ? last : first).focus();
-  } else if (e.shiftKey && (active === first || active === root)) {
-    e.preventDefault();
-    last.focus();
-  } else if (!e.shiftKey && active === last) {
-    e.preventDefault();
-    first.focus();
-  }
+  const onPanel = active === root;
+  const at = active instanceof HTMLElement ? round.indexOf(active) : -1;
+  // focus inside the panel on something not in the round (a disabled control's wrapper): the browser moves on from it
+  if (at < 0 && !onPanel && root.contains(active)) return;
+  const to = tabStep({ own: own.length, toasts: toasts.length, at, onPanel, back: e.shiftKey });
+  if (to === null) return;
+  e.preventDefault();
+  round[to].focus();
 }
 
 /**

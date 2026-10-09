@@ -2,7 +2,7 @@
 
 **ITS AI Recruiting Department, Founding Partner Program. Release 1.**
 
-Draft of 30 September 2026 (checked again against the product the same day), for review by ITS before it is given to a customer. This guide is for the account owner: the person who creates the workspace, invites the team, and is responsible for the settings. Admins can do everything in this guide except make someone an owner, and can use it too. If you also run hires yourself, read the hiring manager guide as well.
+Draft of 30 September 2026, brought up to date with the product on 9 October 2026, for review by ITS before it is given to a customer. This guide is for the account owner: the person who creates the workspace, invites the team, and is responsible for the settings. Admins can do everything in this guide except make someone an owner, and can use it too. If you also run hires yourself, read the hiring manager guide as well.
 
 Screen names and button labels in **bold** are the ones you will see in the product.
 
@@ -35,13 +35,13 @@ To change these details later, and to add more, use the **Company** card in **Se
 
 ## 3. The screens at a glance
 
-At the top of the left rail is your company, with your role in it and a cog that opens **Setup**. Below it, for owners, admins and hiring managers, is **Start a hire**: it opens the new-role conversation on Today (or the draft you already started). Nothing is saved until you send your first message. Pressing **N** on any page does the same, unless you are typing in a box or have changed something on that page (so nothing you were working on is lost); you can turn that key off in **Setup**, under **Keyboard shortcut**.
+At the top of the left rail is your company, with your role in it and a cog that opens **Setup**. Below it, for owners, admins and hiring managers, is **Start a hire**: it opens the job builder, a page of its own where a new role is drafted with the assistant (or the draft you already started). Nothing is saved until you send your first message. Pressing **N** on any page does the same, unless you are typing in a box or have changed something on that page (so nothing you were working on is lost); you can turn that key off in **Setup**, under **Keyboard shortcut**.
 
 The rail then has five entries:
 
-- **Today**: the daily brief and the conversation with the assistant. This is where a new role starts.
+- **Today**: the daily brief, and the **Who are you hiring?** box that hands your first words to the job builder.
 - **Roles**: every role, its status and its pipeline. Up to eight roles you are working on are listed under it: a green dot and the number of applicants for an open role, a grey dot for a paused role, a draft or one waiting for approval. **All roles** shows the rest. For an interviewer, this list and the **Roles** page show only the roles they interview for, without applicant counts.
-- **Talent**: the candidates for a role, grouped by what needs you.
+- **Talent**: the candidates for a role, on a stage strip (New, Longlist, Shortlist, Interviewing, On hold, Offer, Hired, Not moving forward) with each one's match score, and a pool board that sorts them for you to review. The hiring manager guide covers it.
 - **Interviews**: every interview in motion or done, and each interviewer's load.
 - **Setup**: your company, your team, recruiter access, your sessions, availability, email alerts, connected services, what the assistant may do on its own, and the audit history.
 
@@ -61,7 +61,7 @@ People who have not signed in yet are listed under **Invited, not yet in**, with
 | **Admin** | A second person who runs the account with you | Everything the owner can: company settings, team, roles, postings, candidates, pay, rules, recruiter access, outcomes, the audit history | Make someone an owner or change an owner's role |
 | **Hiring manager** | The person who runs a hire | Start a role in the conversation, edit and approve the packet, see candidates and pay, invite to a screen, hold, approve interviews, record the decision after an interview, decline, write to candidates, record outcomes and close a role, bring in a recruiter, see the timeline and the report | Change the team, change what the assistant may do, end a recruiter's access, pause a role, change postings, stop accepting applications |
 | **Interviewer** | Anyone who meets candidates but does not decide | See the roles they interview for and their own interviews, with a short brief on each candidate they interview; say whether an interview took place; set their own availability | See pay, the candidate list or other candidates; act on candidates; see the report |
-| **HR** | Someone who keeps records and manages the team | See roles, candidates and pay; invite to a screen, hold; write to candidates; record outcomes; say whether an interview they sat on took place; bring in a recruiter; invite, change and remove team members | Approve a role; edit a packet; decline a candidate; approve an interview or decide after one |
+| **HR** | Someone who keeps records and manages the team | See roles, candidates and pay; invite to a screen, hold; write to candidates; record an offer made, a hire and other outcomes, and close a role; keep team notes; say whether an interview they sat on took place; bring in a recruiter; invite, change and remove team members | Approve a role; edit a packet; decline a candidate or send a decision or closing message; approve an interview or decide after one |
 
 **Changing a role.** Pick the new role from the list next to the person and press **Change role**. They are signed out everywhere and get the new role when they sign in again.
 
@@ -144,7 +144,15 @@ Only owners and admins can change these settings, and only after a recent sign-i
 - **Stuck**: a role where nothing has moved for a while, with a suggested action and **Have a recruiter review**.
 - **Recruiter**: a request you sent, shown as "A recruiter will pick this up" or "A recruiter is on it", with **See the request**.
 - **Getting started**: for a new company, the setup steps each person can do (company details, team, interview hours, the first role, job-board access, the AI rules), each with a line on why it matters, ticked as they are done; **Hide these steps** hides them for you only. While ITS has not yet confirmed your company the card says so, with how many emails to candidates are waiting, and nobody can hide that part.
+- **Ready to sort**: an open role with two or more people the pool board can sort, with a link to **Review and apply**.
+- **Draft**: a draft of your own still in progress.
+- **Closing date**: a role that stops taking applications tonight or tomorrow night, or has just stopped, with **Extend by two weeks**, **Choose another date** and, for people who may close a role, **Close the role**.
+- **Live today**: a job that went public today, with **Share the job**.
+- **New hire**: "Keep your backups warm" until a new hire's start date, naming the people still in the running.
+- **Your interviews**: for an interviewer, an interview to say took place or not.
 - **Nothing waiting**: nothing needs you. A new company with no role yet sees **Start a hire** here.
+
+**Needs you** also covers, for people who may decline candidates, those whose decision has not been sent to them yet, with **Review and send** (anyone whose message already waits for approval is on the approver's card instead), as well as a hold that has ended and an offer with no answer recorded after five days. **Stuck** also names whoever has waited longest on a role, with **Decide**, **Hold until a date** and **Send a note**; nothing is sent from the card.
 
 A role packet waiting for approval appears as a **Decision** only for the people who can approve it: not for the person who started the role (unless they are the only owner), and only for the named decision maker or an owner when the packet names one.
 
@@ -205,7 +213,7 @@ Before you send, the panel says what the recruiter will see, the time they will 
 
 **What the recruiter can see.** Before accepting, only your company name, the role title, the kind of request, its urgency, the skill it needs and the time remaining. After accepting, what the request names: one candidate and the role they applied for, one role and its candidates, or all of your hiring when you chose that. Access lasts at most 14 days and ends a day after they mark it resolved. Every page they open is recorded in your **Access history** under **ITS recruiter access** in Setup, and you are told as soon as a recruiter starts.
 
-**When your plan's roles are used up.** Your plan includes a number of roles. A role uses one of them when it is created (when someone asks for approval of a draft), and closing or filling a role does not give it back. Once they are all used, drafting a new role says so before anything is typed, lists the roles that used them, and offers **Talk to ITS about more roles**. It opens the request form filled in, so you see what it shares before you send it. A talk about your plan does not use one of its recruiter requests.
+**When your plan's roles are used up.** Your plan includes a number of roles at a time. A role uses one of them from when it is created (when someone asks for approval of a draft) while it is waiting for approval, sent back for changes, open or paused. Closing a role, filled or not, gives its place back straight away. Once they are all in use, drafting a new role says so before anything is typed, lists the roles using them (each opens its role, where you can close one you no longer need), and offers **Talk to ITS about more roles**. It opens the request form filled in, so you see what it shares before you send it. A talk about your plan does not use one of its recruiter requests.
 
 **Recruiter requests and your plan.** Your plan includes a number of recruiter requests. Only the requests your own team makes count; going over never holds a request up, and ITS talks with you about the extra.
 

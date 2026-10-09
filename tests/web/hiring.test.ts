@@ -56,17 +56,40 @@ describe("the hire sheet (plan H1)", () => {
     expect(hireToast({ name: "Maria Reyes", startDate: "2026-11-02" })).toEqual({ title: "Maria Reyes is hired.", detail: "Starting Monday, November 2. Recorded with your name; nothing was sent to anyone." });
   });
 
+  // a fixed "now" before the start date, so these do not change meaning once November 2 has passed
+  const before = new Date(2026, 9, 9, 12);
+
   it("then offers the two ways on: close the role now and tell them, or keep the backups warm until the start", () => {
-    const v = hireFollowUpView(hire, "Maria");
+    const v = hireFollowUpView(hire, "Maria", before);
     expect(v.startLine).toBe("Maria starts on Monday, November 2.");
     expect(v.backupsLine).toBe("2 other people are still in the running:");
     expect(v.people.map((p) => p.name)).toEqual(["Luis Ortega", "Ana Holt"]);
     expect(v.mayClose).toBe(true);
+    expect(v.started).toBe(false);
     expect(v.closeWords).toMatch(/you see the closing message before it goes/);
     expect(v.keepWarmWords).toMatch(/^Keep the role open and them all in mind until Maria starts on Monday, November 2\. Nobody is told anything/);
-    const closed = hireFollowUpView({ ...hire, closeRole: null, backups: { count: 0, people: [] } }, "Maria");
+    const closed = hireFollowUpView({ ...hire, closeRole: null, backups: { count: 0, people: [] } }, "Maria", before);
     expect(closed).toMatchObject({ mayClose: false, closeWords: null, keepWarmWords: null, backupsLine: null });
-    expect(keepWarmToast("Maria", "2026-11-02")).toEqual({ title: "The role stays open.", detail: "Nobody was told anything. Today reminds you about your backups until Maria starts on Monday, November 2." });
+    expect(keepWarmToast("Maria", "2026-11-02", before)).toEqual({ title: "The role stays open.", detail: "Nobody was told anything. Today reminds you about your backups until Maria starts on Monday, November 2." });
+  });
+
+  it("keeps the Today promise on the start day itself, the last day Today's card shows", () => {
+    const onTheDay = new Date(2026, 10, 2, 17);
+    expect(hireFollowUpView(hire, "Maria", onTheDay)).toMatchObject({ started: false, startLine: "Maria starts on Monday, November 2." });
+    expect(hireFollowUpView(hire, "Maria", onTheDay).keepWarmWords).toMatch(/Today reminds you about your backups until then/);
+    expect(keepWarmToast("Maria", "2026-11-02", onTheDay).detail).toMatch(/Today reminds you about your backups until Maria starts/);
+  });
+
+  it("with a start date already past (a hire recorded late), promises no Today reminder that would never come", () => {
+    const after = new Date(2026, 10, 3, 9);
+    const v = hireFollowUpView(hire, "Maria", after);
+    expect(v.started).toBe(true);
+    expect(v.startLine).toBe("Maria started on Monday, November 2.");
+    // leaving it open is still offered, so the sheet always has a way out, but plainly
+    expect(v.keepWarmWords).toBe("Leave the role open for now. Nobody is told anything. Maria has already started, so Today will not remind you about the others; close the role from its page when you are ready.");
+    expect(v.keepWarmWords).not.toMatch(/Today reminds/);
+    expect(hireFollowUpView({ ...hire, backups: { count: 1, people: hire.backups.people.slice(0, 1) } }, "Maria", after).keepWarmWords).toMatch(/Today will not remind you about them;/);
+    expect(keepWarmToast("Maria", "2026-11-02", after)).toEqual({ title: "The role stays open.", detail: "Nobody was told anything. Close the role from its page when you are ready." });
   });
 });
 

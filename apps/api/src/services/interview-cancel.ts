@@ -13,6 +13,8 @@ type Mover = Parameters<typeof transition>[1]["by"];
  * - "known": the candidate, whenever they knew about it: a booked time, or times they were offered to pick from. The
  *   Cancel button, a team member's removal, the candidate's own news (they withdrew), and a private decision (founder
  *   decision B6): the note carries no reason, and the decision message a person sends later leaves this interview out.
+ *   For a private decision this departs from plan-adjustments §4 (one message, when told), pending the founder's answer
+ *   and counsel register item 23(c); see exit-cleanup.ts.
  * - "none": nothing here; the link shows a friendly page. Used when the caller sends the decision message in the same
  *   transaction and that message names the cancelled interview, so the candidate gets one message, not two.
  */

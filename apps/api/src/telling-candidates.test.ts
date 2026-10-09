@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, desc, eq, isNull, like } from "drizzle-orm";
-import type { ApplicationStage, ClosingMessagePreview, ClosingMessageResult, DecisionMessagePreview } from "@ros/contracts";
-import { ADVERSE_DECISION_LINE, anonymizeCandidate, correctOutcome, entitlements } from "@ros/core";
-import { detectStuckRoles, queueDecisionMessage, runInterventionLadder, runUntoldSafetyNet, sendStillReviewingNotes } from "@ros/agents";
-import { aiRuns, applications, approvalRequests, candidates, communications, dataRequests, entitlements as entitlementRows, events, hiringOutcomes, notifications, policies, randomToken, recruiterEscalations, roles, screens, takeovers, users, withTenant, workflowRuns } from "@ros/db";
+import { and, desc, eq, inArray, isNull, like } from "drizzle-orm";
+import type { ApplicationStage, ClosingMessagePreview, ClosingMessageResult, DecisionMessagePreview, RolePacket } from "@ros/contracts";
+import { ADVERSE_DECISION_LINE, anonymizeCandidate, correctOutcome, entitlements, grantStaffAccess } from "@ros/core";
+import { TURN_CAP_CLOSE_MESSAGE, detectStuckRoles, modelTurnCap, queueDecisionMessage, runInterventionLadder, runUntoldSafetyNet, sendStillReviewingNotes } from "@ros/agents";
+import { aiRuns, applications, approvalRequests, candidates, communications, dataRequests, entitlements as entitlementRows, events, hiringOutcomes, notifications, policies, randomToken, recruiterEscalations, roles, screens, takeovers, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -93,8 +93,11 @@ describe("telling candidates", () => {
       expect(preview.wordings.map((w) => w.id)).toEqual(["v1", "v2", "v3", "after_interview", "position_filled"]);
       expect(preview.wordings.find((w) => w.suggested)?.id).toBe("position_filled");
       expect(preview.text).toContain("The position has now been filled");
-      // the link lands on the "Don't keep me for future roles" choice
-      expect(preview.text).toMatch(/You can also choose this on your status page: http.*\/c\/status\/[^\s]+#future-roles/);
+      // the link lands on the "Don't keep me for future roles" choice; the team sees it as a placeholder, never the real
+      // link, which never expires and lets whoever holds it act as the candidate
+      expect(preview.text).toContain("You can also choose this on your status page: ");
+      expect(preview.text).toContain("/c/status/[their status link]#future-roles");
+      expect(preview.text).not.toContain((await application(id)).statusToken);
       const standard = (await (await json(owner, "POST", `/api/v1/applications/${id}/decision-message/preview`, { wording: "v1" })).json()) as DecisionMessagePreview;
       expect(standard.text).toContain("decided not to move forward at this time");
       const chosen = (await (await json(owner, "POST", `/api/v1/applications/${id}/decision-message/preview`, { wording: "position_filled", personalLine: "Thank you for the care you put into your application." })).json()) as DecisionMessagePreview;
@@ -133,6 +136,15 @@ describe("telling candidates", () => {
       await pass(31_000);
       expect((await decisionRows(id))[0].status).toBe("sent");
       expect((await application(id)).toldState).toBe("sent");
+      // the email carries Ben's real status link; what the team is shown of it hides that link and the reply address
+      const ben = await application(id);
+      expect(row.bodyText).toContain(`/c/status/${ben.statusToken}#future-roles`);
+      const detail = await (await json(owner, "GET", `/api/v1/applications/${id}`)).text();
+      expect(detail).not.toContain(ben.statusToken);
+      if (ben.replyToken) expect(detail).not.toContain(ben.replyToken);
+      const shown = (JSON.parse(detail) as { communications: Array<{ id: string; bodyText: string }> }).communications.find((m) => m.id === row.id)!;
+      expect(shown.bodyText).toContain("/c/status/[link]#future-roles");
+      expect(shown).not.toHaveProperty("replyTo");
       // an eligibility decline: one wording only
       const elig = await seed("Cai", { stage: "ineligible" });
       expect((await act(owner, elig, { action: "reject", reason: "eligibility", note: "Confirmed." })).status).toBe(200);
@@ -180,10 +192,12 @@ describe("telling candidates", () => {
       const [req] = await container.db.select().from(approvalRequests).where(eq(approvalRequests.id, r.approvalRequestId));
       expect(req.proposal).toMatchObject({ wording: "v3", personalLine: { text: "Thank you for your time.", senderName: "Dana Whitfield" } });
       // the approver reads which wording and the line on Today
-      const brief = (await (await json(owner, "GET", "/api/v1/brief")).json()) as { cards: Array<{ approvalRequestId?: string; body: string }> };
+      const brief = (await (await json(owner, "GET", "/api/v1/brief")).json()) as { cards: Array<{ approvalRequestId?: string; roleId?: string; title: string; body: string }> };
       const card = brief.cards.find((c) => c.approvalRequestId === r.approvalRequestId)!;
       expect(card.body).toContain('with the approved "Shorter" message');
       expect(card.body).toContain('They added a personal line: "Thank you for your time."');
+      // her message waits on the approver's card, so the "not told yet" card leaves her out (its Review and send could not send it)
+      expect(brief.cards.some((c) => c.roleId === roleId && /not been told your decision yet/.test(c.title) && c.body.includes("Dee Reyes"))).toBe(false);
       expect(await (await json(owner, "POST", `/api/v1/approvals/${r.approvalRequestId}/decide`, { decision: "approve" })).json()).toMatchObject({ dispositionSent: true, candidateNotice: "queued" });
       await container.drain();
       const [row] = await decisionRows(id);
@@ -334,8 +348,19 @@ describe("telling candidates", () => {
       const eve = await seed("Eve");
       await decline(eve);
       await age(eve, 12);
+      type Talent = { applications: Array<{ id: string; toldState: string | null }>; counts: { notTold: number } };
+      const talent = async (q = "") => (await (await json(owner, "GET", `/api/v1/roles/${roleId}/applications?counts=1${q}`)).json()) as Talent;
+      const before = await talent();
+      expect(before.applications.find((a) => a.id === eve)?.toldState).toBe("not_told");
       await anonymize(eve);
       expect((await application(eve)).toldState).toBe("not_told");
+      // the Talent list leaves them out of "Not told yet": no told state on the row, one fewer in the count, not in the
+      // filtered list (polish list)
+      const after = await talent();
+      expect(after.applications.find((a) => a.id === eve)?.toldState).toBeNull();
+      expect(after.counts.notTold).toBe(before.counts.notTold - 1);
+      expect(after.counts.notTold).toBe(after.applications.filter((a) => a.toldState === "not_told").length);
+      expect((await talent("&told=not_told")).applications.some((a) => a.id === eve)).toBe(false);
       expect((await safetyNet()).some((x) => x.applicationId === eve)).toBe(false);
       expect(await decisionRows(eve)).toHaveLength(0);
       expect(await container.db.select().from(events).where(and(eq(events.type, "application.untold_fallback"), eq(events.subjectId, eve)))).toHaveLength(0);
@@ -439,8 +464,10 @@ describe("telling candidates", () => {
       expect((await errorOf(await json(owner, "POST", `/api/v1/roles/${role}/closing-message`, { confirm: true }))).code).toBe("waiting_approval");
       expect((await errorOf(await act(owner, ivo, { action: "send_decision" }))).code).toBe("waiting_approval");
       expect(((await (await json(owner, "GET", `/api/v1/roles/${role}/closing-message`)).json()) as ClosingMessagePreview).waitingApprovalId).toBe(approvalRequestId);
-      const brief = (await (await json(owner, "GET", "/api/v1/brief")).json()) as { cards: Array<{ approvalRequestId?: string; title: string }> };
+      const brief = (await (await json(owner, "GET", "/api/v1/brief")).json()) as { cards: Array<{ approvalRequestId?: string; roleId?: string; title: string }> };
       expect(brief.cards.find((c) => c.approvalRequestId === approvalRequestId)?.title).toMatch(/^Send the closing message to 2 people/);
+      // everyone on it waits for that one approval: no "not told yet" card about the same people
+      expect(brief.cards.some((c) => c.roleId === role && /not been told your decision yet/.test(c.title))).toBe(false);
       const decided = (await (await json(owner, "POST", `/api/v1/approvals/${approvalRequestId}/decide`, { decision: "approve" })).json()) as { closingMessage: { queued: number } };
       expect(decided.closingMessage.queued).toBe(2);
       await container.drain();
@@ -492,6 +519,30 @@ describe("telling candidates", () => {
       expect((await errorOf(await json(owner, "GET", `/api/v1/roles/${roleId}/closing-message`))).code).toBe("role_not_closed");
       expect((await json(hr, "POST", `/api/v1/roles/${role}/closing-message`, { confirm: true })).status).toBe(403);
       expect((await json(owner, "POST", `/api/v1/roles/${role}/closing-message`, {})).status).toBe(400);
+    });
+
+    it("an ITS recruiter given one candidate sees nobody else the closed role left in the pool; a grant for the whole role does", async () => {
+      const role = await openRole();
+      const olu = await seed("Olu", { role });
+      await seed("Pam", { role });
+      expect((await json(owner, "POST", `/api/v1/roles/${role}/outcome`, { outcome: "no_hire", confirm: true })).status).toBe(200);
+      const underGrant = async (email: string, scope: { roleId: string; applicationId?: string }) => {
+        const cookie = await signInStaff(app, container, email, "its_recruiter", "Sky Recruiter");
+        const [u] = await container.db.select().from(users).where(eq(users.email, email));
+        await withPlatform(container.db, (tx) => grantStaffAccess(tx, { userId: u.id, userName: "Sky Recruiter", companyId, kind: "escalation", scope, purpose: "test: a request about this role", grantedBy: { kind: "system", id: "test" }, expiresAt: new Date(Date.now() + 24 * HOUR) }));
+        expect((await json(cookie, "POST", "/api/v1/auth/switch", { companyId })).status).toBe(200);
+        return cookie;
+      };
+      const oneCandidate = await underGrant("sky@its.telling.test", { roleId: role, applicationId: olu });
+      const refused = await json(oneCandidate, "GET", `/api/v1/roles/${role}/closing-message`);
+      expect(refused.status).toBe(403);
+      const error = await errorOf(refused);
+      expect(error.code).toBe("staff_scope");
+      expect(error.message).not.toContain("Pam");
+      const wholeRole = await underGrant("tor@its.telling.test", { roleId: role });
+      const seen = await json(wholeRole, "GET", `/api/v1/roles/${role}/closing-message`);
+      expect(seen.status, await seen.clone().text()).toBe(200);
+      expect(((await seen.json()) as ClosingMessagePreview).count).toBe(2);
     });
 
     it("'no hire' and a move to the talent pool keep them in the pool unless they opted out, and answer with the message a Send would write", async () => {
@@ -577,6 +628,46 @@ describe("telling candidates", () => {
     });
   });
 
+  describe("a \"no thanks\" reply before the candidate knows the decision (B6)", () => {
+    const inbound = (payload: Record<string, unknown>) => app.request("/webhooks/postmark/inbound", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+    beforeAll(() => { container.integrations.env.emailInConfigured = true; container.integrations.env.intakeDomain = "intake.telling.test"; });
+    afterAll(() => { container.integrations.env.emailInConfigured = false; });
+    const person = async (id: string) => (await container.db.select().from(candidates).where(eq(candidates.id, (await application(id)).candidateId)))[0];
+    const noThanks = async (id: string, first: string, messageId: string) => {
+      const a = await application(id);
+      const r = await inbound({ From: `${first.toLowerCase()}@telling.test`, To: `reply-${a.replyToken}@intake.telling.test`, Subject: "Re: Next step", TextBody: "No thanks", MessageID: messageId });
+      expect(r.status).toBe(200);
+      return (await r.json()) as { talentPoolOptOut?: boolean };
+    };
+    const optedOutOf = async (id: string) => {
+      const cand = await person(id);
+      expect(cand.preferences.talentPoolOptOut).toBeUndefined();
+      expect(await container.db.select().from(events).where(and(eq(events.type, "consent.revoked"), eq(events.subjectId, cand.id)))).toHaveLength(0);
+      expect(await container.db.select().from(communications).where(and(eq(communications.applicationId, id), eq(communications.templateKey, "talent_pool_opt_out")))).toHaveLength(0);
+    };
+
+    it("a private decision they were never told: \"no thanks\" turns down a step, goes to the team as it is, and opts nobody out", async () => {
+      const wes = await seed("Wes");
+      await decline(wes);
+      expect(await noThanks(wes, "Wes", "wes-1")).toMatchObject({ talentPoolOptOut: false });
+      await container.drain();
+      await optedOutOf(wes);
+      expect((await told("message.received")).some((n) => n.title === "Wes Reyes wrote back" && n.body.includes("This may mean they do not want to go ahead with this step"))).toBe(true);
+    });
+
+    it("a decision message taken back with Undo made no offer: \"no thanks\" afterwards opts nobody out", async () => {
+      const xan = await seed("Xan");
+      await decline(xan);
+      const sent = (await (await act(owner, xan, { action: "send_decision" })).json()) as { communicationId: string };
+      expect((await json(owner, "POST", `/api/v1/applications/${xan}/messages/${sent.communicationId}/undo`, {})).status).toBe(200);
+      await pass(31_000);
+      expect((await decisionRows(xan)).map((x) => x.status)).toEqual(["cancelled"]);
+      expect(await noThanks(xan, "Xan", "xan-1")).toMatchObject({ talentPoolOptOut: false });
+      await container.drain();
+      await optedOutOf(xan);
+    });
+  });
+
   describe("asking for a person in the conversation (plan G8)", () => {
     it("emails the candidate when a person will contact them", async () => {
       const id = await seed("Quinn", { stage: "screen_invited" });
@@ -589,6 +680,28 @@ describe("telling candidates", () => {
       expect(row.status).toBe("sent");
       expect(row.bodyText).toMatch(/A person working with the hiring team will contact you (within four business hours|on the next business day)/);
       expect(row.disclosureIncluded).toBe(true);
+    });
+
+    it("an invited conversation that reaches its cap on model calls closes with what was said, without calling the model again", async () => {
+      const id = await seed("Yara", { stage: "screen_invited" });
+      const token = randomToken(24);
+      await withTenant(container.db, companyId, (tx) => tx.insert(screens).values({ companyId, applicationId: id, channel: "web", status: "invited", token, invitedAt: new Date().toISOString() }));
+      const packet = ((await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: RolePacket } }).currentPacket.packet;
+      const cap = modelTurnCap(packet);
+      const chat = { messageToCandidate: "The hiring team can tell you more about that.", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: "company", sentiment: "fine", done: false, humanRequested: false };
+      for (let i = 0; i < cap + 1; i++) container.fake!.scriptNext("screen.turn", chat);
+      for (let i = 0; i < cap + 1; i++) {
+        const r = await app.request(`/c/screen/${token}`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ message: "Is there parking near the office?" }).toString() });
+        expect(r.status).toBeLessThan(400);
+      }
+      await container.drain();
+      const [scr] = await container.db.select().from(screens).where(eq(screens.token, token));
+      expect(scr.status).toBe("completed");
+      expect(scr.transcript.filter((t) => t.role === "assistant" && t.aiRunId)).toHaveLength(cap);
+      expect(scr.transcript.at(-1)).toMatchObject({ role: "assistant", content: TURN_CAP_CLOSE_MESSAGE });
+      const [capped] = await container.db.select().from(events).where(and(eq(events.type, "screen.turn_cap_reached"), eq(events.subjectId, scr.id)));
+      expect(capped.payload).toMatchObject({ ending: "closed", cap, modelTurns: cap });
+      container.fake!.clearScripts();
     });
   });
 
@@ -633,6 +746,34 @@ describe("telling candidates", () => {
       expect(requested.payload).toMatchObject({ invitationLine: { aiHelped: true } });
       expect(JSON.stringify(requested.payload)).not.toContain("We enjoyed");
     });
+
+    it("a kept line the person then changed still says the assistant helped, even when the page leaves the flag out", async () => {
+      const id = await seed("Ria");
+      const s = (await (await json(owner, "POST", `/api/v1/applications/${id}/messages/suggest`, { purpose: "update" })).json()) as { line: string; suggestionRunId: string };
+      // one word changed and a sentence added: still mostly the assistant's words
+      const edited = `${s.line.replace(/\.$/, "")}, truly. More news soon.`;
+      const sent = (await (await json(owner, "POST", `/api/v1/applications/${id}/messages`, { text: edited, suggestionRunId: s.suggestionRunId })).json()) as { communicationId: string };
+      const [row] = await container.db.select().from(communications).where(eq(communications.id, sent.communicationId));
+      expect(row).toMatchObject({ disclosureIncluded: true, aiRunId: s.suggestionRunId });
+      expect(row.bodyText).toMatch(/with help from an AI assistant/);
+      // a run that is not one of the assistant's suggestions does not count: the person's own words, under their name
+      const own = (await (await json(owner, "POST", `/api/v1/applications/${id}/messages`, { text: "Just checking in about next week.", suggestionRunId: "00000000-0000-4000-8000-000000000000" })).json()) as { communicationId: string };
+      const [ownRow] = await container.db.select().from(communications).where(eq(communications.id, own.communicationId));
+      expect(ownRow.aiRunId).toBeNull();
+      expect(ownRow.bodyText).not.toMatch(/AI assistant/);
+      // the invitation's line: changed after it was kept, sent without the flag, still credited to the assistant
+      const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { interviews: { plan: Array<{ key: string }> } } } };
+      const roundKey = role.currentPacket.packet.interviews.plan[0].key;
+      const invite = (await (await json(owner, "POST", `/api/v1/applications/${id}/messages/suggest`, { purpose: "interview_invite", roundKey })).json()) as { line: string; suggestionRunId: string };
+      const ok = await json(owner, "POST", `/api/v1/applications/${id}/interviews`, { roundKey, interviewerUserIds: [ownerId], invitationLine: { text: "We look forward to meeting you next week.", suggestionRunId: invite.suggestionRunId } });
+      expect(ok.status, await ok.clone().text()).toBe(201);
+      const interviewId = ((await ok.json()) as { id: string }).id;
+      const [run] = (await container.db.select().from(workflowRuns).where(eq(workflowRuns.workflowKey, "schedule_interview"))).filter((r) => r.subject.id === interviewId);
+      expect(run.state).toMatchObject({ invitationNote: { text: "We look forward to meeting you next week.", aiHelped: true } });
+      const [requested] = await container.db.select().from(events).where(and(eq(events.type, "interview.requested"), eq(events.subjectId, interviewId)));
+      expect(requested.payload).toMatchObject({ invitationLine: { aiHelped: true, suggestionRunId: invite.suggestionRunId } });
+      await pass(31_000);
+    });
   });
 
   describe("courtesy notes and the watchers (plan G10)", () => {
@@ -640,10 +781,17 @@ describe("telling candidates", () => {
       const long = new Date(Date.now() - 31 * DAY).toISOString();
       const sam = await seed("Sam", { createdAt: long });
       const recent = await seed("Sue");
+      // waits that crossed the 30 days long ago (applied before the note existed, or before it was turned on): never noted
+      // months after the fact, all at once; a week of missed daily runs is made up for, no more
+      const backlog = await seed("Wren", { createdAt: new Date(Date.now() - 90 * DAY).toISOString() });
+      const pastCatchUp = await seed("Xavi", { createdAt: new Date(Date.now() - 38 * DAY).toISOString() });
       const notes = () => withTenant(container.db, companyId, (tx) => sendStillReviewingNotes(tx, { integrations: container.integrations, statusBaseUrl: container.env.JOBS_BASE_URL, now: new Date(), actor: { kind: "system", id: "still_reviewing" } }, companyId));
       const noted = await notes();
       expect(noted).toContain(sam);
       expect(noted).not.toContain(recent);
+      expect(noted).not.toContain(backlog);
+      expect(noted).not.toContain(pastCatchUp);
+      expect(await container.db.select().from(communications).where(and(inArray(communications.applicationId, [backlog, pastCatchUp]), eq(communications.templateKey, "still_reviewing")))).toHaveLength(0);
       const [row] = await container.db.select().from(communications).where(and(eq(communications.applicationId, sam), eq(communications.templateKey, "still_reviewing")));
       expect(row.bodyText).toMatch(/no decision has been made yet/);
       expect(row.bodyText).toMatch(/\/c\/status\//);

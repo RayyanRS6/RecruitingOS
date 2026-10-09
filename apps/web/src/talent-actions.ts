@@ -1,5 +1,6 @@
 import { OWNER_STAGE_LABEL, type MarkKind, type OwnerStage } from "@ros/contracts";
 import type { ActionResult, CandidateNotice, DecisionMessagesResponse, DeclineMessagePolicy, StageMove } from "./api/client";
+import { safetyNetPromise } from "./telling";
 
 /**
  * What the Talent page and the candidate panel say after a choice, word for word from what the API reports (plan 0.5;
@@ -98,6 +99,8 @@ export function actionToast(action: string, r: Pick<ActionResult, "candidateNoti
       return { title: "Recorded that you told them yourself.", detail: "Nothing more will be sent." };
     case "cancel_screen":
       return { title: "Screen invitation stopped.", detail: r.next ?? (r.candidateNotice ? noticeText(r.candidateNotice) : "Their link no longer works.") };
+    case "undo_decision":
+      return { title: r.ownerStage ? `Decision taken back: back in ${OWNER_STAGE_LABEL[r.ownerStage]}.` : "Decision taken back.", detail: "They were never told, and nothing will be sent." };
     default:
       return { title: "Saved." };
   }
@@ -247,14 +250,24 @@ export function interviewCancelToast(r: { candidateTold?: boolean; interviewersT
   return { title: "Interview cancelled.", detail: `${r.candidateTold ? "The candidate was sent a cancellation." : "The candidate had no time booked or offered, so nothing was sent to them."}${r.interviewersTold ? " The interviewers were told." : ""}` };
 }
 
+/** Who may tell candidates a decision (application.reject), for someone who may not: HR closes roles but does not tell. */
+export const CLOSING_SENDERS = "An owner, admin, hiring manager or recruiter";
+
 /**
  * The toast after closing a role (POST /roles/:id/outcome): who moved, privately, and the interviews it called off. A
  * candidate who had a booked time or times to pick from was sent a short note at once saying only that the interview is
- * off (`interviewOffNotes`); the decision stays private until someone sends the one closing message (Q30).
+ * off (`interviewOffNotes`); the decision stays private until someone sends the one closing message (Q30), or the
+ * safety net acts after five working days (Q27). `closingMessage.policy`, when the answer carries it, says which way the
+ * safety net goes. `mayTell` is false for someone who may close a role but not tell candidates a decision (HR): they are
+ * told who sends the message instead of being asked to send it.
  */
-export function closeRoleToast(r: { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number }, title = "Role closed as filled."): ToastParts {
+export function closeRoleToast(r: { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; closingMessage?: { policy: DeclineMessagePolicy } | null }, title = "Role closed as filled.", mayTell = true): ToastParts {
   const moved = Math.max(0, (r.movedToTalentPool ?? 0) - (r.heldEmailsAddedToTalentPool ?? 0));
-  const who = moved ? `${moved === 1 ? "The one person" : `The ${moved} people`} still in the process moved to your talent pool, privately: nobody is told until you send the closing message.` : "Nobody else was still in the process.";
+  const policy = r.closingMessage?.policy ?? null;
+  const tell = !mayTell ? `${CLOSING_SENDERS} sends them the closing message; it waits on their Today.`
+    : policy === "not_sent" ? `Under your settings no message is sent: tell each of them yourself, then record it on their page. ${safetyNetPromise(policy)}`
+    : `Send the closing message when you are ready. ${safetyNetPromise(policy, "the closing message")}`;
+  const who = moved ? `${moved === 1 ? "The one person" : `The ${moved} people`} still in the process moved to your talent pool, privately: nobody is told yet. ${tell}` : "Nobody else was still in the process.";
   return { title, detail: `${who}${closedInterviewsText(r.interviewsCancelled ?? 0, r.interviewOffNotes ?? 0)}` };
 }
 
@@ -282,13 +295,13 @@ export function panelStepFrom(value: string | null | undefined): PanelStep | nul
 }
 
 /** How a choice on the stage button is carried out on the page: at once (a private mark), by opening a step, or not at all. */
-export type StageIntent = { kind: "none" } | { kind: "action"; body: { action: "set_mark"; mark: MarkKind } | { action: "clear_mark" } } | { kind: "step"; step: PanelStep };
+export type StageIntent = { kind: "none" } | { kind: "action"; body: { action: "set_mark"; mark: MarkKind } | { action: "clear_mark" } | { action: "undo_decision" } } | { kind: "step"; step: PanelStep };
 
 /**
  * The stage button's choice turned into what the page does (plan adjustments §2): Longlist and Shortlist set the mark in
  * one click; the step under a mark takes it off; On hold asks for the date it ends; Interviewing opens the interview
  * approval; Offer opens the record-only "Offer made" (plan H2); Hired opens the hire sheet (H1); Not moving forward opens
- * the private decline.
+ * the private decline. For a decision nobody told, the step it was made from takes it back (plan G1).
  */
 export function stageIntent(move: StageMove): StageIntent {
   if (!move.allowed || move.current) return { kind: "none" };
@@ -306,6 +319,8 @@ export function stageIntent(move: StageMove): StageIntent {
       return { kind: "step", step: "hire" };
     case "decline":
       return { kind: "step", step: "decline" };
+    case "undo_decision":
+      return { kind: "action", body: { action: "undo_decision" } };
     default:
       return { kind: "none" };
   }

@@ -10,6 +10,7 @@ import { cancelInterviewInTx } from "../services/interview-cancel";
 import { exitCleanup } from "../services/exit-cleanup";
 import { interviewBriefFor } from "../services/interviewer-view";
 import { hireFollowUp } from "../services/hire-sheet";
+import { suggestionRunOf } from "../services/messages";
 import { settleOutsideOffer, tellRecruiterAboutOutcome } from "../services/offers";
 import { staffScopeOf } from "../services/staff-scope";
 
@@ -247,6 +248,8 @@ applicationInterviewRoutes.post("/:id/interviews", requireTenant, async (c) => {
     const [app] = await tx.select().from(applications).where(and(eq(applications.id, c.req.param("id")), eq(applications.companyId, t.companyId))).limit(1);
     if (!app) throw new HttpError(404, "not_found", "Application not found.");
     if (!INTERVIEW_FROM.includes(app.stage)) throw new HttpError(409, "interview_not_schedulable", `A candidate at "${STAGE_LABEL[app.stage]}" cannot be moved to an interview from here.`);
+    // A line that came from the assistant's suggestion says so even if it was changed or the page left the flag out (Q28).
+    if (invitationNote && !invitationNote.aiHelped && (await suggestionRunOf(tx, body.invitationLine?.suggestionRunId))) invitationNote = { ...invitationNote, aiHelped: true };
     const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
     const round = pv?.packet.interviews.plan.find((r) => r.key === body.roundKey);
     if (!round) throw new HttpError(400, "round_unknown", "That round is not in the approved interview plan.");

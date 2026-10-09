@@ -13,12 +13,13 @@ export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "quie
 /**
  * A button. Primary is near-black, secondary is outlined, ghost has no box, danger is for the few actions that cannot be
  * taken back ("quiet" and "destructive" are the earlier names for ghost and danger). `kbd` shows a keyboard hint and
- * announces it as the shortcut.
+ * announces it as the shortcut. `ariaPressed` makes it a toggle a screen reader hears as pressed or not, for a choice
+ * shown only by its fill (left out, the button is a plain button).
  */
-export function Button(props: { children: ReactNode; variant?: ButtonVariant; size?: "sm" | "md"; onClick?: () => void; type?: "button" | "submit"; disabled?: boolean; loading?: boolean; title?: string; icon?: IconName; iconEnd?: IconName; kbd?: string; ariaLabel?: string; block?: boolean }) {
+export function Button(props: { children: ReactNode; variant?: ButtonVariant; size?: "sm" | "md"; onClick?: () => void; type?: "button" | "submit"; disabled?: boolean; loading?: boolean; title?: string; icon?: IconName; iconEnd?: IconName; kbd?: string; ariaLabel?: string; ariaPressed?: boolean; block?: boolean }) {
   const { variant = "secondary", size = "md" } = props;
   return (
-    <button type={props.type ?? "button"} className={cx("btn", variant, size === "sm" && "sm", props.block && "block")} onClick={props.onClick} disabled={props.disabled || props.loading} title={props.title} aria-label={props.ariaLabel} aria-busy={props.loading} aria-keyshortcuts={props.kbd}>
+    <button type={props.type ?? "button"} className={cx("btn", variant, size === "sm" && "sm", props.block && "block")} onClick={props.onClick} disabled={props.disabled || props.loading} title={props.title} aria-label={props.ariaLabel} aria-pressed={props.ariaPressed} aria-busy={props.loading} aria-keyshortcuts={props.kbd}>
       {props.loading ? (
         <>
           <span className="spinner" aria-hidden="true" />
@@ -298,7 +299,7 @@ export function Table(props: { head: string[]; children: ReactNode; label?: stri
     <section className="table-wrap" tabIndex={0} aria-label={props.label ?? `Table: ${props.head.filter(Boolean).join(", ")}`}>
       <table className="table">
         <thead>
-          <tr>{props.head.map((h, i) => <th key={`${i}-${h}`}>{h || <span className="sr-only">Actions</span>}</th>)}</tr>
+          <tr>{props.head.map((h, i) => <th key={`${i}-${h}`} scope="col">{h || <span className="sr-only">Actions</span>}</th>)}</tr>
         </thead>
         <tbody>{props.children}</tbody>
       </table>
@@ -309,7 +310,7 @@ export function Table(props: { head: string[]; children: ReactNode; label?: stri
 export { Icon, ICON_NAMES, type IconName } from "./icons";
 // The match score's breakdown (Wave F): bars per requirement, no hooks.
 export { barFigures, barTone, ScoreBar, type ScoreBarItem, ScoreBars } from "./score-bars";
-export { cx, initials, normalizeToast, OWNER_STAGES, type OwnerStage, ownerStage, SCORE_BANDS, type ScoreBand, scoreBand, scoreLabel, type StageChoice, stageMenuItems, type StepState, TOAST_ACTION_MAX_MS, TOAST_EVENT, type ToastAction, type ToastMessage, type ToastTone, type Tone, toastDuration, toastPayload } from "./helpers";
+export { cx, initials, normalizeToast, OWNER_STAGES, type OwnerStage, ownerStage, SCORE_BANDS, type ScoreBand, scoreBand, scoreLabel, type StageChoice, stageMenuItems, type StepState, TOAST_ACTION_MAX_MS, TOAST_EVENT, type ToastAction, type ToastMessage, type ToastTone, type Tone, toastArrives, toastDuration, toastPayload } from "./helpers";
 
 // The pieces below listen to the keyboard or keep state, which needs React hooks, so each lives in its own client
 // module: the rest of this file stays usable from server components.

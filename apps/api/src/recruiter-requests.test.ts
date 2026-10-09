@@ -210,9 +210,9 @@ describe("what a recruiter request covers, and saying so", () => {
     expect(err.code).toBe("limit_reached");
     expect(err.message).not.toMatch(/upgrade/i);
     expect(err.message).toMatch(/talk to ITS/i);
-    // the real rule: closing a role gives no place back, so the message never suggests it
-    expect(err.message).toMatch(/closing a role does not give it back/);
-    expect(err.message).not.toMatch(/Close a role/);
+    // the rule (polish list): a role uses a place until it closes, so the message says closing one frees it
+    expect(err.message).toMatch(/closing a role gives its place back/);
+    expect(err.message).toMatch(/Close a role you no longer need, or talk to ITS/);
     const [action] = err.details.actions;
     expect(action).toMatchObject({ label: "Talk to ITS about more roles", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company" } });
     // pressing it is an ordinary request about all of the company's hiring

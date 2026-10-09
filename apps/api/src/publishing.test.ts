@@ -472,6 +472,13 @@ describe("publishing: boards, ITS posting tasks, live edits, the legal check, th
     expect(card.title).toContain("stopped taking applications");
     expect(card.actions.map((a) => a.label)).toEqual(["Extend by two weeks", "Choose another date", "Close the role"]);
     expect(card.actions[0]).toMatchObject({ method: "POST", path: `/api/v1/roles/${roleC}/closing-date` });
+    expect(card.body).toContain("close the role when you are ready");
+    // a recruiter manages the date but may not close a role (outcome.record): no "Close the role", and the card says who can
+    const recruiterMember = await signInAs(container, app, { companyId, role: "recruiter", email: "rory@publish.test" });
+    const theirs = (await brief(recruiterMember)).find((c) => c.kind === "closing_date" && c.roleId === roleC)!;
+    expect(theirs.actions.map((a) => a.label)).toEqual(["Extend by two weeks", "Choose another date"]);
+    expect(theirs.body).not.toContain("close the role when you are ready");
+    expect(theirs.body).toContain("Closing the role is up to the company's owner, an admin, the hiring manager or HR.");
     // the plain switch cannot reopen past the date: the date would stop them again and show a past date
     expect((await errorOf(await post(owner, `/api/v1/roles/${roleC}/applications/accepting`, { accepting: true }))).code).toBe("closing_date_passed");
     // the card's button posts its body as it is (Today adds a question field, which is ignored)

@@ -340,6 +340,7 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
         outcome_corrected: "An ITS administrator corrected the recorded outcome",
         move_to_talent_pool: "Moved to the talent pool",
         cancel_screen: "Stopped the screen invitation",
+        undo_decision: "Took back the decision before they were told; nothing was sent",
       };
       return { ...base, what: words[action] ?? `Decision: ${action.replace(/[._]/g, " ")}`, ...(note ? { why: note } : {}) };
     }
@@ -385,10 +386,14 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
       return null; // the answer itself is on the Screen tab
     case "screen.recruiter_notes_added":
       return { ...base, what: "Added notes from a call with the candidate", why: "Kept as the recruiter's notes, never as the candidate's own words." };
+    case "screen.turn_cap_reached":
+      return { ...base, what: "The screening conversation reached its length limit", who: "The system", why: p.ending === "review" ? "They were taken to check their answers, where they can answer any question still open, and send them." : "It closed with what they had said so far, and the scorecard reads only that." };
     case "screen.repeat_confirmed":
       return { ...base, what: p.intent === "person" ? "Confirmed by email: asked for a person after applying again" : p.intent === "outage" ? "Confirmed by email: a person to finish the conversation the assistant could not, after applying again" : p.added ? "Confirmed by email: answers given when applying again were added" : "Confirmed by email after applying again; nothing was added" };
     case "screen.human_requested":
       return { ...base, what: "Asked to talk to a person instead of the assistant" };
+    case "screen.allowance_lapsed":
+      return { ...base, what: "Never got the screening conversation: the plan's conversations stayed used up", who: "The system", ...(p.promised ? { told: "They were told it is not going ahead and that nothing else is needed." } : {}) };
     case "screen.expired":
       if (p.oneVisit) return { ...base, what: "Did not start the screening conversation that goes with the application", who: "The system", why: "Reminded once; the application came to the team without it, and they were told nothing else is needed." };
       return { ...base, what: "The screening invitation lapsed without an answer" };

@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { RolePacket } from "@ros/contracts";
-import { REVIEW_MESSAGE } from "@ros/agents";
+import { REVIEW_MESSAGE, TURN_CAP_REVIEW_MESSAGE, modelTurnCap } from "@ros/agents";
 import { applications, assessments, communications, companies, events, recruiterEscalations, rolePackets, roles, screens, unconfirmedScreens, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { createApplication } from "./services/applications";
-import { DETACHED_EMAILS_PER_DAY, confirmRepeat, conversationLater, conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, conversationWithdraw, findConversation, repeatConfirmationView, startApplyConversation, type ApplyVisitOutcome, type ConversationRef } from "./services/apply-conversation";
+import { CONVERSATIONS_PER_APPLICATION_PER_DAY, DETACHED_EMAILS_PER_DAY, confirmRepeat, conversationLater, conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, conversationWithdraw, findConversation, repeatConfirmationView, startApplyConversation, type ApplyVisitOutcome, type ConversationRef } from "./services/apply-conversation";
 import { useOneVisitApplyFlow } from "./test-helpers";
 
 /**
@@ -124,6 +124,11 @@ describe("a repeat submission's conversation is detached until the address owner
     expect((await reload(rosaId)).stage).toBe("screen_invited");
     const token = confirmLink("rosa@repeat.test");
     expect(token).toBeTruthy();
+    // the team sees that email on her page without its link's token (only its hash is kept), nor her status link's
+    const detail = await (await json("GET", `/api/v1/applications/${rosaId}`)).text();
+    expect(detail).not.toContain(token!);
+    expect(detail).toContain("/c/confirm-answers/[link]");
+    expect(detail).not.toContain((await reload(rosaId)).statusToken);
     const [row] = await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.token, ref.token));
     expect(row).toMatchObject({ status: "completed", confirmation: "sent", intent: "answers" });
     expect(row.confirmTokenHash).not.toBe(token); // only the hash is kept
@@ -185,10 +190,10 @@ describe("a repeat submission's conversation is detached until the address owner
 
   it("'Do this later' in a repeat submission's copy is worded for what it is, and repeat submissions cannot fill someone's mailbox: three such emails a day at most, the page the same", async () => {
     await applyNow({ first: "Max", email: "max@repeat.test" });
-    for (let i = 0; i < 5; i++) {
-      const again = await applyNow({ first: "Someone", email: "max@repeat.test" });
-      expect(await conversationLater(container, await refOf(again.outcome))).toBe(true);
-    }
+    const refs: ConversationRef[] = [];
+    for (let i = 0; i < 3; i++) refs.push(await refOf((await applyNow({ first: "Someone", email: "max@repeat.test" })).outcome));
+    // five presses of "Do this later" across the three copies (the last one pressed three times)
+    for (const ref of [...refs, refs[2], refs[2]]) expect(await conversationLater(container, ref)).toBe(true);
     await container.drain();
     const later = mail().filter((m) => m.to === "max@repeat.test" && /^Please check: an application for/.test(m.subject));
     expect(later).toHaveLength(DETACHED_EMAILS_PER_DAY);
@@ -196,8 +201,7 @@ describe("a repeat submission's conversation is detached until the address owner
     expect(later[0].text).toContain("Nothing is added to your application unless you confirm it at the end.");
     expect(later[0].text).not.toMatch(/Here is the link to the short screening conversation/);
     // the copy's own "please confirm" falls under the same cap: recorded, and nothing sent
-    const again = await applyNow({ first: "Someone", email: "max@repeat.test" });
-    const ref = await refOf(again.outcome);
+    const ref = refs[2];
     await conversationStart(container, ref);
     await answerAll(ref);
     expect(await conversationSubmit(container, ref)).toBe(true);
@@ -251,5 +255,44 @@ describe("a repeat submission's conversation is detached until the address owner
     const kai = (await container.db.select().from(applications)).filter((a) => a.id === row.applicationId)[0];
     const comms = await container.db.select().from(communications).where(eq(communications.applicationId, kai.id));
     expect(comms.every((c) => c.direction === "outbound")).toBe(true);
+  });
+
+  it("one application opens a few conversations a day, its own and repeat submissions' together; past that a repeat gets the receipt, after as many submissions whether or not the address applied before", async () => {
+    const first = await applyNow({ first: "Noa", email: "noa@repeat.test" });
+    expect(first.outcome.kind).toBe("conversation");
+    const copies = () => container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.applicationId, first.applicationId));
+    for (let i = 1; i < CONVERSATIONS_PER_APPLICATION_PER_DAY; i++) expect((await applyNow({ first: "Someone", email: "noa@repeat.test" })).outcome.kind).toBe("conversation");
+    expect(await copies()).toHaveLength(CONVERSATIONS_PER_APPLICATION_PER_DAY - 1);
+    // the same receipt as when the month's conversations are used up; no copy, no link, nothing for the model
+    expect((await applyNow({ first: "Someone", email: "noa@repeat.test" })).outcome).toEqual({ kind: "receipt", reason: "conversation_by_email" });
+    expect(await copies()).toHaveLength(CONVERSATIONS_PER_APPLICATION_PER_DAY - 1);
+    // more than a day on, an address that applied before opens as many as a new one did
+    const dayAgo = new Date(Date.now() - 25 * 3600_000).toISOString();
+    await container.db.update(unconfirmedScreens).set({ createdAt: dayAgo }).where(eq(unconfirmedScreens.applicationId, first.applicationId));
+    await container.db.update(screens).set({ createdAt: dayAgo }).where(eq(screens.applicationId, first.applicationId));
+    for (let i = 0; i < CONVERSATIONS_PER_APPLICATION_PER_DAY; i++) expect((await applyNow({ first: "Someone", email: "noa@repeat.test" })).outcome.kind).toBe("conversation");
+    expect((await applyNow({ first: "Someone", email: "noa@repeat.test" })).outcome).toEqual({ kind: "receipt", reason: "conversation_by_email" });
+  });
+
+  it("a repeat submission's conversation has the same cap on model calls as a first one, and ends the same way: at checking the answers", async () => {
+    await applyNow({ first: "Ezra", email: "ezra@repeat.test" });
+    const again = await applyNow({ first: "Ezra", email: "ezra@repeat.test" });
+    const ref = await refOf(again.outcome);
+    expect(ref.kind).toBe("detached");
+    await conversationStart(container, ref);
+    const packet = ((await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: RolePacket } }).currentPacket.packet;
+    const cap = modelTurnCap(packet);
+    const chat = { messageToCandidate: "The hiring team can tell you more about that.", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: "company", sentiment: "fine", done: false, humanRequested: false };
+    for (let i = 0; i < cap + 2; i++) container.fake!.scriptNext("screen.turn", chat);
+    const turns = () => container.fake!.calls.filter((c) => c.task === "screen.turn").length;
+    const before = turns();
+    for (let i = 0; i < cap + 2; i++) await conversationTurn(container, ref, { message: "Is there parking near the office?" });
+    expect(turns()).toBe(before + cap);
+    const view = (await conversationView(container.db, ref))!;
+    expect(view.phase).toBe("review");
+    expect(view.transcript.some((t) => t.role === "assistant" && t.content === TURN_CAP_REVIEW_MESSAGE)).toBe(true);
+    const [capped] = await container.db.select().from(events).where(and(eq(events.type, "screen.turn_cap_reached"), eq(events.subjectId, ref.id)));
+    expect(capped.payload).toMatchObject({ detached: true, ending: "review", cap });
+    container.fake!.clearScripts();
   });
 });

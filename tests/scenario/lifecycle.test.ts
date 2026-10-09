@@ -61,7 +61,7 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     // AI did: one intake.turn run, logged with cost and prompt version
     const runs = await container.db.select().from(aiRuns).where(eq(aiRuns.task, "intake.turn"));
     expect(runs).toHaveLength(1);
-    expect(runs[0].promptVersion).toBe(2);
+    expect(runs[0].promptVersion).toBe(3);
     expect(runs[0].status).toBe("ok");
     // events
     expect(await eventsOf("intake.started")).toHaveLength(1);

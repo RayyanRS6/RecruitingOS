@@ -21,7 +21,29 @@ describe("BLS OEWS benchmark", () => {
     expect(calls[0].url).toBe("https://api.bls.gov/publicAPI/v1/timeseries/data/");
     expect(calls[0].body.seriesid).toEqual(["OEUM003108000000029129207", "OEUM003108000000029129208", "OEUM003108000000029129209"]);
     expect(calls[0].body.registrationkey).toBeUndefined();
-    expect(result).toEqual({ metro: "irvine area", basis: "hourly", p25: 48.1, p50: 55.3, p75: 62.9, source: "BLS OEWS 2025, SOC 291292, area 0031080", asOf: "2025" });
+    // the place as people write it (polish list: "austin area" read oddly in the assistant's message)
+    expect(result).toEqual({ metro: "Irvine area", basis: "hourly", p25: 48.1, p50: 55.3, p75: 62.9, source: "BLS OEWS 2025, SOC 291292, area 0031080", asOf: "2025" });
+    expect(BlsOewsAdapter.areaFor("Salt Lake City, UT").label).toBe("Salt Lake");
+    expect(BlsOewsAdapter.areaFor("Austin, TX")).toEqual({ code: "0012420", label: "Austin" });
+  });
+
+  it("social media and content jobs are read as marketing specialists (13-1161), marked approximate, never as marketing managers (polish list)", async () => {
+    // every name the playbook's social and content role answers to, and the role's own title
+    for (const title of ["Social Media Manager", "Social and Content Marketing Manager", "Content Marketing Manager", "Social Media Marketing Manager", "Community Manager", "Brand Content Manager", "Content Manager"]) {
+      expect(BlsOewsAdapter.occupationFor(title), title).toEqual({ soc: "131161", approximate: "Market research analysts and marketing specialists" });
+    }
+    // a marketing manager is still a marketing manager, and a marketing coordinator a close match for specialists
+    expect(BlsOewsAdapter.occupationFor("Marketing Manager")).toEqual({ soc: "112021" });
+    expect(BlsOewsAdapter.occupationFor("Marketing Coordinator")).toEqual({ soc: "131161" });
+    const calls: Call[] = [];
+    const adapter = new BlsOewsAdapter(undefined, fetchAnswering((c) => ({ status: 200, body: series(c.body.seriesid, [58000, 71000, 90000]) }), calls));
+    const social = await adapter.benchmark({ title: "Social Media Manager", locationText: "Austin, TX", basis: "salary" });
+    expect(calls[0].body.seriesid[0]).toBe("OEUM001242000000013116112");
+    expect(social).toEqual({ metro: "Austin area", basis: "salary", p25: 58000, p50: 71000, p75: 90000, source: "BLS OEWS 2025, SOC 131161, area 0012420", asOf: "2025", approximate: true, occupation: "Market research analysts and marketing specialists" });
+    // the playbook's own code wins over the title (written either way); whether it is close is the caller's to say
+    const byCode = await adapter.benchmark({ title: "Social and Content Marketing Manager", socCode: "13-1161", locationText: "Austin, TX", basis: "salary" });
+    expect(calls[1].body.seriesid[0]).toBe("OEUM001242000000013116112");
+    expect(byCode?.approximate).toBeUndefined();
   });
 
   it("an unknown location falls back to the national series; a key selects v2 and annual figures use the annual data types", async () => {
@@ -42,6 +64,8 @@ describe("BLS OEWS benchmark", () => {
     const calls: Call[] = [];
     expect(await new BlsOewsAdapter(undefined, fetchAnswering(() => ({ status: 200, body: {} }), calls)).benchmark({ title: "Chief Astronaut" })).toBeNull();
     expect(calls).toHaveLength(0); // no occupation code, no call
+    expect(await new BlsOewsAdapter(undefined, fetchAnswering(() => ({ status: 200, body: {} }), calls)).benchmark({ title: "Dental Assistant", socCode: "not-a-code" })).toBeNull();
+    expect(calls).toHaveLength(0); // a malformed code is no code
   });
 
   it("names the occupation by the longest match in the title, and reads hourly or annual figures as asked (plan C2)", async () => {

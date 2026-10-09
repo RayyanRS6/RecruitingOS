@@ -84,12 +84,14 @@ describe("the job builder", () => {
   });
 
   it("says when the plan has no room, with the roles holding the places, before anything is typed", () => {
-    const full = { ok: false, limit: 2, used: 2, holding: [{ roleId: "r1", title: "Front Desk Lead", status: "open" }, { roleId: "r2", title: "Hygienist", status: "closed" }], message: "Your plan includes 2 roles, and all are used: Front Desk Lead, Hygienist (closed). A place is used when a role is created, and closing a role does not give it back. Talk to ITS about adding more." };
+    const full = { ok: false, limit: 2, used: 2, holding: [{ roleId: "r1", title: "Front Desk Lead", status: "open" }, { roleId: "r2", title: "Hygienist", status: "paused" }], message: "Your plan includes 2 roles at a time, and all are in use: Front Desk Lead, Hygienist (paused). A role uses a place while it is open, paused or waiting for approval, and closing a role gives its place back. Close a role you no longer need, or talk to ITS about adding more." };
     const html = render(createElement(NewRole), [[["me"], me("owner")], [["intake", "mine"], { sessions: [], room: full }], [["company"], { name: "Bright Dental", vertical: "veterinary", settings: {} }]]);
-    expect(html).toContain("closing a role does not give it back");
+    // closing a role gives its place back (polish list: the count once only went up)
+    expect(html).toContain("closing a role gives its place back");
     expect(html).toContain('href="/roles/r1"');
-    // a closed role that used a place is listed too, and says it is closed
-    expect(html).toMatch(/href="\/roles\/r2"[^>]*>Hygienist<\/a><span class="muted"> \(<!-- -->closed<!-- -->\)<\/span>|href="\/roles\/r2"[^>]*>Hygienist<\/a><span class="muted"> \(closed\)<\/span>/);
+    // each role using a place is a link to it, with its state when it is not simply open
+    expect(html).toMatch(/href="\/roles\/r2"[^>]*>Hygienist<\/a><span class="muted"> \(<!-- -->paused<!-- -->\)<\/span>|href="\/roles\/r2"[^>]*>Hygienist<\/a><span class="muted"> \(paused\)<\/span>/);
+    expect(html).not.toMatch(/Front Desk Lead<\/a><span class="muted">/);
     expect(html).not.toContain("Roles our hiring guide knows");
   });
 

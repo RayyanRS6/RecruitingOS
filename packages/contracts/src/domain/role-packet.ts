@@ -197,6 +197,12 @@ export const PayBenchmark = z.object({
   metro: z.string(),
   asOf: z.string().optional(),
   origin: z.enum(["market", "its_estimate"]),
+  /**
+   * Set when the figures are for a broader group of jobs than this one (no occupation of its own: a social media manager
+   * is read as a marketing specialist): `occupation` names that group, and the pay check calls the figures a rough guide.
+   */
+  approximate: z.boolean().optional(),
+  occupation: z.string().optional(),
 });
 export type PayBenchmark = z.infer<typeof PayBenchmark>;
 

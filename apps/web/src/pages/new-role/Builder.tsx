@@ -6,6 +6,8 @@ import type { IntakeAnswer, IntakeFactsPatch, IntakeSessionView, PacketRevisionP
 import { Alert, Button, EmptyState, ErrorState, Eyebrow, Icon, Menu, Pill, ProgressSteps, Skeleton, SplitView } from "@ros/ui";
 import { api, ApiError, type IntakeApprovalResponse, type IntakeTurnReply, type IntakeTurnResponse, type Me } from "../../api/client";
 import { Link, useNavigate } from "../../nav";
+import { dockFocusDue, focusLost } from "../../focus-after";
+import { scrollBehavior } from "../../motion";
 import { closingDateRequiredFor, readDraftClosingDate, writeDraftClosingDate } from "../../publishing";
 import { activeCompanyOf } from "../../rail";
 import { canManageRole } from "../../roles";
@@ -67,6 +69,8 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
   const [local, setLocal] = useState<LocalLine[]>([]);
   const [text, setText] = useState("");
   const box = useRef<HTMLTextAreaElement | null>(null);
+  /** Set when the cards' answers are sent: the cards they were sent from, so the next dock can take the focus. */
+  const handOff = useRef<{ from: string } | null>(null);
   const [deck, setDeck] = useState<{ key: string; state: CardState; closed: boolean }>({ key: "", state: initialCards(), closed: false });
   const [pane, setPane] = useState<"primary" | "secondary">("primary");
   const [proposal, setProposal] = useState<PacketRevisionProposal | null>(null);
@@ -272,6 +276,17 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
     },
   });
 
+  // After the cards' answers are sent, the Send button that had the focus goes with its card. Whatever replaces it takes
+  // the focus: the next card's question, or the message box when no cards are left (or the same card's question when
+  // the send failed). Only after a send, never on a fresh load, and never when the person has moved focus elsewhere.
+  const dockKey = view ? cardsKey(cardsToShow(view)) : "";
+  useEffect(() => {
+    if (!dockFocusDue(handOff.current, { dockKey, pending: answer.isPending, failed: answer.isError })) return;
+    handOff.current = null;
+    if (!focusLost(document.activeElement, document.body)) return;
+    (document.querySelector<HTMLElement>(".chat-dock .qcard-prompt") ?? box.current)?.focus();
+  }, [dockKey, answer.isPending, answer.isError]);
+
   if (session.isLoading) return <Skeleton lines={6} />;
   if (session.error || !view) {
     if (session.error instanceof ApiError && session.error.status === 404) return <EmptyState icon="roles" title="We could not find that draft" body="It may have been discarded. You can start a new role." action={<Link to={NEW_ROLE_FRESH_HREF} className="btn primary">Start a new role</Link>} />;
@@ -294,10 +309,10 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
   // Once the draft is written, words typed in the box ask for a change to it; before that they go to the conversation.
   const asks = !!hasDraft;
   const submitText = (t: string) => (asks ? revise.mutate(t) : send.mutate(t));
-  const sendCards = () => answer.mutate({ answers: answersPayload(cards, live.state), echo: echoText(cards, live.state) });
+  const sendCards = () => { handOff.current = { from: deckKey }; answer.mutate({ answers: answersPayload(cards, live.state), echo: echoText(cards, live.state) }); };
   const showInDraft = (ids: SectionId[]) => {
     setPane("secondary");
-    window.setTimeout(() => document.getElementById(`draft-${ids[0]}-h`)?.scrollIntoView({ block: "center", behavior: "smooth" }), 50);
+    window.setTimeout(() => document.getElementById(`draft-${ids[0]}-h`)?.scrollIntoView({ block: "center", behavior: scrollBehavior() }), 50);
   };
 
   const above = (

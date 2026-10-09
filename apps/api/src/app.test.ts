@@ -436,9 +436,9 @@ describe("Slice 1 API", () => {
     expect(r.status).toBe(402);
     const err = ((await r.json()) as { error: { code: string; message: string; details: { room: { holding: Array<{ title: string }> } } } }).error;
     expect(err.code).toBe("limit_reached");
-    // the role holding the place is named, and the message says plainly that closing a role would not free it
+    // the role using the place is named, and the message says plainly that closing a role frees its place (polish list)
     expect(err.details.room.holding.map((h) => h.title)).toEqual(["Registered Dental Hygienist"]);
-    expect(err.message).toMatch(/A place is used when a role is created, and closing a role does not give it back/);
+    expect(err.message).toMatch(/A role uses a place while it is open, paused or waiting for approval, and closing a role gives its place back/);
     expect((await container.db.select().from(aiRuns)).length).toBe(runsBefore);
   });
 

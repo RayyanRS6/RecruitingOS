@@ -1,6 +1,6 @@
 import type { DraftRolePacket, EvidenceAssessment, IntakeExtraction, IntakeFacts, IntakeQuestion, IntakeTurn, PacketRevision, ResumeExtraction, ScreenAssessment, ScreenProgress, ScreenTurn } from "@ros/contracts";
 import type { FakeProvider, IntakeContext, StructuredRequest } from "@ros/ai";
-import { normalizeCriterion, screenCriterion } from "@ros/core";
+import { marketPlace, normalizeCriterion, screenCriterion } from "@ros/core";
 import { redactProtected } from "./screening";
 import { FOCUS_INTRO, isFocusKey } from "./screen-focus";
 
@@ -66,6 +66,7 @@ function contextFrom(req: StructuredRequest<unknown>): FakeIntakeContext {
   const locMatch = sys.match(/Locations: ([^.\n]+)\./);
   const benchMatch = sys.match(/Compensation benchmark for ([^(]+) \((hourly|salary)\): p25 ([\d.]+), p50 ([\d.]+), p75 ([\d.]+)\. Source: ([^\n]+)\./);
   const estimate = /This figure is ITS's own estimate/.test(sys);
+  const roughMatch = sys.match(/This figure is an approximate match: it is for a broader group of jobs \(([^)]+)\)/);
   const payMatch = sys.match(/Confirmed pay \(set or confirmed by a person\): (hourly|salary) ([\d.]+) to ([\d.]+)(?:, ceiling ([\d.]+))?\./);
   const ownerMessages = req.messages.filter((m) => m.role === "user").map((m) => m.content);
   const transcript = req.messages.map((m) => m.content).join("\n");
@@ -77,7 +78,7 @@ function contextFrom(req: StructuredRequest<unknown>): FakeIntakeContext {
     playbookRoleTitle: roleMatch?.[1]?.trim() ?? null,
     companyName: companyMatch?.[1]?.trim() ?? "the company",
     vertical: verticalMatch?.[1]?.trim() ?? "general",
-    benchmark: benchMatch ? { metro: benchMatch[1].trim(), basis: benchMatch[2], p25: Number(benchMatch[3]), p50: Number(benchMatch[4]), p75: Number(benchMatch[5]), source: benchMatch[6].trim(), origin: estimate ? "its_estimate" : "market" } : null,
+    benchmark: benchMatch ? { metro: benchMatch[1].trim(), basis: benchMatch[2], p25: Number(benchMatch[3]), p50: Number(benchMatch[4]), p75: Number(benchMatch[5]), source: benchMatch[6].trim(), origin: estimate ? "its_estimate" : "market", ...(roughMatch ? { approximate: true, occupation: roughMatch[1] } : {}) } : null,
     benchmarkGap: /pay basis is not known/.test(sys) ? "basis_unknown" : /No compensation benchmark is available/.test(sys) ? "no_market_figure" : null,
     locationsText: locMatch?.[1]?.trim() ?? "",
     ad: sys.match(/<job_ad>\n([\s\S]*?)\n<\/job_ad>/)?.[1] ?? null,
@@ -124,6 +125,21 @@ function slug(s: string): string {
 
 const money = (n: number) => `$${n.toLocaleString("en-US")}`;
 const per = (basis: string) => (basis === "hourly" ? "an hour" : "a year");
+
+/**
+ * The items of a list line ("Must-haves: ...") not already in the facts. The summary of tapped answers lists each ticked
+ * answer whole, between semicolons, and the server has already put it in the facts: it stays whole, never split into
+ * "Instagram", "TikTok", ... beside it (polish list). Words the owner typed are still read as a list (`split`).
+ */
+function newListItems(text: string, known: string[], split: RegExp): string[] {
+  const has = (s: string, more: string[]) => [...known, ...more].some((m) => normalizeCriterion(m) === normalizeCriterion(s));
+  const added: string[] = [];
+  for (const part of text.split(";").map((s) => s.trim().replace(/\.$/, "")).filter(Boolean)) {
+    if (has(part, added)) continue;
+    for (const piece of part.split(split).map((s) => s.trim().replace(/\.$/, "")).filter(Boolean)) if (!has(piece, added)) added.push(piece);
+  }
+  return added;
+}
 
 /**
  * intake.turn v2: realistic question cards (up to three) the way the model is asked to write them, built from the
@@ -209,11 +225,11 @@ function fakeIntakeTurn(c: FakeIntakeContext): IntakeTurn {
     if (f) facts.whatFailureLooksLike = f[1].trim();
   }
   const mh = last.match(/must[\s-]?haves?\s*[:-]\s*([^\n]+)/i) ?? last.match(/\bmust have\s+(?:an?\s+)?([^.\n]+)/i);
-  if (mh) facts.mustHaves = [...facts.mustHaves, ...mh[1].split(/;|,| and (?:be |have )?/).map((s) => s.trim().replace(/\.$/, "")).filter(Boolean)];
+  if (mh) facts.mustHaves = [...facts.mustHaves, ...newListItems(mh[1], facts.mustHaves, /,| and (?:be |have )?/)];
   const nh = last.match(/nice[\s-]?to[\s-]?haves?\s*[:-]\s*([^\n]+)/i);
-  if (nh) facts.niceToHaves = [...facts.niceToHaves, ...nh[1].split(/;|,/).map((s) => s.trim()).filter(Boolean)];
+  if (nh) facts.niceToHaves = [...facts.niceToHaves, ...newListItems(nh[1], facts.niceToHaves, /,/)];
   const db = last.match(/deal[\s-]?breakers?\s*[:-]\s*([^\n]+)/i);
-  if (db) facts.dealBreakers = [...facts.dealBreakers, ...db[1].split(/;|,/).map((s) => s.trim().replace(/\.$/, "")).filter(Boolean)];
+  if (db) facts.dealBreakers = [...facts.dealBreakers, ...newListItems(db[1], facts.dealBreakers, /,/)];
 
   // Unlawful wording in what the owner just said, and in a pasted ad on the first turn (the ad is data, never instructions).
   const declinedNow: IntakeFacts["declinedCriteria"] = [];
@@ -278,9 +294,15 @@ function fakeIntakeTurn(c: FakeIntakeContext): IntakeTurn {
   if (takenFromAd.length) lines.push(`I took these from your ad: ${takenFromAd.join("; ")}. I'll only ask about what's missing.`);
   if (c.playbookRoleTitle && c.ownerMessages.length === 1) lines.push(`Got it. I'm using our ${c.vertical} playbook for a ${c.playbookRoleTitle}${facts.locationText ? ` in ${facts.locationText}` : ""}.`);
   if (c.benchmark && facts.compensationMin !== undefined && !benchmarkMentioned) {
-    const below = facts.compensationMax !== undefined && facts.compensationMax < c.benchmark.p50;
-    const whose = c.benchmark.origin === "its_estimate" ? `ITS's estimate of the market for ${c.benchmark.metro}` : `the market for ${c.benchmark.metro}`;
-    lines.push(`For reference, ${whose} runs about ${c.benchmark.p25}–${c.benchmark.p75} ${per(c.benchmark.basis)} (midpoint ${c.benchmark.p50}; source: ${c.benchmark.source}).${below ? " Your range is below the midpoint, which may slow the search." : ""}`);
+    // intake.turn v3: money as the pay card writes it, the place with capitals, and a figure for a broader group of jobs
+    // told as a rough guide, with a range below its middle mentioned gently (polish list).
+    const b = c.benchmark;
+    const below = facts.compensationMax !== undefined && facts.compensationMax < b.p50;
+    const where = marketPlace(b.metro);
+    const whose = b.origin === "its_estimate" ? `ITS's estimate of the market for ${where}` : `the market for ${where}`;
+    const rough = b.approximate ? ` There is no government pay figure for this exact job, so this one is for a broader group${b.occupation ? ` (${b.occupation.toLowerCase()})` : ""}: take it as a rough guide.` : "";
+    const belowWords = !below ? "" : b.approximate ? " Your range is below its middle, which is worth knowing but not a worry on its own." : " Your range is below the middle, which may slow the search.";
+    lines.push(`For reference, ${whose} runs about ${money(b.p25)}–${money(b.p75)} ${per(b.basis)} (middle ${money(b.p50)}; source: ${b.source}).${rough}${belowWords}`);
   } else if (c.benchmarkGap === "basis_unknown" && !benchmarkMentioned) lines.push("Is this job paid by the hour or a yearly salary? I'll check market pay once I know.");
   else if (c.benchmarkGap === "no_market_figure" && !benchmarkMentioned) lines.push("I have no market pay figure for this job here, so the pay isn't checked against the market.");
   if (ready) lines.push(`I have enough to write a first draft${missing.length ? `, with assumptions noted for: ${missing.map((m) => m.replace(/_/g, " ")).join(", ")}` : ""}. Say "draft it" or answer anything beside this first.`);
@@ -599,6 +621,13 @@ function theirWords(text: string): string {
   return words ? `${words.charAt(0).toLowerCase()}${words.slice(1)}` : "that";
 }
 
+/** The candidate's own words, verbatim, to quote back: their first sentence, at most twelve words. */
+function quoteOf(text: string): string {
+  const sentence = (text.split(/[.!?;]/)[0] ?? text).trim();
+  const words = sentence.split(/\s+/);
+  return words.length > 12 ? `${words.slice(0, 12).join(" ")}…` : sentence;
+}
+
 /**
  * screen.turn v3 (plan Wave E): a move to the next question is a short acknowledgment only (the code adds the packet's
  * question word for word); a follow-up builds on the candidate's own words, at most two per question; after a follow-up
@@ -652,6 +681,15 @@ function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
       followUpReason = "answer has no example yet";
       return { ...base, messageToCandidate: `You mentioned ${theirWords(trimmed)}. Could you give one example of how that went?`, followUpReason, answerRecorded: null, sentiment: "fine" };
     }
+    // A fuller answer that makes a claim about their work ("I ran the brand's Instagram and grew it a lot") with no
+    // figure and no example yet gets one follow-up that quotes their own words, once in the whole conversation, so a
+    // local run shows what the model does (polish list). Never on anything personal, never on the open questions.
+    const noFollowUpYet = Object.values(s.progress.followUps).every((n) => !n);
+    const claim = ["skills", "behavioral"].includes(currentQ.kind) && complete && trimmed.length >= 40 && /^I\b/.test(trimmed) && !/\d/.test(trimmed) && !/\b(?:for example|for instance|e\.g\.|once|one time)\b/i.test(trimmed) && redactProtected(trimmed) === trimmed;
+    if (claim && noFollowUpYet && !confused && !isFocusKey(currentQ.key)) {
+      followUpReason = "a claim with no example yet";
+      return { ...base, messageToCandidate: `You said "${quoteOf(trimmed)}". Could you give one example of what that looked like, and what came of it?`, followUpReason, answerRecorded: null, sentiment: "fine" };
+    }
     // After a follow-up, the whole answer to the question: their earlier words and the new ones, verbatim and in order.
     const earlier = followUpsSoFar > 0 ? earlierCandidateMessage(user) : null;
     answerRecorded = { questionKey: currentQ.key, answer: redactProtected(earlier && !confused ? `${earlier} ${latest}` : latest), complete };
@@ -662,7 +700,7 @@ function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
   }
   const next = remaining.find((q) => q.key !== current);
   if (!next) {
-    return { ...base, answerRecorded, done: true, messageToCandidate: `Thanks ${s.name}, that is everything I needed. The hiring team at ${s.company} will review and you will hear back within a few days. Reply HUMAN at any time to reach a person.` };
+    return { ...base, answerRecorded, done: true, messageToCandidate: `Thanks ${s.name}, that is everything I needed. People on the hiring team at ${s.company} review your answers and make every decision; you will hear from them either way. Reply HUMAN at any time to reach a person.` };
   }
   // Only the acknowledgment: the code adds the next question in the packet's own words.
   return { ...base, answerRecorded, questionKey: next.key, messageToCandidate: "Thanks." };

@@ -78,7 +78,8 @@ export function PayCard({ card, onSave, saving, error }: { card: IntakePayCard; 
       ) : (
         <p className="small muted">Pay is always shown on the job ad. Set it here, or tell the assistant.</p>
       )}
-      {card.belowMarket ? <Alert tone="caution">{card.summary}</Alert> : null}
+      {/* Below a figure for a broader group of jobs is worth knowing, not a warning (polish list). */}
+      {card.belowMarket ? <Alert tone={card.benchmark?.approximate ? "info" : "caution"}>{card.summary}</Alert> : null}
       {open ? (
         <>
           <PayFields form={form} onChange={(f) => { setForm(f); setProblem(null); }} card={card} idBase="draft-pay" />

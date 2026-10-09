@@ -7,12 +7,13 @@ import { api, ApiError, type ApplicationDetail, type MessagePreview, type SendMe
 import { Link } from "../../nav";
 import { toast } from "../../toast";
 import { AskRecruiter } from "../../components/AskRecruiter";
-import { useUndoToast } from "../../components/use-undo";
+import { InlineUndo } from "../../components/InlineUndo";
+import { useTakeBack, useUndoToast } from "../../components/use-undo";
 import { LOW_CONFIDENCE_LABEL, LOW_CONFIDENCE_TEXT, closerLook, openScreenOf } from "../../evidence";
 import { offerMadeOn, plainDayWords } from "../../hiring";
 import { callNotesState, overviewScreenLine } from "../../screen-view";
 import { holdDay } from "../../talent-actions";
-import { sentWithUndoToast, threadItems, threadWhen, undoMillisLeft } from "../../telling";
+import { sentWithUndoToast, suggestedLineNote, threadItems, threadWhen, undoMillisLeft } from "../../telling";
 import { AssessmentCard, NoAssessmentCard, ScorecardUnavailableCard, ScreenCard } from "./assessment";
 import { CallNotesCard } from "./call-notes";
 import { MatchCard } from "./match";
@@ -301,23 +302,33 @@ type KeptSuggestion = { line: string; runId: string | null };
 export function MessagesTab({ a, roleId, compose, setCompose }: { a: ApplicationDetail; roleId: string; compose: Compose; setCompose: (next: Compose) => void }) {
   const refresh = useRefreshCandidate(a.id, roleId);
   const undoToast = useUndoToast();
+  const takeBack = useTakeBack();
+  // The message just sent, while it waits out its Undo window: Undo is offered here as well as on the toast.
+  const [lastSent, setLastSent] = useState<{ communicationId: string; undoUntil: string } | null>(null);
   const { open, subject, text } = compose;
   const setOpen = (v: boolean) => setCompose({ ...compose, open: v });
   const preview = useQuery({ queryKey: ["message-preview", a.id], queryFn: () => api.get<MessagePreview>(`/api/v1/applications/${a.id}/messages/preview`), enabled: open });
   const [kept, setKept] = useState<KeptSuggestion | null>(null);
-  // The assistant helped only while its line is still in the words that go.
-  const aiHelped = !!kept && text.includes(kept.line);
+  // Once "Use this line" was pressed the assistant helped, however the line was changed afterwards (Q28; product thesis:
+  // every candidate touch is disclosed). It stops only when the person takes the line out or empties the message.
+  const aiHelped = !!kept;
+  const lineStillWhole = !!kept && text.includes(kept.line);
+  const takeOutLine = () => {
+    if (kept && lineStillWhole) setCompose({ ...compose, text: text.replace(kept.line, "").replace(/^\s+/, "") });
+    setKept(null);
+  };
   const suggest = useMutation({
     mutationFn: () => api.post<SuggestedLine>(`/api/v1/applications/${a.id}/messages/suggest`, { purpose: "update" }),
     onError: (e) => toast(e instanceof ApiError ? e.message : "The assistant could not suggest a line just now."),
   });
   const send = useMutation({
-    mutationFn: () => api.post<SendMessageResult>(`/api/v1/applications/${a.id}/messages`, { subject: subject.trim() || undefined, text, ...(aiHelped ? { aiHelped: true, suggestionRunId: kept?.runId ?? undefined } : {}) }),
+    mutationFn: () => api.post<SendMessageResult>(`/api/v1/applications/${a.id}/messages`, { subject: subject.trim() || undefined, text, ...(kept ? { aiHelped: true, suggestionRunId: kept.runId ?? undefined } : {}) }),
     onSuccess: async (r) => {
       if (r.status === "queued") {
         const seconds = Math.round(undoMillisLeft(r.undoUntil) / 1000);
         const t = sentWithUndoToast({ firstName: a.candidate.firstName, seconds, kind: "message" });
         undoToast({ applicationId: a.id, roleId, communicationId: r.communicationId, undoUntil: r.undoUntil, firstName: a.candidate.firstName, kind: "message", title: t.title, detail: t.detail ?? "", plain: { title: `Sent to ${a.candidate.firstName}.`, detail: "It is on its way." } });
+        if (r.communicationId && r.undoUntil && undoMillisLeft(r.undoUntil) > 0) setLastSent({ communicationId: r.communicationId, undoUntil: r.undoUntil });
       } else if (r.status === "held") toast("Saved.", "It goes out as soon as ITS confirms your company.");
       else toast("Saved for approval.", "An owner or admin reads it before it goes out; you will be told.");
       setCompose({ open: false, subject: "", text: "" });
@@ -361,13 +372,14 @@ export function MessagesTab({ a, roleId, compose, setCompose }: { a: Application
         {!open ? (
           <div className="row">
             <Button size="sm" icon="mail" disabled={!a.candidate.email} title={a.candidate.email ? "Your own words, sent under the hiring team's name with yours in the footer" : "No email address on file"} onClick={() => setOpen(true)}>Write to {first}</Button>
+            {lastSent ? <InlineUndo autoFocus undoUntil={lastSent.undoUntil} ariaLabel={`Undo your message to ${first}`} onUndo={async () => { await takeBack({ applicationId: a.id, roleId, communicationId: lastSent.communicationId, firstName: first, kind: "message" }); setLastSent(null); }} /> : null}
             {!a.candidate.email ? <span className="small muted">No email address on file.</span> : null}
           </div>
         ) : (
           <div className="stack" style={{ gap: 8 }}>
             <p className="small muted" style={{ margin: 0 }}>Your own words, sent as {preview.data?.fromName ?? "the hiring team"} to {preview.data?.to ?? a.candidate.email}. {preview.data ? (preview.data.repliesComeBack ? "Replies come back to this panel." : "Replies reach the ITS mailbox, where a person reads them.") : ""}{preview.data?.needsApproval ? " An owner or admin reads your message before it goes out." : ""}{preview.data?.undoSeconds ? ` After Send you have ${preview.data.undoSeconds} seconds to undo it.` : ""}</p>
             <Field label="Subject (optional)" htmlFor="msg-subject"><input id="msg-subject" className="input" value={subject} onChange={(e) => setCompose({ ...compose, subject: e.target.value })} maxLength={200} /></Field>
-            <Field label="Message" htmlFor="msg-text"><textarea id="msg-text" className="input" rows={6} value={text} onChange={(e) => setCompose({ ...compose, text: e.target.value })} maxLength={5000} placeholder={`Hi ${first},`} /></Field>
+            <Field label="Message" htmlFor="msg-text"><textarea id="msg-text" className="input" rows={6} value={text} onChange={(e) => { setCompose({ ...compose, text: e.target.value }); if (!e.target.value.trim()) setKept(null); }} maxLength={5000} placeholder={`Hi ${first},`} /></Field>
             {suggestion?.line && !kept ? (
               <div className="suggested-line">
                 <p className="small" style={{ margin: 0 }}><q>{suggestion.line}</q></p>
@@ -381,7 +393,12 @@ export function MessagesTab({ a, roleId, compose, setCompose }: { a: Application
               {!kept ? <Button size="sm" variant="secondary" icon="sparkle" loading={suggest.isPending} onClick={() => suggest.mutate()} title="The assistant suggests one opening line; if you keep it, the email says the assistant helped">Suggest an opening line</Button> : null}
               <Button size="sm" variant="quiet" onClick={() => setOpen(false)}>Cancel</Button>
             </div>
-            {aiHelped ? <p className="small muted" style={{ margin: 0 }}>You kept a line the AI assistant suggested, so the footer says the assistant helped write it.</p> : null}
+            {aiHelped ? (
+              <div className="row" style={{ gap: 8 }}>
+                <p className="small muted" style={{ margin: 0 }}>{suggestedLineNote(lineStillWhole, "footer")}</p>
+                {lineStillWhole ? <Button size="sm" variant="quiet" onClick={takeOutLine}>Take out the assistant's line</Button> : null}
+              </div>
+            ) : null}
           </div>
         )}
       </Card>

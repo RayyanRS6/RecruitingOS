@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { RolePacket, TapAnswer } from "@ros/contracts";
-import { MOVED_ON_MESSAGE, REVIEW_MESSAGE, answerWithdrawPrompt, conversationOverdue, detectStuckRoles } from "@ros/agents";
-import { grantStaffAccess } from "@ros/core";
+import { MOVED_ON_MESSAGE, REVIEW_MESSAGE, TURN_CAP_REVIEW_MESSAGE, answerWithdrawPrompt, conversationOverdue, detectStuckRoles, modelTurnCap } from "@ros/agents";
+import { entitlements as allowance, grantStaffAccess } from "@ros/core";
 import { adminAlerts, aiRuns, applications, assessments, candidates, companies, entitlements, events, notifications, recruiterEscalations, rolePackets, roles, screens, usageEvents, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
@@ -136,6 +136,9 @@ describe("Wave E: applying and the conversation in one visit", () => {
     const list = (await (await json("GET", `/api/v1/roles/${roleId}/applications?counts=1`)).json()) as { applications: Array<{ id: string; stillApplying: boolean }>; counts: { stillApplying: number } };
     expect(list.applications.find((r) => r.id === applicationId)?.stillApplying).toBe(true);
     expect(list.counts.stillApplying).toBe(1);
+    // nor Today: nobody invited her, so its screening card does not count her as "invited" or "answering now"
+    const today = (await (await json("GET", "/api/v1/brief")).json()) as { cards: Array<{ kind: string; roleId?: string; title: string }> };
+    expect(today.cards.some((c) => c.kind === "screening" && c.roleId === roleId)).toBe(false);
   });
 
   it("E2: a fixed introduction, then Start shows the first question in the packet's own words, with no model call", async () => {
@@ -228,6 +231,9 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect((await notesAbout("Maria")).length).toBeGreaterThan(0);
     const list = (await (await json("GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; stillApplying: boolean }>;
     expect(list.find((r) => r.id === mariaId)?.stillApplying).toBe(false);
+    // Today hears about her now that she has finished
+    const today = (await (await json("GET", "/api/v1/brief")).json()) as { cards: Array<{ kind: string; roleId?: string; title: string }> };
+    expect(today.cards.find((c) => c.kind === "screening" && c.roleId === roleId)?.title).toMatch(/: 1 completed since yesterday$/);
   });
 
   it("E3: 'Send without the conversation' sends the application on to the team, is counted, and reads what was answered as not finished", async () => {
@@ -263,6 +269,14 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect((await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, applicationId)))).toHaveLength(1);
     expect((await container.db.select().from(usageEvents).where(eq(usageEvents.key, "screen_person_requests"))).filter((u) => u.ref.screenId === scr.id)).toMatchObject([{ ref: { choice: "contact_me" } }]);
     expect((await conversationView(container.db, ref))!).toMatchObject({ phase: "closed", status: "human_requested" });
+    // the page keeps the time promised when he asked, however much later it is opened, and says so once it has passed
+    const asked = (await conversationView(container.db, ref))!.personAsked!;
+    expect(asked.overdue).toBe(false);
+    expect(asked.dueWords).toMatch(/^[A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}/);
+    const later = (await conversationView(container.db, ref, new Date(Date.now() + 10 * 24 * HOUR)))!;
+    expect(later.personAsked).toEqual({ dueWords: asked.dueWords, overdue: true });
+    // "Talk to a person" still offers a new request in the words true when it is read
+    expect(later.personExpectation).toMatch(/^(within four business hours|on the next business day)/);
     // the owner does not work recruiter requests; a recruiter does
     const notes = { notes: [{ questionKey: questions[0].key, text: "Called him: license RDH54321 is active in California." }, { text: "Has done perio maintenance for six years; can start in two weeks." }] };
     expect((await json("POST", `/api/v1/applications/${applicationId}/screen/recruiter-notes`, notes)).status).toBe(403);
@@ -281,6 +295,35 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect(result.questionFindings.some((f) => f.evidence?.source === "recruiter_note")).toBe(true);
     // a finished conversation takes no more notes
     expect((await json("POST", `/api/v1/applications/${applicationId}/screen/recruiter-notes`, notes, recruiter)).status).toBe(409);
+  });
+
+  it("a conversation calls the model a limited number of times: messages that never answer a question stop at the cap and go to checking the answers", async () => {
+    const { outcome, applicationId } = await applyNow({ first: "Cora", last: "Lane", email: "cora@onevisit.test" });
+    const ref = await refOf(outcome);
+    await conversationStart(container, ref);
+    // the ask and two follow-ups for each question, and five more for the candidate's own questions
+    const cap = modelTurnCap({ screening: { questions } } as unknown as Pick<RolePacket, "screening">);
+    expect(cap).toBe(3 * questions.length + 5);
+    const chat = { messageToCandidate: "The hiring team can tell you more about that.", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: "company", sentiment: "fine", done: false, humanRequested: false };
+    for (let i = 0; i < cap + 2; i++) container.fake!.scriptNext("screen.turn", chat);
+    const before = await turnsFor();
+    for (let i = 0; i < cap + 2; i++) await conversationTurn(container, ref, { message: "Is there parking near the office?" });
+    expect(await turnsFor()).toBe(before + cap);
+    const view = (await conversationView(container.db, ref))!;
+    expect(view.phase).toBe("review");
+    expect(view.transcript.some((t) => t.role === "assistant" && t.content === TURN_CAP_REVIEW_MESSAGE)).toBe(true);
+    expect(view.review!.every((i) => i.status === "unanswered")).toBe(true);
+    // checking the answers calls nothing: she can still answer what is open and press Send
+    expect(await conversationTurn(container, ref, { message: "One more question" })).toMatchObject({ kind: "reply", review: true });
+    expect(await turnsFor()).toBe(before + cap);
+    expect((await conversationEdit(container, ref, { questionKey: questions[0].key, text: "Yes, my RDH license is active." })).ok).toBe(true);
+    expect(await conversationSubmit(container, ref)).toBe(true);
+    const scr = await screenOf(applicationId);
+    expect(scr.status).toBe("completed");
+    const [capped] = await container.db.select().from(events).where(and(eq(events.type, "screen.turn_cap_reached"), eq(events.subjectId, scr.id)));
+    expect(capped.payload).toMatchObject({ ending: "review", cap, modelTurns: cap, channel: "web" });
+    container.fake!.clearScripts();
+    await container.drain();
   });
 
   it("E5: the assistant failing twice pauses the conversation (no hand-off); the run tries again and emails the candidate once it answers", async () => {
@@ -370,6 +413,27 @@ describe("Wave E: applying and the conversation in one visit", () => {
     await app.request(`/api/v1/admin/customers/${companyId}/apply-flow`, { method: "POST", headers: { "content-type": "application/json", cookie: its, "x-admin-reason": "test" }, body: JSON.stringify({ applyFlow: "one_visit", reason: "Pilot back on for everyone" }) });
     const audits = (await container.db.select().from(events).where(eq(events.type, "role.apply_mode_changed"))).length;
     expect(audits).toBe(2);
+  });
+
+  it("E9: two first answers at the same moment count the conversation once; two conversations counted at once each count, and only one crosses the 80% line", async () => {
+    const { outcome, applicationId } = await applyNow({ first: "Nia", last: "Ford", email: "nia@onevisit.test" });
+    const ref = await refOf(outcome);
+    await conversationStart(container, ref);
+    const scr = await screenOf(applicationId);
+    await Promise.all([answer(ref), answer(ref)]);
+    const counted = (await container.db.select().from(usageEvents).where(eq(usageEvents.key, "text_screens"))).filter((u) => u.ref.screenId === scr.id);
+    expect(counted).toHaveLength(1);
+    // both answers are in the transcript: neither turn wrote over the other's
+    expect((await screenOf(applicationId)).transcript.filter((t) => t.role === "candidate")).toHaveLength(2);
+    // the count is added in the database, and the crossing read from the total it returns
+    const [ent] = await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, "text_screens")));
+    await container.db.update(entitlements).set({ limit: 10, used: 7 }).where(eq(entitlements.id, ent.id));
+    const both = await Promise.all([1, 2].map((n) => withTenant(container.db, companyId, (tx) => allowance.recordScreenStart(tx, companyId, { test: n }))));
+    expect(both.map((c) => c.used).sort()).toEqual([8, 9]);
+    expect(both.filter((c) => c.crossed === "warning")).toHaveLength(1);
+    expect(both.filter((c) => c.crossed === "used_up")).toHaveLength(0);
+    expect((await container.db.select().from(entitlements).where(eq(entitlements.id, ent.id)))[0].used).toBe(9);
+    await container.db.update(entitlements).set({ limit: ent.limit, used: ent.used }).where(eq(entitlements.id, ent.id));
   });
 
   it("Q17: at 80% the owner and ITS are warned; used up, applications still come in and the link goes out by email once it is topped up", async () => {
@@ -495,6 +559,9 @@ describe("Wave E: applying and the conversation in one visit", () => {
     const toTess = () => mail().filter((m) => m.to === "tess@onevisit.test");
     expect(toTess().filter((m) => /are ready to send/.test(m.subject))).toHaveLength(1);
     expect(toTess().find((m) => /are ready to send/.test(m.subject))!.text).toMatch(/If you do nothing, we will send your answers to the hiring team as they are on /);
+    // the team can already see her answers, so the reminder never says they are unsent; only that she has not pressed Send
+    expect(toTess().find((m) => /are ready to send/.test(m.subject))!.text).toContain("but you have not pressed Send yet.");
+    expect(toTess().find((m) => /are ready to send/.test(m.subject))!.text).not.toMatch(/have not been sent/);
     expect(toTess().filter((m) => /Pick up your screening conversation/.test(m.subject))).toHaveLength(0);
     await advance(49 * HOUR);
     const scr = await screenOf(applicationId);
@@ -599,5 +666,23 @@ describe("Wave E: applying and the conversation in one visit", () => {
     // GET /applications/:id names how each conversation was offered (the panel's "Still applying" reads it)
     const detail = (await (await json("GET", `/api/v1/applications/${mariaId}`)).json()) as { screens: Array<{ invitedVia: string | null }> };
     expect(detail.screens[0].invitedVia).toBe("apply");
+  });
+
+  // Last: it moves the clock two months on.
+  it("Q17, G10: still used up after sixty days, the promised link never goes; the candidate is told it is not going ahead, and the team who never got it", async () => {
+    const [ent] = await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, "text_screens")));
+    await container.db.update(entitlements).set({ limit: 10, used: 10 }).where(eq(entitlements.id, ent.id));
+    const late = await applyNow({ first: "Ines", last: "Lowe", email: "ines@onevisit.test" });
+    expect(late.outcome).toEqual({ kind: "receipt", reason: "conversation_by_email" });
+    await advance(61 * 24 * HOUR);
+    const run = (await container.db.select().from(workflowRuns).where(eq(workflowRuns.workflowKey, "screen"))).find((r) => (r.state as { applicationId?: string }).applicationId === late.applicationId)!;
+    expect(run.status).toBe("completed");
+    expect(await container.db.select().from(screens).where(eq(screens.applicationId, late.applicationId))).toHaveLength(0);
+    const toInes = mail().filter((m) => m.to === "ines@onevisit.test");
+    expect(toInes.filter((m) => /That conversation is not going ahead, and you do not need to do anything about it/.test(m.text))).toHaveLength(1);
+    expect(toInes.filter((m) => /screening conversation/i.test(m.subject))).toHaveLength(0);
+    expect((await notesAbout("Ines Lowe")).some((n) => /never got the screening conversation/.test(n.title) && n.action?.href.includes(late.applicationId))).toBe(true);
+    expect((await container.db.select().from(events).where(and(eq(events.type, "screen.allowance_lapsed"), eq(events.subjectId, late.applicationId))))).toMatchObject([{ payload: { promised: true } }]);
+    await container.db.update(entitlements).set({ limit: ent.limit, used: ent.used }).where(eq(entitlements.id, ent.id));
   });
 });

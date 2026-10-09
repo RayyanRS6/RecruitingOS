@@ -328,5 +328,8 @@ async function sendIntervention(q: Queryable, deps: LadderDeps, companyId: strin
   }
   const esc = await createEscalation(q, { companyId, roleId: d.roleId, kind: "stuck_role", question: `${d.title}. ${d.body} The owner has not acted after a brief line, a message, and an offer of help. Please review the role and reach out.`, requestedBy: deps.actor });
   await notify(q, { companyId, kind: "stuck.escalated", title: `A recruiter is reviewing ${d.roleTitle}`, body: "It has been waiting a while, so an ITS recruiter is taking a look and will reach out.", action: { label: "See role", href: `/roles/${d.roleId}` } });
-  await teamMail(q, deps, companyId, { to: deps.itsQueueEmail, subject: `[stuck_role] ${d.title}`, text: `${d.body}\n\nOpen the queue: ${deps.appBaseUrl}/recruiter/queue/${esc.id}`, idempotencyKey: `escalation:${esc.id}`, templateKey: "escalation" });
+  // The ITS queue gets the title (the role, counts and days) and the link, never the body: a body can name candidates or
+  // carry the team's own words, and the queue sees only what the request is about until someone accepts it (correction
+  // 11). The full request stays on the escalation, which opens on acceptance and loses a person's name on deletion.
+  await teamMail(q, deps, companyId, { to: deps.itsQueueEmail, subject: `[stuck_role] ${d.title}`, text: `${d.title}.\n\nThe team has not acted after a note in the app, an email, and an offer of help. Accept it in the queue to open the full request: ${deps.appBaseUrl}/recruiter/queue/${esc.id}`, idempotencyKey: `escalation:${esc.id}`, templateKey: "escalation" });
 }

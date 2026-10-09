@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RolePacket, ScreenAssessment, ScreenProgress, ScreenTurn } from "@ros/contracts";
 import { FakeProvider, screenAssessPrompt, screenTurnPrompt, type ScreenContext } from "@ros/ai";
-import { EMPTY_SCREEN_PROGRESS, WITHDRAW_CONFIRM_KEY, advanceProgress, candidateWordsOf, enforceTurnRules, nextQuestion, recruiterNotesOf, reviewItems, screenCommand, screenIntro, verifyScreenQuotes, withdrawPending } from "./screening";
+import { EMPTY_SCREEN_PROGRESS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, candidateWordsOf, enforceTurnRules, nextQuestion, recruiterNotesOf, reviewItems, screenCommand, screenIntro, verifyScreenQuotes, withdrawPending } from "./screening";
 import { registerFakeHandlers } from "./fake-handlers";
 
 /**
@@ -46,6 +46,17 @@ describe("enforceTurnRules: the follow-up cap", () => {
     expect(t.messageToCandidate).toMatch(/that is everything I needed/);
     expect(t.messageToCandidate).toMatch(/HUMAN/);
     expect(advanceProgress(progress, t).currentQuestionKey).toBeNull();
+  });
+
+  it("every close the code writes says people decide and they will hear either way, never when", () => {
+    const progress = asking("availability", { availability: 2 }, ["experience", "availability"]);
+    const closes = [enforceTurnRules(followUp, packet, progress, { experience: "Six years." }).messageToCandidate, SCREEN_COMPLETE_MESSAGE, TURN_CAP_CLOSE_MESSAGE, `No problem. That is everything I needed. ${SCREEN_NEXT_LINE}`];
+    for (const close of closes) {
+      expect(close).toMatch(/you will hear from them either way/);
+      expect(close).not.toMatch(/few days|within|shortly|soon/);
+      // still short enough for one text message
+      expect(close.length).toBeLessThan(300);
+    }
   });
 
   it("three follow-ups in a row on one question: two are asked, the third moves on", () => {
@@ -237,5 +248,26 @@ describe("the local stand-in for screen.turn v3", () => {
     expect(second.questionKey).toBe("pay");
     expect(second.messageToCandidate).toBe("Thanks.");
     expect(enforceTurnRules(second, packet, after, {}).messageToCandidate).toBe("Thanks. What pay range are you looking for?");
+  });
+
+  it("asks one follow-up that quotes a fuller answer's own words, once in the conversation, so a local run shows it (polish list)", async () => {
+    const asked: ScreenProgress = { ...EMPTY_SCREEN_PROGRESS, askedKeys: ["experience"], currentQuestionKey: "experience" };
+    const said = "I ran the Instagram and TikTok accounts for a local skincare brand and grew both a lot.";
+    const first = await turn(ctx(asked, [{ role: "assistant", content: "Tell me about your most recent work.", at: "t" }, { role: "candidate", content: said, at: "t" }], said));
+    expect(first.followUpReason).toBeTruthy();
+    expect(first.messageToCandidate).toBe("You said \"I ran the Instagram and TikTok accounts for a local skincare brand…\". Could you give one example of what that looked like, and what came of it?");
+    expect(first.answerRecorded).toBeNull();
+    // after it, the whole answer is recorded and the conversation moves on
+    const after: ScreenProgress = { ...asked, followUps: { experience: 1 } };
+    const more = "We ran a weekly creator series and the account went from a few hundred followers to several thousand.";
+    const second = await turn(ctx(after, [{ role: "assistant", content: "Tell me about your most recent work.", at: "t" }, { role: "candidate", content: said, at: "t" }, { role: "assistant", content: first.messageToCandidate, at: "t" }, { role: "candidate", content: more, at: "t" }], more));
+    expect(second.answerRecorded?.answer).toBe(`${said} ${more}`);
+    expect(second.questionKey).toBe("pay");
+    // once in the conversation: a later claim like it moves straight on
+    const later: ScreenProgress = { ...EMPTY_SCREEN_PROGRESS, askedKeys: ["experience"], currentQuestionKey: "experience", followUps: { why: 1 } };
+    expect((await turn(ctx(later, [{ role: "candidate", content: said, at: "t" }], said))).messageToCandidate).toBe("Thanks.");
+    // an answer that already gives a figure or an example moves straight on too
+    const withFigure = "I ran the Instagram for a skincare brand and grew it to 40,000 followers.";
+    expect((await turn(ctx(asked, [{ role: "candidate", content: withFigure, at: "t" }], withFigure))).messageToCandidate).toBe("Thanks.");
   });
 });

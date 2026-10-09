@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { and, count, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome, OwnerGroup, OwnerStage, PoolQuestionQuery, RoleBatchRequest, SendDecisionMessages, SetClosingDate, ApplyModeChange, DecisionMessagePreviewRequest, SendClosingMessage, RecordOfferMade, importanceOf, type ActiveMark, type AssessmentFlagKind, type CandidateNotice, type ClosingMessagePreview, type DecisionMessagePreview, type PoolAnswer } from "@ros/contracts";
-import { ESCALATION_ACCESS_DAYS, PoolQuestionError, activeStaffGrant, addEscalationReply, answerPoolQuestion, createEscalation, poolQuestions, resolveApplyMode } from "@ros/core";
+import { ESCALATION_ACCESS_DAYS, PoolQuestionError, activeStaffGrant, addEscalationReply, answerPoolQuestion, createEscalation, maskCandidateLinks, poolQuestions, resolveApplyMode } from "@ros/core";
 import { withPlatform, type Tx } from "@ros/db";
 import { requireRecruiterOrAdmin } from "../middleware/session";
 import { stillApplyingFor } from "../services/screens";
@@ -20,7 +20,7 @@ import { aiRuns, applicationMarks, applications, approvalRequests, assessments, 
 import { actorOf, applicationScopeGuard, clientIp, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { DOWNLOAD_URL_TTL_SECONDS, safeFilename } from "../uploads";
-import { SCREEN_OPEN_STATUSES, applicationActionState, applicationFactsFrom, declineMessagePolicy, decisionMessagePreview, pendingDecisionMessages, performApplicationAction, sendDecisionMessages, stageMoves } from "../services/application-actions";
+import { SCREEN_OPEN_STATUSES, applicationActionState, applicationFactsFrom, declineMessagePolicy, decisionMessagePreview, pendingDecisionMessages, performApplicationAction, sendDecisionMessages, stageMoves, undoFacts } from "../services/application-actions";
 import { exitCleanup, type ExitCandidateEmail } from "../services/exit-cleanup";
 import { closingMessagePreview, sendClosingMessage } from "../services/closing-messages";
 import { keepInTalentPool } from "../services/talent-pool";
@@ -332,7 +332,8 @@ export type StageStripCounts = { total: number; byOwnerStage: Record<OwnerStage,
  * The role's applicants. Each row carries, beside the evidence view: where the person sits on the stage strip
  * (`ownerStage`, `ownerStageLabel`), their active private mark (`mark`: kind, label, `remindAt`, note, who set it),
  * small `tags` ("Check eligibility", "Hold ended"), `stageChangedAt` and `appliedAt` with `daysInStage`, the told state
- * of a decision (`toldState`, `candidateToldAt`, `decisionMessageWaiting`), and the stage button (`stageMoves`). The match
+ * of a decision (`toldState`: null for someone whose details were deleted, who cannot be told; `candidateToldAt`,
+ * `decisionMessageWaiting`), and the stage button (`stageMoves`). The match
  * score (founder decision B2), worked out on read from the stored findings: `score`, `band`, `bandLabel`, `coverage`,
  * `missingMustHave`, the must-have line (`mustHaves`), where the pool board puts them (`placement`) and its `nextStep`,
  * and `readingVersion` when the reading was made against an earlier version of the role. One query per kind of fact for
@@ -389,7 +390,9 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
         appliedAt: iso(a.createdAt),
         stageChangedAt: iso(a.stageChangedAt),
         daysInStage: Math.max(0, Math.floor((now.getTime() - Date.parse(a.stageChangedAt)) / 86_400_000)),
-        toldState: DECISION_STAGES.includes(a.stage) ? a.toldState : null,
+        // Someone whose details were deleted at their request cannot be told anything: no told state, so the Talent list's
+        // "Not told yet" count and list leave them out, as Today and the daily check do (polish list).
+        toldState: DECISION_STAGES.includes(a.stage) && !cand?.anonymizedAt ? a.toldState : null,
         candidateToldAt: a.candidateToldAt ? iso(a.candidateToldAt) : null,
         decisionMessageWaiting: waitingToTell.has(a.id),
         stillApplying: applying.has(a.id),
@@ -451,6 +454,9 @@ roleRoutes.post("/:id/decision-messages", requireTenant, async (c) => {
 roleRoutes.get("/:id/closing-message", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "application.reject");
+  // It names everyone the role left in the talent pool: an ITS recruiter given one candidate sees nobody else, and may
+  // not send it either (sendClosingMessage).
+  if (t.staff?.scope.applicationId) throw new HttpError(403, "staff_scope", "Your access covers one candidate, so you can't see the closing message for everyone this role left in the talent pool.");
   const container = c.get("container");
   const preview = await withTenant(container.db, t.companyId, (tx) => closingMessagePreview(tx, container, c.req.param("id") ?? ""));
   if (!preview) throw new HttpError(404, "not_found", "Role not found.");
@@ -581,7 +587,8 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const mark = (await activeMarksFor(tx, [app.id])).get(app.id) ?? null;
     // Their own decision message waiting for an approver, or a closed role's one closing message that names them (Q30).
     const decisionMessageWaiting = (await pendingDecisionMessages(tx, [app.id])).has(app.id);
-    const facts = applicationFactsFrom(app, scr.map((s) => s.status), ivs, t.role, asmts.find((x) => x.kind === "triage") ?? null, { mark, decisionMessagePending: decisionMessageWaiting });
+    // A decision nobody told can be taken back (plan G1): where it was made from, and whether the role has closed.
+    const facts = applicationFactsFrom(app, scr.map((s) => s.status), ivs, t.role, asmts.find((x) => x.kind === "triage") ?? null, { mark, decisionMessagePending: decisionMessageWaiting, ...(await undoFacts(tx, app)) });
     const { allowed: allowedActions, blockedReasons } = applicationActionState(facts);
     // What a Send of the decision message does under the company's settings: it goes, waits for approval, or is not sent.
     const declineMessage = await declineMessagePolicy(tx, { companyId: t.companyId, roleId: app.roleId });
@@ -599,7 +606,11 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     const scored = scorePerson({ app, assessments: asmts, packets: packets.byVersion, currentVersion: packets.currentVersion, mark, stillApplying: (await stillApplyingFor(tx, [app.id])).has(app.id), resumeUnreadable: !!resumeDoc && resumeDoc.status === "clean" && !resumeDoc.hasText && !app.extraction, openScreen: scr.some((s) => SCREEN_OPEN_STATUSES.includes(s.status)) });
     // The status token opens the candidate's status page and the reply token is all that authenticates a reply, so neither leaves the server.
     const { statusToken: _statusToken, replyToken: _replyToken, ...appOut } = app;
-    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: groupFor(app, mark, now), ownerStage: strip, ownerStageLabel: ownerStageLabel(strip, mark), mark, tags: ownerTags(app, mark, now), stageMoves: stageMoves(facts), toldState: DECISION_STAGES.includes(app.stage) ? app.toldState : null, decisionMessageWaiting, untoldFallbackOn, allowedActions, blockedReasons, declineMessage, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: comms, timeline, screens: scr.map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedVia: s.invitedVia ?? null, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, assessmentId: s.assessmentId, ...scorecards.get(s.id) })), pendingApprovals, packetLabels, matchScore: scored.match, mustHaves: scored.mustHaves, placement: scored.placement, readingVersion: scored.readingVersion };
+    // Nor does any other candidate link in the messages we sent them (status, conversation, scheduling, confirming the
+    // answers given after applying again): each body is shown with the tokens hidden, without the reply address (it
+    // carries the reply token) and with attachments named only. Links outlive any team member's or recruiter's access.
+    const thread = comms.map(({ replyTo: _replyTo, attachments, ...m }) => ({ ...m, bodyText: maskCandidateLinks(m.bodyText), bodyHtml: maskCandidateLinks(m.bodyHtml), attachments: attachments ? attachments.map((a) => ({ filename: a.filename, contentType: a.contentType })) : null }));
+    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: groupFor(app, mark, now), ownerStage: strip, ownerStageLabel: ownerStageLabel(strip, mark), mark, tags: ownerTags(app, mark, now), stageMoves: stageMoves(facts), toldState: DECISION_STAGES.includes(app.stage) ? app.toldState : null, decisionMessageWaiting, untoldFallbackOn, allowedActions, blockedReasons, declineMessage, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: thread, timeline, screens: scr.map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedVia: s.invitedVia ?? null, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, assessmentId: s.assessmentId, ...scorecards.get(s.id) })), pendingApprovals, packetLabels, matchScore: scored.match, mustHaves: scored.mustHaves, placement: scored.placement, readingVersion: scored.readingVersion };
   });
   if (!row) throw new HttpError(404, "not_found", "Application not found.");
   return c.json(row);
@@ -883,7 +894,8 @@ roleRoutes.post("/:id/outcome", requireTenant, async (c) => {
   const held = await settleHeldEmailsOnClose(container, { companyId: t.companyId, roleId: result.role.id });
   await container.kick();
   // The close card's count and preview of the one closing message for everyone still untold (Q30), held emails included;
-  // nothing is sent until someone presses Send on it.
-  const closingMessage: ClosingMessagePreview | null = await withTenant(container.db, t.companyId, (tx) => closingMessagePreview(tx, container, result.role.id)).catch(() => null);
+  // nothing is sent until someone presses Send on it. Only for someone who may send it (application.reject): HR may close
+  // a role but not tell candidates, so they get no Send that the closing-message route would refuse.
+  const closingMessage: ClosingMessagePreview | null = can(t.role, "application.reject") ? await withTenant(container.db, t.companyId, (tx) => closingMessagePreview(tx, container, result.role.id)).catch(() => null) : null;
   return c.json({ ok: true, outcomeId: result.row.id, role: result.role, movedToTalentPool: result.movedToTalentPool + held.addedToTalentPool, heldEmailsAddedToTalentPool: held.addedToTalentPool, keptInTalentPool: result.keptInTalentPool, talentPoolOptOuts: result.talentPoolOptOuts, interviewsCancelled: result.interviewsCancelled, interviewOffNotes: result.interviewOffNotes, closingMessage, statement: OUTCOME_STATEMENT });
 });

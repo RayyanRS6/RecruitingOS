@@ -19,9 +19,12 @@ type PlanAsk = RecruiterAction;
 /** The company's business type, for the quick starts (GET /companies/current, the query Setup reads too). */
 type CompanyLite = { name?: string; vertical?: string; settings: Record<string, unknown> };
 
+/** A role's state beside its name in the room list; an open role needs no word. */
+const PLACE_STATUS_WORD: Record<string, string> = { pending_approval: "waiting for approval", draft: "sent back for changes", paused: "paused" };
+
 /**
- * Where the plan stands, when it has no room: the roles that used the places (closed and filled ones too: closing a role
- * does not give its place back), and a way to ask ITS for more (C13).
+ * Where the plan stands, when it has no room: the roles using the places now (open, paused, waiting for approval or sent
+ * back for changes; closing one gives its place back), each a link to close it from, and a way to ask ITS for more (C13).
  */
 export function RoomAlert({ room, ask }: { room: PlanRoom; ask: PlanAsk | null }) {
   return (
@@ -30,7 +33,7 @@ export function RoomAlert({ room, ask }: { room: PlanRoom; ask: PlanAsk | null }
         <span>{room.message ?? "Your plan has no room for another role right now."}</span>
         {room.holding.length ? (
           <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
-            {room.holding.map((r) => <li key={r.roleId}><Link to={`/roles/${r.roleId}`}>{r.title}</Link>{r.status === "closed" || r.status === "filled" ? <span className="muted"> ({r.status})</span> : null}</li>)}
+            {room.holding.map((r) => <li key={r.roleId}><Link to={`/roles/${r.roleId}`}>{r.title}</Link>{PLACE_STATUS_WORD[r.status] ? <span className="muted"> ({PLACE_STATUS_WORD[r.status]})</span> : null}</li>)}
           </ul>
         ) : null}
         <div className="row">

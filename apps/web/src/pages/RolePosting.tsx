@@ -9,6 +9,7 @@ import { BoardTicks } from "../components/BoardTicks";
 import { ClosingDateField } from "../components/ClosingDate";
 import { ShareJob } from "../components/ShareJob";
 import { useCompanyCheck } from "../components/use-company-check";
+import { scrollBehavior } from "../motion";
 import { toast } from "../toast";
 import { boardNames } from "../role-words";
 
@@ -181,11 +182,13 @@ export function PostingTab({ roleId, roleStatus, canManage, canShare = false, ro
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["postings", roleId], queryFn: () => api.get<PostingsResponse>(`/api/v1/roles/${roleId}/postings`) });
   // Today's cards link to a part of the tab (`#share`, `#closing-date`); it is on the page only once the postings are read.
+  // The part takes the focus too, so a keyboard or screen-reader user starts there; the scroll is instant for anyone who
+  // asked for reduced motion.
   const loaded = !!q.data;
   useEffect(() => {
     if (!loaded || typeof window === "undefined" || !window.location.hash) return;
     const el = document.getElementById(window.location.hash.slice(1));
-    if (el) window.setTimeout(() => el.scrollIntoView({ block: "start", behavior: "smooth" }), 50);
+    if (el) window.setTimeout(() => { el.scrollIntoView({ block: "start", behavior: scrollBehavior() }); el.focus({ preventScroll: true }); }, 50);
   }, [loaded]);
   const volume = useQuery({ queryKey: ["volume", roleId], queryFn: () => api.get<VolumeReport>(`/api/v1/roles/${roleId}/volume`) });
   const refresh = async () => {
@@ -221,7 +224,7 @@ export function PostingTab({ roleId, roleStatus, canManage, canShare = false, ro
       {check === "waiting" && roleStatus !== "closed" ? <Alert tone="caution">{POSTING_WAITS_FOR_CHECK}</Alert> : null}
 
       {canShare && roleStatus === "open" ? (
-        <section id="share" className="setup-section">
+        <section id="share" className="setup-section" tabIndex={-1}>
           <Card title="Share it">
             <p className="small muted" style={{ marginBottom: 10 }}>The quickest first applicants often come from people who already know you. Every place gets its own link, so the Talent page says where each applicant came from.</p>
             <ShareJob roleId={roleId} roleTitle={roleTitle} companyName={companyName} />
@@ -234,7 +237,7 @@ export function PostingTab({ roleId, roleStatus, canManage, canShare = false, ro
           <p className="small muted" style={{ marginBottom: 10 }}>{its ? "ITS posts the job on the job boards from your company's own accounts, and nothing is marked as up until its address has been checked." : "Your team posts the job on the job boards from your own accounts; each board below has the words to paste and the steps."}</p>
           <BoardTicks key={d.boards.map((b) => `${b.channel}:${b.chosen}`).join(",")} roleId={roleId} boards={d.boards} roleStatus={roleStatus} whoPosts={d.whoPosts} canManage={canManage} />
         </Card>
-        <section id="closing-date" className="setup-section">
+        <section id="closing-date" className="setup-section" tabIndex={-1}>
           <Card title="Closing date">
             <ClosingDateField key={`${d.closingDate.closesOn}`} roleId={roleId} closingDate={d.closingDate} canEdit={canManage} roleStatus={roleStatus} idBase="posting" />
           </Card>

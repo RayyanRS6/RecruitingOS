@@ -153,6 +153,20 @@ describe("the Talent page", () => {
     expect(text(html)).not.toContain("triage-agent");
   });
 
+  it("keeps Previous and Next in place while the next person loads, so the button pressed keeps the focus", () => {
+    // a2 is not loaded yet (nothing is fetched ahead for the neighbours)
+    const html = render(client([detail(maria)]), createElement(CandidatePanel, { id: "a2", roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: ["a1", "a2"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
+    expect(html).toMatch(/role="dialog" aria-modal="true" aria-label="Candidate"/);
+    expect(html).toContain('aria-label="Previous candidate (Alt+Up)"');
+    expect(html).toContain('aria-label="Next candidate (Alt+Down)"');
+    expect(text(html)).toContain("2 of 2");
+    // the person's own controls wait for them
+    expect(html).not.toContain("Stage:");
+    // one live region stays mounted, empty until someone has moved and the next person has loaded
+    expect(html).toContain('<span class="sr-only" aria-live="polite"></span>');
+    expect(html.match(/aria-live="polite"/g)?.length).toBe(1);
+  });
+
   it("says a decision nobody has told yet is private, with Send message and I told them myself", () => {
     nav.search = "open=a2";
     const html = render(client([detail(luis)]), createElement(People));
@@ -183,6 +197,42 @@ describe("the steps a stage choice opens", () => {
     expect(text(html)).toMatch(/This cancels the Working interview on Wednesday, October 14(,| at) 11:00\sAM, and the candidate is told now, in a short note that gives no reason, that it is off\./);
     expect(html).toContain('<option value="candidate_unresponsive">They stopped responding</option>');
     expect(text(html)).toContain("Confirm: not moving forward");
+  });
+
+  it("someone already at the interview step, with nothing in motion, can still have an interview approved", () => {
+    const iv = (over: Record<string, unknown>) => ({ id: "iv1", roundKey: "r1", title: "Working interview", status: "cancelled", startsAt: null, endsAt: null, timezone: null, meetingUrl: null, attempt: 1, outcome: null, decision: null, offeredSlots: [], createdAt: daysAgo(2), ...over });
+    const at = (stage: string, interviews: unknown[], over: Record<string, unknown> = {}) => detail({ ...maria, stage }, { interviews, ...over });
+    const open = (d: ReturnType<typeof detail>, step: "interview" | null = null) => text(render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step, onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
+    // an interview cancelled from the Interviews page
+    const cancelled = open(at("interview_recommended", [iv({})]));
+    expect(cancelled).toContain("The interview was cancelled");
+    expect(cancelled).toContain("The Working interview with Maria was cancelled. Approve a new interview and fresh times go out to them.");
+    expect(cancelled).toContain("Approve an interview");
+    // times the candidate let expire
+    expect(open(at("interview_recommended", [iv({ status: "offer_expired" })]))).toContain("Maria did not pick a time for the Working interview.");
+    // "Next round" recorded, with the round still to approve
+    const next = open(at("interview_complete", [iv({ status: "completed", outcome: "happened", decision: "next_round" })]));
+    expect(next).toContain("Set up the next round");
+    expect(next).toContain("Approve the next round");
+    // recommended after a screen (no suggestion card when the company's settings let that through on its own)
+    expect(open(at("interview_recommended", []))).toContain("Maria is ready to interview.");
+    // the approval itself replaces the card while it is open
+    const step = open(at("interview_recommended", [iv({})]), "interview");
+    expect(step).toContain("Approve and offer times");
+    expect(step).not.toContain("The interview was cancelled");
+  });
+
+  it("does not offer a new interview while a decision waits, one is in motion, or the role may not request one", () => {
+    const iv = { id: "iv1", roundKey: "r1", title: "Working interview", status: "completed", startsAt: null, endsAt: null, timezone: null, meetingUrl: null, attempt: 1, outcome: "happened", decision: null, offeredSlots: [], createdAt: daysAgo(2) };
+    const open = (d: ReturnType<typeof detail>) => text(render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
+    // a finished interview nobody has decided about: the decision card, not a new interview
+    const deciding = open(detail({ ...maria, stage: "interview_complete" }, { interviews: [iv], allowedActions: ["interview", "record_decision", "reject", "record_outcome", "set_mark"] }));
+    expect(deciding).toContain("How did the interview go?");
+    expect(deciding).not.toContain("Approve an interview");
+    // the role cannot request interviews (the API leaves "interview" out)
+    expect(open(detail({ ...maria, stage: "interview_recommended" }, { interviews: [], allowedActions: ["reject", "record_outcome"] }))).not.toContain("Ready to interview");
+    // on hold: nothing waits on anyone until the date
+    expect(open(detail({ ...maria, stage: "interview_recommended" }, { interviews: [], mark: { id: "m1", mark: "on_hold", label: "On hold", remindAt: "2026-12-01", note: null, source: "person", setAt: daysAgo(1), setBy: { kind: "user", id: "u1" } } }))).not.toContain("Ready to interview");
   });
 
   it("Interviewing opens the interview approval, and Hired the one-sheet hire (plan H1)", () => {

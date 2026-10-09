@@ -1,4 +1,4 @@
-import { and, count, eq, gte, inArray, isNull, like, sql } from "drizzle-orm";
+import { and, count, eq, gt, gte, inArray, isNull, like, lte, sql } from "drizzle-orm";
 import { CHOOSABLE_WORDINGS, DECISION_WORDING_LABEL, type Actor, type ApplicationStage, type CandidateNotice, type DecisionWording, type DecisionWordingOption, type ToldState } from "@ros/contracts";
 import { DECISION_STAGES, activeMarksFor, adverseDecisionLineApplies, createEscalation, emit, gate, notify, resolvePolicy } from "@ros/core";
 import { applications, approvalRequests, candidates, communications, companies, events, interviews, rolePackets, roles, type Queryable } from "@ros/db";
@@ -35,9 +35,18 @@ export async function loadDecisionParts(q: Queryable, app: Pick<App, "candidateI
 }
 export type DecisionParts = NonNullable<Awaited<ReturnType<typeof loadDecisionParts>>>;
 
-/** The candidate's status page, where "Don't keep me for future roles" is one click. */
+/** The candidate's status page, where "Don't keep me for future roles" is one click. Only in what is sent to the candidate. */
 export function statusUrlOf(baseUrl: string, app: Pick<App, "statusToken">): string {
   return `${baseUrl}/c/status/${app.statusToken}`;
+}
+
+/**
+ * The status link as the team sees it in a preview. The real link never leaves the server: it never expires, and
+ * whoever holds it can act as the candidate (withdraw, opt out, ask for their data), so a team member, or an ITS
+ * recruiter whose access later ends, must never be able to copy it from a preview.
+ */
+export function statusUrlPlaceholder(baseUrl: string): string {
+  return `${baseUrl}/c/status/[their status link]`;
 }
 
 /**
@@ -99,7 +108,11 @@ async function resolveWording(q: Queryable, app: App, role: Role, wanted: Decisi
   return { wording: wanted ?? suggested, suggested, options };
 }
 
-/** What the decision message will say, exactly as a Send would write it now. Null when there is no decision or nothing to write it from. */
+/**
+ * What the decision message will say, exactly as a Send would write it now, except that the status link is the
+ * placeholder (`statusUrlPlaceholder`): this text is only ever shown to the team, and a Send writes its own with the
+ * real link (`queueDecisionMessage`). Null when there is no decision or nothing to write it from.
+ */
 export async function decisionMessageDraft(q: Queryable, input: { app: App; wording?: DecisionWording | null; personalLine?: PersonalLine | null; statusBaseUrl: string; now: Date }) {
   const { app } = input;
   if (!DECISION_STAGES.includes(app.stage)) return null;
@@ -107,7 +120,7 @@ export async function decisionMessageDraft(q: Queryable, input: { app: App; word
   if (!parts) return null;
   const { wording, options } = await resolveWording(q, app, parts.role, input.wording);
   const adverseDecisionLine = adverseDecisionLineApplies({ jobLocations: parts.packet.identity.locations, candidateLocationText: parts.cand.locationText });
-  const message = dispositionMessage({ candidate: parts.cand, company: parts.company, packet: parts.packet, wording, cancelledInterviews: await interviewsCalledOff(q, app, input.now), personalLine: input.personalLine ?? null, statusUrl: statusUrlOf(input.statusBaseUrl, app), adverseDecisionLine });
+  const message = dispositionMessage({ candidate: parts.cand, company: parts.company, packet: parts.packet, wording, cancelledInterviews: await interviewsCalledOff(q, app, input.now), personalLine: input.personalLine ?? null, statusUrl: statusUrlPlaceholder(input.statusBaseUrl), adverseDecisionLine });
   return { to: parts.cand.email, subject: message.subject, text: message.text, wording, wordings: options, personalLine: input.personalLine?.text ?? null, adverseDecisionLine };
 }
 
@@ -187,7 +200,7 @@ export async function closingMessageText(q: Queryable, input: { app: App; status
   const parts = await loadDecisionParts(q, input.app);
   if (!parts) return null;
   const sample = { ...parts.cand, firstName: "[first name]", preferences: { ...parts.cand.preferences, talentPoolOptOut: false } };
-  const message = dispositionMessage({ candidate: sample, company: parts.company, packet: parts.packet, wording: "role_closed", statusUrl: `${input.statusBaseUrl}/c/status/[their status link]`, adverseDecisionLine: false });
+  const message = dispositionMessage({ candidate: sample, company: parts.company, packet: parts.packet, wording: "role_closed", statusUrl: statusUrlPlaceholder(input.statusBaseUrl), adverseDecisionLine: false });
   return { subject: message.subject, text: message.text };
 }
 
@@ -309,9 +322,17 @@ export async function runUntoldSafetyNet(q: Queryable, deps: SafetyNetDeps, comp
 const WAITING_STAGES: ApplicationStage[] = ["received", "eligible", "ineligible", "triaged", "screen_complete", "interview_recommended", "interview_complete", "debrief", "finalist"];
 
 /**
+ * Daily runs missed (an outage, a retry) are made up for this many days; an older wait is never noted, so turning the
+ * note on, or the release that added it, never writes to a backlog of people who applied months ago.
+ */
+export const STILL_REVIEWING_CATCH_UP_DAYS = 7;
+
+/**
  * The courtesy note to everyone still waiting for a decision `afterDays` after they applied (policy
  * `message.still_reviewing`, 30 days unless the company chose otherwise): one per application, only under "Do it", never
- * to someone set aside as not a fit for now, nor without an address. Returns the applications noted.
+ * to someone set aside as not a fit for now, nor without an address. Only within a week of the wait reaching `afterDays`
+ * (`STILL_REVIEWING_CATCH_UP_DAYS`): someone who crossed it longer ago is never noted, months after the fact. Returns the
+ * applications noted.
  */
 export async function sendStillReviewingNotes(q: Queryable, deps: { integrations: Integrations; statusBaseUrl: string; now: Date; actor: Actor }, companyId: string): Promise<string[]> {
   const open = await q.select().from(roles).where(and(eq(roles.companyId, companyId), inArray(roles.status, ["open", "paused"])));
@@ -320,8 +341,9 @@ export async function sendStillReviewingNotes(q: Queryable, deps: { integrations
     const policy = await resolvePolicy(q, companyId, role.id, "message.still_reviewing");
     if (policy.level !== "auto" && policy.level !== "auto_notify") continue;
     const afterDays = Math.max(7, Number(policy.params.afterDays ?? 30) || 30);
-    const cutoff = deps.now.getTime() - afterDays * 86_400_000;
-    const waiting = (await q.select().from(applications).where(and(eq(applications.roleId, role.id), inArray(applications.stage, WAITING_STAGES)))).filter((a) => Date.parse(a.createdAt) <= cutoff);
+    const cutoff = new Date(deps.now.getTime() - afterDays * 86_400_000);
+    const windowStart = new Date(cutoff.getTime() - STILL_REVIEWING_CATCH_UP_DAYS * 86_400_000);
+    const waiting = await q.select().from(applications).where(and(eq(applications.roleId, role.id), inArray(applications.stage, WAITING_STAGES), gt(applications.createdAt, windowStart.toISOString()), lte(applications.createdAt, cutoff.toISOString())));
     if (!waiting.length) continue;
     const already = new Set((await q.select({ applicationId: communications.applicationId }).from(communications).where(and(inArray(communications.applicationId, waiting.map((a) => a.id)), eq(communications.templateKey, "still_reviewing")))).map((r) => r.applicationId ?? ""));
     const marks = await activeMarksFor(q, waiting.map((a) => a.id));

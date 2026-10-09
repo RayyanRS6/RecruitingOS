@@ -191,7 +191,9 @@ svg.icon { flex: none; vertical-align: middle; }
 /* Layout: the rail and the page. The rail's optional parts (company chip, Start a hire, role list, compact mode) are
    described in docs/07; the original markup (brand, links, sections, foot) keeps working unchanged. */
 .shell { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 100vh; }
-.rail { position: sticky; top: 0; height: 100vh; overflow-y: auto; border-right: 1px solid var(--line); background: var(--surface-rail); padding: 18px 12px; display: flex; flex-direction: column; gap: 2px; }
+/* overflow-x: hidden: the rail scrolls up and down only; a word wider than it never puts a sideways scrollbar at the foot
+   of the window (polish list: the compact rail's "Recruiting OS" did, on the job builder and every role page). */
+.rail { position: sticky; top: 0; height: 100vh; overflow-x: hidden; overflow-y: auto; border-right: 1px solid var(--line); background: var(--surface-rail); padding: 18px 12px; display: flex; flex-direction: column; gap: 2px; }
 .rail .brand { font-family: var(--display); font-weight: 800; font-size: 15px; padding: 4px 10px 14px; }
 .rail .brand small { display: block; font-family: var(--ui); font-weight: 400; font-size: 11.5px; color: var(--ink-3); letter-spacing: 0.08em; text-transform: uppercase; margin-top: 3px; }
 .rail a:not(.btn, .icon-btn) { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--r-control); color: var(--ink-2); text-decoration: none; font-weight: 500; }
@@ -210,6 +212,8 @@ svg.icon { flex: none; vertical-align: middle; }
 .rail-sub a:not(.btn) { padding: 6px 8px; font-size: 13.5px; font-weight: 400; }
 .rail-sub .rail-sub-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-sub .rail-count { color: var(--ink-3); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+/* the word beside a role with no count (Open, Paused, Waiting, Draft): the dot's colour never says the status alone */
+.rail-sub .rail-tag { font-size: 11.5px; flex: none; }
 .rail .foot { margin-top: auto; font-size: 12.5px; color: var(--ink-3); padding: 12px 10px 4px; border-top: 1px solid var(--line); display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .rail .foot .who { overflow-wrap: anywhere; }
 /* Compact rail (role and candidate pages): icons with a small word under each. */
@@ -220,7 +224,8 @@ svg.icon { flex: none; vertical-align: middle; }
 .shell[data-rail="compact"] .rail-org-text, .shell[data-rail="compact"] .rail-org .icon-btn, .shell[data-rail="compact"] .rail-sub, .shell[data-rail="compact"] .rail .section, .shell[data-rail="compact"] .brand small, .shell[data-rail="compact"] .rail .foot .who { display: none; }
 .shell[data-rail="compact"] .rail-start { justify-content: center; padding: 10px 0; }
 .shell[data-rail="compact"] .rail-start .rail-label, .shell[data-rail="compact"] .rail-start .kbd { display: none; }
-.shell[data-rail="compact"] .rail .brand { padding: 4px 0 12px; text-align: center; }
+/* The name fits the 84px rail: smaller, on two lines ("Recruiting" / "OS"), never wider than the rail. */
+.shell[data-rail="compact"] .rail .brand { padding: 4px 0 12px; text-align: center; font-size: 12px; line-height: 1.15; overflow-wrap: anywhere; }
 .main { padding: 28px clamp(18px, 4vw, 48px) 80px; max-width: 1120px; }
 .main.full { max-width: none; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
@@ -235,12 +240,13 @@ svg.icon { flex: none; vertical-align: middle; }
 /* Grid items never force the page wider than the screen: tables scroll inside their own region instead (phone admin tabs). */
 .stack > * { min-width: 0; }
 .row { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
-.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--space-3); }
+/* min(…, 100%): a column never asks for more than the room there is, so a narrow phone never scrolls sideways. */
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: var(--space-3); }
 @media (max-width: 900px) {
   /* minmax(0, ...) so wide content scrolls inside its own region instead of pushing the page (and Sign out) off screen. */
   .shell, .shell[data-rail] { grid-template-columns: minmax(0, 1fr); }
   .rail, .shell[data-rail] .rail { position: static; height: auto; overflow: visible; flex-direction: row; flex-wrap: wrap; align-items: center; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px; }
-  .rail .brand, .shell[data-rail] .rail .brand { width: 100%; padding: 2px 6px 6px; text-align: left; }
+  .rail .brand, .shell[data-rail] .rail .brand { width: 100%; padding: 2px 6px 6px; text-align: left; font-size: 15px; line-height: inherit; }
   .rail .section, .rail-sub, .rail-org { display: none; }
   .rail a:not(.btn, .icon-btn), .shell[data-rail] .rail a:not(.btn, .icon-btn) { flex-direction: row; gap: 6px; padding: 7px 9px; font-size: 14px; }
   .rail-start, .shell[data-rail] .rail-start { width: auto; margin: 0 4px 0 0; padding: 7px 10px; }
@@ -410,9 +416,11 @@ button.list-item { width: 100%; border: 0; background: none; text-align: left; f
 /* Tables, timelines, conversation */
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); }
 table.table { border-collapse: collapse; width: 100%; font-size: 13.5px; font-variant-numeric: tabular-nums; }
-.table th { text-align: left; font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); background: var(--surface); border-bottom: 1px solid var(--line); padding: 10px 12px; white-space: nowrap; }
-.table td { padding: 11px 12px; border-top: 1px solid var(--line); vertical-align: top; }
-.table tbody tr:first-child td { border-top: 0; }
+.table thead th { text-align: left; font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); background: var(--surface); border-bottom: 1px solid var(--line); padding: 10px 12px; white-space: nowrap; }
+/* a row's own header (`<th scope="row">`, as in Compare) looks like any other cell: it only tells a screen reader what the row is */
+.table td, .table tbody th { padding: 11px 12px; border-top: 1px solid var(--line); vertical-align: top; }
+.table tbody th { text-align: left; font-weight: inherit; }
+.table tbody tr:first-child td, .table tbody tr:first-child th { border-top: 0; }
 .timeline { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
 .timeline li { display: grid; grid-template-columns: 110px 1fr; gap: 10px; font-size: 13px; }
 .timeline .when { color: var(--ink-3); font-variant-numeric: tabular-nums; }
@@ -457,11 +465,13 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
 @media (max-width: 640px) {
   .drawer-head { padding: 14px 14px 0; }
   .drawer-head-row { flex-wrap: wrap; }
-  .drawer-actions { order: 4; flex-basis: 100%; justify-content: flex-start; }
+  /* flex-end, as .builder-head-actions: a wrapped line ends at the right edge, so a menu opening leftward from its last
+     button (align="end": More, the stage button) opens inside the screen, never past its left edge where nothing scrolls. */
+  .drawer-actions { order: 4; flex-basis: 100%; justify-content: flex-end; }
   .drawer-body { padding: 16px 14px 32px; }
 }
 .menu-wrap { position: relative; display: inline-flex; }
-.menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: var(--z-menu); min-width: 232px; max-width: min(340px, calc(100vw - 32px)); padding: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: var(--shadow-float); animation: pop-in var(--dur-fast) var(--ease); }
+.menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: var(--z-menu); min-width: min(232px, calc(100vw - 32px)); max-width: min(340px, calc(100vw - 32px)); padding: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: var(--shadow-float); animation: pop-in var(--dur-fast) var(--ease); }
 .menu[data-align="end"] { left: auto; right: 0; }
 .menu-heading { padding: 8px 10px 6px; font: 600 11px/1.3 var(--ui); letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); }
 .menu [role="menu"] { display: grid; gap: 1px; }
@@ -570,7 +580,7 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
 .people-list { display: grid; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; }
 .people-list li { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 14px; }
 /* The hire sheet's two ways on: close the role now, or keep the backups warm. */
-.hire-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 12px; }
+.hire-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 10px; margin-top: 12px; }
 .hire-choice { display: grid; gap: 6px; align-content: start; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--ground); }
 .hire-choice .btn { justify-self: start; }
 
@@ -707,7 +717,7 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
 .draft-body { display: grid; gap: 14px; padding: 18px 22px 32px; }
 .draft-empty { display: grid; justify-items: center; gap: 8px; padding: 72px 20px; text-align: center; color: var(--ink-3); }
 .draft-empty strong { color: var(--ink); }
-.checklist { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--ground); }
+.checklist { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--ground); }
 .checklist h3, .flag-list h3 { font: 600 11.5px/1.3 var(--ui); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
 .checklist ul { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; font-size: 13.5px; }
 .checklist li { display: flex; align-items: flex-start; gap: 8px; }

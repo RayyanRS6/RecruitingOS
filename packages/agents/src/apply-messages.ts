@@ -73,7 +73,7 @@ export async function sendConversationReviewReminder(q: Queryable, integrations:
   const { candidate, company, packet } = input;
   const text = `Hi ${candidate.firstName},
 
-You answered every question in the screening conversation for the ${packet.identity.title} position at ${company.name}, but your answers have not been sent yet. You can check them, change any of them, and press Send here:
+You answered every question in the screening conversation for the ${packet.identity.title} position at ${company.name}, but you have not pressed Send yet. You can check them, change any of them, and press Send here:
 
 ${conversationUrl(input)}
 
@@ -112,6 +112,24 @@ If you would like to add something, reply to this email.
 
 ${signOff(input)}`;
   return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_not_started", subject: `Your application for ${packet.identity.title}`, text, idempotencyKey: `screen_not_started:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
+}
+
+/**
+ * The link we said we would email once the plan's screening conversations were topped up (Q17) never went: they stayed
+ * used up for the whole wait. The candidate is told the conversation is not going ahead, that it costs them nothing,
+ * and that their application is with the team as it is (no silent lapse, plan G10). No screen exists, so one per
+ * application.
+ */
+export async function sendConversationNotOfferedNote(q: Queryable, integrations: Integrations, input: MessageInput): Promise<SendResult> {
+  const { candidate, company, packet, application } = input;
+  const text = `Hi ${candidate.firstName},
+
+We said we would email you a link to a short written conversation for the ${packet.identity.title} position at ${company.name}. That conversation is not going ahead, and you do not need to do anything about it. Your application is with the hiring team as it is, and nothing else is needed from you. People on the team review it and decide on next steps; you will hear from them either way.
+
+If you would like to add something, reply to this email.
+
+${signOff(input)}`;
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_not_offered", subject: `Your application for ${packet.identity.title}`, text, idempotencyKey: `screen_not_offered:${application.id}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
 /**

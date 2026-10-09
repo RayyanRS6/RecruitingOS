@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { can, type Permission } from "../../packages/core/src/permissions";
-import { defaultInterviewers } from "../../apps/web/src/interview-defaults";
+import { againChoice, defaultInterviewers } from "../../apps/web/src/interview-defaults";
 import { actorWords, describeRoleEvent, payShownLabel, roleWords } from "../../apps/web/src/role-words";
 import { canApproveRole, canChangeCompany, canDecideInterviews, canDecline, canEditPacket, canManageInterviews, canManageRole, canRecordOutcome, canRequestInterviews, canSeeActivity, canSeePay, canSeeTalent, canShareJob, canStartHire } from "../../apps/web/src/roles";
 
@@ -150,5 +150,30 @@ describe("who is ticked when an interview is approved", () => {
 
   it("ticks nobody until the team list is known", () => {
     expect(defaultInterviewers({ roundKey: "r1", applicationPlan, activeMemberIds: null })).toEqual([]);
+  });
+});
+
+describe("what an interview that never took place offers next", () => {
+  const at = (status: string, stage = "interview_recommended", over: Record<string, string> = {}) => ({ id: "iv1", applicationId: "a1", status, createdAt: "2026-10-01T10:00:00.000Z", candidate: { stage }, ...over });
+
+  it("offers times again when the candidate let them expire, and a new interview after a cancellation", () => {
+    expect(againChoice(at("offer_expired"), [at("offer_expired")], "owner")).toBe("offer_again");
+    expect(againChoice(at("cancelled"), [at("cancelled")], "hiring_manager")).toBe("approve_new");
+    expect(againChoice(at("cancelled", "interview_complete"), [], "recruiter")).toBe("approve_new");
+  });
+
+  it("offers nothing once they have moved on, another interview exists, or the role may not do it", () => {
+    expect(againChoice(at("cancelled", "rejected"), [], "owner")).toBeNull();
+    expect(againChoice(at("offer_expired", "talent_pool"), [], "owner")).toBeNull();
+    // a newer interview for the same candidate, in motion or not, is where things stand now
+    expect(againChoice(at("cancelled"), [at("cancelled"), { id: "iv2", applicationId: "a1", status: "scheduling", createdAt: "2026-10-02T10:00:00.000Z" }], "owner")).toBeNull();
+    expect(againChoice(at("cancelled"), [{ id: "iv2", applicationId: "a1", status: "completed", createdAt: "2026-10-03T10:00:00.000Z" }], "owner")).toBeNull();
+    // someone else's interviews do not count
+    expect(againChoice(at("cancelled"), [{ id: "iv9", applicationId: "a9", status: "scheduling", createdAt: "2026-10-03T10:00:00.000Z" }], "owner")).toBe("approve_new");
+    expect(againChoice(at("cancelled"), [], "hr")).toBeNull();
+    expect(againChoice(at("offer_expired"), [], "interviewer")).toBeNull();
+    // finished or in motion: the sheet's other cards cover it
+    expect(againChoice(at("completed"), [], "owner")).toBeNull();
+    expect(againChoice(at("scheduling"), [], "owner")).toBeNull();
   });
 });

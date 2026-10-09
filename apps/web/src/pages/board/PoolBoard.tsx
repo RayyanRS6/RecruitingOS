@@ -47,7 +47,8 @@ export function PoolBoard(props: { roleId: string; board: BoardView; only: { ids
       <div className="board-head">
         <div className="board-head-title">
           <Eyebrow>Board</Eyebrow>
-          <h2>{board.role.title}</h2>
+          {/* focusable from code only: it takes the focus when Review and apply closes with nothing left to apply */}
+          <h2 id="board-title" tabIndex={-1}>{board.role.title}</h2>
           <p className="board-counts">{headerCounts(s)}</p>
         </div>
         <div className="board-head-actions">

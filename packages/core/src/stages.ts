@@ -1,6 +1,6 @@
-import { and, eq, inArray, isNull, like } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, like } from "drizzle-orm";
 import { MARK_LABEL, OWNER_STAGE_LABEL, type ActorKind, type ApplicationStage, type Actor, type CandidateStep, type MarkKind, type OwnerGroup, type OwnerStage, type ToldState } from "@ros/contracts";
-import { applicationMarks, applications, communications, type Queryable } from "@ros/db";
+import { applicationMarks, applications, communications, events, type Queryable } from "@ros/db";
 import { emit } from "./events";
 
 /**
@@ -67,10 +67,66 @@ export const DECISION_STAGES: readonly ApplicationStage[] = ["rejected", "talent
 const LEAVES_PROCESS: readonly ApplicationStage[] = ["hired", "withdrawn", "rejected", "declined", "talent_pool"];
 
 /**
- * `decisionTold` matters for one move only: someone declined (or moved to the talent pool) who was never told may still
- * withdraw from their status page (plan A1), since for them nothing has been decided yet.
+ * Where a decision taken back before the candidate was told puts them (plan G1, "quiet undo"): the step they were at
+ * before it, made safe, since the decision already called off their screens and interviews. Someone waiting on a screen
+ * or still early goes back to "ready for your review"; someone whose interview was booked, to "recommended for
+ * interview"; an offer being prepared, to finalist. Null for a step a decision cannot be taken back to (they had
+ * withdrawn, been hired or declined an offer before it).
  */
-export function canTransition(from: ApplicationStage, to: ApplicationStage, by: Mover, ctx: { decisionTold?: boolean } = {}): boolean {
+export function reopenStage(before: ApplicationStage | null): ApplicationStage | null {
+  if (before === null) return "triaged";
+  switch (before) {
+    case "applied":
+    case "received":
+    case "eligible":
+    case "triaged":
+    case "screen_invited":
+    case "screening":
+      return "triaged";
+    case "interview_scheduled":
+      return "interview_recommended";
+    case "offer_draft":
+    case "offer_approval":
+      return "finalist";
+    case "ineligible":
+    case "screen_complete":
+    case "interview_recommended":
+    case "interview_complete":
+    case "debrief":
+    case "finalist":
+    case "reference_check":
+    case "offer_sent":
+    case "negotiation":
+    case "accepted":
+    case "onboarding":
+      return before;
+    default:
+      return null;
+  }
+}
+
+/** Every step `reopenStage` can put someone back at. */
+export const REOPEN_TARGETS: readonly ApplicationStage[] = ["triaged", "ineligible", "screen_complete", "interview_recommended", "interview_complete", "debrief", "finalist", "reference_check", "offer_sent", "negotiation", "accepted", "onboarding"];
+
+/**
+ * The stage an application was at before its current decision (declined, or moved to the talent pool): the last move
+ * into a stage that is not a decision, or where its history starts. Null when nothing is recorded.
+ */
+export async function stageBeforeDecision(q: Queryable, applicationId: string): Promise<ApplicationStage | null> {
+  const moves = await q.select({ payload: events.payload }).from(events).where(and(eq(events.subjectType, "application"), eq(events.subjectId, applicationId), eq(events.type, "application.stage_changed"))).orderBy(asc(events.id));
+  let i = moves.length - 1;
+  while (i >= 0 && DECISION_STAGES.includes(moves[i].payload.to as ApplicationStage)) i -= 1;
+  return i >= 0 ? (moves[i].payload.to as ApplicationStage) : ((moves[0]?.payload.from as ApplicationStage | undefined) ?? null);
+}
+
+/**
+ * `decisionTold` matters for one move only: someone declined (or moved to the talent pool) who was never told may still
+ * withdraw from their status page (plan A1), since for them nothing has been decided yet. `undoDecision`: a person takes
+ * back a decision the candidate was never told (plan G1), to a step `reopenStage` allows; nothing else leaves a decision
+ * that way, and never once the candidate was told, or a message is on its way.
+ */
+export function canTransition(from: ApplicationStage, to: ApplicationStage, by: Mover, ctx: { decisionTold?: boolean; undoDecision?: boolean; toldState?: string | null } = {}): boolean {
+  if (ctx.undoDecision) return DECISION_STAGES.includes(from) && ctx.toldState === "not_told" && isHuman(by) && REOPEN_TARGETS.includes(to);
   if (to === "withdrawn" && DECISION_STAGES.includes(from)) return by === "candidate" && ctx.decisionTold === false;
   if (to === "withdrawn") return ACTIVE.includes(from) && (by === "candidate" || by === "system" || isHuman(by));
   if (to === "rejected") return ACTIVE.includes(from) && isHuman(by); // never the system, not on judgment and not on an eligibility answer
@@ -98,18 +154,20 @@ export class TransitionError extends Error {
  */
 export async function transition(
   q: Queryable,
-  input: { applicationId: string; companyId: string; to: ApplicationStage; by: Mover; actor: Actor; reason?: string; payload?: Record<string, unknown>; correlationId?: string | null },
+  input: { applicationId: string; companyId: string; to: ApplicationStage; by: Mover; actor: Actor; reason?: string; payload?: Record<string, unknown>; correlationId?: string | null; /** a person taking back a decision the candidate was never told (`canTransition`) */ undoDecision?: boolean },
 ): Promise<{ from: ApplicationStage; to: ApplicationStage }> {
   const [app] = await q.select().from(applications).where(eq(applications.id, input.applicationId)).limit(1);
   if (!app) throw new Error(`application ${input.applicationId} not found`);
   const from = app.stage;
   if (from === input.to) return { from, to: input.to };
-  if (!canTransition(from, input.to, input.by, { decisionTold: decisionTold(app.toldState) })) throw new TransitionError(from, input.to, input.by);
+  if (!canTransition(from, input.to, input.by, { decisionTold: decisionTold(app.toldState), undoDecision: input.undoDecision, toldState: app.toldState })) throw new TransitionError(from, input.to, input.by);
   const now = new Date().toISOString();
   const patch: Partial<typeof applications.$inferInsert> = { stage: input.to, stageChangedAt: now };
   if (input.to === "withdrawn") { patch.withdrawnAt = now; patch.withdrawReason = input.reason ?? null; }
   if (input.to === "rejected") { patch.rejectedAt = now; patch.rejectReason = input.reason ?? null; }
   if (DECISION_STAGES.includes(input.to) && !DECISION_STAGES.includes(from)) { patch.toldState = "not_told"; patch.candidateToldAt = null; }
+  // A decision taken back leaves nothing of it on the application: a later decline is a new decision, with its own date.
+  if (input.undoDecision) { patch.rejectedAt = null; patch.rejectReason = null; patch.rejectNote = null; patch.candidateToldAt = null; }
   await q.update(applications).set(patch).where(eq(applications.id, input.applicationId));
   await emit(q, {
     type: "application.stage_changed",

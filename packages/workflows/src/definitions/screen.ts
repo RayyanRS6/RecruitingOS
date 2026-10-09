@@ -6,7 +6,7 @@ import { audit, emit, entitlements, gate, humanResponseExpectation, isOneVisitFl
 import { applications, assessments, candidates, companies, rolePackets, roles, screens, withPlatform, type Tx } from "@ros/db";
 import {
   answersOf, applyScreenOpening, assessScreen, createScreen, finishScreenTurn, focusQuestionsFrom, loadScreenBundle, packetForFocusedInvite, prepareScreenOpening, requestHuman, screenContextOf, sendConversationHandedOver, sendConversationIdleReminder,
-  sendConversationNotStartedNote, sendConversationNotStartedReminder, sendConversationResume, sendConversationReviewReminder, sendConversationUnfinishedNote, sendScreenExpiredNote, sendScreenInvite, sendScreenReminder, submitScreenAnswers, type FocusQuestion, type ScreenDeps,
+  sendConversationNotOfferedNote, sendConversationNotStartedNote, sendConversationNotStartedReminder, sendConversationResume, sendConversationReviewReminder, sendConversationUnfinishedNote, sendScreenExpiredNote, sendScreenInvite, sendScreenReminder, submitScreenAnswers, type FocusQuestion, type ScreenDeps,
 } from "@ros/agents";
 import { twoPhase, type StepContext, type WorkflowDefinition } from "../types";
 import { SUGGESTION_WINDOW_HOURS, settleSuggestion, waitForSuggestion, type SuggestionState } from "../suggestions";
@@ -127,7 +127,16 @@ export const screen: WorkflowDefinition<State> = {
               await emit(ctx.q, { type: "entitlement.exceeded", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { key: entitlements.TEXT_SCREENS, limit: ent.limit, used: ent.used, plan: company.planKey }, correlationId: ctx.run.id });
               await notify(ctx.q, { companyId: ctx.companyId, kind: "entitlement.text_screens", title: "Screening conversations used up for this month", body: `Your plan includes ${ent.limit} screening conversations this month. ${candidate.firstName} ${candidate.lastName} is waiting for one and gets the link by email as soon as more are added, so everyone for ${role.title} has the same process. ITS has been told. You can also review them yourself.`, action: { label: "See usage", href: "/setup" } });
             }
-            if (ctx.now.getTime() - Date.parse(since) > ALLOWANCE_WAIT_DAYS * 24 * HOUR) return { kind: "complete" };
+            if (ctx.now.getTime() - Date.parse(since) > ALLOWANCE_WAIT_DAYS * 24 * HOUR) {
+              // Still used up after the whole wait: no silent lapse (plan G10). Someone whose receipt and acknowledgment
+              // promised the link by email (the conversation offered with the application) is told it is not going ahead
+              // and that nothing is needed; the team is told the person never got it, whoever started the run.
+              const promised = ctx.state.flow === "one_visit";
+              await emit(ctx.q, { type: "screen.allowance_lapsed", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { waitingSince: since, days: ALLOWANCE_WAIT_DAYS, promised }, correlationId: ctx.run.id });
+              if (promised) await sendConversationNotOfferedNote(ctx.q, ctx.services.integrations, { application: app, candidate, role, company, packet, actor: ctx.actor, correlationId: ctx.run.id });
+              await notify(ctx.q, { companyId: ctx.companyId, kind: "entitlement.text_screens", title: `${candidate.firstName} ${candidate.lastName} never got the screening conversation`, body: `Your plan's screening conversations stayed used up for ${ALLOWANCE_WAIT_DAYS} days, so ${candidate.firstName} never got the link.${promised ? " They have been told their application is with you as it is and that nothing else is needed." : ""} Their application is ready for your review; you can also ask a recruiter to call them.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
+              return { kind: "complete" };
+            }
             return { kind: "wait", wait: { kind: "timer", until: new Date(ctx.now.getTime() + ALLOWANCE_RECHECK_HOURS * HOUR).toISOString(), reason: "the plan's screening conversations are used up; waiting for more" }, state: { waitingForAllowance: since }, resumeStep: "invite" };
           }
         }
@@ -403,7 +412,7 @@ export const screen: WorkflowDefinition<State> = {
         if (g.outcome === "execute") {
           if (app.stage === "screen_complete") await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "interview_recommended", by: "system", actor: ctx.actor, correlationId: ctx.run.id });
           await emit(ctx.q, { type: "candidate.recommended", companyId: ctx.companyId, actor: { kind: "agent", id: "screening", runId: asmt.aiRunId ?? undefined }, subject: { type: "application", id: app.id }, payload: { recommendation: rec, assessmentId: asmt.id }, correlationId: ctx.run.id });
-          if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, kind: "candidate.recommended", title: `${name} is ready to interview`, body: `${rec === "strong_interview" ? "Strong screen. " : ""}${asmt.result.summary}`, action: { label: "Review and decide", href: `/roles/${role.id}/talent?open=${app.id}` } });
+          if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, kind: "candidate.recommended", title: `${name} is ready to interview`, body: `${rec === "strong_interview" ? "Strong screen. " : ""}${asmt.result.summary}`, action: { label: "Approve an interview", href: `/roles/${role.id}/talent?open=${app.id}&step=interview` } });
         } else if (g.outcome === "wait_for_approval") {
           return waitForSuggestion(ctx, g.approvalRequestId, "on_decision");
         }

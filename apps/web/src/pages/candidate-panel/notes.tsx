@@ -127,7 +127,10 @@ export function MyNote({ applicationId, view, firstName, compact = false }: { ap
     <Card title="Your note" aside={mine?.edited || versions.length ? <Chip>Changed</Chip> : null}>
       {compact ? <p className="small muted" style={{ margin: "0 0 8px" }}>{NOTES_REMINDER}</p> : null}
       <div className="row" style={{ gap: 6, marginBottom: 8 }} role="group" aria-label="Start from">
-        {starterChoices(view).map((s) => <Button key={s.id} size="sm" variant={starter === s.id ? "primary" : "secondary"} onClick={() => pick(s.id)} title={s.prompt}>{s.label}</Button>)}
+        {/* the chosen starter is heard as pressed, not only seen by its fill */}
+        {starterChoices(view).map((s) => <Button key={s.id} size="sm" variant={starter === s.id ? "primary" : "secondary"} ariaPressed={starter === s.id} onClick={() => pick(s.id)} title={s.prompt}>{s.label}</Button>)}
+        {/* once words are written, another starter adds its heading but the note stays filed under the first one: say which */}
+        <span className="small muted" aria-live="polite">{starter ? `Filed under: ${starterChoices(view).find((c) => c.id === starter)?.label ?? starter}` : ""}</span>
       </div>
       <label htmlFor={boxId} className="sr-only">Your note on {firstName}</label>
       <textarea id={boxId} className="textarea note-box" rows={compact ? 4 : 7} maxLength={NOTE_BODY_MAX + 200} value={text} onChange={(e) => setText(e.target.value)} placeholder={`What you saw and heard, as it bears on the job. Only your team reads it; ${firstName} never does.`} aria-describedby={`${boxId}-status`} />

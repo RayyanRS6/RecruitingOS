@@ -175,25 +175,39 @@ export type ToastTone = "neutral" | "good" | "critical";
  */
 export type ToastAction = { label: string; onAction: () => void };
 
-/** A toast: what happened, and optionally a second line on what did or did not follow ("The candidate was not told."). */
-export type ToastMessage = { title: string; detail?: string; tone?: ToastTone; action?: ToastAction; durationMs?: number };
+/**
+ * A toast: what happened, and optionally a second line on what did or did not follow ("The candidate was not told.").
+ * `endsAction`: it answers the action of the toast on screen (what became of an Undo pressed on the page itself), so it
+ * replaces that toast at once instead of waiting for it.
+ */
+export type ToastMessage = { title: string; detail?: string; tone?: ToastTone; action?: ToastAction; durationMs?: number; endsAction?: boolean };
 
 /** The longest a toast with an action stays: an Undo window is 30 seconds by default and two minutes at most. */
 export const TOAST_ACTION_MAX_MS = 120_000;
 
 /**
  * What toast() puts on the event: a plain string when there is only a title (the shape every Toaster has understood
- * from the start), a ToastMessage when there is a second line, a tone or an action.
+ * from the start), a ToastMessage when there is a second line, a tone, an action, or `endsAction`.
  */
-export function toastPayload(title: string, more?: string | { detail?: string; tone?: ToastTone; action?: ToastAction; durationMs?: number }): string | ToastMessage {
+export function toastPayload(title: string, more?: string | { detail?: string; tone?: ToastTone; action?: ToastAction; durationMs?: number; endsAction?: boolean }): string | ToastMessage {
   const extra = typeof more === "string" ? { detail: more } : (more ?? {});
-  if (!extra.detail && !extra.tone && !extra.action) return title;
+  if (!extra.detail && !extra.tone && !extra.action && !extra.endsAction) return title;
   const message: ToastMessage = { title };
   if (extra.detail) message.detail = extra.detail;
   if (extra.tone) message.tone = extra.tone;
   if (extra.action) message.action = extra.action;
   if (extra.action && extra.durationMs) message.durationMs = extra.durationMs;
+  if (extra.endsAction) message.endsAction = true;
   return message;
+}
+
+/**
+ * Whether a toast that just arrived shows now or waits: while a toast's action (an Undo) can still be pressed, a plain
+ * toast waits for it to end instead of taking the Undo away; a toast with an action of its own, or one that answers the
+ * action on screen (`endsAction`), shows at once.
+ */
+export function toastArrives(actionOnScreen: boolean, next: ToastMessage): "show" | "wait" {
+  return actionOnScreen && !next.action && !next.endsAction ? "wait" : "show";
 }
 
 /** Accepts both shapes a toast travels in: a plain string (title only) or a ToastMessage. Anything else is ignored. */
@@ -205,6 +219,7 @@ export function normalizeToast(input: unknown): ToastMessage | null {
   const message: ToastMessage = { title: o.title };
   if (typeof o.detail === "string" && o.detail.trim()) message.detail = o.detail;
   if (o.tone === "neutral" || o.tone === "good" || o.tone === "critical") message.tone = o.tone;
+  if (o.endsAction === true) message.endsAction = true;
   // An action needs words and something to do; its toast stays as long as the action is possible.
   const action = o.action as Record<string, unknown> | null | undefined;
   if (action && typeof action === "object" && typeof action.label === "string" && action.label.trim() && typeof action.onAction === "function") {

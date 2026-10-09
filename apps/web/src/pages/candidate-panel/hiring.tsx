@@ -117,7 +117,7 @@ type HireAnswer = { hire?: HireFollowUp | null; roleId?: string };
  * seen before it goes), or keep them warm until the start date. After an interview with no decision yet, the hire is
  * recorded as that interview's decision too.
  */
-export function HireStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId: string; onClose: () => void }) {
+export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail; roleId: string; /** May tell candidates a decision (application.reject): HR closes the role but does not send the closing message. */ mayTell: boolean; onClose: () => void }) {
   const qc = useQueryClient();
   const refresh = useRefreshCandidate(a.id, roleId);
   const name = `${a.candidate.firstName} ${a.candidate.lastName}`.trim();
@@ -149,10 +149,10 @@ export function HireStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId:
   const close = useMutation({
     mutationFn: (path: string) => api.post<{ movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; closingMessage?: ClosingMessagePreview | null }>(path, { outcome: "filled", confirm: true }),
     onSuccess: async (r) => {
-      const t = closeRoleToast(r);
+      const t = closeRoleToast(r, undefined, mayTell);
       toast(t.title, t.detail);
       await Promise.all([refresh(), qc.invalidateQueries({ queryKey: ["role", roleId] })]);
-      if (r.closingMessage && r.closingMessage.count > 0) setClosing(r.closingMessage);
+      if (mayTell && r.closingMessage && r.closingMessage.count > 0) setClosing(r.closingMessage);
       else onClose();
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not close the role."),
@@ -174,16 +174,17 @@ export function HireStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId:
         <div className="hire-choices">
           {v.mayClose && after.closeRole ? (
             <div className="hire-choice">
-              <strong>Close the role now and tell them</strong>
+              <strong>{mayTell ? "Close the role now and tell them" : "Close the role now"}</strong>
               <p className="small muted">{v.closeWords}</p>
               <Button size="sm" variant="primary" loading={close.isPending} onClick={() => close.mutate(after.closeRole!.path)}>Close it now</Button>
             </div>
           ) : null}
           {v.keepWarmWords ? (
             <div className="hire-choice">
-              <strong>Keep them warm until the start date</strong>
+              {/* a start date already past has no Today reminder to promise (plan H1) */}
+              <strong>{v.started ? "Leave the role open for now" : "Keep them warm until the start date"}</strong>
               <p className="small muted">{v.keepWarmWords}</p>
-              <Button size="sm" onClick={() => { const t = keepWarmToast(a.candidate.firstName || name, after.startDate); toast(t.title, t.detail); onClose(); }}>Keep the role open</Button>
+              <Button size="sm" onClick={() => { const t = keepWarmToast(a.candidate.firstName || name, after.startDate); toast(t.title, t.detail); onClose(); }}>{v.started ? "Leave it open" : "Keep the role open"}</Button>
             </div>
           ) : null}
         </div>

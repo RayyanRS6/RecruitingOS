@@ -35,7 +35,7 @@ test.describe("closing a role", () => {
     await expectAccessible(page, "role page with the close card");
     await card.getByLabel("Outcome").selectOption("no_hire");
     await card.getByRole("button", { name: "Confirm and close the role" }).click();
-    await expect(page.getByRole("status").filter({ hasText: /Role closed; the outcome is recorded with your name\..*nobody is told until you send the closing message\./ })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: /Role closed; the outcome is recorded with your name\..*nobody is told yet\. Send the closing message when you are ready\./ })).toBeVisible();
 
     // the one closing message: who gets it, the words once with each person's own name, and a single Send
     const closing = page.locator("section.card").filter({ has: page.getByRole("heading", { name: /^Tell the people .+ left in process$/ }) });

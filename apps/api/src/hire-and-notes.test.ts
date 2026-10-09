@@ -477,9 +477,26 @@ describe("interviews to hire: offer made, hire sheet, team notes, one-step inter
   });
 
   describe("closing the role from the hire sheet (plan H1)", () => {
+    it("HR is told who sends the closing message, since they may close a role but not tell candidates", async () => {
+      const [cara] = await container.db.select({ id: applications.id }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(eq(candidates.firstName, "Cara"));
+      const forHr = await withTenant(container.db, companyId, (tx) => hireFollowUp(tx, { roleId, hiredApplicationId: cara.id, startDate: null, role: "hr" }));
+      expect(forHr.closeRole!.words).toMatch(/an owner, admin, hiring manager or recruiter sends them the closing message/);
+      expect(forHr.closeRole!.words).not.toMatch(/you see the closing message/);
+      const forOwner = await withTenant(container.db, companyId, (tx) => hireFollowUp(tx, { roleId, hiredApplicationId: cara.id, startDate: null, role: "owner" }));
+      expect(forOwner.closeRole!.words).toMatch(/you see the closing message before it goes/);
+    });
+
     it("closes the role as filled; the people still in process move to the talent pool privately, and the sheet no longer offers the close", async () => {
-      const r = await json(owner, "POST", `/api/v1/roles/${roleId}/outcome`, { outcome: "filled", confirm: true });
+      // HR may close the role, but the answer carries no closing message to send: the send route would refuse them
+      const r = await json(hr, "POST", `/api/v1/roles/${roleId}/outcome`, { outcome: "filled", confirm: true });
       expect(r.status).toBe(200);
+      const closed = (await r.json()) as { movedToTalentPool: number; closingMessage: unknown };
+      expect(closed.movedToTalentPool).toBeGreaterThan(0);
+      expect(closed.closingMessage).toBeNull();
+      expect((await json(hr, "POST", `/api/v1/roles/${roleId}/closing-message`, { confirm: true })).status).toBe(403);
+      // an owner still finds it, with everyone the close left untold
+      const preview = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/closing-message`)).json()) as { count: number };
+      expect(preview.count).toBeGreaterThan(0);
       const [cara] = await container.db.select({ id: applications.id }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(eq(candidates.firstName, "Cara"));
       const after = await withTenant(container.db, companyId, (tx) => hireFollowUp(tx, { roleId, hiredApplicationId: cara.id, startDate: null, role: "owner" }));
       expect(after.closeRole).toBeNull();

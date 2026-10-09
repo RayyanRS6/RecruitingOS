@@ -601,6 +601,10 @@ async function visibleStage(container: Container, app: typeof applications.$infe
 }
 
 /**
+ * DRAFT WORDING PENDING COUNSEL (docs/spec/11-counsel-register.md item 23), except the standard decline line and the
+ * plain talent-pool line, the release-1 wording. Each line restates a `DECISION_SENTENCE` wording in
+ * `packages/agents/src/coordinator.ts` in the page's own words; change both together.
+ *
  * A decision in the words of the message that told it (plan G6): the closing message of a closed role (Q30), a filled
  * position, a decline after an interview or on an eligibility answer. Any other approved wording, and a decision a
  * person told them themselves, read the standard way. Never a reason beyond the eligibility answer, which the candidate
@@ -1178,7 +1182,13 @@ function AnswerItem(props: { item: ReviewItem; n: number; base: string }) {
   );
 }
 
-/** "Check your answers" (E10): every answer with its Change link, changed and skipped ones marked, then Send. */
+/**
+ * "Check your answers" (E10): every answer with its Change link, changed and skipped ones marked, then Send. It never
+ * promises the answers are private until Send: the team's panel shows them as they are given, changes included, and
+ * someone who does not press Send has them sent as they are (the screen workflow's idle_remind and close_unfinished:
+ * one reminder unless they already had one, then two days). Keep it in step with sendConversationReviewReminder and
+ * counsel register item 20.
+ */
 function ReviewPage(props: { view: ConversationView; changed: string | null; error?: string | null }) {
   const { view } = props;
   const base = screenPath(view.token);
@@ -1187,7 +1197,8 @@ function ReviewPage(props: { view: ConversationView; changed: string | null; err
     <ConversationPage view={view} title="Check your answers">
       <Progress at={view.total} total={view.total} text={`All ${view.total} questions done`} />
       <h1>Check your answers</h1>
-      <p class="lead">This is what you told the assistant. Change any answer you like, then press Send. Nothing is sent until you do.</p>
+      <p class="lead">This is what you told the assistant. The hiring team can see your answers as you give them, including any you change. Change any answer you like, then press Send to tell them you are finished.</p>
+      <p>If you do not press Send, we send your answers as they are a few days after your last answer or change. If we have not reminded you yet, we email you once before then.</p>
       {props.changed && items.some((i) => i.key === props.changed) ? <div class="card" role="status"><strong>Your answer is changed.</strong></div> : null}
       <ErrorNote code={props.error} />
       <ol class="answers">{items.map((item, i) => <AnswerItem item={item} n={i + 1} base={base} />)}</ol>
@@ -1221,8 +1232,17 @@ function closedWords(view: ConversationView): { title: string; lines: string[] }
   switch (view.status) {
     case "completed":
       return { title: "Thanks, your answers are sent", lines: [`The hiring team at ${co} reads them with your application. People on the team make every decision, and you will hear from them either way.`, "If anything else is needed from you, we will email you."] };
-    case "human_requested":
-      return { title: "A person will be in touch", lines: [`Someone working with the hiring team at ${co} will contact you ${view.personExpectation}.`, "Anything you answered is kept. Nothing else is needed from you here."] };
+    case "human_requested": {
+      // The time promised when they asked, never a new one each visit. Past it, the page cannot tell whether someone
+      // already called (the status stays the same), so it says how to chase it rather than that nobody did.
+      const asked = view.personAsked;
+      const when = !asked
+        ? `Someone working with the hiring team at ${co} will contact you. If nobody has been in touch, reply to any of our emails.`
+        : asked.overdue
+          ? `Someone working with the hiring team at ${co} was due to contact you by ${asked.dueWords}. If nobody has been in touch yet, reply to any of our emails and we will follow it up.`
+          : `Someone working with the hiring team at ${co} aims to contact you by ${asked.dueWords}.`;
+      return { title: "A person will be in touch", lines: [when, "Anything you answered is kept. Nothing else is needed from you here."] };
+    }
     case "declined_by_candidate":
       return { title: "Your application is with the hiring team", lines: [`It went to the hiring team at ${co} without the conversation. People on the team review it, and you will hear from them either way.`] };
     case "paused":

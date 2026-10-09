@@ -157,6 +157,8 @@ export type CancelledInterview = { title: string; startsAt: string | null; timez
  * The sentence that tells the decision, in each approved wording (founder decision Q28, plan G6). Ours, never the AI's.
  * DRAFT WORDING PENDING COUNSEL (docs/spec/11-counsel-register.md item 23), except `v1` and `eligibility`, the wordings
  * the product has always sent. None of them gives a reason beyond the eligibility answer, which the candidate can correct.
+ * The status page restates each wording in `decisionLine` (apps/api/src/pages/candidate.tsx), also under item 23;
+ * change both together.
  */
 const DECISION_SENTENCE: Record<DecisionWording, (company: string) => string> = {
   v1: () => "After reviewing your background against what this role needs, the team has decided not to move forward at this time.",

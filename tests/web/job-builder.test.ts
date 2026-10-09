@@ -307,6 +307,8 @@ describe("pay", () => {
     expect(marketRange(market)).toBe("$24–$31 an hour, middle $27");
     expect(marketSource(market)).toBe("BLS OEWS, Anaheim metro, 2025");
     expect(marketSource({ benchmark: { ...market.benchmark, origin: "its_estimate" } })).toMatch(/^ITS estimate for Anaheim metro, 2025\. ITS's own pay table/);
+    // a figure for a broader group of jobs says it is a rough guide (polish list)
+    expect(marketSource({ benchmark: { ...market.benchmark, approximate: true, occupation: "Market research analysts and marketing specialists" } })).toBe("BLS OEWS, Anaheim metro, 2025. A rough guide: there is no figure for this exact job, so it is for market research analysts and marketing specialists.");
     expect(marketRange({ benchmark: null })).toBeNull();
     expect(payFormFrom({ basis: "hourly", stated: { min: 45, max: 55, ceiling: null } })).toEqual({ basis: "hourly", min: "45", max: "55", ceiling: "" });
   });

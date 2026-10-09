@@ -54,9 +54,10 @@ test.describe("the match score and the skills editor", () => {
     }
     await expectAccessible(page, "the candidate panel with the match card");
     // "Something wrong?" asks first, saying what an ITS recruiter would see and for how long; Cancel sends nothing
-    const flag = maria.getByRole("combobox", { name: "Something wrong with this assessment?" }).first();
+    const flag = maria.getByRole("button", { name: "Something wrong with this assessment?" }).first();
     if (await flag.count()) {
-      await flag.selectOption("false_positive");
+      await flag.click();
+      await page.getByRole("menuitem", { name: "Overrated this candidate" }).click();
       const confirm = page.getByRole("dialog", { name: "Ask an ITS recruiter to check this reading?" });
       await expect(confirm.getByText(/Once they pick it up they see this candidate and the role they applied for/)).toBeVisible();
       await expectAccessible(page, "the flag's confirmation");

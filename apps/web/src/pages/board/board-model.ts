@@ -1,6 +1,7 @@
 import { BATCH_MAX, BOARD_COLUMN_LABEL, BoardColumn, DECLINE_REASON_LABEL, RejectReason } from "@ros/contracts";
 import { scoreBand, type Tone } from "@ros/ui";
 import type { BatchPreview, BatchResult, BoardCard, BoardView, PoolAnswer, PoolQuestion, PoolSummary, RoleBatchItem } from "../../api/client";
+import { safetyNetPromise } from "../../telling";
 
 /**
  * The pool board on the Talent page (plan F6-F10; founder decisions B2, B4, B5, B6), kept free of React so it can be
@@ -311,11 +312,14 @@ export function groupCount(rows: readonly ReviewRow[], column: BoardColumn, stat
   return { ticked: own.filter((r) => isTicked(r, state)).length, total: own.length };
 }
 
-/** Where each group goes, and that it is private. */
+/**
+ * Where each group goes, and that it is private. A decision nobody tells is not left forever: the safety net (Q27) acts
+ * after five working days, and the board does not know the company's setting, so the line says both what it may do.
+ */
 export const GROUP_WORDS: Record<BoardColumn, string> = {
   shortlist: "Added to your Shortlist. Private, the candidate is not told.",
   longlist: "Kept warm on your Longlist. Private, no email.",
-  not_moving_forward: "Filed privately. Nobody is emailed until you send the decision message from the Talent page; you will be reminded.",
+  not_moving_forward: `Filed privately. Nobody is emailed now; you will be reminded to send the decision message from the Talent page. ${safetyNetPromise()}`,
 };
 
 /** The line under Review and apply's title: what can change here, and what happens to the rest. */

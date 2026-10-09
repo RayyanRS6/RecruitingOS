@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Alert, Button, Dialog, Icon, Skeleton, cx } from "@ros/ui";
 import { api, type PostingsResponse } from "../api/client";
 import { ShareJob } from "../components/ShareJob";
+import { scrollBehavior } from "../motion";
 import { destinationsOf, interviewersNote, noBoardsLine, outdatedBoardsLine, pollInterval, type Destination, type StatusChip } from "../publishing";
 import { toast } from "../toast";
 
@@ -70,7 +71,7 @@ export function AfterApproval(props: { open: boolean; onClose: () => void; roleI
   const d = q.data;
   const shareNow = () => {
     setSharing(true);
-    window.setTimeout(() => shareRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }), 50);
+    window.setTimeout(() => shareRef.current?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() }), 50);
   };
   const preparing = !d || d.publishing.state === "preparing";
   const sub = props.editWhileOpen

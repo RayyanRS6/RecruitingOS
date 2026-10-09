@@ -48,6 +48,10 @@ export const EventType = z.enum([
   // notes, and how a role's applicants meet the conversation (set by ITS).
   "screen.declined_by_candidate", "screen.unfinished", "screen.idle_reminded", "screen.paused", "screen.resumed", "screen.question_skipped", "screen.answer_tapped", "screen.answer_edited", "screen.recruiter_notes_added",
   "screen.repeat_started", "screen.repeat_confirmation_sent", "screen.repeat_confirmed", "screen.repeat_discarded",
+  // A conversation reached the most model calls it may make and ended in code (to "check your answers", or closed).
+  "screen.turn_cap_reached",
+  // The plan's screening conversations stayed used up for the whole wait (Q17): the link never went; the candidate and the team are told.
+  "screen.allowance_lapsed",
   "role.apply_mode_changed", "company.apply_flow_changed", "entitlement.warning",
   "candidate.recommended", "interview.requested", "interview.scheduling_started", "interview.slots_offered", "interview.scheduled",
   "interview.rescheduled", "interview.cancelled", "interview.no_show", "interview.brief_sent", "interview.recording_consented",

@@ -132,6 +132,29 @@ export function safetyNetDate(decidedAt: string, days = SAFETY_NET_WORKING_DAYS)
   return new Date(t);
 }
 
+/**
+ * The note under a message or an invitation that uses the line the assistant suggested (Q28). Once kept, the assistant
+ * helped, however the line was changed afterwards: the email says so until the person takes the line out (while it is
+ * still word for word) or empties the box. `whole`: the line is still there word for word.
+ */
+export function suggestedLineNote(whole: boolean, where: "footer" | "invitation"): string {
+  const says = `the ${where} says the assistant helped write it`;
+  if (whole) return `You kept a line the AI assistant suggested, so ${says}.`;
+  return `You changed the line the AI assistant suggested; it is still mostly its words, so ${says}. To leave that out, empty the ${where === "footer" ? "message" : "line"} and write your own.`;
+}
+
+/**
+ * The safety net (Q27) said at the moment a decision is filed, for lines that would otherwise read as "nothing is ever
+ * sent until a person sends it". With the company's setting known: "sends" means the standard message goes by itself;
+ * otherwise a recruiter is brought in and nothing is sent. Without it, both are said. `what` names the message.
+ */
+export function safetyNetPromise(policy?: DeclineMessagePolicy | null, what = "the standard message"): string {
+  const within = `If nobody tells them within ${SAFETY_NET_WORKING_DAYS} working days`;
+  if (policy === "sends") return `${within}, ${what} goes to them by itself.`;
+  if (policy === "needs_approval" || policy === "not_sent") return `Nothing is sent by itself: ${within.charAt(0).toLowerCase()}${within.slice(1)}, an ITS recruiter is brought in to make sure they are told.`;
+  return `${within}, ${what} goes by itself (if your settings ask for approval or keep these messages with a person, an ITS recruiter is brought in instead and nothing is sent).`;
+}
+
 /** "Tuesday, October 14". */
 export function dayWords(d: Date): string {
   return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });

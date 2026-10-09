@@ -155,7 +155,7 @@ export function RoleDetail() {
       {check === "waiting" && ["open", "paused"].includes(r.status) ? <Alert tone="caution">{ROLE_WAITS_FOR_CHECK}</Alert> : null}
 
       {/* Closing lists who is still in process, then shows the one closing message for them all (founder decision Q30). */}
-      {closing ? <CloseRoleCard roleId={r.id} initialOutcome={closing.outcome} onClose={() => setClosing(null)} /> : null}
+      {closing ? <CloseRoleCard roleId={r.id} initialOutcome={closing.outcome} mayTell={canDecline(myRole)} onClose={() => setClosing(null)} /> : null}
       {closingMessage && !closing && r.status === "closed" && canDecline(myRole) ? <ClosingMessageCard roleId={r.id} onDone={() => { setClosingMessage(false); if (search.get("closingMessage")) navigate(`/roles/${r.id}`, { replace: true }); }} /> : null}
 
       {p ? <PacketApprovalCard role={r} onEdit={() => openEditor()} canEdit={editPacket} canManage={manage} canSeePay={canSeePay(myRole)} showingProposed={shown === proposed && !!proposed} onShowProposed={setShowProposed} onApproved={(info) => { setShowProposed(false); setAfterApproval(info); }} /> : null}

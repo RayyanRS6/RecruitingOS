@@ -1,19 +1,67 @@
-import { and, eq } from "drizzle-orm";
-import { companies, entitlements, plans, usageEvents, type Queryable } from "@ros/db";
+import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
+import { companies, entitlements, plans, roles, usageEvents, type Queryable } from "@ros/db";
 import { raiseAlertOnce } from "./alerts";
 
-/** Entitlement checks by key. Product code never compares plan names. */
+/** The plan's allowance of roles at a time. */
+export const ACTIVE_ROLES = "active_roles";
+
+/**
+ * A role uses one of the plan's places from the moment it is created until it closes: while it waits for approval, is
+ * sent back for changes, is open or is paused. Closing it (filled, cancelled, no hire) gives the place back, and a role
+ * reopened by correcting its outcome takes one again. Counted from the roles themselves, never from a running total.
+ */
+export const ROLE_STATUSES_USING_A_PLACE = ["pending_approval", "draft", "open", "paused"] as const;
+
+/** The roles using the plan's places now, oldest first; `except` leaves out a role being created in this transaction. */
+export async function rolesUsingAPlace(q: Queryable, companyId: string, opts: { except?: string } = {}): Promise<Array<{ roleId: string; title: string; status: string }>> {
+  const where = [eq(roles.companyId, companyId), inArray(roles.status, [...ROLE_STATUSES_USING_A_PLACE])];
+  if (opts.except) where.push(ne(roles.id, opts.except));
+  return q.select({ roleId: roles.id, title: roles.title, status: roles.status }).from(roles).where(and(...where)).orderBy(asc(roles.createdAt));
+}
+
+/** Where a company stands on roles: the places in use (and which roles use them) and room for one more. */
+export async function roleRoom(q: Queryable, companyId: string, opts: { except?: string } = {}): Promise<{ ok: boolean; limit: number | null; used: number; holding: Array<{ roleId: string; title: string; status: string }> }> {
+  const [row] = await q.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, ACTIVE_ROLES))).limit(1);
+  const holding = await rolesUsingAPlace(q, companyId, opts);
+  const limit = row?.limit ?? null;
+  return { ok: limit === null || holding.length + 1 <= limit, limit, used: holding.length, holding };
+}
+
+/** Entitlement checks by key. Product code never compares plan names. Roles are counted from the roles themselves. */
 export async function check(q: Queryable, companyId: string, key: string, delta = 1): Promise<{ ok: boolean; limit: number | null; used: number }> {
   const [row] = await q.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, key))).limit(1);
   if (!row) return { ok: true, limit: null, used: 0 }; // unmetered
-  if (row.limit === null) return { ok: true, limit: null, used: row.used };
-  return { ok: row.used + delta <= row.limit, limit: row.limit, used: row.used };
+  const used = key === ACTIVE_ROLES ? (await rolesUsingAPlace(q, companyId)).length : row.used;
+  if (row.limit === null) return { ok: true, limit: null, used };
+  return { ok: used + delta <= row.limit, limit: row.limit, used };
 }
 
-export async function record(q: Queryable, companyId: string, key: string, quantity: number, unit: string, ref: Record<string, unknown> = {}): Promise<void> {
+/**
+ * Records a use. Each one is kept as a usage event; the running total counts up, except for roles, whose total is the
+ * number of roles using a place now (the role being recorded is already created), so it never only goes up. The count
+ * is added in the database (`used = used + n`), never read and written back: two uses at the same moment (two
+ * applicants' first answers) each count, the second waiting on the first's row lock and adding to its total. Returns
+ * the total after this use, as the database has it, or null for an unmetered key.
+ */
+export async function record(q: Queryable, companyId: string, key: string, quantity: number, unit: string, ref: Record<string, unknown> = {}): Promise<{ used: number; limit: number | null } | null> {
   await q.insert(usageEvents).values({ companyId, key, quantity, unit, ref });
-  const [row] = await q.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, key))).limit(1);
-  if (row) await q.update(entitlements).set({ used: row.used + quantity }).where(eq(entitlements.id, row.id));
+  const [row] = await q.select({ id: entitlements.id, limit: entitlements.limit }).from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, key))).limit(1);
+  if (!row) return null;
+  if (key === ACTIVE_ROLES) {
+    const used = (await rolesUsingAPlace(q, companyId)).length;
+    await q.update(entitlements).set({ used }).where(eq(entitlements.id, row.id));
+    return { used, limit: row.limit };
+  }
+  const [after] = await q.update(entitlements).set({ used: sql`${entitlements.used} + ${quantity}` }).where(eq(entitlements.id, row.id)).returning({ used: entitlements.used, limit: entitlements.limit });
+  return after ?? null;
+}
+
+/** The plan's usage as the company's settings show it: roles counted from the roles using a place now. */
+export async function usageOf(q: Queryable, companyId: string): Promise<Record<string, { used: number; limit: number | null }>> {
+  const rows = await q.select().from(entitlements).where(eq(entitlements.companyId, companyId));
+  const out: Record<string, { used: number; limit: number | null }> = {};
+  for (const e of rows) out[e.key] = { used: e.key === ACTIVE_ROLES ? (await rolesUsingAPlace(q, companyId)).length : e.used, limit: e.limit };
+  return out;
 }
 
 /** Materializes a plan's limits into entitlement rows for a company (signup, upgrade, downgrade, renewal). */
@@ -49,16 +97,17 @@ export type AllowanceCrossing = { crossed: "warning" | "used_up" | null; used: n
 /**
  * Counts a screening conversation at the candidate's first answer (plan E9), never at the invitation, and says whether
  * this one crossed the 80% line or used the allowance up. Nothing is refused here: someone who has started is never cut
- * off (founder decision F8; Q17).
+ * off (founder decision F8; Q17). The crossing is worked out from the total the database returned for this count, so of
+ * two conversations counted at the same moment exactly one crosses each line.
  */
 export async function recordScreenStart(q: Queryable, companyId: string, ref: Record<string, unknown>): Promise<AllowanceCrossing> {
-  const [before] = await q.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, TEXT_SCREENS))).limit(1);
-  await record(q, companyId, TEXT_SCREENS, 1, "screen", ref);
-  if (!before || before.limit === null || before.limit <= 0) return { crossed: null, used: (before?.used ?? 0) + 1, limit: before?.limit ?? null };
-  const used = before.used + 1;
-  const line = Math.ceil(before.limit * ALLOWANCE_WARN_RATIO);
-  const crossed = before.used < before.limit && used >= before.limit ? "used_up" : before.used < line && used >= line ? "warning" : null;
-  return { crossed, used, limit: before.limit };
+  const after = await record(q, companyId, TEXT_SCREENS, 1, "screen", ref);
+  if (!after || after.limit === null || after.limit <= 0) return { crossed: null, used: after?.used ?? 1, limit: after?.limit ?? null };
+  const used = after.used;
+  const prev = used - 1;
+  const line = Math.ceil(after.limit * ALLOWANCE_WARN_RATIO);
+  const crossed = prev < after.limit && used >= after.limit ? "used_up" : prev < line && used >= line ? "warning" : null;
+  return { crossed, used, limit: after.limit };
 }
 
 /**

@@ -333,4 +333,30 @@ describe("email alerts and the history of updates", () => {
     expect((await json(owner, "PUT", "/api/v1/notifications/preferences", { preferences: [{ group: "messages", cadence: "weekly" }] })).status).toBe(200);
     expect(await digestRuns()).toHaveLength(2);
   });
+
+  it("the ITS queue's email when the ladder reaches a recruiter names the role and links the queue, never a candidate", async () => {
+    // a detection whose body names people (a conversation stuck open, the team never acting)
+    const found: Detection[] = [{ detector: "conversations_stuck", roleId: roleB, roleTitle: "Front Desk Coordinator", title: "2 applicants are stuck in the screening conversation (Front Desk Coordinator)", body: "Priya Shah, Maria Reyes. Their conversation should have closed by itself and did not.", action: { label: "See who", href: `/roles/${roleB}/talent` }, days: 6, applicationIds: [] }];
+    const deps = (now: Date) => ({ integrations: container.integrations, appBaseUrl: container.env.APP_BASE_URL, itsQueueEmail: container.env.ITS_QUEUE_EMAIL, now, actor: { kind: "system" as const, id: "stuck_role_detector" } });
+    const t = new Date();
+    const levels: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const at = new Date(t.getTime() + i * 49 * 3_600_000);
+      const r = await withTenant(container.db, companyId, (tx) => runInterventionLadder(tx, deps(at), companyId, found));
+      levels.push(...r.filter((x) => x.detector === "conversations_stuck").map((x) => x.level));
+    }
+    expect(levels).toEqual(["brief", "message", "offer_recruiter", "escalation"]);
+    setClock(new Date(t.getTime() + 3 * 49 * 3_600_000));
+    await container.drain();
+    setClock(new Date());
+    const toQueue = mail().sent.filter((m) => m.to === container.env.ITS_QUEUE_EMAIL && m.tags?.template === "escalation");
+    expect(toQueue).toHaveLength(1);
+    expect(toQueue[0].text).toContain("2 applicants are stuck in the screening conversation (Front Desk Coordinator)");
+    expect(toQueue[0].text).toContain("/recruiter/queue/");
+    expectNoLeaks(toQueue[0]);
+    // nor is the name kept in the stored copy of that email
+    const stored = await container.db.select({ bodyText: communications.bodyText }).from(communications).where(and(eq(communications.companyId, companyId), eq(communications.templateKey, "escalation")));
+    expect(stored.length).toBeGreaterThan(0);
+    for (const s of stored) expect(s.bodyText ?? "").not.toContain("Priya Shah");
+  });
 });

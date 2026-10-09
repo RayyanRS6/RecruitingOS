@@ -164,6 +164,10 @@ describe("interviews to hire (Wave H)", () => {
     expect(t).toContain("Your note");
     expect(html).toContain('role="group" aria-label="Start from"');
     expect(t).toMatch(/Before the interview After the interview For and against/);
+    // the starter the note is filed under is heard as pressed, not only seen by its fill, and said in words
+    expect(html).toMatch(/<button type="button" class="btn primary sm" title="What do you want to find out\?" aria-pressed="true">Before the interview<\/button>/);
+    expect(html).toMatch(/<button type="button" class="btn secondary sm" title="How did it go\? What did you see and hear\?" aria-pressed="false">After the interview<\/button>/);
+    expect(t).toContain("Filed under: Before the interview");
     expect(html).toContain(">Ask about Saturdays.</textarea>");
     expect(t).toContain("Changed since it was first written; the earlier words are kept on record.");
     expect(t).toContain("Your team's notes (1)");
@@ -190,7 +194,7 @@ describe("interviews to hire (Wave H)", () => {
 describe("closing a role and its one closing message (Q30)", () => {
   it("the close card lists who is still in process before anything is closed", () => {
     const apps = { applications: [{ id: "a1", stage: "triaged", ownerStage: "new", ownerStageLabel: "New", candidate: { id: "c1", name: "Maria Reyes" } }, { id: "a2", stage: "rejected", ownerStage: "not_moving_forward", ownerStageLabel: "Not moving forward", candidate: { id: "c2", name: "Luis Ortega" } }, { id: "a3", stage: "finalist", ownerStage: "interviewing", ownerStageLabel: "Interviewing", candidate: { id: "c3", name: "Ana Holt" } }], counts: {} };
-    const t = text(render(client([], [[["applications", "r1"], apps]]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled_outside_platform", onClose: () => undefined })));
+    const t = text(render(client([], [[["applications", "r1"], apps]]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled_outside_platform", mayTell: true, onClose: () => undefined })));
     expect(t).toContain("Close this role");
     expect(t).toContain("Still in process");
     expect(t).toContain("Maria Reyes");
@@ -198,6 +202,10 @@ describe("closing a role and its one closing message (Q30)", () => {
     expect(t).not.toContain("Luis Ortega");
     expect(t).toContain("These 2 people move to your talent pool, privately");
     expect(t).toContain("Next you see the one closing message for all of them before anything goes.");
+    // HR may close the role but not tell candidates: told who sends the message, never promised a Send of their own
+    const hr = text(render(client([], [[["applications", "r1"], apps]]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled_outside_platform", mayTell: false, onClose: () => undefined })));
+    expect(hr).toContain("An owner, admin, hiring manager or recruiter then sends them the one closing message; it waits on their Today.");
+    expect(hr).not.toContain("Next you see the one closing message");
   });
 
   it("the closing message names who gets it, shows the words once, and has a single Send", () => {
@@ -210,6 +218,11 @@ describe("closing a role and its one closing message (Q30)", () => {
     expect(t).toContain("Hi [first name],");
     expect(t).toContain("Send to 2 people");
     expect(t).toContain("Not now");
+    // "Not now" does not promise that nothing ever goes: the safety net (Q27) sends it by itself under these settings
+    expect(t).toContain("Not now leaves them on Today as not told yet. If nobody tells them within 5 working days, the closing message goes to them by itself.");
+    expect(t).not.toContain("nothing is sent until someone sends it");
+    const asked = text(render(client([]), createElement(ClosingMessageCard, { roleId: "r1", preview: { ...preview, policy: "needs_approval" } as never, onDone: () => undefined })));
+    expect(asked).toContain("Nothing is sent by itself: if nobody tells them within 5 working days, an ITS recruiter is brought in to make sure they are told.");
   });
 });
 
@@ -221,6 +234,19 @@ describe("the team's notes in Compare (plan H3)", () => {
     expect(t).toContain("Team notes");
     expect(t).toMatch(/Sam Doyle ?: Calm and precise\./);
     expect(t).toContain("No notes yet");
+  });
+
+  it("gives every row a row header, so a screen reader names what each cell is about", () => {
+    const cand = (id: string) => ({ applicationId: id, name: id === "a1" ? "Maria Reyes" : "Luis Ortega", stage: "triaged", stageLabel: "Ready", group: "waiting_on_you", mustHaves: {}, competencies: {}, screen: null, resume: null, unknownCount: 0, open: `/roles/r1/talent?open=${id}`, score: null, notes: [] });
+    const data = { role: { id: "r1", title: "Dental Hygienist" }, mustHaves: [{ key: "mh_1", text: "Active CA RDH license" }], competencies: [{ key: "c1", name: "Patient care", definition: "Calm with patients", importance: "essential" }], max: 5, reminder: "People decide.", candidates: [cand("a1"), cand("a2")] };
+    const html = render(client([]), createElement(CompareTable, { data: data as never }));
+    expect(html).toContain('<th scope="col">Maria Reyes</th>');
+    expect(html).toContain('<th scope="row" class="small muted">Match score</th>');
+    expect(html).toMatch(/<th scope="row" class="small"><span class="sbar-tag must">Must-have<\/span> Active CA RDH license<\/th>/);
+    expect(html).toMatch(/<th scope="row" class="small" title="Calm with patients">(<span class="sbar-tag">[^<]*<\/span> )?Patient care<\/th>/);
+    expect(html).toContain('<th scope="row" class="small muted">Their panel</th>');
+    // every body row starts with its header: no row is left with a plain first cell
+    expect(html).not.toMatch(/<tr><td/);
   });
 });
 

@@ -22,7 +22,7 @@ Every integration is an adapter behind an interface in `packages/integrations`, 
 | HRIS | Handoff packet | `hris/handoff_packet` | Slice 5 | Nothing | Email + CSV + checklist to the payroll admin; universal fallback |
 | HRIS breadth | Finch | `hris/finch` | Version 1, pending_credentials | Finch account | ADP, Paychex, Paylocity, isolved |
 | Background checks | Checkr | `background/checkr` | Version 1, pending_credentials | Checkr account | FCRA flows; adverse action human-only |
-| Compensation | BLS OEWS | `comp/bls` | live (v1 keyless, limited) | Optional free key for v2 | SOC code mapping by the model, metro by location |
+| Compensation | BLS OEWS | `comp/bls` | live (v1 keyless, limited) | Optional free key for v2 | SOC code from the playbook role (`occupation`), else from the job title by a built-in table; metro by location. A job with no occupation of its own (social media and content roles are read as 13-1161 marketing specialists, never 11-2021 marketing managers; e-commerce managers as 11-2021) is marked approximate, and the pay check calls the figure a rough guide |
 | Compensation | Playbook ranges | `comp/playbook` | live | ITS authoring | |
 | Billing | Stripe | `billing/stripe` | Slice 4 or 5 | Account | Syncs to entitlements |
 | Embeddings | Voyage | `ai/embed` | Slice 7 | API key | |

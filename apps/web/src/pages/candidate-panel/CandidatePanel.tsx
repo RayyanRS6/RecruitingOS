@@ -83,9 +83,12 @@ export function CandidatePanel(props: PanelProps) {
     go?.();
   };
 
-  // Next and previous, by button or Alt+arrow; unsent text asks first.
+  // Next and previous, by button or Alt+arrow; unsent text asks first. `moved` lets the live region say who is shown
+  // after a move (not on opening, where the dialog's own name is read).
   const nav = neighbours(props.ids, id);
-  const goTo = (to: string | null) => { if (to) guarded(() => props.onGo(to)); };
+  const navBox = useRef<HTMLSpanElement>(null);
+  const [moved, setMoved] = useState(false);
+  const goTo = (to: string | null) => { if (to) guarded(() => { setMoved(true); props.onGo(to); }); };
   const goRef = useRef(goTo);
   goRef.current = goTo;
   const navRef = useRef(nav);
@@ -114,6 +117,15 @@ export function CandidatePanel(props: PanelProps) {
     setSeen({ id, seen: next });
   }, [id, tab, loaded]);
   const unread = a && seen?.id === id ? unreadTabs(latestByTab(a), seen.seen, tab) : new Set<PanelTab>();
+
+  // After a move, focus that fell out of the panel comes back to it: the pressed button turned disabled at the end of
+  // the list, or a section tab was focused while the next person loaded. The dialog itself takes it, so its new name
+  // is read. Nothing happens when focus is still inside (the usual case: Previous and Next stay mounted).
+  useEffect(() => {
+    if (!loaded) return;
+    const dialog = navBox.current?.closest<HTMLElement>('[role="dialog"]');
+    if (dialog && !dialog.contains(document.activeElement)) dialog.focus({ preventScroll: true });
+  }, [id, loaded]);
 
   const name = a ? `${a.candidate.firstName} ${a.candidate.lastName}`.trim() : "Candidate";
   const openCompose = () => { setCompose({ ...composing, open: true }); onTab("messages"); };
@@ -149,18 +161,27 @@ export function CandidatePanel(props: PanelProps) {
       sub={sub}
       leading={a ? <Avatar name={name} size="lg" /> : undefined}
       actions={
-        a ? (
+        // Previous and Next stay mounted while the next person loads (they depend only on the list), so the button a
+        // keyboard user pressed keeps focus; the rest waits for the person. The two slots keep their order so React
+        // reuses the same buttons.
+        nav || a ? (
           <>
             {nav ? (
-              <span className="panel-nav">
+              <span className="panel-nav" ref={navBox}>
                 <IconButton icon="chevron-up" size="sm" label="Previous candidate (Alt+Up)" disabled={!nav.prev} onClick={() => goTo(nav.prev)} />
-                <span aria-live="polite">{nav.index + 1} of {nav.total}</span>
+                <span>{nav.index + 1} of {nav.total}</span>
                 <IconButton icon="chevron-down" size="sm" label="Next candidate (Alt+Down)" disabled={!nav.next} onClick={() => goTo(nav.next)} />
+                {/* one live region that stays mounted: after a move it says who is shown, once they have loaded */}
+                <span className="sr-only" aria-live="polite">{moved && a ? `${name}, ${nav.index + 1} of ${nav.total}` : ""}</span>
               </span>
             ) : null}
-            <Button size="sm" icon="mail" disabled={!a.candidate.email} title={a.candidate.email ? `Write to ${a.candidate.firstName}` : "No email address on file"} onClick={openCompose}>Email</Button>
-            <StageButton stage={a.ownerStage} label={a.ownerStageLabel} blocked={stageBlocked(a.stageMoves)} disabled={act.isPending} onMove={onMove} align="end" />
-            <Menu label="More" items={more} onSelect={onMore} ariaLabel="More choices" align="end" />
+            {a ? (
+              <>
+                <Button size="sm" icon="mail" disabled={!a.candidate.email} title={a.candidate.email ? `Write to ${a.candidate.firstName}` : "No email address on file"} onClick={openCompose}>Email</Button>
+                <StageButton stage={a.ownerStage} label={a.ownerStageLabel} blocked={stageBlocked(a.stageMoves)} disabled={act.isPending} onMove={onMove} align="end" />
+                <Menu label="More" items={more} onSelect={onMore} ariaLabel="More choices" align="end" />
+              </>
+            ) : null}
           </>
         ) : undefined
       }

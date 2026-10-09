@@ -83,7 +83,8 @@ export interface JobBoardAdapter {
   expire(input: { roleId: string; externalId?: string | null }): Promise<void>;
 }
 
-export type CompBenchmark = { metro: string; basis: "hourly" | "salary"; p25: number; p50: number; p75: number; source: string; asOf: string };
+/** `approximate` (with the broader `occupation` it was read from) when the job has no occupation of its own. */
+export type CompBenchmark = { metro: string; basis: "hourly" | "salary"; p25: number; p50: number; p75: number; source: string; asOf: string; approximate?: true; occupation?: string };
 
 export interface CompAdapter {
   readonly id: string;

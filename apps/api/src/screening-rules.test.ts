@@ -170,7 +170,8 @@ describe("screening rules: the follow-up cap and the web hand-off to a person", 
     expect(last.content).toMatch(/A person from Rules Dental Group will follow up with you (within four business hours|on the next business day)/);
     const html = decodeEntities(await (await app.request(`/c/screen/${token}`)).text());
     expect(html).toContain("<h1>A person will be in touch</h1>");
-    expect(html).toMatch(/Someone working with the hiring team at Rules Dental Group will contact you (within four business hours|on the next business day)/);
+    // the page keeps the time promised when they asked: four business hours from the request, as a day and a time
+    expect(html).toMatch(/Someone working with the hiring team at Rules Dental Group aims to contact you by [A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}/);
     expect(html).not.toContain('name="message"'); // the conversation is closed to the assistant
     // counted, as ITS covers it (Q16), never against the company's recruiter requests
     expect((await container.db.select().from(usageEvents).where(eq(usageEvents.key, "screen_person_requests"))).filter((u) => u.ref.screenId === screenId)).toMatchObject([{ ref: { choice: "contact_me" } }]);

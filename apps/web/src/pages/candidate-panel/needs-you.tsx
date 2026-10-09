@@ -4,12 +4,12 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, ErrorState, Field, Skeleton } from "@ros/ui";
 import { api, ApiError, type ActionResult, type ApplicationDetail, type InterviewDraft, type InterviewPlanView, type SuggestedLine } from "../../api/client";
-import { PERSONAL_LINE_MAX } from "../../telling";
+import { PERSONAL_LINE_MAX, suggestedLineNote } from "../../telling";
 import { toast } from "../../toast";
 import { AskRecruiter } from "../../components/AskRecruiter";
 import { defaultInterviewers } from "../../interview-defaults";
 import { interviewDraftLine } from "../../hiring";
-import { canReadNotes } from "../../roles";
+import { canDecline, canReadNotes } from "../../roles";
 import { callNotesState } from "../../screen-view";
 import { NOT_NOW_TOAST, declineConfirmText, decisionToast, holdDay, outcomeNoticeText, outcomeToast, type PanelStep } from "../../talent-actions";
 import { CallNotesCard } from "./call-notes";
@@ -29,6 +29,8 @@ type Props = { a: ApplicationDetail; roleId: string; myRole: string | null; myUs
 const DECIDED = ["rejected", "talent_pool"];
 /** The steps from which an offer made outside the app can be recorded (plan H2). */
 const FINALIST = ["finalist", "reference_check"];
+/** Already in the Interviewing column, where the stage button has nothing to open: the approval card offers the interview. */
+const INTERVIEW_READY = ["interview_recommended", "interview_complete"];
 
 export function NeedsYou(props: Props) {
   const { a, roleId, step, setStep } = props;
@@ -42,16 +44,21 @@ export function NeedsYou(props: Props) {
   // after the interviews (plan Wave H): a finalist's next step, and an offer waiting on the candidate's answer
   const finalist = FINALIST.includes(a.stage) && can("record_outcome") && !step && !can("record_decision");
   const waitingOnCandidate = a.stage === "offer_sent" && step !== "hire";
+  // Already at the interview step with nothing in motion (an interview cancelled, times that expired, "Next round", the
+  // approval set aside with "Not now", or the assistant's recommendation after a screen): the approval stays one click away.
+  const readyToInterview = !step && can("interview") && !can("record_decision") && INTERVIEW_READY.includes(a.stage)
+    && !suggestions.some((p) => p.actionType === "application.recommend_interview") && a.mark?.mark !== "on_hold" && a.mark?.mark !== "not_a_fit_for_now";
   const cards = [
     callNotes.prominent ? <CallNotesCard key="call-notes" a={a} roleId={roleId} prominent /> : null,
     step === "hold" ? <HoldStep key="hold" a={a} roleId={roleId} onClose={() => setStep(null)} /> : null,
     step === "decline" ? <DeclineStep key="decline" a={a} roleId={roleId} onClose={() => setStep(null)} /> : null,
     step === "interview" ? <InterviewStep key="interview" a={a} roleId={roleId} initialRoundKey={props.roundKey} onClose={() => setStep(null)} /> : null,
     step === "offer" ? <OfferStep key="offer" a={a} roleId={roleId} onClose={() => setStep(null)} /> : null,
-    step === "hire" ? <HireStep key="hire" a={a} roleId={roleId} onClose={() => setStep(null)} /> : null,
+    step === "hire" ? <HireStep key="hire" a={a} roleId={roleId} mayTell={canDecline(props.myRole)} onClose={() => setStep(null)} /> : null,
     step === "outcome" ? <OutcomeStep key="outcome" a={a} roleId={roleId} onClose={() => setStep(null)} onHire={() => setStep("hire")} /> : null,
     ...suggestions.map((p) => <SuggestionCard key={p.id} a={a} roleId={roleId} p={p} onInterview={(roundKey) => setStep("interview", { roundKey })} />),
     can("record_decision") && step !== "interview" && step !== "hire" ? <DecisionCard key="decision" a={a} roleId={roleId} myRole={props.myRole} onNextRound={(key) => setStep("interview", { roundKey: key })} onHire={() => setStep("hire")} onNotes={() => props.onTab?.("notes")} /> : null,
+    readyToInterview ? <ReadyToInterviewCard key="ready-to-interview" a={a} onApprove={() => setStep("interview")} /> : null,
     finalist ? <FinalistCard key="finalist" a={a} setStep={(s) => setStep(s)} /> : null,
     waitingOnCandidate ? <WaitingOnCandidateCard key="waiting-on-candidate" a={a} roleId={roleId} onAccepted={() => setStep("hire")} /> : null,
     a.stage === "ineligible" ? <EligibilityCard key="eligibility" a={a} roleId={roleId} /> : null,
@@ -156,13 +163,15 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
   // which case the invitation says the assistant helped. Checked by the API like a decision message's line.
   const [line, setLine] = useState("");
   const [kept, setKept] = useState<{ line: string; runId: string | null } | null>(null);
-  const lineAiHelped = !!kept && line.includes(kept.line);
+  // Kept once, the assistant helped, however the line is changed afterwards; only taking it out or emptying the box ends that.
+  const lineAiHelped = !!kept;
+  const lineStillWhole = !!kept && line.includes(kept.line);
   const suggest = useMutation({
     mutationFn: () => api.post<SuggestedLine>(`/api/v1/applications/${a.id}/messages/suggest`, { purpose: "interview_invite", roundKey: chosenRoundKey }),
     onError: (e) => toast(e instanceof ApiError ? e.message : "The assistant could not suggest a line just now."),
   });
   const request = useMutation({
-    mutationFn: () => api.post(`/api/v1/applications/${a.id}/interviews`, { roundKey: chosenRoundKey, interviewerUserIds: chosenInterviewers, linkSource, meetingUrl: linkSource === "pasted" ? meetingUrl : undefined, ...(line.trim() ? { invitationLine: { text: line.trim(), aiHelped: lineAiHelped, ...(lineAiHelped && kept?.runId ? { suggestionRunId: kept.runId } : {}) } } : {}) }),
+    mutationFn: () => api.post(`/api/v1/applications/${a.id}/interviews`, { roundKey: chosenRoundKey, interviewerUserIds: chosenInterviewers, linkSource, meetingUrl: linkSource === "pasted" ? meetingUrl : undefined, ...(line.trim() ? { invitationLine: { text: line.trim(), aiHelped: lineAiHelped, ...(kept?.runId ? { suggestionRunId: kept.runId } : {}) } } : {}) }),
     onSuccess: async () => { toast("Interview approved.", "Times go out to the candidate as soon as they exist."); onClose(); await refresh(); },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not start the interview."),
   });
@@ -187,7 +196,7 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
           <Field label="Meeting link" htmlFor="iv-link"><select id="iv-link" className="select" value={linkSource} onChange={(e) => setLinkSource(e.target.value as "calendar" | "pasted")}><option value="calendar">Create it with the calendar event</option><option value="pasted">I'll paste a link</option></select></Field>
           {linkSource === "pasted" ? <Field label="Link" htmlFor="iv-url"><input id="iv-url" className="input" type="url" value={meetingUrl} onChange={(e) => setMeetingUrl(e.target.value)} placeholder="https://" /></Field> : null}
           <Field label="A personal line for the invitation (optional)" htmlFor="iv-line" hint={`It goes with the times, under your name: one or two sentences, ${PERSONAL_LINE_MAX} characters at most. It is checked before anything is sent: no scores, nothing about age, family, health, religion or background.`}>
-            <textarea id="iv-line" className="textarea" rows={2} maxLength={PERSONAL_LINE_MAX} value={line} onChange={(e) => setLine(e.target.value)} placeholder={`For example: We enjoyed reading about your work, ${a.candidate.firstName}.`} />
+            <textarea id="iv-line" className="textarea" rows={2} maxLength={PERSONAL_LINE_MAX} value={line} onChange={(e) => { setLine(e.target.value); if (!e.target.value.trim()) setKept(null); }} placeholder={`For example: We enjoyed reading about your work, ${a.candidate.firstName}.`} />
           </Field>
           {suggestion?.line && !kept ? (
             <div className="suggested-line">
@@ -197,7 +206,12 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
             </div>
           ) : suggestion && !suggestion.line ? <p className="small muted" style={{ margin: 0 }}>{suggestion.note}</p> : null}
           {!kept ? <div className="row"><Button size="sm" variant="secondary" icon="sparkle" loading={suggest.isPending} disabled={!chosenRoundKey} onClick={() => suggest.mutate()} title="The assistant suggests one friendly line; if you keep it, the invitation says the assistant helped">Suggest a line</Button></div> : null}
-          {lineAiHelped ? <p className="small muted" style={{ margin: 0 }}>You kept a line the AI assistant suggested, so the invitation says the assistant helped write it.</p> : null}
+          {lineAiHelped ? (
+            <div className="row" style={{ gap: 8 }}>
+              <p className="small muted" style={{ margin: 0 }}>{suggestedLineNote(lineStillWhole, "invitation")}</p>
+              {lineStillWhole ? <Button size="sm" variant="quiet" onClick={() => { setLine(line.replace(kept!.line, "").trim()); setKept(null); }}>Take out the assistant's line</Button> : null}
+            </div>
+          ) : null}
         </>
       )}
       <div className="row" style={{ marginTop: 10 }}>
@@ -311,6 +325,33 @@ function SuggestionCard({ a, roleId, p, onInterview }: { a: ApplicationDetail; r
           <AskRecruiter roleId={roleId} applicationId={a.id} size="sm" />
         </div>
       )}
+    </Card>
+  );
+}
+
+/**
+ * Someone already at the interview step with no interview in motion and no decision waiting: the way to approve one.
+ * The stage button has nothing to open here (they are in Interviewing already), so this card is how a cancelled
+ * interview, times that expired, a "Next round" decision or an approval set aside with "Not now" gets going again. The
+ * approval it opens is filled in from the plan, so the right round is already chosen.
+ */
+function readyToInterviewWords(a: Pick<ApplicationDetail, "candidate" | "interviews">): { title: string; body: string; button: string } {
+  const first = a.candidate.firstName;
+  const latest = a.interviews[0]; // newest first
+  if (latest?.status === "cancelled") return { title: "The interview was cancelled", body: `The ${latest.title} with ${first} was cancelled. Approve a new interview and fresh times go out to them.`, button: "Approve an interview" };
+  if (latest?.status === "offer_expired") return { title: "No time was picked", body: `${first} did not pick a time for the ${latest.title}. Approve it again and new times go out to them.`, button: "Approve an interview" };
+  if (latest?.decision === "next_round") return { title: "Set up the next round", body: `You chose the next round after the ${latest.title}. Approve it and times go out to ${first}.`, button: "Approve the next round" };
+  return { title: "Ready to interview", body: `${first} is ready to interview. Choose the round and the interviewers; times go out to them from there.`, button: "Approve an interview" };
+}
+
+function ReadyToInterviewCard({ a, onApprove }: { a: ApplicationDetail; onApprove: () => void }) {
+  const w = readyToInterviewWords(a);
+  return (
+    <Card needsYou title={w.title}>
+      <p className="small" style={{ color: "var(--ink-2)" }}>{w.body} Nothing is sent until you approve it.</p>
+      <div className="row" style={{ marginTop: 10 }}>
+        <Button variant="primary" size="sm" onClick={onApprove}>{w.button}</Button>
+      </div>
     </Card>
   );
 }

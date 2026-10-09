@@ -100,28 +100,41 @@ export function hireToast(input: { name: string; startDate: string | null }): To
 }
 
 /**
+ * A start date before today (a hire recorded after they started): Today's "keep your backups warm" card is kept through
+ * the start day itself and gone after it, so nothing would remind anyone. Read in the reader's own calendar.
+ */
+export function hireStarted(startDate: string | null | undefined, now: Date = new Date()): boolean {
+  return !!startDate && startDate.slice(0, 10) < dayKey(now);
+}
+
+/**
  * What the hire sheet asks once the hire is recorded: the other people still in the running, and what to do with the
  * role: close it now and tell them (the one closing message, seen before it goes), or keep them warm until the start date.
+ * When the start date has already passed (`started`), Today has no reminder to give, so leaving the role open is offered
+ * plainly, without promising one.
  */
-export function hireFollowUpView(hire: HireFollowUp, name: string): { startLine: string; backupsLine: string | null; people: HireFollowUp["backups"]["people"]; mayClose: boolean; closeWords: string | null; keepWarmWords: string | null } {
+export function hireFollowUpView(hire: HireFollowUp, name: string, now: Date = new Date()): { startLine: string; backupsLine: string | null; people: HireFollowUp["backups"]["people"]; mayClose: boolean; closeWords: string | null; keepWarmWords: string | null; started: boolean } {
   const start = hire.startDate ? plainDayWords(hire.startDate) : null;
+  const started = hireStarted(hire.startDate, now);
   const n = hire.backups.count;
   const backupsLine = n ? `${n === 1 ? "1 other person is" : `${n} other people are`} still in the running:` : null;
-  const keepWarmWords = n
-    ? `Keep the role open and ${n === 1 ? "them" : "them all"} in mind until ${name} starts${start ? ` on ${start}` : ""}. Nobody is told anything; Today reminds you about your backups until then, in case the start falls through.`
-    : null;
+  const keepWarmWords = !n ? null
+    : started ? `Leave the role open for now. Nobody is told anything. ${name} has already started, so Today will not remind you about ${n === 1 ? "them" : "the others"}; close the role from its page when you are ready.`
+    : `Keep the role open and ${n === 1 ? "them" : "them all"} in mind until ${name} starts${start ? ` on ${start}` : ""}. Nobody is told anything; Today reminds you about your backups until then, in case the start falls through.`;
   return {
-    startLine: start ? `${name} starts on ${start}.` : `${name} is hired.`,
+    startLine: !start ? `${name} is hired.` : started ? `${name} started on ${start}.` : `${name} starts on ${start}.`,
     backupsLine,
     people: hire.backups.people,
     mayClose: !!hire.closeRole,
     closeWords: hire.closeRole?.words ?? null,
     keepWarmWords,
+    started,
   };
 }
 
-/** The toast after "Keep them warm". */
-export function keepWarmToast(name: string, startDate: string | null): ToastParts {
+/** The toast after "Keep them warm" (or, once the start date has passed, "Leave it open"). */
+export function keepWarmToast(name: string, startDate: string | null, now: Date = new Date()): ToastParts {
+  if (hireStarted(startDate, now)) return { title: "The role stays open.", detail: "Nobody was told anything. Close the role from its page when you are ready." };
   return { title: "The role stays open.", detail: `Nobody was told anything. Today reminds you about your backups until ${name} starts${startDate ? ` on ${plainDayWords(startDate)}` : ""}.` };
 }
 

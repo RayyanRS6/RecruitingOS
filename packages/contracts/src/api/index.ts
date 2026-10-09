@@ -183,9 +183,11 @@ export const ApplicationAction = z.object({
    * on_hold. send_decision: a person sends the
    * standard decision message (or asks for its approval, under the company's settings). told_in_person: records that
    * someone told the candidate themselves, so nothing more is sent. cancel_screen: "Stop this screen invitation" before
-   * the candidate starts; they get a short, polite note and go back to waiting on the team.
+   * the candidate starts; they get a short, polite note and go back to waiting on the team. undo_decision: takes back a
+   * decision (declined, or moved to the talent pool) the candidate was never told: they go back to the step they were at,
+   * and nothing was or will be sent (plan G1).
    */
-  action: z.enum(["invite_screen", "ask_in_screen", "advance_to_interview", "reject", "hold", "move_to_talent_pool", "override_eligibility", "review_anyway", "set_mark", "clear_mark", "send_decision", "told_in_person", "cancel_screen"]),
+  action: z.enum(["invite_screen", "ask_in_screen", "advance_to_interview", "reject", "hold", "move_to_talent_pool", "override_eligibility", "review_anyway", "set_mark", "clear_mark", "send_decision", "told_in_person", "cancel_screen", "undo_decision"]),
   reason: RejectReason.optional(),
   note: z.string().max(2000).optional(),
   /** invite_screen: preferred channel; defaults to SMS with consent, else web chat by email. */

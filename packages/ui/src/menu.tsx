@@ -1,6 +1,6 @@
 "use client";
 
-import { type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { type KeyboardEvent, type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { cx, domId, type Move, nextIndex, type OwnerStage, ownerStage, stageMenuItems, type Tone, typeaheadIndex } from "./helpers";
 import { Icon, type IconName } from "./icons";
 
@@ -11,6 +11,23 @@ import { Icon, type IconName } from "./icons";
 export type MenuItem = { id: string; label: string; tone?: Tone; icon?: IconName; hint?: string; current?: boolean; disabled?: boolean; reason?: string; danger?: boolean };
 
 const KEY_MOVES: Record<string, Move> = { ArrowDown: "next", ArrowUp: "prev", Home: "first", End: "last" };
+
+/** The space kept between an open menu and the edge of the window. */
+const EDGE = 8;
+
+/**
+ * Which side a menu of `width` opens on under a button at `button` (left and right, in window pixels): the preferred
+ * side ("start" lines its left edge up with the button's, "end" its right edge), unless that runs past an edge of the
+ * window and the other side runs past less.
+ */
+export function menuSide(preferred: "start" | "end", button: { left: number; right: number }, width: number, windowWidth: number): "start" | "end" {
+  const past = (side: "start" | "end") => {
+    const left = side === "start" ? button.left : button.right - width;
+    return Math.max(0, EDGE - left) + Math.max(0, left + width - (windowWidth - EDGE));
+  };
+  const other = preferred === "start" ? "end" : "start";
+  return past(preferred) > past(other) ? other : preferred;
+}
 
 /**
  * A button that opens a list of choices (docs/07), such as "Move to stage". Keyboard: Enter, Space or the down arrow
@@ -23,11 +40,23 @@ export function Menu(props: { label: ReactNode; items: MenuItem[]; onSelect: (id
   const [active, setActive] = useState(-1);
   const wrap = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
   const items = useRef<Array<HTMLButtonElement | null>>([]);
   const reactId = useId();
   const menuId = domId("menu", reactId);
   const oneOfMany = props.items.some((i) => i.current !== undefined);
+  const preferred = props.align ?? "start";
+  const [side, setSide] = useState<"start" | "end">(preferred);
 
+  // The menu opens on its preferred side unless that would run past the edge of the window where the other side would
+  // not (a button that wrapped to the left of a phone screen): nothing past the edge can be scrolled to.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const at = wrap.current?.getBoundingClientRect();
+    const width = panel.current?.offsetWidth ?? 0;
+    if (!at || !width) return setSide(preferred);
+    setSide(menuSide(preferred, { left: at.left, right: at.right }, width, document.documentElement.clientWidth || window.innerWidth));
+  }, [open, preferred]);
   useEffect(() => {
     if (open && active >= 0) items.current[active]?.focus();
   }, [open, active]);
@@ -72,7 +101,10 @@ export function Menu(props: { label: ReactNode; items: MenuItem[]; onSelect: (id
       e.stopPropagation();
       close(true);
     } else if (e.key === "Tab") {
-      close(false);
+      // Focus goes back to the button before the menu closes, and the browser's own Tab then moves on from the button:
+      // the item that had focus is removed as the menu closes, so a drawer's Tab trap would otherwise find focus outside
+      // the panel and send it to the panel's first control. No preventDefault: Tab moves on, Shift+Tab goes back.
+      close(true);
     } else if (e.key.length === 1 && /\S/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
       setActive(typeaheadIndex(props.items.map((i) => i.label), at, e.key));
     }
@@ -97,7 +129,7 @@ export function Menu(props: { label: ReactNode; items: MenuItem[]; onSelect: (id
         <Icon name="chevron-down" size={14} />
       </button>
       {open ? (
-        <div className="menu" data-align={props.align ?? "start"}>
+        <div ref={panel} className="menu" data-align={side}>
           {props.heading ? (
             <div className="menu-heading" aria-hidden="true">
               {props.heading}

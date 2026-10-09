@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { and, desc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
-import type { Actor } from "@ros/contracts";
-import { applicationMarks, applicationNotes, applications, approvalRequests, candidates, communications, dataRequests, documents, escalationMessages, events, interviewParticipants, interviews, jobs, notifications, recruiterEscalations, screens, unconfirmedScreens, type Queryable } from "@ros/db";
+import { and, desc, eq, inArray, isNull, lte, notInArray, notLike, sql } from "drizzle-orm";
+import { RejectReason, type Actor } from "@ros/contracts";
+import { applicationMarks, applicationNotes, applications, approvalRequests, candidates, communications, dataRequests, documents, escalationMessages, events, hiringOutcomes, interviewParticipants, interviews, jobs, notifications, recruiterEscalations, screens, unconfirmedScreens, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { emit } from "./events";
 import { raiseAlert, resolveAlertsFor } from "./alerts";
@@ -70,10 +70,18 @@ export async function recordCounselDecision(q: Queryable, row: DataRequestRow, i
   return u;
 }
 
+/** Message statuses that mean it left us (handed to the email or text provider; `unknown` and `sending` may have gone). */
+const LEFT_US = new Set(["sent", "delivered", "bounced", "complained", "unknown", "sending"]);
+/** A message that left us but may not have reached them, in the words the export uses. */
+const DID_NOT_ARRIVE: Record<string, string> = { bounced: "sent, but it did not arrive", complained: "sent; marked as unwanted", unknown: "sent, but we could not confirm it arrived", sending: "being sent" };
+/** What became of a message that never left us. */
+const NOT_SENT: Record<string, string> = { cancelled: "not sent: withdrawn before it was sent", held: "not sent: waiting for the company to be confirmed", queued: "not sent yet", failed: "not sent: it could not be sent" };
+
 /**
  * Everything the person gave us or we sent them; never the assessment's internal rationale, never anyone else's data.
- * The team's private notes (application_notes, plan H3) are left out: the counsel default until register item 25 is
- * answered.
+ * Messages that never left us (taken back, withdrawn, held, failed) are listed apart from those sent, each with what
+ * happened to it. The team's private notes (application_notes, plan H3) are left out: the counsel default until register
+ * item 25 is answered.
  */
 export async function exportCandidateData(q: Queryable, companyId: string, candidateId: string): Promise<Record<string, unknown>> {
   const [cand] = await q.select().from(candidates).where(and(eq(candidates.id, candidateId), eq(candidates.companyId, companyId))).limit(1);
@@ -83,7 +91,8 @@ export async function exportCandidateData(q: Queryable, companyId: string, candi
   // A screen's answers live in two places (screen-answers.ts): the export carries every one of them, with the opening questions in the words they were asked.
   const scrRows = await q.select({ applicationId: screens.applicationId, channel: screens.channel, status: screens.status, transcript: screens.transcript, answers: screens.answers, progress: screens.progress, createdAt: screens.createdAt }).from(screens).where(inArray(screens.applicationId, apps.map((a) => a.id).concat(["00000000-0000-0000-0000-000000000000"])));
   const scr = scrRows.map((s) => ({ applicationId: s.applicationId, channel: s.channel, status: s.status, transcript: s.transcript, answers: screenAnswersOf(s), openingQuestions: openingQuestionsOf(s.progress), createdAt: s.createdAt }));
-  const comms = await q.select({ direction: communications.direction, channel: communications.channel, subject: communications.subject, bodyText: communications.bodyText, createdAt: communications.createdAt }).from(communications).where(eq(communications.candidateId, cand.id)).orderBy(desc(communications.createdAt));
+  const comms = await q.select({ direction: communications.direction, channel: communications.channel, subject: communications.subject, bodyText: communications.bodyText, status: communications.status, deliveredAt: communications.deliveredAt, createdAt: communications.createdAt }).from(communications).where(eq(communications.candidateId, cand.id)).orderBy(desc(communications.createdAt));
+  const outbound = comms.filter((c) => c.direction === "outbound");
   const history = await q.select({ type: events.type, occurredAt: events.occurredAt, subjectId: events.subjectId }).from(events).where(and(eq(events.companyId, companyId), inArray(events.subjectId, apps.map((a) => a.id).concat([cand.id]))));
   return {
     exportedAt: new Date().toISOString(),
@@ -92,8 +101,12 @@ export async function exportCandidateData(q: Queryable, companyId: string, candi
     applications: apps.map((a) => ({ id: a.id, roleId: a.roleId, stage: a.stage, source: a.source, answers: a.answers, eligibility: a.eligibility ? { passed: a.eligibility.passed, failedRules: a.eligibility.failedRules } : null, appliedAt: a.createdAt, rejectReason: a.rejectReason ?? null, ...(DECISION_STAGES.includes(a.stage) ? { decisionTold: a.toldState, decisionToldAt: a.candidateToldAt ?? null } : {}) })),
     documents: docs,
     screens: scr,
-    messagesWeSent: comms.filter((c) => c.direction === "outbound"),
-    messagesYouSent: comms.filter((c) => c.direction === "inbound"),
+    // Only what actually left us is "sent"; one that may not have arrived says so.
+    messagesWeSent: outbound.filter((c) => LEFT_US.has(c.status)).map(({ status, direction: _d, ...c }) => ({ ...c, ...(DID_NOT_ARRIVE[status] ? { delivery: DID_NOT_ARRIVE[status] } : {}) })),
+    // Written but never sent (taken back with Undo, withdrawn when the decision changed, held, failed): listed apart, with
+    // what happened to each, since they still hold the person's data.
+    messagesWeDidNotSend: outbound.filter((c) => !LEFT_US.has(c.status)).map(({ status, direction: _d, deliveredAt: _a, ...c }) => ({ ...c, whatHappened: NOT_SENT[status] ?? "not sent" })),
+    messagesYouSent: comms.filter((c) => c.direction === "inbound").map(({ status: _s, deliveredAt: _a, ...c }) => c),
     stageHistory: history.filter((e) => e.type === "application.stage_changed" || e.type.startsWith("interview.")).map((e) => ({ type: e.type, at: e.occurredAt })),
   };
 }
@@ -116,13 +129,18 @@ export async function fulfilCorrectionRequest(q: Queryable, row: DataRequestRow,
 }
 
 const DELETION_REASON = "the candidate asked for their information to be deleted";
+const REMOVED = "[removed at the candidate's request]";
+
+/** Reasons a stage move records that are fixed codes, never anyone's words: a deletion keeps them in the history. */
+const CODED_REASONS: string[] = [...RejectReason.options, "hired_externally", "candidate_withdrew", "employer_declined", "offer_declined_externally", "no_hire", DELETION_REASON];
 
 /**
  * A deletion ends the person's part in every process (plan A9): their interviews still to come are cancelled (the
  * interviewers are told, the calendar events are queued for removal; nobody writes to the candidate, whose address goes
  * in the same transaction), their open screens close, the assistant's waiting suggestions and any message to them
  * waiting for approval are withdrawn (and a closed role's closing message no longer names them), and an application
- * still in the process is withdrawn. Private marks lose their notes. A decision nobody told them stays untold: nothing
+ * still in the process is withdrawn. Private marks lose their notes, and so do outcomes and the history (a move's own
+ * reason, when it was a person's words rather than a fixed one). A decision nobody told them stays untold: nothing
  * is ever sent to them, and nobody is reminded or asked to (decision-messages.ts). The scheduling and screening runs end
  * on their own at their next step, since what they wait on is gone.
  */
@@ -183,6 +201,20 @@ async function closeProcessOnDeletion(q: Queryable, input: { companyId: string; 
   // The team's free-text notes were copied into the history as it happened (a mark, a decline, "I told them myself", a
   // decision after an interview): they are blanked there too. What happened, who did it and when stay.
   await q.update(events).set({ payload: sql`jsonb_set(${events.payload}, '{note}', 'null'::jsonb)` }).where(and(eq(events.subjectType, "application"), inArray(events.subjectId, appIds), sql`${events.payload}->>'note' is not null`));
+  // A move's reason can be a person's own words too ("Keep them in" with why, a move to the talent pool with a note): any
+  // reason that is not one of the fixed ones is blanked. The fixed reasons stay, so the history and the reports still read.
+  await q.update(events).set({ payload: sql`jsonb_set(${events.payload}, '{reason}', 'null'::jsonb)` }).where(and(
+    eq(events.type, "application.stage_changed"),
+    eq(events.subjectType, "application"),
+    inArray(events.subjectId, appIds),
+    sql`${events.payload}->>'reason' is not null`,
+    notInArray(sql`${events.payload}->>'reason'`, CODED_REASONS),
+    notLike(sql`${events.payload}->>'reason'`, "role closed: %"),
+  ));
+  // The words recorded with an outcome (why they were declined, a note with a hire) are the team's about them; so is an
+  // administrator's reason for correcting one. The outcome itself, who recorded it and when stay.
+  await q.update(hiringOutcomes).set({ notes: null }).where(and(eq(hiringOutcomes.companyId, companyId), inArray(hiringOutcomes.applicationId, appIds)));
+  await q.update(hiringOutcomes).set({ correctionReason: REMOVED, details: sql`${hiringOutcomes.details} - 'correctionReason'` }).where(and(eq(hiringOutcomes.companyId, companyId), inArray(hiringOutcomes.applicationId, appIds), sql`(${hiringOutcomes.correctionReason} is not null or ${hiringOutcomes.details}->>'correctionReason' is not null)`));
 }
 
 /**
@@ -288,8 +320,8 @@ export function scrubBoardSnapshot(board: unknown, appIds: readonly string[], pa
 /**
  * A deletion reaches the recruiter's copy too (Q31 family, step 13): a request about one of the person's applications
  * keeps the company and role context but loses everything about the candidate, and its question is removed; any other
- * request, recruiter answer or in-app notice that names them has the name, email and phone replaced, and a role
- * review's board snapshot loses them too (`scrubBoardSnapshot`).
+ * request, recruiter answer, in-app notice or team email that names them has the name, email and phone replaced, and a
+ * role review's board snapshot loses them too (`scrubBoardSnapshot`).
  */
 async function scrubRecruiterCopies(q: Queryable, input: { companyId: string; appIds: string[]; candidate: { firstName: string; lastName: string; email: string | null; phone: string | null }; now: Date }): Promise<{ escalations: number; notifications: number }> {
   const patterns = identifyingPatterns(input.candidate);
@@ -331,6 +363,16 @@ async function scrubRecruiterCopies(q: Queryable, input: { companyId: string; ap
       if (title === n.title && body === n.body) continue;
       await q.update(notifications).set({ title, body }).where(eq(notifications.id, n.id));
       notificationCount++;
+    }
+    // Mail kept with no candidate on it (the team's alerts and summaries, the ITS queue's notices) should never name
+    // anyone; any that did loses the name, email and phone here too. A copy already sent stays with the email provider.
+    const teamMail = await q.select({ id: communications.id, subject: communications.subject, bodyText: communications.bodyText, bodyHtml: communications.bodyHtml }).from(communications).where(and(eq(communications.companyId, input.companyId), isNull(communications.candidateId)));
+    for (const m of teamMail) {
+      const subject = m.subject === null ? null : redactPerson(m.subject, patterns, "A candidate");
+      const bodyText = redactPerson(m.bodyText, patterns, "a candidate");
+      const bodyHtml = m.bodyHtml === null ? null : redactPerson(m.bodyHtml, patterns, "a candidate");
+      if (subject === m.subject && bodyText === m.bodyText && bodyHtml === m.bodyHtml) continue;
+      await q.update(communications).set({ subject, bodyText, bodyHtml }).where(eq(communications.id, m.id));
     }
   }
   return { escalations: escalationCount, notifications: notificationCount };

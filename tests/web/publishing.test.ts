@@ -319,7 +319,8 @@ describe("sharing (D8)", () => {
     expect(share).toContain('target="_blank" rel="noopener noreferrer"');
     expect(share).toContain("tab.opener = null;");
     // the share block on the Posting tab (Today links to #share) and in the empty applicant list
-    expect(read("../../apps/web/src/pages/RolePosting.tsx")).toContain('<section id="share" className="setup-section">');
+    // focusable from code only, so following Today's link puts the keyboard there too
+    expect(read("../../apps/web/src/pages/RolePosting.tsx")).toContain('<section id="share" className="setup-section" tabIndex={-1}>');
     expect(read("../../apps/web/src/pages/People.tsx")).toContain("<ShareJob roleId={roleId}");
   });
 });

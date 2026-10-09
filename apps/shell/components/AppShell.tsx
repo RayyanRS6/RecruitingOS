@@ -153,7 +153,8 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
                       <NavLink to={`/roles/${r.id}`}>
                         <span className={r.live ? "dot good" : "dot"} aria-hidden="true" />
                         <span className="rail-sub-title">{r.title}</span>
-                        {r.applicants !== null ? <span className="rail-count" aria-hidden="true">{r.applicants}</span> : null}
+                        {/* a count, or a short word where there is none: the dot's colour never says the status alone */}
+                        {r.applicants !== null ? <span className="rail-count" aria-hidden="true">{r.applicants}</span> : r.tag ? <span className="rail-count rail-tag" aria-hidden="true">{r.tag}</span> : null}
                         <span className="sr-only">, {r.statusWord}</span>
                       </NavLink>
                     </li>

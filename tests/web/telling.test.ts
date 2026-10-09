@@ -2,8 +2,26 @@ import { describe, expect, it } from "vitest";
 import type { ApplicationDetail, DecisionMessageResult } from "../../apps/web/src/api/client";
 import {
   PERSONAL_LINE_HINT, SAFETY_NET_WORKING_DAYS, THREAD_LONG, WORDING_HINT, bulkUndoMillis, bulkUndoneToast, closingResultToast, closingSendLabel, closingSheetLines, replyOwnWords, safetyNetActed, safetyNetDate,
-  safetyNetLine, sendButtonLabel, sendPolicyLine, sentWithUndoToast, threadItems, undoFailedToast, undoMillisLeft, undoable, undoneToast, wordingChoices,
+  safetyNetLine, safetyNetPromise, sendButtonLabel, sendPolicyLine, sentWithUndoToast, suggestedLineNote, threadItems, undoFailedToast, undoMillisLeft, undoable, undoneToast, wordingChoices,
 } from "../../apps/web/src/telling";
+
+describe("the safety net said when a decision is filed (Q27)", () => {
+  it("never says nothing goes by itself: under 'Do it' the message goes, otherwise a recruiter is brought in, and unknown says both", () => {
+    expect(safetyNetPromise("sends", "the closing message")).toBe("If nobody tells them within 5 working days, the closing message goes to them by itself.");
+    expect(safetyNetPromise("needs_approval")).toBe("Nothing is sent by itself: if nobody tells them within 5 working days, an ITS recruiter is brought in to make sure they are told.");
+    expect(safetyNetPromise("not_sent")).toBe(safetyNetPromise("needs_approval"));
+    expect(safetyNetPromise()).toBe("If nobody tells them within 5 working days, the standard message goes by itself (if your settings ask for approval or keep these messages with a person, an ITS recruiter is brought in instead and nothing is sent).");
+  });
+});
+
+describe("a line the assistant suggested and the person kept (Q28)", () => {
+  it("says the assistant helped while the line is whole, and still says so once it was changed, with how to leave it out", () => {
+    expect(suggestedLineNote(true, "footer")).toBe("You kept a line the AI assistant suggested, so the footer says the assistant helped write it.");
+    expect(suggestedLineNote(true, "invitation")).toBe("You kept a line the AI assistant suggested, so the invitation says the assistant helped write it.");
+    expect(suggestedLineNote(false, "footer")).toBe("You changed the line the AI assistant suggested; it is still mostly its words, so the footer says the assistant helped write it. To leave that out, empty the message and write your own.");
+    expect(suggestedLineNote(false, "invitation")).toMatch(/empty the line and write your own\.$/);
+  });
+});
 
 /**
  * Telling candidates (plan Wave G; founder decisions B6, Q27, Q28, Q30), the page's words: the approved wordings and

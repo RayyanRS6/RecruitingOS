@@ -12,9 +12,10 @@ describe("the roles under Roles", () => {
   it("lists open roles first with their applicants, then paused, waiting and drafts; never filled or closed ones", () => {
     const list = railRoles([role("d", "draft"), role("c", "closed", 9), role("p", "paused", 4), role("o", "open", 6), role("f", "filled", 3), role("w", "pending_approval")], { role: "owner" });
     expect(list.map((r) => r.id)).toEqual(["o", "p", "w", "d"]);
-    expect(list[0]).toEqual({ id: "o", title: "Role o", live: true, applicants: 6, statusWord: "open, 6 applicants" });
-    // a paused or draft role gets the grey dot and no count
+    expect(list[0]).toEqual({ id: "o", title: "Role o", live: true, applicants: 6, statusWord: "open, 6 applicants", tag: null });
+    // a paused or draft role gets the grey dot and no count, and a word in its place, so the colour never says it alone
     expect(list.slice(1).every((r) => !r.live && r.applicants === null)).toBe(true);
+    expect(list.map((r) => r.tag)).toEqual([null, "Paused", "Waiting", "Draft"]);
     expect(list.map((r) => r.statusWord)).toEqual(["open, 6 applicants", "paused", "waiting for approval", "draft"]);
     expect(railRoles([role("o", "open", 1)], { role: "owner" })[0].statusWord).toBe("open, 1 applicant");
   });
@@ -29,7 +30,9 @@ describe("the roles under Roles", () => {
 
   it("never counts applicants for an interviewer, whose list the API already limits to the roles they interview for", () => {
     const fromApi = [{ ...role("b", "open"), countsHidden: true }];
-    expect(railRoles(fromApi, { role: "interviewer" })).toEqual([{ id: "b", title: "Role b", live: true, applicants: null, statusWord: "open" }]);
+    // with no count, the open role says "Open" beside its green dot: an interviewer's paused role reads "Paused"
+    expect(railRoles(fromApi, { role: "interviewer" })).toEqual([{ id: "b", title: "Role b", live: true, applicants: null, statusWord: "open", tag: "Open" }]);
+    expect(railRoles([{ ...role("p", "paused"), countsHidden: true }], { role: "interviewer" })[0].tag).toBe("Paused");
     // a count is never shown to an interviewer, and never from a list that says its counts were left out
     expect(railRoles([role("a", "open", 5)], { role: "interviewer" })[0].applicants).toBeNull();
     expect(railRoles(fromApi, { role: "owner" })[0].applicants).toBeNull();

@@ -9,6 +9,7 @@ import { toast } from "../toast";
 import { activeCompanyOf } from "../rail";
 import { canDecideInterviews, canManageInterviews, canReadNotes, canSeeTalent } from "../roles";
 import { interviewCancelToast } from "../talent-actions";
+import { againChoice } from "../interview-defaults";
 import { MyNote, useNotes } from "./candidate-panel/notes";
 
 const STATUS_LABEL: Record<string, string> = { proposed: "Preparing times", scheduling: "Waiting on the candidate", scheduled: "Scheduled", completed: "Completed", cancelled: "Cancelled", no_show: "No-show", offer_expired: "Times expired" };
@@ -33,7 +34,7 @@ export function Interviews() {
       <PageHeader eyebrow={company.name ?? undefined} title="Interviews" sub={canManageInterviews(role) ? "Every interview a person approved: waiting on the candidate, scheduled, or done. Reschedule and cancel from here; nothing is decided by software." : "Your interviews: waiting on the candidate, scheduled, or done. Afterwards, tell us whether it took place; the hiring team records the decision."} />
       {list.isLoading ? <Skeleton lines={4} /> : list.error ? <ErrorState message="Could not load interviews." onRetry={() => list.refetch()} /> : (
         <>
-          {upcoming.length === 0 ? <EmptyState icon="interviews" title="No interviews in motion" body={canSeeTalent(role) ? "Open a candidate and choose Interview to start one." : "You will see an interview here as soon as you are put on one."} action={canSeeTalent(role) ? <Link to="/talent" className="btn primary">Go to Talent</Link> : undefined} /> : (
+          {upcoming.length === 0 ? <EmptyState icon="interviews" title="No interviews in motion" body={canSeeTalent(role) ? "Open a candidate and move them to Interviewing to start one." : "You will see an interview here as soon as you are put on one."} action={canSeeTalent(role) ? <Link to="/talent" className="btn primary">Go to Talent</Link> : undefined} /> : (
             <Card title={`In motion (${upcoming.length})`}>
               <Table head={["Candidate", "Round", "When", "Interviewers", "Status", ""]}>
                 {upcoming.map((i) => (
@@ -68,7 +69,7 @@ export function Interviews() {
           ) : null}
         </>
       )}
-      {id ? <InterviewSheet id={id} role={role} userId={me.data?.user.id ?? null} /> : null}
+      {id ? <InterviewSheet id={id} role={role} userId={me.data?.user.id ?? null} all={list.data ?? []} /> : null}
     </div>
   );
 }
@@ -85,7 +86,7 @@ function CandidateCell({ i }: { i: InterviewSummary }) {
 }
 
 /** One interview. What can be changed here follows the person's role: interviewers see their interview and record whether it took place; the decision is recorded from the candidate's page by the hiring team. */
-function InterviewSheet({ id, role, userId }: { id: string; role: string | null; userId: string | null }) {
+function InterviewSheet({ id, role, userId, all }: { id: string; role: string | null; userId: string | null; all: InterviewSummary[] }) {
   const nav = useNavigate();
   const qc = useQueryClient();
   // A refusal or a missing interview is an answer, not a hiccup: it is not retried and the 10-second refresh stops while it stands.
@@ -106,6 +107,7 @@ function InterviewSheet({ id, role, userId }: { id: string; role: string | null;
   const manage = canManageInterviews(role);
   const participant = !!i && !!userId && i.participants.some((p) => p.userId === userId);
   const finished = !!i && ["completed", "no_show"].includes(i.status);
+  const again = !!i && againChoice(i, all, role);
   return (
     <Drawer open onClose={() => nav("/interviews")} title={i ? `${i.candidate.firstName} ${i.candidate.lastName} · ${i.title}` : "Interview"} leading={i ? <Avatar name={`${i.candidate.firstName} ${i.candidate.lastName}`} size="lg" /> : undefined}>
       {q.error && !i ? <ErrorState message={q.error instanceof ApiError && (q.error.status === 404 || q.error.status === 403) ? "This interview is not one of yours, or it no longer exists." : "Could not load this interview."} onRetry={() => q.refetch()} /> : q.isLoading || !i ? <Skeleton lines={8} /> : (
@@ -161,6 +163,20 @@ function InterviewSheet({ id, role, userId }: { id: string; role: string | null;
                 <Button size="sm" loading={reschedule.isPending} onClick={() => reschedule.mutate()}>Offer new times</Button>
                 {confirmCancel ? <Button size="sm" variant="destructive" loading={cancel.isPending} disabled={!reason.trim()} onClick={() => cancel.mutate()}>Confirm cancel</Button> : <Button size="sm" variant="destructive" onClick={() => setConfirmCancel(true)}>Cancel interview</Button>}
               </div>
+            </Card>
+          ) : null}
+          {again === "offer_again" ? (
+            <Card needsYou title="Offer times again">
+              <p className="small" style={{ color: "var(--ink-2)" }}>{i.candidate.firstName} did not pick a time. New times go out for the same round and interviewers, or you can decide about them from their page.</p>
+              <div className="row" style={{ marginTop: 10 }}>
+                <Button size="sm" variant="primary" loading={reschedule.isPending} onClick={() => reschedule.mutate()}>Offer new times</Button>
+                {canSeeTalent(role) ? <Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}`} className="btn quiet sm">Open their page</Link> : null}
+              </div>
+            </Card>
+          ) : again === "approve_new" ? (
+            <Card title="Interview again?">
+              <p className="small" style={{ color: "var(--ink-2)" }}>This interview was cancelled. To meet {i.candidate.firstName} after all, approve a new interview; fresh times go out from there.</p>
+              <div className="row" style={{ marginTop: 10 }}><Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}&step=interview`} className="btn secondary sm">Approve a new interview</Link></div>
             </Card>
           ) : null}
           <Card title="Timeline"><Timeline items={i.timeline.map((e) => ({ when: new Date(e.occurredAt).toLocaleString(), what: e.type.replace(/[._]/g, " "), who: e.actor.name ?? e.actor.kind }))} /></Card>

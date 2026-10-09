@@ -61,7 +61,7 @@ export type RoleReport = {
 };
 
 /** `talentPoolOptOut`: the person asked not to be kept for future roles, so they are never counted in the talent pool. */
-type AppRow = { id: string; roleId: string; candidateId: string; source: string; sourceDetail: string | null; stage: ApplicationStage; stageChangedAt: string; createdAt: string; latestAssessmentId: string | null; rejectReason: string | null; talentPoolOptOut?: boolean; toldState?: ToldState };
+type AppRow = { id: string; roleId: string; candidateId: string; source: string; sourceDetail: string | null; stage: ApplicationStage; stageChangedAt: string; createdAt: string; latestAssessmentId: string | null; rejectReason: string | null; talentPoolOptOut?: boolean; toldState?: ToldState; /** Their details were deleted at their request: there is nobody to tell. */ dataDeleted?: boolean };
 /** Every mark set on the applications, active (clearedAt null) or not. */
 type MarkRow = { applicationId: string; mark: MarkKind; remindAt: string | null; createdAt: string; clearedAt: string | null };
 type EventRow = { subjectId: string; occurredAt: string; payload: Record<string, unknown> };
@@ -105,7 +105,7 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
   const roleIds = roleRows.map((r) => r.id);
   const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId)).limit(1);
   const apps = (await tx
-    .select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId, source: applications.source, sourceDetail: applications.sourceDetail, stage: applications.stage, stageChangedAt: applications.stageChangedAt, createdAt: applications.createdAt, latestAssessmentId: applications.latestAssessmentId, rejectReason: applications.rejectReason, talentPoolOptOut: sql<boolean>`coalesce((${candidates.preferences}->>'talentPoolOptOut')::boolean, false)`, toldState: applications.toldState })
+    .select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId, source: applications.source, sourceDetail: applications.sourceDetail, stage: applications.stage, stageChangedAt: applications.stageChangedAt, createdAt: applications.createdAt, latestAssessmentId: applications.latestAssessmentId, rejectReason: applications.rejectReason, talentPoolOptOut: sql<boolean>`coalesce((${candidates.preferences}->>'talentPoolOptOut')::boolean, false)`, toldState: applications.toldState, dataDeleted: sql<boolean>`${candidates.anonymizedAt} is not null` })
     .from(applications)
     .leftJoin(candidates, eq(candidates.id, applications.candidateId))
     .where(and(eq(applications.companyId, companyId), inArray(applications.roleId, roleIds)))
@@ -313,7 +313,8 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
     byOwnerStage[ownerStage(a, mark)] += 1;
     if (mark) markCounts[markKey[mark.mark]] += 1;
     if (holdEnded(mark, now)) markCounts.holdsEnded += 1;
-    if (DECISION_STAGES.includes(a.stage)) {
+    // Someone whose details were deleted cannot be told: they are not a decision waiting to be told (as on the Talent list).
+    if (DECISION_STAGES.includes(a.stage) && !a.dataDeleted) {
       told.decisions += 1;
       told[toldKey[a.toldState ?? "not_told"]] += 1;
     }

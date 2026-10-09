@@ -12,10 +12,13 @@ import { cancelInterviewInTx, type CancelNotice } from "./interview-cancel";
  * `candidateEmail` says what the candidate hears about it:
  * - "send_cancellation": the candidate's own news (they withdrew, declined an offer). Every interview they knew about
  *   (a booked time, or times they were offered) is called off with a short note.
- * - "private_decision": the team's decision, which stays private until a person sends it (founder decision B6;
- *   plan-adjustments §4). The decision is not sent here, but a candidate who holds a booked time or was offered times
- *   is told now, with no reason, that the interview is off, so nobody turns up to an interview that no longer exists.
- *   The decision message a person sends later leaves out an interview whose cancellation was already told.
+ * - "private_decision": the team's decision, which stays private until a person sends it (founder decision B6). The
+ *   decision is not sent here, but a candidate who holds a booked time or was offered times is told now, with no
+ *   reason, that the interview is off, so nobody turns up to an interview that no longer exists. The decision message a
+ *   person sends later leaves out an interview whose cancellation was already told. This deliberately departs from
+ *   plan-adjustments §4 ("the cancellation notice and the decline go together when told"), pending the founder's
+ *   answer and counsel register item 23(c): waiting for the decision would leave a candidate to turn up to a cancelled
+ *   interview whenever nobody sends it before the interview time.
  * - "with_decision_message": nothing is sent here, because the caller sends the decision message in this same
  *   transaction and that message names the cancelled interview, so the candidate gets one message, not two.
  * A privacy deletion does not come here: packages/core/src/privacy-requests.ts ends the person's interviews itself and

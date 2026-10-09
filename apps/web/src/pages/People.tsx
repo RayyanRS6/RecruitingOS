@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "../nav";
 import { Alert, Avatar, Button, Card, Chip, EmptyState, ErrorState, Field, Icon, PageHeader, Pill, ScoreBadge, Sheet, Skeleton, StageButton, TabPanel, Tabs, type OwnerStage } from "@ros/ui";
@@ -12,11 +12,13 @@ import { AskRecruiter } from "../components/AskRecruiter";
 import { ShareJob } from "../components/ShareJob";
 import { useCompanyCheck } from "../components/use-company-check";
 import { LOW_CONFIDENCE_LABEL } from "../evidence";
+import { focusLost, rowFocusAfterMove } from "../focus-after";
 import { activeCompanyOf } from "../rail";
 import { canDecline, canSeeTalent, canShareJob } from "../roles";
 import { roleStatus } from "../role-status";
 import { actionToast, batches, bulkSendToast, holdDay, mergeDecisionResults, noticeText, panelStepFrom, stageBlocked, stageIntent, type PanelStep } from "../talent-actions";
-import { useBulkUndoToast } from "../components/use-undo";
+import { InlineUndo } from "../components/InlineUndo";
+import { useBulkTakeBack, useBulkUndoToast } from "../components/use-undo";
 import { waitingOnCandidateRow } from "../hiring";
 import { WORDING_HINT, bulkUndoMillis, undoable } from "../telling";
 import { ORDERS, READING, READING_FILTERS, STILL_APPLYING_LABEL, STILL_APPLYING_TEXT, appliedWhen, applyView, defaultView, emptyText, isStillApplying, readingCounts, readingOf, stillApplyingCount, stripItems, waitingOnYouCount, waitingText, type Order, type ReadingFilter, type TalentView } from "../talent-list";
@@ -134,12 +136,36 @@ export function People() {
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : "That did not go through. Try again."),
   });
+  // A move from a row's stage button can take the row out of the view (the "New" tab, "Waiting on you"), and the stage
+  // button that had the focus with it. Once the move has settled (the list is fetched again first), focus that was lost
+  // goes to the person now in that place, or back to the same row's button when it is still listed.
+  const listArea = useRef<HTMLDivElement>(null);
+  const moved = useRef<{ id: string; index: number } | null>(null);
   const onRowMove = (a: ApplicationSummary, to: OwnerStage) => {
     const move = a.stageMoves.find((m) => m.to === to);
     if (!move) return;
     const intent = stageIntent(move);
-    if (intent.kind === "action") rowAct.mutate({ id: a.id, body: intent.body });
+    if (intent.kind === "action") { moved.current = { id: a.id, index: shownIds.indexOf(a.id) }; rowAct.mutate({ id: a.id, body: intent.body }); }
     else if (intent.kind === "step") openPanel(a.id, intent.step);
+  };
+  useEffect(() => {
+    const m = moved.current;
+    if (!m || rowAct.isPending) return;
+    moved.current = null;
+    if (!focusLost(document.activeElement, document.body)) return;
+    const area = listArea.current;
+    if (!area) return;
+    const rowsNow = Array.from(area.querySelectorAll<HTMLElement>(".talent-row[data-application]"));
+    const target = rowFocusAfterMove(rowsNow.map((r) => r.dataset.application ?? ""), m);
+    const row = target ? rowsNow.find((r) => r.dataset.application === target.id) : null;
+    const el = row && target ? row.querySelector<HTMLElement>(target.same ? ".menu-wrap > button" : ".talent-name") : area.querySelector<HTMLElement>('[role="tabpanel"]');
+    el?.focus();
+  }, [rowAct.isPending]);
+  // Closing Review and apply after everyone was applied leaves its opener ("Review and apply N") disabled, so focus
+  // cannot go back to it; the board's heading takes it instead.
+  const closeReview = () => {
+    goTo(boardSearch(search, { review: false }));
+    requestAnimationFrame(() => { if (focusLost(document.activeElement, document.body)) document.getElementById("board-title")?.focus(); });
   };
 
   const status = role ? (role.status === "open" ? { label: "Live", tone: "good" as const } : roleStatus(role.status)) : null;
@@ -204,6 +230,7 @@ export function People() {
             </Alert>
           ) : null}
           {compareOpen ? <ComparePanel roleId={roleId} candidates={shown.map((a) => ({ id: a.id, name: a.candidate?.name ?? "Unknown", stageLabel: a.ownerStageLabel, score: a.score }))} /> : null}
+          <div ref={listArea}>
           <TabPanel idBase="talent-strip" value={view.stage}>
             {apps.isLoading ? <Skeleton lines={5} /> : apps.error ? <ErrorState message="Could not load the applicants." onRetry={() => apps.refetch()} /> : shown.length === 0 && total === 0 && role?.status === "open" && canShareJob(myRole) ? (
               // Nobody yet on a live job (plan D8): the empty list is the place to share it from.
@@ -220,10 +247,11 @@ export function People() {
               </div>
             )}
           </TabPanel>
+          </div>
         </>
       )}
       {/* The candidate panel comes last, so a name opened from Review and apply or from an answer sits on top of them. */}
-      {reviewing && roleId && board.data ? <ReviewApply roleId={roleId} board={board.data} mayDecline={mayTell} onClose={() => goTo(boardSearch(search, { review: false }))} onOpen={(id) => openPanel(id)} /> : null}
+      {reviewing && roleId && board.data ? <ReviewApply roleId={roleId} board={board.data} mayDecline={mayTell} onClose={closeReview} onOpen={(id) => openPanel(id)} /> : null}
       {asking && roleId && board.data ? <AskPool roleId={roleId} board={board.data} onClose={() => setAsking(false)} onOpen={(id) => openPanel(id)} onShow={(ids, label) => { setOnlyFor({ roleId, ids, label }); setAsking(false); }} /> : null}
       {panel && roleId ? (
         <CandidatePanel
@@ -255,7 +283,7 @@ function TalentRow({ a, busy, onOpen, onMove }: { a: ApplicationSummary; busy: b
   // A decision message in the outbox of a company ITS has not confirmed yet waits for the check (founder decision B7).
   const check = useCompanyCheck();
   return (
-    <div className="talent-row">
+    <div className="talent-row" data-application={a.id}>
       <Avatar name={name} />
       <div className="talent-row-main">
         <button type="button" className="talent-name" onClick={onOpen}>{name}</button>
@@ -296,9 +324,13 @@ const BULK_WORDINGS: ReadonlyArray<DecisionWording> = CHOOSABLE_WORDINGS;
 function TellSheet({ roleId, people, onClose }: { roleId: string; people: ApplicationSummary[]; onClose: () => void }) {
   const qc = useQueryClient();
   const bulkUndo = useBulkUndoToast();
+  const bulkTakeBack = useBulkTakeBack();
   const [picked, setPicked] = useState<string[]>(people.map((p) => p.id));
   const [wording, setWording] = useState<DecisionWording | "each">("each");
   const [results, setResults] = useState<DecisionMessagesResponse | null>(null);
+  // The messages of this Send still waiting out their Undo window, and when the first of them leaves: "Undo all" is in
+  // the sheet as well as on the toast, which the keyboard cannot reach while the sheet is open.
+  const [waiting, setWaiting] = useState<{ items: Array<{ applicationId: string; communicationId: string }>; until: string } | null>(null);
   const sample = picked[0] ?? null;
   const preview = useQuery({
     queryKey: ["decision-message", sample, wording],
@@ -317,7 +349,9 @@ function TellSheet({ roleId, people, onClose }: { roleId: string; people: Applic
       setResults(r);
       const t = bulkSendToast(r);
       const items = undoable(r.results);
-      bulkUndo({ roleId, items, ms: bulkUndoMillis(r.results), title: t.title, detail: items.length ? [t.detail, "Undo all takes back every message still waiting."].filter(Boolean).join(" ") : t.detail });
+      const ms = bulkUndoMillis(r.results);
+      bulkUndo({ roleId, items, ms, title: t.title, detail: items.length ? [t.detail, "Undo all takes back every message still waiting."].filter(Boolean).join(" ") : t.detail });
+      setWaiting(items.length && ms > 0 ? { items, until: new Date(Date.now() + ms).toISOString() } : null);
       await Promise.all([qc.invalidateQueries({ queryKey: ["applications", roleId] }), qc.invalidateQueries({ queryKey: ["brief"] }), qc.invalidateQueries({ queryKey: ["application"] })]);
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send the messages."),
@@ -331,7 +365,10 @@ function TellSheet({ roleId, people, onClose }: { roleId: string; people: Applic
           <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
             {results.results.map((r) => <li key={r.applicationId}><strong>{nameOf(r.applicationId)}</strong>: {r.ok && r.candidateNotice ? noticeText(r.candidateNotice) : r.message ?? "Not sent."}</li>)}
           </ul>
-          <Button onClick={onClose}>Done</Button>
+          <div className="row">
+            {waiting ? <InlineUndo autoFocus label="Undo all" ariaLabel={`Undo all: take back the ${waiting.items.length === 1 ? "message" : `${waiting.items.length} messages`} still waiting`} undoUntil={waiting.until} onUndo={async () => { await bulkTakeBack(roleId, waiting.items); setWaiting(null); }} /> : null}
+            <Button onClick={onClose}>Done</Button>
+          </div>
         </div>
       ) : (
         <div className="stack">

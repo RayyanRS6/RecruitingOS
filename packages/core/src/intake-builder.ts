@@ -203,7 +203,19 @@ export function intakeReadiness(input: { facts: IntakeFacts; state: IntakeServer
 
 const PAY_UNIT: Record<"hourly" | "salary", string> = { hourly: "an hour", salary: "a year" };
 
-/** The pay card (C8): the market figure with its source and year, the ITS estimate labelled as one, or plainly none. */
+/** A market figure's place as a sentence says it: "the Austin area", "the US as a whole", "Los Angeles-Long Beach-Anaheim, CA". */
+export function marketPlace(metro: string): string {
+  // A figure stored before places were written with capitals ("austin area") reads as "Austin area".
+  const named = metro === metro.toLowerCase() ? metro.replace(/\b[a-z]/g, (c) => c.toUpperCase()).replace(/ Area$/, " area") : metro;
+  if (/^us national$/i.test(named)) return "the US as a whole";
+  return /\barea$/i.test(named) ? `the ${named}` : named;
+}
+
+/**
+ * The pay card (C8): the market figure with its source and year, the ITS estimate labelled as one, or plainly none. A
+ * figure for a broader group of jobs than this one (`approximate`) says so, and a range below its middle is mentioned
+ * gently rather than as something that will slow the search (polish list).
+ */
 export function payCard(facts: IntakeFacts, state: IntakeServerState): IntakePayCard {
   const basis = isBasis(facts.compensationBasis) ? facts.compensationBasis : state.benchmark?.basis ?? null;
   const b = state.benchmark ?? null;
@@ -212,11 +224,14 @@ export function payCard(facts: IntakeFacts, state: IntakeServerState): IntakePay
   if (b) {
     const range = `${money(b.p25)}–${money(b.p75)} ${PAY_UNIT[b.basis]} (middle ${money(b.p50)})`;
     const label = b.origin === "its_estimate" ? "ITS estimate" : `Market pay${b.asOf ? `, ${b.asOf}` : ""}`;
+    const where = marketPlace(b.metro);
+    const rough = b.approximate ? ` There is no government figure for this exact job, so this one is for a broader group${b.occupation ? ` (${b.occupation.toLowerCase()})` : ""}: take it as a rough guide.` : "";
     const summary = b.origin === "its_estimate"
-      ? `ITS estimate for ${b.metro}: ${range}. This is ITS's own pay table, not government wage data.`
-      : `Market pay for the ${b.metro}: ${range}. Source: ${b.source}.`;
+      ? `ITS estimate for ${where}: ${range}. This is ITS's own pay table, not government wage data.${rough}`
+      : `Market pay for ${where}: ${range}. Source: ${b.source}.${rough}`;
     const belowMarket = stated.max !== null && b.basis === basis && stated.max < b.p50;
-    return { basis, benchmark: { ...b, label }, gap: null, stated, confirmed, belowMarket, summary: belowMarket ? `${summary} Your range tops out below the middle of the market, which can slow the search.` : summary };
+    const below = b.approximate ? " Your range tops out below its middle, which is worth knowing but not a worry on its own." : " Your range tops out below the middle of the market, which can slow the search.";
+    return { basis, benchmark: { ...b, label }, gap: null, stated, confirmed, belowMarket, summary: belowMarket ? `${summary}${below}` : summary };
   }
   const where = facts.locationText?.trim() || "this place";
   const gap = state.benchmarkGap === "basis_unknown" || !basis

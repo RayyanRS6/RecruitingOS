@@ -3,11 +3,11 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, type Actor, type ReviewItem, type RolePacket, type ScreenProgress, type ScreenStatus, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat, type UnconfirmedIntent } from "@ros/contracts";
 import { runPromptDetached, screenTurnPrompt, type AiRuntime, type RunOutcome, type ScreenContext } from "@ros/ai";
 import {
-  EMPTY_SCREEN_PROGRESS, MOVED_ON_MESSAGE, REVIEW_MESSAGE, SKIPPED_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, answerWithdrawPrompt, answersOf, countConversation, createScreen, currentQuestion, declineConversation, editScreenAnswer, enforceTurnRules, flagAllowance,
+  EMPTY_SCREEN_PROGRESS, MOVED_ON_MESSAGE, REVIEW_MESSAGE, SCREEN_COMPLETE_MESSAGE, SKIPPED_MESSAGE, TURN_CAP_REVIEW_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, modelTurnCap, modelTurnsUsed, answerWithdrawPrompt, answersOf, countConversation, createScreen, currentQuestion, declineConversation, editScreenAnswer, enforceTurnRules, flagAllowance,
   isFocusKey, loadScreenBundle, nextQuestion, pausedMessage, redactProtected, requestHuman, reviewItems, runScreenTurn, screenCommand, screenContextOf, screenIntro, sendConversationForLater, sendRepeatConfirmation,
   sendRepeatConversationLater, sendRepeatConversationResume, startScreenConversation, statusUrlFor, submitScreenAnswers, tapWords, withFocusAnswer, withdrawPending, withdrawnMessage, type AllowanceNote, type ScreenIntro, type TurnResult,
 } from "@ros/agents";
-import { emit, entitlements, evaluateEligibility, humanResponseExpectation, loadBusinessCalendar, oneVisitPolicyAllows, resolveApplyMode, resolvePolicy, tapFormatFor, transition } from "@ros/core";
+import { addBusinessHours, deadlineWords, emit, entitlements, evaluateEligibility, humanResponseExpectation, loadBusinessCalendar, oneVisitPolicyAllows, resolveApplyMode, resolvePolicy, tapFormatFor, transition } from "@ros/core";
 import { applications, candidates, communications, companies, randomToken, rolePackets, roles, screens, unconfirmedScreens, withTenant, workflowRuns, type Db, type Tx } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import type { WorkflowEngine } from "@ros/workflows";
@@ -59,7 +59,9 @@ const APPLY_ACTOR: Actor = { kind: "system", id: "apply_page" };
  * - `receipt`, with why: `later_flow` (the role uses "form now, conversation later", or the owner's rule for
  *   invitations is "ask me first" or "only a person": today's receipt); `under_review` (an answer to an eligibility
  *   question did not match: no conversation, a neutral receipt, and the status page says "Under review"; plan E7);
- *   `conversation_by_email` (the month's conversations are used up: the link comes by email once more are added; Q17).
+ *   `conversation_by_email` (the month's conversations are used up: the link comes by email once more are added; Q17;
+ *   a repeat submission gets it too once the application has had its day's conversations,
+ *   `CONVERSATIONS_PER_APPLICATION_PER_DAY`).
  */
 export type ApplyVisitOutcome = { kind: "conversation"; token: string } | { kind: "receipt"; reason: "later_flow" | "under_review" | "conversation_by_email" };
 
@@ -97,6 +99,9 @@ export async function startApplyConversation(tx: Tx, container: Container, input
   const usedUp = !ent.ok && company.planKey !== "design_partner";
   if (input.duplicate) {
     if (usedUp) return { kind: "receipt", reason: "conversation_by_email" };
+    // Past the day's conversations for this application, the same receipt as when the month's are used up: no row, no
+    // link, no model calls. Never an existing conversation's link instead: that would show one person's words to the next.
+    if (!(await anotherConversationToday(tx, app.id))) return { kind: "receipt", reason: "conversation_by_email" };
     const row = await createUnconfirmedConversation(tx, container, { application: app, role, company, firstName: input.typedFirstName, now });
     return { kind: "conversation", token: row.token };
   }
@@ -150,6 +155,22 @@ export function registerApplyConversationJobs(engine: WorkflowEngine, deps: Conv
   });
 }
 
+/**
+ * The conversations one application may have opened in a day, its own and repeat submissions' together. A repeat
+ * submission's conversation is never counted against the company's allowance (only a confirmed one is), so without a
+ * cap anyone could open model conversations without end by sending the form again with an address that already
+ * applied. Counting the application's own conversation too means the receipt comes after the same number of
+ * submissions whether or not the address had applied before (unless it applied within the day).
+ */
+export const CONVERSATIONS_PER_APPLICATION_PER_DAY = 4;
+
+async function anotherConversationToday(tx: Tx, applicationId: string): Promise<boolean> {
+  const since = sql`now() - interval '24 hours'`;
+  const [own] = await tx.select({ n: sql<number>`count(*)` }).from(screens).where(and(eq(screens.applicationId, applicationId), sql`${screens.createdAt} > ${since}`));
+  const [repeats] = await tx.select({ n: sql<number>`count(*)` }).from(unconfirmedScreens).where(and(eq(unconfirmedScreens.applicationId, applicationId), sql`${unconfirmedScreens.createdAt} > ${since}`));
+  return Number(own?.n ?? 0) + Number(repeats?.n ?? 0) < CONVERSATIONS_PER_APPLICATION_PER_DAY;
+}
+
 async function createUnconfirmedConversation(tx: Tx, container: Container, input: { application: Application; role: Role; company: Company; firstName: string; now: Date }): Promise<Unconfirmed> {
   const expiresAt = new Date(input.now.getTime() + UNCONFIRMED_DAYS * 24 * HOUR);
   const firstName = input.firstName.trim().slice(0, 80) || "there";
@@ -186,7 +207,7 @@ function detachedContext(d: Detached, state: { progress: ScreenProgress; answers
 }
 
 function closedFor(status: string, companyName: string): string {
-  if (status === "completed") return "Thanks, this screening is complete. The hiring team is reviewing and you will hear back within a few days. Reply HUMAN to reach a person.";
+  if (status === "completed") return SCREEN_COMPLETE_MESSAGE;
   if (status === "human_requested") return "A person from the hiring team will follow up with you shortly.";
   if (status === "paused") return pausedMessage(companyName);
   return "This screening has closed. Reply HUMAN if you would like a person to follow up.";
@@ -233,9 +254,9 @@ export function hashToken(raw: string): string {
 
 type DetachedState = { status: ScreenStatus; transcript: ScreenTranscriptEntry[]; answers: Record<string, string>; progress: ScreenProgress };
 
-/** Writes the assistant's reply on a detached conversation; the end of the questions goes to "check your answers" (E10). */
-async function detachedReply(tx: Tx, d: Detached, s: DetachedState & { message: string; questionKey: string | null; done: boolean; aiRunId?: string }): Promise<TurnResult> {
-  const message = s.done ? REVIEW_MESSAGE : s.message;
+/** Writes the assistant's reply on a detached conversation; the end of the questions goes to "check your answers" (E10), saying `reviewMessage` (REVIEW_MESSAGE unless given). */
+async function detachedReply(tx: Tx, d: Detached, s: DetachedState & { message: string; questionKey: string | null; done: boolean; aiRunId?: string; reviewMessage?: string }): Promise<TurnResult> {
+  const message = s.done ? s.reviewMessage ?? REVIEW_MESSAGE : s.message;
   const progress: ScreenProgress = s.done ? { ...s.progress, phase: "review", currentQuestionKey: null } : s.progress;
   const transcript = [...s.transcript, { role: "assistant" as const, content: message, at: new Date().toISOString(), questionKey: s.questionKey ?? undefined, channel: "web" as const, aiRunId: s.aiRunId }];
   await tx.update(unconfirmedScreens).set({ status: s.status, transcript, answers: s.answers, progress }).where(eq(unconfirmedScreens.id, d.row.id));
@@ -294,6 +315,13 @@ async function beginDetachedTurn(tx: Tx, deps: ConversationDeps, id: string, inp
     const silent: ScreenTurn = { messageToCandidate: " ", questionKey: next?.key ?? null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: !next, humanRequested: false };
     progress = advanceProgress(progress, silent);
     return { done: await detachedReply(tx, d, { ...state, answers, progress, message: next ? `${lead} Next: ${next.question}` : lead, questionKey: next?.key ?? null, done: !next }) };
+  }
+  // The same cap on model calls as the real conversation (`modelTurnCap`), ending the same way: "check your answers",
+  // where nothing calls the model. Nothing about it tells this conversation apart from a first application's.
+  if (modelTurnsUsed(transcript) >= modelTurnCap(packet)) {
+    await emit(tx, { type: "screen.turn_cap_reached", companyId: d.company.id, actor: { kind: "system", id: "screening" }, subject: { type: "screen", id: row.id }, payload: { detached: true, modelTurns: modelTurnsUsed(transcript), cap: modelTurnCap(packet), ending: "review", channel: "web" } });
+    const ended: ScreenTurn = { messageToCandidate: " ", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: true, humanRequested: false };
+    return { done: await detachedReply(tx, d, { ...state, progress: advanceProgress(state.progress, ended), message: TURN_CAP_REVIEW_MESSAGE, reviewMessage: TURN_CAP_REVIEW_MESSAGE, questionKey: null, done: true }) };
   }
   return { ctx: detachedContext(d, state, message), turn: transcript.length };
 }
@@ -543,7 +571,11 @@ export async function findConversation(db: Db, token: string): Promise<Conversat
  * - `current`: the question being asked, the tap answer it offers (E12), and whether it already has an answer (the
  *   assistant is following up: skipping then moves on and keeps it, E11). `review`: one line per question.
  * - `transcript`: what the candidate sees; a recruiter's call notes are never on it.
- * - `personExpectation`: when a person will be in touch ("within four business hours (...)").
+ * - `personExpectation`: when a person would be in touch if asked now ("within four business hours (...)"), for the
+ *   page that offers one.
+ * - `personAsked`: once a person was asked for (status `human_requested`), the time promised then, in words, and whether
+ *   it has passed: the closed page keeps that promise instead of making a new one each time it is opened. Null
+ *   otherwise, or for an old conversation with no record of when.
  * There is deliberately no status link here: a detached conversation has none to give, so neither kind shows one.
  */
 export type ConversationView = {
@@ -563,9 +595,10 @@ export type ConversationView = {
   review: ReviewItem[] | null;
   withdrawPending: boolean;
   personExpectation: string;
+  personAsked: { dueWords: string; overdue: boolean } | null;
 };
 
-function viewOf(input: { token: string; status: string; channel: string; progress: ScreenProgress; answers: Record<string, string>; transcript: ScreenTranscriptEntry[]; companyName: string; notices: Company["settings"]["notices"]; packet: RolePacket; firstName: string; expectation: string }): ConversationView {
+function viewOf(input: { token: string; status: string; channel: string; progress: ScreenProgress; answers: Record<string, string>; transcript: ScreenTranscriptEntry[]; companyName: string; notices: Company["settings"]["notices"]; packet: RolePacket; firstName: string; expectation: string; personAsked: ConversationView["personAsked"] }): ConversationView {
   const { progress, packet } = input;
   const status = input.status as ScreenStatus;
   const oneVisit = progress.flow === "one_visit";
@@ -592,22 +625,37 @@ function viewOf(input: { token: string; status: string; channel: string; progres
     review: phase === "review" ? reviewItems({ answers: input.answers, progress }, packet) : null,
     withdrawPending: open && withdrawPending(input.transcript),
     personExpectation: input.expectation,
+    personAsked: status === "human_requested" ? input.personAsked : null,
   };
 }
 
-export async function conversationView(db: Db, ref: ConversationRef): Promise<ConversationView | null> {
+/** How long a person may take to reach someone who asked for one, as the conversation promises it (founder decision F12). */
+const PERSON_REPLY_BUSINESS_HOURS = 4;
+
+/**
+ * `now`: the moment the page is read (the real time unless a test says otherwise). The promise to someone who asked for
+ * a person is worked out from when they asked, so it stays the same however often the page is opened; a request made
+ * outside business hours counts from the next opening, as "on the next business day" said at the time.
+ */
+export async function conversationView(db: Db, ref: ConversationRef, now: Date = new Date()): Promise<ConversationView | null> {
   return withTenant(db, ref.companyId, async (tx) => {
-    const expectation = humanResponseExpectation(new Date(), await loadBusinessCalendar(tx));
+    const calendar = await loadBusinessCalendar(tx, now);
+    const expectation = humanResponseExpectation(now, calendar);
+    const asked = (at: string | null | undefined): ConversationView["personAsked"] => {
+      if (!at) return null;
+      const due = addBusinessHours(new Date(at), PERSON_REPLY_BUSINESS_HOURS, calendar);
+      return { dueWords: deadlineWords(due, calendar), overdue: now.getTime() > due.getTime() };
+    };
     if (ref.kind === "screen") {
       const b = await loadScreenBundle(tx, ref.id);
       if (!b) return null;
-      return viewOf({ token: ref.token, status: b.screen.status, channel: b.screen.channel, progress: b.screen.progress, answers: b.screen.answers, transcript: b.screen.transcript, companyName: b.company.name, notices: b.company.settings.notices, packet: b.packet, firstName: b.candidate.firstName, expectation });
+      return viewOf({ token: ref.token, status: b.screen.status, channel: b.screen.channel, progress: b.screen.progress, answers: b.screen.answers, transcript: b.screen.transcript, companyName: b.company.name, notices: b.company.settings.notices, packet: b.packet, firstName: b.candidate.firstName, expectation, personAsked: b.screen.status === "human_requested" ? asked(b.screen.humanRequestedAt) : null });
     }
     const d = await loadDetached(tx, ref.id);
     if (!d) return null;
     // A wiped conversation reads as an expired link, like a screen nobody answered.
     const status = d.row.discardedAt ? "expired" : d.row.status;
-    return viewOf({ token: ref.token, status, channel: "web", progress: d.row.progress, answers: d.row.answers, transcript: d.row.discardedAt ? [] : d.row.transcript, companyName: d.company.name, notices: d.company.settings.notices, packet: d.packet, firstName: d.row.firstName || "there", expectation });
+    return viewOf({ token: ref.token, status, channel: "web", progress: d.row.progress, answers: d.row.answers, transcript: d.row.discardedAt ? [] : d.row.transcript, companyName: d.company.name, notices: d.company.settings.notices, packet: d.packet, firstName: d.row.firstName || "there", expectation, personAsked: status === "human_requested" ? asked(d.row.finishedAt) : null });
   });
 }
 

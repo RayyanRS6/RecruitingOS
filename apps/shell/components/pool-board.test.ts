@@ -96,7 +96,7 @@ describe("the pool board on the Talent page", () => {
     expect(words).toContain("Sort again");
     // the header: eyebrow, role, counts, the ways in
     expect(html).toContain('<p class="eyebrow">Board</p>');
-    expect(html).toContain("<h2>Dental Hygienist</h2>");
+    expect(html).toContain('<h2 id="board-title" tabindex="-1">Dental Hygienist</h2>');
     expect(words).toContain("To sort: 1 shortlist · 1 longlist · 1 not moving forward · 1 already sorted or decided");
     expect(words).toContain("Ask about this pool");
     expect(words).toContain("Have a recruiter check this");
@@ -138,7 +138,7 @@ describe("the pool board on the Talent page", () => {
     // groups with n/m and where they go, privately
     expect(words).toContain("Shortlist 1/1 1 of 1 ticked Added to your Shortlist. Private, the candidate is not told.");
     expect(words).toContain("Longlist 0/1 0 of 1 ticked Kept warm on your Longlist. Private, no email.");
-    expect(words).toContain("Not moving forward 1/1 1 of 1 ticked Filed privately. Nobody is emailed until you send the decision message from the Talent page; you will be reminded.");
+    expect(words).toContain("Not moving forward 1/1 1 of 1 ticked Filed privately. Nobody is emailed now; you will be reminded to send the decision message from the Talent page. If nobody tells them within 5 working days, the standard message goes by itself");
     expect(words).toContain("Untick anyone you want to decide yourself, change a reason if needed, then apply. Unticked people stay where they are.");
     // Maria and Luis start ticked; Ben, who needs your eye, does not
     expect(html).toContain('<input id="review-a1" type="checkbox" aria-describedby="review-a1-why" checked=""/>');

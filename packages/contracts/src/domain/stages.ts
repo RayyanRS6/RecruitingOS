@@ -101,7 +101,7 @@ export type CandidateNotice = z.infer<typeof CandidateNotice>;
  * sheet (POST /applications/:id/outcome, hired_externally). `decline`:
  * open the private decline (POST /applications/:id/actions, reject, reason required). `none`: where they are now.
  */
-export const StageMoveVia = z.enum(["none", "set_mark", "clear_mark", "interview", "offer", "record_hire", "decline"]);
+export const StageMoveVia = z.enum(["none", "set_mark", "clear_mark", "interview", "offer", "record_hire", "decline", "undo_decision"]);
 export type StageMoveVia = z.infer<typeof StageMoveVia>;
 /** One entry of the stage button: every owner stage, allowed or not, with the reason when not. */
 export type StageMove = { to: OwnerStage; label: string; via: StageMoveVia; mark?: MarkKind; allowed: boolean; current: boolean; blockedReason?: string };

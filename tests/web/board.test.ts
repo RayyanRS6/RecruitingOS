@@ -254,7 +254,8 @@ describe("Review and apply", () => {
   it("says where each group goes and that it is private, and the footer says nobody is emailed", () => {
     expect(GROUP_WORDS.shortlist).toBe("Added to your Shortlist. Private, the candidate is not told.");
     expect(GROUP_WORDS.longlist).toMatch(/Private, no email\.$/);
-    expect(GROUP_WORDS.not_moving_forward).toBe("Filed privately. Nobody is emailed until you send the decision message from the Talent page; you will be reminded.");
+    // nobody is emailed now, and the safety net (Q27) is named rather than promising that nothing ever goes by itself
+    expect(GROUP_WORDS.not_moving_forward).toBe("Filed privately. Nobody is emailed now; you will be reminded to send the decision message from the Talent page. If nobody tells them within 5 working days, the standard message goes by itself (if your settings ask for approval or keep these messages with a person, an ITS recruiter is brought in instead and nothing is sent).");
     expect(REVIEW_SUB).toBe("Untick anyone you want to decide yourself, change a reason if needed, then apply. Unticked people stay where they are.");
     expect(REVIEW_FOOT).toBe("This files people into your pipeline privately. Nobody is emailed.");
   });

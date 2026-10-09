@@ -90,7 +90,7 @@ export function CompareTable({ data }: { data: CompareView }) {
       </div>
       <Table head={["What we checked", ...cands.map((c) => c.name)]} label="Candidates compared">
         <tr>
-          <td className="small muted">Match score</td>
+          <th scope="row" className="small muted">Match score</th>
           {cands.map((c) => {
             const s = scoreSummary(c);
             return (
@@ -104,18 +104,18 @@ export function CompareTable({ data }: { data: CompareView }) {
             );
           })}
         </tr>
-        <tr><td className="small muted">Where they are</td>{cands.map((c) => <td key={c.applicationId}><StatusChip stage={c.stage} label={c.ownerStageLabel ?? c.stageLabel} group={c.group} /></td>)}</tr>
-        {data.mustHaves.map((m) => <tr key={`mh:${m.key}`}><td className="small"><span className="sbar-tag must">Must-have</span> {m.text}</td>{cands.map((c) => <td key={c.applicationId}><Cell c={c} keyName={m.key} mustHave /></td>)}</tr>)}
+        <tr><th scope="row" className="small muted">Where they are</th>{cands.map((c) => <td key={c.applicationId}><StatusChip stage={c.stage} label={c.ownerStageLabel ?? c.stageLabel} group={c.group} /></td>)}</tr>
+        {data.mustHaves.map((m) => <tr key={`mh:${m.key}`}><th scope="row" className="small"><span className="sbar-tag must">Must-have</span> {m.text}</th>{cands.map((c) => <td key={c.applicationId}><Cell c={c} keyName={m.key} mustHave /></td>)}</tr>)}
         {data.competencies.map((x) => {
           const tag = skillTag(cands, x.key);
-          return <tr key={`sk:${x.key}`}><td className="small" title={x.definition}>{tag ? <><span className="sbar-tag">{tag}</span> </> : null}{x.name}</td>{cands.map((c) => <td key={c.applicationId}><Cell c={c} keyName={x.key} mustHave={false} /></td>)}</tr>;
+          return <tr key={`sk:${x.key}`}><th scope="row" className="small" title={x.definition}>{tag ? <><span className="sbar-tag">{tag}</span> </> : null}{x.name}</th>{cands.map((c) => <td key={c.applicationId}><Cell c={c} keyName={x.key} mustHave={false} /></td>)}</tr>;
         })}
-        <tr><td className="small muted">Screen</td>{cands.map((c) => <td key={c.applicationId} className="small">{c.screen ? REC_LABEL[c.screen.recommendation] ?? c.screen.recommendation.replace(/_/g, " ") : <span className="muted">no screen yet</span>}</td>)}</tr>
-        <tr><td className="small muted">Résumé</td>{cands.map((c) => <td key={c.applicationId} className="small">{c.resume ? overallLabel(c.resume.overall) : <span className="muted">not read yet</span>}</td>)}</tr>
-        <tr><td className="small muted">Still unknown</td>{cands.map((c) => <td key={c.applicationId} className="small">{c.unknownCount}</td>)}</tr>
+        <tr><th scope="row" className="small muted">Screen</th>{cands.map((c) => <td key={c.applicationId} className="small">{c.screen ? REC_LABEL[c.screen.recommendation] ?? c.screen.recommendation.replace(/_/g, " ") : <span className="muted">no screen yet</span>}</td>)}</tr>
+        <tr><th scope="row" className="small muted">Résumé</th>{cands.map((c) => <td key={c.applicationId} className="small">{c.resume ? overallLabel(c.resume.overall) : <span className="muted">not read yet</span>}</td>)}</tr>
+        <tr><th scope="row" className="small muted">Still unknown</th>{cands.map((c) => <td key={c.applicationId} className="small">{c.unknownCount}</td>)}</tr>
         {/* The team's private notes (plan H3), for those who read notes; never the candidate's, never the AI's. */}
-        {withNotes ? <tr><td className="small muted">Team notes <span className="sr-only">(private)</span></td>{cands.map((c) => <td key={c.applicationId}><NotesCell notes={c.notes ?? []} /></td>)}</tr> : null}
-        <tr><td className="small muted">Their panel</td>{cands.map((c) => <td key={c.applicationId}><Link to={c.open} className="btn quiet sm">Open</Link></td>)}</tr>
+        {withNotes ? <tr><th scope="row" className="small muted">Team notes <span className="sr-only">(private)</span></th>{cands.map((c) => <td key={c.applicationId}><NotesCell notes={c.notes ?? []} /></td>)}</tr> : null}
+        <tr><th scope="row" className="small muted">Their panel</th>{cands.map((c) => <td key={c.applicationId}><Link to={c.open} className="btn quiet sm">Open</Link></td>)}</tr>
       </Table>
       {notes.length ? <ul className="small" style={{ margin: "8px 0 0", paddingLeft: 18, color: "var(--caution)" }}>{notes.map((n) => <li key={n}>{n}</li>)}</ul> : null}
       <p className="small muted" style={{ marginTop: 8 }}>{data.reminder}</p>

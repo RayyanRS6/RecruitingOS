@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { OWNER_STAGE_LABEL, OwnerStage, type ActiveMark, type Actor, type ApplicationAction, type ApplicationStage, type CandidateNotice, type DecisionMessagePreview, type DecisionWording, type MarkKind, type MembershipRole, type StageMove, type StageMoveVia, type ToldState } from "@ros/contracts";
-import { DECISION_STAGES, MarkError, STAGE_LABEL, activeMarksFor, assertCan, baseOwnerStage, can, clearMark, emit, gate, markBlockedReason, ownerStage, resolvePolicy, setMark, transition, withdrawQueuedDecision, type Permission } from "@ros/core";
-import { applications, approvalRequests, assessments, interviews, screens, type Tx } from "@ros/db";
+import { DECISION_STAGES, MarkError, STAGE_LABEL, activeMarksFor, assertCan, baseOwnerStage, can, clearMark, emit, gate, markBlockedReason, ownerStage, reopenStage, resolvePolicy, setMark, stageBeforeDecision, transition, withdrawQueuedDecision, type Permission } from "@ros/core";
+import { applications, approvalRequests, assessments, candidates, interviews, roles, screens, type Tx } from "@ros/db";
 import { DecisionMessageError, checkPersonalLine, decisionMessageDraft, decisionsWaitingApproval, queueDecisionMessage, type PersonalLine } from "@ros/agents";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
@@ -24,15 +24,17 @@ export const INTERVIEW_DONE_STATUSES: readonly string[] = ["completed", "no_show
 /** The assistant's suggestions that wait on a person (plan A6): a person acting on the candidate directly settles them. */
 const SUGGESTIONS = ["application.invite_screen", "application.recommend_interview"];
 
-export type ApplicationCapability = "invite_screen" | "ask_in_screen" | "interview" | "advance_to_interview" | "hold" | "reject" | "move_to_talent_pool" | "override_eligibility" | "review_anyway" | "record_decision" | "record_outcome" | "record_offer" | "set_mark" | "clear_mark" | "send_decision" | "told_in_person" | "cancel_screen";
+export type ApplicationCapability = "invite_screen" | "ask_in_screen" | "interview" | "advance_to_interview" | "hold" | "reject" | "move_to_talent_pool" | "override_eligibility" | "review_anyway" | "record_decision" | "record_outcome" | "record_offer" | "set_mark" | "clear_mark" | "send_decision" | "told_in_person" | "cancel_screen" | "undo_decision";
 
 /**
  * `role` is the viewer's tenant role when known: every capability is then limited to roles that hold its permission, so a person never sees a button the route would refuse.
  * `openUnknowns` is how many questions the latest résumé assessment left open: "Ask about this in a screen" needs at least one.
  * `mark` and `markRemindAt` are the active private mark; `toldState` and `decisionMessagePending` say whether a decision was told or its message waits for approval.
  * `hasUnstartedScreen`: a screening invitation the candidate has not started, which "Stop this screen invitation" can take back (plan A7).
+ * `decidedFrom`: for a decision, the stage it was made from (null: no history), read only where taking it back is offered
+ * (left out, "Take back this decision" is not offered); `roleClosed`: the role has closed (its talent-pool moves stay).
  */
-export type ApplicationFacts = { stage: string; rejectReason: string | null; hasOpenScreen: boolean; hasActiveInterview: boolean; hasUndecidedInterview: boolean; role?: MembershipRole | null; openUnknowns?: number; mark?: MarkKind | null; markRemindAt?: string | null; toldState?: ToldState | null; decisionMessagePending?: boolean; hasUnstartedScreen?: boolean };
+export type ApplicationFacts = { stage: string; rejectReason: string | null; hasOpenScreen: boolean; hasActiveInterview: boolean; hasUndecidedInterview: boolean; role?: MembershipRole | null; openUnknowns?: number; mark?: MarkKind | null; markRemindAt?: string | null; toldState?: ToldState | null; decisionMessagePending?: boolean; hasUnstartedScreen?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean };
 
 /** Why a choice is not available right now, in the reader's words; the page puts it on the disabled button. */
 export type BlockedReasons = Partial<Record<ApplicationCapability, string>>;
@@ -58,6 +60,8 @@ const CAPABILITY: Record<ApplicationCapability, { permission: Permission; what: 
   told_in_person: { permission: "application.reject", what: "tell candidates about a decision" },
   // The candidate is sent a note, so it sits with those who tell candidates decisions: owner, admin, hiring manager, recruiter.
   cancel_screen: { permission: "application.reject", what: "stop a screening invitation" },
+  // Taking back a decision sits with those who make it.
+  undo_decision: { permission: "application.reject", what: "take back a decision" },
 };
 const CAPABILITIES = Object.keys(CAPABILITY) as ApplicationCapability[];
 
@@ -73,6 +77,10 @@ function whoMay(permission: Permission): string {
 
 const decided = (f: ApplicationFacts) => DECISION_STAGES.includes(f.stage as ApplicationStage);
 const untold = (f: ApplicationFacts) => (f.toldState ?? "not_told") === "not_told";
+/** A decline on an eligibility answer is taken back with "Review anyway", which reads the application again. */
+const eligibilityDecline = (f: ApplicationFacts) => f.stage === "rejected" && f.rejectReason === "eligibility";
+/** Where taking back this decision puts them, or null when it cannot be taken back to anywhere (or that is not known here). */
+const reopensAt = (f: ApplicationFacts): ApplicationStage | null => (f.decidedFrom === undefined ? null : reopenStage(f.decidedFrom));
 
 /** What the application's state allows, whoever is asking. */
 function allowedByState(f: ApplicationFacts): ApplicationCapability[] {
@@ -99,6 +107,9 @@ function allowedByState(f: ApplicationFacts): ApplicationCapability[] {
   // "I told them myself" also while the message is still on its way: a person's word ends the wait either way.
   if (decided(f) && (untold(f) || f.toldState === "queued")) out.push("told_in_person");
   if (!terminal && f.stage !== "talent_pool" && f.hasUnstartedScreen) out.push("cancel_screen");
+  // Quiet undo (plan G1): a decision nobody has told the candidate, with no message waiting for approval, on a role still
+  // open, goes back to the step it was made from. Nothing was or will be sent.
+  if (decided(f) && untold(f) && !f.decisionMessagePending && !f.roleClosed && !eligibilityDecline(f) && reopensAt(f)) out.push("undo_decision");
   return out;
 }
 
@@ -140,6 +151,13 @@ function stateReason(cap: ApplicationCapability, f: ApplicationFacts): string {
       return tellingReason(f);
     case "cancel_screen":
       return TERMINAL_STAGES.includes(f.stage) || f.stage === "talent_pool" ? step : f.hasOpenScreen ? "They have started the screening conversation, so it can't be stopped now." : "No screening invitation is waiting for them.";
+    case "undo_decision":
+      return !decided(f) ? "Only for a decision not to move forward."
+        : !untold(f) ? "They have been told, or the message is on its way, so the decision can't be taken back here."
+        : f.decisionMessagePending ? "The decision message is waiting for approval; turn it down first."
+        : f.roleClosed ? "The role is closed."
+        : eligibilityDecline(f) ? "Use Review anyway: it reads their application again."
+        : "This decision can't be taken back here.";
     default:
       return step;
   }
@@ -184,10 +202,15 @@ export function stageMoves(f: ApplicationFacts): StageMove[] {
     const blockedReason = ok ? undefined : (extra.reason ?? (cap ? blockedReasons[cap] : undefined) ?? past);
     return { to, label: OWNER_STAGE_LABEL[to], via, ...(extra.mark ? { mark: extra.mark } : {}), allowed: ok, current: !!extra.current, ...(blockedReason ? { blockedReason } : {}) };
   };
+  // A decision the candidate was never told can be taken back to the step it was made from (plan G1): that step is the
+  // one choice offered; the others stay blocked with their reasons.
+  const reopen = allowed.includes("undo_decision") ? reopensAt(f) : null;
+  const back = reopen ? baseOwnerStage(reopen) : null;
   return OwnerStage.options.map((to) => {
     // Someone set aside as not a fit for now shows as Not moving forward; a decline is still a separate, explicit choice.
     if (to === current && to === "not_moving_forward" && mark?.mark === "not_a_fit_for_now") return move(to, "decline", "reject", { current: true });
     if (to === current) return move(to, "none", null, { current: true, reason: "They are here now." });
+    if (back && to === back) return move(to, "undo_decision", "undo_decision");
     if (to === base && mark) return move(to, "clear_mark", "clear_mark");
     switch (to) {
       case "longlist":
@@ -217,9 +240,11 @@ export function applicationFactsFrom(
   interviewRows: Array<{ status: string; decision: string | null }>,
   role?: MembershipRole | null,
   triage?: { result: { unknowns: unknown[] } } | null,
-  extra: { mark?: Pick<ActiveMark, "mark" | "remindAt"> | null; decisionMessagePending?: boolean } = {},
+  extra: { mark?: Pick<ActiveMark, "mark" | "remindAt"> | null; decisionMessagePending?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean } = {},
 ): ApplicationFacts {
   return {
+    ...(extra.decidedFrom !== undefined ? { decidedFrom: extra.decidedFrom } : {}),
+    roleClosed: !!extra.roleClosed,
     stage: app.stage,
     rejectReason: app.rejectReason,
     hasOpenScreen: screenStatuses.some((s) => SCREEN_OPEN_STATUSES.includes(s)),
@@ -240,13 +265,25 @@ export async function pendingDecisionMessages(tx: Tx, applicationIds: string[]):
   return decisionsWaitingApproval(tx, applicationIds);
 }
 
-export async function applicationFacts(tx: Tx, app: Pick<typeof applications.$inferSelect, "id" | "stage" | "rejectReason" | "toldState">, role?: MembershipRole | null): Promise<ApplicationFacts> {
+/**
+ * What taking back a decision needs to know (plan G1): the stage it was made from, and whether the role has closed.
+ * Only for a decision nobody told, of someone whose details were not deleted; otherwise nothing (not offered).
+ */
+export async function undoFacts(tx: Tx, app: Pick<typeof applications.$inferSelect, "id" | "stage" | "toldState" | "roleId" | "candidateId">): Promise<{ decidedFrom?: ApplicationStage | null; roleClosed?: boolean }> {
+  if (!DECISION_STAGES.includes(app.stage) || app.toldState !== "not_told") return {};
+  const [cand] = await tx.select({ anonymizedAt: candidates.anonymizedAt }).from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
+  if (!cand || cand.anonymizedAt) return {};
+  const [role] = await tx.select({ status: roles.status }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
+  return { decidedFrom: await stageBeforeDecision(tx, app.id), roleClosed: role?.status === "closed" };
+}
+
+export async function applicationFacts(tx: Tx, app: Pick<typeof applications.$inferSelect, "id" | "stage" | "rejectReason" | "toldState" | "roleId" | "candidateId">, role?: MembershipRole | null): Promise<ApplicationFacts> {
   const scr = await tx.select({ status: screens.status }).from(screens).where(eq(screens.applicationId, app.id));
   const ivs = await tx.select({ status: interviews.status, decision: interviews.decision }).from(interviews).where(eq(interviews.applicationId, app.id));
   const [triage] = await tx.select({ result: assessments.result }).from(assessments).where(and(eq(assessments.applicationId, app.id), eq(assessments.kind, "triage"))).orderBy(desc(assessments.createdAt)).limit(1);
   const mark = (await activeMarksFor(tx, [app.id])).get(app.id) ?? null;
   const pending = await pendingDecisionMessages(tx, [app.id]);
-  return applicationFactsFrom(app, scr.map((s) => s.status), ivs, role, triage ?? null, { mark, decisionMessagePending: pending.has(app.id) });
+  return applicationFactsFrom(app, scr.map((s) => s.status), ivs, role, triage ?? null, { mark, decisionMessagePending: pending.has(app.id), ...(await undoFacts(tx, app)) });
 }
 
 /** Whether the message is out or on its way (held for the ITS check counts: it goes on its own): what `dispositionSent` has always meant. */
@@ -447,6 +484,7 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
     if ((body.action === "set_mark" || body.action === "hold") && app.stage === "ineligible") throw new HttpError(409, "not_allowed", CHECK_ELIGIBILITY_FIRST);
     if (body.action === "send_decision" || body.action === "told_in_person") throw new HttpError(409, !decided(facts) ? "not_decided" : untold(facts) && facts.decisionMessagePending ? "waiting_approval" : "already_told", tellingReason(facts));
     if (body.action === "cancel_screen") throw new HttpError(409, facts.hasOpenScreen ? "screen_started" : "no_screen_invitation", stateReason("cancel_screen", facts));
+    if (body.action === "undo_decision") throw new HttpError(409, !decided(facts) ? "not_decided" : !untold(facts) ? "already_told" : facts.decisionMessagePending ? "waiting_approval" : "not_allowed", stateReason("undo_decision", facts));
     throw new HttpError(409, "invalid", `Cannot ${body.action.replace(/_/g, " ")} someone who is ${STAGE_LABEL[app.stage].toLowerCase()}.`);
   }
   if (settlesSuggestions(body)) await settleSuggestions(tx, container, { app, tenant: t, actor, action: body.action, note: body.note });
@@ -545,12 +583,24 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       const stage = after?.stage ?? app.stage;
       return { ok: true, stage, ownerStage: ownerStage({ stage }, facts.mark ? { mark: facts.mark, remindAt: facts.markRemindAt } : null), next: stopped.candidateTold ? "Screening invitation stopped. The candidate was sent a short note saying there is nothing to do with that link; they are back with you to review." : "Screening invitation stopped. We had no email address to tell the candidate; they are back with you to review." };
     }
+    case "undo_decision": {
+      // Quiet undo (plan G1): a decision the candidate was never told goes, and they are back at the step it was made
+      // from. Nothing was sent and nothing will be: they leave the decisions the untold safety net looks at, and a later
+      // decline is a new decision with its own date (and its own message). Recorded as a person's override.
+      assertCan(t.role, "application.reject");
+      const to = reopensAt(facts);
+      if (!to) throw new HttpError(409, "not_allowed", stateReason("undo_decision", facts));
+      await transition(tx, { applicationId: app.id, companyId: t.companyId, to, by, actor, reason: "decision taken back before the candidate was told", undoDecision: true, payload: { undo: true, note: body.note ?? null } });
+      await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "undo_decision", from: app.stage, to, note: body.note ?? null } });
+      const owner = baseOwnerStage(to);
+      return { ok: true, stage: to, ownerStage: owner, mark: null, toldState: "not_told", candidateNotice: "not_told", next: `Decision taken back: they are back in ${OWNER_STAGE_LABEL[owner]}. They were never told, and nothing will be sent.` };
+    }
     case "advance_to_interview": {
       assertCan(t.role, "application.act");
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "interview_recommended", by, actor, reason: body.note ?? "owner decision" });
       await emit(tx, { type: "candidate.recommended", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { by: "human" } });
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "advance_to_interview", note: body.note ?? null } });
-      return { ok: true, stage: "interview_recommended", ownerStage: "interviewing", candidateNotice: "not_told", next: "Marked as recommended for interview. Open the candidate and choose \"Interview\" to pick the round and interviewers; times go out to the candidate from there." };
+      return { ok: true, stage: "interview_recommended", ownerStage: "interviewing", candidateNotice: "not_told", next: "Marked as recommended for interview. Open the candidate and choose \"Approve an interview\" to pick the round and interviewers; times go out to the candidate from there." };
     }
   }
 }

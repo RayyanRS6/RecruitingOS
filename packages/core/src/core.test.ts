@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApplicationStage as ApplicationStageEnum, CANDIDATE_STEP_LABEL, OWNER_STAGE_LABEL, type ApplicationStage, type OwnerStage } from "@ros/contracts";
-import { canTransition, candidateStep, decisionTold, groupFor, holdEnded, holdRunning, markBlockedReason, mayWithdraw, ownerGroup, ownerStage, ownerStageLabel, ownerTags } from "./stages";
+import { REOPEN_TARGETS, canTransition, candidateStep, decisionTold, groupFor, holdEnded, holdRunning, markBlockedReason, mayWithdraw, ownerGroup, ownerStage, ownerStageLabel, ownerTags, reopenStage } from "./stages";
 import { MarkError, holdUntil } from "./marks";
 import { evaluateEligibility } from "./eligibility";
 import { dedupeKey, normalizePhone } from "./dedupe";
@@ -35,6 +35,31 @@ describe("state machine", () => {
     expect(ownerGroup("ineligible")).toBe("waiting_on_you");
     expect(ownerTags({ stage: "ineligible" })).toEqual(["Check eligibility"]);
     expect(ownerTags({ stage: "triaged" })).toEqual([]);
+  });
+  it("lets a person take back a decision the candidate was never told, to the step it was made from, and nothing else (plan G1)", () => {
+    const undo = (toldState: string) => ({ undoDecision: true, toldState });
+    expect(canTransition("rejected", "triaged", "owner", undo("not_told"))).toBe(true);
+    expect(canTransition("talent_pool", "interview_recommended", "hiring_manager", undo("not_told"))).toBe(true);
+    for (const told of ["queued", "sent", "told_in_person", "before_tracking"]) expect(canTransition("rejected", "triaged", "owner", undo(told)), told).toBe(false);
+    // never without the flag, never for the system, never to a step that is not a safe place to go back to
+    expect(canTransition("rejected", "triaged", "owner")).toBe(false);
+    expect(canTransition("rejected", "triaged", "system", undo("not_told"))).toBe(false);
+    expect(canTransition("rejected", "screening", "owner", undo("not_told"))).toBe(false);
+    expect(canTransition("triaged", "screen_complete", "owner", undo("not_told"))).toBe(false);
+    // where they go back to: screens and interviews the decision called off are not reopened
+    expect(reopenStage(null)).toBe("triaged");
+    expect(reopenStage("screen_invited")).toBe("triaged");
+    expect(reopenStage("screening")).toBe("triaged");
+    expect(reopenStage("screen_complete")).toBe("screen_complete");
+    expect(reopenStage("interview_scheduled")).toBe("interview_recommended");
+    expect(reopenStage("finalist")).toBe("finalist");
+    expect(reopenStage("offer_approval")).toBe("finalist");
+    expect(reopenStage("withdrawn")).toBeNull();
+    expect(reopenStage("hired")).toBeNull();
+    for (const s of ApplicationStageEnum.options) {
+      const to = reopenStage(s);
+      if (to) expect(REOPEN_TARGETS, s).toContain(to);
+    }
   });
   it("lets someone withdraw from a decision they were never told, and nobody else (plan A1)", () => {
     expect(canTransition("rejected", "withdrawn", "candidate", { decisionTold: false })).toBe(true);

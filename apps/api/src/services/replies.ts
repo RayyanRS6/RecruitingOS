@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, like, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { createDataRequest, createEscalation, disclosureLine, humanResponseExpectation, loadBusinessCalendar, notify, raiseAlert } from "@ros/core";
+import { DECISION_STAGES, createDataRequest, createEscalation, decisionTold, disclosureLine, humanResponseExpectation, loadBusinessCalendar, notify, raiseAlert } from "@ros/core";
 import { fromAddress, queueCommunication, recordInbound, replyToFor, requestHuman, sendPrivacyAcknowledgment } from "@ros/agents";
 import { applications, candidates, communications, companies, dataRequests, inboundEmails, rolePackets, roles, screens, withPlatform, withTenant, type Tx } from "@ros/db";
 import type { InboundEmail } from "@ros/integrations";
@@ -14,8 +14,8 @@ import { optOutOfTalentPool } from "./talent-pool";
  * address here. The reply is recorded on the application as an inbound communication, the team is told with a link
  * straight to the candidate, and a reply whose first line is HUMAN hands the conversation to a person exactly as the
  * HUMAN keyword does in a screening text, with an answer that says when (business hours) and carries the AI disclosure
- * (plan G8). After a decline, a first line of "no thanks" answers the decline email's offer and keeps the person out of
- * the talent pool; before one, the same words are passed to the team as they are. After a decision message, asking for
+ * (plan G8). Once the decision message reached them (or they were told), a first line of "no thanks" answers its offer
+ * and keeps the person out of the talent pool; before that, the same words are passed to the team as they are. After a decision message, asking for
  * its reasons and a person's review (EXPLAIN, as Colorado's line says) goes to the ITS compliance queue (plan G5).
  * Nothing here ever creates an application or changes a stage.
  */
@@ -73,14 +73,17 @@ async function asksForReasons(tx: Tx, app: App, text: string): Promise<boolean> 
 type ExplanationAsk = { candidateId: string; email: string | null; companyName: string };
 
 /**
- * Whether a "no thanks" answers the offer about future roles: only the decline email makes it, so only once the
- * application was declined or moved to the talent pool, or a decline email went out. Before that, "no thanks" to a
- * screening invitation or an interview time more likely turns down that step, which is the team's to follow up.
+ * Whether a "no thanks" answers the offer about future roles. Only the decision message makes that offer, so this is
+ * true only once the candidate knows the decision: the message reached them, someone recorded telling them, or the
+ * decision came before decisions were private. A decision the team has not told them yet is unknown to them (founder
+ * decision B6), and so is one whose message is still waiting, was taken back with Undo, or failed. In those cases, as
+ * before any decision, "no thanks" to a screening invitation or an interview time more likely turns down that step, and
+ * it goes to the team as it is.
  */
 async function noThanksMeansFutureRoles(tx: Tx, app: App): Promise<boolean> {
-  if (app.stage === "rejected" || app.stage === "talent_pool") return true;
-  const [declineEmail] = await tx.select({ id: communications.id }).from(communications).where(and(eq(communications.applicationId, app.id), eq(communications.direction, "outbound"), like(communications.templateKey, "disposition:%"))).limit(1);
-  return !!declineEmail;
+  if (DECISION_STAGES.includes(app.stage) && decisionTold(app.toldState)) return true;
+  // A decision message that actually left (sent or delivered): also someone told, then moved back with "review anyway".
+  return (await decisionMessageSent(tx, app)).sent;
 }
 
 export async function handleCandidateReply(tx: Tx, container: Container, input: { app: App; mail: InboundEmail }): Promise<{ communicationId: string; humanRequested: boolean; talentPoolOptOut?: boolean; duplicate?: boolean; explanationRequested?: ExplanationAsk }> {
@@ -108,7 +111,7 @@ export async function handleCandidateReply(tx: Tx, container: Container, input: 
   const name = `${candidate.firstName} ${candidate.lastName}`.trim() || "A candidate";
   const open = `/roles/${app.roleId}/talent?open=${app.id}`;
   const wantsHuman = humanRequested(text);
-  // After a decline the opt-out is done at once and confirmed by email; anything else they wrote stays in the thread for the team.
+  // Once they know the decision the opt-out is done at once and confirmed by email; anything else they wrote stays in the thread for the team.
   const saidNoThanks = !wantsHuman && noThanksRequested(text);
   const aboutFutureRoles = saidNoThanks && (await noThanksMeansFutureRoles(tx, app));
   const optedOut = aboutFutureRoles && (await optOutOfTalentPool(tx, container, { application: app, source: "email_reply" }));

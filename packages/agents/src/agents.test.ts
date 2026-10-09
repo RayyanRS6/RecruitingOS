@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { FakeProvider, screenTurnPrompt, type ScreenContext } from "@ros/ai";
+import { FakeProvider, callPrompt, intakeCompilePrompt, intakeTurnPrompt, screenTurnPrompt, type IntakeContext, type ScreenContext } from "@ros/ai";
 import { DraftRolePacket, IntakeExtraction, IntakeTurn, type IntakeQuestion } from "@ros/contracts";
+import { consumerPlaybook, matchPlaybookRole } from "@ros/playbooks";
 import { futureRolesLine, reminderClosingLine } from "./coordinator";
 import { registerFakeHandlers } from "./fake-handlers";
 import { mergeFacts, prepareQuestions } from "./intake";
@@ -31,8 +32,10 @@ describe("the screening assistant states pay as the job page does (plan 0.8)", (
   const system = (c: ScreenContext) => screenTurnPrompt.system(c).map((b) => b.text).join("\n");
 
   it("gives the range the law makes the public page show, even when the owner chose not to", () => {
-    // Version 3 (plan Wave E) keeps the pay rule of version 2.
-    expect(screenTurnPrompt.version).toBe(3);
+    // Version 4 (a close that promises no time) keeps the pay rule of version 2.
+    expect(screenTurnPrompt.version).toBe(4);
+    expect(system(ctx())).toContain("never state or suggest a time");
+    expect(system(ctx())).not.toMatch(/few days/);
     expect(system(ctx(true))).toContain("Posted pay: hourly 45 to 55 USD.");
     expect(system(ctx(false))).toContain("Posted pay: not disclosed; say a person can discuss pay.");
     // without the public rule's answer, the owner's own choice
@@ -68,7 +71,9 @@ describe("fake intake handler", () => {
     expect(res.output.factsExtracted.employmentType).toBe("full_time");
     expect(res.output.readyToCompile).toBe(false);
     expect(res.output.questions.length).toBeGreaterThan(0);
-    expect(res.output.assistantMessage).toMatch(/below the midpoint/);
+    expect(res.output.assistantMessage).toMatch(/below the middle, which may slow the search/);
+    // money as the pay card writes it, never bare numbers (polish list)
+    expect(res.output.assistantMessage).toContain("runs about $50–$64 an hour (middle $57; source: playbook).");
   });
 
   it("declines unlawful criteria and offers an alternative", async () => {
@@ -113,6 +118,52 @@ describe("fake intake handler", () => {
     if (res.kind !== "ok") throw new Error("expected ok");
     expect(res.output.compensation).toMatchObject({ min: 45, max: 55 });
     expect(res.output.description.publicJobDescription).not.toMatch(/\$\d/);
+  });
+});
+
+describe("market pay in the assistant's words, from the real prompt (intake.turn v3, polish list)", () => {
+  const fake = new FakeProvider();
+  registerFakeHandlers(fake);
+  const rt = { provider: fake, models: { judgment: "fake", standard: "fake", fast: "fake" } };
+  const role = matchPlaybookRole(consumerPlaybook, "Social media manager")!;
+  const facts = { mustHaves: [], niceToHaves: [], eligibilityNotes: [], interviewers: [], dealBreakers: [], declinedCriteria: [], title: role.title, locationText: "Austin, TX", compensationBasis: "salary", compensationMin: 65000, compensationMax: 80000 };
+  const ctx = (benchmark: IntakeContext["benchmark"]): IntakeContext => ({
+    company: { name: "Northwind Skincare", vertical: "consumer", sizeBand: "11-50", locations: [{ city: "Austin", region: "TX", country: "US" }] },
+    playbook: consumerPlaybook, playbookRole: role, benchmark, facts,
+    messages: [{ role: "owner", content: "I need a social media manager in Austin, $65,000 to $80,000 a year.", at: "2026-10-09T09:00:00.000Z" }],
+  });
+  const say = async (c: IntakeContext) => {
+    const r = await callPrompt(rt, intakeTurnPrompt, c, { companyId: null });
+    if (r.result.kind !== "ok") throw new Error(r.result.kind);
+    return r.result.output.assistantMessage;
+  };
+
+  it("the social and content role reads as marketing specialists, a rough guide, never marketing managers", () => {
+    expect(role.title).toBe("Social and Content Marketing Manager");
+    expect(role.occupation).toEqual({ soc: "13-1161", name: "Market research analysts and marketing specialists", match: "approximate" });
+  });
+
+  it("writes money and places the way the pay card does", async () => {
+    expect(intakeTurnPrompt.version).toBe(3);
+    const c = ctx({ basis: "salary", p25: 121130, p50: 164920, p75: 212050, source: "BLS OEWS 2025, SOC 112021, area 0012420", metro: "austin area", origin: "market", asOf: "2025" });
+    // the model is handed the figure already written as the pay card writes it
+    expect(intakeTurnPrompt.system(c).map((b) => b.text).join("\n")).toContain("write it as the pay card does: $121,130–$212,050 a year (middle $164,920), never bare numbers, and name places with capital letters.");
+    const text = await say(c);
+    expect(text).toContain("the market for the Austin area runs about $121,130–$212,050 a year (middle $164,920; source: BLS OEWS 2025, SOC 112021, area 0012420).");
+    expect(text).toContain("Your range is below the middle, which may slow the search.");
+    expect(text).not.toMatch(/\b121130\b|midpoint|austin area/);
+  });
+
+  it("tells a figure for a broader group of jobs as a rough guide, and a range below it gently", async () => {
+    const c = ctx({ basis: "salary", p25: 58000, p50: 71000, p75: 90000, source: "BLS OEWS 2025, SOC 131161, area 0012420", metro: "Austin area", origin: "market", asOf: "2025", approximate: true, occupation: "Market research analysts and marketing specialists" });
+    expect(intakeTurnPrompt.system(c).map((b) => b.text).join("\n")).toContain("This figure is an approximate match: it is for a broader group of jobs (Market research analysts and marketing specialists)");
+    const text = await say({ ...c, facts: { ...facts, compensationMax: 70000 } });
+    expect(text).toContain("$58,000–$90,000 a year (middle $71,000;");
+    expect(text).toContain("so this one is for a broader group (market research analysts and marketing specialists): take it as a rough guide.");
+    expect(text).toContain("Your range is below its middle, which is worth knowing but not a worry on its own.");
+    expect(text).not.toMatch(/slow the search/);
+    // the compile prompt keeps its own words: how to talk to the owner is the conversation's
+    expect(intakeCompilePrompt.system(c).map((b) => b.text).join("\n")).not.toMatch(/approximate match|pay card does/);
   });
 });
 
@@ -173,6 +224,19 @@ describe("the stand-in's question cards (intake.turn v2)", () => {
     expect(t.questions[0]).toMatchObject({ field: "compensation", mode: "pay" });
     expect(t.questions[0].prompt).toMatch(/still right/);
     expect(t.factsExtracted.declinedCriteria.map((d) => d.requested.toLowerCase())).toContain("native english speaker");
+  });
+
+  it("keeps a ticked must-have whole: the summary of tapped answers is not split into fragments (polish list)", async () => {
+    const ticked = ["Instagram, TikTok and YouTube growth for a brand", "Creator and UGC programs"];
+    // the server has already put the ticked answers in the facts; the summary line repeats them in the conversation
+    const t = await turn({ reason: "growth", mustHaves: ticked }, ["I need a dental hygienist in Irvine. Full time. $45 to $55 an hour.", `Must-haves: ${ticked.join("; ")}`]);
+    expect(t.factsExtracted.mustHaves).toEqual(ticked);
+    // words the owner types themselves are still read as a list
+    const typed = await turn({ reason: "growth" }, ["I need a dental hygienist in Irvine. Full time. $45 to $55 an hour.", "Must-haves: active CA RDH license, perio charting and Dentrix"]);
+    expect(typed.factsExtracted.mustHaves).toEqual(["active CA RDH license", "perio charting", "Dentrix"]);
+    // a typed list next to a ticked one: only the new words are added
+    const both = await turn({ reason: "growth", mustHaves: ticked }, ["I need a dental hygienist in Irvine. Full time. $45 to $55 an hour.", `Must-haves: ${ticked.join("; ")}; Canva, CapCut`]);
+    expect(both.factsExtracted.mustHaves).toEqual([...ticked, "Canva", "CapCut"]);
   });
 
   it("reads the title, place and pay out of a pasted ad without guessing (intake.extract)", async () => {

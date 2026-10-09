@@ -260,8 +260,9 @@ export function marketRange(card: Pick<IntakePayCard, "benchmark">): string | nu
 export function marketSource(card: Pick<IntakePayCard, "benchmark">): string | null {
   const b = card.benchmark;
   if (!b) return null;
-  if (b.origin === "its_estimate") return `ITS estimate for ${b.metro}${b.asOf ? `, ${b.asOf}` : ""}. ITS's own pay table, not government wage data.`;
-  return `${b.source}, ${b.metro}${b.asOf ? `, ${b.asOf}` : ""}`;
+  const rough = b.approximate ? ` A rough guide: there is no figure for this exact job, so it is for ${b.occupation ? b.occupation.toLowerCase() : "a broader group of jobs"}.` : "";
+  if (b.origin === "its_estimate") return `ITS estimate for ${b.metro}${b.asOf ? `, ${b.asOf}` : ""}. ITS's own pay table, not government wage data.${rough}`;
+  return `${b.source}, ${b.metro}${b.asOf ? `, ${b.asOf}` : ""}${rough ? `.${rough}` : ""}`;
 }
 
 /* ------------------------------------------------------------------------------------------------------------------ */

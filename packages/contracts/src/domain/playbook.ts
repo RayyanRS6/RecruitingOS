@@ -43,6 +43,12 @@ export const PlaybookRole = z.object({
     medianDaysToFill: z.number().optional(),
   }).default({}),
   channels: z.array(z.string()).default([]),
+  /**
+   * The government occupation (SOC code) market pay is read from for this role. "approximate" when the job has no
+   * occupation of its own and the figures are for a broader group (a social media manager is read as a marketing
+   * specialist), so the pay check calls them a rough guide. Without it, the occupation is found from the title.
+   */
+  occupation: z.object({ soc: z.string().regex(/^\d{2}-\d{4}$/), name: z.string(), match: z.enum(["close", "approximate"]) }).optional(),
 });
 export type PlaybookRole = z.infer<typeof PlaybookRole>;
 

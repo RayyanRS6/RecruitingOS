@@ -103,13 +103,20 @@ export type BenchmarkResult = { benchmark: PayBenchmark | null; gap?: "basis_unk
 /**
  * The pay benchmark (C2, C8): nothing until the basis is known; then the live wage service (a network call, made with
  * no transaction open), then the playbook's own table, labelled as an ITS estimate. A figure on the other basis is
- * never used: a $95,000 salary is not compared with hourly rates.
+ * never used: a $95,000 salary is not compared with hourly rates. The playbook role's own occupation, when it names one,
+ * is the one read; figures for a broader group than the job (the role says so, or the wage service does) are marked
+ * `approximate`, with that group's name, so they are told as a rough guide.
  */
 export async function resolveBenchmark(comp: CompAdapter, inputs: Pick<IntakeInputs, "basis" | "playbookRole" | "titleGuess" | "locationText">): Promise<BenchmarkResult> {
   if (!inputs.basis) return { benchmark: null, gap: "basis_unknown" };
+  const occupation = inputs.playbookRole?.occupation;
   try {
-    const live = await comp.benchmark({ title: inputs.playbookRole?.title ?? inputs.titleGuess, locationText: inputs.locationText, basis: inputs.basis });
-    if (live && live.basis === inputs.basis) return { benchmark: { basis: live.basis, p25: live.p25, p50: live.p50, p75: live.p75, source: live.source, metro: live.metro, asOf: live.asOf, origin: "market" } };
+    const live = await comp.benchmark({ title: inputs.playbookRole?.title ?? inputs.titleGuess, ...(occupation ? { socCode: occupation.soc } : {}), locationText: inputs.locationText, basis: inputs.basis });
+    if (live && live.basis === inputs.basis) {
+      const approximate = occupation ? occupation.match === "approximate" : !!live.approximate;
+      const group = occupation ? occupation.name : live.occupation;
+      return { benchmark: { basis: live.basis, p25: live.p25, p50: live.p50, p75: live.p75, source: live.source, metro: live.metro, asOf: live.asOf, origin: "market", ...(approximate ? { approximate: true, ...(group ? { occupation: group } : {}) } : {}) } };
+    }
   } catch {
     // the wage service being down is not the owner's problem: fall through to the playbook
   }
@@ -553,7 +560,7 @@ function confirmedStateFrom(facts: IntakeFacts, raw: RolePacket | DraftRolePacke
 }
 
 function benchmarkOf(b: NonNullable<IntakeContext["benchmark"]>): PayBenchmark {
-  return { basis: b.basis === "salary" ? "salary" : "hourly", p25: b.p25, p50: b.p50, p75: b.p75, source: b.source, metro: b.metro, ...(b.asOf ? { asOf: b.asOf } : {}), origin: b.origin ?? "market" };
+  return { basis: b.basis === "salary" ? "salary" : "hourly", p25: b.p25, p50: b.p50, p75: b.p75, source: b.source, metro: b.metro, ...(b.asOf ? { asOf: b.asOf } : {}), origin: b.origin ?? "market", ...(b.approximate ? { approximate: true, ...(b.occupation ? { occupation: b.occupation } : {}) } : {}) };
 }
 
 export type CompiledIntake = { roleId: string; packet: RolePacket; version: number; aiRunId: string };

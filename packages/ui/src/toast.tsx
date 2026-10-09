@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { cx, normalizeToast, TOAST_EVENT, type ToastMessage, toastDuration } from "./helpers";
+import { cx, normalizeToast, TOAST_EVENT, type ToastMessage, toastArrives, toastDuration } from "./helpers";
 import { Icon } from "./icons";
 
 /**
@@ -41,19 +41,38 @@ export function Toast(props: ToastMessage & { onDismiss?: () => void }) {
 
 /**
  * Shows the toasts that toast() (apps/web/src/toast.ts) sends as a window event, one at a time; a newer one replaces the
- * one on screen. The live region stays in the page while empty, so screen readers announce each new message. Mount it
- * once, near the root of the signed-in app. A toast with an action stays while the action is possible.
+ * one on screen, except that a toast whose action (an Undo) can still be pressed is never taken away by a plain one:
+ * that waits (the latest only) and shows once the action has ended or the toast is dismissed (`toastArrives`). The live
+ * region stays in the page while empty, so screen readers announce each new message. Mount it once, near the root of
+ * the signed-in app. A toast with an action stays while the action is possible.
  */
 export function Toaster() {
   const [message, setMessage] = useState<ToastMessage | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const actionOnScreen = useRef(false);
+  const waiting = useRef<ToastMessage | null>(null);
+  const show = useRef<(m: ToastMessage) => void>(() => undefined);
+  const end = useRef<() => void>(() => undefined);
+  show.current = (m: ToastMessage) => {
+    if (timer.current) clearTimeout(timer.current);
+    actionOnScreen.current = !!m.action;
+    setMessage(m);
+    timer.current = setTimeout(() => end.current(), toastDuration(m));
+  };
+  end.current = () => {
+    if (timer.current) clearTimeout(timer.current);
+    actionOnScreen.current = false;
+    const next = waiting.current;
+    waiting.current = null;
+    if (next) show.current(next);
+    else setMessage(null);
+  };
   useEffect(() => {
     const onToast = (e: Event) => {
       const next = normalizeToast((e as CustomEvent<unknown>).detail);
       if (!next) return;
-      if (timer.current) clearTimeout(timer.current);
-      setMessage(next);
-      timer.current = setTimeout(() => setMessage(null), toastDuration(next));
+      if (toastArrives(actionOnScreen.current, next) === "wait") waiting.current = next;
+      else show.current(next);
     };
     window.addEventListener(TOAST_EVENT, onToast);
     return () => {
@@ -61,10 +80,7 @@ export function Toaster() {
       if (timer.current) clearTimeout(timer.current);
     };
   }, []);
-  const dismiss = () => {
-    if (timer.current) clearTimeout(timer.current);
-    setMessage(null);
-  };
+  const dismiss = () => end.current();
   return (
     <div className="toast-region" role="status">
       {message ? <Toast {...message} onDismiss={dismiss} /> : null}

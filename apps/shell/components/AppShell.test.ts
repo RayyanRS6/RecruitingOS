@@ -71,6 +71,8 @@ describe("the rail", () => {
     expect(html).toContain('<span class="dot good" aria-hidden="true"></span><span class="rail-sub-title">Dental Hygienist</span>');
     expect(html).toContain(", open, 6 applicants");
     expect(html).toContain('<span class="dot" aria-hidden="true"></span><span class="rail-sub-title">Front Desk Lead</span>');
+    // the draft says so in a word too: the dot's colour never carries the status alone
+    expect(html).toContain('<span class="rail-sub-title">Front Desk Lead</span><span class="rail-count rail-tag" aria-hidden="true">Draft</span>');
     expect(html).not.toContain("Office Manager");
     expect(html).toContain("All roles");
     for (const link of ["Today", "Roles", "Talent", "Interviews", "Setup"]) expect(html, link).toContain(`</svg>${link}</a>`);
@@ -91,7 +93,9 @@ describe("the rail", () => {
     const html = render(meAs("interviewer"), { roles: theirs });
     expect(html).toContain("Dental Hygienist");
     expect(html).toContain(", open</span>");
-    expect(html).not.toContain("rail-count");
+    // no count: the word "Open" stands beside the green dot instead
+    expect(html).toContain('<span class="rail-count rail-tag" aria-hidden="true">Open</span>');
+    expect(html).not.toMatch(/<span class="rail-count" aria-hidden="true">\d/);
     expect(html).not.toContain("applicant");
     expect(html).not.toContain(">Talent</a>");
     expect(html).toContain("Interviewer");

@@ -47,6 +47,22 @@ describe("pay a person set (plan C7)", () => {
     expect(payCard({ ...empty(), locationText: "Reno" }, state({ benchmarkGap: "basis_unknown" })).gap?.reason).toBe("basis_unknown");
     expect(payCard({ ...facts, locationText: "Reno" }, state({ benchmarkGap: "no_market_figure" })).summary).toBe("We have no market pay figure for this job in Reno, so pay was not checked against the market.");
   });
+
+  it("names the place as people write it, and tells a figure for a broader group of jobs as a rough guide (polish list)", () => {
+    const salary = { ...empty(), compensationBasis: "salary", compensationMin: 65000, compensationMax: 80000 };
+    const close = payCard(salary, state({ benchmark: { basis: "salary", p25: 121130, p50: 164920, p75: 212050, source: "BLS OEWS 2025, SOC 112021, area 0012420", metro: "Austin area", asOf: "2025", origin: "market" } }));
+    expect(close.summary).toBe("Market pay for the Austin area: $121,130–$212,050 a year (middle $164,920). Source: BLS OEWS 2025, SOC 112021, area 0012420. Your range tops out below the middle of the market, which can slow the search.");
+    // a figure stored before places were capitalised still reads properly
+    expect(payCard(salary, state({ benchmark: { basis: "salary", p25: 1, p50: 2, p75: 3, source: "x", metro: "austin area", origin: "market" } })).summary).toMatch(/^Market pay for the Austin area:/);
+    expect(payCard(salary, state({ benchmark: { basis: "salary", p25: 1, p50: 2, p75: 3, source: "x", metro: "US national", origin: "market" } })).summary).toMatch(/^Market pay for the US as a whole:/);
+    const rough = payCard(salary, state({ benchmark: { basis: "salary", p25: 58000, p50: 71000, p75: 90000, source: "BLS OEWS 2025, SOC 131161, area 0012420", metro: "Austin area", asOf: "2025", origin: "market", approximate: true, occupation: "Market research analysts and marketing specialists" } }));
+    expect(rough.belowMarket).toBe(false);
+    expect(rough.summary).toContain("so this one is for a broader group (market research analysts and marketing specialists): take it as a rough guide.");
+    const roughBelow = payCard({ ...salary, compensationMax: 70000 }, state({ benchmark: { basis: "salary", p25: 58000, p50: 71000, p75: 90000, source: "BLS", metro: "Austin area", origin: "market", approximate: true, occupation: "Market research analysts and marketing specialists" } }));
+    expect(roughBelow.belowMarket).toBe(true);
+    expect(roughBelow.summary).toMatch(/below its middle, which is worth knowing but not a worry on its own\.$/);
+    expect(roughBelow.summary).not.toMatch(/slow the search/);
+  });
 });
 
 describe("readiness, computed on the server (plan C7, founder decision Q8)", () => {

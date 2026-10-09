@@ -65,6 +65,7 @@ describe("what the page says after a choice", () => {
     expect(actionToast("ask_in_screen", { next: "Invitation on its way. The screen starts with the open questions." }).title).toBe("Invitation on its way. The screen starts with the open questions.");
     expect(actionToast("cancel_screen", { candidateNotice: "queued" }).title).toBe("Screen invitation stopped.");
     expect(actionToast("cancel_screen", {}).detail).toBe("Their link no longer works.");
+    expect(actionToast("undo_decision", { ownerStage: "new" })).toEqual({ title: "Decision taken back: back in New.", detail: "They were never told, and nothing will be sent." });
     // never a bare "Done."
     expect(actionToast("something_new", {}).title).not.toBe("Done.");
   });
@@ -148,7 +149,7 @@ describe("the private decline step", () => {
   });
 
   it("closing a role says who moved privately, which interviews ended, and who was told only that theirs is off", () => {
-    expect(closeRoleToast({ movedToTalentPool: 3, heldEmailsAddedToTalentPool: 1, interviewsCancelled: 1, interviewOffNotes: 1 })).toEqual({ title: "Role closed as filled.", detail: "The 2 people still in the process moved to your talent pool, privately: nobody is told until you send the closing message. 1 interview was cancelled; the candidate was sent a short note now saying only that it is off." });
+    expect(closeRoleToast({ movedToTalentPool: 3, heldEmailsAddedToTalentPool: 1, interviewsCancelled: 1, interviewOffNotes: 1, closingMessage: { policy: "sends" } })).toEqual({ title: "Role closed as filled.", detail: "The 2 people still in the process moved to your talent pool, privately: nobody is told yet. Send the closing message when you are ready. If nobody tells them within 5 working days, the closing message goes to them by itself. 1 interview was cancelled; the candidate was sent a short note now saying only that it is off." });
     expect(closeRoleToast({ movedToTalentPool: 2, interviewsCancelled: 2, interviewOffNotes: 2 }).detail).toMatch(/2 interviews were cancelled; each candidate was sent a short note now saying only that their interview is off\.$/);
     expect(closeRoleToast({ movedToTalentPool: 3, interviewsCancelled: 3, interviewOffNotes: 2 }).detail).toMatch(/3 interviews were cancelled; the 2 candidates who had a time booked or offered were sent a short note now saying only that their interview is off\.$/);
     expect(closeRoleToast({ movedToTalentPool: 1, interviewsCancelled: 1, interviewOffNotes: 0 }).detail).toMatch(/1 interview was cancelled; no times had gone to the candidate, so nothing was sent about it\.$/);
@@ -156,6 +157,21 @@ describe("the private decline step", () => {
     expect(closeRoleToast({}).detail).toBe("Nobody else was still in the process.");
     // the role page closes with any outcome, under its own title
     expect(closeRoleToast({ movedToTalentPool: 2 }, "Role closed; the outcome is recorded with your name.").title).toBe("Role closed; the outcome is recorded with your name.");
+  });
+
+  it("closing a role never says nothing will go by itself: the safety net (Q27) is named the way the settings run it", () => {
+    // settings ask for approval: nothing goes by itself, a recruiter is brought in
+    expect(closeRoleToast({ movedToTalentPool: 2, closingMessage: { policy: "needs_approval" } }).detail).toBe("The 2 people still in the process moved to your talent pool, privately: nobody is told yet. Send the closing message when you are ready. Nothing is sent by itself: if nobody tells them within 5 working days, an ITS recruiter is brought in to make sure they are told.");
+    // only a person sends decision messages: tell them yourself
+    expect(closeRoleToast({ movedToTalentPool: 1, closingMessage: { policy: "not_sent" } }).detail).toBe("The one person still in the process moved to your talent pool, privately: nobody is told yet. Under your settings no message is sent: tell each of them yourself, then record it on their page. Nothing is sent by itself: if nobody tells them within 5 working days, an ITS recruiter is brought in to make sure they are told.");
+    // the setting not known: both ways are said
+    expect(closeRoleToast({ movedToTalentPool: 2 }).detail).toMatch(/If nobody tells them within 5 working days, the closing message goes by itself \(if your settings ask for approval or keep these messages with a person, an ITS recruiter is brought in instead and nothing is sent\)\.$/);
+  });
+
+  it("HR, who may close a role but not tell candidates, is told who sends the closing message instead of being asked to", () => {
+    const hr = closeRoleToast({ movedToTalentPool: 2, closingMessage: null }, "Role closed; the outcome is recorded with your name.", false).detail!;
+    expect(hr).toBe("The 2 people still in the process moved to your talent pool, privately: nobody is told yet. An owner, admin, hiring manager or recruiter sends them the closing message; it waits on their Today.");
+    expect(hr).not.toMatch(/you send/i);
   });
 });
 
@@ -191,6 +207,8 @@ describe("the stage button's choices", () => {
     // Offer opens the record-only "Offer made" (plan H2): the app never writes or sends the offer
     expect(stageIntent(move({ to: "offer", via: "offer", mark: undefined }))).toEqual({ kind: "step", step: "offer" });
     expect(stageIntent(move({ to: "not_moving_forward", via: "decline", mark: undefined }))).toEqual({ kind: "step", step: "decline" });
+    // a decision nobody told, taken back to the step it was made from (plan G1)
+    expect(stageIntent(move({ to: "new", via: "undo_decision", mark: undefined }))).toEqual({ kind: "action", body: { action: "undo_decision" } });
   });
 
   it("does nothing for the stage they are at, or a move that is not allowed", () => {

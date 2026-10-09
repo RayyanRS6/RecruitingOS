@@ -36,11 +36,11 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       // an interviewer is offered nothing, and told why on each
       const interviewer = applicationActionState(facts({ role: "interviewer" }));
       expect(interviewer.allowed).toEqual([]);
-      expect(Object.keys(interviewer.blockedReasons)).toHaveLength(17);
+      expect(Object.keys(interviewer.blockedReasons)).toHaveLength(18);
       // every choice not allowed has a reason, for every role
       for (const role of ["owner", "admin", "hiring_manager", "hr", "recruiter", "interviewer"] as MembershipRole[]) {
         const s = applicationActionState(facts({ role }));
-        expect(s.allowed.length + Object.keys(s.blockedReasons).length, role).toBe(17);
+        expect(s.allowed.length + Object.keys(s.blockedReasons).length, role).toBe(18);
         for (const reason of Object.values(s.blockedReasons)) expect(reason, role).not.toMatch(/_|undefined/);
       }
     });
@@ -118,6 +118,27 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       // set aside as not a fit for now: shown as Not moving forward, and a decline is still a separate choice
       expect(moves({ mark: "not_a_fit_for_now" }).not_moving_forward).toMatchObject({ current: true, allowed: true, via: "decline" });
       expect(moves({ mark: "not_a_fit_for_now" }).new).toMatchObject({ allowed: true, via: "clear_mark" });
+    });
+
+    it("a decision nobody told can be taken back to the step it was made from, by those who decide; never once told (plan G1)", () => {
+      const declined = (over: Partial<ApplicationFacts> = {}) => facts({ stage: "rejected", rejectReason: "not_a_match_experience", toldState: "not_told", decidedFrom: "screen_invited", ...over });
+      expect(applicationActionState(declined()).allowed).toContain("undo_decision");
+      expect(applicationActionState(declined({ stage: "talent_pool", rejectReason: null, decidedFrom: "finalist" })).allowed).toContain("undo_decision");
+      // the stage button offers the step it was made from; everything else stays blocked
+      const moves = Object.fromEntries(stageMoves(declined()).map((m) => [m.to, m]));
+      expect(moves.new).toMatchObject({ allowed: true, via: "undo_decision" });
+      expect(moves.shortlist.allowed).toBe(false);
+      expect(Object.fromEntries(stageMoves(declined({ decidedFrom: "interview_scheduled" })).map((m) => [m.to, m])).interviewing).toMatchObject({ allowed: true, via: "undo_decision" });
+      // never once they were told or a message is on its way, nor while one waits for approval, nor on a closed role
+      expect(applicationActionState(declined({ toldState: "sent" })).blockedReasons.undo_decision).toBe("They have been told, or the message is on its way, so the decision can't be taken back here.");
+      expect(applicationActionState(declined({ toldState: "queued" })).allowed).not.toContain("undo_decision");
+      expect(applicationActionState(declined({ decisionMessagePending: true })).blockedReasons.undo_decision).toBe("The decision message is waiting for approval; turn it down first.");
+      expect(applicationActionState(declined({ roleClosed: true })).blockedReasons.undo_decision).toBe("The role is closed.");
+      // an eligibility decline has its own "Review anyway"; and where it was made from is not known on a list, so not offered
+      expect(applicationActionState(declined({ rejectReason: "eligibility" })).blockedReasons.undo_decision).toBe("Use Review anyway: it reads their application again.");
+      expect(applicationActionState(declined({ decidedFrom: undefined })).allowed).not.toContain("undo_decision");
+      expect(applicationActionState(facts()).blockedReasons.undo_decision).toBe("Only for a decision not to move forward.");
+      expect(applicationActionState(declined({ role: "hr" })).blockedReasons.undo_decision).toMatch(/^Your role can't take back a decision/);
     });
 
     it("without a known role (a system caller) only the state counts", () => {

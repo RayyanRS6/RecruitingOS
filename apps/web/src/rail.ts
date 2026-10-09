@@ -43,12 +43,20 @@ export function railListsRoles(me: MeLike | null | undefined): boolean {
 /** Statuses listed under Roles: the ones still being worked on. Filled and closed roles are on the Roles page. */
 const LISTED = ["open", "paused", "pending_approval", "draft"];
 
-export type RailRole = { id: string; title: string; live: boolean; applicants: number | null; statusWord: string };
+/**
+ * `tag`: a short word shown where no count is, so the dot's colour never carries the status alone (docs/07: a word
+ * always goes with it): "Open" for a live role whose count is hidden, else "Paused", "Waiting" or "Draft".
+ */
+export type RailRole = { id: string; title: string; live: boolean; applicants: number | null; statusWord: string; tag: string | null };
+
+/** The visible word beside a role with no count; kept short for the narrow rail (the full words are read out). */
+const RAIL_TAG: Record<string, string> = { open: "Open", paused: "Paused", pending_approval: "Waiting", draft: "Draft" };
 
 /**
  * The roles under Roles: open ones first (a green dot and how many applied), then paused, waiting for approval and
- * drafts (a grey dot), newest first within each, at most RAIL_ROLE_LIMIT. An interviewer's list comes from the API
- * already limited to the roles they interview for and without applicant counts (`countsHidden`), so no count is shown.
+ * drafts (a grey dot and the word for where they stand), newest first within each, at most RAIL_ROLE_LIMIT. An
+ * interviewer's list comes from the API already limited to the roles they interview for and without applicant counts
+ * (`countsHidden`), so no count is shown and an open role says "Open" instead.
  */
 export function railRoles(roles: ReadonlyArray<{ id: string; title: string; status: string; createdAt?: string | null; counts?: { total?: number } | null; countsHidden?: boolean }>, viewer: { role: string | null }, limit = RAIL_ROLE_LIMIT): RailRole[] {
   const interviewer = viewer.role === "interviewer";
@@ -60,7 +68,7 @@ export function railRoles(roles: ReadonlyArray<{ id: string; title: string; stat
     .map(({ r }) => {
       const live = r.status === "open";
       const applicants = live && !interviewer && !r.countsHidden ? (r.counts?.total ?? 0) : null;
-      return { id: r.id, title: r.title, live, applicants, statusWord: railStatusWord(r.status, applicants) };
+      return { id: r.id, title: r.title, live, applicants, statusWord: railStatusWord(r.status, applicants), tag: applicants === null ? RAIL_TAG[r.status] ?? null : null };
     });
 }
 

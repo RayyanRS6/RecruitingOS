@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, like } from "drizzle-orm";
 import type { ActiveMark, ApplicationStage, StageMove } from "@ros/contracts";
-import { anonymizeCandidate, correctOutcome, emit, entitlements, exportCandidateData, transition } from "@ros/core";
-import { detectStuckRoles, handleEmailEvent, runInterventionLadder, sweepStaleSending, workingDaysSince } from "@ros/agents";
+import { anonymizeCandidate, correctOutcome, emit, entitlements, exportCandidateData, suppressAddress, transition } from "@ros/core";
+import { detectStuckRoles, handleEmailEvent, retryCommunication, runInterventionLadder, runUntoldSafetyNet, sweepStaleSending, workingDaysSince } from "@ros/agents";
 import { applicationMarks, applications, approvalRequests, candidates, communications, events, interviews, notifications, policies, randomToken, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
@@ -184,7 +184,9 @@ describe("the stage strip, private marks and private decisions", () => {
       expect(after.candidateToldAt).toBeTruthy();
       const [sent] = await container.db.select().from(communications).where(and(eq(communications.applicationId, id), eq(communications.templateKey, "disposition:human")));
       expect(sent.status).toBe("sent");
-      expect(sent.bodyText).toBe(preview.text);
+      // the words previewed, with the real status link in place of the placeholder the team was shown
+      expect(preview.text).not.toContain(after.statusToken);
+      expect(sent.bodyText).toBe(preview.text.replace("/c/status/[their status link]", `/c/status/${after.statusToken}`));
       expect(await container.db.select().from(events).where(and(eq(events.type, "application.told"), eq(events.subjectId, id)))).toHaveLength(1);
       // once told, there is nothing more to send
       const again = await act(owner, id, { action: "send_decision" });
@@ -195,6 +197,33 @@ describe("the stage strip, private marks and private decisions", () => {
       expect((await act(hr, other, { action: "send_decision" })).status).toBe(403);
       expect(((await (await act(owner, other, { action: "send_decision" })).json()) as { error: { code: string } }).error.code).toBe("not_decided");
       expect((await json(owner, "GET", `/api/v1/applications/${other}/decision-message`)).status).toBe(404);
+    });
+
+    it("a decline nobody told can be taken back: they go back where they were, nothing is sent, and the safety net leaves them alone (plan G1)", async () => {
+      const id = await seed("Lou", { stage: "screen_complete" });
+      await decline(id);
+      const d = await detail(id);
+      expect(d.allowedActions).toContain("undo_decision");
+      expect(d.stageMoves.find((m) => m.to === "new")).toMatchObject({ allowed: true, via: "undo_decision" });
+      // HR may not take back a decision
+      expect((await act(hr, id, { action: "undo_decision" })).status).toBe(403);
+      const r = await act(owner, id, { action: "undo_decision", note: "Ticked by mistake in Review and apply" });
+      expect(r.status).toBe(200);
+      expect(await r.json()).toMatchObject({ stage: "screen_complete", ownerStage: "new", candidateNotice: "not_told" });
+      expect(await application(id)).toMatchObject({ stage: "screen_complete", rejectedAt: null, rejectReason: null, rejectNote: null });
+      const override = (await container.db.select().from(events).where(and(eq(events.type, "human.override"), eq(events.subjectId, id)))).find((e) => e.payload.action === "undo_decision");
+      expect(override?.payload).toMatchObject({ from: "rejected", to: "screen_complete" });
+      // a week on, nobody is chased and nothing goes: they are no longer a decision
+      const net = await withTenant(container.db, companyId, (tx) => runUntoldSafetyNet(tx, { integrations: container.integrations, statusBaseUrl: "http://localhost:3000", now: new Date(Date.now() + 10 * DAY), actor: { kind: "system", id: "untold_safety_net" } }, companyId));
+      expect(net.map((x) => x.applicationId)).not.toContain(id);
+      await container.drain();
+      expect(await container.db.select().from(communications).where(and(eq(communications.applicationId, id), like(communications.templateKey, "disposition:%")))).toHaveLength(0);
+      // declined again, it is a new decision; once told, it can no longer be taken back
+      await decline(id);
+      expect(await (await act(owner, id, { action: "told_in_person" })).json()).toMatchObject({ toldState: "told_in_person" });
+      const late = await act(owner, id, { action: "undo_decision" });
+      expect(late.status).toBe(409);
+      expect(((await late.json()) as { error: { code: string } }).error.code).toBe("already_told");
     });
 
     it("a message that could not be delivered leaves them not told, and a second Send is a new message", async () => {
@@ -380,6 +409,71 @@ describe("the stage strip, private marks and private decisions", () => {
       const [msg] = await decisionRows(id);
       await withPlatform(container.db, (tx) => handleEmailEvent(tx, container.integrations, { event: { provider: "postmark", recordType: "Bounce", externalId: `Bounce:${msg.id}`, messageId: msg.providerMessageId, email: "eve@marks.test", type: "HardBounce", description: "The mailbox does not exist.", at: new Date().toISOString(), hard: true, complaint: false, soft: false, metadata: {} }, appBaseUrl: "http://localhost:3000", now: new Date() }));
       expect(await application(id)).toMatchObject({ toldState: "not_told", candidateToldAt: null });
+    });
+
+    const softBounce = (msg: { id: string; providerMessageId: string | null }, email: string) =>
+      withPlatform(container.db, (tx) => handleEmailEvent(tx, container.integrations, { event: { provider: "postmark", recordType: "Bounce", externalId: `Bounce:soft:${msg.id}`, messageId: msg.providerMessageId, email, type: "SoftBounce", description: "The mailbox is full.", at: new Date().toISOString(), hard: false, complaint: false, soft: true, metadata: {} }, appBaseUrl: "http://localhost:3000", now: new Date() }));
+    const retry = (communicationId: string) => withPlatform(container.db, (tx) => retryCommunication(tx, container.integrations, { communicationId, attempt: 1, now: new Date() }));
+    const firstTry = async (id: string) => (await decisionRows(id)).filter((r) => !r.retryOf).sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+
+    it("a decision message that keeps soft-bouncing until the address is stopped means they were not told after all", async () => {
+      const id = await seed("Kit");
+      await decline(id);
+      expect(await (await act(owner, id, { action: "send_decision" })).json()).toMatchObject({ candidateNotice: "queued" });
+      await container.drain();
+      expect((await application(id)).toldState).toBe("sent");
+      const msg = await firstTry(id);
+      // one soft bounce: it is tried again later, so it still counts as on its way
+      expect(await softBounce(msg, "kit@marks.test")).toMatchObject({ action: "retry_scheduled" });
+      expect((await application(id)).toldState).toBe("sent");
+      // the retry goes and bounces too: the address is stopped, and nothing more will be tried
+      await retry(msg.id);
+      await container.drain();
+      const again = (await decisionRows(id)).find((r) => r.retryOf === msg.id)!;
+      expect(again.status).toBe("sent");
+      expect(await softBounce(again, "kit@marks.test")).toMatchObject({ action: "suppressed" });
+      expect(await application(id)).toMatchObject({ toldState: "not_told", candidateToldAt: null });
+      expect((await detail(id)).allowedActions).toEqual(expect.arrayContaining(["send_decision", "told_in_person"]));
+    });
+
+    it("a retry that cannot go because the address was stopped meanwhile leaves them not told", async () => {
+      const id = await seed("Hana");
+      await decline(id);
+      await act(owner, id, { action: "send_decision" });
+      await container.drain();
+      const msg = await firstTry(id);
+      await softBounce(msg, "hana@marks.test");
+      // another message to the same address soft-bounced this week: the address is stopped before the retry goes
+      await withPlatform(container.db, (tx) => suppressAddress(tx, { address: "hana@marks.test", reason: "soft_bounce_repeated", source: "postmark", actor: { kind: "system", id: "test" }, companyId, now: new Date() }));
+      await retry(msg.id);
+      await container.drain();
+      expect((await decisionRows(id)).find((r) => r.retryOf === msg.id)?.status).toBe("failed");
+      expect(await application(id)).toMatchObject({ toldState: "not_told", candidateToldAt: null });
+    });
+
+    it("a soft-bounced decline is not tried again once the decision no longer applies, nor after it was taken back and made again", async () => {
+      const back = await seed("Ivo");
+      const redone = await seed("Jade");
+      for (const id of [back, redone]) {
+        await decline(id);
+        await act(owner, id, { action: "send_decision" });
+      }
+      await container.drain();
+      await softBounce(await firstTry(back), "ivo@marks.test");
+      await softBounce(await firstTry(redone), "jade@marks.test");
+      // both are put back in the process (what "review anyway" does); one is then declined again
+      const reopen = (id: string) => withTenant(container.db, companyId, (tx) => transition(tx, { applicationId: id, companyId, to: "eligible", by: "owner", actor: { kind: "user", id: ownerId } }));
+      await reopen(back);
+      await reopen(redone);
+      await decline(redone);
+      const sentBefore = (container.integrations.email as FakeEmailAdapter).sent.length;
+      for (const id of [back, redone]) {
+        const msg = await firstTry(id);
+        expect(await retry(msg.id)).toEqual({ queued: false, reason: "the decision no longer applies" });
+        expect((await decisionRows(id)).filter((r) => r.retryOf === msg.id)).toHaveLength(0);
+      }
+      await container.drain();
+      expect((container.integrations.email as FakeEmailAdapter).sent.length).toBe(sentBefore);
     });
 
     it("correcting an outcome from one decision to the other keeps whether they were told, so nobody is written to twice", async () => {

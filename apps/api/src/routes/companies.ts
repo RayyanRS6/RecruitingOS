@@ -1,8 +1,8 @@
 import { Hono, type Context } from "hono";
 import { desc, eq } from "drizzle-orm";
 import { CreateCompany, InviteMember, UpdateMember } from "@ros/contracts";
-import { assertCan, audit, raiseAlert, setActiveCompany, revokeStaffGrant } from "@ros/core";
-import { companies, entitlements as entitlementRows, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
+import { assertCan, audit, entitlements, raiseAlert, setActiveCompany, revokeStaffGrant } from "@ros/core";
+import { companies, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
 import { actorOf, requireTenant, requireUser, type Vars } from "../middleware/session";
 import { createCompany } from "../services/companies";
 import { tellItsAboutNewCompany } from "../services/company-trust";
@@ -35,8 +35,8 @@ companyRoutes.get("/current", requireTenant, async (c) => {
   const row = await withTenant(container.db, t.companyId, async (tx) => {
     const [co] = await tx.select().from(companies).where(eq(companies.id, t.companyId)).limit(1);
     const [plan] = await tx.select().from(plans).where(eq(plans.key, co.planKey)).limit(1);
-    const ents = await tx.select().from(entitlementRows).where(eq(entitlementRows.companyId, t.companyId));
-    const usage = Object.fromEntries(ents.map((e) => [e.key, { used: e.used, limit: e.limit }]));
+    // Roles are counted from the roles using a place now, so closing one shows its place free again (polish list).
+    const usage = await entitlements.usageOf(tx, t.companyId);
     return { ...co, plan: plan ? { key: plan.key, name: plan.name, limits: plan.limits } : null, usage };
   });
   return c.json({ ...row, integrations: container.integrations.statuses(), ai: { provider: container.ai.provider.id } });

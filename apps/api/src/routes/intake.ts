@@ -1,9 +1,9 @@
 import { Hono, type Context } from "hono";
-import { and, desc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, or, sql } from "drizzle-orm";
 import { ConversationMessage, INTAKE_MESSAGE_MAX, IntakeAnswersRequest, IntakeMessageRequest, KeepPacketFlag, StartIntake, type Actor, type IntakeSessionSummary, type PlanRoom } from "@ros/contracts";
 import { IntakeSessionError, applyIntakeEdit, draftIntake, keepDraftFlag, requestIntakeApproval, runIntakeTurn, sessionView, startIntakeSession, type IntakeDeps, type IntakeSessionRow, type IntakeTurnOutcome } from "@ros/agents";
 import { IntakeEditError, assertCan, can, emit, entitlements, looksLikePastedAd, normalizeFacts, notify, packetToFacts } from "@ros/core";
-import { entitlements as entitlementRows, events, intakeSessions, recruiterEscalations, rolePackets, roles, usageEvents, withTenant, type Tx } from "@ros/db";
+import { entitlements as entitlementRows, events, intakeSessions, recruiterEscalations, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { actorOf, requireTenant, type Tenant, type Vars } from "../middleware/session";
 import { HttpError, messageTooLong } from "../middleware/errors";
 import { briefViewerOf, composeBrief } from "../services/brief";
@@ -124,23 +124,24 @@ function turnReply(r: IntakeTurnOutcome, sessionId: string) {
 const MORE_ROLES_QUESTION = "We would like to open more roles than our plan includes. Can we talk about adding more?";
 const askAboutPlan = { label: "Talk to ITS about more roles", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan", question: MORE_ROLES_QUESTION } };
 
+/** A role's state as the room message names it; an open role needs no word. */
+const PLACE_STATUS_WORD: Record<string, string> = { pending_approval: "waiting for approval", draft: "sent back for changes", paused: "paused" };
+
 /**
- * Room on the plan for another role (C13), with the roles that used the places, so the owner learns it before answering
- * any question. A place is used when a role is created and is not given back when the role closes or fills (nothing
- * ever takes one off the count), so every role that used one is listed, closed ones too, and the message never suggests
- * closing a role to make room. There is nowhere in the product to change plans, so a full plan offers the one thing
- * that helps: asking ITS about more roles (a talk about the plan, which never uses one of the plan's recruiter requests).
+ * Room on the plan for another role (C13), with the roles using the places, so the owner learns it before answering any
+ * question. A role uses a place while it is open, paused, waiting for approval or sent back for changes; closing it gives
+ * the place back (polish list: the count once only went up), so a full plan says so and names the roles using the
+ * places. There is nowhere in the product to change plans, so a full plan also offers asking ITS about more roles (a talk
+ * about the plan, which never uses one of the plan's recruiter requests). `newRoleId` is a role created in this very
+ * transaction, which is not counted against itself.
  */
-async function planRoom(tx: Tx, companyId: string): Promise<PlanRoom> {
-  const check = await entitlements.check(tx, companyId, "active_roles", 1);
-  const usage = await tx.select({ ref: usageEvents.ref }).from(usageEvents).where(and(eq(usageEvents.companyId, companyId), eq(usageEvents.key, "active_roles")));
-  const ids = [...new Set(usage.map((u) => u.ref.roleId).filter((id): id is string => typeof id === "string" && UUID.test(id)))];
-  const holding = ids.length ? await tx.select({ roleId: roles.id, title: roles.title, status: roles.status }).from(roles).where(inArray(roles.id, ids)) : [];
-  const names = holding.map((r) => (r.status === "closed" || r.status === "filled" ? `${r.title} (${r.status})` : r.title));
-  const message = check.ok
+async function planRoom(tx: Tx, companyId: string, opts: { newRoleId?: string } = {}): Promise<PlanRoom> {
+  const room = await entitlements.roleRoom(tx, companyId, { except: opts.newRoleId });
+  const names = room.holding.map((r) => (PLACE_STATUS_WORD[r.status] ? `${r.title} (${PLACE_STATUS_WORD[r.status]})` : r.title));
+  const message = room.ok
     ? null
-    : `Your plan includes ${check.limit} role${check.limit === 1 ? "" : "s"}, and ${check.limit === 1 ? "it is" : "all are"} used${names.length ? `: ${names.join(", ")}` : ""}. A place is used when a role is created, and closing a role does not give it back. Talk to ITS about adding more.`;
-  return { ok: check.ok, limit: check.limit, used: check.used, holding, message };
+    : `Your plan includes ${room.limit} role${room.limit === 1 ? "" : "s"} at a time, and ${room.limit === 1 ? "it is" : "all are"} in use${names.length ? `: ${names.join(", ")}` : ""}. A role uses a place while it is open, paused or waiting for approval, and closing a role gives its place back. Close a role you no longer need, or talk to ITS about adding more.`;
+  return { ok: room.ok, limit: room.limit, used: room.used, holding: room.holding, message };
 }
 
 function limitReached(t: Tenant, room: PlanRoom): HttpError {
@@ -331,7 +332,8 @@ async function askForApproval(c: Context<Vars>, draftFirst: boolean) {
       finalize: async (tx, compiled) => {
         // Two drafts asked for at once take turns on the plan's count, so together they never go past it.
         await tx.select({ id: entitlementRows.id }).from(entitlementRows).where(and(eq(entitlementRows.companyId, t.companyId), eq(entitlementRows.key, "active_roles"))).for("update");
-        const again = await planRoom(tx, t.companyId);
+        // The new role is already in this transaction: it is the one asking for a place, not one holding it.
+        const again = await planRoom(tx, t.companyId, { newRoleId: compiled.roleId });
         if (!again.ok) throw limitReached(t, again);
         const { runId } = await container.engine.start(tx, {
           workflowKey: "role_approval",
