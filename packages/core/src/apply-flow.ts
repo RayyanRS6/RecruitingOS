@@ -1,4 +1,4 @@
-import type { ApplyMode, PolicyLevel, RolePacket, ScreeningFunnel, ScreeningQuestion, ScreenInvitedVia, ScreenProgress, ScreenTranscriptEntry, TapAnswer, TapFormat } from "@ros/contracts";
+import type { ApplyMode, PolicyLevel, RolePacket, ScreeningFunnel, ScreeningQuestion, ScreenProgress, ScreenTranscriptEntry, TapAnswer, TapFormat } from "@ros/contracts";
 import { screenAnswersSent } from "./screen-answers";
 
 /**
@@ -40,8 +40,6 @@ export function isStillApplying(screen: { status: string; invitedVia?: string | 
 export function isOneVisitFlow(progress: Pick<ScreenProgress, "flow"> | null | undefined): boolean {
   return progress?.flow === "one_visit";
 }
-
-export const SCREEN_INVITED_VIA_APPLY: ScreenInvitedVia = "apply";
 
 /* ------------------------------------------------------------------------------------------------------------ */
 /* Tap answers (E12)                                                                                             */

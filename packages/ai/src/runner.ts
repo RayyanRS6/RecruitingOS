@@ -141,6 +141,3 @@ export async function createRuntime(env: Record<string, string | undefined> = pr
   }
   throw new Error(`unknown AI_PROVIDER ${providerId}`);
 }
-
-/** @deprecated use createRuntime; kept one release for callers that still name the async variant. */
-export const createRuntimeAsync = createRuntime;

@@ -1,6 +1,6 @@
 # 17. The five skipped tests: what they are and why they are skipped
 
-Reviewed on 21 September 2026 (founder instruction, item 9). Command used: `grep -rn "it.skip\|test.skip\|describe.skip\|it.todo" apps packages tests --include=*.ts --include=*.tsx`. Result: exactly five, all in `tests/scenario/lifecycle.test.ts`, lines 459 to 463. No other suite skips or defers a test.
+Reviewed on 21 September 2026 (founder instruction, item 9). Command used: `grep -rn "it.skip\|test.skip\|describe.skip\|it.todo" apps packages tests --include=*.ts --include=*.tsx`. Result: exactly five, all in `tests/scenario/lifecycle.test.ts` (lines 493 to 497 as of 9 October). Three tests skip only under a stated condition and run otherwise: the browser journeys that sign in through the fake identity page skip against a deployed address (`tests/e2e/specs/helpers.ts`, when `E2E_BASE_URL` is set), and the two font checks skip when `apps/shell/public/fonts` is absent (`apps/shell/lib/fonts.test.ts`, `apps/api/src/candidate-look.test.ts`).
 
 | Test name (as written) | Target release | What it would cover | Why it is skipped | Where the release 1 behaviour is tested instead |
 |---|---|---|---|---|

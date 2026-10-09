@@ -196,13 +196,6 @@ export function disclosureLine(companyName: string): string {
   return `This message was sent by the hiring team at ${companyName} with help from an AI recruiting assistant. Reply HUMAN at any time to reach a person.`;
 }
 
-export const RETENTION_DAYS_DEFAULT: Record<string, number> = {
-  decision_data: 4 * 365,
-  communications: 4 * 365,
-  documents: 4 * 365,
-  screens: 4 * 365,
-};
-
 /* ------------------------------------------------------------------------------------------------------------ */
 /* What the law asks of a job ad before it goes public (plan D5; Track L: counsel confirms the lists first).      */
 /* ------------------------------------------------------------------------------------------------------------ */

@@ -21,10 +21,6 @@ function localParts(now: Date, timezone: string): { day: number; minutes: number
   }
 }
 
-export function localHour(now: Date, timezone: string): number {
-  return Math.floor(localParts(now, timezone).minutes / 60);
-}
-
 function toMinutes(hhmm: string, fallback: number): number {
   const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm);
   if (!m) return fallback;

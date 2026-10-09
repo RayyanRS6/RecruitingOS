@@ -345,10 +345,6 @@ export function extraWarnings(row: ReviewRow, server: readonly string[] | undefi
 /** The fixed reasons a not-moving-forward can be filed with here, in the team's words (closing the role has its own step). */
 export const DECLINE_CHOICES: ReadonlyArray<{ id: RejectReason; label: string }> = RejectReason.options.filter((r) => r !== "role_closed").map((r) => ({ id: r, label: DECLINE_REASON_LABEL[r] }));
 
-export function declineLabel(reason: RejectReason | null): string {
-  return reason ? DECLINE_REASON_LABEL[reason] : "Choose a reason";
-}
-
 /** The toast after Apply: how many were applied, and that it was private. */
 export function appliedToast(r: Pick<BatchResult, "applied" | "refused">): { title: string; detail: string } {
   if (!r.applied) return { title: "Nothing was applied", detail: "Each person says why. Nobody was emailed." };

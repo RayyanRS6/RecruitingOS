@@ -110,6 +110,7 @@ Defaults are the local development values. "prod" in the Required column means t
 | `PRIVACY_EMAIL` | | `privacy@identifiedtalent.com` | The privacy-request address shown to candidates |
 | `PRODUCT_NAME` | | `Recruiting OS` | Internal product name in owner- and staff-facing system mail |
 | `SMS_PROVIDER` | | `fake` | `fake` or `twilio` |
+| `MESSAGE_UNDO_SECONDS` | | `30` (tests `0`) | How long a message a person sends to a candidate (a decision message, a team message) waits with an Undo before it leaves; 0 to 120, 0 sends at once |
 | `SMS_ENABLED` | | on only with twilio | Texting candidates; off until counsel, carrier registration and a partner need it. Opting out always works |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_MESSAGING_SERVICE_SID` (or `TWILIO_FROM_NUMBER`) | when twilio | | The auth token also verifies inbound webhook signatures |
 | `TWILIO_WEBHOOK_URL` | | `APP_BASE_URL/webhooks/twilio/inbound` | The exact public URL Twilio posts to, when it differs |

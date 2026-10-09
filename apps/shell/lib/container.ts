@@ -4,7 +4,7 @@ import { createContainer, type Container } from "@ros/api/src/container";
 /**
  * One container per process. Next.js re-evaluates modules on hot reload in development, so the instance is kept on
  * globalThis; in production each serverless instance builds its own once. The inline worker runs only where the
- * environment allows it (never in production: Trigger.dev or a worker process owns the queue, D22).
+ * environment allows it (never in production: the worker process on Railway owns the queue).
  */
 type Shell = { container: Container; handler: (req: Request) => Promise<Response> };
 const g = globalThis as unknown as { __rosShell?: Promise<Shell> };

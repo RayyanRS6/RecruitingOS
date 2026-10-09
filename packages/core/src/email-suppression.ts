@@ -31,10 +31,6 @@ export async function activeSuppression(q: Queryable, address: string): Promise<
   return row ?? null;
 }
 
-export async function isSuppressed(q: Queryable, address: string): Promise<boolean> {
-  return !!(await activeSuppression(q, address));
-}
-
 export async function suppressAddress(
   q: Queryable,
   input: { address: string; reason: SuppressionReason; source: "postmark" | "admin"; providerMessageId?: string | null; details?: Record<string, unknown>; actor: Actor; companyId?: string | null; now?: Date },
@@ -64,20 +60,9 @@ export async function listSuppressions(q: Queryable, activeOnly = true): Promise
   return q.select().from(emailSuppressions).where(activeOnly ? eq(emailSuppressions.active, true) : undefined).orderBy(desc(emailSuppressions.lastAt)).limit(500);
 }
 
-/** True the first time an external id is seen; false when the provider redelivered an event we already handled. */
-export async function recordWebhookReceipt(q: Queryable, input: { provider: string; kind: string; externalId: string }): Promise<boolean> {
-  try {
-    await q.insert(webhookReceipts).values({ provider: input.provider, kind: input.kind, externalId: input.externalId });
-    return true;
-  } catch (err) {
-    const message = err instanceof Error ? `${err.message} ${(err as { cause?: { message?: string } }).cause?.message ?? ""}` : String(err);
-    if (/unique|duplicate|23505/i.test(message)) return false;
-    throw err;
-  }
-}
-
 /**
- * The same first-time check, made inside the caller's transaction together with the handling of the event: ON CONFLICT
+ * True the first time an external id is seen; false when the provider redelivered an event we already handled. The
+ * check is made inside the caller's transaction together with the handling of the event: ON CONFLICT
  * DO NOTHING never aborts the transaction (a caught unique violation would), and a handling that fails rolls the
  * receipt back with it, so the provider's redelivery is processed instead of being answered as a duplicate.
  */

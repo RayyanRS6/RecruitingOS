@@ -34,7 +34,7 @@ Maintained by the production team; last updated 21 September 2026. Status vocabu
 | Error tracking scrubber | Built with mocks | `integrations.test.ts` observability | staging: Sentry DSN, verify a scrubbed event |
 | Business calendar and SLAs | Built with mocks | `business-calendar.test.ts`, `core.test.ts` | staging: administrator publishes the real calendar |
 | Next.js shell on Vercel with Hono mounted | Built with mocks (local build) | `next build` passes; `apps/shell/lib/hono.test.ts`; e2e | staging: Vercel project, environment variables, preview deployment |
-| Durable workflows (own engine; Trigger.dev migration D22) | Built with mocks | engine tests inside every suite | staging: worker process with `WORKER_DATABASE_URL`; Trigger.dev later, one workflow at a time |
+| Durable workflows (own engine, a database-backed queue) | Built with mocks | engine tests inside every suite | staging: the worker on Railway with `WORKER_DATABASE_URL` (`docs/runbooks/railway-worker.md`); no move to Trigger.dev is planned (decision 1, 22 Sep) |
 | Backups and recovery | Not started (plan written) | `05-backup-and-recovery.md` | staging: PITR enabled, restore drill |
 | Incident response | Not started (plan written) | `04-incident-response.md` | tabletop with Nadine and Paul |
 | Credential rotation | Not started (plan written) | `06-credential-rotation.md` | first rotation drill in staging |

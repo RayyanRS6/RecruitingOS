@@ -21,8 +21,6 @@ export type BusinessCalendar = { timeZone: string; hours: WeeklyHours; holidays:
 export type CalendarSource = BusinessCalendar | { timeZone: string; forDay(dayKey: string): BusinessCalendar };
 
 export const BUSINESS_TIMEZONE = "America/Los_Angeles";
-export const BUSINESS_START_HOUR = 9;
-export const BUSINESS_END_HOUR = 17;
 
 /** Observed US federal holidays. The default calendar carries these; administrators maintain the live list. */
 export const DEFAULT_US_FEDERAL_HOLIDAYS: readonly CalendarHoliday[] = [
@@ -35,7 +33,6 @@ export const DEFAULT_US_FEDERAL_HOLIDAYS: readonly CalendarHoliday[] = [
   { date: "2027-09-06", name: "Labor Day" }, { date: "2027-10-11", name: "Columbus Day" }, { date: "2027-11-11", name: "Veterans Day" }, { date: "2027-11-25", name: "Thanksgiving Day" },
   { date: "2027-12-24", name: "Christmas Day (observed)" }, { date: "2027-12-31", name: "New Year's Day 2028 (observed)" },
 ];
-export const US_FEDERAL_HOLIDAYS: ReadonlySet<string> = new Set(DEFAULT_US_FEDERAL_HOLIDAYS.map((h) => h.date));
 
 const WEEKDAY_WINDOW: HoursWindow[] = [{ start: "09:00", end: "17:00" }];
 export const DEFAULT_BUSINESS_CALENDAR: BusinessCalendar = {

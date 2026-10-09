@@ -50,11 +50,6 @@ export function sendPolicyLine(input: { to: string | null; policy: DeclineMessag
   return input.undoSeconds > 0 ? `${to} It goes when you press Send, after ${input.undoSeconds} seconds in which you can still undo it.` : `${to} It goes as soon as you press Send.`;
 }
 
-/** The label of a wording the message used, for the toast and the history. */
-export function wordingLabel(w: DecisionWording | null | undefined): string | null {
-  return w ? DECISION_WORDING_LABEL[w] : null;
-}
-
 /* ------------------------------------------------------------------------------------------------------------ */
 /* Undo (plan G9)                                                                                                 */
 /* ------------------------------------------------------------------------------------------------------------ */

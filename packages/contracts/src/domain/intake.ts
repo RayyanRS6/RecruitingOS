@@ -165,8 +165,6 @@ export const IntakeExtraction = z.object({
 });
 export type IntakeExtraction = z.infer<typeof IntakeExtraction>;
 
-export const IntakeSessionStatus = z.enum(["active", "compiled", "abandoned"]);
-
 /** Who set or confirmed the pay, and the figures they settled; the approval gate compares these with the facts (C7). */
 export const IntakePayConfirmation = z.object({
   by: Actor,

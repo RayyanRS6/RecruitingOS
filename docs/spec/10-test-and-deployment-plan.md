@@ -34,16 +34,16 @@ Definition of done per pull request (from `docs/13`): UI, backend, database, per
 
 Configuration by environment variable (see `docs/14`); production boot refuses dev secrets, the fake AI provider, and a superuser database role.
 
-## 4. Infrastructure (pending D8)
+## 4. Infrastructure (D8 decided; the full topology is in `docs/14`)
 
-- API: one container, autoscaled 1–3 instances, health check `/healthz`.
-- Worker: one container, `WORKER_INLINE=false`, autoscaled on queue depth (1–2 instances for the pilot).
-- Web: static build on the platform's CDN with `VITE_API_URL`; API and app under one site (`app.` and `api.` subdomains) with `COOKIE_DOMAIN`.
-- Database: Postgres 16 with pgvector, PITR, 7-day backups; connection pooling from the platform.
-- Storage: S3-compatible bucket, versioning, private; per-tenant key prefixes.
+- App and API: one Next.js deployment on Vercel (`apps/shell`) with the Hono API mounted inside it, one origin, health check `/healthz`.
+- Worker: one always-on process on Railway (`railway.json`, `WORKER_INLINE=false`), health check `GET /healthz` on its own port, restarted by Railway when it stops polling.
+- Database: Supabase Postgres with row-level security, separate roles for the app, the worker and migrations; point-in-time recovery before real data.
+- Storage: a private Supabase Storage bucket; uploads land in quarantine and are checked by the worker before anything reads them.
 - Email: Postmark server with a verified sending domain (SPF, DKIM, DMARC) and an inbound domain (MX) (D7).
-- Secrets: the platform's secret store; `APP_ENCRYPTION_KEY` with key id.
-- Observability: platform logs shipped with redaction; Sentry-compatible error tracking; uptime checks on the job page and `/healthz`.
+- Secrets: Vercel and Railway environment variables for the processes; Supabase Vault for integration credentials, readable by the worker role only.
+- Rate limits: Upstash Redis, shared by every API process.
+- Observability: Sentry with scrubbing; the worker heartbeat on the app's `/healthz`; uptime checks on the job page and `/healthz?strict=1`.
 
 ## 5. Release process
 

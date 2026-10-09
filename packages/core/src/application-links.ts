@@ -32,9 +32,6 @@ export const SOURCE_LABEL: Record<ApplicationSource, string> = {
   other: "Other",
 };
 
-/** The sources a person may create a link for; boards get theirs from the publish workflow. */
-export const PERSON_LINK_SOURCES: readonly ApplicationSource[] = ["referral", "direct", "other"];
-
 /**
  * The ready-made places a job is shared to (plan D8): one tap each, no form, each with its own tracked link that opens
  * the job page. The same place reuses its link, so a second tap counts into the same row.

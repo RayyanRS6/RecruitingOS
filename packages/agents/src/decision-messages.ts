@@ -33,7 +33,6 @@ export async function loadDecisionParts(q: Queryable, app: Pick<App, "candidateI
   const [pv] = await q.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
   return cand && role && company && pv ? { cand, role, company, packet: pv.packet } : null;
 }
-export type DecisionParts = NonNullable<Awaited<ReturnType<typeof loadDecisionParts>>>;
 
 /** The candidate's status page, where "Don't keep me for future roles" is one click. Only in what is sent to the candidate. */
 export function statusUrlOf(baseUrl: string, app: Pick<App, "statusToken">): string {

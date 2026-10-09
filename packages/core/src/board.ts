@@ -1,4 +1,4 @@
-import { DECLINE_REASON_LABEL, NEXT_STEP_LABEL, type ApplicationStage, type BoardColumn, type BoardPlacement, type MarkKind, type MatchCriterion, type MatchScore, type MustHaveSummary, type NextStep, type NextStepKind, type OwnerStage, type ReadingVersion, type RejectReason } from "@ros/contracts";
+import { NEXT_STEP_LABEL, type ApplicationStage, type BoardColumn, type BoardPlacement, type MarkKind, type MatchCriterion, type MatchScore, type MustHaveSummary, type NextStep, type NextStepKind, type OwnerStage, type ReadingVersion, type RejectReason } from "@ros/contracts";
 import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, LOW_CONFIDENCE_TEXT, RESUME_UNREADABLE_TEXT, insufficientEvidence, type AssessmentLike, type EvidenceView } from "./evidence";
 
 /**
@@ -73,10 +73,6 @@ export function declineReasonFor(match: MatchScore | null): { reason: RejectReas
   const lost = match.breakdown.filter((c) => c.pointsLost > 0).slice(0, 2);
   if (match.score === null || !lost.length) return null;
   return { reason: reasonCodeFor(lost[0].label), note: `Match score ${match.score}/100. Cost the most: ${lost.map((c) => `${c.label} (${c.finding.toLowerCase()})`).join("; ")}.` };
-}
-
-export function declineReasonLabel(reason: RejectReason): string {
-  return DECLINE_REASON_LABEL[reason];
 }
 
 function done(column: BoardColumn | null, doneLabel: string, reason: string, state: BoardPlacement["state"] = "done"): BoardPlacement {

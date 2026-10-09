@@ -656,10 +656,6 @@ export async function requestIntakeApproval(
   });
 }
 
-/** The one-step path older callers use: draft if needed, then ask for approval, under exactly the same rules. */
-export const compileIntake = (db: Db, deps: IntakeDeps, input: Parameters<typeof requestIntakeApproval>[2], opts: Omit<NonNullable<Parameters<typeof requestIntakeApproval>[3]>, "draftFirst"> = {}): Promise<ApprovalAsk> =>
-  requestIntakeApproval(db, deps, input, { ...opts, draftFirst: true });
-
 async function alreadyCompiled(q: Queryable, sessionId: string): Promise<CompiledIntake | null> {
   const [session] = await q.select().from(intakeSessions).where(eq(intakeSessions.id, sessionId)).limit(1);
   if (!session) throw new IntakeSessionError("not_found");

@@ -417,10 +417,6 @@ export const BreakGlass = z.object({ companyId: z.string().min(1), reason: z.str
 // Owner conversation: a thin wrapper that always drafts (C4); the first message of a draft may be a pasted ad.
 export const ConversationMessage = z.object({ message: z.string().trim().min(1).max(INTAKE_FIRST_MESSAGE_MAX) });
 
-// Screening (Slice 2)
-export const ScreenCandidateMessage = z.object({ message: z.string().min(1).max(2000) });
-export const InviteScreenOptions = z.object({ channel: z.enum(["web", "sms"]).optional() });
-
 // Notifications
 export const MarkNotificationsRead = z.object({ ids: z.array(z.string()).min(1).max(200) });
 
@@ -446,7 +442,6 @@ export const BusinessCalendarInput = z.object({
   coverageChanges: z.array(z.object({ from: IsoDate, to: IsoDate, reason: z.string().min(1).max(200), hours: z.array(HoursWindowInput).max(4).nullable() }).refine((c) => c.from <= c.to, { message: "a coverage change must end on or after it starts" })).max(200).default([]),
   note: z.string().max(1000).optional(),
 });
-export type BusinessCalendarInputT = z.infer<typeof BusinessCalendarInput>;
 export const RecalculateDeadlines = z.object({ escalationIds: z.array(z.string().min(1)).max(500).optional(), reason: z.string().min(5).max(500) });
 
 // Candidate privacy requests (correction 7; docs/runbooks/privacy-requests.md)

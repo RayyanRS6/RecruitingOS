@@ -2,15 +2,14 @@ import { z } from "zod";
 import type { Actor } from "./common";
 
 /**
- * The one-time ITS check of a company that signed itself up (founder decision B7, plan B1). Until ITS confirms the
- * company is real, it can draft and approve roles, but its careers page, job pages, Google listing and feeds stay
- * offline and its messages to candidates wait in the outbox ("held"). Stored on `companies.settings` as `verifiedAt`
- * and `verifiedBy`; set and cleared only from the ITS admin console, never by the customer (CompanySettingsInput is
- * strict and the settings route names these keys as ITS's).
+ * When ITS confirmed the company, or null while it waits for the check. Reads any settings object.
+ *
+ * The check is the one-time ITS check of a company that signed itself up (founder decision B7, plan B1). Until ITS
+ * confirms the company is real, it can draft and approve roles, but its careers page, job pages, Google listing and
+ * feeds stay offline and its messages to candidates wait in the outbox ("held"). Stored on `companies.settings` as
+ * `verifiedAt` and `verifiedBy`; set and cleared only from the ITS admin console, never by the customer
+ * (CompanySettingsInput is strict and the settings route names these keys as ITS's).
  */
-export type CompanyVerification = { verifiedAt?: string; verifiedBy?: Actor };
-
-/** When ITS confirmed the company, or null while it waits for the check. Reads any settings object. */
 export function companyVerifiedAt(settings: unknown): string | null {
   const at = settings && typeof settings === "object" ? (settings as { verifiedAt?: unknown }).verifiedAt : undefined;
   return typeof at === "string" && at ? at : null;

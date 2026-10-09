@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { Confidence, Evidence } from "./common";
-import { EvidenceAssessment, Finding } from "./assessment";
+import { Evidence } from "./common";
+import { EvidenceAssessment } from "./assessment";
 
 /** Screening (docs/05 Screening Agent, docs/06 `screen` workflow). Text first: web chat or SMS. */
 
@@ -129,9 +129,6 @@ export const ScreenAssessment = EvidenceAssessment.omit({ recommendation: true }
   recommendation: ScreenRecommendation,
 });
 export type ScreenAssessment = z.infer<typeof ScreenAssessment>;
-
-export const ScreenFindingSchema = Finding;
-export const ScreenConfidence = Confidence;
 
 /* ------------------------------------------------------------------------------------------------------------ */
 /* Wave E: applying and the conversation in one visit                                                            */

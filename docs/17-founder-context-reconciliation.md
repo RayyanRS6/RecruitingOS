@@ -73,6 +73,6 @@ Legend: **Adopted now** (changed in this pass), **Already true** (the build matc
 
 ## Deliberate divergences to confirm with the founder
 
-1. Own workflow engine and Hono/Vite instead of Temporal and Next.js (section 24). Reason: fewer moving parts for a four-person team; the engine has migration room. Cost of reversing later: moderate; workflow definitions are plain step functions.
+1. (Since superseded for the web app: D20 moved it to one Next.js app on Vercel with the Hono API mounted inside it; the own workflow engine stayed and runs on the Railway worker.) Own workflow engine and Hono/Vite instead of Temporal and Next.js (section 24). Reason: fewer moving parts for a four-person team; the engine has migration room. Cost of reversing later: moderate; workflow definitions are plain step functions.
 2. BambooHR as the first live HRIS path while Gusto and Rippling partner approvals are pending (section 25). Reason: BambooHR works with a customer API key today; the others require partner programs.
 3. Dental playbook retained (section 06). Reason: it is built, exercises licensing-based eligibility rules the consumer vertical does not, and remains a later vertical. It is no longer the default.

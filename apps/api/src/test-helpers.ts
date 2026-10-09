@@ -28,14 +28,6 @@ export async function signInStaff(app: ReturnType<typeof createApp>, container: 
   return signInWithIdentity(app, container, { email, name: name ?? user.name ?? undefined, provider: "azure", aal2: true, subject: user.authProvider === "azure" && user.authSubject ? user.authSubject : undefined });
 }
 
-/** Seeds a platform role through the ledger without opening a session (for accounts that sign in later in a test). */
-export async function seedPlatformRole(container: Container, email: string, role: PlatformRole, name?: string): Promise<string> {
-  let [user] = await container.db.select().from(users).where(eq(users.email, email.toLowerCase())).limit(1);
-  if (!user) [user] = await container.db.insert(users).values({ email: email.toLowerCase(), name: name ?? email.split("@")[0], authProvider: "azure", authSubject: `seed-${email}` }).returning();
-  if (user.platformRole !== role) await grantPlatformRole(container.db, { userId: user.id, role, actor: { kind: "system", id: "test_seed" }, reason: "test seed", source: "test_seed" });
-  return user.id;
-}
-
 export const signInAdmin = (app: ReturnType<typeof createApp>, container: Container, email: string, name?: string) => signInStaff(app, container, email, "platform_admin", name);
 
 /**
