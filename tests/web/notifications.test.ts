@@ -44,8 +44,8 @@ describe("the way to every earlier update", () => {
 
   it("is a page of its own that pages back with the last update's id and marks read and unread", () => {
     expect(existsSync(new URL("../../apps/shell/app/(app)/(company)/updates/page.tsx", import.meta.url))).toBe(true);
-    expect(updates).toContain("/api/v1/notifications/history?filter=${filter}&limit=${PAGE}${pageParam ? `&before=${pageParam}` : \"\"}");
-    expect(updates).toContain('`/api/v1/notifications/${v.read ? "read" : "unread"}`');
+    expect(updates).toContain(`/api/v1/notifications/history?filter=\${filter}&limit=\${PAGE}\${pageParam ? \`&before=\${pageParam}\` : ""}`);
+    expect(updates).toContain(`\`/api/v1/notifications/\${v.read ? "read" : "unread"}\``);
     expect(updates).toContain("Show earlier updates");
   });
 

@@ -546,7 +546,7 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
 .score-slot { display: inline-flex; justify-content: flex-end; min-width: 64px; }
 @media (max-width: 640px) {
   /* On a phone the score moves to the second line, under the stage button, beside the chips. */
-  .talent-row { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "avatar main stage" ". chips score"; gap: 8px 12px; padding: 12px 14px; }
+  .talent-row { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "avatar main  stage" ".      chips score"; gap: 8px 12px; padding: 12px 14px; }
   .talent-row > .talent-row-chips { justify-content: flex-start; }
   .talent-row > .talent-row-chips:empty { display: none; }
   .score-slot { min-width: 0; }

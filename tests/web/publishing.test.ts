@@ -340,12 +340,12 @@ describe("board ticks and ITS posting tasks (D6, D3)", () => {
     expect(isPostingTaskKind("ask")).toBe(false);
     const queue = read("../../apps/web/src/pages/RecruiterQueue.tsx");
     expect(queue).toContain("<PostingTaskPanel id={e.id} task={e.postingTask}");
-    expect(queue).toContain("/api/v1/escalations/${id}/posting/${input.path}");
+    expect(queue).toContain(`/api/v1/escalations/\${id}/posting/\${input.path}`);
   });
 
   it("the Posting tab says ITS is posting, never 'from your own account', when ITS posts", () => {
     const tab = read("../../apps/web/src/pages/RolePosting.tsx");
-    expect(tab).toContain("ITS is posting this on ${p.name} from your company's own account");
+    expect(tab).toContain(`ITS is posting this on \${p.name} from your company's own account`);
     expect(tab).toContain('"Posted by ITS from your company\'s own account"');
   });
 });

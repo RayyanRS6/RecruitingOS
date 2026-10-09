@@ -217,7 +217,7 @@ describe("the job page and the careers page (plan D10)", () => {
     let html = decode(await page(`/careers/${slug}/jobs/${roleId}`));
     expect(html).toMatch(/<meta name="description" content="What you will do|<meta name="description" content="Cleanings and periodontal care/);
     expect(html).toContain(`<link rel="canonical" href="${urls.job}"/>`);
-    expect(html).toMatch(new RegExp(`<meta property="og:title" content="[^"]+ at Ledger Dental"/>`));
+    expect(html).toMatch(/<meta property="og:title" content="[^"]+ at Ledger Dental"\/>/);
     expect(html).toContain(`<meta property="og:url" content="${urls.job}"/>`);
     expect(html).toContain('<meta property="og:site_name" content="Ledger Dental"/>');
     expect(html).toContain('<meta name="twitter:card" content="summary"/>');

@@ -304,7 +304,7 @@ export const screen: WorkflowDefinition<State> = {
       async prepare(ctx) {
         const plan = await ctx.read(async (q) => {
           const b = await loadScreenBundle(q, ctx.state.screenId!);
-          if (!b || b.screen.status !== "paused") return null;
+          if (b?.screen.status !== "paused") return null;
           const lastCandidate = b.screen.transcript.map((t) => t.role).lastIndexOf("candidate");
           if (lastCandidate < 0) return null;
           // The model sees the conversation up to the message it never answered, not the holding notes after it.

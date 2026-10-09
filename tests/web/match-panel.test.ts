@@ -180,7 +180,7 @@ describe("the panel's wiring", () => {
     // a menu, not a dropdown: an arrow key only moves through the kinds; Enter or a click chooses (WCAG 3.2.2)
     expect(card).toContain('<Menu label="Something wrong?" ariaLabel="Something wrong with this assessment?"');
     expect(card).not.toContain("<select");
-    expect(card).toContain('export const FLAG_SHARE = `This asks an ITS recruiter to check the reading. Once they pick it up they see ${accessWords("application")}. ${ACCESS_LIMITS}`;');
+    expect(card).toContain(`export const FLAG_SHARE = \`This asks an ITS recruiter to check the reading. Once they pick it up they see \${accessWords("application")}. \${ACCESS_LIMITS}\`;`);
   });
 
   it("shows the bars costliest first with the full marks folded, and the confidence chip apart from the score", () => {

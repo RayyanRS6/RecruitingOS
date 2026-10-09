@@ -99,7 +99,7 @@ export async function checkOperationalHealth(db: Db, now: Date, opts: Maintenanc
   let workerStale = false;
   if (!opts.workerInline) {
     const worker = await readWorkerHealth(db, now, HEARTBEAT_STALE_MS);
-    workerStale = !worker || !worker.healthy;
+    workerStale = !worker?.healthy;
     if (workerStale) {
       const minutes = worker ? Math.round(worker.ageSeconds / 60) : null;
       const result = await withPlatform(db, (tx) => raiseAlertOnce(tx, {
