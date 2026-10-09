@@ -60,7 +60,7 @@ export function QuestionCard(props: {
         </span>
         <IconButton icon="x" label="Close the questions" size="sm" onClick={props.onClose} />
       </div>
-      <h3 ref={heading} tabIndex={-1} className="qcard-prompt">{q.prompt}</h3>
+      <h2 ref={heading} tabIndex={-1} className="qcard-prompt">{q.prompt}</h2>
 
       {q.mode === "pay" ? (
         <PayFields form={a.pay ?? payFormFrom(props.pay)} onChange={(f) => onState(setPayForm(state, q, f))} card={props.pay} idBase={name} />

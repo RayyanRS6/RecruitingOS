@@ -39,7 +39,7 @@ test("approve a role, see where it is going, share it and give it a closing date
   const done = page.getByRole("dialog", { name: "Your job is approved" });
   await expect(done).toBeVisible({ timeout: 30_000 });
   const where = done.getByRole("region", { name: "Where it is going" });
-  await expect(where.getByText("Your careers page")).toBeVisible();
+  await expect(where.getByText("Your careers page", { exact: true })).toBeVisible();
   await expect(where.getByText("Google", { exact: true })).toBeVisible();
   await expect(where.getByText(/Checking it is up|Up and checked|Getting it ready/).first()).toBeVisible({ timeout: 30_000 });
   await expectAccessible(page, "after approval");

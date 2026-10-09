@@ -414,7 +414,8 @@ button.list-item { width: 100%; border: 0; background: none; text-align: left; f
 }
 
 /* Tables, timelines, conversation */
-.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); }
+/* relative: screen-reader-only text in a wide table stays inside the scrolling box instead of widening the page */
+.table-wrap { position: relative; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); }
 table.table { border-collapse: collapse; width: 100%; font-size: 13.5px; font-variant-numeric: tabular-nums; }
 .table thead th { text-align: left; font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); background: var(--surface); border-bottom: 1px solid var(--line); padding: 10px 12px; white-space: nowrap; }
 /* a row's own header (`<th scope="row">`, as in Compare) looks like any other cell: it only tells a screen reader what the row is */
@@ -718,7 +719,7 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
 .draft-empty { display: grid; justify-items: center; gap: 8px; padding: 72px 20px; text-align: center; color: var(--ink-3); }
 .draft-empty strong { color: var(--ink); }
 .checklist { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--ground); }
-.checklist h3, .flag-list h3 { font: 600 11.5px/1.3 var(--ui); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
+.checklist h2, .flag-list h2 { font: 600 11.5px/1.3 var(--ui); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
 .checklist ul { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; font-size: 13.5px; }
 .checklist li { display: flex; align-items: flex-start; gap: 8px; }
 .checklist .ok { color: var(--good-dot); margin-top: 2px; }

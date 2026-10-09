@@ -139,6 +139,7 @@ test.describe("staff sign-in policy in the browser", () => {
     expect(me.auth).toMatchObject({ provider: "azure", aal: "aal2" });
     expect(me.auth.mfaVerifiedAt).toBeTruthy();
     // a platform role is granted by an administrator, never by the sign-in itself: a new staff account starts without one
+    await page.waitForLoadState("networkidle"); // the first page may still be redirecting
     await expectAccessible(page, "first page after staff sign-in");
   });
 });

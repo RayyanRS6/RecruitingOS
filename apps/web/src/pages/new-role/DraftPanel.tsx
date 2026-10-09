@@ -103,12 +103,12 @@ export function DraftPanel(props: {
               <section className="checklist" aria-label="What we know and what is still missing">
                 {checklist.known.length ? (
                   <div>
-                    <h3>What we know</h3>
+                    <h2>What we know</h2>
                     <ul>{checklist.known.map((i) => <li key={i.key}><Icon name="check-circle" size={16} className="ok" /><span><strong>{i.label}:</strong> {i.value}{i.note ? <span className="muted"> {i.note}</span> : null}</span></li>)}</ul>
                   </div>
                 ) : null}
                 <div>
-                  <h3>Still missing</h3>
+                  <h2>Still missing</h2>
                   <ul>{checklist.missing.map((i) => <li key={i.key}><span className="todo-ring" aria-hidden="true" /><span><strong>{i.label}</strong>{i.value ? `: ${i.value}` : ""}{i.note ? <span className="muted"> {i.note}</span> : null}</span></li>)}</ul>
                 </div>
               </section>
@@ -118,7 +118,7 @@ export function DraftPanel(props: {
 
             {flags.length ? (
               <section className="flag-list" aria-label="Wording to check before approval">
-                <h3>Check this wording before asking for approval</h3>
+                <h2>Check this wording before asking for approval</h2>
                 {flags.map((f) => <WordingFlag key={f.id} flag={f} onAsk={props.onAsk} onKeep={props.onKeepFlag} keeping={props.keepingFlag === f.id} />)}
               </section>
             ) : null}

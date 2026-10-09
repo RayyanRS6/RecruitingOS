@@ -142,7 +142,7 @@ test.describe("the pool board", () => {
     // Private: Cleo is not moving forward and has not been told; her own status page says nothing about it
     const list = (await (await page.request.get(`${baseURL}/api/v1/roles/${roleId}/applications`)).json()) as Array<{ candidate: { name: string } | null; ownerStage: string; toldState: string | null }>;
     expect(list.find((a) => a.candidate?.name === "Cleo Park")).toMatchObject({ ownerStage: "not_moving_forward", toldState: "not_told" });
-    const statusPath = await statusPathFromEmail(page.request, baseURL!, roleId, emails.Cleo);
+    const statusPath = await statusPathFromEmail(page.request, baseURL!, emails.Cleo);
     await page.goto(statusPath);
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible({ timeout: 30_000 });
     await expect(page.locator("body")).not.toContainText(/not moving forward|shortlist|longlist/i);

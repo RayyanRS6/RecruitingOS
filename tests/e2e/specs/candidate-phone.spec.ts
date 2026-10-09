@@ -147,7 +147,8 @@ test.describe("candidate journey on a phone", () => {
     // Start, from the keyboard: the first question at once, in large type, with "Question 1 of N" and the quiet skip
     await page.getByRole("button", { name: "Start" }).focus();
     await page.keyboard.press("Enter");
-    await expect(page.getByText(/^Question 1 of \d+$/)).toBeVisible();
+    // the progress bar's label (the bar repeats the words inside it for browsers that cannot draw one)
+    await expect(page.locator('label[for="progress"]')).toHaveText(/^Question 1 of \d+$/);
     await expect(page.getByRole("button", { name: "Skip this question" }).first()).toBeVisible();
     await expect(page.getByRole("link", { name: "I'd rather talk to a person" })).toBeVisible();
     await expectAccessible(page, "first question");
@@ -209,7 +210,7 @@ test.describe("candidate journey on a phone", () => {
     await noHorizontalOverflow(page, "lost your link");
 
     // the status page opens from the emailed link, without a login
-    const statusPath = await statusPathFromEmail(page.request, baseURL!, seeded.roleId, email);
+    const statusPath = await statusPathFromEmail(page.request, baseURL!, email);
     await page.goto(statusPath);
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     // the candidate's own steps (plan A1), the current one marked; the team's stage names and private marks never show

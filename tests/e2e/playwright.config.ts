@@ -26,7 +26,8 @@ export default defineConfig({
   // One retry on CI only: the journeys run against `next dev`, which occasionally resets a connection while it compiles a
   // route (seen 22 Sep 2026 as ECONNRESET on a documentation-only commit). Locally a failure must fail.
   retries: process.env.CI ? 1 : 0,
-  reporter: [["list"], ["html", { open: "never", outputFolder: "report" }]],
+  // On CI each failure is printed as it happens ("line"), so a run cut short by the job's time limit still shows why.
+  reporter: [[process.env.CI ? "line" : "list"], ["html", { open: "never", outputFolder: "report" }]],
   use: { baseURL: base, trace: "retain-on-failure", screenshot: "only-on-failure", video: "off" },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: /candidate-phone\.spec\.ts/ },

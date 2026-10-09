@@ -17,8 +17,10 @@ const ev = (type: string, payload: Record<string, unknown>, occurredAt = "2026-1
 describe("Offer made (Q29)", () => {
   it("is record-only: nothing is written or sent, and the date can never be one still to come", () => {
     expect(offerStepText("Maria")).toMatch(/The app never writes, sends or changes an offer, and nothing is sent to Maria\./);
-    const b = offerDateBounds(new Date(2026, 9, 9, 15));
+    const b = offerDateBounds(null, new Date(2026, 9, 9, 15));
     expect(b).toEqual({ max: "2026-10-09", initial: "2026-10-09" });
+    // the company's day, not the reader's: 03:00 UTC on 10 October is still 9 October in California
+    expect(offerDateBounds("America/Los_Angeles", new Date("2026-10-10T03:00:00Z"))).toEqual({ max: "2026-10-09", initial: "2026-10-09" });
     expect(offerMadeToast("Maria")).toEqual({ title: "Offer recorded.", detail: "Nothing was sent to Maria. When they answer, record it on their page: they accepted, or they declined." });
   });
 

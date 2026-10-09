@@ -7,7 +7,8 @@ import { api, ApiError, type ActionResult, type ApplicationDetail, type ClosingM
 import { toast } from "../../toast";
 import { ClosingMessageCard } from "../../components/ClosingMessage";
 import { closeRoleToast, type PanelStep } from "../../talent-actions";
-import { dayKey, hireConfirmText, hireFollowUpView, hireToast, keepWarmToast, offerAnswerToast, offerDateBounds, offerMadeToast, offerNote, offerStepText, waitingOnCandidateText } from "../../hiring";
+import { useCompanyTimeZone } from "../../components/use-company-time-zone";
+import { hireConfirmText, hireFollowUpView, hireToast, keepWarmToast, offerAnswerToast, offerDateBounds, offerMadeToast, offerNote, offerStepText, waitingOnCandidateText } from "../../hiring";
 import { useDraft, useFocusOnMount, useRefreshCandidate } from "./hooks";
 
 /**
@@ -35,13 +36,15 @@ export function FinalistCard({ a, setStep }: { a: ApplicationDetail; setStep: (s
 /** "Offer made" (Q29): the day it was made and a private note; record-only, nothing sent to the candidate. */
 export function OfferStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId: string; onClose: () => void }) {
   const refresh = useRefreshCandidate(a.id, roleId);
-  const bounds = offerDateBounds();
-  const [madeOn, setMadeOn] = useState(bounds.initial);
+  const bounds = offerDateBounds(useCompanyTimeZone());
+  // Left as it is, the field shows the company's today and the API records its own today.
+  const [picked, setMadeOn] = useState<string | null>(null);
+  const madeOn = picked ?? bounds.initial;
   const [note, setNote] = useState("");
   useDraft("offer-note", note);
   const first = useFocusOnMount<HTMLInputElement>();
   const record = useMutation({
-    mutationFn: () => api.post<OfferMadeResult>(`/api/v1/applications/${a.id}/offer`, { confirm: true, madeOn, note: note.trim() || undefined }),
+    mutationFn: () => api.post<OfferMadeResult>(`/api/v1/applications/${a.id}/offer`, { confirm: true, madeOn: picked ?? undefined, note: note.trim() || undefined }),
     onSuccess: async () => {
       const t = offerMadeToast(a.candidate.firstName);
       toast(t.title, t.detail);
@@ -123,6 +126,7 @@ export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail
   const name = `${a.candidate.firstName} ${a.candidate.lastName}`.trim();
   const [startDate, setStartDate] = useState("");
   const [acceptedOn, setAcceptedOn] = useState("");
+  const latestAccepted = offerDateBounds(useCompanyTimeZone()).max;
   const [note, setNote] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [after, setAfter] = useState<HireFollowUp | null>(null);
@@ -198,7 +202,7 @@ export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail
       <p className="small muted">You record it with your name; the platform never makes or sends an offer, and it asks for no pay, tax, identity or banking details.</p>
       <div className="stack" style={{ gap: 8, marginTop: 8 }}>
         <Field label="Start date (agreed with them)" htmlFor="hire-start"><input ref={first} id="hire-start" className="input" type="date" value={startDate} onChange={(e) => { setStartDate(e.target.value); setConfirming(false); }} /></Field>
-        <Field label="The day they accepted the offer (optional)" htmlFor="hire-accepted"><input id="hire-accepted" className="input" type="date" max={dayKey(new Date())} value={acceptedOn} onChange={(e) => { setAcceptedOn(e.target.value); setConfirming(false); }} /></Field>
+        <Field label="The day they accepted the offer (optional)" htmlFor="hire-accepted"><input id="hire-accepted" className="input" type="date" max={latestAccepted} value={acceptedOn} onChange={(e) => { setAcceptedOn(e.target.value); setConfirming(false); }} /></Field>
         <Field label="Note (kept internally, optional)" htmlFor="hire-note"><input id="hire-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
         {confirming ? (
           <Alert tone="caution">

@@ -1,4 +1,5 @@
 import type { ActionResult, ApplicationDetail, ApplicationSummary, HireFollowUp, InterviewDraft } from "./api/client";
+import { todayIn } from "./publishing";
 import { interviewsOffText, type ToastParts } from "./talent-actions";
 
 /**
@@ -24,9 +25,12 @@ export function plainDayWords(day: string): string {
 /* Offer made (Q29), and waiting on the candidate's answer                                                        */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-/** The offer's date field: today unless changed, and never a day still to come (the API refuses one). */
-export function offerDateBounds(now: Date = new Date()): { max: string; initial: string } {
-  const today = dayKey(now);
+/**
+ * The offer's date field: today unless changed, and never a day still to come (the API refuses one). Today is the
+ * company's day (the API checks against it), the reader's own until the company's time zone is known.
+ */
+export function offerDateBounds(timeZone: string | null, now: Date = new Date()): { max: string; initial: string } {
+  const today = timeZone ? todayIn(timeZone, now) : dayKey(now);
   return { max: today, initial: today };
 }
 

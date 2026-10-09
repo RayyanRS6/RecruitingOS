@@ -38,7 +38,8 @@ jobs:
   verify:
     name: verify # the required status check on main: lockfile install, secret scans, audit, typecheck, migration validation, tests, evals, build, browser journeys with accessibility checks
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # 32 browser journeys run one at a time against `next dev` (about 30 minutes) after about 20 minutes of other checks.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
         with:

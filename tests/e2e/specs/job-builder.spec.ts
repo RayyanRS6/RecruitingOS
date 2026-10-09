@@ -44,7 +44,7 @@ test.describe("the job builder", () => {
       // tick the first answer offered on each card (a radio, a checkbox or a team chip)
       const first = card.locator("input[type=radio], input[type=checkbox]").first();
       if (await first.count()) await first.check({ force: true });
-      await card.getByRole("button", { name: i === total - 1 ? "Send" : "Next" }).click();
+      await card.getByRole("button", { name: i === total - 1 ? "Send" : "Next", exact: true }).click();
     }
     // the picks come back as one summary message, then the assistant's next turn
     await expect(page.getByText("Your answers").first()).toBeVisible({ timeout: 60_000 });
@@ -76,7 +76,7 @@ test.describe("the job builder", () => {
     await expect(page.getByRole("textbox", { name: "Ask for a change to the draft" })).toHaveAttribute("placeholder", /Ask me to change anything/);
     // a change by chat is shown field by field first, and saved only on Confirm
     await page.getByRole("textbox", { name: "Ask for a change to the draft" }).fill("Add a must-have: Dentrix experience");
-    await page.getByRole("button", { name: "Send" }).click();
+    await page.getByRole("button", { name: "Send", exact: true }).click();
     const proposal = page.getByRole("region", { name: "Proposed change" });
     await expect(proposal).toContainText("Dentrix experience", { timeout: 60_000 });
     await expect(proposal).toContainText("Confirming changes the draft.");

@@ -106,22 +106,21 @@ export async function seedRoleAndApplicant(request: APIRequestContext, base: str
   expect(location === `/careers/${company.slug}/jobs/${roleId}/applied` || /^\/c\/screen\/[A-Za-z0-9_-]+$/.test(location), `the apply form sent the applicant to ${location}`).toBe(true);
   const conversationPath = location.startsWith("/c/screen/") ? location : null;
   const candidateEmail = multipart.email as string;
-  const statusPath = await statusPathFromEmail(request, base, roleId, candidateEmail);
+  const statusPath = await statusPathFromEmail(request, base, candidateEmail);
   return { roleId, slug: company.slug, statusPath, candidateEmail, conversationPath };
 }
 
 /**
- * The status page path from the acknowledgment email, read the way the owner sees it on the candidate's page (the
- * message thread), once the worker has sent it. The apply form never returns the link itself.
+ * The status page path from the acknowledgment email as the candidate received it, read from the development outbox
+ * (`/dev/outbox`, the fake email adapter) once the worker has sent it. The apply form never returns the link itself,
+ * and the owner's copy of the message shows `/c/status/[link]` instead of the candidate's token.
  */
-export async function statusPathFromEmail(request: APIRequestContext, base: string, roleId: string, email: string): Promise<string> {
+export async function statusPathFromEmail(request: APIRequestContext, base: string, email: string): Promise<string> {
   let path = "";
   await expect.poll(async () => {
-    const list = (await (await request.get(`${base}/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; candidate: { email: string | null } | null }>;
-    const mine = list.find((a) => a.candidate?.email === email.toLowerCase());
-    if (!mine) return "";
-    const detail = (await (await request.get(`${base}/api/v1/applications/${mine.id}`)).json()) as { communications: Array<{ templateKey: string | null; bodyText: string }> };
-    path = detail.communications.find((m) => m.templateKey === "acknowledgment")?.bodyText.match(/\/c\/status\/[A-Za-z0-9_-]+/)?.[0] ?? "";
+    const sent = (await (await request.get(`${base}/dev/outbox`)).json()) as Array<{ to: string; subject: string; text: string }>;
+    const ack = sent.find((m) => m.to.toLowerCase() === email.toLowerCase() && m.subject.startsWith("We received your application"));
+    path = ack?.text.match(/\/c\/status\/[A-Za-z0-9_-]+/)?.[0] ?? "";
     return path;
   }, { timeout: 60_000, message: "the acknowledgment email with the status link" }).not.toBe("");
   return path;
