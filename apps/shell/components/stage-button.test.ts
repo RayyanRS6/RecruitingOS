@@ -46,7 +46,7 @@ describe("the stage button", () => {
 describe("the candidate panel's pieces (Wave A)", () => {
   it("marks a tab with something new with a dot a screen reader hears as new", () => {
     const out = renderToStaticMarkup(createElement(Tabs, { label: "Candidate sections", value: "overview", items: [{ id: "overview", label: "Overview" }, { id: "messages", label: "Messages", marker: true }] }));
-    expect(out).toContain('<span>Messages</span><span class="tab-dot" aria-hidden="true"></span><span class="sr-only"> (new)</span>');
+    expect(out).toContain('<span class="tab-label" data-label="Messages">Messages</span><span class="tab-dot" aria-hidden="true"></span><span class="sr-only"> (new)</span>');
     expect(out.match(/tab-dot/g)).toHaveLength(1);
   });
 

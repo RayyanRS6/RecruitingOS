@@ -59,6 +59,7 @@ describe("candidate pages: design tokens and fonts", () => {
     // the status page's messages and the screening conversation are one look: the candidate's own on the right in near-black (plan G7)
     for (const css of [SCREEN_CSS, STATUS_CSS]) expect(css).toContain(".msg.candidate { align-self: flex-end; background: var(--ink); color: var(--ground);");
     expect(STATUS_CSS).toContain(".msg.assistant, .msg.team { align-self: flex-start; background: var(--ground);");
+    expect(pageCss).toContain("@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }");
   });
 
   it("declares IBM Plex Sans and Bricolage Grotesque from this deployment's own /fonts/ folder, and the policy still names no outside host", () => {
@@ -230,10 +231,25 @@ describe("candidate pages: the look, page by page", () => {
     expect(facts).toMatch(/<li class="fact"><svg class="icon"[^>]*>.*?<\/svg><span class="fact-text">Posted [A-Z][a-z]+ \d{1,2}, \d{4}<\/span><\/li>/);
     // two Apply buttons: one by the title (hidden on a phone, where the bar is always there) and one in the panel
     expect(html.match(/>Apply now</g)).toHaveLength(2);
-    expect(html).toMatch(/<a class="btn head-apply" href="\/careers\/[^"]+\/apply">Apply now<\/a>/);
+    expect(html).toMatch(/<a class="btn go head-apply" href="\/careers\/[^"]+\/apply"><span class="go-fill" aria-hidden="true"><\/span><span class="go-icon"><svg class="icon"[^>]*>.*?<\/svg><\/span><span class="go-text">Apply now<\/span><\/a>/);
     expect(CSS).toMatch(/@media \(max-width: 899px\) \{[^@]*\.head-apply \{ display: none; \}/);
     const panel = html.indexOf('<div class="apply-panel">');
     expect(panel).toBeGreaterThan(0);
+    // Apply now (founder decision Q2 = A): the circle and arrow, the fill hidden from screen readers, the words its only name; in the panel too
+    expect(html.slice(panel)).toMatch(/<a class="btn go" href="\/careers\/[^"]+\/apply"><span class="go-fill" aria-hidden="true"><\/span><span class="go-icon"><svg class="icon"[^>]*>.*?<\/svg><\/span><span class="go-text">Apply now<\/span><\/a>/);
+    // each one's accessible name is exactly "Apply now": take away what screen readers skip and only the words are left
+    const goLinks = [...html.matchAll(/<a class="btn go[^"]*" href="[^"]+">(.*?)<\/a>/g)].map((m) => m[1]);
+    expect(goLinks).toHaveLength(2);
+    for (const inner of goLinks) expect(inner.replace(/<(span|svg)\b[^>]*aria-hidden="true"[^>]*>.*?<\/\1>/g, "").replace(/<[^>]+>/g, "")).toBe("Apply now");
+    // the fill moves by transform alone, in 200ms, on a mouse's hover or a keyboard's focus; a tap never turns it near-black
+    expect(CSS).toMatch(/\.go-fill \{[^}]*transform: translateX\(calc\(-100% - 4px\)\); \}/);
+    expect(CSS).toMatch(/@media \(hover: hover\) and \(pointer: fine\) \{[^@]*\.btn\.go:hover \.go-fill \{ transform: none; \}/);
+    expect(CSS).toContain(".btn.go:focus-visible .go-fill, .btn.go:active .go-fill { transform: none; }");
+    expect(CSS).toContain("@media (prefers-reduced-motion: no-preference) { .go-fill, .go-icon .icon { transition: transform 200ms ease-out; } }");
+    // its edge is the field-border grey, so the pill shows on the open ground too; a tap on a phone never fills a button
+    expect(CSS).toMatch(/\.btn\.go \{[^}]*border-color: var\(--line-strong\);/);
+    expect(CSS).toContain("@media (hover: hover) and (pointer: fine) { .btn:hover { background: var(--primary-hover); border-color: var(--primary-hover); } }");
+    expect(CSS).not.toMatch(/backdrop-filter|filter:\s*blur|transition:[^;]*width/);
     expect(html.lastIndexOf(">Apply now<")).toBeGreaterThan(panel);
     // the AI and pay notices come first in reading order, in readable notice boxes
     const notices = [...html.matchAll(/<p class="notice">([^<]*)<\/p>/g)].map((m) => ({ at: m.index ?? 0, text: m[1] }));

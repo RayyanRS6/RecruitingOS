@@ -12,6 +12,7 @@
   --surface-2: #f1eee7; /* sunken fills: neutral chips, hover, the score badge's grey */
   --surface-3: #e8e4da; /* pressed and selected fills */
   --surface-rail: #fbfaf7;
+  --tint: #f8f7f3; /* a half-step between --surface and --surface-2: the table headings' band and the row under the mouse */
   --line: #e5e0d5; /* hairlines between surfaces (decorative) */
   --line-2: #d9d3c7; /* outlines of secondary buttons, pills and the keyboard hint */
   --line-strong: #8c8578; /* 3.7:1 on --surface, 3.4:1 on --ground: form-field borders must be seen (WCAG 1.4.11) */
@@ -89,42 +90,44 @@
   --shadow: var(--shadow-float);
   color-scheme: light;
 }
-/* Dark: the same roles on a warm near-black. Primary buttons turn light with dark text. Kept identical to the
-   [data-theme="dark"] block below (tokens.test.ts checks). */
+/* Dark: the same roles on a cool, neutral near-black (Obsidian-like; founder decision Q1 = C, 10 October 2026: warm
+   paper in light, cool obsidian grey in dark). Primary buttons turn light with dark text. Kept identical to the
+   [data-theme="dark"] block below, key for key and in the same order (tokens.test.ts checks). */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --ground: #151412;
-    --surface: #1d1b18;
-    --surface-2: #26231f;
-    --surface-3: #302c27;
-    --surface-rail: #191816;
-    --line: #35312b;
-    --line-2: #45403a;
-    --line-strong: #7a7368; /* 3.7:1 on --surface */
-    --ink: #f3f0ea; /* 16.2:1 on --ground */
-    --ink-2: #cbc5ba; /* 9.1:1 on --surface-2 */
-    --ink-3: #a8a196; /* 6.1:1 on --surface-2 */
-    --primary: #f3f0ea; /* --on-primary text 16.2:1 */
-    --primary-hover: #d9d4cb;
-    --on-primary: #151412;
-    --accent: #8ea0ff; /* focus ring, 7.6:1 on --ground */
-    --accent-ink: #aab8ff; /* 9.7:1 on --ground */
+    --ground: #0e0e10; /* cool near-black, no warm tint */
+    --surface: #18181b; /* cards, lists, menus: one step up */
+    --surface-2: #25252a; /* sunken fills: chips, hover, the score badge's grey */
+    --surface-3: #303036; /* pressed and selected fills; the skeleton */
+    --surface-rail: #121215;
+    --tint: #1e1e22; /* half-step between --surface and --surface-2: table header band, row hover */
+    --line: #2c2c31;
+    --line-2: #3f3f46;
+    --line-strong: #78787f; /* 4.04:1 on --surface, 4.40:1 on --ground, 3.48:1 on --surface-2 */
+    --ink: #ededf0; /* 16.50:1 on --ground, 15.16:1 on --surface */
+    --ink-2: #c6c6cc; /* 8.97:1 on --surface-2, 9.77:1 on --tint */
+    --ink-3: #a1a1aa; /* 5.95:1 on --surface-2, 5.12:1 on --surface-3 */
+    --primary: #ededf0; /* --on-primary text 16.50:1 */
+    --primary-hover: #d1d1d6;
+    --on-primary: #0e0e10;
+    --accent: #8ea0ff; /* focus ring, 7.92:1 on --ground, 5.38:1 on --surface-3 */
+    --accent-ink: #aab8ff; /* 10.11:1 on --ground, 7.22:1 on --accent-soft */
     --accent-soft: #232a52;
-    --good: #6fd39c; /* 7.8:1 on --good-soft */
-    --good-soft: #14301f;
-    --good-line: #23543a;
+    --good: #6fd39c; /* 7.58:1 on --good-soft */
+    --good-soft: #1f302a; /* --good-dot at 14% over --surface */
+    --good-line: #2b5640;
     --good-dot: #4cc383;
-    --good-solid: #2f9e64; /* --on-good-solid text 5.3:1 */
-    --on-good-solid: #0f1a13;
-    --caution: #f1c45e; /* 8.8:1 on --caution-soft */
-    --caution-soft: #33280f;
-    --caution-line: #5c4715;
+    --good-solid: #2f9e64; /* --on-good-solid text 5.69:1 */
+    --on-good-solid: #0e0e10;
+    --caution: #f1c45e; /* 8.39:1 on --caution-soft */
+    --caution-soft: #342c1e; /* --caution-dot at 14% over --surface */
+    --caution-line: #604c22;
     --caution-dot: #e0a82e;
-    --critical: #ff9389; /* 7.3:1 on --critical-soft */
-    --critical-soft: #3d1915;
-    --critical-line: #6a2a24;
+    --critical: #ff9389; /* 6.74:1 on --critical-soft */
+    --critical-soft: #392424; /* --critical-dot at 15% over --surface */
+    --critical-line: #6b3633;
     --critical-dot: #f2665a;
-    --neutral-dot: #7a7368;
+    --neutral-dot: #78787f;
     --scrim: rgba(0, 0, 0, 0.55);
     --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.4), 0 18px 40px -16px rgba(0, 0, 0, 0.75);
     --shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.35);
@@ -132,38 +135,39 @@
   }
 }
 :root[data-theme="dark"] {
-  --ground: #151412;
-  --surface: #1d1b18;
-  --surface-2: #26231f;
-  --surface-3: #302c27;
-  --surface-rail: #191816;
-  --line: #35312b;
-  --line-2: #45403a;
-  --line-strong: #7a7368;
-  --ink: #f3f0ea;
-  --ink-2: #cbc5ba;
-  --ink-3: #a8a196;
-  --primary: #f3f0ea;
-  --primary-hover: #d9d4cb;
-  --on-primary: #151412;
+  --ground: #0e0e10;
+  --surface: #18181b;
+  --surface-2: #25252a;
+  --surface-3: #303036;
+  --surface-rail: #121215;
+  --tint: #1e1e22;
+  --line: #2c2c31;
+  --line-2: #3f3f46;
+  --line-strong: #78787f;
+  --ink: #ededf0;
+  --ink-2: #c6c6cc;
+  --ink-3: #a1a1aa;
+  --primary: #ededf0;
+  --primary-hover: #d1d1d6;
+  --on-primary: #0e0e10;
   --accent: #8ea0ff;
   --accent-ink: #aab8ff;
   --accent-soft: #232a52;
   --good: #6fd39c;
-  --good-soft: #14301f;
-  --good-line: #23543a;
+  --good-soft: #1f302a;
+  --good-line: #2b5640;
   --good-dot: #4cc383;
   --good-solid: #2f9e64;
-  --on-good-solid: #0f1a13;
+  --on-good-solid: #0e0e10;
   --caution: #f1c45e;
-  --caution-soft: #33280f;
-  --caution-line: #5c4715;
+  --caution-soft: #342c1e;
+  --caution-line: #604c22;
   --caution-dot: #e0a82e;
   --critical: #ff9389;
-  --critical-soft: #3d1915;
-  --critical-line: #6a2a24;
+  --critical-soft: #392424;
+  --critical-line: #6b3633;
   --critical-dot: #f2665a;
-  --neutral-dot: #7a7368;
+  --neutral-dot: #78787f;
   --scrim: rgba(0, 0, 0, 0.55);
   --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.4), 0 18px 40px -16px rgba(0, 0, 0, 0.75);
   --shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.35);
@@ -186,7 +190,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--ink); }
 .tabular, .num { font-variant-numeric: tabular-nums; }
 svg.icon { flex: none; vertical-align: middle; }
 /* biome-ignore lint/complexity/noImportantStyles: a person who asked for reduced motion must win over every component animation */
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
 
 /* Layout: the rail and the page. The rail's optional parts (company chip, Start a hire, role list, compact mode) are
    described in docs/07; the original markup (brand, links, sections, foot) keeps working unchanged. */
@@ -198,7 +202,7 @@ svg.icon { flex: none; vertical-align: middle; }
 .rail .brand small { display: block; font-family: var(--ui); font-weight: 400; font-size: 11.5px; color: var(--ink-3); letter-spacing: 0.08em; text-transform: uppercase; margin-top: 3px; }
 .rail a:not(.btn, .icon-btn) { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--r-control); color: var(--ink-2); text-decoration: none; font-weight: 500; }
 .rail a:not(.btn, .icon-btn) svg { color: var(--ink-3); }
-.rail a:not(.btn, .icon-btn):hover { background: var(--surface-2); color: var(--ink); }
+@media (hover: hover) and (pointer: fine) { .rail a:not(.btn, .icon-btn):hover { background: var(--surface-2); color: var(--ink); } }
 .rail a.active { background: var(--surface-2); color: var(--ink); box-shadow: inset 2px 0 0 var(--ink); }
 .rail a.active svg { color: var(--ink); }
 .rail .section { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); padding: 14px 10px 4px; }
@@ -272,7 +276,7 @@ svg.icon { flex: none; vertical-align: middle; }
 .list { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); overflow: hidden; }
 .list-item { display: flex; align-items: center; gap: 14px; padding: 14px 20px; color: var(--ink); text-decoration: none; }
 .list-item + .list-item { border-top: 1px solid var(--line); }
-a.list-item:hover, button.list-item:hover { background: var(--surface-2); }
+@media (hover: hover) and (pointer: fine) { a.list-item:hover, button.list-item:hover { background: var(--surface-2); } }
 button.list-item { width: 100%; border: 0; background: none; text-align: left; font: inherit; cursor: pointer; }
 .list-item-main { flex: 1; min-width: 0; display: grid; gap: 1px; }
 .list-item-main .sub { color: var(--ink-3); font-size: 13.5px; }
@@ -285,26 +289,33 @@ button.list-item { width: 100%; border: 0; background: none; text-align: left; f
 }
 
 /* Buttons */
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border-radius: var(--r-control); padding: 9px 14px; font-weight: 600; font-size: 14px; cursor: pointer; border: 1px solid transparent; text-decoration: none; line-height: 1.2; transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease); }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border-radius: var(--r-control); padding: 9px 14px; font-weight: 600; font-size: 14px; cursor: pointer; border: 1px solid transparent; text-decoration: none; line-height: 1.2; transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease); }
 .btn svg.icon { width: 16px; height: 16px; }
 .btn.primary { background: var(--primary); color: var(--on-primary); }
-.btn.primary:hover { background: var(--primary-hover); }
 .btn.secondary { background: var(--surface); border-color: var(--line-2); color: var(--ink); }
-.btn.secondary:hover { background: var(--surface-2); }
 .btn.ghost, .btn.quiet { background: transparent; color: var(--ink-2); }
 .btn.quiet { padding-left: 6px; padding-right: 6px; }
-.btn.ghost:hover, .btn.quiet:hover { background: var(--surface-2); color: var(--ink); }
 .btn.danger, .btn.destructive { background: var(--critical-soft); border-color: var(--critical-line); color: var(--critical); }
-.btn.danger:hover, .btn.destructive:hover { border-color: var(--critical); }
+/* Hover only where there is a mouse: a button tapped on a phone never stays grey */
+@media (hover: hover) and (pointer: fine) {
+  .btn.primary:hover { background: var(--primary-hover); }
+  .btn.secondary:hover { background: var(--surface-2); }
+  .btn.ghost:hover, .btn.quiet:hover { background: var(--surface-2); color: var(--ink); }
+  .btn.danger:hover, .btn.destructive:hover { border-color: var(--critical); }
+}
 .btn:disabled, .btn[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
 .btn.sm { padding: 6px 10px; font-size: 13px; gap: 6px; }
 .btn.block { width: 100%; }
 .btn .kbd { background: transparent; border-color: currentColor; color: inherit; opacity: 0.75; height: 18px; min-width: 18px; }
-.icon-btn { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 34px; height: 34px; padding: 0; border: 0; border-radius: var(--r-control); background: transparent; color: var(--ink-3); cursor: pointer; text-decoration: none; transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease); }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 34px; height: 34px; padding: 0; border: 0; border-radius: var(--r-control); background: transparent; color: var(--ink-3); cursor: pointer; text-decoration: none; transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease); }
 .icon-btn.sm { width: 28px; height: 28px; }
-.icon-btn:hover { background: var(--surface-2); color: var(--ink); }
+@media (hover: hover) and (pointer: fine) { .icon-btn:hover { background: var(--surface-2); color: var(--ink); } }
 .icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 5px; border: 1px solid var(--line-2); border-radius: 5px; background: var(--surface); color: var(--ink-2); font: 600 11px/1 var(--ui); }
+/* Pressed: a control gives a little under the finger or the click (transform only, back in 150ms); off for reduced motion */
+@media (prefers-reduced-motion: no-preference) {
+  :is(.btn, .icon-btn, .pill-button, .toggle-chip, .segmented button):active:not(:disabled, [aria-disabled="true"]) { transform: scale(0.97); }
+}
 
 /* Forms */
 .field { display: grid; gap: 6px; }
@@ -327,8 +338,11 @@ button.list-item { width: 100%; border: 0; background: none; text-align: left; f
 .dot.caution { background: var(--caution-dot); }
 .dot.critical { background: var(--critical-dot); }
 .dot.accent { background: var(--ink); }
-.dot.pulse { animation: pulse 2s var(--ease) infinite; }
-@keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 transparent; } 50% { box-shadow: 0 0 0 4px var(--good-line); } }
+/* Live: a ring grows out of the dot and fades (transform and opacity only, nothing repainted); only a page's own Live
+   pill asks for it, and it stops for reduced motion */
+.dot.pulse { position: relative; }
+.dot.pulse::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: inherit; animation: live-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite; }
+@keyframes live-ping { 0% { transform: scale(1); opacity: 0.6; } 75%, 100% { transform: scale(2.4); opacity: 0; } }
 .pill, .pill-button { display: inline-flex; align-items: center; gap: 7px; padding: 3px 10px; border-radius: var(--r-pill); border: 1px solid var(--line-2); background: var(--surface); color: var(--ink-2); font-size: 13px; font-weight: 600; line-height: 1.35; white-space: nowrap; }
 .pill.sm { padding: 1px 8px; font-size: 12px; gap: 6px; }
 .pill.accent, .pill-button.accent { color: var(--ink); border-color: var(--ink-3); }
@@ -341,7 +355,7 @@ button.list-item { width: 100%; border: 0; background: none; text-align: left; f
 .pill.critical .dot, .pill-button.critical .dot { background: var(--critical-dot); }
 .pill.solid.good { background: var(--good-solid); border-color: transparent; color: var(--on-good-solid); }
 .pill.solid .dot { background: currentColor; }
-.pill-button { font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 5px 10px 5px 12px; transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease); }
+.pill-button { font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 5px 10px 5px 12px; transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease); }
 .pill-button:hover { border-color: var(--ink-3); }
 .pill-button:disabled { opacity: 0.55; cursor: not-allowed; }
 .score { display: inline-flex; align-items: baseline; padding: 3px 10px; border-radius: var(--r-pill); border: 1px solid var(--line-2); background: var(--surface-2); color: var(--ink-2); font-size: 14px; font-weight: 700; line-height: 1.3; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -369,8 +383,9 @@ button.list-item { width: 100%; border: 0; background: none; text-align: left; f
 .empty { display: grid; justify-items: center; gap: 6px; text-align: center; padding: 40px 20px; color: var(--ink-2); border: 1px dashed var(--line-2); border-radius: var(--r-card); }
 .empty p { max-width: 52ch; }
 .empty-icon { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; margin-bottom: 4px; border-radius: 50%; background: var(--surface-2); color: var(--ink-3); }
-.skeleton { background: linear-gradient(90deg, var(--surface-2), var(--surface), var(--surface-2)); background-size: 200% 100%; animation: shimmer 1.2s infinite; border-radius: var(--r-control); min-height: 14px; }
-@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+/* Loading: a flat block that fades and comes back (opacity only); never below 60%, so it is always seen */
+.skeleton { background: var(--surface-3); border-radius: var(--r-control); min-height: 14px; animation: skeleton-pulse 1.6s ease-in-out infinite; }
+@keyframes skeleton-pulse { 50% { opacity: 0.6; } }
 .spinner { display: inline-block; flex: none; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: currentColor; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 14px; }
@@ -383,8 +398,8 @@ button.list-item { width: 100%; border: 0; background: none; text-align: left; f
 
 /* Controls */
 .segmented { display: inline-flex; flex-wrap: wrap; max-width: 100%; gap: 2px; margin: 0; min-width: 0; padding: 2px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); }
-.segmented button { border: 0; border-radius: 6px; background: transparent; color: var(--ink-2); padding: 5px 10px; cursor: pointer; font-size: 13px; font-weight: 500; }
-.segmented button:hover { background: var(--surface-2); color: var(--ink); }
+.segmented button { border: 0; border-radius: 6px; background: transparent; color: var(--ink-2); padding: 5px 10px; cursor: pointer; font-size: 13px; font-weight: 500; transition: transform var(--dur-fast) var(--ease); }
+@media (hover: hover) and (pointer: fine) { .segmented button:hover { background: var(--surface-2); color: var(--ink); } }
 .segmented button.on { background: var(--ink); color: var(--surface); font-weight: 600; }
 .tabs { display: flex; gap: 4px 22px; overflow-x: auto; scrollbar-width: none; box-shadow: inset 0 -1px 0 var(--line); }
 .tab { position: relative; display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 10px 2px 12px; border: 0; background: none; color: var(--ink-3); font: 500 14.5px/1.2 var(--ui); white-space: nowrap; text-decoration: none; cursor: pointer; }
@@ -394,6 +409,9 @@ button.list-item { width: 100%; border: 0; background: none; text-align: left; f
 .tab[aria-selected="true"]::after, .tab[aria-current="page"]::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; border-radius: 2px; background: var(--ink); }
 .tab:disabled { opacity: 0.45; cursor: not-allowed; }
 .tab .count { color: var(--ink-3); font-weight: 500; font-variant-numeric: tabular-nums; }
+/* The label keeps the width of its bold self, so choosing a tab never nudges the tabs beside it (hidden from screen readers) */
+.tab-label { display: inline-flex; flex-direction: column; align-items: center; }
+.tab-label::after { content: attr(data-label); height: 0; overflow: hidden; visibility: hidden; font-weight: 600; pointer-events: none; user-select: none; }
 .tabs.counts { gap: 4px 28px; }
 .tabs.counts .tab { flex-direction: column; gap: 2px; padding: 12px 4px; }
 .tabs.counts .tab .count { order: -1; color: var(--ink); font-size: 18px; font-weight: 600; }
@@ -414,14 +432,64 @@ button.list-item { width: 100%; border: 0; background: none; text-align: left; f
 }
 
 /* Tables, timelines, conversation */
-/* relative: screen-reader-only text in a wide table stays inside the scrolling box instead of widening the page */
-.table-wrap { position: relative; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); }
-table.table { border-collapse: collapse; width: 100%; font-size: 13.5px; font-variant-numeric: tabular-nums; }
-.table thead th { text-align: left; font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); background: var(--surface); border-bottom: 1px solid var(--line); padding: 10px 12px; white-space: nowrap; }
+/* relative: screen-reader-only text in a wide table stays inside the scrolling box instead of widening the page.
+   Separate borders with no gap, so a sticky heading or first column carries its own line. A thin scrollbar whose
+   thumb is the field-border grey (3:1 or more on the surface). */
+.table-wrap { position: relative; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+.table-wrap:focus-visible { outline-offset: -2px; }
+table.table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+/* Headings in normal case, darker grey, on a faint band (founder decision Q3, 10 October 2026) */
+.table thead th { text-align: left; font-size: 12.5px; font-weight: 600; color: var(--ink-2); background: var(--tint); border-bottom: 1px solid var(--line); padding: 10px 12px; white-space: nowrap; }
 /* a row's own header (`<th scope="row">`, as in Compare) looks like any other cell: it only tells a screen reader what the row is */
-.table td, .table tbody th { padding: 11px 12px; border-top: 1px solid var(--line); vertical-align: top; }
+.table td, .table tbody th { padding: 11px 12px; border-top: 1px solid var(--line); vertical-align: top; transition: background-color var(--dur-fast) var(--ease); }
 .table tbody th { text-align: left; font-weight: inherit; }
 .table tbody tr:first-child td, .table tbody tr:first-child th { border-top: 0; }
+/* Figures: right-aligned under a right-aligned heading, tabular (.num), on one line */
+.table .num { text-align: right; white-space: nowrap; }
+.table .nowrap { white-space: nowrap; }
+/* The row under the mouse, on devices that have one: a row tapped on a phone never stays tinted */
+@media (hover: hover) and (pointer: fine) {
+  .table tbody tr:hover > :is(td, th):not(.table-empty) { background: var(--tint); }
+  .table-wrap.pin-first tbody tr:hover > :first-child:not(.table-empty) { background: var(--tint); }
+  .th-sort:hover { color: var(--ink); }
+}
+/* A heading that sorts: the heading is the button; a faint pair of arrows until it sorts, then one arrow in ink.
+   Top-aligned, so its words sit on the same line as the plain headings: on its baseline, a figure column's button
+   (row-reverse) lines up by its arrows instead and stands about 1.6px higher. */
+.th-sort { display: inline-flex; align-items: center; gap: 4px; margin: -4px -6px; padding: 4px 6px; border: 0; border-radius: 6px; background: none; color: inherit; font: inherit; vertical-align: top; cursor: pointer; }
+.th-sort svg.icon { color: var(--ink-3); }
+[aria-sort] > .th-sort svg.icon { color: var(--ink); }
+.th-sort:focus-visible { outline-offset: 0; }
+.table th.num .th-sort { flex-direction: row-reverse; }
+/* No rows to show (a filter found nothing): one quiet row under the headings. Left-aligned: the cell spans every
+   column, so centred words would sit in the middle of a wide table, off the edge of a phone's box. */
+.table td.table-empty { padding: 28px 16px; color: var(--ink-3); text-align: left; }
+/* Rows on their way: quiet bars where the cells will be */
+.table .skeleton { display: block; width: 72%; min-height: 12px; }
+.table .num .skeleton { margin-left: auto; }
+/* A long list on a wide screen scrolls in its own box with its headings in view (a solid band, no blur) */
+@media (min-width: 901px) {
+  .table-wrap.scroll { max-height: min(70vh, 640px); overflow: auto; }
+  .table-wrap.scroll thead th { position: sticky; top: 0; z-index: 2; }
+}
+/* A wide table keeps its first column in view while it scrolls sideways */
+.table-wrap.pin-first :is(th, td):first-child { position: sticky; left: 0; z-index: 1; box-shadow: inset -1px 0 0 var(--line); }
+.table-wrap.pin-first tbody :is(th, td):first-child { background: var(--surface); }
+.table-wrap.pin-first thead th:first-child { z-index: 3; }
+/* The no-rows cell spans every column, so it is not pinned and draws no divider at the table's far edge */
+.table-wrap.pin-first td.table-empty { position: static; box-shadow: none; }
+/* Inside a card the table runs edge to edge: one frame (the card's), not a box inside a box */
+.card .table-wrap { margin-inline: -20px; border-width: 1px 0; border-radius: 0; }
+.card .table :is(th, td):first-child { padding-left: 20px; }
+.card .table :is(th, td):last-child { padding-right: 20px; }
+/* A report's figures (Stat) and its 30 day bars: the number large and tabular, what it counts under it */
+.stat-row { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+.stat { display: grid; gap: 2px; min-width: 0; }
+.stat-n { color: var(--ink); font: 600 var(--text-2xl)/1.1 var(--display); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.stat-label { color: var(--ink-3); font-size: 12.5px; }
+.daybars { display: flex; align-items: flex-end; gap: 2px; height: 40px; margin-top: 10px; }
+.daybars > span { flex: 1; min-width: 3px; border-radius: 2px; background: var(--ink-2); }
+.daybars > span.zero { background: var(--line); }
 .timeline { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
 .timeline li { display: grid; grid-template-columns: 110px 1fr; gap: 10px; font-size: 13px; }
 .timeline .when { color: var(--ink-3); font-variant-numeric: tabular-nums; }
@@ -478,7 +546,8 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
 .menu [role="menu"] { display: grid; gap: 1px; }
 .menu [role="menu"]:focus { outline: none; }
 .menu-item { display: grid; grid-template-columns: 16px 1fr auto; align-items: center; gap: 2px 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: 8px; background: none; color: var(--ink); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
-.menu-item:hover, .menu-item:focus { background: var(--surface-2); outline: none; }
+.menu-item:focus { background: var(--surface-2); outline: none; }
+@media (hover: hover) and (pointer: fine) { .menu-item:hover { background: var(--surface-2); } }
 .menu-item:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
 .menu-item .dot { justify-self: center; }
 .menu-item[aria-checked="true"] { font-weight: 600; }
@@ -499,7 +568,7 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
 /* An action on a toast ("Undo"): outlined in the toast's own ink, at the end of the line. */
 .toast.has-action { align-items: center; }
 .toast-action { flex: none; margin-left: 6px; padding: 5px 12px; border: 1px solid currentColor; border-radius: var(--r-control); background: transparent; color: inherit; font: 600 13px/1.2 var(--ui); cursor: pointer; }
-.toast-action:hover { background: var(--ground); color: var(--ink); }
+@media (hover: hover) and (pointer: fine) { .toast-action:hover { background: var(--ground); color: var(--ink); } }
 .toast-action:focus-visible { outline-color: var(--ground); }
 
 /* A dot on a tab with something new in it (the candidate panel's unread markers). */
@@ -515,7 +584,7 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
 .talent-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .talent-toolbar .input, .talent-toolbar .select { width: auto; padding: 7px 10px; font-size: 13.5px; }
 .talent-toolbar .talent-search { flex: 1 1 200px; min-width: 160px; }
-.toggle-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: var(--r-pill); border: 1px solid var(--line-2); background: var(--surface); color: var(--ink-2); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.toggle-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: var(--r-pill); border: 1px solid var(--line-2); background: var(--surface); color: var(--ink-2); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; transition: transform var(--dur-fast) var(--ease); }
 .toggle-chip:hover { border-color: var(--ink-3); }
 .toggle-chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--ground); }
 .toggle-chip .count { font-variant-numeric: tabular-nums; font-weight: 500; opacity: 0.85; }
@@ -527,7 +596,7 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
 .talent-row > .score-slot { grid-area: score; }
 .talent-row > .menu-wrap { grid-area: stage; justify-self: end; }
 .talent-row + .talent-row { border-top: 1px solid var(--line); }
-.talent-row:hover { background: var(--surface-2); }
+@media (hover: hover) and (pointer: fine) { .talent-row:hover { background: var(--surface-2); } }
 .talent-row:first-child { border-radius: var(--r-card) var(--r-card) 0 0; }
 .talent-row:last-child { border-radius: 0 0 var(--r-card) var(--r-card); }
 .talent-row:only-child { border-radius: var(--r-card); }

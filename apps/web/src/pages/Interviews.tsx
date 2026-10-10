@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "../nav";
-import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, Field, PageHeader, Pill, Skeleton, Table, Timeline, type Tone } from "@ros/ui";
+import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, Field, PageHeader, Pill, Skeleton, type SortValue, sortRows, Table, Timeline, type Tone, useTableSort } from "@ros/ui";
 import { api, ApiError, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me, type NewTimesSettingView, type SendNewTimesResult } from "../api/client";
 import { toast } from "../toast";
 import { interviewNewTimesText } from "../cancelled";
@@ -19,6 +19,7 @@ const DECISION_LABEL: Record<string, string> = { next_round: "Next round", final
 // Red is only for a missing must-have or a critical error (docs/07), so a cancelled interview is plain grey.
 const STATUS_TONE: Record<string, Tone> = { proposed: "accent", scheduling: "caution", scheduled: "good", completed: "neutral", cancelled: "neutral", no_show: "caution", offer_expired: "caution" };
 const when = (iso: string | null, tz: string | null) => (iso ? new Date(iso).toLocaleString("en-US", { timeZone: tz ?? undefined, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "not yet");
+const INTERVIEW_SORT: Record<"candidate" | "round" | "when", (i: InterviewSummary) => SortValue> = { candidate: (i) => `${i.candidate.firstName} ${i.candidate.lastName}`, round: (i) => i.title, when: (i) => (i.startsAt ? Date.parse(i.startsAt) : null) };
 
 /** Interviews across roles (docs/04): who, when, who is interviewing, and what needs a person. */
 export function Interviews() {
@@ -27,10 +28,14 @@ export function Interviews() {
   const company = activeCompanyOf(me.data);
   const role = company.role;
   const list = useQuery({ queryKey: ["interviews"], queryFn: () => api.get<InterviewSummary[]>("/api/v1/interviews"), refetchInterval: 15000 });
-  const upcoming = (list.data ?? []).filter((i) => ["proposed", "scheduling", "scheduled"].includes(i.status)).sort((a, b) => (a.startsAt ?? "9").localeCompare(b.startsAt ?? "9"));
+  const upcoming = (list.data ?? []).filter((i) => ["proposed", "scheduling", "scheduled"].includes(i.status));
   const past = (list.data ?? []).filter((i) => !["proposed", "scheduling", "scheduled"].includes(i.status));
+  // In motion opens soonest first (unscheduled last), as it always has; Past opens latest first.
+  const soon = useTableSort<"candidate" | "round" | "when">({ key: "when", dir: "ascending" });
+  const done = useTableSort<"candidate" | "round" | "when">({ key: "when", dir: "descending" });
+  // The interviewer line names people soonest interview first, whatever order the table is sorted in
   const load: Record<string, number> = {};
-  for (const i of upcoming) for (const p of i.participants) load[p.name ?? p.email] = (load[p.name ?? p.email] ?? 0) + 1;
+  for (const i of sortRows(upcoming, INTERVIEW_SORT.when, "ascending")) for (const p of i.participants) load[p.name ?? p.email] = (load[p.name ?? p.email] ?? 0) + 1;
   return (
     <div className="stack" style={{ gap: 18 }}>
       <PageHeader eyebrow={company.name ?? undefined} title="Interviews" sub={canManageInterviews(role) ? "Every interview a person approved: waiting on the candidate, scheduled, or done. Reschedule and cancel from here; nothing is decided by software." : "Your interviews: waiting on the candidate, scheduled, or done. Afterwards, tell us whether it took place; the hiring team records the decision."} />
@@ -38,8 +43,8 @@ export function Interviews() {
         <>
           {upcoming.length === 0 ? <EmptyState icon="interviews" title="No interviews in motion" body={canSeeTalent(role) ? "Open a candidate and move them to Interviewing to start one." : "You will see an interview here as soon as you are put on one."} action={canSeeTalent(role) ? <Link to="/talent" className="btn primary">Go to Talent</Link> : undefined} /> : (
             <Card title={`In motion (${upcoming.length})`}>
-              <Table head={["Candidate", "Round", "When", "Interviewers", "Status", ""]}>
-                {upcoming.map((i) => (
+              <Table head={[soon.col("candidate", "Candidate", "text"), soon.col("round", "Round", "text"), soon.col("when", "When", "date", { first: "ascending" }), "Interviewers", "Status", ""]} announce={soon.announce}>
+                {soon.apply(upcoming, INTERVIEW_SORT).map((i) => (
                   <tr key={i.id}>
                     <td><CandidateCell i={i} /></td>
                     <td>{i.title}</td>
@@ -55,8 +60,8 @@ export function Interviews() {
           )}
           {past.length ? (
             <Card title={`Past (${past.length})`}>
-              <Table head={["Candidate", "Round", "When", "Outcome", "Decision", ""]}>
-                {past.map((i) => (
+              <Table head={[done.col("candidate", "Candidate", "text"), done.col("round", "Round", "text"), done.col("when", "When", "date"), "Outcome", "Decision", ""]} announce={done.announce}>
+                {done.apply(past, INTERVIEW_SORT).map((i) => (
                   <tr key={i.id}>
                     <td><CandidateCell i={i} /></td>
                     <td>{i.title}</td>

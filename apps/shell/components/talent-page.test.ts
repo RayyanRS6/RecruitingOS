@@ -89,8 +89,8 @@ describe("the Talent page", () => {
     expect(html).toContain("2 applicants · 1 waiting on you");
     // the strip: every stage with its count, the count a separate word for a screen reader
     expect(html).toContain('role="tablist" aria-label="Stages"');
-    expect(html).toContain('<span>All</span> <span class="count">2</span>');
-    expect(html).toContain('<span>Not moving forward</span> <span class="count">1</span>');
+    expect(html).toContain('<span class="tab-label" data-label="All">All</span> <span class="count">2</span>');
+    expect(html).toContain('<span class="tab-label" data-label="Not moving forward">Not moving forward</span> <span class="count">1</span>');
     // waiting on you is on, so only Maria is listed; the decision nobody has told is one click away
     expect(html).toMatch(/<button type="button" class="toggle-chip" aria-pressed="true">Waiting on you/);
     expect(html).toContain('class="talent-name">Maria Reyes</button>');
@@ -278,9 +278,10 @@ describe("the Cancelled column (founder decisions 1A to 4A)", () => {
   it("sits right after Interviewing on the strip, split by what each person chose, each row saying where their new times stand", () => {
     nav.search = "ownerStage=cancelled";
     const html = render(withColumn(true), createElement(People));
-    expect(html).toContain('<span>Interviewing</span> <span class="count">0</span>');
-    expect(html.indexOf("<span>Interviewing</span>")).toBeLessThan(html.indexOf("<span>Cancelled</span>"));
-    expect(html).toContain('<span>Cancelled</span> <span class="count">2</span>');
+    expect(html).toContain('<span class="tab-label" data-label="Interviewing">Interviewing</span> <span class="count">0</span>');
+    expect(html.indexOf('data-label="Interviewing">Interviewing</span>')).toBeGreaterThan(-1);
+    expect(html.indexOf('data-label="Interviewing">Interviewing</span>')).toBeLessThan(html.indexOf('data-label="Cancelled">Cancelled</span>'));
+    expect(html).toContain('<span class="tab-label" data-label="Cancelled">Cancelled</span> <span class="count">2</span>');
     expect(html).toMatch(/<button type="button" class="toggle-chip" aria-pressed="false">Asked for new times <span class="count">1<\/span><\/button>/);
     expect(plain(html)).toContain("No longer interested 0");
     expect(plain(html)).toContain("No-show 1");

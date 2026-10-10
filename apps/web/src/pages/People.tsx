@@ -321,8 +321,8 @@ function TalentRow({ a, busy, onOpen, onMove }: { a: ApplicationSummary; busy: b
         </span>
       </div>
       <div className="talent-row-chips">
-        {/* answering the screening questions in the visit that sent the application (plan E6): nothing waits on you yet */}
-        {isStillApplying(a) ? <Pill size="sm" tone="neutral" pulse title="Sent the form and answering the screening questions now">{STILL_APPLYING_LABEL}</Pill> : null}
+        {/* answering the screening questions in the visit that sent the application (plan E6): nothing waits on you yet; the dot stays still, the word says it (only the page's Live pill pulses) */}
+        {isStillApplying(a) ? <Pill size="sm" tone="neutral" title="Sent the form and answering the screening questions now">{STILL_APPLYING_LABEL}</Pill> : null}
         {reading !== "none" ? <Pill size="sm" tone={READING[reading].tone}>{READING[reading].label}</Pill> : null}
         {a.evidence?.lowConfidence && reading !== "closer_look" ? <Chip tone="caution">{LOW_CONFIDENCE_LABEL}</Chip> : null}
         {a.tags.map((t) => <Chip key={t} tone="caution">{t}</Chip>)}

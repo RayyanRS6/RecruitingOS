@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GLYPHS, ICON_ALIASES, ICON_NAMES, resolveIcon } from "./glyphs";
-import { cx, domId, holdPageScroll, initials, nextIndex, normalizeToast, OWNER_STAGES, SCORE_BANDS, scoreBand, scoreLabel, stageMenuItems, tabIds, toastDuration, toastPayload, typeaheadIndex } from "./helpers";
+import { compareValues, cx, domId, holdPageScroll, initials, nextIndex, nextSort, normalizeToast, numHead, OWNER_STAGES, SCORE_BANDS, scoreBand, scoreLabel, sortAnnouncement, sortRows, stageMenuItems, tabIds, toastDuration, toastPayload, typeaheadIndex } from "./helpers";
 
 describe("avatar initials", () => {
   it("takes the first letters of the first and last names", () => {
@@ -222,5 +222,76 @@ describe("icon set", () => {
       for (const d of paths) expect(d, name).toMatch(/^[Mm][\d.\s,LlHhVvCcSsQqTtAaZzMm-]+$/);
     }
     for (const [alias, target] of Object.entries(ICON_ALIASES)) expect(GLYPHS).toHaveProperty(target, resolveIcon(alias as keyof typeof ICON_ALIASES));
+  });
+});
+
+describe("sorting a table", () => {
+  it("orders words the way a person reads them, numbers by size, and puts empty values last either way", () => {
+    const rows = [{ n: "Role 10", c: 3 }, { n: "role 2", c: null }, { n: "Bright Dental", c: 12 }, { n: "", c: 1 }];
+    expect(sortRows(rows, (r) => r.n, "ascending").map((r) => r.n)).toEqual(["Bright Dental", "role 2", "Role 10", ""]);
+    expect(sortRows(rows, (r) => r.n, "descending").map((r) => r.n)).toEqual(["Role 10", "role 2", "Bright Dental", ""]);
+    expect(sortRows(rows, (r) => r.c, "descending").map((r) => r.c)).toEqual([12, 3, 1, null]);
+    expect(sortRows(rows, (r) => r.c, "ascending").map((r) => r.c)).toEqual([1, 3, 12, null]);
+    expect(compareValues(Number.NaN, 1, "descending")).toBe(1);
+    expect(compareValues(undefined, null, "ascending")).toBe(0);
+    expect(compareValues("Ádám", "adam", "ascending")).toBe(0);
+  });
+
+  it("keeps rows that tie in the order they came, and leaves the list it was given alone", () => {
+    const rows = [{ id: "a", v: 1 }, { id: "b", v: 1 }, { id: "c", v: 0 }];
+    expect(sortRows(rows, (r) => r.v, "descending").map((r) => r.id)).toEqual(["a", "b", "c"]);
+    expect(sortRows(rows, (r) => r.v, "ascending").map((r) => r.id)).toEqual(["c", "a", "b"]);
+    expect(rows.map((r) => r.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("sorts dates by their timestamps, an unscheduled one last", () => {
+    const at = ["2026-10-14T18:00:00.000Z", null, "2026-10-09T10:00:00.000Z"].map((s) => (s ? Date.parse(s) : null));
+    expect(sortRows(at, (v) => v, "ascending")).toEqual([Date.parse("2026-10-09T10:00:00.000Z"), Date.parse("2026-10-14T18:00:00.000Z"), null]);
+    expect(sortRows(at, (v) => v, "descending")).toEqual([Date.parse("2026-10-14T18:00:00.000Z"), Date.parse("2026-10-09T10:00:00.000Z"), null]);
+  });
+
+  it("starts a new column the useful way round and flips the same column, with no third press", () => {
+    expect(nextSort(null, "company", "text")).toEqual({ key: "company", dir: "ascending" });
+    expect(nextSort(null, "cost", "number")).toEqual({ key: "cost", dir: "descending" });
+    expect(nextSort(null, "when", "date")).toEqual({ key: "when", dir: "descending" });
+    expect(nextSort({ key: "cost", dir: "descending" }, "cost", "number")).toEqual({ key: "cost", dir: "ascending" });
+    expect(nextSort({ key: "cost", dir: "ascending" }, "cost", "number")).toEqual({ key: "cost", dir: "descending" });
+    expect(nextSort({ key: "cost", dir: "ascending" }, "when", "date")).toEqual({ key: "when", dir: "descending" });
+  });
+
+  it("lets a page start a column earliest first (a deadline, an interview to come), and still flips it", () => {
+    expect(nextSort(null, "due", "date", "ascending")).toEqual({ key: "due", dir: "ascending" });
+    expect(nextSort({ key: "candidate", dir: "ascending" }, "when", "date", "ascending")).toEqual({ key: "when", dir: "ascending" });
+    expect(nextSort({ key: "when", dir: "ascending" }, "when", "date", "ascending")).toEqual({ key: "when", dir: "descending" });
+    expect(sortAnnouncement("Due", "date", "ascending")).toBe("Sorted by Due, earliest first.");
+  });
+
+  it("says the new order once, in plain words", () => {
+    expect(sortAnnouncement("Last activity", "date", "descending")).toBe("Sorted by Last activity, latest first.");
+    expect(sortAnnouncement("Company", "text", "ascending")).toBe("Sorted by Company, A to Z.");
+    expect(sortAnnouncement("Company", "text", "descending")).toBe("Sorted by Company, Z to A.");
+    expect(sortAnnouncement("AI cost", "number", "descending")).toBe("Sorted by AI cost, highest first.");
+    expect(sortAnnouncement("AI cost", "number", "ascending")).toBe("Sorted by AI cost, lowest first.");
+    expect(numHead("Applicants")).toEqual({ label: "Applicants", num: true });
+  });
+
+  it("makes its word collator on the first comparison of words, not when a page loads the module", async () => {
+    vi.resetModules();
+    // counts each collator made, and still makes a real one
+    const Real = Intl.Collator;
+    let made = 0;
+    const counting = new Proxy(Real, { construct: (target, args) => { made++; return Reflect.construct(target, args); } });
+    Object.defineProperty(Intl, "Collator", { value: counting, configurable: true, writable: true });
+    try {
+      const fresh = await import("./helpers");
+      expect(made).toBe(0);
+      expect(fresh.compareValues(2, 10, "ascending")).toBeLessThan(0);
+      expect(made).toBe(0);
+      expect(fresh.compareValues("Role 2", "Role 10", "ascending")).toBeLessThan(0);
+      expect(fresh.compareValues("Bright", "avon", "descending")).toBeLessThan(0);
+      expect(made).toBe(1);
+    } finally {
+      Object.defineProperty(Intl, "Collator", { value: Real, configurable: true, writable: true });
+    }
   });
 });

@@ -1,4 +1,4 @@
-import { Card, Table } from "@ros/ui";
+import { Card, numHead, Table } from "@ros/ui";
 import { headerCounts, snapshotPlace, type BoardSnapshot } from "./board-model";
 
 /**
@@ -14,12 +14,12 @@ export function BoardSnapshotCard({ snapshot }: { snapshot: BoardSnapshot }) {
       <p className="small" style={{ marginTop: 4 }}>{snapshot.summary.sentences.join(" ")}</p>
       {snapshot.people.length ? (
         <div style={{ marginTop: 10 }}>
-          <Table head={["Candidate", "Where the board put them", "Score", "Why", "Suggested next step"]} label="The pool board when they asked">
+          <Table head={["Candidate", "Where the board put them", numHead("Score"), "Why", "Suggested next step"]} label="The pool board when they asked">
             {snapshot.people.map((p) => (
               <tr key={p.applicationId}>
                 <td>{p.name}</td>
                 <td className="small">{snapshotPlace(p)}</td>
-                <td className="small">{p.score === null ? "No score yet" : `${p.score}/100`}</td>
+                <td className="small num">{p.score === null ? "No score yet" : `${p.score}/100`}</td>
                 <td className="small">{p.needsYourEye ? `Needs a person's eye: ${p.needsYourEye}` : p.reason}</td>
                 <td className="small">{p.nextStep ?? ""}</td>
               </tr>

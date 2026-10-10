@@ -88,7 +88,7 @@ export function CompareTable({ data }: { data: CompareView }) {
         <span className="small muted">{orderLine(order, cands.length)}</span>
         {cands.length > 1 ? <Segmented value={order} onChange={setOrder} options={COMPARE_ORDERS.map((o) => ({ value: o.value, label: o.label }))} ariaLabel="Order of the columns" /> : null}
       </div>
-      <Table head={["What we checked", ...cands.map((c) => c.name)]} label="Candidates compared">
+      <Table head={["What we checked", ...cands.map((c) => c.name)]} label="Candidates compared" pinFirst>
         <tr>
           <th scope="row" className="small muted">Match score</th>
           {cands.map((c) => {

@@ -2,7 +2,7 @@
 
 import { type ReactNode, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Avatar, Button, Card, Chip, ErrorState, Field, PageHeader, Pill, Segmented, Skeleton, Table, type Tone } from "@ros/ui";
+import { Alert, Avatar, Button, Card, Chip, ErrorState, Field, PageHeader, Pill, Segmented, Skeleton, Table, type Tone, useTableSort } from "@ros/ui";
 import { api, ApiError, type MyCalendar, type NewTimesSettingView } from "../api/client";
 import { useSearchParams } from "../nav";
 import { STILL_REVIEWING_LABEL, STILL_REVIEWING_NOTE, hasChoice, loosens, looseningQuestion, splitRules } from "../ai-rules";
@@ -106,7 +106,7 @@ export function Setup() {
 
           <Section id="setup-services">
             <Card title="Connected services">
-              <Table head={["What", "Provider", "Status", "What it takes"]}>
+              <Table head={["What", "Provider", "Status", "What it takes"]} empty="No services connected yet.">
                 {c.integrations.map((i) => (
                   <tr key={`${i.kind}-${i.provider}`}>
                     <td>{i.kind}</td>
@@ -423,14 +423,15 @@ function AuditHistory() {
   const [everyPage, setEveryPage] = useState(false);
   const path = `/api/v1/companies/current/audit?limit=50${everyPage ? "" : "&exclude=staff.tenant_accessed"}`;
   const q = useQuery({ queryKey: ["audit-history", everyPage], queryFn: () => api.get<AuditRow[]>(path), retry: false });
+  const s = useTableSort<"when" | "who">({ key: "when", dir: "descending" });
   if (q.error) return null;
   return (
     <Card title="Audit history" aside={<a className="btn secondary sm" href="/api/v1/companies/current/audit.csv">Download as a spreadsheet</a>}>
       <p className="small muted">Who did what in your workspace: recruiter access, team changes, rule changes, company changes, candidate records opened, outcomes and downloads. The last 50 are shown; the spreadsheet has everything, and downloading it is recorded too.</p>
       <label className="small" style={{ display: "block", margin: "8px 0" }}><input type="checkbox" checked={everyPage} onChange={(e) => setEveryPage(e.target.checked)} /> Include every page an ITS recruiter opened</label>
-      {q.isLoading ? <Skeleton lines={4} /> : !q.data?.length ? <p className="small muted">Nothing recorded yet.</p> : (
-        <Table head={["When", "What happened", "Who"]} label="Audit history">
-          {q.data.map((r) => <tr key={r.id}><td className="small" style={{ whiteSpace: "nowrap" }}>{new Date(r.at).toLocaleString()}</td><td>{r.description}</td><td className="small">{r.actor.name ?? r.actor.kind}</td></tr>)}
+      {!q.isLoading && !q.data?.length ? <p className="small muted">Nothing recorded yet.</p> : (
+        <Table head={[s.col("when", "When", "date"), "What happened", s.col("who", "Who", "text")]} label="Audit history" scroll loading={q.isLoading ? 5 : undefined} announce={s.announce}>
+          {s.apply(q.data ?? [], { when: (r) => Date.parse(r.at), who: (r) => r.actor.name ?? r.actor.kind }).map((r) => <tr key={r.id}><td className="small nowrap">{new Date(r.at).toLocaleString()}</td><td>{r.description}</td><td className="small">{r.actor.name ?? r.actor.kind}</td></tr>)}
         </Table>
       )}
     </Card>
