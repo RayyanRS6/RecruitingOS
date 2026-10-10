@@ -27,7 +27,7 @@ export default defineConfig({
   // route (seen 22 Sep 2026 as ECONNRESET on a documentation-only commit). Locally a failure must fail.
   retries: process.env.CI ? 1 : 0,
   // On CI each failure is printed as it happens ("line"), so a run cut short by the job's time limit still shows why.
-  reporter: [[process.env.CI ? "line" : "list"], ["html", { open: "never", outputFolder: "report" }]],
+  reporter: [[process.env.CI ? "line" : "list"], ["html", { open: "never", outputFolder: process.env.E2E_REPORT_DIR ?? "report" }]],
   use: { baseURL: base, trace: "retain-on-failure", screenshot: "only-on-failure", video: "off" },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: /candidate-phone\.spec\.ts/ },
@@ -43,9 +43,11 @@ export default defineConfig({
     timeout: 180_000,
     env: {
       // The dev server restarts itself when the V8 heap passes 80% of its limit (next/dist/server/lib/start-server.js;
-      // the default limit is half the machine's memory), which wipes the in-memory database mid-run. Give it most of
-      // the runner's memory and skip development source maps, which are the largest part of that heap.
-      NODE_OPTIONS: "--max-old-space-size=12288",
+      // the default limit is half the machine's memory), which wipes the in-memory database mid-run. Give it a limit
+      // well above what half the journeys need (CI runs them in two halves, each with its own server) but below the
+      // runner's memory, so the runner itself is never starved, and skip development source maps, the largest part of
+      // that heap.
+      NODE_OPTIONS: "--max-old-space-size=6144",
       NODE_ENV: "development", PGLITE_DIR: "memory://", APP_BASE_URL: base,
       AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", SMS_PROVIDER: "fake", AUTH_PROVIDER: "fake", CALENDAR_PROVIDER: "fake", ANALYTICS_PROVIDER: "fake",
       SECRET_STORE: "memory", STORAGE_PROVIDER: "memory", WORKER_INLINE: "true", WORKER_POLL_MS: "250", COMP_BLS_ENABLED: "false", MAGIC_LINK_ENABLED: "true",
