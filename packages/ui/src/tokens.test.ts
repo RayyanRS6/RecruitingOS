@@ -70,6 +70,18 @@ const PAIRS: Array<[string, string, number]> = [
   ["--focus", "--surface", 3],
   ["--line-strong", "--surface", 3],
   ["--line-strong", "--ground", 3],
+  // Added with the Obsidian-look work (10 October 2026): the sunken and pressed fills, the table band (--tint), and the
+  // Apply now circle against its pill (a non-text boundary, 3:1).
+  ["--ink", "--surface-2", 4.5],
+  ["--ink-3", "--surface-3", 4.5],
+  ["--ink", "--tint", 4.5],
+  ["--ink-2", "--tint", 4.5],
+  ["--ink-3", "--tint", 4.5],
+  ["--link", "--tint", 4.5],
+  ["--focus", "--surface-2", 3],
+  ["--focus", "--tint", 3],
+  ["--line-strong", "--surface-2", 3],
+  ["--primary", "--surface-2", 3],
 ];
 
 describe("design tokens", () => {
@@ -103,5 +115,25 @@ describe("design tokens", () => {
     expect(colour(light, "--primary")).toBe(colour(light, "--ink"));
     expect(css).toMatch(/\.btn\.primary \{ background: var\(--primary\); color: var\(--on-primary\); \}/);
     expect(css).not.toMatch(/\.btn\.primary \{[^}]*--accent/);
+  });
+
+  it("puts the table band (--tint) between the surface and the sunken grey, in both themes", () => {
+    for (const theme of [light, darkByPreference]) {
+      const [s, t, s2] = ["--surface", "--tint", "--surface-2"].map((n) => luminance(colour(theme, n)));
+      expect(t).toBeLessThanOrEqual(Math.max(s, s2));
+      expect(t).toBeGreaterThanOrEqual(Math.min(s, s2));
+    }
+  });
+
+  it("keeps the warm paper in the light theme and a cool, neutral grey in the dark one (founder decision Q1, 10 October 2026)", () => {
+    const rgb = (hex: string) => [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16));
+    for (const name of ["--ground", "--surface-2", "--surface-3", "--surface-rail", "--tint", "--line", "--line-2", "--line-strong", "--ink", "--ink-2", "--ink-3"]) {
+      const [r, , b] = rgb(colour(light, name));
+      expect(r, `${name} (light) is no longer warm`).toBeGreaterThan(b);
+    }
+    for (const name of ["--ground", "--surface", "--surface-2", "--surface-3", "--surface-rail", "--tint", "--line", "--line-2", "--line-strong", "--ink", "--ink-2", "--ink-3", "--primary", "--primary-hover", "--on-primary", "--neutral-dot"]) {
+      const [r, , b] = rgb(colour(darkByPreference, name));
+      expect(b, `${name} (dark) has a warm tint`).toBeGreaterThanOrEqual(r);
+    }
   });
 });

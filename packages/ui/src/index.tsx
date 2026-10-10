@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { cx, initials, type StepState, STEP_STATE_TEXT, scoreBand, scoreLabel, type Tone } from "./helpers";
+import { Children, type ReactNode } from "react";
+import { cx, initials, type StepState, STEP_STATE_TEXT, scoreBand, scoreLabel, type TableHead, type Tone } from "./helpers";
 import { Icon, type IconName } from "./icons";
 
 /**
@@ -76,7 +76,8 @@ export function Chip(props: { children: ReactNode; tone?: "neutral" | "accent" |
 
 /**
  * A status pill: a dot and a word ("Live", "Draft", "On hold"). The word carries the meaning; the colour only helps a
- * glance. `solid` is for a finished state (Hired); `pulse` is for something live right now.
+ * glance. `solid` is for a finished state (Hired); `pulse` is for the one Live pill at the top of a page: a ring grows
+ * from the dot and fades.
  */
 export function Pill(props: { children: ReactNode; tone?: Tone; dot?: boolean; solid?: boolean; pulse?: boolean; icon?: IconName; size?: "sm" | "md"; title?: string }) {
   const tone = props.tone ?? "neutral";
@@ -293,29 +294,76 @@ export function Bubble(props: { from: "assistant" | "user" | "system"; children:
   return <div className={`bubble ${props.from}`}>{props.children}</div>;
 }
 
-export function Table(props: { head: string[]; children: ReactNode; label?: string }) {
+/**
+ * A table in a box that scrolls sideways when it must (docs/07). `head` takes words, or a TableHead: `num` for a column
+ * of figures (right-aligned, heading included; give the cells className="num"), or `sort` and `onSort` for a heading
+ * that sorts (from useTableSort). aria-sort is set on the sorted column only, and `announce` says a new order once,
+ * politely. `scroll` keeps the headings in view in a long list on a wide screen; `pinFirst` keeps the first column in
+ * view while a wide table scrolls sideways. `loading` shows that many quiet rows under the headings while the rows are
+ * on their way; `empty` is the one row shown when there are none (a filter that found nothing), the headings kept.
+ * Hook-free: server components import it.
+ */
+export function Table(props: { head: Array<string | TableHead>; children?: ReactNode; label?: string; scroll?: boolean; pinFirst?: boolean; loading?: number; empty?: ReactNode; announce?: string }) {
+  const cols: TableHead[] = props.head.map((h) => (typeof h === "string" ? { label: h } : h));
+  const loading = props.loading && props.loading > 0 ? props.loading : 0;
+  const showEmpty = !loading && props.empty !== undefined && Children.toArray(props.children).length === 0;
+  const live = loading > 0 || props.empty !== undefined || cols.some((c) => c.onSort);
+  const status = loading ? "Loading…" : props.announce || (showEmpty && typeof props.empty === "string" ? props.empty : "");
   return (
     // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrolling region must be reachable by keyboard (axe scrollable-region-focusable); the label names it for screen readers
-    <section className="table-wrap" tabIndex={0} aria-label={props.label ?? `Table: ${props.head.filter(Boolean).join(", ")}`}>
+    <section className={cx("table-wrap", props.scroll && "scroll", props.pinFirst && "pin-first")} tabIndex={0} aria-label={props.label ?? `Table: ${cols.map((c) => c.label).filter(Boolean).join(", ")}`}>
       <table className="table">
         <thead>
-          <tr>{props.head.map((h, i) => <th key={`${i}-${h}`} scope="col">{h || <span className="sr-only">Actions</span>}</th>)}</tr>
+          <tr>
+            {cols.map((c, i) => (
+              <th key={`${i}-${c.label}`} scope="col" className={c.num ? "num" : undefined} aria-sort={c.onSort && c.sort ? c.sort : undefined}>
+                {c.onSort ? (
+                  <button type="button" className="th-sort" onClick={c.onSort}>
+                    {c.label}
+                    <Icon name={c.sort === "ascending" ? "chevron-up" : c.sort === "descending" ? "chevron-down" : "sort"} size={14} />
+                  </button>
+                ) : c.label || <span className="sr-only">Actions</span>}
+              </th>
+            ))}
+          </tr>
         </thead>
-        <tbody>{props.children}</tbody>
+        <tbody aria-busy={loading ? true : undefined}>
+          {loading
+            ? Array.from({ length: loading }, (_, r) => (
+                <tr key={`loading-${r}`} aria-hidden="true">
+                  {cols.map((c, i) => <td key={`${i}-${c.label}`} className={c.num ? "num" : undefined}><span className="skeleton" /></td>)}
+                </tr>
+              ))
+            : showEmpty
+              ? <tr><td colSpan={cols.length} className="table-empty">{props.empty}</td></tr>
+              : props.children}
+        </tbody>
       </table>
+      {live ? <span className="sr-only" role="status">{status}</span> : null}
     </section>
+  );
+}
+
+/** A figure and what it counts, for a report ("12" over "applicants in total"): the number large and tabular, the words under it. Not on Today (founder decision Q4). */
+export function Stat(props: { n: number | string; label: string }) {
+  return (
+    <div className="stat">
+      <span className="stat-n">{props.n}</span>
+      <span className="stat-label">{props.label}</span>
+    </div>
   );
 }
 
 export { Icon, ICON_NAMES, type IconName } from "./icons";
 // The match score's breakdown (Wave F): bars per requirement, no hooks.
 export { barFigures, barTone, ScoreBar, type ScoreBarItem, ScoreBars } from "./score-bars";
-export { cx, initials, normalizeToast, OWNER_STAGES, type OwnerStage, ownerStage, SCORE_BANDS, type ScoreBand, scoreBand, scoreLabel, type StageChoice, stageMenuItems, type StepState, TOAST_ACTION_MAX_MS, TOAST_EVENT, type ToastAction, type ToastMessage, type ToastTone, type Tone, toastArrives, toastDuration, toastPayload } from "./helpers";
+export { compareValues, cx, initials, nextSort, normalizeToast, numHead, OWNER_STAGES, type OwnerStage, ownerStage, SCORE_BANDS, type ScoreBand, scoreBand, scoreLabel, type SortDir, type SortKind, type SortValue, sortAnnouncement, sortRows, type StageChoice, stageMenuItems, type StepState, type TableHead, TOAST_ACTION_MAX_MS, TOAST_EVENT, type ToastAction, type ToastMessage, type ToastTone, type Tone, toastArrives, toastDuration, toastPayload } from "./helpers";
 
 // The pieces below listen to the keyboard or keep state, which needs React hooks, so each lives in its own client
 // module: the rest of this file stays usable from server components.
 export { Dialog, Drawer, Sheet } from "./sheet";
 export { type TabItem, TabPanel, Tabs } from "./tabs";
+export { useTableSort } from "./table-sort";
 export { SplitView } from "./split-view";
 export { AutoTextarea } from "./auto-textarea";
 export { Menu, type MenuItem, StageButton } from "./menu";

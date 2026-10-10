@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { and, desc, eq, inArray, isNull, lte, notInArray, notLike, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lte, notInArray, notLike, sql } from "drizzle-orm";
 import { RejectReason, type Actor } from "@ros/contracts";
-import { applicationMarks, applicationNotes, applications, approvalRequests, candidates, communications, dataRequests, documents, escalationMessages, events, hiringOutcomes, interviewParticipants, interviews, jobs, notifications, recruiterEscalations, screens, unconfirmedScreens, type Queryable } from "@ros/db";
+import { applicationMarks, applicationNotes, applications, approvalRequests, candidates, communications, dataRequests, documents, escalationMessages, events, hiringOutcomes, interviewFollowups, interviewParticipants, interviews, jobs, notifications, recruiterEscalations, screens, unconfirmedScreens, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { emit } from "./events";
 import { raiseAlert, resolveAlertsFor } from "./alerts";
@@ -94,6 +94,8 @@ export async function exportCandidateData(q: Queryable, companyId: string, candi
   const comms = await q.select({ direction: communications.direction, channel: communications.channel, subject: communications.subject, bodyText: communications.bodyText, status: communications.status, deliveredAt: communications.deliveredAt, createdAt: communications.createdAt }).from(communications).where(eq(communications.candidateId, cand.id)).orderBy(desc(communications.createdAt));
   const outbound = comms.filter((c) => c.direction === "outbound");
   const history = await q.select({ type: events.type, occurredAt: events.occurredAt, subjectId: events.subjectId }).from(events).where(and(eq(events.companyId, companyId), inArray(events.subjectId, apps.map((a) => a.id).concat([cand.id]))));
+  // The choice they made when they cancelled an interview (founder decision 2A). A no-show is the team's record, not theirs.
+  const cancellations = apps.length ? await q.select({ applicationId: interviewFollowups.applicationId, at: interviewFollowups.createdAt, choice: interviewFollowups.choice }).from(interviewFollowups).where(and(inArray(interviewFollowups.applicationId, apps.map((a) => a.id)), eq(interviewFollowups.kind, "candidate_cancelled"))).orderBy(asc(interviewFollowups.createdAt)) : [];
   return {
     exportedAt: new Date().toISOString(),
     person: { firstName: cand.firstName, lastName: cand.lastName, email: cand.email, phone: cand.phone, location: cand.locationText, consent: cand.consent, preferences: cand.preferences, createdAt: cand.createdAt },
@@ -107,6 +109,7 @@ export async function exportCandidateData(q: Queryable, companyId: string, candi
     // what happened to each, since they still hold the person's data.
     messagesWeDidNotSend: outbound.filter((c) => !LEFT_US.has(c.status)).map(({ status, direction: _d, deliveredAt: _a, ...c }) => ({ ...c, whatHappened: NOT_SENT[status] ?? "not sent" })),
     messagesYouSent: comms.filter((c) => c.direction === "inbound").map(({ status: _s, deliveredAt: _a, ...c }) => c),
+    interviewCancellations: cancellations.map((c) => ({ applicationId: c.applicationId, at: new Date(c.at).toISOString(), choice: c.choice })),
     stageHistory: history.filter((e) => e.type === "application.stage_changed" || e.type.startsWith("interview.")).map((e) => ({ type: e.type, at: e.occurredAt })),
   };
 }
@@ -147,6 +150,9 @@ const CODED_REASONS: string[] = [...RejectReason.options, "hired_externally", "c
 async function closeProcessOnDeletion(q: Queryable, input: { companyId: string; appIds: string[]; actor: Actor; now: Date }): Promise<void> {
   const { companyId, appIds, actor, now } = input;
   if (!appIds.length) return;
+  // The applications first, in one order, then their interviews: the order every path that changes both takes (a
+  // booking, a cancel, a send of new times), so a deletion and one of those at the same moment take turns.
+  await q.select({ id: applications.id }).from(applications).where(inArray(applications.id, appIds)).orderBy(asc(applications.id)).for("update");
   const open = await q.select().from(interviews).where(and(inArray(interviews.applicationId, appIds), inArray(interviews.status, ["proposed", "scheduling", "scheduled"])));
   for (const iv of open) {
     if (iv.status === "scheduled" && iv.startsAt && Date.parse(iv.startsAt) <= now.getTime()) continue; // it took place, or is taking place

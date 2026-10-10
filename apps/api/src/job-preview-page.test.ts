@@ -87,7 +87,9 @@ describe("the job-page preview (plan D1)", () => {
     expect(html).toContain("<li>There is no logo yet. Upload one in Setup; until then the page shows your initials.</li>");
     expect(html).toContain("<title>Preview: ");
     expect(html).toContain("Careers at Preview Dental");
-    expect(html).toMatch(/<a class="btn head-apply" href="\/api\/v1\/roles\/[^"]+\/preview\?version=1&view=apply">Apply now<\/a>/);
+    expect(html).toMatch(/<a class="btn go head-apply" href="\/api\/v1\/roles\/[^"]+\/preview\?version=1&view=apply"><span class="go-fill" aria-hidden="true"><\/span><span class="go-icon"><svg class="icon"[^>]*>.*?<\/svg><\/span><span class="go-text">Apply now<\/span><\/a>/);
+    // the sliding fill is CSS only: the preview's job page carries no script
+    expect(html).not.toContain("<script");
     expect(html).toContain("<h2>What we're looking for</h2>");
     expect(html).toContain('<span class="sr-only">Pay: </span><span class="fact-text">$45–$55 an hour</span>');
     // the data, as the job builder and the role page read it

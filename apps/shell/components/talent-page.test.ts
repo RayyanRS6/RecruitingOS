@@ -22,10 +22,13 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 const { People } = await import("@ros/web/src/pages/People");
 const { CandidatePanel } = await import("@ros/web/src/pages/candidate-panel/CandidatePanel");
 
-const STAGES = ["new", "longlist", "shortlist", "interviewing", "on_hold", "offer", "hired", "not_moving_forward"] as const;
-const LABEL: Record<string, string> = { new: "New", longlist: "Longlist", shortlist: "Shortlist", interviewing: "Interviewing", on_hold: "On hold", offer: "Offer", hired: "Hired", not_moving_forward: "Not moving forward" };
-function moves(current: string, blocked: Record<string, string> = {}) {
-  const via: Record<string, string> = { new: "none", longlist: "set_mark", shortlist: "set_mark", interviewing: "interview", on_hold: "set_mark", offer: "offer", hired: "record_hire", not_moving_forward: "decline" };
+const STAGES = ["new", "longlist", "shortlist", "interviewing", "cancelled", "on_hold", "offer", "hired", "not_moving_forward"] as const;
+const LABEL: Record<string, string> = { new: "New", longlist: "Longlist", shortlist: "Shortlist", interviewing: "Interviewing", cancelled: "Cancelled", on_hold: "On hold", offer: "Offer", hired: "Hired", not_moving_forward: "Not moving forward" };
+// Nobody is moved to Cancelled by hand: only the candidate's own cancel, or an interview they missed, puts them there.
+const ONLY_THE_CANDIDATE = "Only the candidate's own cancellation, or an interview they missed, puts someone here.";
+function moves(current: string, blockedHere: Record<string, string> = {}) {
+  const via: Record<string, string> = { new: "none", longlist: "set_mark", shortlist: "set_mark", interviewing: "interview", cancelled: "none", on_hold: "set_mark", offer: "offer", hired: "record_hire", not_moving_forward: "decline" };
+  const blocked: Record<string, string> = { cancelled: ONLY_THE_CANDIDATE, ...blockedHere };
   return STAGES.map((to) => ({ to, label: LABEL[to], via: to === current ? "none" : via[to], ...(via[to] === "set_mark" ? { mark: to } : {}), allowed: to !== current && !blocked[to], current: to === current, ...(to === current ? { blockedReason: "They are here now." } : blocked[to] ? { blockedReason: blocked[to] } : {}) }));
 }
 const evidence = { needsCloserLook: false, reason: null, assessmentUnavailable: false, resumeUnreadable: false, unknowns: [], unknownCount: 0, topStrength: null, topConcern: null, confidenceReasons: [] };
@@ -36,13 +39,13 @@ const maria = {
   ownerStage: "new", ownerStageLabel: "New", mark: null, tags: [] as string[], stageMoves: moves("new", { offer: 'Record an offer once they are a finalist (they are at "Ready for your review").' }), toldState: null as string | null,
   candidate: { id: "c1", name: "Maria Reyes", email: "maria@example.com", phone: null, locationText: "Tustin, CA" }, extractionSummary: null,
   assessment: { overall: "strong", confidence: "high", summary: "Active RDH license.", strengths: [], concerns: [] }, evidence,
-  appliedAt: daysAgo(4), stageChangedAt: daysAgo(3), daysInStage: 3, candidateToldAt: null, decisionMessageWaiting: false, score: 91 as number | null,
+  appliedAt: daysAgo(4), stageChangedAt: daysAgo(3), daysInStage: 3, candidateToldAt: null, decisionMessageWaiting: false, score: 91 as number | null, cancelled: null,
 };
 const luis = {
   ...maria, id: "a2", stage: "rejected", stageLabel: "Not moving forward", group: "not_moving_forward", ownerStage: "not_moving_forward", ownerStageLabel: "Not moving forward", stageMoves: moves("not_moving_forward"), toldState: "not_told",
   candidate: { id: "c2", name: "Luis Ortega", email: "luis@example.com", phone: null, locationText: null }, assessment: null, daysInStage: 1, score: null,
 };
-const counts = { total: 2, byOwnerStage: { new: 1, longlist: 0, shortlist: 0, interviewing: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 1 }, byGroup: { waiting_on_you: 1, waiting_on_candidate: 0, in_process: 0, not_moving_forward: 1, hired: 0 }, notTold: 1, holdsEnded: 0 };
+const counts = { total: 2, byOwnerStage: { new: 1, longlist: 0, shortlist: 0, interviewing: 0, cancelled: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 1 }, byGroup: { waiting_on_you: 1, waiting_on_candidate: 0, in_process: 0, not_moving_forward: 1, hired: 0 }, notTold: 1, holdsEnded: 0 };
 
 type Row = { id: string; stage: string; candidate: { name: string; email: string; locationText: string | null }; assessment: unknown; [field: string]: unknown };
 function detail(row: Row, over: Record<string, unknown> = {}) {
@@ -86,8 +89,8 @@ describe("the Talent page", () => {
     expect(html).toContain("2 applicants · 1 waiting on you");
     // the strip: every stage with its count, the count a separate word for a screen reader
     expect(html).toContain('role="tablist" aria-label="Stages"');
-    expect(html).toContain('<span>All</span> <span class="count">2</span>');
-    expect(html).toContain('<span>Not moving forward</span> <span class="count">1</span>');
+    expect(html).toContain('<span class="tab-label" data-label="All">All</span> <span class="count">2</span>');
+    expect(html).toContain('<span class="tab-label" data-label="Not moving forward">Not moving forward</span> <span class="count">1</span>');
     // waiting on you is on, so only Maria is listed; the decision nobody has told is one click away
     expect(html).toMatch(/<button type="button" class="toggle-chip" aria-pressed="true">Waiting on you/);
     expect(html).toContain('class="talent-name">Maria Reyes</button>');
@@ -242,5 +245,127 @@ describe("the steps a stage choice opens", () => {
     expect(hire).toContain("Start date (agreed with them)");
     expect(hire).toContain("The day they accepted the offer (optional)");
     expect(hire).toContain("the platform never makes or sends an offer");
+  });
+});
+
+describe("the Cancelled column (founder decisions 1A to 4A)", () => {
+  // React writes an apostrophe as an entity; the reader sees the character.
+  const plain = (html: string) => text(html).replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+  const view = (over: Record<string, unknown> = {}) => ({
+    id: "f1", reason: "asked_new_times", label: "Asked for new times", since: daysAgo(1), interviewId: "iv1", times: "none", lastSentAt: null, lastSentVia: null, status: "New times go out automatically Thu, Oct 15",
+    auto: { state: "waiting", reason: null, reasonText: null, dueAt: "2026-10-15T16:00:00.000Z", dueDay: "2026-10-15", sentAt: null },
+    ...over,
+  });
+  const ana = {
+    ...maria, id: "a3", stage: "interview_recommended", stageLabel: "Recommended for interview", group: "in_process", ownerStage: "cancelled", ownerStageLabel: "Asked for new times", stageMoves: moves("cancelled"), score: 70,
+    candidate: { id: "c3", name: "Ana Lopez", email: "ana@example.com", phone: null, locationText: null }, cancelled: view(),
+  };
+  const cleo = {
+    ...maria, id: "a4", stage: "interview_complete", stageLabel: "Interview done: decision needed", group: "waiting_on_you", ownerStage: "cancelled", ownerStageLabel: "No-show", stageMoves: moves("cancelled"), score: 64,
+    candidate: { id: "c4", name: "Cleo Park", email: "cleo@example.com", phone: null, locationText: null },
+    cancelled: view({ id: "f2", reason: "no_show", label: "No-show", status: "Waiting for you", auto: { state: "none", reason: "no_show", reasonText: null, dueAt: null, dueDay: null, sentAt: null } }),
+  };
+  const columnCounts = { ...counts, total: 4, byOwnerStage: { ...counts.byOwnerStage, cancelled: 2 }, byGroup: { ...counts.byGroup, waiting_on_you: 2, in_process: 1 }, cancelled: { askedNewTimes: 1, notInterested: 0, noShow: 1 } };
+  const withColumn = (auto: boolean | null, details: Array<ReturnType<typeof detail>> = []) => {
+    const qc = client(details);
+    qc.setQueryData(["applications", "r1"], { applications: [maria, luis, ana, cleo], counts: columnCounts });
+    if (auto !== null) qc.setQueryData(["new-times-setting"], { auto, workingDays: 3, pending: 1, companyConfirmed: true });
+    return qc;
+  };
+  const iv = (over: Record<string, unknown> = {}) => ({ id: "iv1", roundKey: "r1", title: "Working interview", status: "cancelled", startsAt: null, endsAt: null, timezone: null, meetingUrl: null, attempt: 2, outcome: null, decision: null, offeredSlots: [], createdAt: daysAgo(3), ...over });
+  const open = (d: ReturnType<typeof detail>, step: "hold" | null = null) => plain(render(client([d]), createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step, onStep: () => undefined, ids: [d.id], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
+
+  it("sits right after Interviewing on the strip, split by what each person chose, each row saying where their new times stand", () => {
+    nav.search = "ownerStage=cancelled";
+    const html = render(withColumn(true), createElement(People));
+    expect(html).toContain('<span class="tab-label" data-label="Interviewing">Interviewing</span> <span class="count">0</span>');
+    expect(html.indexOf('data-label="Interviewing">Interviewing</span>')).toBeGreaterThan(-1);
+    expect(html.indexOf('data-label="Interviewing">Interviewing</span>')).toBeLessThan(html.indexOf('data-label="Cancelled">Cancelled</span>'));
+    expect(html).toContain('<span class="tab-label" data-label="Cancelled">Cancelled</span> <span class="count">2</span>');
+    expect(html).toMatch(/<button type="button" class="toggle-chip" aria-pressed="false">Asked for new times <span class="count">1<\/span><\/button>/);
+    expect(plain(html)).toContain("No longer interested 0");
+    expect(plain(html)).toContain("No-show 1");
+    expect(html).toContain('class="talent-name">Ana Lopez</button>');
+    expect(html).toContain('class="talent-name">Cleo Park</button>');
+    expect(html).not.toContain('class="talent-name">Maria Reyes</button>');
+    // the row: where the new times stand, and the stage button's sub-label
+    expect(plain(html)).toContain("New times go out automatically Thu, Oct 15");
+    expect(plain(html)).toContain("Waiting for you");
+    expect(html).toContain('aria-label="Stage: No-show. Move to another stage"');
+    expect(html).toContain('aria-label="Stage: Asked for new times. Move to another stage"');
+    // the alert follows the company's setting, with the way to send new times to many people
+    expect(plain(html)).toContain("2 people are under Cancelled. Only people who asked for new times get one set automatically; everyone else waits for you.");
+    expect(plain(html)).toContain("Send new times…");
+  });
+
+  it("says everyone waits for the team when automatic times are off, and opens on one reason from a link", () => {
+    nav.search = "ownerStage=cancelled&cancelled=no_show";
+    const html = render(withColumn(false), createElement(People));
+    expect(plain(html)).toContain("2 people are under Cancelled. Automatic new times are off, so everyone here waits for you.");
+    expect(html).toMatch(/<button type="button" class="toggle-chip" aria-pressed="true">No-show <span class="count">1<\/span><\/button>/);
+    expect(html).toContain('class="talent-name">Cleo Park</button>');
+    expect(html).not.toContain('class="talent-name">Ana Lopez</button>');
+  });
+
+  it("never offers the batch to someone who may not manage interviews", () => {
+    nav.search = "ownerStage=cancelled";
+    const qc = withColumn(true);
+    qc.setQueryData(["me"], { user: { id: "u2", email: "hr@bright.test", name: "Hana Ruiz", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "hr" }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } });
+    const html = plain(render(qc, createElement(People)));
+    expect(html).toContain("Cleo Park");
+    expect(html).not.toContain("Send new times…");
+  });
+
+  it("the panel's card says the promised day, with Send new times and Don't send automatically; no second card offers an interview", () => {
+    const panel = open(detail(ana, { interviews: [iv()], allowedActions: ["interview", "reject", "record_outcome", "set_mark", "send_new_times", "stop_new_times"] }));
+    expect(panel).toContain("Ana cancelled and asked for new times");
+    expect(panel).toContain("New times go to them automatically on Thursday, October 15, as your settings say. Send them now instead, or stop the automatic set.");
+    expect(panel).toContain("Send new times");
+    expect(panel).toContain("Don't send automatically");
+    expect(panel).not.toContain("The interview was cancelled");
+    expect(panel).not.toContain("Approve an interview");
+    // without the API's leave, the buttons are not offered
+    const quiet = open(detail(ana, { interviews: [iv()], allowedActions: ["interview", "reject"] }));
+    expect(quiet).toContain("Ana cancelled and asked for new times");
+    expect(quiet).not.toContain("Send new times");
+  });
+
+  it("a no-show: new times for the same round or a decision below, and never 'Next round' from the decision card", () => {
+    const plan = [{ key: "r1", title: "Working interview", durationMinutes: 45, format: "in_person", interviewerUserIds: [], purpose: "" }, { key: "r2", title: "Meet the dentist", durationMinutes: 30, format: "in_person", interviewerUserIds: [], purpose: "" }];
+    const panel = open(detail(cleo, { interviews: [iv({ status: "no_show", outcome: "no_show_candidate", attempt: 1 })], interviewPlan: plan, allowedActions: ["interview", "record_decision", "reject", "record_outcome", "set_mark", "send_new_times"] }));
+    expect(panel).toContain("Cleo did not come to the interview");
+    expect(panel).toContain("The working interview was booked and they did not come. Nothing goes to them automatically. Send new times for the same round, or decide below.");
+    expect(panel.indexOf("Cleo did not come to the interview")).toBeLessThan(panel.indexOf("How did the interview go?"));
+    expect(panel).toContain("(the candidate did not attend)");
+    expect(panel).not.toContain("Next round");
+    expect(panel).toContain("Finalist");
+    // back under Cancelled after a decision was taken back, the missed interview already decided: no decision card, so
+    // the card points to the stage at the top instead of "below"
+    const decided = open(detail(cleo, { interviews: [iv({ status: "no_show", outcome: "no_show_candidate", attempt: 1, decision: "not_moving_forward" })], interviewPlan: plan, allowedActions: ["interview", "reject", "record_outcome", "set_mark", "send_new_times"] }));
+    expect(decided).toContain("Send new times for the same round, or choose their next stage at the top.");
+    expect(decided).not.toContain("decide below");
+    expect(decided).not.toContain("How did the interview go?");
+  });
+
+  it("before ITS confirms the company, the alert and the card promise nothing automatic and offer no send until it does", () => {
+    nav.search = "ownerStage=cancelled";
+    const qc = withColumn(true);
+    qc.setQueryData(["new-times-setting"], { auto: true, workingDays: 3, pending: 0, companyConfirmed: false });
+    const html = plain(render(qc, createElement(People)));
+    expect(html).toContain("2 people are under Cancelled. Nothing goes to anyone here automatically until ITS confirms your company. You can send new times after that.");
+    expect(html).not.toContain("Send new times…");
+    const notChecked = view({ status: "Waiting for you", auto: { state: "none", reason: "company_not_checked", reasonText: "ITS had not confirmed your company in time, so nothing was sent automatically.", dueAt: null, dueDay: null, sentAt: null } });
+    const d = detail({ ...ana, cancelled: notChecked }, { interviews: [iv()], allowedActions: ["interview", "reject", "record_outcome", "set_mark", "send_new_times"] });
+    const cards = client([d]);
+    cards.setQueryData(["new-times-setting"], { auto: true, workingDays: 3, pending: 0, companyConfirmed: false });
+    const panel = plain(render(cards, createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: [d.id], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
+    expect(panel).toContain("ITS had not confirmed your company in time, so nothing was sent automatically. You can send new times once ITS confirms your company, or decide.");
+    // the API refuses a send until then, so the card offers none
+    expect(panel).not.toContain("Send new times");
+  });
+
+  it("putting someone under Cancelled on hold says it takes them out of it", () => {
+    expect(open(detail(ana, { interviews: [iv()] }), "hold")).toContain("Putting them on hold takes them out of Cancelled; nothing is sent to them automatically.");
+    expect(open(detail(maria), "hold")).not.toContain("takes them out of Cancelled");
   });
 });

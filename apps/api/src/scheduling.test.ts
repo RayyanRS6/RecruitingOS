@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import { entitlements } from "@ros/core";
-import { applications, auditRecords, integrations, interviews, notifications, users } from "@ros/db";
+import { applications, auditRecords, integrations, interviewFollowups, interviews, notifications, users, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter, FakeGoogleCalendarProvider, MemorySecretStore } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -360,5 +360,42 @@ describe("interview scheduling", () => {
     const outcome = await json(owner, "POST", `/api/v1/interviews/${iv.id}/outcome`, { outcome: "no_show_candidate" });
     expect(outcome.status).toBe(200);
     expect((await interview(iv.id)).status).toBe("no_show");
+  });
+
+  it("a candidate who did not come goes under Cancelled as a no-show, with nothing automatic, and the team is told that instead of 'How did it go?'; an interviewer's no-show writes nothing", async () => {
+    const decide = (name: string) => container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.decision"))).then((rows) => rows.filter((x) => x.title === `How did it go with ${name}?`));
+    const cand = await apply("Tom", "Berg");
+    const iv = await requestInterview(cand.id);
+    let row = await interview(iv.id);
+    expect((await json(owner, "POST", `/api/v1/interviews/${iv.id}/book-on-behalf`, { slotId: row.offeredSlots[0].id, note: "agreed by phone" })).status).toBe(200);
+    row = await interview(iv.id);
+    expect(row.status).toBe("scheduled");
+    const outcome = await json(owner, "POST", `/api/v1/interviews/${iv.id}/outcome`, { outcome: "no_show_candidate" });
+    expect(outcome.status).toBe(200);
+    // the interview sheet says they are under Cancelled, as a no-show, with nothing in motion
+    expect(((await outcome.json()) as { followUp: unknown }).followUp).toMatchObject({ reason: "no_show", times: "none" });
+    const [a] = await container.db.select().from(applications).where(eq(applications.id, cand.id));
+    expect(a.stage).toBe("interview_complete");
+    const followUps = await container.db.select().from(interviewFollowups).where(eq(interviewFollowups.applicationId, cand.id));
+    expect(followUps).toHaveLength(1);
+    expect(followUps[0]).toMatchObject({ kind: "candidate_no_show", choice: null, interviewId: iv.id, interviewAttempt: row.attempt, autoState: "none", autoReason: "no_show", autoDueAt: null, autoRunId: null, resolvedAt: null });
+    expect(await container.db.select().from(workflowRuns).where(eq(workflowRuns.workflowKey, "interview_new_times"))).toHaveLength(0);
+    const notes = (await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.no_show")))).filter((x) => x.title === "Tom Berg did not come to the interview");
+    expect(notes).toHaveLength(1);
+    expect(notes[0].body).toBe(`${row.title}. They are under Cancelled as a no-show. Nothing goes to them automatically: send new times for the same round, or decide.`);
+    expect(notes[0].action).toEqual({ label: "Open the candidate", href: `/roles/${roleId}/talent?open=${cand.id}` });
+    expect(await decide("Tom Berg")).toHaveLength(0);
+    // a second outcome on the same interview is refused, as today, and writes nothing more
+    expect((await json(owner, "POST", `/api/v1/interviews/${iv.id}/outcome`, { outcome: "no_show_candidate" })).status).toBe(409);
+    expect(await container.db.select().from(interviewFollowups).where(eq(interviewFollowups.applicationId, cand.id))).toHaveLength(1);
+
+    // the interviewer did not come: no row, and the usual question
+    const other = await apply("Lena", "Vogel");
+    const iv2 = await requestInterview(other.id);
+    const row2 = await interview(iv2.id);
+    expect((await json(owner, "POST", `/api/v1/interviews/${iv2.id}/book-on-behalf`, { slotId: row2.offeredSlots[0].id })).status).toBe(200);
+    expect((await json(owner, "POST", `/api/v1/interviews/${iv2.id}/outcome`, { outcome: "no_show_interviewer" })).status).toBe(200);
+    expect(await container.db.select().from(interviewFollowups).where(eq(interviewFollowups.applicationId, other.id))).toHaveLength(0);
+    expect(await decide("Lena Vogel")).toHaveLength(1);
   });
 });

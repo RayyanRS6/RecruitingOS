@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, notInArray, or, sql } from "drizzle-orm";
-import { ApplicationStage as ApplicationStageEnum, MARK_LABEL, OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum, type ApplicationStage, type MarkKind, type OwnerGroup, type OwnerStage, type PoolMustHaveCount, type PoolSummary, type ToldState } from "@ros/contracts";
-import { DECISION_STAGES, OUTCOME_STATEMENT, POSTING_TASK_KINDS, SOURCES, SOURCE_LABEL, STAGE_LABEL, groupFor, holdEnded, isSource, ownerGroup, ownerStage } from "@ros/core";
+import { ApplicationStage as ApplicationStageEnum, CANCELLED_REASON_LABEL, MARK_LABEL, OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum, type ApplicationStage, type MarkKind, type OwnerGroup, type OwnerStage, type PoolMustHaveCount, type PoolSummary, type ToldState } from "@ros/contracts";
+import { DECISION_STAGES, OUTCOME_STATEMENT, POSTING_TASK_KINDS, SOURCES, SOURCE_LABEL, STAGE_LABEL, activeFollowUpsFor, groupFor, holdEnded, inCancelled, isSource, ownerGroup, ownerStage, type FollowUpStrip } from "@ros/core";
 import { applicationMarks, applications, approvalRequests, candidates, communications, companies, events, hiringOutcomes, interviews, recruiterEscalations, roles, type Tx } from "@ros/db";
 import { localDays } from "@ros/workflows";
 import { boardView, loadPool, shownLatestReadings } from "./pool";
@@ -64,6 +64,8 @@ export type RoleReport = {
 type AppRow = { id: string; roleId: string; candidateId: string; source: string; sourceDetail: string | null; stage: ApplicationStage; stageChangedAt: string; createdAt: string; latestAssessmentId: string | null; rejectReason: string | null; talentPoolOptOut?: boolean; toldState?: ToldState; /** Their details were deleted at their request: there is nobody to tell. */ dataDeleted?: boolean };
 /** Every mark set on the applications, active (clearedAt null) or not. */
 type MarkRow = { applicationId: string; mark: MarkKind; remindAt: string | null; createdAt: string; clearedAt: string | null };
+/** An open follow-up (the Cancelled column, founder decisions 1A to 4A): what the strip and the groups read of it. */
+type FollowUpRowOfReport = FollowUpStrip & { applicationId: string };
 type EventRow = { subjectId: string; occurredAt: string; payload: Record<string, unknown> };
 type AssessmentRow = { id: string; applicationId: string; createdAt: string; recommendation: string | null };
 type InterviewRow = { applicationId: string; status: string; outcome?: string | null; roundKey: string; title: string; rescheduleCountCandidate: number; decision: string | null };
@@ -87,6 +89,8 @@ export type ReportData = {
   outcomes: OutcomeRow[];
   /** Optional so hand-made rows from before the marks need not list any. */
   marks?: MarkRow[];
+  /** The open follow-ups, as `activeFollowUpsFor` reads them for the Talent list (J18); optional as the marks are. */
+  followUps?: FollowUpRowOfReport[];
 };
 
 const NO_MESSAGES: RoleReport["messages"] = { total: 0, sent: 0, failed: 0, bounced: 0, unknown: 0, pending: 0, candidatesAffected: 0 };
@@ -94,7 +98,7 @@ const NO_MESSAGES: RoleReport["messages"] = { total: 0, sent: 0, failed: 0, boun
 /** One query per figure. `roleIds` null means every role of the company (the administrator's view). */
 export async function loadReportData(tx: Tx, input: { companyId: string; roleIds: string[] | null }): Promise<ReportData> {
   const { companyId } = input;
-  const empty: ReportData = { roles: [], timeZone: null, apps: [], stageEvents: [], overrides: [], assessments: [], interviews: [], approvals: [], escalations: [], messages: NO_MESSAGES, outcomes: [], marks: [] };
+  const empty: ReportData = { roles: [], timeZone: null, apps: [], stageEvents: [], overrides: [], assessments: [], interviews: [], approvals: [], escalations: [], messages: NO_MESSAGES, outcomes: [], marks: [], followUps: [] };
   if (input.roleIds && input.roleIds.length === 0) return empty;
   const roleRows = await tx
     .select({ id: roles.id, title: roles.title, status: roles.status, openedAt: roles.openedAt, closedAt: roles.closedAt })
@@ -156,7 +160,9 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
   const marks = ids.length
     ? await tx.select({ applicationId: applicationMarks.applicationId, mark: applicationMarks.mark, remindAt: applicationMarks.remindAt, createdAt: applicationMarks.createdAt, clearedAt: applicationMarks.clearedAt }).from(applicationMarks).where(and(eq(applicationMarks.companyId, companyId), inArray(applicationMarks.applicationId, ids))).orderBy(asc(applicationMarks.createdAt))
     : [];
-  return { roles: roleRows, timeZone: company?.timezone ?? null, apps, stageEvents, overrides, assessments: asmts, interviews: ivs, approvals, escalations, messages, outcomes, marks };
+  // Who is under Cancelled and whether anything is in motion for them, the same loader as the Talent list (J18).
+  const followUps = [...(await activeFollowUpsFor(tx, ids)).values()].map((f) => ({ applicationId: f.applicationId, reason: f.reason, autoState: f.autoState, interviewOpen: f.interviewOpen }));
+  return { roles: roleRows, timeZone: company?.timezone ?? null, apps, stageEvents, overrides, assessments: asmts, interviews: ivs, approvals, escalations, messages, outcomes, marks, followUps };
 }
 
 /** The active mark of each application, from the rows the report loaded. */
@@ -164,6 +170,11 @@ function activeMarkOf(data: ReportData): Map<string, MarkRow> {
   const out = new Map<string, MarkRow>();
   for (const m of data.marks ?? []) if (!m.clearedAt) out.set(m.applicationId, m);
   return out;
+}
+
+/** The open follow-up of each application, from the rows the report loaded. */
+function activeFollowUpOf(data: ReportData): Map<string, FollowUpStrip> {
+  return new Map((data.followUps ?? []).map((f) => [f.applicationId, f]));
 }
 
 /** The report for one role, or null when the role is not visible in this transaction. */
@@ -186,9 +197,10 @@ export async function customerReport(tx: Tx, input: { companyId: string; now: Da
   const data = await loadReportData(tx, { companyId: input.companyId, roleIds: null });
   const report = composeRoleReport(data, input.now);
   const marks = activeMarkOf(data);
+  const followUps = activeFollowUpOf(data);
   const rolesOut = data.roles.map((r) => {
     const own = data.apps.filter((a) => a.roleId === r.id);
-    return { ...r, applicants: own.length, waitingOnYou: own.filter((a) => groupFor(a, marks.get(a.id), input.now) === "waiting_on_you").length, hired: own.filter((a) => a.stage === "hired").length };
+    return { ...r, applicants: own.length, waitingOnYou: own.filter((a) => groupFor(a, marks.get(a.id), input.now, followUps.get(a.id)) === "waiting_on_you").length, hired: own.filter((a) => a.stage === "hired").length };
   });
   return { report, roles: rolesOut };
 }
@@ -269,6 +281,13 @@ const ROLE_STATUS_LABEL: Record<string, string> = {
   closed: "closed",
 };
 
+/** What a candidate on the pending list waits on you for: a hold that ended, why they are under Cancelled, or their step. */
+function pendingLabel(a: AppRow, mark: MarkRow | undefined, followUp: FollowUpStrip | undefined, now: Date): string {
+  if (holdEnded(mark, now)) return "Hold ended";
+  if (inCancelled(a.stage, followUp)) return `Cancelled: ${CANCELLED_REASON_LABEL[followUp.reason].toLowerCase()}`;
+  return STAGE_LABEL[a.stage];
+}
+
 export function composeRoleReport(data: ReportData, now: Date): RoleReport {
   const nowMs = now.getTime();
   const days = (fromMs: number, toMs = nowMs) => Math.max(0, toMs - fromMs) / DAY_MS;
@@ -295,9 +314,11 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
   }
   const applicants = { total: data.apps.length, last30Days: byDay.reduce((n, d) => n + d.count, 0), timeZone: local.timeZone, bySource, byDay };
 
-  // 2. Where everyone is: counts by stage, in the stage order, by owner group (a running hold waits on nobody), on the
-  // stage strip with the private marks, and whether the people a decision was made about have been told.
+  // 2. Where everyone is: counts by stage, in the stage order, by owner group (a running hold waits on nobody, nor does
+  // someone under Cancelled with new times promised, being prepared or out), on the stage strip with the private marks
+  // and the Cancelled column, and whether the people a decision was made about have been told.
   const marks = activeMarkOf(data);
+  const followUps = activeFollowUpOf(data);
   const stageCount = new Map<ApplicationStage, number>();
   const byGroup: Record<OwnerGroup, number> = { waiting_on_you: 0, waiting_on_candidate: 0, in_process: 0, not_moving_forward: 0, hired: 0 };
   const byOwnerStage = Object.fromEntries(OwnerStageEnum.options.map((s) => [s, 0])) as Record<OwnerStage, number>;
@@ -307,9 +328,10 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
   const toldKey: Record<ToldState, keyof ToldCounts> = { not_told: "notTold", queued: "queued", sent: "sent", told_in_person: "toldInPerson", before_tracking: "beforeTracking" };
   for (const a of data.apps) {
     const mark = marks.get(a.id);
+    const followUp = followUps.get(a.id);
     stageCount.set(a.stage, (stageCount.get(a.stage) ?? 0) + 1);
-    byGroup[groupFor(a, mark, now)] += 1;
-    byOwnerStage[ownerStage(a, mark)] += 1;
+    byGroup[groupFor(a, mark, now, followUp)] += 1;
+    byOwnerStage[ownerStage(a, mark, followUp)] += 1;
     if (mark) markCounts[markKey[mark.mark]] += 1;
     if (holdEnded(mark, now)) markCounts.holdsEnded += 1;
     // Someone whose details were deleted cannot be told: they are not a decision waiting to be told (as on the Talent list).
@@ -320,7 +342,7 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
   }
   const byStage: StageCount[] = ApplicationStageEnum.options.filter((s) => stageCount.has(s)).map((s) => ({ stage: s, label: STAGE_LABEL[s], group: ownerGroup(s), count: stageCount.get(s) ?? 0 }));
   const stages = { total: data.apps.length, byStage, byGroup, byOwnerStage, marks: markCounts, told };
-  const waitsOnYou = (a: AppRow) => groupFor(a, marks.get(a.id), now) === "waiting_on_you";
+  const waitsOnYou = (a: AppRow) => groupFor(a, marks.get(a.id), now, followUps.get(a.id)) === "waiting_on_you";
 
   // 3. Time in stage: every completed stay from the stage-change history, and how long the people in each stage have been there now.
   const eventsByApp = new Map<string, EventRow[]>();
@@ -383,7 +405,7 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
   const waitingApps = data.apps.filter(waitsOnYou);
   const waitingIds = new Set(waitingApps.map((a) => a.id));
   const items: PendingItem[] = [
-    ...waitingApps.map((a) => ({ kind: "candidate" as const, label: holdEnded(marks.get(a.id), now) ? "Hold ended" : STAGE_LABEL[a.stage], days: wholeDays(a.stageChangedAt), applicationId: a.id, approvalRequestId: null })),
+    ...waitingApps.map((a) => ({ kind: "candidate" as const, label: pendingLabel(a, marks.get(a.id), followUps.get(a.id), now), days: wholeDays(a.stageChangedAt), applicationId: a.id, approvalRequestId: null })),
     ...data.approvals.filter((p) => !p.applicationId || !waitingIds.has(p.applicationId)).map((p) => ({ kind: "approval" as const, label: APPROVAL_LABEL[p.actionType] ?? p.actionType.replace(/[._]/g, " "), days: wholeDays(p.createdAt), applicationId: p.applicationId, approvalRequestId: p.id })),
   ].sort((x, y) => y.days - x.days);
   const pendingDecisions = { count: items.length, approvals: data.approvals.length, candidates: waitingApps.length, oldestDays: items.length ? items[0].days : null, list: items.slice(0, 5) };
@@ -478,8 +500,12 @@ function round1(value: number | null): number | null {
 /* The two CSV files: the applicant list (names; audited on export) and the figures as rows.                     */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-/** "Pipeline stage" is the stage strip with the private marks; "Hold ends" is a running hold's date; "Candidate told" says whether a decision was told. */
-export const APPLICANT_COLUMNS = ["Applied on", "Name", "Source", "Source detail", "Stage", "Pipeline stage", "Mark", "Hold ends", "Candidate told", "Days in stage", "Recommendation", "Decision", "Outcome", "Interviews", "Interviews completed"] as const;
+/**
+ * "Pipeline stage" is the stage strip with the private marks and the Cancelled column; "Hold ends" is a running hold's
+ * date; "Cancelled" says why someone is under Cancelled ("Asked for new times", "No longer interested", "No-show");
+ * "Candidate told" says whether a decision was told.
+ */
+export const APPLICANT_COLUMNS = ["Applied on", "Name", "Source", "Source detail", "Stage", "Pipeline stage", "Mark", "Hold ends", "Cancelled", "Candidate told", "Days in stage", "Recommendation", "Decision", "Outcome", "Interviews", "Interviews completed"] as const;
 export type ApplicantRow = Record<(typeof APPLICANT_COLUMNS)[number], string | number>;
 
 /** The latest thing a person did with the application, in plain words. */
@@ -496,6 +522,8 @@ const ACTION_LABEL: Record<string, string> = {
   outcome: "Outcome recorded",
   outcome_corrected: "Outcome corrected",
   clear_mark: "Mark taken off",
+  "interview.new_times": "New interview times sent",
+  "interview.new_times_stop": "Automatic new times stopped",
 };
 /** A "set_mark" event is labelled by the mark it set. */
 const MARK_ACTION_LABEL: Record<MarkKind, string> = { longlist: "Put on the longlist", shortlist: "Put on the shortlist", on_hold: "Put on hold", not_a_fit_for_now: "Set aside: not a fit for now" };
@@ -545,20 +573,24 @@ export async function applicantRows(tx: Tx, input: { companyId: string; roleId: 
   const outcomeOf = new Map<string, string>();
   for (const o of data.outcomes) if (o.applicationId && !o.correctedAt && OUTCOME_LABEL[o.outcome]) outcomeOf.set(o.applicationId, o.outcome);
   const marks = activeMarkOf(data);
+  const followUps = activeFollowUpOf(data);
   const local = localDays(input.now, data.timeZone);
   const rows: ApplicantRow[] = apps.map((a) => {
     const ivs = data.interviews.filter((i) => i.applicationId === a.id);
     const rec = recOf.get(a.id);
     const mark = marks.get(a.id);
+    const followUp = followUps.get(a.id);
+    const strip = ownerStage(a, mark, followUp);
     return {
       "Applied on": local.key(new Date(a.createdAt)),
       Name: nameOf.get(a.candidateId) ?? "",
       Source: isSource(a.source) ? SOURCE_LABEL[a.source] : a.source,
       "Source detail": a.sourceDetail ?? "",
       Stage: STAGE_LABEL[a.stage],
-      "Pipeline stage": OWNER_STAGE_LABEL[ownerStage(a, mark)],
+      "Pipeline stage": OWNER_STAGE_LABEL[strip],
       Mark: mark ? MARK_LABEL[mark.mark] : "",
       "Hold ends": mark?.remindAt ? local.key(new Date(mark.remindAt)) : "",
+      Cancelled: strip === "cancelled" && followUp ? CANCELLED_REASON_LABEL[followUp.reason] : "",
       "Candidate told": DECISION_STAGES.includes(a.stage) ? TOLD_LABEL[a.toldState ?? "not_told"] : "",
       "Days in stage": Math.floor(Math.max(0, input.now.getTime() - Date.parse(a.stageChangedAt)) / DAY_MS),
       Recommendation: rec ? RECOMMENDATION_LABEL[rec] ?? rec.replace(/_/g, " ") : "",

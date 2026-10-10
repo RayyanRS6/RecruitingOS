@@ -176,4 +176,28 @@ describe("what an interview that never took place offers next", () => {
     expect(againChoice(at("completed"), [], "owner")).toBeNull();
     expect(againChoice(at("scheduling"), [], "owner")).toBeNull();
   });
+
+  it("offers 'Send new times' for someone under Cancelled with nothing in motion, before offering times again or a new interview", () => {
+    const under = (status: string, times: string, stage = "interview_recommended") => ({ ...at(status, stage), followUp: { id: "f1", reason: "asked_new_times" as const, times } });
+    expect(againChoice(under("cancelled", "none"), [], "owner")).toBe("send_new_times");
+    expect(againChoice(under("offer_expired", "expired"), [], "recruiter")).toBe("send_new_times");
+    // a candidate who did not come: a new interview for the same round, from the same card
+    expect(againChoice(under("no_show", "none", "interview_complete"), [], "hiring_manager")).toBe("send_new_times");
+    // new times already being prepared, held, out or not delivered: nothing more to send from here
+    for (const times of ["preparing", "held", "out", "not_reached"]) expect(againChoice(under("offer_expired", times), [], "owner")).toBe("offer_again");
+    expect(againChoice(under("cancelled", "out"), [], "owner")).toBe("approve_new");
+    // a role that may not manage interviews keeps what it had; an older interview of theirs offers nothing
+    expect(againChoice(under("cancelled", "none"), [], "interviewer")).toBeNull();
+    expect(againChoice(under("cancelled", "none"), [{ id: "iv2", applicationId: "a1", status: "cancelled", createdAt: "2026-10-03T10:00:00.000Z" }], "owner")).toBeNull();
+    expect(againChoice(under("cancelled", "none", "rejected"), [], "owner")).toBeNull();
+  });
+});
+
+describe("the role's activity: new times for several people under Cancelled", () => {
+  it("says how many the team sent new times for and how many went ahead, never as if the candidates asked", () => {
+    const ev = (payload: Record<string, unknown>) => describeRoleEvent({ id: 1, type: "interview.new_times_batch", occurredAt: "2026-10-10T10:00:00.000Z", actor: { kind: "user", id: "u1", name: "Dana" }, subjectType: "role", subjectId: "r1", payload });
+    expect(ev({ roleId: "r1", requested: 4, sent: 3, notSent: 1 })).toBe("New times for 4 people under Cancelled: 3 going ahead, 1 not sent");
+    expect(ev({ roleId: "r1", requested: 1, sent: 1, notSent: 0 })).toBe("New times for 1 person under Cancelled: 1 going ahead");
+    expect(ev({ roleId: "r1", requested: 2, sent: 0, notSent: 2 })).not.toMatch(/asked/);
+  });
 });

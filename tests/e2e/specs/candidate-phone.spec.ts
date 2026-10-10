@@ -265,5 +265,26 @@ test.describe("candidate journey on a phone", () => {
     await expect(page.getByText("What to prepare:", { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(page.locator('ol.track [aria-current="step"]')).toHaveText("Interview");
     await expectAccessible(page, "status page with a booked interview");
+
+    // she cancels from the phone, by keyboard, choosing what she would like next (founder decision 2A); the page after it
+    // says what happens next, and a refresh never cancels twice (it is a page of its own)
+    await page.getByRole("link", { name: "Details, calendar file, reschedule or cancel" }).click();
+    await expect(page.getByRole("heading", { name: /You.re confirmed/ })).toBeVisible();
+    await expect(page.getByRole("group", { name: "If you cancel, what would you like next?" })).toBeVisible();
+    const newTimes = page.getByRole("radio", { name: "Send me new times later" });
+    await newTimes.focus();
+    await page.keyboard.press("Space");
+    await expect(newTimes).toBeChecked();
+    await page.getByRole("checkbox", { name: "Yes, cancel this interview." }).focus();
+    await page.keyboard.press("Space");
+    await page.getByRole("button", { name: "Cancel the interview" }).focus();
+    await page.keyboard.press("Enter");
+    await page.waitForURL(/\/c\/schedule\/[A-Za-z0-9_-]+\/cancelled$/);
+    await expect(page.getByRole("heading", { level: 1, name: "Your interview is cancelled" })).toBeVisible();
+    await expect(page.getByText(/We will email you new times on [A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}, unless the team gets in touch first\.|Someone from the team will be in touch about them\./)).toBeVisible();
+    await expectAccessible(page, "interview cancelled");
+    await noHorizontalOverflow(page, "interview cancelled");
+    await page.reload();
+    await expect(page.getByRole("heading", { level: 1, name: "Your interview is cancelled" })).toBeVisible();
   });
 });

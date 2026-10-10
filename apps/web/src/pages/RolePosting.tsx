@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, ErrorState, Field, Pill, Sheet, Skeleton, Table, type Tone } from "@ros/ui";
+import { Alert, Button, Card, Chip, ErrorState, Field, numHead, Pill, Sheet, Skeleton, Table, type Tone } from "@ros/ui";
 import { api, ApiError, type ApplicationLink, type Posting, type PostingView, type PostingsResponse, type RoleDetail, type VolumeReport, type WhoPosts } from "../api/client";
 import { POSTING_WAITS_FOR_CHECK } from "../company-check";
 import { BoardTicks } from "../components/BoardTicks";
@@ -538,13 +538,13 @@ function OtherLinks({ roleId, links, roleStatus, onChange, canManage }: { roleId
     <Card title="Other links">
       <p className="small muted">A link for a referrer, a direct approach, or anything else. Applications through it are recorded with this source and name; the link itself never appears in the candidate's record.</p>
       {links.length ? (
-        <Table head={["Name", "Source", "Link", "Visits", ""]} label="Other tracked links">
+        <Table head={["Name", "Source", "Link", numHead("Visits"), ""]} label="Other tracked links">
           {links.map((l) => (
             <tr key={l.id} style={l.disabledAt ? { opacity: 0.6 } : undefined}>
               <td>{l.label}{l.sourceDetail && l.sourceDetail !== l.label ? <span className="small muted"> · {l.sourceDetail}</span> : null}</td>
               <td>{l.sourceLabel}</td>
               <td><code className="small">{l.url}</code></td>
-              <td>{l.visits}</td>
+              <td className="num">{l.visits}</td>
               <td>
                 {l.disabledAt ? <span className="small muted">Disabled {when(l.disabledAt)}</span> : (
                   <span className="row">
@@ -578,8 +578,8 @@ function VolumeCard({ report, loading, failed, onRetry }: { report: VolumeReport
     <Card title="Applications by source (last 14 days)">
       <p className="small muted">{report.totals.total} in total; {report.yesterday.total} yesterday, {report.today.total} so far today. Days run midnight to midnight, {zoneName(report.timeZone)}. You are told when a day goes above {report.threshold}. Nobody is ever turned away automatically; the switch at the top stops new applications without touching anyone.</p>
       {report.sources.length ? (
-        <Table head={["Source", "Last 14 days", "Yesterday", "Today"]} label="Applications by source">
-          {report.sources.map((s) => <tr key={s.source}><td>{s.label}</td><td>{s.total}</td><td>{yesterday?.bySource[s.source] ?? 0}</td><td>{today?.bySource[s.source] ?? 0}</td></tr>)}
+        <Table head={["Source", numHead("Last 14 days"), numHead("Yesterday"), numHead("Today")]} label="Applications by source">
+          {report.sources.map((s) => <tr key={s.source}><td>{s.label}</td><td className="num">{s.total}</td><td className="num">{yesterday?.bySource[s.source] ?? 0}</td><td className="num">{today?.bySource[s.source] ?? 0}</td></tr>)}
         </Table>
       ) : <p className="small muted" style={{ marginTop: 8 }}>No applications in the last 14 days.</p>}
       <p className="small muted" style={{ marginTop: 8 }}>By day: {report.days.map((d) => `${d.day.slice(5)}: ${d.total}`).join(" · ")}</p>

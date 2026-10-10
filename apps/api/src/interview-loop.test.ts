@@ -3,7 +3,7 @@ import { and, desc, eq, like } from "drizzle-orm";
 import type { ApplicationStage, MembershipRole } from "@ros/contracts";
 import { STAGE_LABEL, anonymizeCandidate, can, canTransition, entitlements, ownerGroup, transition, type Permission } from "@ros/core";
 import { detectStuckRoles } from "@ros/agents";
-import { applications, candidates, communications, events, interviewParticipants, interviews, notifications, randomToken, screens, users, withTenant } from "@ros/db";
+import { applications, candidates, communications, events, interviewFollowups, interviewParticipants, interviews, notifications, randomToken, screens, users, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -617,6 +617,67 @@ describe("the loop after an interview", () => {
     expect(html).not.toContain("/withdraw");
     expect((await withdraw(other.id)).status).toBe(302);
     expect((await application(other.id)).stage).toBe("rejected");
+  });
+
+  /* ---------------------------------------------------------------------------------------------------------------- */
+  /* The Cancelled column (founder decisions 1A to 4A): leaving the process, a no-show's round, "Next round".           */
+  /* ---------------------------------------------------------------------------------------------------------------- */
+
+  const followUpOf = async (applicationId: string) => (await container.db.select().from(interviewFollowups).where(eq(interviewFollowups.applicationId, applicationId)).orderBy(desc(interviewFollowups.createdAt)))[0];
+  /** The candidate cancels their booked interview from the confirmed page, with their choice. */
+  const candidateCancels = async (interviewId: string, next: "new_times" | "not_interested") => {
+    const row = await interview(interviewId);
+    const r = await app.request(`/c/schedule/${row.scheduleToken}/cancel`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ confirm: "yes", next }).toString() });
+    expect(r.status).toBe(302);
+    expect(r.headers.get("location")).toBe(`/c/schedule/${row.scheduleToken}/cancelled`);
+    await container.drain();
+    return followUpOf((await interview(interviewId)).applicationId);
+  };
+
+  it("leaving the process takes someone out of Cancelled: a private decline and a withdrawal resolve their row, and nothing goes to them automatically", async () => {
+    const declined = await apply("Ines", "Duarte");
+    const iv = await requestInterview(declined.id);
+    await book(iv.id);
+    expect(await candidateCancels(iv.id, "new_times")).toMatchObject({ choice: "new_times", autoState: "waiting", resolvedAt: null });
+    expect((await act(declined.id, { action: "reject", reason: "not_a_match_experience" })).status).toBe(200);
+    expect(await followUpOf(declined.id)).toMatchObject({ resolvedHow: "left_process", autoState: "not_sent", autoReason: "left_process" });
+    const left = await container.db.select().from(events).where(and(eq(events.type, "application.left_cancelled"), eq(events.subjectId, declined.id)));
+    expect(left.at(-1)?.payload).toMatchObject({ how: "left_process", autoStopped: true });
+    // the decision stays private, and nothing promises the new times that will no longer come
+    const html = await statusPage(declined.id);
+    expect(html.match(/<h2>What happens next<\/h2><p>([^<]*)<\/p>/)?.[1]).toBe("The hiring team is reviewing your application. You will hear from them either way.");
+    expect(html).not.toMatch(/did not work out/);
+
+    const withdrew = await apply("Owen", "Price");
+    const iv2 = await requestInterview(withdrew.id);
+    await book(iv2.id);
+    expect(await candidateCancels(iv2.id, "not_interested")).toMatchObject({ choice: "not_interested", autoState: "none", resolvedAt: null });
+    expect((await withdraw(withdrew.id)).status).toBe(302);
+    await container.drain();
+    expect(await followUpOf(withdrew.id)).toMatchObject({ resolvedHow: "left_process", autoState: "none" });
+  });
+
+  it("after a candidate's no-show the approval card proposes the same round again, and 'Next round' takes them out of Cancelled; after an interviewer's no-show the card proposes the next round", async () => {
+    const missed = await apply("Yara", "Haddad");
+    const iv = await requestInterview(missed.id);
+    await book(iv.id);
+    expect((await json(owner, "POST", `/api/v1/interviews/${iv.id}/outcome`, { outcome: "no_show_candidate" })).status).toBe(200);
+    expect(await followUpOf(missed.id)).toMatchObject({ kind: "candidate_no_show", resolvedAt: null });
+    const draft = (await (await json(owner, "GET", `/api/v1/applications/${missed.id}/interview-draft`)).json()) as { roundKey: string; nextRound: boolean };
+    expect(draft).toMatchObject({ roundKey: plan[0].key, nextRound: false });
+    // a person decides on the next round anyway: they leave the column, and the no-show stays on record
+    const r = await json(owner, "POST", `/api/v1/applications/${missed.id}/decision`, { decision: "next_round" });
+    expect(r.status, await r.clone().text()).toBe(200);
+    expect(await followUpOf(missed.id)).toMatchObject({ resolvedHow: "moved_by_team", resolvedBy: { kind: "user", id: ownerId } });
+    expect(await interview(iv.id)).toMatchObject({ status: "no_show", outcome: "no_show_candidate", decision: "next_round" });
+
+    const stoodUp = await apply("Zane", "Ito");
+    const iv2 = await requestInterview(stoodUp.id);
+    await book(iv2.id);
+    expect((await json(owner, "POST", `/api/v1/interviews/${iv2.id}/outcome`, { outcome: "no_show_interviewer" })).status).toBe(200);
+    expect(await followUpOf(stoodUp.id)).toBeUndefined();
+    const next = (await (await json(owner, "GET", `/api/v1/applications/${stoodUp.id}/interview-draft`)).json()) as { roundKey: string; nextRound: boolean };
+    expect(next).toMatchObject({ roundKey: plan[1].key, nextRound: true });
   });
 
   // Last: it closes the role.

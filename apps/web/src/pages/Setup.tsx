@@ -2,10 +2,11 @@
 
 import { type ReactNode, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Avatar, Button, Card, Chip, ErrorState, Field, PageHeader, Pill, Segmented, Skeleton, Table, type Tone } from "@ros/ui";
-import { api, ApiError, type MyCalendar } from "../api/client";
+import { Alert, Avatar, Button, Card, Chip, ErrorState, Field, PageHeader, Pill, Segmented, Skeleton, Table, type Tone, useTableSort } from "@ros/ui";
+import { api, ApiError, type MyCalendar, type NewTimesSettingView } from "../api/client";
 import { useSearchParams } from "../nav";
 import { STILL_REVIEWING_LABEL, STILL_REVIEWING_NOTE, hasChoice, loosens, looseningQuestion, splitRules } from "../ai-rules";
+import { NEW_TIMES_SETUP, newTimesReadOnlyText, newTimesSavedNotice, newTimesSettingFrom, newTimesSettingText, pendingQuestion, workingDaysFrom, type NewTimesSaved } from "../cancelled";
 import { CAREERS_PAGE_WAITS, companyCheckOf } from "../company-check";
 import { ABOUT_MAX, LOGO_TYPES, aboutCheckOf, aboutDraftOf, aboutProblem, logoProblem, logoUrlOf } from "../publishing";
 import { LEVELS, allowedLevels, type PolicyLevel } from "../policy-levels";
@@ -21,9 +22,10 @@ type BusinessHours = { days: number[]; start: string; end: string };
 /**
  * `about`: the short "about the company" text candidates read on the careers page and every job page, once a person
  * approved it (founder decision Q13); `boardPosting`: who posts on the job boards (plan D3); `zipRecruiterPlan`: the
- * company has its own paid ZipRecruiter plan, the only way ZipRecruiter is offered (Q11).
+ * company has its own paid ZipRecruiter plan, the only way ZipRecruiter is offered (Q11); `newTimesAfterCancel`: the one
+ * automatic set of new times for candidates who cancel and ask for them, on or off, after how many working days (3A).
  */
-type CompanySettings = { website?: string; logoUrl?: string; benefitsSummary?: string; careersPage?: { enabled: boolean; intro?: string }; businessHours?: BusinessHours; notices?: Record<string, { version: string; text: string }>; pilot?: { startedAt: string; endsAt: string; extendedUntil?: string }; about?: CompanyAbout | null; boardPosting?: "its" | "self"; zipRecruiterPlan?: boolean };
+type CompanySettings = { website?: string; logoUrl?: string; benefitsSummary?: string; careersPage?: { enabled: boolean; intro?: string }; businessHours?: BusinessHours; notices?: Record<string, { version: string; text: string }>; pilot?: { startedAt: string; endsAt: string; extendedUntil?: string }; about?: CompanyAbout | null; boardPosting?: "its" | "self"; zipRecruiterPlan?: boolean; newTimesAfterCancel?: { auto: boolean; workingDays: number } };
 type CompanyAbout = { text: string; approvedAt: string; approvedBy?: { id?: string; name?: string | null } | null };
 type Company ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; timezone: string; planKey: string; status: string; plan?: { key: string; name: string; limits: Record<string, number | null> } | null; usage?: Record<string, { used: number; limit: number | null }>; locations: Array<{ city?: string; region?: string; country?: string }>; settings: CompanySettings; integrations: Array<{ kind: string; provider: string; status: string }>; ai: { provider: string } };
 /**
@@ -90,6 +92,8 @@ export function Setup() {
             <Section id="setup-boards"><JobBoardsCard company={c} canEdit={canChangeCompany(myRole)} /></Section>
           </div>
 
+          <Section id="setup-new-times"><NewTimesCard company={c} canEdit={canChangeCompany(myRole)} onReauthRequired={() => setReauthNeeded(true)} /></Section>
+
           <Section id="setup-recruiters"><RecruiterAccess canRevoke={["owner", "admin"].includes(myRole)} /></Section>
 
           <Section id="setup-sessions"><YourSessions /></Section>
@@ -102,7 +106,7 @@ export function Setup() {
 
           <Section id="setup-services">
             <Card title="Connected services">
-              <Table head={["What", "Provider", "Status", "What it takes"]}>
+              <Table head={["What", "Provider", "Status", "What it takes"]} empty="No services connected yet.">
                 {c.integrations.map((i) => (
                   <tr key={`${i.kind}-${i.provider}`}>
                     <td>{i.kind}</td>
@@ -419,14 +423,15 @@ function AuditHistory() {
   const [everyPage, setEveryPage] = useState(false);
   const path = `/api/v1/companies/current/audit?limit=50${everyPage ? "" : "&exclude=staff.tenant_accessed"}`;
   const q = useQuery({ queryKey: ["audit-history", everyPage], queryFn: () => api.get<AuditRow[]>(path), retry: false });
+  const s = useTableSort<"when" | "who">({ key: "when", dir: "descending" });
   if (q.error) return null;
   return (
     <Card title="Audit history" aside={<a className="btn secondary sm" href="/api/v1/companies/current/audit.csv">Download as a spreadsheet</a>}>
       <p className="small muted">Who did what in your workspace: recruiter access, team changes, rule changes, company changes, candidate records opened, outcomes and downloads. The last 50 are shown; the spreadsheet has everything, and downloading it is recorded too.</p>
       <label className="small" style={{ display: "block", margin: "8px 0" }}><input type="checkbox" checked={everyPage} onChange={(e) => setEveryPage(e.target.checked)} /> Include every page an ITS recruiter opened</label>
-      {q.isLoading ? <Skeleton lines={4} /> : !q.data?.length ? <p className="small muted">Nothing recorded yet.</p> : (
-        <Table head={["When", "What happened", "Who"]} label="Audit history">
-          {q.data.map((r) => <tr key={r.id}><td className="small" style={{ whiteSpace: "nowrap" }}>{new Date(r.at).toLocaleString()}</td><td>{r.description}</td><td className="small">{r.actor.name ?? r.actor.kind}</td></tr>)}
+      {!q.isLoading && !q.data?.length ? <p className="small muted">Nothing recorded yet.</p> : (
+        <Table head={[s.col("when", "When", "date"), "What happened", s.col("who", "Who", "text")]} label="Audit history" scroll loading={q.isLoading ? 5 : undefined} announce={s.announce}>
+          {s.apply(q.data ?? [], { when: (r) => Date.parse(r.at), who: (r) => r.actor.name ?? r.actor.kind }).map((r) => <tr key={r.id}><td className="small nowrap">{new Date(r.at).toLocaleString()}</td><td>{r.description}</td><td className="small">{r.actor.name ?? r.actor.kind}</td></tr>)}
         </Table>
       )}
     </Card>
@@ -601,7 +606,7 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
 }
 
 function fieldLabel(f: string): string {
-  return ({ name: "name", website: "website", timezone: "time zone", sizeBand: "size", locations: "locations", logoUrl: "logo", benefitsSummary: "benefits summary", careersPage: "careers page intro", businessHours: "contact hours", notices: "candidate notices", boardPosting: "who posts on job boards", zipRecruiterPlan: "ZipRecruiter plan", about: "about the company" } as Record<string, string>)[f] ?? f;
+  return ({ name: "name", website: "website", timezone: "time zone", sizeBand: "size", locations: "locations", logoUrl: "logo", benefitsSummary: "benefits summary", careersPage: "careers page intro", businessHours: "contact hours", notices: "candidate notices", boardPosting: "who posts on job boards", zipRecruiterPlan: "ZipRecruiter plan", about: "about the company", newTimesAfterCancel: "automatic new times after a cancellation" } as Record<string, string>)[f] ?? f;
 }
 
 /*
@@ -859,6 +864,109 @@ function JobBoardsCard({ company: c, canEdit }: { company: Company; canEdit: boo
         <p className="small muted" style={{ margin: 0 }}>Posting on ZipRecruiter needs a paid plan of your own, so it is offered on a role only once you say you have one.</p>
         {!canEdit ? <p className="small muted" style={{ margin: 0 }}>Only owners and admins change these.</p> : null}
       </div>
+    </Card>
+  );
+}
+
+/* GET: the setting, how many people were already told a day for their new times, and whether ITS confirmed the company. */
+const NEW_TIMES_PATH = "/api/v1/companies/current/new-times";
+
+/**
+ * When a candidate cancels (founder decisions 1A to 4A; 3A): whether people who cancel and ask for new times get one set
+ * by email automatically, and after how many working days (1 to 10). The box saves at once; the number has its own
+ * Save. Switching it off while some people were already told a day asks what happens to them first: their day kept, or
+ * their times stopped too; nothing is chosen for the owner, and the API refuses to choose (409 `pending_choice_needed`)
+ * if this page was out of date. Like a rule change, it needs a recent sign-in.
+ */
+function NewTimesCard({ company: c, canEdit, onReauthRequired }: { company: Company; canEdit: boolean; onReauthRequired: () => void }) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["new-times-setting"], queryFn: () => api.get<NewTimesSettingView>(NEW_TIMES_PATH), retry: false });
+  // Until that answer is in (or if it fails), the company's own settings say what is set.
+  const saved = q.data ? { auto: q.data.auto, workingDays: q.data.workingDays } : newTimesSettingFrom(c.settings);
+  const confirmed = q.data ? q.data.companyConfirmed : companyCheckOf(c) !== "waiting";
+  const [days, setDays] = useState<string | null>(null);
+  const typed = days ?? String(saved.workingDays);
+  const n = workingDaysFrom(typed);
+  // Switching off with people already told a day: the question, with nothing chosen yet.
+  const [asking, setAsking] = useState<{ pending: number; choice: "keep" | "stop" | null } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: (input: { auto: boolean; workingDays: number; pending?: "keep" | "stop"; asked?: number }) =>
+      api.patch<{ changed?: string[]; pendingNewTimes?: number }>("/api/v1/companies/current", { settings: { newTimesAfterCancel: { auto: input.auto, workingDays: input.workingDays, ...(input.pending ? { pending: input.pending } : {}) } } }),
+    onSuccess: async (r, input) => {
+      toast(r.changed?.length ? `Saved: ${r.changed.map(fieldLabel).join(", ")}.` : "Nothing changed.");
+      const what: NewTimesSaved = input.pending
+        ? { kind: "off", choice: input.pending, count: input.pending === "keep" ? (r.pendingNewTimes ?? input.asked ?? 0) : (input.asked ?? 0) }
+        : input.auto === saved.auto && input.workingDays !== saved.workingDays ? { kind: "days", pending: r.pendingNewTimes ?? 0 } : { kind: "other" };
+      setNotice(newTimesSavedNotice(what));
+      setAsking(null);
+      setDays(null);
+      await Promise.all([qc.invalidateQueries({ queryKey: ["company"] }), qc.invalidateQueries({ queryKey: ["new-times-setting"] }), qc.invalidateQueries({ queryKey: ["audit-history"] })]);
+    },
+    onError: (e) => {
+      if (e instanceof ApiError && e.code === "pending_choice_needed") {
+        // this page did not know someone was already told a day: ask, as it would have
+        const pending = Number((e.details as { pending?: unknown } | undefined)?.pending ?? 0);
+        setAsking({ pending: pending > 0 ? pending : 1, choice: null });
+        qc.invalidateQueries({ queryKey: ["new-times-setting"] });
+      } else if (e instanceof ApiError && e.code === "reauth_required") {
+        onReauthRequired();
+        toast("Confirm it's you first, then save again.");
+      } else toast(e instanceof ApiError ? e.message : "Could not save.");
+    },
+  });
+  const toggle = (on: boolean) => {
+    setNotice(null);
+    const pending = q.data?.pending ?? 0;
+    if (!on && saved.auto && pending > 0) setAsking({ pending, choice: null });
+    else save.mutate({ auto: on, workingDays: saved.workingDays });
+  };
+  return (
+    <Card title={NEW_TIMES_SETUP.title}>
+      <p className="small muted" style={{ marginBottom: 10 }}>{NEW_TIMES_SETUP.intro}</p>
+      {canEdit ? (
+        <div className="stack" style={{ gap: 12 }}>
+          <div className="stack" style={{ gap: 4 }}>
+            <label className="row small" style={{ gap: 8 }}>
+              <input type="checkbox" checked={asking ? false : saved.auto} disabled={save.isPending} onChange={(e) => toggle(e.target.checked)} />
+              {NEW_TIMES_SETUP.checkbox}
+            </label>
+            {/* before the ITS check every email to candidates waits, so nothing automatic is promised (founder decision B7) */}
+            {!confirmed ? <p className="small muted" style={{ margin: 0 }}>{NEW_TIMES_SETUP.beforeCheck}</p> : null}
+          </div>
+          {asking ? (
+            <Alert tone="caution">
+              <div className="stack" style={{ gap: 8 }}>
+                <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+                  <legend className="small" style={{ marginBottom: 6 }}>{pendingQuestion(asking.pending)}</legend>
+                  <label className="row small" style={{ gap: 8 }}><input type="radio" name="new-times-pending" value="keep" checked={asking.choice === "keep"} onChange={() => setAsking({ ...asking, choice: "keep" })} /> {NEW_TIMES_SETUP.keep}</label>
+                  <label className="row small" style={{ gap: 8 }}><input type="radio" name="new-times-pending" value="stop" checked={asking.choice === "stop"} onChange={() => setAsking({ ...asking, choice: "stop" })} /> {NEW_TIMES_SETUP.stop}</label>
+                </fieldset>
+                <div className="row">
+                  <Button size="sm" variant="primary" disabled={!asking.choice} loading={save.isPending} onClick={() => { if (asking.choice) save.mutate({ auto: false, workingDays: saved.workingDays, pending: asking.choice, asked: asking.pending }); }}>Save</Button>
+                  <Button size="sm" variant="quiet" disabled={save.isPending} onClick={() => setAsking(null)}>Cancel</Button>
+                </div>
+              </div>
+            </Alert>
+          ) : null}
+          {saved.auto && !asking ? (
+            <div className="row" style={{ alignItems: "flex-end", gap: 8 }}>
+              <Field label={NEW_TIMES_SETUP.daysLabel} htmlFor="new-times-days" hint={NEW_TIMES_SETUP.daysHint}>
+                <input id="new-times-days" className="input" type="number" min={1} max={10} step={1} style={{ width: 100 }} value={typed} aria-invalid={n === null ? true : undefined} onChange={(e) => { setDays(e.target.value); setNotice(null); }} />
+              </Field>
+              <Button size="sm" variant="primary" disabled={n === null || n === saved.workingDays} loading={save.isPending} onClick={() => { if (n !== null) save.mutate({ auto: true, workingDays: n }); }}>Save</Button>
+            </div>
+          ) : null}
+          <p className="small" style={{ color: "var(--ink-2)", margin: 0 }}>{newTimesSettingText(saved)}</p>
+          {notice ? <Alert tone="info">{notice}</Alert> : null}
+        </div>
+      ) : (
+        <div className="stack" style={{ gap: 6 }}>
+          <p className="small" style={{ margin: 0 }}>{newTimesReadOnlyText(saved)} {NEW_TIMES_SETUP.readOnly}</p>
+          {!confirmed ? <p className="small muted" style={{ margin: 0 }}>{NEW_TIMES_SETUP.beforeCheck}</p> : null}
+          <p className="small muted" style={{ margin: 0 }}>{newTimesSettingText(saved)}</p>
+        </div>
+      )}
     </Card>
   );
 }

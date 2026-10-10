@@ -1,8 +1,8 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { OWNER_STAGE_LABEL, OwnerStage, type ActiveMark, type Actor, type ApplicationAction, type ApplicationStage, type CandidateNotice, type DecisionMessagePreview, type DecisionWording, type MarkKind, type MembershipRole, type StageMove, type StageMoveVia, type ToldState } from "@ros/contracts";
-import { DECISION_STAGES, MarkError, STAGE_LABEL, activeMarksFor, assertCan, baseOwnerStage, can, clearMark, emit, gate, markBlockedReason, ownerStage, reopenStage, resolvePolicy, setMark, stageBeforeDecision, transition, withdrawQueuedDecision, type Permission } from "@ros/core";
-import { applications, approvalRequests, assessments, candidates, interviews, roles, screens, type Tx } from "@ros/db";
-import { DecisionMessageError, checkPersonalLine, decisionMessageDraft, decisionsWaitingApproval, queueDecisionMessage, type PersonalLine } from "@ros/agents";
+import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, stageBeforeDecision, transition, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type Permission } from "@ros/core";
+import { applications, approvalRequests, assessments, candidates, companies, interviewFollowups, interviews, roles, screens, type Tx } from "@ros/db";
+import { DecisionMessageError, checkPersonalLine, decisionMessageDraft, decisionsWaitingApproval, newTimesDayWords, queueDecisionMessage, type PersonalLine } from "@ros/agents";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
 import type { Tenant } from "../middleware/session";
@@ -24,7 +24,7 @@ export const INTERVIEW_DONE_STATUSES: readonly string[] = ["completed", "no_show
 /** The assistant's suggestions that wait on a person (plan A6): a person acting on the candidate directly settles them. */
 const SUGGESTIONS = ["application.invite_screen", "application.recommend_interview"];
 
-export type ApplicationCapability = "invite_screen" | "ask_in_screen" | "interview" | "advance_to_interview" | "hold" | "reject" | "move_to_talent_pool" | "override_eligibility" | "review_anyway" | "record_decision" | "record_outcome" | "record_offer" | "set_mark" | "clear_mark" | "send_decision" | "told_in_person" | "cancel_screen" | "undo_decision";
+export type ApplicationCapability = "invite_screen" | "ask_in_screen" | "interview" | "advance_to_interview" | "hold" | "reject" | "move_to_talent_pool" | "override_eligibility" | "review_anyway" | "record_decision" | "record_outcome" | "record_offer" | "set_mark" | "clear_mark" | "send_decision" | "told_in_person" | "cancel_screen" | "undo_decision" | "send_new_times" | "stop_new_times";
 
 /**
  * `role` is the viewer's tenant role when known: every capability is then limited to roles that hold its permission, so a person never sees a button the route would refuse.
@@ -33,8 +33,11 @@ export type ApplicationCapability = "invite_screen" | "ask_in_screen" | "intervi
  * `hasUnstartedScreen`: a screening invitation the candidate has not started, which "Stop this screen invitation" can take back (plan A7).
  * `decidedFrom`: for a decision, the stage it was made from (null: no history), read only where taking it back is offered
  * (left out, "Take back this decision" is not offered); `roleClosed`: the role has closed (its talent-pool moves stay).
+ * `followUp`: their open follow-up (the Cancelled column, founder decisions 1A to 4A; `activeFollowUpsFor`), or null.
+ * `undoToCancelled`: taking the decision back puts them back under Cancelled (they were declined from there), so the
+ * stage button offers it on that row.
  */
-export type ApplicationFacts = { stage: string; rejectReason: string | null; hasOpenScreen: boolean; hasActiveInterview: boolean; hasUndecidedInterview: boolean; role?: MembershipRole | null; openUnknowns?: number; mark?: MarkKind | null; markRemindAt?: string | null; toldState?: ToldState | null; decisionMessagePending?: boolean; hasUnstartedScreen?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean };
+export type ApplicationFacts = { stage: string; rejectReason: string | null; hasOpenScreen: boolean; hasActiveInterview: boolean; hasUndecidedInterview: boolean; role?: MembershipRole | null; openUnknowns?: number; mark?: MarkKind | null; markRemindAt?: string | null; toldState?: ToldState | null; decisionMessagePending?: boolean; hasUnstartedScreen?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean; followUp?: FollowUpStrip | null; undoToCancelled?: boolean };
 
 /** Why a choice is not available right now, in the reader's words; the page puts it on the disabled button. */
 export type BlockedReasons = Partial<Record<ApplicationCapability, string>>;
@@ -62,6 +65,9 @@ const CAPABILITY: Record<ApplicationCapability, { permission: Permission; what: 
   cancel_screen: { permission: "application.reject", what: "stop a screening invitation" },
   // Taking back a decision sits with those who make it.
   undo_decision: { permission: "application.reject", what: "take back a decision" },
+  // New times for someone under Cancelled reopen an interview a person already approved, so they sit with those who manage interviews.
+  send_new_times: { permission: "interview.manage", what: "send new interview times" },
+  stop_new_times: { permission: "interview.manage", what: "stop automatic new interview times" },
 };
 const CAPABILITIES = Object.keys(CAPABILITY) as ApplicationCapability[];
 
@@ -110,6 +116,10 @@ function allowedByState(f: ApplicationFacts): ApplicationCapability[] {
   // Quiet undo (plan G1): a decision nobody has told the candidate, with no message waiting for approval, on a role still
   // open, goes back to the step it was made from. Nothing was or will be sent.
   if (decided(f) && untold(f) && !f.decisionMessagePending && !f.roleClosed && !eligibilityDecline(f) && reopensAt(f)) out.push("undo_decision");
+  // Under Cancelled (founder decisions 1A to 4A): new times while nothing is being prepared or out to them, and stopping
+  // an automatic set still waiting for its day. Whether ITS has confirmed the company is checked by the send itself.
+  if (f.followUp && !terminal && CANCEL_STAGES.includes(f.stage as ApplicationStage) && !f.followUp.interviewOpen) out.push("send_new_times");
+  if (f.followUp && followUpParked(f.followUp)) out.push("stop_new_times");
   return out;
 }
 
@@ -158,6 +168,10 @@ function stateReason(cap: ApplicationCapability, f: ApplicationFacts): string {
         : f.roleClosed ? "The role is closed."
         : eligibilityDecline(f) ? "Use Review anyway: it reads their application again."
         : "This decision can't be taken back here.";
+    case "send_new_times":
+      return f.followUp?.interviewOpen && CANCEL_STAGES.includes(f.stage as ApplicationStage) ? "New times are already being prepared or are out to them." : "Only for someone under Cancelled.";
+    case "stop_new_times":
+      return "Nothing is due to go to them automatically.";
     default:
       return step;
   }
@@ -187,14 +201,15 @@ export function allowedApplicationActions(f: ApplicationFacts): ApplicationCapab
  * The stage button (founder decision B3): every owner stage, in strip order, with how a choice is carried out and, when
  * it cannot be chosen, why. Longlist, Shortlist and On hold set a private mark in one click; choosing the step under a
  * mark takes the mark off; Interviewing opens the interview approval; Offer opens the record-only "Offer made" for a
- * finalist (plan H2); Hired opens the hire sheet; Not moving forward opens the private decline. Built from
- * `applicationActionState`, so it never offers what the action route refuses.
+ * finalist (plan H2); Hired opens the hire sheet; Not moving forward opens the private decline. Nobody is moved into
+ * Cancelled (only the candidate's own cancel or a missed interview puts them there), and from Cancelled they go back to
+ * Interviewing by booking a time. Built from `applicationActionState`, so it never offers what the action route refuses.
  */
 export function stageMoves(f: ApplicationFacts): StageMove[] {
   const { allowed, blockedReasons } = applicationActionState(f);
   const stage = f.stage as ApplicationStage;
   const mark = f.mark ? { mark: f.mark, remindAt: f.markRemindAt ?? null } : null;
-  const current = ownerStage({ stage }, mark);
+  const current = ownerStage({ stage }, mark, f.followUp);
   const base = baseOwnerStage(stage);
   const past = `Not available at this step (${STAGE_LABEL[stage] ?? stage}).`;
   const move = (to: OwnerStage, via: StageMoveVia, cap: ApplicationCapability | null, extra: { mark?: MarkKind; current?: boolean; reason?: string | null } = {}): StageMove => {
@@ -203,9 +218,9 @@ export function stageMoves(f: ApplicationFacts): StageMove[] {
     return { to, label: OWNER_STAGE_LABEL[to], via, ...(extra.mark ? { mark: extra.mark } : {}), allowed: ok, current: !!extra.current, ...(blockedReason ? { blockedReason } : {}) };
   };
   // A decision the candidate was never told can be taken back to the step it was made from (plan G1): that step is the
-  // one choice offered; the others stay blocked with their reasons.
+  // one choice offered; the others stay blocked with their reasons. Someone declined from Cancelled goes back there.
   const reopen = allowed.includes("undo_decision") ? reopensAt(f) : null;
-  const back = reopen ? baseOwnerStage(reopen) : null;
+  const back: OwnerStage | null = reopen ? (f.undoToCancelled ? "cancelled" : baseOwnerStage(reopen)) : null;
   return OwnerStage.options.map((to) => {
     // Someone set aside as not a fit for now shows as Not moving forward; a decline is still a separate, explicit choice.
     if (to === current && to === "not_moving_forward" && mark?.mark === "not_a_fit_for_now") return move(to, "decline", "reject", { current: true });
@@ -219,7 +234,11 @@ export function stageMoves(f: ApplicationFacts): StageMove[] {
         return move(to, "set_mark", "set_mark", { mark: to, reason: allowed.includes("set_mark") ? markBlockedReason(stage, to) : null });
       case "new":
         return move(to, "none", null, { reason: base === "new" ? null : "They are past this step." });
+      // Without this case the default branch below would open the decline.
+      case "cancelled":
+        return move(to, "none", null, { reason: "Only the candidate's own cancellation, or an interview they missed, puts someone here." });
       case "interviewing":
+        if (current === "cancelled") return move(to, "none", null, { reason: "They move back to Interviewing when they book a time. Send them new times from their page." });
         return base === "new" ? move(to, "interview", "interview") : move(to, "none", null, { reason: base === "interviewing" ? null : past });
       case "offer":
         return base === "hired" || base === "not_moving_forward" ? move(to, "offer", null, { reason: past }) : move(to, "offer", "record_offer");
@@ -240,11 +259,13 @@ export function applicationFactsFrom(
   interviewRows: Array<{ status: string; decision: string | null }>,
   role?: MembershipRole | null,
   triage?: { result: { unknowns: unknown[] } } | null,
-  extra: { mark?: Pick<ActiveMark, "mark" | "remindAt"> | null; decisionMessagePending?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean } = {},
+  extra: { mark?: Pick<ActiveMark, "mark" | "remindAt"> | null; decisionMessagePending?: boolean; decidedFrom?: ApplicationStage | null; roleClosed?: boolean; followUp?: FollowUpStrip | null; undoToCancelled?: boolean } = {},
 ): ApplicationFacts {
   return {
     ...(extra.decidedFrom !== undefined ? { decidedFrom: extra.decidedFrom } : {}),
+    ...(extra.undoToCancelled ? { undoToCancelled: true } : {}),
     roleClosed: !!extra.roleClosed,
+    followUp: extra.followUp ?? null,
     stage: app.stage,
     rejectReason: app.rejectReason,
     hasOpenScreen: screenStatuses.some((s) => SCREEN_OPEN_STATUSES.includes(s)),
@@ -266,15 +287,20 @@ export async function pendingDecisionMessages(tx: Tx, applicationIds: string[]):
 }
 
 /**
- * What taking back a decision needs to know (plan G1): the stage it was made from, and whether the role has closed.
- * Only for a decision nobody told, of someone whose details were not deleted; otherwise nothing (not offered).
+ * What taking back a decision needs to know (plan G1): the stage it was made from, whether the role has closed, and
+ * whether it puts them back under Cancelled (their newest follow-up ended when the decision took them out of the
+ * process, and the step it goes back to is one where Cancelled shows: `restoreFollowUpAfterUndo`). Only for a decision
+ * nobody told, of someone whose details were not deleted; otherwise nothing (not offered).
  */
-export async function undoFacts(tx: Tx, app: Pick<typeof applications.$inferSelect, "id" | "stage" | "toldState" | "roleId" | "candidateId">): Promise<{ decidedFrom?: ApplicationStage | null; roleClosed?: boolean }> {
+export async function undoFacts(tx: Tx, app: Pick<typeof applications.$inferSelect, "id" | "stage" | "toldState" | "roleId" | "candidateId">): Promise<{ decidedFrom?: ApplicationStage | null; roleClosed?: boolean; undoToCancelled?: boolean }> {
   if (!DECISION_STAGES.includes(app.stage) || app.toldState !== "not_told") return {};
   const [cand] = await tx.select({ anonymizedAt: candidates.anonymizedAt }).from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
   if (!cand || cand.anonymizedAt) return {};
   const [role] = await tx.select({ status: roles.status }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
-  return { decidedFrom: await stageBeforeDecision(tx, app.id), roleClosed: role?.status === "closed" };
+  const decidedFrom = await stageBeforeDecision(tx, app.id);
+  const back = reopenStage(decidedFrom);
+  const [newest] = back && CANCEL_STAGES.includes(back) ? await tx.select({ resolvedHow: interviewFollowups.resolvedHow }).from(interviewFollowups).where(eq(interviewFollowups.applicationId, app.id)).orderBy(desc(interviewFollowups.createdAt), desc(interviewFollowups.id)).limit(1) : [];
+  return { decidedFrom, roleClosed: role?.status === "closed", ...(newest?.resolvedHow === "left_process" ? { undoToCancelled: true } : {}) };
 }
 
 export async function applicationFacts(tx: Tx, app: Pick<typeof applications.$inferSelect, "id" | "stage" | "rejectReason" | "toldState" | "roleId" | "candidateId">, role?: MembershipRole | null): Promise<ApplicationFacts> {
@@ -283,7 +309,8 @@ export async function applicationFacts(tx: Tx, app: Pick<typeof applications.$in
   const [triage] = await tx.select({ result: assessments.result }).from(assessments).where(and(eq(assessments.applicationId, app.id), eq(assessments.kind, "triage"))).orderBy(desc(assessments.createdAt)).limit(1);
   const mark = (await activeMarksFor(tx, [app.id])).get(app.id) ?? null;
   const pending = await pendingDecisionMessages(tx, [app.id]);
-  return applicationFactsFrom(app, scr.map((s) => s.status), ivs, role, triage ?? null, { mark, decisionMessagePending: pending.has(app.id), ...(await undoFacts(tx, app)) });
+  const followUp = (await activeFollowUpsFor(tx, [app.id])).get(app.id) ?? null;
+  return applicationFactsFrom(app, scr.map((s) => s.status), ivs, role, triage ?? null, { mark, decisionMessagePending: pending.has(app.id), followUp, ...(await undoFacts(tx, app)) });
 }
 
 /** Whether the message is out or on its way (held for the ITS check counts: it goes on its own): what `dispositionSent` has always meant. */
@@ -455,6 +482,16 @@ async function previewAfterDecision(tx: Tx, container: Container, applicationId:
   return fresh ? decisionMessagePreview(tx, container, fresh) : null;
 }
 
+/**
+ * What taking back a decision says about someone it put back under Cancelled: their promised set still goes on its day
+ * (it was waiting, and its day is still ahead), or nothing goes until the team acts.
+ */
+async function restoredSetWords(tx: Tx, row: Pick<FollowUpRow, "companyId" | "autoState" | "autoDueAt">): Promise<string> {
+  if (row.autoState !== "waiting" || !row.autoDueAt) return " Nothing will be sent until you act.";
+  const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, row.companyId)).limit(1);
+  return ` Their new times still go to them automatically on ${newTimesDayWords(row.autoDueAt, company?.timezone ?? "UTC")}, as they asked.`;
+}
+
 function markHttpError(e: unknown): never {
   if (e instanceof MarkError) throw new HttpError(e.code === "bad_date" ? 400 : 409, e.code, e.message);
   throw e;
@@ -590,8 +627,12 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       assertCan(t.role, "application.reject");
       const to = reopensAt(facts);
       if (!to) throw new HttpError(409, "not_allowed", stateReason("undo_decision", facts));
-      await transition(tx, { applicationId: app.id, companyId: t.companyId, to, by, actor, reason: "decision taken back before the candidate was told", undoDecision: true, payload: { undo: true, note: body.note ?? null } });
+      // On the engine's clock: it decides whether a promised set's day is still ahead (`restoreFollowUpAfterUndo`).
+      await transition(tx, { applicationId: app.id, companyId: t.companyId, to, by, actor, reason: "decision taken back before the candidate was told", undoDecision: true, payload: { undo: true, note: body.note ?? null }, now });
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "undo_decision", from: app.stage, to, note: body.note ?? null } });
+      // Someone declined from Cancelled goes back there with their choice; their promised set too while its day is ahead.
+      const restored = await openFollowUpOf(tx, app.id);
+      if (restored) return { ok: true, stage: to, ownerStage: "cancelled", mark: null, toldState: "not_told", candidateNotice: "not_told", next: `Decision taken back: they are back under Cancelled. They were never told.${await restoredSetWords(tx, restored)}` };
       const owner = baseOwnerStage(to);
       return { ok: true, stage: to, ownerStage: owner, mark: null, toldState: "not_told", candidateNotice: "not_told", next: `Decision taken back: they are back in ${OWNER_STAGE_LABEL[owner]}. They were never told, and nothing will be sent.` };
     }

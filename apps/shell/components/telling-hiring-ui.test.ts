@@ -26,10 +26,12 @@ const { SendDecisionStep } = await import("@ros/web/src/pages/candidate-panel/te
 const { ClosingMessageCard, CloseRoleCard } = await import("@ros/web/src/components/ClosingMessage");
 const { CompareTable } = await import("@ros/web/src/pages/compare/ComparePanel");
 const { QuestionCard } = await import("@ros/web/src/pages/new-role/QuestionCard");
+const { Interviews } = await import("@ros/web/src/pages/Interviews");
 
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
-const STAGES = ["new", "longlist", "shortlist", "interviewing", "on_hold", "offer", "hired", "not_moving_forward"] as const;
-const moves = (current: string) => STAGES.map((to) => ({ to, label: to, via: to === current ? "none" : "set_mark", allowed: to !== current, current: to === current }));
+const STAGES = ["new", "longlist", "shortlist", "interviewing", "cancelled", "on_hold", "offer", "hired", "not_moving_forward"] as const;
+// nobody is moved to Cancelled by hand (founder decision 1A)
+const moves = (current: string) => STAGES.map((to) => ({ to, label: to, via: to === current || to === "cancelled" ? "none" : "set_mark", allowed: to !== current && to !== "cancelled", current: to === current }));
 
 function detail(over: Record<string, unknown> = {}) {
   return {
@@ -247,6 +249,53 @@ describe("the team's notes in Compare (plan H3)", () => {
     expect(html).toContain('<th scope="row" class="small muted">Their panel</th>');
     // every body row starts with its header: no row is left with a plain first cell
     expect(html).not.toMatch(/<tr><td/);
+  });
+});
+
+describe("the Interviews page for someone under Cancelled (founder decisions 1A to 4A)", () => {
+  const iv = (over: Record<string, unknown> = {}) => ({
+    id: "iv1", applicationId: "a1", roleId: "r1", roleTitle: "Dental Hygienist", roundKey: "working", title: "Working interview", format: "in_person", durationMinutes: 45, status: "cancelled", startsAt: null, endsAt: null, timezone: null, meetingUrl: null, linkSource: "calendar", attempt: 2,
+    offeredSlots: [], selectedSlot: null, candidateAvailability: null, schedulingWindow: { fromDate: "2026-10-12", toDate: "2026-10-23" }, rescheduleCountCandidate: 0, outcome: null, decision: null, decisionNote: null, reminders: {}, cancelReason: "cancelled by the candidate", scheduleTokenExpiresAt: null, createdAt: daysAgo(3),
+    candidate: { firstName: "Ana", lastName: "Lopez", timezone: null, stage: "interview_recommended", stageLabel: "Recommended for interview" }, participants: [], calendarRefs: {}, followUp: { id: "f1", reason: "asked_new_times", times: "none" },
+    ...over,
+  });
+  const sheet = (i: ReturnType<typeof iv>, extra: Array<[unknown[], unknown]> = []) => {
+    nav.params = { id: "iv1" };
+    try {
+      return text(render(client([], [[["interviews"], [i]], [["interview", "iv1"], { ...i, timeline: [], availabilitySources: [], brief: null }], ...extra]), createElement(Interviews)));
+    } finally {
+      nav.params = { id: "r1" };
+    }
+  };
+
+  it("offers Send new times for the same round instead of approving a new interview, and only while nothing is in motion", () => {
+    const asked = sheet(iv());
+    expect(asked).toContain("Ana cancelled and asked for new times. New times go out for the same round.");
+    expect(asked).toContain("Send new times");
+    expect(asked).not.toContain("Interview again?");
+    const noShow = sheet(iv({ status: "no_show", outcome: "no_show_candidate", candidate: { firstName: "Ana", lastName: "Lopez", timezone: null, stage: "interview_complete", stageLabel: "Interview done: decision needed" }, followUp: { id: "f2", reason: "no_show", times: "none" } }));
+    expect(noShow).toContain("Ana did not come. New times go out for the same round.");
+    // their new times are already out: the sheet's other cards cover it
+    const out = sheet(iv({ followUp: { id: "f1", reason: "asked_new_times", times: "out" } }));
+    expect(out).not.toContain("New times go out for the same round.");
+    expect(out).toContain("Interview again?");
+  });
+
+  it("before ITS confirms the company, never offers a send it would refuse, and does not flag them as needing you", () => {
+    const setting = (companyConfirmed: boolean): [unknown[], unknown] => [["new-times-setting"], { auto: true, workingDays: 3, pending: 0, companyConfirmed }];
+    const waiting = sheet(iv(), [setting(false)]);
+    expect(waiting).toContain("Ana cancelled and asked for new times. You can send new times once ITS confirms your company, or decide.");
+    expect(waiting).not.toContain("Send new times");
+    expect(waiting).not.toContain("New times go out for the same round.");
+    const confirmed = sheet(iv(), [setting(true)]);
+    expect(confirmed).toContain("Ana cancelled and asked for new times. New times go out for the same round.");
+    expect(confirmed).toContain("Send new times");
+  });
+
+  it("names the decision a team send records on a missed interview", () => {
+    const sent = sheet(iv({ status: "no_show", outcome: "no_show_candidate", decision: "new_times", decisionNote: "New times sent after the candidate did not attend", candidate: { firstName: "Ana", lastName: "Lopez", timezone: null, stage: "interview_recommended", stageLabel: "Recommended for interview" }, followUp: null }));
+    expect(sent).toContain("Decision: New times sent");
+    expect(sent).not.toContain("new_times");
   });
 });
 

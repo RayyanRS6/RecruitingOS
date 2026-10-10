@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, ErrorState, Field, Skeleton } from "@ros/ui";
-import { api, ApiError, type ActionResult, type ApplicationDetail, type InterviewDraft, type InterviewPlanView, type SuggestedLine } from "../../api/client";
+import { api, ApiError, type ActionResult, type ApplicationDetail, type CancelledView, type InterviewDraft, type InterviewPlanView, type NewTimesSettingView, type SendNewTimesResult, type SuggestedLine } from "../../api/client";
+import { HOLD_ENDS_CANCELLED, cancelledBody, cancelledTitle, sendNewTimesQuestion, stopNewTimesQuestion } from "../../cancelled";
 import { PERSONAL_LINE_MAX, suggestedLineNote } from "../../telling";
 import { toast } from "../../toast";
 import { AskRecruiter } from "../../components/AskRecruiter";
@@ -11,7 +12,7 @@ import { defaultInterviewers } from "../../interview-defaults";
 import { interviewDraftLine } from "../../hiring";
 import { canDecline, canReadNotes } from "../../roles";
 import { callNotesState } from "../../screen-view";
-import { NOT_NOW_TOAST, declineConfirmText, decisionToast, holdDay, outcomeNoticeText, outcomeToast, type PanelStep } from "../../talent-actions";
+import { NOT_NOW_TOAST, declineConfirmText, decisionToast, holdDay, newTimesToast, outcomeNoticeText, outcomeToast, type PanelStep } from "../../talent-actions";
 import { CallNotesCard } from "./call-notes";
 import { DECLINE_REASONS, activeInterviews, holdDateBounds, whoDecides, type PanelTab } from "./helpers";
 import { FinalistCard, HireStep, OfferStep, WaitingOnCandidateCard } from "./hiring";
@@ -46,17 +47,21 @@ export function NeedsYou(props: Props) {
   const waitingOnCandidate = a.stage === "offer_sent" && step !== "hire";
   // Already at the interview step with nothing in motion (an interview cancelled, times that expired, "Next round", the
   // approval set aside with "Not now", or the assistant's recommendation after a screen): the approval stays one click away.
+  // Someone under Cancelled has their own card instead, with "Send new times" (founder decisions 1A to 4A).
+  const cancelled = a.ownerStage === "cancelled" ? a.cancelled : null;
   const readyToInterview = !step && can("interview") && !can("record_decision") && INTERVIEW_READY.includes(a.stage)
-    && !suggestions.some((p) => p.actionType === "application.recommend_interview") && a.mark?.mark !== "on_hold" && a.mark?.mark !== "not_a_fit_for_now";
+    && !suggestions.some((p) => p.actionType === "application.recommend_interview") && a.mark?.mark !== "on_hold" && a.mark?.mark !== "not_a_fit_for_now" && !cancelled;
   const cards = [
     callNotes.prominent ? <CallNotesCard key="call-notes" a={a} roleId={roleId} prominent /> : null,
-    step === "hold" ? <HoldStep key="hold" a={a} roleId={roleId} onClose={() => setStep(null)} /> : null,
+    step === "hold" ? <HoldStep key="hold" a={a} roleId={roleId} cancelled={!!cancelled} onClose={() => setStep(null)} /> : null,
     step === "decline" ? <DeclineStep key="decline" a={a} roleId={roleId} onClose={() => setStep(null)} /> : null,
     step === "interview" ? <InterviewStep key="interview" a={a} roleId={roleId} initialRoundKey={props.roundKey} onClose={() => setStep(null)} /> : null,
     step === "offer" ? <OfferStep key="offer" a={a} roleId={roleId} onClose={() => setStep(null)} /> : null,
     step === "hire" ? <HireStep key="hire" a={a} roleId={roleId} mayTell={canDecline(props.myRole)} onClose={() => setStep(null)} /> : null,
     step === "outcome" ? <OutcomeStep key="outcome" a={a} roleId={roleId} onClose={() => setStep(null)} onHire={() => setStep("hire")} /> : null,
     ...suggestions.map((p) => <SuggestionCard key={p.id} a={a} roleId={roleId} p={p} onInterview={(roundKey) => setStep("interview", { roundKey })} />),
+    // under Cancelled: above the decision card, which an undecided no-show also has ("Send new times …, or decide below")
+    cancelled && step !== "interview" ? <CancelledCard key="cancelled" a={a} c={cancelled} roleId={roleId} onChooseInterviewers={() => setStep("interview")} /> : null,
     can("record_decision") && step !== "interview" && step !== "hire" ? <DecisionCard key="decision" a={a} roleId={roleId} myRole={props.myRole} onNextRound={(key) => setStep("interview", { roundKey: key })} onHire={() => setStep("hire")} onNotes={() => props.onTab?.("notes")} /> : null,
     readyToInterview ? <ReadyToInterviewCard key="ready-to-interview" a={a} onApprove={() => setStep("interview")} /> : null,
     finalist ? <FinalistCard key="finalist" a={a} setStep={(s) => setStep(s)} /> : null,
@@ -79,8 +84,11 @@ export function NeedsYou(props: Props) {
 /* Steps a stage choice opens.                                                                                   */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-/** On hold (plan A4): until a date, with an optional note; private, and they come back to Today on that date. */
-function HoldStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId: string; onClose: () => void }) {
+/**
+ * On hold (plan A4): until a date, with an optional note; private, and they come back to Today on that date. For someone
+ * under Cancelled, a hold takes them out of it, and no automatic new times go to them.
+ */
+function HoldStep({ a, roleId, cancelled, onClose }: { a: ApplicationDetail; roleId: string; cancelled: boolean; onClose: () => void }) {
   const bounds = holdDateBounds();
   const [until, setUntil] = useState(bounds.initial);
   const [note, setNote] = useState("");
@@ -90,7 +98,7 @@ function HoldStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId: string
   const valid = until >= bounds.min && until <= bounds.max;
   return (
     <Card needsYou lift title="Put on hold">
-      <p className="small" style={{ color: "var(--ink-2)" }}>Nothing about {a.candidate.firstName} waits on anyone until the date you choose; then they come back to Today. Private: nothing is sent to the candidate.</p>
+      <p className="small" style={{ color: "var(--ink-2)" }}>Nothing about {a.candidate.firstName} waits on anyone until the date you choose; then they come back to Today. Private: nothing is sent to the candidate.{cancelled ? ` ${HOLD_ENDS_CANCELLED}` : ""}</p>
       <div className="stack" style={{ gap: 8, marginTop: 10 }}>
         <Field label="Bring them back on" htmlFor="hold-until" hint="Eight weeks at most."><input ref={first} id="hold-until" className="input" type="date" min={bounds.min} max={bounds.max} value={until} onChange={(e) => setUntil(e.target.value)} /></Field>
         <Field label="Note (kept internally, optional)" htmlFor="hold-note"><input id="hold-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="For example: waiting to hear about the second chair" /></Field>
@@ -357,6 +365,74 @@ function ReadyToInterviewCard({ a, onApprove }: { a: ApplicationDetail; onApprov
 }
 
 /**
+ * Someone under Cancelled (founder decisions 1A to 4A): what they chose when they cancelled, or that they did not come,
+ * and where their new times stand, in the words of the state the API reports. "Send new times" reopens the interview
+ * they cancelled for the same round (after a no-show, it sets up a new one for that round); "Don't send automatically"
+ * stops a set still waiting for its day. Both ask first. They stay under Cancelled until they book or someone decides.
+ * When nobody who ran the interview is still on the team, "Choose interviewers" opens the interview approval instead.
+ */
+function CancelledCard({ a, c, roleId, onChooseInterviewers }: { a: ApplicationDetail; c: CancelledView; roleId: string; onChooseInterviewers: () => void }) {
+  const refresh = useRefreshCandidate(a.id, roleId);
+  const [asking, setAsking] = useState<"send" | "stop" | null>(null);
+  const [noInterviewers, setNoInterviewers] = useState(false);
+  // the company's setting and whether ITS has confirmed the company; shared with the Talent page and Setup
+  const setting = useQuery({ queryKey: ["new-times-setting"], queryFn: () => api.get<NewTimesSettingView>("/api/v1/companies/current/new-times"), retry: false });
+  const first = a.candidate.firstName;
+  const round = a.interviews.find((i) => i.id === c.interviewId)?.title ?? a.interviews[0]?.title ?? "interview";
+  const send = useMutation({
+    mutationFn: () => api.post<SendNewTimesResult>(`/api/v1/applications/${a.id}/new-times`, {}),
+    onSuccess: async (r) => {
+      const t = newTimesToast({ kind: "sent", via: r.via, firstName: first, round });
+      toast(t.title, t.detail);
+      setAsking(null);
+      setNoInterviewers(false);
+      await refresh();
+    },
+    onError: (e) => {
+      setAsking(null);
+      if (e instanceof ApiError && e.code === "no_interviewers") setNoInterviewers(true);
+      toast(e instanceof ApiError ? e.message : "Could not send new times.");
+    },
+  });
+  const stop = useMutation({
+    mutationFn: () => api.post(`/api/v1/applications/${a.id}/new-times/stop`, {}),
+    onSuccess: async () => {
+      const t = newTimesToast({ kind: "stopped" });
+      toast(t.title, t.detail);
+      setAsking(null);
+      await refresh();
+    },
+    onError: (e) => {
+      setAsking(null);
+      toast(e instanceof ApiError ? e.message : "Could not stop the automatic new times.");
+    },
+  });
+  const can = (x: ApplicationDetail["allowedActions"][number]) => a.allowedActions.includes(x);
+  // Before ITS confirms the company nothing goes automatically and a send is refused, so the card says so and offers no send.
+  const companyConfirmed = setting.data?.companyConfirmed;
+  const maySend = can("send_new_times") && companyConfirmed !== false;
+  // Waits on the team only when nothing is on its way to them: no set waiting for its day, no times being prepared or out.
+  const parked = c.auto.state === "waiting" || c.auto.state === "waiting_check";
+  const needsYou = !parked && (c.times === "none" || c.times === "expired" || c.times === "not_reached");
+  return (
+    <Card needsYou={needsYou} title={cancelledTitle(first, c.reason)}>
+      <p className="small" style={{ color: "var(--ink-2)" }}>{cancelledBody({ firstName: first, round, c, companyConfirmed, decideBelow: can("record_decision") })}</p>
+      {asking === "send" ? (
+        <Alert tone="caution"><div className="row" style={{ justifyContent: "space-between" }}><span>{sendNewTimesQuestion(first, round)}</span><span className="row"><Button size="sm" variant="primary" icon="send" loading={send.isPending} onClick={() => send.mutate()}>Yes, send</Button><Button size="sm" variant="quiet" onClick={() => setAsking(null)}>Cancel</Button></span></div></Alert>
+      ) : asking === "stop" ? (
+        <Alert tone="caution"><div className="row" style={{ justifyContent: "space-between" }}><span>{stopNewTimesQuestion(first)}</span><span className="row"><Button size="sm" variant="primary" loading={stop.isPending} onClick={() => stop.mutate()}>Yes, stop</Button><Button size="sm" variant="quiet" onClick={() => setAsking(null)}>Keep it</Button></span></div></Alert>
+      ) : maySend || can("stop_new_times") || noInterviewers ? (
+        <div className="row" style={{ marginTop: 10 }}>
+          {maySend ? <Button size="sm" variant="primary" icon="send" onClick={() => setAsking("send")}>Send new times</Button> : null}
+          {can("stop_new_times") ? <Button size="sm" variant="quiet" onClick={() => setAsking("stop")}>Don't send automatically</Button> : null}
+          {noInterviewers ? <Button size="sm" variant="quiet" onClick={onChooseInterviewers}>Choose interviewers</Button> : null}
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+/**
  * The decision after an interview is a person's (docs/06; release 1 records it, scorecards and debriefs come later).
  * Shown when the last interview is over and nobody has decided yet: next round, finalist, hire, or not moving forward
  * with a reason. "Next round" opens the interview approval with that round and its interviewers; "Hire" the hire sheet.
@@ -382,7 +458,8 @@ function DecisionCard({ a, roleId, myRole, onNextRound, onHire, onNotes }: { a: 
   });
   const last = a.interviews.find((i) => ["completed", "no_show"].includes(i.status) && !i.decision);
   const idx = last ? a.interviewPlan.findIndex((r) => r.key === last.roundKey) : -1;
-  const hasNextRound = idx >= 0 && idx + 1 < a.interviewPlan.length;
+  // A candidate who did not come never moves on to the next round from here: new times for the same round, or a decision.
+  const hasNextRound = idx >= 0 && idx + 1 < a.interviewPlan.length && last?.outcome !== "no_show_candidate";
   return (
     <Card needsYou lift title="How did the interview go?">
       <p className="small" style={{ color: "var(--ink-2)" }}>{last ? `${last.title}${last.outcome === "no_show_candidate" ? " (the candidate did not attend)" : last.outcome === "no_show_interviewer" ? " (the interviewer did not attend)" : ""}. ` : ""}The decision is yours and is recorded with your name.</p>

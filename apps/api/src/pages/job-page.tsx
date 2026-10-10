@@ -68,6 +68,15 @@ export function HelpLine(props: { contact: ContactLine; class?: string }) {
 }
 
 /**
+ * The inside of the Apply now button (founder decision Q2 = A, 10 October 2026): a dark circle with an arrow, then the
+ * words. On a mouse's hover or a keyboard's focus the dark fill slides across the words (CSS only, layout.tsx). The fill
+ * and the arrow are decoration, hidden from screen readers; the words are the button's name.
+ */
+function ApplyInner() {
+  return <><span class="go-fill" aria-hidden="true" /><span class="go-icon"><Icon name="arrow-right" /></span><span class="go-text">Apply now</span></>;
+}
+
+/**
  * Four things that are true of every application here: how long (the conversation included, when it follows the form;
  * plan E8), what to send, who decides, how to reach a person.
  */
@@ -136,7 +145,7 @@ export function JobPage(props: JobPageProps) {
         <JobFacts packet={packet} pay={pay} postedOn={role.postedOn} />
         {role.accepting ? (
           <div class="head-actions">
-            <a class="btn head-apply" href={props.links.apply}>Apply now</a>
+            <a class="btn go head-apply" href={props.links.apply}><ApplyInner /></a>
             {role.applyBy ? <p class="apply-by"><Icon name="calendar" />{role.applyBy}</p> : null}
           </div>
         ) : null}
@@ -179,7 +188,7 @@ export function JobPage(props: JobPageProps) {
             <div class="card apply-card">
               <p class="apply-title">{title}</p>
               {role.applyBy ? <p class="apply-by"><Icon name="calendar" />{role.applyBy}</p> : <p class="meta">We confirm by email.</p>}
-              <a class="btn" href={props.links.apply}>Apply now</a>
+              <a class="btn go" href={props.links.apply}><ApplyInner /></a>
               <FourPoints company={company} packet={packet} flow={props.flow} />
               <HelpLine contact={company.contact} />
             </div>

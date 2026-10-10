@@ -1,7 +1,8 @@
 import { and, asc, eq, inArray, isNull, like } from "drizzle-orm";
-import { MARK_LABEL, OWNER_STAGE_LABEL, type ActorKind, type ApplicationStage, type Actor, type CandidateStep, type MarkKind, type OwnerGroup, type OwnerStage, type ToldState } from "@ros/contracts";
+import { CANCELLED_REASON_LABEL, MARK_LABEL, OWNER_STAGE_LABEL, type ActorKind, type ApplicationStage, type Actor, type CandidateStep, type MarkKind, type OwnerGroup, type OwnerStage, type ToldState } from "@ros/contracts";
 import { applicationMarks, applications, communications, events, type Queryable } from "@ros/db";
 import { emit } from "./events";
+import { CANCEL_STAGES, followUpInMotion, inCancelled, resolveOpenFollowUp, restoreFollowUpAfterUndo, type FollowUpStrip } from "./interview-followups";
 
 /**
  * The application state machine (docs/06). Each transition names who may perform it.
@@ -150,18 +151,21 @@ export class TransitionError extends Error {
 /**
  * Moves an application and records the fact. The only way stage changes. Leaving the process, or a person moving them
  * to another column of the stage strip, clears the private mark (recorded as `application.mark_cleared`); a new
- * decision starts the told state again at not_told.
+ * decision starts the told state again at not_told. Booking a time, leaving the process or a person's move takes them
+ * out of Cancelled; a decision taken back puts someone who was there back (interview-followups.ts). `now`: the caller's
+ * clock (a workflow's), when it has one.
  */
 export async function transition(
   q: Queryable,
-  input: { applicationId: string; companyId: string; to: ApplicationStage; by: Mover; actor: Actor; reason?: string; payload?: Record<string, unknown>; correlationId?: string | null; /** a person taking back a decision the candidate was never told (`canTransition`) */ undoDecision?: boolean },
+  input: { applicationId: string; companyId: string; to: ApplicationStage; by: Mover; actor: Actor; reason?: string; payload?: Record<string, unknown>; correlationId?: string | null; /** a person taking back a decision the candidate was never told (`canTransition`) */ undoDecision?: boolean; now?: Date },
 ): Promise<{ from: ApplicationStage; to: ApplicationStage }> {
   const [app] = await q.select().from(applications).where(eq(applications.id, input.applicationId)).limit(1);
   if (!app) throw new Error(`application ${input.applicationId} not found`);
   const from = app.stage;
   if (from === input.to) return { from, to: input.to };
   if (!canTransition(from, input.to, input.by, { decisionTold: decisionTold(app.toldState), undoDecision: input.undoDecision, toldState: app.toldState })) throw new TransitionError(from, input.to, input.by);
-  const now = new Date().toISOString();
+  const at = input.now ?? new Date();
+  const now = at.toISOString();
   const patch: Partial<typeof applications.$inferInsert> = { stage: input.to, stageChangedAt: now };
   if (input.to === "withdrawn") { patch.withdrawnAt = now; patch.withdrawReason = input.reason ?? null; }
   if (input.to === "rejected") { patch.rejectedAt = now; patch.rejectReason = input.reason ?? null; }
@@ -181,10 +185,17 @@ export async function transition(
   // the decision message still waiting in the outbox, so it never reaches someone the decision no longer applies to.
   if (DECISION_STAGES.includes(from) && !DECISION_STAGES.includes(input.to)) await withdrawQueuedDecision(q, { applicationId: input.applicationId, companyId: input.companyId, actor: input.actor, reason: `the decision no longer applies (now ${STAGE_LABEL[input.to].toLowerCase()})` });
   // A person moving someone to another column of the strip (approving an interview for someone on hold, say) ends the
-  // mark too; the system's own moves never undo a person's hold.
+  // mark too; the system's own moves never undo a person's hold. The candidate's own cancel of a booked interview does:
+  // they go under Cancelled (founder decision 1A), and no automatic times go to someone a person had paused. The cancel
+  // itself ends the mark (`openFollowUp`), not this move.
   const leaves = LEAVES_PROCESS.includes(input.to);
   const movedOn = isHuman(input.by) && baseOwnerStage(from) !== baseOwnerStage(input.to);
   if (leaves || movedOn) await endMarkOnMove(q, { applicationId: input.applicationId, companyId: input.companyId, actor: input.actor, to: input.to, leaves, correlationId: input.correlationId });
+  // The Cancelled column (founder decisions 1A-4A): booking a time, leaving the process, or a person's move ends it.
+  // The system's own moves (the candidate's cancel, the interview closing) never do. A private decision taken back before
+  // the candidate was told leaves nothing of it (above): someone who was under Cancelled goes back there.
+  if (input.undoDecision && CANCEL_STAGES.includes(input.to)) await restoreFollowUpAfterUndo(q, { companyId: input.companyId, applicationId: input.applicationId, actor: input.actor, now: at });
+  else if (leaves || input.to === "interview_scheduled" || isHuman(input.by)) await resolveOpenFollowUp(q, { companyId: input.companyId, applicationId: input.applicationId, actor: input.actor, how: leaves ? "left_process" : input.to === "interview_scheduled" ? "rebooked" : "moved_by_team", now: at });
   return { from, to: input.to };
 }
 
@@ -249,14 +260,17 @@ export function baseOwnerStage(stage: ApplicationStage): OwnerStage {
 }
 
 /**
- * Where an application sits on the stage strip. Marks overlay the internal stage while the person is still in the
- * process: On hold over any active step, Longlist and Shortlist over New only (someone interviewing shows as
- * Interviewing), Not a fit for now as Not moving forward. Out of the process (hired, declined, withdrawn, talent pool)
- * no mark counts; marks are cleared there anyway.
+ * Where an application sits on the stage strip. Someone with an open follow-up (they cancelled a booked interview or did
+ * not come to it) shows as Cancelled while recommended for interview or interview done. Marks overlay the internal stage
+ * while the person is still in the process: On hold over any active step, Longlist and Shortlist over New only (someone
+ * interviewing shows as Interviewing), Not a fit for now as Not moving forward. Out of the process (hired, declined,
+ * withdrawn, talent pool) neither counts; both are cleared there anyway.
  */
-export function ownerStage(app: { stage: ApplicationStage }, mark?: MarkView): OwnerStage {
+export function ownerStage(app: { stage: ApplicationStage }, mark?: MarkView, followUp?: FollowUpStrip | null): OwnerStage {
   const base = baseOwnerStage(app.stage);
-  if (!mark || base === "hired" || base === "not_moving_forward") return base;
+  if (base === "hired" || base === "not_moving_forward") return base;
+  if (inCancelled(app.stage, followUp)) return "cancelled"; // before marks; the two never coexist (interview-followups.ts)
+  if (!mark) return base;
   if (mark.mark === "on_hold") return "on_hold";
   if (mark.mark === "not_a_fit_for_now") return "not_moving_forward";
   return base === "new" ? mark.mark : base;
@@ -275,11 +289,14 @@ export function holdEnded(mark: MarkView, now: Date = new Date()): boolean {
 /**
  * The owner group with the mark taken into account (plan A4 `groupFor`), for every count that asks "who waits on you":
  * a running hold waits on nobody, so it is in process; once its date passes the person waits on you again; someone set
- * aside as not a fit for now counts as not moving forward.
+ * aside as not a fit for now counts as not moving forward. Someone under Cancelled waits on you only when nothing is in
+ * motion for them: a promised automatic set, or new times being prepared or out, wait on nobody at the company.
  */
-export function groupFor(app: { stage: ApplicationStage }, mark?: MarkView, now: Date = new Date()): OwnerGroup {
+export function groupFor(app: { stage: ApplicationStage }, mark?: MarkView, now: Date = new Date(), followUp?: FollowUpStrip | null): OwnerGroup {
   const g = ownerGroup(app.stage);
-  if (!mark || g === "hired" || g === "not_moving_forward") return g;
+  if (g === "hired" || g === "not_moving_forward") return g;
+  if (inCancelled(app.stage, followUp)) return followUpInMotion(followUp) ? "in_process" : "waiting_on_you";
+  if (!mark) return g;
   if (mark.mark === "not_a_fit_for_now") return "not_moving_forward";
   if (holdRunning(mark, now)) return "in_process";
   if (holdEnded(mark, now)) return "waiting_on_you";
@@ -295,8 +312,12 @@ export function ownerTags(app: { stage: ApplicationStage }, mark?: MarkView, now
   return tags;
 }
 
-/** The owner-stage label, with the mark's own words for a mark the strip has no column for. */
-export function ownerStageLabel(stage: OwnerStage, mark?: MarkView): string {
+/**
+ * The owner-stage label, with the mark's own words for a mark the strip has no column for, and under Cancelled why they
+ * are there ("Asked for new times", "No longer interested", "No-show"), the sub-label on the stage button.
+ */
+export function ownerStageLabel(stage: OwnerStage, mark?: MarkView, followUp?: FollowUpStrip | null): string {
+  if (stage === "cancelled" && followUp) return CANCELLED_REASON_LABEL[followUp.reason];
   return mark?.mark === "not_a_fit_for_now" && stage === "not_moving_forward" ? MARK_LABEL.not_a_fit_for_now : OWNER_STAGE_LABEL[stage];
 }
 

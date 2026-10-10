@@ -5,8 +5,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "../nav";
 import { Alert, Avatar, Button, Card, Chip, EmptyState, ErrorState, Field, Icon, PageHeader, Pill, ScoreBadge, Sheet, Skeleton, StageButton, TabPanel, Tabs, type OwnerStage } from "@ros/ui";
 import { CHOOSABLE_WORDINGS, DECISION_WORDING_LABEL, type DecisionWording } from "@ros/contracts";
-import { api, ApiError, type ActionResult, type ApplicationSummary, type ApplicationsWithCounts, type BoardView, type DecisionMessagePreview, type DecisionMessagesResponse, type Me, type RoleSummary } from "../api/client";
+import { api, ApiError, type ActionResult, type ApplicationSummary, type ApplicationsWithCounts, type BoardView, type DecisionMessagePreview, type DecisionMessagesResponse, type Me, type NewTimesSettingView, type RoleSummary, type SendNewTimesBatchResult } from "../api/client";
 import { toast } from "../toast";
+import { NEW_TIMES_SHEET_TEXT, cancelledAlertText, cancelledChips, mergeNewTimesResults, newTimesResultLine, newTimesSendLabel, newTimesSheetRows } from "../cancelled";
 import { messageOnItsWayChip } from "../company-check";
 import { AskRecruiter } from "../components/AskRecruiter";
 import { ShareJob } from "../components/ShareJob";
@@ -14,9 +15,9 @@ import { useCompanyCheck } from "../components/use-company-check";
 import { LOW_CONFIDENCE_LABEL } from "../evidence";
 import { focusLost, rowFocusAfterMove } from "../focus-after";
 import { activeCompanyOf } from "../rail";
-import { canDecline, canSeeTalent, canShareJob } from "../roles";
+import { canDecline, canManageInterviews, canSeeTalent, canShareJob } from "../roles";
 import { roleStatus } from "../role-status";
-import { actionToast, batches, bulkSendToast, holdDay, mergeDecisionResults, noticeText, panelStepFrom, stageBlocked, stageIntent, type PanelStep } from "../talent-actions";
+import { actionToast, batches, bulkSendToast, holdDay, mergeDecisionResults, newTimesToast, noticeText, panelStepFrom, stageBlocked, stageIntent, type PanelStep } from "../talent-actions";
 import { InlineUndo } from "../components/InlineUndo";
 import { useBulkTakeBack, useBulkUndoToast } from "../components/use-undo";
 import { waitingOnCandidateRow } from "../hiring";
@@ -34,8 +35,8 @@ import { boardOrder, boardSearch, modeFrom, type TalentMode } from "./board/boar
 /** Where the candidate panel stands: who, which section, a step a stage choice opened, and the list it was opened from. */
 type PanelState = { id: string; tab: PanelTab; step: PanelStep | null; roundKey?: string; ids: string[] | null; compose: boolean };
 
-/** The link filters (`?ownerStage=`, `?stage=`, `?told=`, `?applying=`) as one key: when a link changes them, the view starts again from it. */
-const linkKey = (p: URLSearchParams) => ["ownerStage", "stage", "told", "applying"].map((k) => p.get(k) ?? "").join("|");
+/** The link filters (`?ownerStage=`, `?stage=`, `?told=`, `?applying=`, `?cancelled=`) as one key: when a link changes them, the view starts again from it. */
+const linkKey = (p: URLSearchParams) => ["ownerStage", "stage", "told", "applying", "cancelled"].map((k) => p.get(k) ?? "").join("|");
 
 /**
  * Talent (plan A3; founder decisions B3 and B6): one role's applicants as a calm list. The stage strip counts everyone
@@ -47,6 +48,10 @@ const linkKey = (p: URLSearchParams) => ["ownerStage", "stage", "told", "applyin
  * Beside the strip, "Still applying" (plan E6) counts the people still in the visit that sent their application (the
  * screening conversation offered with it, not finished yet) and shows only them on a click. They are never counted or
  * shown as waiting on you.
+ *
+ * Cancelled (founder decisions 1A to 4A) holds the candidates who cancelled a booked interview and the ones who did not
+ * come to one. Its chips split it by what each person chose ("Asked for new times", "No longer interested", "No-show"),
+ * each row says where their new times stand, and "Send new times…" sends them to several people at once.
  *
  * The pool board (plan F6-F10; founder decisions B2, B4, B5): "Sort the pool" switches to the board (`?view=board`),
  * where the people who finished applying sit in Shortlist, Longlist and Not moving forward with the reason for each,
@@ -92,6 +97,13 @@ export function People() {
   const mayTell = canDecline(myRole);
   const [compareOpen, setCompareOpen] = useState(false);
   const [telling, setTelling] = useState(false);
+  // The Cancelled column (founder decisions 1A to 4A): its reasons as chips, and new times to many people at once for
+  // those who may manage interviews. The alert's wording follows the company's setting.
+  const underCancelled = rows.filter((a) => a.ownerStage === "cancelled" && a.cancelled);
+  const cancelledCount = counts?.byOwnerStage.cancelled ?? underCancelled.length;
+  const mayManageInterviews = canManageInterviews(myRole);
+  const newTimesSetting = useQuery({ queryKey: ["new-times-setting"], queryFn: () => api.get<NewTimesSettingView>("/api/v1/companies/current/new-times"), enabled: mayManageInterviews && view.stage === "cancelled" });
+  const [sendingNewTimes, setSendingNewTimes] = useState(false);
 
   // The pool board (plan F6): its view and Review and apply live in the address, so Today's links open them. The board
   // sits under the applications' key, so every change that refreshes the list refreshes the board too.
@@ -171,7 +183,7 @@ export function People() {
   const status = role ? (role.status === "open" ? { label: "Live", tone: "good" as const } : roleStatus(role.status)) : null;
   const total = counts?.total ?? rows.length;
   const empty = emptyText(view, total);
-  const filtersOn = view.reading !== "any" || view.query.trim() !== "" || view.waiting || view.applying || view.stage !== "all" || !!view.internalStage || !!view.told;
+  const filtersOn = view.reading !== "any" || view.query.trim() !== "" || view.waiting || view.applying || view.stage !== "all" || !!view.internalStage || !!view.told || !!view.cancelledReason;
   const headline = [`${total} ${total === 1 ? "applicant" : "applicants"}`, waitingCount ? `${waitingCount} waiting on you` : "", applyingCount ? `${applyingCount} still applying` : ""].filter(Boolean).join(" · ");
 
   return (
@@ -204,13 +216,15 @@ export function People() {
       ) : (
         <>
           <div className="talent-strip">
-            <Tabs idBase="talent-strip" label="Stages" variant="counts" value={view.stage} onChange={(v) => setView({ stage: v as TalentView["stage"], waiting: false })} items={stripItems(counts)} />
+            <Tabs idBase="talent-strip" label="Stages" variant="counts" value={view.stage} onChange={(v) => setView({ stage: v as TalentView["stage"], waiting: false, cancelledReason: null })} items={stripItems(counts)} />
             {/* Beside the strip, not in it (plan E6): the people still in the visit that sent their application. */}
             {applyingCount || view.applying ? <button type="button" className="toggle-chip" aria-pressed={view.applying} title="Sent the form and answering the screening questions now" onClick={() => setView({ applying: !view.applying, waiting: false })}>{STILL_APPLYING_LABEL} <span className="count">{applyingCount}</span></button> : null}
           </div>
           <div className="talent-toolbar">
             {waitingCount ? <button type="button" className="toggle-chip" aria-pressed={view.waiting} onClick={() => setView({ waiting: !view.waiting, applying: false, order: view.waiting ? view.order : "waiting" })}>Waiting on you <span className="count">{waitingCount}</span></button> : null}
-            {mayTell && (counts?.notTold ?? 0) > 0 ? <button type="button" className="toggle-chip" aria-pressed={view.told === "not_told"} onClick={() => setView(view.told === "not_told" ? { told: null } : { told: "not_told", stage: "not_moving_forward", waiting: false, applying: false })}>Not told yet <span className="count">{counts?.notTold}</span></button> : null}
+            {mayTell && (counts?.notTold ?? 0) > 0 ? <button type="button" className="toggle-chip" aria-pressed={view.told === "not_told"} onClick={() => setView(view.told === "not_told" ? { told: null } : { told: "not_told", stage: "not_moving_forward", waiting: false, applying: false, cancelledReason: null })}>Not told yet <span className="count">{counts?.notTold}</span></button> : null}
+            {/* under Cancelled: what each person chose, or that they did not come (founder decision 2A) */}
+            {view.stage === "cancelled" ? cancelledChips(counts?.cancelled, rows).map((c) => <button key={c.id} type="button" className="toggle-chip" aria-pressed={view.cancelledReason === c.id} onClick={() => setView({ cancelledReason: view.cancelledReason === c.id ? null : c.id })}>{c.label} <span className="count">{c.count}</span></button>) : null}
             {view.internalStage ? <button type="button" className="toggle-chip" aria-pressed="true" aria-label={`Showing only: ${STAGE_LABEL[view.internalStage] ?? view.internalStage}. Remove this filter`} onClick={clearStageLink}>{STAGE_LABEL[view.internalStage] ?? view.internalStage.replace(/_/g, " ")} <Icon name="x" size={14} /></button> : null}
             <select className="select" aria-label="Reading" value={view.reading} onChange={(e) => setView({ reading: e.target.value as ReadingFilter })}>
               {READING_FILTERS.filter((f) => f.id !== "missing_must_have" || provenMissKnown).map((f) => <option key={f.id} value={f.id}>{f.label}{f.id === "any" ? "" : ` (${byReading[f.id]})`}</option>)}
@@ -226,6 +240,15 @@ export function People() {
               <div className="row" style={{ justifyContent: "space-between" }}>
                 <span>{notTold.length === 1 ? "1 person has" : `${notTold.length} people have`} not been told your decision. Decisions stay private until someone sends the decision message or records telling them.</span>
                 <Button size="sm" variant="primary" icon="send" onClick={() => setTelling(true)}>Review and send</Button>
+              </div>
+            </Alert>
+          ) : null}
+          {mayManageInterviews && view.stage === "cancelled" && cancelledCount > 0 ? (
+            <Alert tone="info">
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <span>{cancelledAlertText(cancelledCount, newTimesSetting.data?.auto, newTimesSetting.data?.companyConfirmed)}</span>
+                {/* before ITS confirms the company every send is refused, so the way to send waits for it too */}
+                {newTimesSetting.data?.companyConfirmed === false ? null : <Button size="sm" variant="primary" icon="send" onClick={() => setSendingNewTimes(true)}>Send new times…</Button>}
               </div>
             </Alert>
           ) : null}
@@ -270,6 +293,7 @@ export function People() {
         />
       ) : null}
       {telling && roleId ? <TellSheet roleId={roleId} people={notTold} onClose={() => setTelling(false)} /> : null}
+      {sendingNewTimes && roleId ? <NewTimesSheet roleId={roleId} people={underCancelled} onClose={() => setSendingNewTimes(false)} /> : null}
     </div>
   );
 }
@@ -297,13 +321,15 @@ function TalentRow({ a, busy, onOpen, onMove }: { a: ApplicationSummary; busy: b
         </span>
       </div>
       <div className="talent-row-chips">
-        {/* answering the screening questions in the visit that sent the application (plan E6): nothing waits on you yet */}
-        {isStillApplying(a) ? <Pill size="sm" tone="neutral" pulse title="Sent the form and answering the screening questions now">{STILL_APPLYING_LABEL}</Pill> : null}
+        {/* answering the screening questions in the visit that sent the application (plan E6): nothing waits on you yet; the dot stays still, the word says it (only the page's Live pill pulses) */}
+        {isStillApplying(a) ? <Pill size="sm" tone="neutral" title="Sent the form and answering the screening questions now">{STILL_APPLYING_LABEL}</Pill> : null}
         {reading !== "none" ? <Pill size="sm" tone={READING[reading].tone}>{READING[reading].label}</Pill> : null}
         {a.evidence?.lowConfidence && reading !== "closer_look" ? <Chip tone="caution">{LOW_CONFIDENCE_LABEL}</Chip> : null}
         {a.tags.map((t) => <Chip key={t} tone="caution">{t}</Chip>)}
         {a.toldState === "not_told" ? <Chip>{a.decisionMessageWaiting ? "Message waiting for approval" : "Not told yet"}</Chip> : null}
         {a.toldState === "queued" ? <Chip>{messageOnItsWayChip(check)}</Chip> : null}
+        {/* under Cancelled: where their new times stand ("New times go out automatically Thu, Oct 15", "Waiting for you") */}
+        {a.ownerStage === "cancelled" && a.cancelled ? <Chip>{a.cancelled.status}</Chip> : null}
       </div>
       {/* the match score, worked out by code from the checked findings (founder decision B2); an older answer has none */}
       <span className="score-slot" title={a.coverage?.words}>{a.score !== undefined ? <ScoreBadge score={a.score} size="sm" /> : null}</span>
@@ -403,6 +429,60 @@ function TellSheet({ roleId, people, onClose }: { roleId: string; people: Applic
           {policy === "needs_approval" ? <p className="small muted" style={{ margin: 0 }}>Under your settings each message waits for approval before it goes out.</p> : null}
           {policy === "sends" && preview.data?.undoSeconds ? <p className="small muted" style={{ margin: 0 }}>Each message waits {preview.data.undoSeconds} seconds before it goes, so you can undo the Send.</p> : null}
           <Button variant="primary" icon="send" disabled={!picked.length || policy === "not_sent"} loading={send.isPending} onClick={() => send.mutate()}>{policy === "needs_approval" ? `Send ${picked.length} for approval` : `Send to ${picked.length} ${picked.length === 1 ? "person" : "people"}`}</Button>
+        </div>
+      )}
+    </Sheet>
+  );
+}
+
+/**
+ * "Send new times" for everyone under Cancelled at once (founder decision 2A, founder question 4): people who asked for
+ * new times and people who did not come are ticked; people who said they are no longer interested are listed but not
+ * ticked; anyone whose new times are already being prepared or are out cannot be ticked. One Send asks for each person
+ * separately, so one refusal never holds up the rest, and each person's own result is shown.
+ */
+function NewTimesSheet({ roleId, people, onClose }: { roleId: string; people: ApplicationSummary[]; onClose: () => void }) {
+  const qc = useQueryClient();
+  const rows = newTimesSheetRows(people);
+  const [picked, setPicked] = useState<string[]>(rows.filter((r) => r.ticked).map((r) => r.id));
+  const [results, setResults] = useState<SendNewTimesBatchResult | null>(null);
+  const send = useMutation({
+    // in requests of at most a hundred people each, one after the other
+    mutationFn: async () => {
+      const parts: SendNewTimesBatchResult[] = [];
+      for (const ids of batches(picked)) parts.push(await api.post<SendNewTimesBatchResult>(`/api/v1/roles/${roleId}/new-times`, { applicationIds: ids }));
+      return mergeNewTimesResults(parts);
+    },
+    onSuccess: async (r) => {
+      setResults(r);
+      const t = newTimesToast({ kind: "batch", ...r });
+      toast(t.title, t.detail);
+      await Promise.all([qc.invalidateQueries({ queryKey: ["applications", roleId] }), qc.invalidateQueries({ queryKey: ["brief"] }), qc.invalidateQueries({ queryKey: ["application"] }), qc.invalidateQueries({ queryKey: ["interviews"] }), qc.invalidateQueries({ queryKey: ["roles"] })]);
+    },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send new times."),
+  });
+  return (
+    <Sheet open onClose={onClose} title="Send new times">
+      {results ? (
+        <div className="stack">
+          <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+            {results.results.map((r) => <li key={r.applicationId}><strong>{r.name}</strong>: {newTimesResultLine(r)}</li>)}
+          </ul>
+          <div className="row"><Button onClick={onClose}>Done</Button></div>
+        </div>
+      ) : (
+        <div className="stack">
+          <p className="small" style={{ margin: 0 }}>{NEW_TIMES_SHEET_TEXT}</p>
+          <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+            <legend className="small muted">Who gets new times</legend>
+            {rows.map((p) => (
+              <label key={p.id} className="row small" style={{ gap: 8 }}>
+                <input type="checkbox" checked={picked.includes(p.id)} disabled={p.disabled} onChange={(e) => setPicked((now) => (e.target.checked ? [...now, p.id] : now.filter((x) => x !== p.id)))} />
+                {p.name}{p.note ? <span className="muted">{p.note}</span> : null}
+              </label>
+            ))}
+          </fieldset>
+          <Button variant="primary" icon="send" disabled={!picked.length} loading={send.isPending} onClick={() => send.mutate()}>{newTimesSendLabel(picked.length)}</Button>
         </div>
       )}
     </Sheet>

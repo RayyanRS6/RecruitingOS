@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, like } from "drizzle-orm";
 import type { ActiveMark, ApplicationStage, StageMove } from "@ros/contracts";
-import { anonymizeCandidate, correctOutcome, emit, entitlements, exportCandidateData, suppressAddress, transition } from "@ros/core";
+import { anonymizeCandidate, correctOutcome, emit, entitlements, exportCandidateData, openFollowUp, suppressAddress, transition } from "@ros/core";
 import { detectStuckRoles, handleEmailEvent, retryCommunication, runInterventionLadder, runUntoldSafetyNet, sweepStaleSending, workingDaysSince } from "@ros/agents";
 import { applicationMarks, applications, approvalRequests, candidates, communications, events, interviews, notifications, policies, randomToken, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
@@ -599,12 +599,34 @@ describe("the stage strip, private marks and private decisions", () => {
   });
 
   describe("the role's list", () => {
+    /**
+     * Someone under Cancelled (founder decisions 1A to 4A): their interview cancelled by them, or missed, with an open
+     * follow-up; `open` adds a new interview being set up for them (their new times are being prepared).
+     */
+    const underCancelled = (first: string, input: { kind: "candidate_cancelled" | "candidate_no_show"; choice: "new_times" | "not_interested" | null; promised?: boolean; open?: boolean }) =>
+      withTenant(container.db, companyId, async (tx) => {
+        const actor = { kind: "user" as const, id: ownerId, name: "Owner" };
+        const [cand] = await tx.insert(candidates).values({ companyId, firstName: first, lastName: "Moss", email: `${first.toLowerCase()}@marks.test`, firstSource: "direct" }).returning();
+        const [a] = await tx.insert(applications).values({ companyId, roleId, candidateId: cand.id, packetVersion: 1, source: "direct", stage: input.kind === "candidate_no_show" ? "interview_complete" : "interview_recommended", statusToken: randomToken(16) }).returning();
+        const iv = (status: string, extra: Partial<typeof interviews.$inferInsert> = {}) => ({ companyId, applicationId: a.id, roundKey: "first", title: "First interview", format: "video", durationMinutes: 30, status, createdBy: actor, ...extra });
+        const [missed] = await tx.insert(interviews).values(iv(input.kind === "candidate_no_show" ? "no_show" : "cancelled", { attempt: 2, outcome: input.kind === "candidate_no_show" ? "no_show_candidate" : null })).returning();
+        if (input.open) await tx.insert(interviews).values(iv("scheduling"));
+        const auto = input.promised ? { state: "waiting" as const, dueAt: new Date(Date.now() + 5 * DAY).toISOString(), workingDays: 3 } : { state: "none" as const, reason: input.kind === "candidate_no_show" ? ("no_show" as const) : ("not_asked" as const) };
+        await openFollowUp(tx, { companyId, applicationId: a.id, interviewId: missed.id, interviewAttempt: 2, kind: input.kind, choice: input.choice, auto, actor });
+        return a.id;
+      });
+
     it("carries the strip, the mark, the dates and the stage button on every row, with the counts and filters", async () => {
       const shortlisted = await seed("Vic");
       await act(owner, shortlisted, { action: "set_mark", mark: "shortlist" });
+      // under Cancelled: one promised new times (in process), one who did not come (waiting on you), one no longer
+      // interested with new times being prepared by the team (in process)
+      const quinn = await underCancelled("Quinn", { kind: "candidate_cancelled", choice: "new_times", promised: true });
+      const rae = await underCancelled("Rae", { kind: "candidate_no_show", choice: null });
+      const sol = await underCancelled("Sol", { kind: "candidate_cancelled", choice: "not_interested", open: true });
       const plain = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<Record<string, unknown>>;
       expect(Array.isArray(plain)).toBe(true);
-      const withCounts = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/applications?counts=1`)).json()) as { applications: Array<{ id: string; ownerStage: string; mark: ActiveMark | null; appliedAt: string; stageChangedAt: string; daysInStage: number; toldState: string | null; stageMoves: StageMove[]; tags: string[] }>; counts: { total: number; byOwnerStage: Record<string, number>; byGroup: Record<string, number>; notTold: number } };
+      const withCounts = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/applications?counts=1`)).json()) as { applications: Array<{ id: string; ownerStage: string; ownerStageLabel: string; group: string; mark: ActiveMark | null; appliedAt: string; stageChangedAt: string; daysInStage: number; toldState: string | null; stageMoves: StageMove[]; tags: string[]; cancelled: { reason: string; label: string; times: string; status: string } | null }>; counts: { total: number; byOwnerStage: Record<string, number>; byGroup: Record<string, number>; notTold: number; cancelled: { askedNewTimes: number; notInterested: number; noShow: number } } };
       expect(withCounts.applications).toHaveLength(plain.length);
       expect(withCounts.counts.total).toBe(plain.length);
       const byStage: Record<string, number> = {};
@@ -615,6 +637,18 @@ describe("the stage strip, private marks and private decisions", () => {
       expect(vic).toMatchObject({ ownerStage: "shortlist", mark: { mark: "shortlist" }, toldState: null, daysInStage: 0 });
       expect(vic.appliedAt).toBeTruthy();
       expect(vic.stageMoves.find((m) => m.to === "new")).toMatchObject({ allowed: true, via: "clear_mark" });
+      // under Cancelled: why, where their new times stand, the sub-label on the stage button, and the chips' counts
+      const row = (id: string) => withCounts.applications.find((r) => r.id === id)!;
+      expect(row(quinn)).toMatchObject({ ownerStage: "cancelled", ownerStageLabel: "Asked for new times", group: "in_process", cancelled: { reason: "asked_new_times", label: "Asked for new times", times: "none" } });
+      expect(row(quinn).cancelled!.status).toMatch(/^New times go out automatically [A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}$/);
+      expect(row(rae)).toMatchObject({ ownerStage: "cancelled", ownerStageLabel: "No-show", group: "waiting_on_you", cancelled: { reason: "no_show", status: "Waiting for you" } });
+      expect(row(sol)).toMatchObject({ ownerStage: "cancelled", ownerStageLabel: "No longer interested", group: "in_process", cancelled: { reason: "not_interested", times: "preparing", status: "Getting new times ready" } });
+      expect(row(rae).stageMoves.find((m) => m.to === "cancelled")).toMatchObject({ current: true });
+      expect(withCounts.applications.filter((r) => r.ownerStage !== "cancelled").every((r) => r.cancelled === null)).toBe(true);
+      expect(withCounts.counts.byOwnerStage.cancelled).toBe(3);
+      expect(withCounts.counts.cancelled).toEqual({ askedNewTimes: 1, notInterested: 1, noShow: 1 });
+      const onlyCancelled = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/applications?ownerStage=cancelled`)).json()) as Array<{ id: string; ownerStage: string }>;
+      expect(onlyCancelled.map((r) => r.id).sort()).toEqual([quinn, rae, sol].sort());
       // one column of the strip, and decisions nobody has told
       const onlyShortlist = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/applications?ownerStage=shortlist`)).json()) as Array<{ ownerStage: string }>;
       expect(onlyShortlist.length).toBeGreaterThan(0);

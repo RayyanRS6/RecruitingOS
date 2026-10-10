@@ -149,15 +149,23 @@ export async function resolvePolicy(q: Queryable, companyId: string, roleId: str
   const moved = clamped !== decision.level;
   if (moved) decision = { ...decision, level: clamped };
   if (decision.level === "approval" && !decision.approverRoles.length && (moved || actionType === "role_packet.approve")) decision = { ...decision, approverRoles: def.approverRoles };
-  if (roleId && (decision.level === "auto" || decision.level === "auto_notify")) {
-    const active = await q
-      .select()
-      .from(takeovers)
-      .where(and(eq(takeovers.companyId, companyId), eq(takeovers.roleId, roleId), eq(takeovers.status, "active")))
-      .limit(1);
-    if (active[0]) decision = { ...decision, level: "approval", approverRoles: ["recruiter"], source: "takeover" };
+  if (roleId && (decision.level === "auto" || decision.level === "auto_notify") && (await roleTakenOver(q, companyId, roleId))) {
+    decision = { ...decision, level: "approval", approverRoles: ["recruiter"], source: "takeover" };
   }
   return decision;
+}
+
+/**
+ * Whether an ITS recruiter is running the role (an active takeover). During one the recruiter manages candidate contact:
+ * automatic actions wait for them (`resolvePolicy`), and no automatic new interview times go (founder question 7).
+ */
+export async function roleTakenOver(q: Queryable, companyId: string, roleId: string): Promise<boolean> {
+  const active = await q
+    .select({ id: takeovers.id })
+    .from(takeovers)
+    .where(and(eq(takeovers.companyId, companyId), eq(takeovers.roleId, roleId), eq(takeovers.status, "active")))
+    .limit(1);
+  return !!active[0];
 }
 
 export type GateResult =

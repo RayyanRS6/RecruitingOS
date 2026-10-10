@@ -9,6 +9,7 @@ export * from "./orchestrator";
 export * from "./documents";
 export * from "./fake-handlers";
 export * from "./interview-messages";
+export * from "./new-times";
 export * from "./interview-calendar";
 export * from "./interviewer-brief";
 export * from "./privacy-messages";

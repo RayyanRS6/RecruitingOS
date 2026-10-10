@@ -55,27 +55,27 @@ ${fontFaceCss()}
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --ground: #151412;
-    --surface: #1d1b18;
-    --surface-2: #26231f;
-    --line: #35312b;
-    --line-2: #45403a;
-    --line-strong: #7a7368;
-    --ink: #f3f0ea;
-    --ink-2: #cbc5ba;
-    --ink-3: #a8a196;
-    --primary: #f3f0ea;
-    --primary-hover: #d9d4cb;
-    --on-primary: #151412;
+    --ground: #0e0e10;
+    --surface: #18181b;
+    --surface-2: #25252a;
+    --line: #2c2c31;
+    --line-2: #3f3f46;
+    --line-strong: #78787f;
+    --ink: #ededf0;
+    --ink-2: #c6c6cc;
+    --ink-3: #a1a1aa;
+    --primary: #ededf0;
+    --primary-hover: #d1d1d6;
+    --on-primary: #0e0e10;
     --accent: #8ea0ff;
     --accent-ink: #aab8ff;
     --accent-soft: #232a52;
     --caution: #f1c45e;
-    --caution-soft: #33280f;
-    --caution-line: #5c4715;
+    --caution-soft: #342c1e;
+    --caution-line: #604c22;
     --critical: #ff9389;
-    --critical-soft: #3d1915;
-    --critical-line: #6a2a24;
+    --critical-soft: #392424;
+    --critical-line: #6b3633;
     --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.4), 0 18px 40px -16px rgba(0, 0, 0, 0.75);
     color-scheme: dark;
   }
@@ -127,16 +127,35 @@ main:not(.wide) .card { background: var(--ground); }
 .fact .icon { color: var(--ink-3); }
 
 /* Buttons: near-black for the one main action, outlined for everything else; full width on a phone */
-.btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; margin: 16px 0 0; padding: 13px 22px; border: 1px solid var(--primary); border-radius: var(--r-control); background: var(--primary); color: var(--on-primary); font: 600 16px/1.25 var(--ui); text-align: center; text-decoration: none; cursor: pointer; transition: background-color 150ms ease, border-color 150ms ease; }
-.btn:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+.btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; margin: 16px 0 0; padding: 13px 22px; border: 1px solid var(--primary); border-radius: var(--r-control); background: var(--primary); color: var(--on-primary); font: 600 16px/1.25 var(--ui); text-align: center; text-decoration: none; cursor: pointer; transition: background-color 150ms ease, border-color 150ms ease, transform 150ms ease; }
+@media (hover: hover) and (pointer: fine) { .btn:hover { background: var(--primary-hover); border-color: var(--primary-hover); } }
 .btn.secondary { background: var(--surface); border-color: var(--line-2); color: var(--ink); }
-.btn.secondary:hover { background: var(--surface-2); border-color: var(--ink-3); }
+@media (hover: hover) and (pointer: fine) { .btn.secondary:hover { background: var(--surface-2); border-color: var(--ink-3); } }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
 .actions > form { display: contents; }
 .actions + p { margin-top: 14px; }
 .actions .btn, p > .btn { margin: 0; }
 @media (min-width: 600px) { .btn { display: inline-flex; width: auto; min-width: 200px; } }
+@media (prefers-reduced-motion: no-preference) { .btn:active:not(:disabled) { transform: scale(0.97); } }
+
+/* Apply now (founder decision Q2 = A, 10 October 2026): on hover or keyboard focus the dark fill slides across the words
+   (transform only). The edge is the field-border grey, so the pill shows on the open ground as on a card. The words turn
+   as the fill passes their middle: from 55ms on the way in, from 35ms on the way out. */
+.btn.go { position: relative; isolation: isolate; overflow: hidden; justify-content: flex-start; gap: 12px; min-height: 48px; padding: 4px 22px 4px 4px; border-color: var(--line-strong); border-radius: var(--r-pill); background: var(--surface-2); color: var(--ink); transition: border-color 150ms ease, color 50ms linear 35ms, transform 150ms ease; }
+.go-fill { position: absolute; top: 4px; right: 4px; bottom: 4px; left: 4px; z-index: -1; border-radius: inherit; background: var(--primary); transform: translateX(calc(-100% - 4px)); }
+.go-icon { display: grid; place-items: center; flex: none; width: 38px; height: 38px; border-radius: 50%; background: var(--primary); color: var(--on-primary); }
+.go-icon .icon { width: 18px; height: 18px; }
+.go-text { flex: 1 1 auto; min-width: 0; text-align: center; overflow-wrap: anywhere; }
+.btn.go:focus-visible { outline-offset: 3px; }
+.btn.go:focus-visible, .btn.go:active { border-color: var(--primary); color: var(--on-primary); transition: border-color 150ms ease, color 50ms linear 55ms, transform 150ms ease; }
+.btn.go:focus-visible .go-fill, .btn.go:active .go-fill { transform: none; }
+@media (hover: hover) and (pointer: fine) {
+  .btn.go:hover { border-color: var(--primary); color: var(--on-primary); transition: border-color 150ms ease, color 50ms linear 55ms, transform 150ms ease; }
+  .btn.go:hover .go-fill { transform: none; }
+  .btn.go:hover .go-icon .icon { transform: translateX(2px); }
+}
+@media (prefers-reduced-motion: no-preference) { .go-fill, .go-icon .icon { transition: transform 200ms ease-out; } }
 
 /* Forms: fields with borders that can be seen (WCAG 1.4.11), a clear mark on a field that needs attention */
 label { display: block; margin: 20px 0 6px; color: var(--ink); font-size: 15px; font-weight: 600; }
@@ -147,7 +166,7 @@ textarea { min-height: 112px; resize: vertical; }
 [aria-invalid="true"] { border-color: var(--critical); box-shadow: 0 0 0 1px var(--critical); }
 input[type=file] { display: block; width: 100%; color: var(--ink-2); font: inherit; font-size: 15px; }
 input[type=file]::file-selector-button { margin-right: 12px; padding: 10px 16px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); color: var(--ink); font: 600 15px/1.2 var(--ui); cursor: pointer; }
-input[type=file]::file-selector-button:hover { background: var(--surface-2); }
+@media (hover: hover) and (pointer: fine) { input[type=file]::file-selector-button:hover { background: var(--surface-2); } }
 input[type=checkbox], input[type=radio] { accent-color: var(--ink); }
 .check { display: flex; align-items: flex-start; gap: 10px; margin: 12px 0; color: var(--ink); font-weight: 400; }
 .check input { flex: none; width: 20px; height: 20px; margin: 2px 0 0; }
@@ -271,7 +290,7 @@ details.no-resume label { margin-top: 16px; }
   .job-body, .about { padding: 22px 18px; }
   .logo { width: 48px; height: 48px; }
 }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
 `;
 
 /** JSON for a script element: "<", ">" and the line separators are escaped so owner-written text can never close the element. */

@@ -3,20 +3,23 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "../nav";
-import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, Field, PageHeader, Pill, Skeleton, Table, Timeline, type Tone } from "@ros/ui";
-import { api, ApiError, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me } from "../api/client";
+import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, Field, PageHeader, Pill, Skeleton, type SortValue, sortRows, Table, Timeline, type Tone, useTableSort } from "@ros/ui";
+import { api, ApiError, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me, type NewTimesSettingView, type SendNewTimesResult } from "../api/client";
 import { toast } from "../toast";
+import { interviewNewTimesText } from "../cancelled";
 import { activeCompanyOf } from "../rail";
 import { canDecideInterviews, canManageInterviews, canReadNotes, canSeeTalent } from "../roles";
-import { interviewCancelToast } from "../talent-actions";
+import { interviewCancelToast, newTimesToast } from "../talent-actions";
 import { againChoice } from "../interview-defaults";
 import { MyNote, useNotes } from "./candidate-panel/notes";
 
 const STATUS_LABEL: Record<string, string> = { proposed: "Preparing times", scheduling: "Waiting on the candidate", scheduled: "Scheduled", completed: "Completed", cancelled: "Cancelled", no_show: "No-show", offer_expired: "Times expired" };
-const DECISION_LABEL: Record<string, string> = { next_round: "Next round", finalist: "Finalist", not_moving_forward: "Not moving forward", hired: "Hired" };
+// `new_times`: the candidate did not come, and the team sent new times for the same round (the Cancelled column).
+const DECISION_LABEL: Record<string, string> = { next_round: "Next round", finalist: "Finalist", not_moving_forward: "Not moving forward", hired: "Hired", new_times: "New times sent" };
 // Red is only for a missing must-have or a critical error (docs/07), so a cancelled interview is plain grey.
 const STATUS_TONE: Record<string, Tone> = { proposed: "accent", scheduling: "caution", scheduled: "good", completed: "neutral", cancelled: "neutral", no_show: "caution", offer_expired: "caution" };
 const when = (iso: string | null, tz: string | null) => (iso ? new Date(iso).toLocaleString("en-US", { timeZone: tz ?? undefined, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "not yet");
+const INTERVIEW_SORT: Record<"candidate" | "round" | "when", (i: InterviewSummary) => SortValue> = { candidate: (i) => `${i.candidate.firstName} ${i.candidate.lastName}`, round: (i) => i.title, when: (i) => (i.startsAt ? Date.parse(i.startsAt) : null) };
 
 /** Interviews across roles (docs/04): who, when, who is interviewing, and what needs a person. */
 export function Interviews() {
@@ -25,10 +28,14 @@ export function Interviews() {
   const company = activeCompanyOf(me.data);
   const role = company.role;
   const list = useQuery({ queryKey: ["interviews"], queryFn: () => api.get<InterviewSummary[]>("/api/v1/interviews"), refetchInterval: 15000 });
-  const upcoming = (list.data ?? []).filter((i) => ["proposed", "scheduling", "scheduled"].includes(i.status)).sort((a, b) => (a.startsAt ?? "9").localeCompare(b.startsAt ?? "9"));
+  const upcoming = (list.data ?? []).filter((i) => ["proposed", "scheduling", "scheduled"].includes(i.status));
   const past = (list.data ?? []).filter((i) => !["proposed", "scheduling", "scheduled"].includes(i.status));
+  // In motion opens soonest first (unscheduled last), as it always has; Past opens latest first.
+  const soon = useTableSort<"candidate" | "round" | "when">({ key: "when", dir: "ascending" });
+  const done = useTableSort<"candidate" | "round" | "when">({ key: "when", dir: "descending" });
+  // The interviewer line names people soonest interview first, whatever order the table is sorted in
   const load: Record<string, number> = {};
-  for (const i of upcoming) for (const p of i.participants) load[p.name ?? p.email] = (load[p.name ?? p.email] ?? 0) + 1;
+  for (const i of sortRows(upcoming, INTERVIEW_SORT.when, "ascending")) for (const p of i.participants) load[p.name ?? p.email] = (load[p.name ?? p.email] ?? 0) + 1;
   return (
     <div className="stack" style={{ gap: 18 }}>
       <PageHeader eyebrow={company.name ?? undefined} title="Interviews" sub={canManageInterviews(role) ? "Every interview a person approved: waiting on the candidate, scheduled, or done. Reschedule and cancel from here; nothing is decided by software." : "Your interviews: waiting on the candidate, scheduled, or done. Afterwards, tell us whether it took place; the hiring team records the decision."} />
@@ -36,8 +43,8 @@ export function Interviews() {
         <>
           {upcoming.length === 0 ? <EmptyState icon="interviews" title="No interviews in motion" body={canSeeTalent(role) ? "Open a candidate and move them to Interviewing to start one." : "You will see an interview here as soon as you are put on one."} action={canSeeTalent(role) ? <Link to="/talent" className="btn primary">Go to Talent</Link> : undefined} /> : (
             <Card title={`In motion (${upcoming.length})`}>
-              <Table head={["Candidate", "Round", "When", "Interviewers", "Status", ""]}>
-                {upcoming.map((i) => (
+              <Table head={[soon.col("candidate", "Candidate", "text"), soon.col("round", "Round", "text"), soon.col("when", "When", "date", { first: "ascending" }), "Interviewers", "Status", ""]} announce={soon.announce}>
+                {soon.apply(upcoming, INTERVIEW_SORT).map((i) => (
                   <tr key={i.id}>
                     <td><CandidateCell i={i} /></td>
                     <td>{i.title}</td>
@@ -53,8 +60,8 @@ export function Interviews() {
           )}
           {past.length ? (
             <Card title={`Past (${past.length})`}>
-              <Table head={["Candidate", "Round", "When", "Outcome", "Decision", ""]}>
-                {past.map((i) => (
+              <Table head={[done.col("candidate", "Candidate", "text"), done.col("round", "Round", "text"), done.col("when", "When", "date"), "Outcome", "Decision", ""]} announce={done.announce}>
+                {done.apply(past, INTERVIEW_SORT).map((i) => (
                   <tr key={i.id}>
                     <td><CandidateCell i={i} /></td>
                     <td>{i.title}</td>
@@ -103,11 +110,24 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
   const cancel = useMutation({ mutationFn: () => api.post<{ candidateTold?: boolean; interviewersTold?: boolean }>(`/api/v1/interviews/${id}/cancel`, { reason }), onSuccess: async (r) => { const t = interviewCancelToast(r); toast(t.title, t.detail); setConfirmCancel(false); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not cancel.") });
   const outcome = useMutation({ mutationFn: (o: string) => api.post(`/api/v1/interviews/${id}/outcome`, { outcome: o }), onSuccess: async () => { toast("Recorded."); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record.") });
   const book = useMutation({ mutationFn: (slotId: string) => api.post(`/api/v1/interviews/${id}/book-on-behalf`, { slotId, note: "chosen with the candidate by phone" }), onSuccess: async () => { toast("Booked on the candidate's behalf."); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not book.") });
+  // Someone under Cancelled (founder decision 2A): the same interview reopened for new times, or a new one for the same round after a no-show.
+  const newTimes = useMutation({
+    mutationFn: (applicationId: string) => api.post<SendNewTimesResult>(`/api/v1/applications/${applicationId}/new-times`, {}),
+    onSuccess: async (r, applicationId) => {
+      if (q.data) { const t = newTimesToast({ kind: "sent", via: r.via, firstName: q.data.candidate.firstName, round: q.data.title }); toast(t.title, t.detail); }
+      await refresh();
+      await qc.invalidateQueries({ queryKey: ["application", applicationId] });
+    },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send new times."),
+  });
   const i = q.data;
   const manage = canManageInterviews(role);
   const participant = !!i && !!userId && i.participants.some((p) => p.userId === userId);
   const finished = !!i && ["completed", "no_show"].includes(i.status);
   const again = !!i && againChoice(i, all, role);
+  // Before ITS confirms the company the team's send is refused (409 company_not_checked), so the card does not offer it.
+  const setting = useQuery({ queryKey: ["new-times-setting"], queryFn: () => api.get<NewTimesSettingView>("/api/v1/companies/current/new-times"), retry: false, enabled: again === "send_new_times" });
+  const companyConfirmed = setting.data?.companyConfirmed;
   return (
     <Drawer open onClose={() => nav("/interviews")} title={i ? `${i.candidate.firstName} ${i.candidate.lastName} · ${i.title}` : "Interview"} leading={i ? <Avatar name={`${i.candidate.firstName} ${i.candidate.lastName}`} size="lg" /> : undefined}>
       {q.error && !i ? <ErrorState message={q.error instanceof ApiError && (q.error.status === 404 || q.error.status === 403) ? "This interview is not one of yours, or it no longer exists." : "Could not load this interview."} onRetry={() => q.refetch()} /> : q.isLoading || !i ? <Skeleton lines={8} /> : (
@@ -165,7 +185,15 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
               </div>
             </Card>
           ) : null}
-          {again === "offer_again" ? (
+          {again === "send_new_times" && i.followUp ? (
+            <Card needsYou={companyConfirmed !== false} title={companyConfirmed === false ? "New times" : "Send new times"}>
+              <p className="small" style={{ color: "var(--ink-2)" }}>{interviewNewTimesText(i.candidate.firstName, i.followUp.reason, companyConfirmed)}</p>
+              <div className="row" style={{ marginTop: 10 }}>
+                {companyConfirmed === false ? null : <Button size="sm" variant="primary" icon="send" loading={newTimes.isPending} onClick={() => newTimes.mutate(i.applicationId)}>Send new times</Button>}
+                {canSeeTalent(role) ? <Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}`} className="btn quiet sm">Open their page</Link> : null}
+              </div>
+            </Card>
+          ) : again === "offer_again" ? (
             <Card needsYou title="Offer times again">
               <p className="small" style={{ color: "var(--ink-2)" }}>{i.candidate.firstName} did not pick a time. New times go out for the same round and interviewers, or you can decide about them from their page.</p>
               <div className="row" style={{ marginTop: 10 }}>

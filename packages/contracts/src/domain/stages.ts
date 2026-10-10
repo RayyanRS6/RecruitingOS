@@ -41,20 +41,44 @@ export type OwnerGroup = z.infer<typeof OwnerGroup>;
 /**
  * The stage strip (founder decision B3): the stages an owner sees and moves people between, in this order. A view over
  * the internal state machine, which is unchanged: Longlist, Shortlist and On hold are private marks a person sets
- * (`application_marks`), never internal stages, and the candidate sees none of them (`ownerStage` in packages/core).
+ * (`application_marks`), never internal stages. Cancelled (founder decisions 1A to 4A) is a view over a stored follow-up
+ * (`interview_followups`), not a mark: someone who cancelled a booked interview or did not come to it, while still
+ * recommended for interview or interview done. The candidate sees none of them (`ownerStage` in packages/core).
  */
-export const OwnerStage = z.enum(["new", "longlist", "shortlist", "interviewing", "on_hold", "offer", "hired", "not_moving_forward"]);
+export const OwnerStage = z.enum(["new", "longlist", "shortlist", "interviewing", "cancelled", "on_hold", "offer", "hired", "not_moving_forward"]);
 export type OwnerStage = z.infer<typeof OwnerStage>;
 export const OWNER_STAGE_LABEL: Record<OwnerStage, string> = {
   new: "New",
   longlist: "Longlist",
   shortlist: "Shortlist",
   interviewing: "Interviewing",
+  cancelled: "Cancelled",
   on_hold: "On hold",
   offer: "Offer",
   hired: "Hired",
   not_moving_forward: "Not moving forward",
 };
+
+/** Why someone is under Cancelled: the choice they made when they cancelled, or that they did not come. */
+export const CancelledReason = z.enum(["asked_new_times", "not_interested", "no_show"]);
+export type CancelledReason = z.infer<typeof CancelledReason>;
+export const CANCELLED_REASON_LABEL: Record<CancelledReason, string> = { asked_new_times: "Asked for new times", not_interested: "No longer interested", no_show: "No-show" };
+/** Where the new times stand: nothing in motion; an interview being set up (no email yet); its email held for the ITS check; out; the email failed; offered and lapsed. */
+export const NewTimesProgress = z.enum(["none", "preparing", "held", "out", "not_reached", "expired"]);
+export type NewTimesProgress = z.infer<typeof NewTimesProgress>;
+/**
+ * Why someone is under Cancelled and where their new times stand. Team-only: never on a candidate page (B6).
+ * `interviewId`: the interview that carries their new times, or else the one they cancelled or missed. `auto.dueDay` is
+ * the promised day (YYYY-MM-DD, company time); `status` is the row's line in plain words.
+ */
+export type CancelledView = {
+  id: string; reason: CancelledReason; label: string; since: string; interviewId: string;
+  auto: { state: "none" | "waiting" | "waiting_check" | "preparing" | "sent" | "not_sent"; reason: string | null; reasonText: string | null; dueAt: string | null; dueDay: string | null; sentAt: string | null };
+  times: NewTimesProgress; lastSentAt: string | null; lastSentVia: "auto" | "person" | "batch" | null;
+  status: string;
+};
+/** The follow-up an interview summary carries: enough for the Interviews page to offer "Send new times". */
+export type InterviewFollowUpRef = { id: string; reason: CancelledReason; times: NewTimesProgress };
 
 /**
  * A person's private mark on an application (plan A4 and plan-adjustments section 2). At most one is active at a time;

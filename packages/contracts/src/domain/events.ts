@@ -38,6 +38,10 @@ export const EventType = z.enum([
   // The untold safety net (Q27): five working days on, the standard message went by itself, or a recruiter was brought
   // in instead; and the one closing message for everyone a closed role left untold (Q30), sent or put to one approval.
   "application.untold_fallback", "role.closing_message",
+  // The Cancelled column (founder decisions 1A to 4A): someone went under Cancelled (a candidate's cancel, a no-show, or
+  // back after a decision was taken back) or left it; new times went to them, or the automatic set did not go. All on
+  // the application, so the candidate's history and data export read them; the team's send to many is one fact on the role.
+  "application.moved_to_cancelled", "application.left_cancelled", "interview.new_times_sent", "interview.new_times_not_sent", "interview.new_times_batch",
   // Review and apply on the pool board (plan F8): one fact per batch, with what the board suggested and what a person chose.
   "pool.batch_applied",
   // A private team note on a candidate written, changed or removed by its author (plan H3). Never carries the note's words.

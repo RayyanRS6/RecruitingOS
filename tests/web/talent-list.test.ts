@@ -13,7 +13,7 @@ function row(over: Partial<ApplicationSummary> & { name?: string; overall?: stri
   const { name, overall, ...rest } = over;
   return {
     id: `a${n}`, stage: "triaged", stageLabel: "Ready for your review", group: "waiting_on_you", source: "careers_page", createdAt: "2026-10-01T10:00:00.000Z", eligibility: null,
-    ownerStage: "new", ownerStageLabel: "New", mark: null, tags: [], stageMoves: [], toldState: null,
+    ownerStage: "new", ownerStageLabel: "New", mark: null, tags: [], stageMoves: [], toldState: null, cancelled: null,
     candidate: { id: `c${n}`, name: name ?? `Person ${n}`, email: `person${n}@example.com`, phone: null, locationText: null },
     extractionSummary: null,
     assessment: overall ? { overall, confidence: "medium", summary: "", strengths: [], concerns: [] } : null,
@@ -22,7 +22,7 @@ function row(over: Partial<ApplicationSummary> & { name?: string; overall?: stri
     ...rest,
   };
 }
-const view = (over: Partial<TalentView> = {}): TalentView => ({ stage: "all", waiting: false, applying: false, reading: "any", query: "", order: "newest", internalStage: null, told: null, ...over });
+const view = (over: Partial<TalentView> = {}): TalentView => ({ stage: "all", waiting: false, applying: false, reading: "any", query: "", order: "newest", internalStage: null, told: null, cancelledReason: null, ...over });
 const params = (q: string) => new URLSearchParams(q);
 
 describe("the reading chip", () => {
@@ -120,9 +120,9 @@ describe("filters, search and order", () => {
 });
 
 describe("the strip and the row's words", () => {
-  it("lists everyone, then every stage in order, with its count", () => {
-    const items = stripItems({ total: 6, byOwnerStage: { new: 2, longlist: 0, shortlist: 1, interviewing: 1, on_hold: 1, offer: 0, hired: 0, not_moving_forward: 1 } });
-    expect(items.map((i) => `${i.label} ${i.count}`)).toEqual(["All 6", "New 2", "Longlist 0", "Shortlist 1", "Interviewing 1", "On hold 1", "Offer 0", "Hired 0", "Not moving forward 1"]);
+  it("lists everyone, then every stage in order, with its count: Cancelled right after Interviewing (founder decision 1A)", () => {
+    const items = stripItems({ total: 8, byOwnerStage: { new: 2, longlist: 0, shortlist: 1, interviewing: 1, cancelled: 2, on_hold: 1, offer: 0, hired: 0, not_moving_forward: 1 } });
+    expect(items.map((i) => `${i.label} ${i.count}`)).toEqual(["All 8", "New 2", "Longlist 0", "Shortlist 1", "Interviewing 1", "Cancelled 2", "On hold 1", "Offer 0", "Hired 0", "Not moving forward 1"]);
     expect(stripItems(null).every((i) => i.count === 0)).toBe(true);
     expect(stageSummary({ new: 2, shortlist: 1, hired: 0 }).map((s) => `${s.count} ${s.label}`)).toEqual(["2 New", "1 Shortlist"]);
     expect(stageSummary(undefined)).toEqual([]);
@@ -162,7 +162,7 @@ describe("still applying (plan E6)", () => {
   const maria = row({ name: "Maria Reyes", overall: "strong", group: "waiting_on_you", daysInStage: 3 });
   const older = row({ name: "Old Answer" }); // an answer from before Wave E has no stillApplying at all
   const all = [sofia, theo, maria, older];
-  const counts = { total: 4, byOwnerStage: { new: 4, longlist: 0, shortlist: 0, interviewing: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 3, in_process: 1, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0 };
+  const counts = { total: 4, byOwnerStage: { new: 4, longlist: 0, shortlist: 0, interviewing: 0, cancelled: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 3, in_process: 1, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0 };
 
   it("is read from the row, and an older answer without it is not still applying", () => {
     expect(isStillApplying(sofia)).toBe(true);
@@ -193,5 +193,42 @@ describe("still applying (plan E6)", () => {
   it("opens on them from a link (the role report's 'See who is still applying'), never on 'waiting on you'", () => {
     expect(defaultView(params("applying=1"), { byGroup: { waiting_on_you: 2, in_process: 0, not_moving_forward: 0, hired: 0 } })).toEqual(view({ applying: true }));
     expect(defaultView(params(""), { byGroup: { waiting_on_you: 0, in_process: 2, not_moving_forward: 0, hired: 0 } }).applying).toBe(false);
+  });
+});
+
+describe("the Cancelled column (founder decisions 1A to 4A)", () => {
+  const under = (reason: "asked_new_times" | "not_interested" | "no_show", over: Partial<ApplicationSummary> = {}) => row({
+    stage: "interview_recommended", ownerStage: "cancelled", ownerStageLabel: reason === "no_show" ? "No-show" : reason === "not_interested" ? "No longer interested" : "Asked for new times", group: "waiting_on_you",
+    cancelled: { id: `f${n}`, reason, label: "", since: "2026-10-09T21:00:00.000Z", interviewId: "iv1", auto: { state: "none", reason: null, reasonText: null, dueAt: null, dueDay: null, sentAt: null }, times: "none", lastSentAt: null, lastSentVia: null, status: "Waiting for you" },
+    ...over,
+  });
+  const ana = under("asked_new_times", { candidate: { id: "c-ana", name: "Ana Lopez", email: "ana@example.com", phone: null, locationText: null } });
+  const ben = under("not_interested", { candidate: { id: "c-ben", name: "Ben Ortiz", email: "ben@example.com", phone: null, locationText: null } });
+  const cleo = under("no_show", { candidate: { id: "c-cleo", name: "Cleo Park", email: "cleo@example.com", phone: null, locationText: null } });
+  const dana = row({ name: "Dana Reyes", ownerStage: "interviewing", ownerStageLabel: "Interviewing" });
+  const all = [ana, ben, cleo, dana];
+
+  it("opens on one reason from a link (Today's card, the role report), and ignores a reason that is not one", () => {
+    expect(defaultView(params("ownerStage=cancelled&cancelled=no_show"), null)).toEqual(view({ stage: "cancelled", cancelledReason: "no_show" }));
+    expect(defaultView(params("ownerStage=cancelled"), { byGroup: { waiting_on_you: 3, in_process: 0, not_moving_forward: 0, hired: 0 } })).toEqual(view({ stage: "cancelled" }));
+    // a reason on its own opens the column it belongs to; beside another column it means nothing
+    expect(defaultView(params("cancelled=asked_new_times"), null)).toEqual(view({ stage: "cancelled", cancelledReason: "asked_new_times" }));
+    expect(defaultView(params("ownerStage=new&cancelled=no_show"), null)).toEqual(view({ stage: "new" }));
+    expect(defaultView(params("ownerStage=cancelled&cancelled=maybe"), null)).toEqual(view({ stage: "cancelled" }));
+  });
+
+  it("shows the column, and one reason within it", () => {
+    expect(applyView(all, view({ stage: "cancelled" })).map((a) => a.id).sort()).toEqual([ana.id, ben.id, cleo.id].sort());
+    expect(applyView(all, view({ stage: "cancelled", cancelledReason: "no_show" })).map((a) => a.id)).toEqual([cleo.id]);
+    expect(applyView(all, view({ stage: "cancelled", cancelledReason: "not_interested" })).map((a) => a.id)).toEqual([ben.id]);
+    // someone not under Cancelled has no reason, so a reason never shows them
+    expect(applyView(all, view({ cancelledReason: "asked_new_times" })).map((a) => a.id)).toEqual([ana.id]);
+    expect(readingCounts(all, { stage: "cancelled", waiting: false, cancelledReason: "no_show" }).any).toBe(1);
+  });
+
+  it("says who shows there when nobody does, and falls back to the usual sentence with a reason chosen", () => {
+    expect(emptyText(view({ stage: "cancelled" }), 4)).toEqual({ title: "Nobody is under Cancelled", body: "Candidates who cancel an interview, or do not come to one, show here with what they chose." });
+    expect(emptyText(view({ stage: "cancelled", cancelledReason: "no_show" }), 4).title).toBe("Nobody here");
+    expect(emptyText(view({ stage: "cancelled", query: "zed" }), 4).title).toBe("Nobody matches");
   });
 });

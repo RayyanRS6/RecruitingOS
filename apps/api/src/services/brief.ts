@@ -1,8 +1,8 @@
 import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
-import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeMarksFor, addCalendarDays, boardPostingOf, can, closingDayWords, companyToday, groupFor, isBoardChannel, isPostingTask, isStillApplying, mayDecideApproval, openFlagsMessage, ownerGroup, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unresolvedFlags, withoutSentimentWords } from "@ros/core";
+import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, boardPostingOf, can, closingDayWords, companyToday, followUpInMotion, groupFor, inCancelled, isBoardChannel, isPostingTask, isStillApplying, mayDecideApproval, openFlagsMessage, ownerGroup, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unresolvedFlags, withoutSentimentWords, type FollowUpView } from "@ros/core";
 import { legalCheckFor, legalCheckMessage } from "./packet-approval";
 import { HELD_STATUS, UNTOLD_SEND_WORKING_DAYS, decisionsWaitingApproval, detectStuckRoles, isClosingProposal, removedCandidates } from "@ros/agents";
-import { DECISION_WORDING_LABEL, companyOnboarding, companyVerifiedAt, type CompanyOnboarding, type DecisionWording, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
+import { CANCELLED_REASON_LABEL, DECISION_WORDING_LABEL, companyOnboarding, companyVerifiedAt, type ApplicationStage, type CompanyOnboarding, type DecisionWording, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
 import { applications, approvalRequests, candidates, communications, companies, events, intakeSessions, integrations, interviewParticipants, interviewerAvailability, interviews, invitations, memberships, postings, recruiterEscalations, rolePackets, roles, screens, type Tx } from "@ros/db";
 import type { Tenant } from "../middleware/session";
 import { mayDecideByRole } from "./approvers";
@@ -187,11 +187,15 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     // A recruiter given one candidate counts and names only that candidate, never the rest of the role's applicants.
     const apps = (await tx.select().from(applications).where(and(eq(applications.roleId, role.id)))).filter((a) => inStaffScope(scope, { roleId: role.id, applicationId: a.id }));
     const marks = await activeMarksFor(tx, apps.map((a) => a.id));
+    const followUps = await activeFollowUpsFor(tx, apps.map((a) => a.id));
+    // People under Cancelled (founder decisions 1A to 4A) have the role's one Cancelled card below, and only while nothing
+    // is in motion for them; nobody gets two cards.
+    const underCancelled = (a: { id: string; stage: ApplicationStage }) => inCancelled(a.stage, followUps.get(a.id));
     const fresh = apps.filter((a) => a.createdAt >= since);
     // Candidates whose interview is over, and those held on an eligibility answer, get cards of their own below, so they
     // are not counted here a second time; a running hold waits on nobody, and an ended one has its own card (stuck detector).
     const parked = (id: string) => { const m = marks.get(id); return m?.mark === "on_hold" || m?.mark === "not_a_fit_for_now"; };
-    const waiting = apps.filter((a) => !parked(a.id) && ((ownerGroup(a.stage) === "waiting_on_you" && a.stage !== "interview_complete" && a.stage !== "ineligible") || a.stage === "eligible"));
+    const waiting = apps.filter((a) => !parked(a.id) && !underCancelled(a) && ((ownerGroup(a.stage) === "waiting_on_you" && a.stage !== "interview_complete" && a.stage !== "ineligible") || a.stage === "eligible"));
     const ineligible = apps.filter((a) => a.stage === "ineligible");
     const decidedNotTold = tells ? apps.filter((a) => DECISION_STAGES.includes(a.stage) && a.toldState === "not_told") : [];
     // someone whose details were deleted at their request is never written to, so nobody is asked to tell them
@@ -201,7 +205,9 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     // reminder, the safety net and the Talent page's "Review and send")
     const waitingApproval = await decisionsWaitingApproval(tx, untold.map((a) => a.id));
     const notTold = untold.filter((a) => !waitingApproval.has(a.id));
-    for (const card of await afterInterviewCards(tx, role, apps.filter((a) => a.stage === "interview_complete"), afterInterview)) cards.push(card);
+    for (const card of await afterInterviewCards(tx, role, apps.filter((a) => a.stage === "interview_complete" && !underCancelled(a)), afterInterview)) cards.push(card);
+    const cancelledCard = afterInterview.decides || afterInterview.requests ? await cancelledColumnCard(tx, role, apps.flatMap((a) => { const f = followUps.get(a.id); return f && inCancelled(a.stage, f) ? [{ candidateId: a.candidateId, followUp: f }] : []; })) : null;
+    if (cancelledCard) cards.push(cancelledCard);
     if (fresh.length) {
       cards.push({ kind: "new_applicants", title: `${fresh.length} ${fresh.length === 1 ? "person" : "people"} applied to ${role.title} since yesterday`, body: waiting.length ? `${waiting.length} ${waiting.length === 1 ? "is" : "are"} ready for your review.` : "They are being acknowledged and checked for eligibility.", roleId: role.id, actions: [{ label: "See applicants", method: "GET", path: `/roles/${role.id}/talent` }] });
     }
@@ -335,7 +341,8 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   const strongIds = new Set([...(await shownLatestReadings(tx, { companyId })).values()].filter((r) => r.overall === "strong").map((r) => r.applicationId));
   const companyApps = (await tx.select({ id: applications.id, roleId: applications.roleId, stage: applications.stage }).from(applications).where(eq(applications.companyId, companyId))).filter((a) => inStaffScope(scope, { roleId: a.roleId, applicationId: a.id }));
   const companyMarks = await activeMarksFor(tx, companyApps.filter((a) => strongIds.has(a.id)).map((a) => a.id));
-  const strongWaiting = companyApps.filter((a) => strongIds.has(a.id) && groupFor(a, companyMarks.get(a.id), now) === "waiting_on_you").length;
+  const companyFollowUps = await activeFollowUpsFor(tx, companyApps.filter((a) => strongIds.has(a.id)).map((a) => a.id));
+  const strongWaiting = companyApps.filter((a) => strongIds.has(a.id) && groupFor(a, companyMarks.get(a.id), now, companyFollowUps.get(a.id)) === "waiting_on_you").length;
   const atRisk = cards.filter((c) => c.kind === "stuck").length + escalations.length;
   const AUTOMATED = new Set(["application.acknowledged", "resume.ingested", "eligibility.evaluated", "application.triaged", "screen.invited", "screen.assessed", "candidate.recommended", "posting.published", "message.sent", "intervention.sent"]);
   const recent = await tx.select({ type: events.type, actor: events.actor, subjectId: events.subjectId }).from(events).where(and(eq(events.companyId, companyId), gte(events.occurredAt, since)));
@@ -599,6 +606,29 @@ async function longWaitCard(tx: Tx, d: { roleId: string; roleTitle: string; titl
       ...(!narrowed && others ? [{ label: "See everyone waiting", method: "GET" as const, path: d.action.href }] : []),
       ...(askRecruiter ? [{ label: "Have a recruiter review", method: "POST" as const, path: `/api/v1/escalations`, body: { kind: "review", roleId: d.roleId } }] : []),
     ],
+  };
+}
+
+/**
+ * The Cancelled column on Today (founder decisions 1A to 4A): one card per role for the people under Cancelled with
+ * nothing in motion for them (no automatic set promised, no new times being prepared or out), longest there first, five
+ * named with why they are there. They are left out of "needs your review" and "Decide after the interview" (and the
+ * stuck detector leaves them out of the long-wait card), so nobody gets two cards; someone whose new times are promised
+ * or on their way waits on nobody and is on no card. Null when nobody waits.
+ */
+async function cancelledColumnCard(tx: Tx, role: { id: string; title: string }, people: Array<{ candidateId: string; followUp: FollowUpView }>): Promise<BriefCard | null> {
+  const waiting = people.filter((p) => !followUpInMotion(p.followUp)).sort((x, y) => Date.parse(x.followUp.since) - Date.parse(y.followUp.since));
+  if (!waiting.length) return null;
+  const shown = waiting.slice(0, 5);
+  const names = await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, shown.map((p) => p.candidateId)));
+  const list = shown.map((p) => { const n = names.find((x) => x.id === p.candidateId); return `${`${n?.firstName ?? ""} ${n?.lastName ?? ""}`.trim() || "A candidate"} (${CANCELLED_REASON_LABEL[p.followUp.reason].toLowerCase()})`; }).join(", ");
+  const more = waiting.length > 5 ? ` and ${waiting.length - 5} more` : "";
+  return {
+    kind: "interviews",
+    title: `${waiting.length} ${waiting.length === 1 ? "person" : "people"} under Cancelled for ${role.title}`,
+    body: `${list}${more}. Send new times, or decide for each of them. Nothing is on its way to them now.`,
+    roleId: role.id,
+    actions: [{ label: "See them", method: "GET", path: `/roles/${role.id}/talent?ownerStage=cancelled` }],
   };
 }
 

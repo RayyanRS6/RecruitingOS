@@ -1,6 +1,9 @@
-import type { ActiveMark, AutoActionsOnOpen, BoardChoiceView, BoardPlacement, CandidateNotice, ClosingDateView, DecisionMessagePreview, DecisionWording, GettingStarted, Importance, IntakeSessionView, LegalCheck, MatchBand, MatchScore, MeResponse, MustHaveSummary, NextStep, NoteView, OwnerGroup, OwnerStage, PacketFlag, PoolSummary, PostingTaskKind, PostingTaskView, PublishingState, ReadingVersion, ShareTarget, ShareView, StageMove, ToldState } from "@ros/contracts";
+import type { ActiveMark, AutoActionsOnOpen, BoardChoiceView, BoardPlacement, CancelledView, CandidateNotice, ClosingDateView, DecisionMessagePreview, DecisionWording, GettingStarted, Importance, IntakeSessionView, InterviewFollowUpRef, LegalCheck, MatchBand, MatchScore, MeResponse, MustHaveSummary, NextStep, NoteView, OwnerGroup, OwnerStage, PacketFlag, PoolSummary, PostingTaskKind, PostingTaskView, PublishingState, ReadingVersion, ShareTarget, ShareView, StageMove, ToldState } from "@ros/contracts";
 
 export type { ActiveMark, CandidateNotice, OwnerStage, StageMove, ToldState };
+// The Cancelled column (founder decisions 1A to 4A): who is there and why, where their new times stand, the team's
+// "Send new times" for one person or many, and the company's setting; the shapes live in @ros/contracts.
+export type { CancelledReason, CancelledView, InterviewFollowUpRef, NewTimesProgress, NewTimesSettingView, SendNewTimesBatchResult, SendNewTimesResult } from "@ros/contracts";
 // Telling candidates (plan Wave G; founder decisions B6, Q27, Q28, Q30) and interviews to hire (Wave H; Q24, Q29): the
 // shapes live in @ros/contracts (api/index.ts and api/hiring.ts), as the API answers them.
 export type { ClosingMessagePreview, ClosingMessageResult, DecisionMessagePreview, DecisionWording, DecisionWordingOption, HireFollowUp, InterviewDraft, NoteStarter, NoteView, NotesView, OfferMadeResult, SuggestedLine } from "@ros/contracts";
@@ -107,8 +110,10 @@ export type Eligibility = { passed: boolean; failedRules: Array<{ key: string; q
  * What the list rows and the candidate panel share. `ownerStage` is where the person sits on the stage strip (founder
  * decision B3), private mark included; `stageMoves` is the stage button, every stage with whether it can be chosen now
  * and why not; `toldState` says, for a decision, whether the candidate was told (B6), and is null while there is none.
+ * `cancelled`: why they are under Cancelled and where their new times stand (founder decisions 1A to 4A); null for
+ * everyone else. `ownerStageLabel` is then its sub-label ("Asked for new times", "No longer interested", "No-show").
  */
-type ApplicationCore = { id: string; stage: string; stageLabel: string; group: OwnerGroup | string; source: string; createdAt: string; eligibility: Eligibility | null; ownerStage: OwnerStage; ownerStageLabel: string; mark: ActiveMark | null; tags: string[]; stageMoves: StageMove[]; toldState: ToldState | null };
+type ApplicationCore = { id: string; stage: string; stageLabel: string; group: OwnerGroup | string; source: string; createdAt: string; eligibility: Eligibility | null; ownerStage: OwnerStage; ownerStageLabel: string; mark: ActiveMark | null; tags: string[]; stageMoves: StageMove[]; toldState: ToldState | null; cancelled: CancelledView | null };
 export type ApplicationSummary = ApplicationCore & {
   candidate: { id: string; name: string; email: string | null; phone: string | null; locationText: string | null } | null;
   extractionSummary: { positions: string[]; licenses: string[]; years: number | null; anomalies: Array<{ kind: string; detail: string }> } | null;
@@ -142,9 +147,12 @@ export type ApplicationSummary = ApplicationCore & {
 };
 /**
  * GET /roles/:id/applications?counts=1: the stage strip's counts cover every applicant the caller may see, whatever the
- * filters. `stillApplying` counts the people still in the visit that sent their application (plan E6).
+ * filters. `stillApplying` counts the people still in the visit that sent their application (plan E6). `cancelled`
+ * splits the Cancelled column by what each person chose, or that they did not come; older answers leave it out.
  */
-export type StageStripCounts = { total: number; byOwnerStage: Record<OwnerStage, number>; byGroup: Record<OwnerGroup, number>; notTold: number; holdsEnded: number; stillApplying?: number };
+export type StageStripCounts = { total: number; byOwnerStage: Record<OwnerStage, number>; byGroup: Record<OwnerGroup, number>; notTold: number; holdsEnded: number; stillApplying?: number; cancelled?: CancelledCounts };
+/** Everyone under Cancelled, by reason: the three chips above the list while that column is shown. */
+export type CancelledCounts = { askedNewTimes: number; notInterested: number; noShow: number };
 export type ApplicationsWithCounts = { applications: ApplicationSummary[]; counts: StageStripCounts };
 /** Where a claim came from. `unquoted`: a claim about the candidate with nothing verified quoted from them (packages/agents/src/triage.ts), shown as "no quote". */
 export type EvidenceRef = { source: string; quote?: string; unquoted?: boolean };
@@ -194,8 +202,11 @@ export type DeclineMessagePolicy = "sends" | "needs_approval" | "not_sent";
  * own sentence about what follows.
  */
 export type ActionResult = { ok: true; stage: string; ownerStage?: OwnerStage; mark?: ActiveMark | null; toldState?: ToldState; dispositionSent?: boolean; candidateNotice?: CandidateNotice; approvalRequestId?: string; workflowRunId?: string; next?: string; /** A move to the talent pool for someone who asked not to be kept for future roles: they stay out of it. */ talentPoolOptOut?: boolean; /** Interviews a private decision called off. */ interviewsCancelled?: number; /** How many of them the candidate was told about at once, in a short note with no reason (they had a booked time or times to pick from); the decision itself stays private. */ interviewOffNotes?: number; /** send_decision: the message and until when Undo can take it back (plan G9); null when it went at once. */ communicationId?: string | null; undoUntil?: string | null; /** The approved wording the message used (Q28). */ wording?: DecisionWording | null; /** A decision: the message one Send would now write (plan G4). */ decisionMessage?: DecisionMessagePreview | null };
-/** What may be done with the application right now; the API decides, the page only shows (see apps/api/src/services/application-actions.ts). */
-export type ApplicationCapability = "invite_screen" | "ask_in_screen" | "interview" | "advance_to_interview" | "hold" | "reject" | "move_to_talent_pool" | "override_eligibility" | "review_anyway" | "record_decision" | "record_outcome" | "record_offer" | "set_mark" | "clear_mark" | "send_decision" | "told_in_person" | "cancel_screen" | "undo_decision";
+/**
+ * What may be done with the application right now; the API decides, the page only shows (see apps/api/src/services/application-actions.ts).
+ * `send_new_times`: someone under Cancelled with no interview open; `stop_new_times`: their automatic set waits for its day.
+ */
+export type ApplicationCapability = "invite_screen" | "ask_in_screen" | "interview" | "advance_to_interview" | "hold" | "reject" | "move_to_talent_pool" | "override_eligibility" | "review_anyway" | "record_decision" | "record_outcome" | "record_offer" | "set_mark" | "clear_mark" | "send_decision" | "told_in_person" | "cancel_screen" | "undo_decision" | "send_new_times" | "stop_new_times";
 /**
  * POST /roles/:id/decision-messages: one result per person, so one refusal never hides the others. `communicationId` and
  * `undoUntil` while that person's message waits out its Undo window (plan G9).
@@ -222,6 +233,7 @@ export type IntakeTurnResponse = { session: IntakeSessionView; reply: IntakeTurn
 export type IntakeApprovalResponse = { roleId: string; version: number; workflowRunId: string | null };
 
 export type OfferedSlot = { id: string; startsAt: string; endsAt: string; interviewerUserIds: string[]; source: "calendar" | "declared" };
+/** `followUp`: the candidate is under Cancelled, why, and where their new times stand; the sheet offers "Send new times" from it. */
 export type InterviewSummary = {
   id: string; applicationId: string; roleId: string; roleTitle: string | null; roundKey: string; title: string; format: string; durationMinutes: number; status: string;
   startsAt: string | null; endsAt: string | null; timezone: string | null; meetingUrl: string | null; linkSource: string; attempt: number; offeredSlots: OfferedSlot[]; selectedSlot: OfferedSlot | null;
@@ -230,6 +242,7 @@ export type InterviewSummary = {
   candidate: { firstName: string; lastName: string; timezone: string | null; stage: string; stageLabel: string };
   participants: Array<{ userId: string; name: string | null; email: string; status: string }>;
   calendarRefs: Record<string, { provider: string; eventId: string; htmlLink: string | null; meetingUrl: string | null }>;
+  followUp?: InterviewFollowUpRef | null;
 };
 // Postings (docs/spec/20): what the Posting tab reads and writes (apps/api/src/routes/postings.ts).
 /** `landing`: a shared link opens the job page first ("job"), a board's own link the form ("apply"), plan D8. */

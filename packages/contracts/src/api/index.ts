@@ -2,7 +2,7 @@ import { z } from "zod";
 import { Location } from "../domain/common";
 import { CompensationBasis, RolePacket } from "../domain/role-packet";
 import { INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX } from "../domain/intake";
-import { ApplicationStage, DecisionWording, MarkKind, OwnerStage, PERSONAL_LINE_MAX, RejectReason, ToldState, type CandidateNotice } from "../domain/stages";
+import { ApplicationStage, DecisionWording, MarkKind, OwnerStage, PERSONAL_LINE_MAX, RejectReason, ToldState, type CancelledView, type CandidateNotice } from "../domain/stages";
 import { ActionType, PolicyLevel } from "../domain/policy";
 import { RequestInterview } from "../domain/interview";
 
@@ -80,8 +80,19 @@ export const CompanySettingsInput = z.object({
   boardPosting: z.enum(["its", "self"]).optional(),
   /** The company has its own paid ZipRecruiter plan (Q11); only then is ZipRecruiter offered. */
   zipRecruiterPlan: z.boolean().optional(),
+  /**
+   * Automatic new interview times for candidates who cancel and ask for them (founder decision 3A): on or off, after 1 to
+   * 10 working days. `pending` is never stored: it says what happens to people already told a day when automatic times
+   * are switched off (keep their day, or stop them too); the owner is asked, never assumed for.
+   */
+  newTimesAfterCancel: z.object({ auto: z.boolean(), workingDays: z.number().int().min(1).max(10), pending: z.enum(["keep", "stop"]).optional() }).strict().optional(),
 }).strict();
 export type CompanySettingsInput = z.infer<typeof CompanySettingsInput>;
+/**
+ * GET /companies/current/new-times: the automatic new-times setting, how many people were already told a day for theirs
+ * (`pending`: automatic sets waiting for their day or for the ITS check), and whether ITS has confirmed the company.
+ */
+export type NewTimesSettingView = { auto: boolean; workingDays: number; pending: number; companyConfirmed: boolean };
 export const UpdateCompany = z.object({
   name: z.string().trim().min(2).max(120),
   website: WebsiteInput,
@@ -208,6 +219,20 @@ export type ApplicationAction = z.infer<typeof ApplicationAction>;
 /** POST /roles/:id/decision-messages: send the decision message to several people at once; each gets its own result. `wording`: one approved wording for all; each person's suggested one when left out. */
 export const SendDecisionMessages = z.object({ applicationIds: z.array(z.string().min(1)).min(1).max(100), wording: DecisionWording.optional() });
 export type SendDecisionMessages = z.infer<typeof SendDecisionMessages>;
+
+/**
+ * POST /roles/:id/new-times: new times to several people under Cancelled at once (founder decision 2A); each gets its own
+ * result, and one refusal never blocks the rest. POST /applications/:id/new-times sends to one person (body `{}`).
+ */
+export const SendNewTimesBatch = z.object({ applicationIds: z.array(z.uuid()).min(1).max(100) }).strict();
+export type SendNewTimesBatch = z.infer<typeof SendNewTimesBatch>;
+/**
+ * What "Send new times" did: `reopened`, the interview they cancelled (or whose times lapsed) is offered again for the
+ * same round; `new_interview`, a new interview for the same round after a no-show. They stay under Cancelled until they
+ * book; the times count as sent once their email is on its way.
+ */
+export type SendNewTimesResult = { ok: true; interviewId: string; via: "reopened" | "new_interview"; cancelled: CancelledView };
+export type SendNewTimesBatchResult = { results: Array<{ applicationId: string; name: string; ok: boolean; code?: string; message?: string; interviewId?: string }>; sent: number; notSent: number };
 
 /** POST /applications/:id/decision-message/preview: the exact message with a chosen wording and personal line, checked, before Send. */
 export const DecisionMessagePreviewRequest = z.object({ wording: DecisionWording.optional(), personalLine: z.string().trim().max(PERSONAL_LINE_MAX).optional() }).strict();

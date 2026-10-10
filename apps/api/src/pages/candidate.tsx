@@ -5,11 +5,11 @@ import { getCookie, setCookie } from "hono/cookie";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ApplyRequest, CANDIDATE_STEP_LABEL, CandidateSmsPreference, CandidateStep, MAX_RESUME_BYTES, SCREEN_PERSON_ROUTE_STATUSES, TapAnswer, inspectResumeFile, isCompanyVerified, type ApplicationStage, type DecisionWording, type ReviewItem, type RolePacket, type TapFormat } from "@ros/contracts";
-import { MOVED_ON_MESSAGE, SKIPPED_MESSAGE, WITHDRAW_CONFIRM_KEY } from "@ros/agents";
-import { CLOSING_DATE_REASON, DECISION_STAGES, applyByLabel, audit, benefitsDescriptionFor, candidateStep, closingDayWords, createDataRequest, decisionTold, emit, fulfilSmsOptOut, fulfilWithdrawal, jobNoticesFor, mayWithdraw, noticesFor, notify, openHumanReview, openPayload, sealPayload, transition, type Notice } from "@ros/core";
+import { MOVED_ON_MESSAGE, SKIPPED_MESSAGE, WITHDRAW_CONFIRM_KEY, newTimesDayWords } from "@ros/agents";
+import { CLOSING_DATE_REASON, DECISION_STAGES, applyByLabel, audit, benefitsDescriptionFor, candidateNewTimesPromise, candidateStep, closingDayWords, createDataRequest, decisionTold, emit, fulfilSmsOptOut, fulfilWithdrawal, jobNoticesFor, mayWithdraw, noticesFor, notify, openFollowUpOf, openHumanReview, openPayload, sealPayload, transition, type NewTimesPromise, type Notice } from "@ros/core";
 import { CandidatePrivacyRequest } from "@ros/contracts";
 import { sendPrivacyAcknowledgment, sendPrivacyCompletion } from "@ros/agents";
-import { applications, candidates, companies, dataRequests, events, interviews, rolePackets, roles, screens, uuidv7, withPlatform, withTenant } from "@ros/db";
+import { applications, candidates, communications, companies, dataRequests, events, interviewFollowups, interviews, rolePackets, roles, screens, uuidv7, withPlatform, withTenant, type Tx } from "@ros/db";
 import { LOGO_FILE, jobPostingJsonLd, refFor } from "@ros/integrations";
 import { randomToken } from "@ros/db";
 import { UPLOAD_GRANT_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS, checkUploadIntent, quarantineKey } from "../uploads";
@@ -627,11 +627,59 @@ function decisionLine(input: { stage: ApplicationStage; wording: DecisionWording
   return poolOptOut ? "Thank you for applying. This role did not work out." : "Thank you for applying. This role did not work out, and we will keep you in mind for future openings unless you ask us not to.";
 }
 
+/**
+ * What the newest interview says once it was cancelled, missed or reopened (the Cancelled column, founder decisions 1A to
+ * 4A), in the candidate's words. `cancelled`: their own cancel, with what may be promised about new times
+ * (`candidateNewTimesPromise`: never a decision, never times that will not come). `gettingReady`: they asked for new times
+ * and they are being worked out. `lapsed`: the new times we sent passed without a pick. `noShow`: they did not come.
+ */
+type InterviewNews = { cancelled?: { promise: NewTimesPromise; day: string | null }; gettingReady?: boolean; lapsed?: boolean; noShow?: boolean };
+
+/**
+ * The newest interview's news (above), read in the company's transaction. Their own cancel is matched on the interview
+ * and its attempt, as the schedule pages match it, so an interview the team cancelled after reopening it never reads as
+ * "You cancelled". `held`: the times of an interview carrying new times wait for the ITS check, so they are not offered
+ * here yet.
+ */
+async function interviewNewsFor(tx: Tx, input: { iv: typeof interviews.$inferSelect; applicationId: string; closed: boolean; timeZone: string }): Promise<InterviewNews & { held: boolean }> {
+  const { iv } = input;
+  if (iv.status === "cancelled") {
+    const [own] = await tx.select().from(interviewFollowups).where(and(eq(interviewFollowups.kind, "candidate_cancelled"), eq(interviewFollowups.interviewId, iv.id), eq(interviewFollowups.interviewAttempt, iv.attempt))).limit(1);
+    if (!own) return { held: false };
+    const promise = candidateNewTimesPromise(own, { applicationClosed: input.closed });
+    return { held: false, cancelled: { promise, day: promise === "date" && own.autoDueAt ? newTimesDayWords(own.autoDueAt, input.timeZone) : null } };
+  }
+  const open = input.closed ? null : await openFollowUpOf(tx, input.applicationId);
+  const noShow = (iv.status === "no_show" && iv.outcome === "no_show_candidate") || open?.kind === "candidate_no_show";
+  if (!open) return { held: false, noShow };
+  const [slots] = iv.status === "scheduling" && open.currentInterviewId === iv.id ? await tx.select({ status: communications.status }).from(communications).where(eq(communications.idempotencyKey, `slots:${iv.id}:${iv.attempt}`)).limit(1) : [];
+  const held = slots?.status === "held";
+  const preparing = iv.status === "proposed" || (iv.status === "scheduling" && (!iv.offeredSlots.length || held));
+  return { held, noShow, gettingReady: open.choice === "new_times" && preparing, lapsed: iv.status === "offer_expired" };
+}
+
+/** The line about the candidate's own cancel; null when nothing may be said beyond the standard line. */
+function cancelledLine(news: InterviewNews): string | null {
+  const c = news.cancelled;
+  if (!c) return null;
+  if (c.promise === "date" && c.day) return `You cancelled your interview and asked for new times. We will email them to you on ${c.day}, unless the team gets in touch first.`;
+  if (c.promise === "date" || c.promise === "soon") return "You cancelled your interview and asked for new times. We will email them to you as soon as they are ready.";
+  if (c.promise === "team") return "You cancelled your interview and asked for new times. The hiring team will be in touch about them.";
+  if (c.promise === "not_interested") return "You cancelled your interview and told the team you are no longer interested. If you change your mind, reply to any of our emails. You can also withdraw your application below.";
+  return null;
+}
+
 /** The line under the steps, in the candidate's words: what is happening now and what they can do. */
-function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOptOut: boolean; screen: { status: string } | null; interview: "booked" | "offered" | null; wording: DecisionWording | null; companyName: string }): string {
+function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOptOut: boolean; screen: { status: string } | null; interview: "booked" | "offered" | null; news?: InterviewNews; wording: DecisionWording | null; companyName: string }): string {
   const { step, stage, poolOptOut } = input;
+  const news = input.news ?? {};
   if (step === "received") return stage === "applied" ? "We are confirming your application now." : "Your application is in. We are checking the basics.";
   if (step === "under_review") {
+    // An interview they cancelled, or new times for it, is the newest thing that happened: it comes before a screening link.
+    const cancelled = cancelledLine(news);
+    if (cancelled) return cancelled;
+    if (news.gettingReady) return "You asked for new times. We are getting them ready and will email them to you.";
+    if (news.lapsed) return "The interview times we sent have passed. The hiring team will be in touch.";
     if (input.screen?.status === "paused") return "Your screening conversation is paused while we fix a problem on our end. Your answers so far are saved, and we will email you a link to finish.";
     if (input.screen) return input.screen.status === "in_progress" ? "Finish the short written conversation with the hiring team's AI assistant whenever you are ready. Your answers so far are saved. The link is below." : "A short written conversation with the hiring team's AI assistant is waiting for you, whenever suits you. The link is below.";
     if (stage === "screen_complete") return "Thanks for completing the screening conversation. The team is reviewing your answers.";
@@ -640,6 +688,8 @@ function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOpt
   if (step === "interview") {
     if (input.interview === "booked") return "Your interview is booked. The details are below and in your email.";
     if (input.interview === "offered") return "The team would like to interview you. Pick a time below.";
+    if (news.lapsed) return "The interview times we sent have passed. The hiring team will be in touch.";
+    if (news.noShow) return "The hiring team will be in touch about next steps.";
     if (stage === "interview_complete" || stage === "debrief") return "Thanks for interviewing. The team is deciding, and you will hear from them either way.";
     return "The hiring team will be in touch about next steps.";
   }
@@ -681,9 +731,12 @@ candidatePages.get("/c/status/:token", async (c) => {
   const openScreen_ = latestScreen && ["invited", "reminded", "in_progress"].includes(latestScreen.status) ? latestScreen : undefined;
   const pausedScreen = latestScreen?.status === "paused" ? latestScreen : undefined;
   const iv = view.hidden ? undefined : (await db.select().from(interviews).where(eq(interviews.applicationId, app.id)).orderBy(desc(interviews.createdAt)).limit(1))[0];
-  const offered = !!iv && iv.status === "scheduling" && !!iv.scheduleToken && iv.offeredSlots.length > 0;
-  const booked = !!iv && iv.status === "scheduled" && !!iv.startsAt && !!iv.scheduleToken && Date.parse(iv.endsAt ?? iv.startsAt) > Date.now();
   const ivTz = iv?.schedulingWindow.candidateTimezone ?? cand?.location?.timezone ?? company?.timezone ?? "America/Los_Angeles";
+  const closed = ["hired", "withdrawn", "rejected", "declined", "talent_pool"].includes(app.stage) || ["closed", "filled"].includes(role?.status ?? "");
+  const news = iv ? await withTenant(container.db, app.companyId, (tx) => interviewNewsFor(tx, { iv, applicationId: app.id, closed, timeZone: ivTz })) : { held: false };
+  // New times whose email waits for the ITS check (founder decision B7) are not offered here either: the times are not out yet.
+  const offered = !!iv && iv.status === "scheduling" && !!iv.scheduleToken && iv.offeredSlots.length > 0 && !news.held;
+  const booked = !!iv && iv.status === "scheduled" && !!iv.startsAt && !!iv.scheduleToken && Date.parse(iv.endsAt ?? iv.startsAt) > Date.now();
   // What to prepare (D15): the purpose of the booked round, from the packet version this application runs on.
   const prepare = booked ? await withTenant(container.db, app.companyId, async (tx) => (await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1))[0]?.packet.interviews.plan.find((r) => r.key === iv!.roundKey)?.purpose ?? null) : null;
   const smsEnabled = container.env.SMS_ENABLED;
@@ -710,7 +763,7 @@ candidatePages.get("/c/status/:token", async (c) => {
         <div><span>Last update</span><span>{new Date(view.since).toLocaleDateString()}</span></div>
       </div>
       <h2>What happens next</h2>
-      <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null, wording, companyName: company?.name ?? "The company" })}</p>
+      <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null, news, wording, companyName: company?.name ?? "The company" })}</p>
       {/* The choice the decision message points to (Q30), one click away from the decision itself. */}
       {told && !poolOptOut ? <p>Would you rather we did not keep your details for future roles? <a href="#future-roles">Say so below</a>; it takes one click.</p> : null}
       <p class="meta">People on the hiring team at {company?.name ?? "the company"} make every decision about your application. An AI assistant reads applications and runs the screening conversation for them; who is interviewed, hired or turned down is always a person's decision.</p>

@@ -26,7 +26,15 @@ describe("Setup's section menu", () => {
     expect(ids("interviewer")).not.toContain("setup-shortcut");
     expect(ids("interviewer")).not.toContain("setup-audit");
     // the cards everyone has stay in every menu
-    for (const role of ["owner", "hr", "interviewer"]) expect(ids(role).slice(0, 7)).toEqual(["setup-company", "setup-team", "setup-profile", "setup-boards", "setup-recruiters", "setup-sessions", "setup-availability"]);
+    for (const role of ["owner", "hr", "interviewer"]) expect(ids(role).slice(0, 8)).toEqual(["setup-company", "setup-team", "setup-profile", "setup-boards", "setup-new-times", "setup-recruiters", "setup-sessions", "setup-availability"]);
+  });
+
+  it("has 'When a candidate cancels' right after the job boards, for everyone (founder decision 3A: only owners and admins change it)", () => {
+    const menu = setupSections({ mayStartHire: false, seesAudit: false });
+    const at = menu.findIndex((s) => s.id === "setup-new-times");
+    expect(menu[at]).toEqual({ id: "setup-new-times", label: "When a candidate cancels" });
+    expect(menu[at - 1].id).toBe("setup-boards");
+    expect(page).toContain('<Section id="setup-new-times"><NewTimesCard company={c} canEdit={canChangeCompany(myRole)}');
   });
 
   it("uses plain names, never an id", () => {

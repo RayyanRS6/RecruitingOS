@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { isCompanyVerified, type Actor } from "@ros/contracts";
-import { ALERT_PRIVACY_LINE, DECISION_STAGES, activeMarksFor, createEscalation, emit, gate, holdEnded, isOneVisitFlow, isStillApplying, loadBusinessCalendar, notify, resolveNotifyCadence, resolvePolicy, storedPreferences, zonedParts } from "@ros/core";
+import { ALERT_PRIVACY_LINE, DECISION_STAGES, activeFollowUpsFor, activeMarksFor, createEscalation, emit, followUpParked, gate, holdEnded, inCancelled, isOneVisitFlow, isStillApplying, loadBusinessCalendar, notify, resolveNotifyCadence, resolvePolicy, storedPreferences, zonedParts } from "@ros/core";
 import { applications, approvalRequests, candidates, companies, interventions, memberships, roles, screens, users, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { queueCommunication } from "./outbox";
@@ -169,11 +169,14 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
   for (const role of open) {
     const apps = await q.select().from(applications).where(eq(applications.roleId, role.id));
     // A person on hold or set aside nudges nobody until their hold ends (plan A4); their candidate-facing reminders carry on.
+    // Nor does someone under Cancelled whose automatic new times are still to come: nothing waits on the team before that day.
     const marks = await activeMarksFor(q, apps.map((a) => a.id));
-    const parked = (a: { id: string }) => { const m = marks.get(a.id); return m?.mark === "on_hold" || m?.mark === "not_a_fit_for_now"; };
+    const followUps = await activeFollowUpsFor(q, apps.map((a) => a.id));
+    const parked = (a: { id: string }) => { const m = marks.get(a.id); const f = followUps.get(a.id); return m?.mark === "on_hold" || m?.mark === "not_a_fit_for_now" || (!!f && followUpParked(f)); };
     // Decisions pending: ready for review, screened, recommended, interviewed with nobody's decision recorded yet, or a
-    // finalist with no next step recorded (plan G10).
-    const waiting = apps.filter((a) => WAITING_ON_TEAM.includes(a.stage) && !parked(a));
+    // finalist with no next step recorded (plan G10). People under Cancelled have a Today card of their own (apps/api
+    // brief.ts), so they are never named here as well.
+    const waiting = apps.filter((a) => WAITING_ON_TEAM.includes(a.stage) && !parked(a) && !inCancelled(a.stage, followUps.get(a.id)));
     if (waiting.length) {
       const oldest = Math.min(...waiting.map((a) => Date.parse(a.stageChangedAt)));
       const days = Math.floor((now.getTime() - oldest) / DAYS);

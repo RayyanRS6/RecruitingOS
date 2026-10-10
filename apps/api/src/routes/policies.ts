@@ -45,7 +45,7 @@ export const FIXED: Readonly<Record<string, string>> = {
   "message.send_templated": "Confirmations and reminders (that an application arrived, a screening reminder, an interview time) go out by themselves in the approved wording.",
   "interview.request": "An interview always waits for a person on your team to approve it on the candidate's page before any times go to the candidate.",
   "interview.schedule": "Once an interview is approved, times are offered from your team's calendars or declared hours, and the booking goes on the calendars by itself.",
-  "interview.reschedule": "When someone on your team moves or cancels an interview, the candidate is offered new times or told, and the calendars follow by themselves.",
+  "interview.reschedule": "When someone on your team moves or cancels an interview, the candidate is offered new times or told, and the calendars follow by themselves. When a candidate cancels and asks for new times, they get one set automatically after the working days you choose in Setup under \"When a candidate cancels\"; you can switch that off.",
 };
 
 /** The product does it today: a setting to choose, or work it does the same way for everyone. The rest are planned. */

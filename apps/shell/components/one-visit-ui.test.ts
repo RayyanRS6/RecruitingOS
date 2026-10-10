@@ -33,8 +33,9 @@ const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, 
 const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
 
-const STAGES = ["new", "longlist", "shortlist", "interviewing", "on_hold", "offer", "hired", "not_moving_forward"] as const;
-const moves = STAGES.map((to) => ({ to, label: to, via: to === "new" ? "none" : "set_mark", allowed: to !== "new", current: to === "new" }));
+const STAGES = ["new", "longlist", "shortlist", "interviewing", "cancelled", "on_hold", "offer", "hired", "not_moving_forward"] as const;
+// nobody is moved to Cancelled by hand (founder decision 1A)
+const moves = STAGES.map((to) => ({ to, label: to, via: to === "new" || to === "cancelled" ? "none" : "set_mark", allowed: to !== "new" && to !== "cancelled", current: to === "new" }));
 const evidence = { needsCloserLook: false, reason: null, assessmentUnavailable: false, resumeUnreadable: false, unknowns: [], unknownCount: 0, topStrength: null, topConcern: null, confidenceReasons: [] };
 const row = (id: string, name: string, over: Record<string, unknown> = {}) => ({
   id, stage: "triaged", stageLabel: "Ready for your review", group: "waiting_on_you", source: "careers_page", createdAt: daysAgo(2), eligibility: { passed: true, failedRules: [], unverifiable: [] },
@@ -46,7 +47,7 @@ const maria = row("a1", "Maria Reyes");
 const sofia = row("a2", "Sofia Lind", { stage: "screen_invited", stageLabel: "Invited to a screen", group: "in_process", stillApplying: true, daysInStage: 0 });
 // Theo's hold ended while he was still answering: the API says "waiting on you"; the page never does while he applies
 const theo = row("a3", "Theo Park", { stage: "screening", stageLabel: "Being screened", group: "waiting_on_you", stillApplying: true });
-const counts = { total: 3, byOwnerStage: { new: 3, longlist: 0, shortlist: 0, interviewing: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 2, in_process: 1, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0, stillApplying: 2 };
+const counts = { total: 3, byOwnerStage: { new: 3, longlist: 0, shortlist: 0, interviewing: 0, cancelled: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 2, in_process: 1, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0, stillApplying: 2 };
 
 const owner = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } };
 const itsRecruiter = { user: { id: "s1", email: "rae@its.test", name: "Rae Recruiter", platformRole: "its_recruiter" }, auth: { provider: "azure", aal: "aal2", mfaVerifiedAt: daysAgo(0) }, memberships: [], activeCompanyId: "co1", staffAccess: { grantId: "g1", kind: "escalation", purpose: "candidate asked for a person", expiresAt: daysAgo(-1), companyName: "Bright Dental", scope: { escalationId: "e1", roleId: "r1", applicationId: "a2" } }, ai: { provider: "fake" } };
@@ -68,7 +69,7 @@ describe("Still applying beside the stage strip (plan E6)", () => {
     expect(html).toMatch(/<div class="talent-strip"><div role="tablist" aria-label="Stages"/);
     expect(html).toMatch(/<button type="button" class="toggle-chip" aria-pressed="false" title="Sent the form and answering the screening questions now">Still applying <span class="count">2<\/span><\/button>/);
     // the strip still counts all three as New
-    expect(html).toContain('<span>New</span> <span class="count">3</span>');
+    expect(html).toContain('<span class="tab-label" data-label="New">New</span> <span class="count">3</span>');
     // the page opens on "waiting on you": Maria only; never Theo, whose group says so
     expect(text(html)).toContain("Waiting on you 1");
     expect(html).toContain('class="talent-name">Maria Reyes</button>');
@@ -83,7 +84,8 @@ describe("Still applying beside the stage strip (plan E6)", () => {
     expect(html).toContain('class="talent-name">Theo Park</button>');
     expect(html).not.toContain('class="talent-name">Maria Reyes</button>');
     expect(text(html)).toContain("Nothing about them waits on you until they send their answers");
-    expect(html.match(/<span class="pill neutral sm" title="Sent the form and answering the screening questions now"><span class="dot pulse" aria-hidden="true"><\/span>Still applying<\/span>/g)).toHaveLength(2);
+    expect(html.match(/<span class="pill neutral sm" title="Sent the form and answering the screening questions now"><span class="dot" aria-hidden="true"><\/span>Still applying<\/span>/g)).toHaveLength(2);
+    expect(html.match(/class="dot pulse"/g)).toHaveLength(1); // only the page's own Live pill pulses
     expect(text(html)).not.toContain("Waiting on you 2 days");
   });
 });
