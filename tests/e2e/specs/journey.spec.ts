@@ -11,6 +11,7 @@ const run = Date.now().toString(36);
 test.describe("owner and candidate journey", () => {
   skipWithoutFakeSignIn();
   test("from sign-in to a booked interview and a reschedule", async ({ page, baseURL, browser }) => {
+    test.setTimeout(240_000); // the longest journey: two sign-ins, a published role, a draft, a booking and a reschedule
     await page.goto("/login");
     await expectAccessible(page, "login");
     await signIn(page, { email: `dana+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
