@@ -7,6 +7,7 @@ import { dedupeKey, normalizePhone } from "./dedupe";
 import { DEFAULT_POLICIES, HARD_HUMAN_ONLY } from "./policy";
 import { can } from "./permissions";
 import { noticesFor, resolveJurisdictions } from "./compliance";
+import { alertHeadline } from "./notify-email";
 
 describe("state machine", () => {
   it("never lets the system reject on judgment", () => {
@@ -113,6 +114,49 @@ describe("the stage strip (founder decision B3)", () => {
     expect(groupFor({ stage: "triaged" }, { mark: "not_a_fit_for_now" }, now)).toBe("not_moving_forward");
     expect(groupFor({ stage: "triaged" }, { mark: "shortlist" }, now)).toBe("waiting_on_you");
     expect(groupFor({ stage: "hired" }, { mark: "on_hold", remindAt: later }, now)).toBe("hired");
+  });
+  it("shows someone with an open follow-up as Cancelled only while recommended for interview or interview done", () => {
+    const asked = { reason: "asked_new_times", autoState: "none", interviewOpen: false } as const;
+    expect(ownerStage({ stage: "interview_recommended" }, null, asked)).toBe("cancelled");
+    expect(ownerStage({ stage: "interview_complete" }, null, asked)).toBe("cancelled");
+    for (const stage of ["interview_scheduled", "finalist", "debrief", "triaged", "offer_sent", "hired", "rejected", "withdrawn", "talent_pool"] as const) {
+      expect(ownerStage({ stage }, null, asked), stage).toBe(ownerStage({ stage }));
+    }
+    // without a follow-up nothing changes, and the follow-up comes before a mark (the two never coexist)
+    expect(ownerStage({ stage: "interview_recommended" })).toBe("interviewing");
+    expect(ownerStage({ stage: "interview_recommended" }, { mark: "on_hold", remindAt: later }, asked)).toBe("cancelled");
+    expect(ownerStage({ stage: "interview_recommended" }, { mark: "on_hold", remindAt: later }, null)).toBe("on_hold");
+  });
+  it("labels Cancelled with why they are there", () => {
+    expect(OWNER_STAGE_LABEL.cancelled).toBe("Cancelled");
+    expect(ownerStageLabel("cancelled", null, { reason: "asked_new_times", autoState: "waiting", interviewOpen: false })).toBe("Asked for new times");
+    expect(ownerStageLabel("cancelled", null, { reason: "not_interested", autoState: "none", interviewOpen: false })).toBe("No longer interested");
+    expect(ownerStageLabel("cancelled", null, { reason: "no_show", autoState: "none", interviewOpen: false })).toBe("No-show");
+    expect(ownerStageLabel("cancelled")).toBe("Cancelled");
+    expect(ownerStageLabel("interviewing", null, { reason: "no_show", autoState: "none", interviewOpen: false })).toBe("Interviewing");
+  });
+  it("counts someone under Cancelled as waiting on you only when nothing is in motion for them", () => {
+    const at = (stage: ApplicationStage, autoState: "none" | "waiting" | "waiting_check" | "preparing" | "sent" | "not_sent", interviewOpen: boolean) => groupFor({ stage }, null, now, { reason: "asked_new_times", autoState, interviewOpen });
+    expect(at("interview_recommended", "waiting", false)).toBe("in_process");
+    expect(at("interview_recommended", "waiting_check", false)).toBe("in_process");
+    expect(at("interview_recommended", "preparing", true)).toBe("in_process");
+    expect(at("interview_recommended", "sent", true)).toBe("in_process");
+    expect(at("interview_complete", "none", true)).toBe("in_process");
+    expect(at("interview_recommended", "none", false)).toBe("waiting_on_you");
+    expect(at("interview_recommended", "not_sent", false)).toBe("waiting_on_you");
+    expect(at("interview_complete", "sent", false)).toBe("waiting_on_you");
+    // out of the column the follow-up is not read: a booked interview is in process, a decline is not moving forward
+    expect(at("interview_scheduled", "none", false)).toBe("in_process");
+    expect(at("rejected", "waiting", false)).toBe("not_moving_forward");
+    expect(groupFor({ stage: "interview_recommended" }, null, now)).toBe("waiting_on_you");
+  });
+  it("gives the Cancelled column's alerts headlines that name nobody", () => {
+    expect(alertHeadline("interview.no_show")).toBe("A candidate did not come to an interview");
+    expect(alertHeadline("interview.new_times_sent")).toBe("New interview times went to a candidate who asked for them");
+    expect(alertHeadline("interview.new_times_not_sent")).toBe("New interview times a candidate asked for were not sent");
+    expect(alertHeadline("interview.new_times")).toBe("New times are going to a candidate for your interview");
+    // a candidate moving an interview keeps its own words
+    expect(alertHeadline("interview.rescheduled")).toBe("A candidate asked to move an interview");
   });
   it("says why a mark cannot be set at this step", () => {
     expect(markBlockedReason("triaged", "shortlist")).toBeNull();

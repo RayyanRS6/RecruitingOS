@@ -3,6 +3,7 @@ export * from "./audit";
 export * from "./policy";
 export * from "./stages";
 export * from "./marks";
+export * from "./interview-followups";
 export * from "./permissions";
 export * from "./auth";
 export * from "./eligibility";

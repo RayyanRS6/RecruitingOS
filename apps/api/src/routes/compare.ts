@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Actor, EvidenceAssessment, MatchScore, NoteView, OwnerStage, ReadingVersion, ScreenAssessment } from "@ros/contracts";
-import { STAGE_LABEL, activeMarksFor, assertCan, audit, groupFor, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion, unsentScreenReadings } from "@ros/core";
+import { STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, groupFor, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion, unsentScreenReadings } from "@ros/core";
 import { applications, assessments, candidates, rolePackets, roles, screens, withTenant, type Tx } from "@ros/db";
 import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
@@ -73,6 +73,8 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
   const hidden = unsentScreenReadings(apps.length ? await tx.select({ status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.applicationId, apps.map((a) => a.id))) : [], all);
   const asmts = all.filter((x) => !hidden.has(x.id));
   const marks = await activeMarksFor(tx, apps.map((a) => a.id));
+  // Under Cancelled (founder decisions 1A to 4A), as on the Talent list.
+  const followUps = await activeFollowUpsFor(tx, apps.map((a) => a.id));
   const notes = await notesForApplications(tx, { applicationIds: apps.map((a) => a.id), tenant: t });
   const rows: CompareCandidate[] = [];
   for (const id of ids) {
@@ -97,7 +99,8 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
     const unknownCount = mustHaves.filter((m) => !mh[m.key] || mh[m.key].met === "unknown").length + competencies.filter((x) => !comp[x.key]).length + (newest?.result.unknowns.length ?? 0);
     await audit(tx, { companyId: t.companyId, actor: input.actor, action: "candidate.viewed", target: { type: "application", id: a.id }, reason: "comparison view" });
     const mark = marks.get(a.id) ?? null;
-    const strip = ownerStage(a, mark);
+    const followUp = followUps.get(a.id) ?? null;
+    const strip = ownerStage(a, mark, followUp);
     const readAgainst = newest?.packetVersion ?? a.packetVersion;
     const scorePacket = byVersion.get(readAgainst) ?? packet;
     rows.push({
@@ -105,9 +108,9 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
       name: `${cand?.firstName ?? ""} ${cand?.lastName ?? ""}`.trim() || "Unknown",
       stage: a.stage,
       stageLabel: STAGE_LABEL[a.stage],
-      group: groupFor(a, mark, input.now),
+      group: groupFor(a, mark, input.now, followUp),
       ownerStage: strip,
-      ownerStageLabel: ownerStageLabel(strip, mark),
+      ownerStageLabel: ownerStageLabel(strip, mark, followUp),
       mustHaves: mh,
       competencies: comp,
       screen: screen ? { recommendation: screen.result.recommendation, summary: screen.result.summary } : null,

@@ -1,5 +1,5 @@
 import { OWNER_STAGE_LABEL, type MarkKind, type OwnerStage } from "@ros/contracts";
-import type { ActionResult, CandidateNotice, DecisionMessagesResponse, DeclineMessagePolicy, StageMove } from "./api/client";
+import type { ActionResult, CandidateNotice, DecisionMessagesResponse, DeclineMessagePolicy, SendNewTimesBatchResult, SendNewTimesResult, StageMove } from "./api/client";
 import { safetyNetPromise } from "./telling";
 
 /**
@@ -100,6 +100,9 @@ export function actionToast(action: string, r: Pick<ActionResult, "candidateNoti
     case "cancel_screen":
       return { title: "Screen invitation stopped.", detail: r.next ?? (r.candidateNotice ? noticeText(r.candidateNotice) : "Their link no longer works.") };
     case "undo_decision":
+      // Back under Cancelled (founder decisions 1A-4A): the API's sentence says whether their new times still go on the
+      // day they were promised, so "nothing will be sent" is never said about a set that will.
+      if (r.ownerStage === "cancelled") return { title: "Decision taken back: back in Cancelled.", detail: r.next?.replace(/^Decision taken back: they are back under Cancelled\.\s*/, "") || "They were never told." };
       return { title: r.ownerStage ? `Decision taken back: back in ${OWNER_STAGE_LABEL[r.ownerStage]}.` : "Decision taken back.", detail: "They were never told, and nothing will be sent." };
     default:
       return { title: "Saved." };
@@ -248,6 +251,28 @@ export function interviewWords(iv: InterviewRef): string {
 /** The toast after "Cancel interview" on the Interviews page: exactly who was told (POST /interviews/:id/cancel). */
 export function interviewCancelToast(r: { candidateTold?: boolean; interviewersTold?: boolean }): ToastParts {
   return { title: "Interview cancelled.", detail: `${r.candidateTold ? "The candidate was sent a cancellation." : "The candidate had no time booked or offered, so nothing was sent to them."}${r.interviewersTold ? " The interviewers were told." : ""}` };
+}
+
+/**
+ * The toast after "Send new times" for someone under Cancelled (founder decision 2A): for one person (POST
+ * /applications/:id/new-times; `round` is the interview's title), stopping their automatic set (…/new-times/stop), or
+ * several people at once (POST /roles/:id/new-times). Times count as sent only once their email is on its way, so the
+ * words say they are being got ready, and that the person stays under Cancelled until they book.
+ */
+export type NewTimesOutcome =
+  | ({ kind: "sent"; firstName: string; round: string } & Pick<SendNewTimesResult, "via">)
+  | { kind: "stopped" }
+  | ({ kind: "batch" } & Pick<SendNewTimesBatchResult, "results" | "sent" | "notSent">);
+export function newTimesToast(r: NewTimesOutcome): ToastParts {
+  if (r.kind === "stopped") return { title: "Stopped.", detail: "Nothing goes to them automatically; they stay under Cancelled." };
+  if (r.kind === "sent") {
+    return r.via === "new_interview"
+      ? { title: `A new ${r.round} was set up.`, detail: `Same round; ${r.firstName} gets an email as soon as there are times to offer.` }
+      : { title: "Getting new times ready.", detail: `${r.firstName} gets an email as soon as there are times to offer from the interviewers' calendars. They stay under Cancelled until they book.` };
+  }
+  const title = r.sent ? `Getting new times ready for ${r.sent} ${r.sent === 1 ? "person" : "people"}.` : "No new times were sent.";
+  const refused = r.results.filter((x) => !x.ok).map((x) => `${x.name} (${(x.message ?? "not sent").replace(/\.$/, "")})`);
+  return r.notSent > 0 && refused.length ? { title, detail: `Not sent: ${refused.join("; ")}.` } : { title };
 }
 
 /** Who may tell candidates a decision (application.reject), for someone who may not: HR closes roles but does not tell. */

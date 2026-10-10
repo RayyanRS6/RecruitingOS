@@ -25,6 +25,7 @@ import { policyRoutes } from "./routes/policies";
 import { notificationRoutes } from "./routes/notifications";
 import { integrationRoutes } from "./routes/integrations";
 import { applicationInterviewRoutes, interviewRoutes, meRoutes, roleInterviewRoutes } from "./routes/interviews";
+import { applicationNewTimesRoutes, roleNewTimesRoutes } from "./routes/new-times";
 import { schedulePages } from "./pages/schedule";
 import { privacyRequestRoutes } from "./routes/privacy-requests";
 import { observabilityRoutes } from "./routes/observability";
@@ -132,7 +133,10 @@ export function createApp(container: Container) {
   app.route("/api/v1/integrations", integrationRoutes);
   app.route("/api/v1/interviews", interviewRoutes);
   app.route("/api/v1/applications", applicationInterviewRoutes);
+  // New times for people under Cancelled (founder decision 2A): one person, their automatic set, or a role's column.
+  app.route("/api/v1/applications", applicationNewTimesRoutes);
   app.route("/api/v1/roles", roleInterviewRoutes);
+  app.route("/api/v1/roles", roleNewTimesRoutes);
   app.route("/api/v1/roles", screenRoleRoutes);
   app.route("/api/v1/applications", screenApplicationRoutes);
   app.route("/api/v1/me", meRoutes);

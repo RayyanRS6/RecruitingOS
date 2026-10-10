@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { emit, notify, transition } from "@ros/core";
+import { emit, notify, openFollowUpOf, resolveOpenFollowUp, transition } from "@ros/core";
 import { sendInterviewCancelled } from "@ros/agents";
 import { applications, candidates, companies, interviewParticipants, interviews, jobs, rolePackets, roles, type Tx } from "@ros/db";
 import type { Container } from "../container";
@@ -34,6 +34,11 @@ function candidateKnows(iv: InterviewRow): { booked: boolean; offered: boolean }
  * candidate's link keeps working and says the interview was cancelled, instead of a bare "not found".
  * `leftProcess`: the application left the process, so the candidate's note carries no reason and promises nothing.
  * `interviewerNote`: what the interviewers read, when the recorded reason is not written for them.
+ *
+ * The interview that carried new times for someone under Cancelled (the Cancelled column, founder decisions 1A to 4A)
+ * takes them out of the column when the team cancels it (`team_cancelled`): a team cancellation never keeps anyone there.
+ * The application is locked first, as the automatic set of new times and a person's send lock it, so a cancel and a
+ * reopen at the same moment take turns.
  */
 export async function cancelInterviewInTx(
   tx: Tx,
@@ -45,8 +50,11 @@ export async function cancelInterviewInTx(
   const hadEvents = Object.keys((iv.calendarRefs ?? {}) as Record<string, unknown>).length > 0;
   const knows = candidateKnows(iv);
   const tell = (input.notice ?? "known") === "known" && (knows.booked || knows.offered);
-  const [app] = await tx.select().from(applications).where(eq(applications.id, iv.applicationId)).limit(1);
+  const [app] = await tx.select().from(applications).where(eq(applications.id, iv.applicationId)).limit(1).for("update");
   await tx.update(interviews).set({ status: "cancelled", cancelReason: input.reason, attempt: iv.attempt + 1 }).where(eq(interviews.id, iv.id));
+  const followUp = app ? await openFollowUpOf(tx, app.id, { lock: true }) : null;
+  const carried = followUp ? followUp.currentInterviewId === iv.id || (followUp.interviewId === iv.id && ["proposed", "scheduling"].includes(iv.status)) : false;
+  if (app && carried) await resolveOpenFollowUp(tx, { companyId, applicationId: app.id, actor, how: input.leftProcess ? "left_process" : "team_cancelled", now: input.now });
   if (app?.stage === "interview_scheduled") await transition(tx, { applicationId: app.id, companyId, to: "interview_recommended", by: input.by, actor, reason: "interview cancelled" });
   const parts = await tx.select({ userId: interviewParticipants.userId }).from(interviewParticipants).where(eq(interviewParticipants.interviewId, iv.id));
   // With nobody left on the interview there is no interviewer to tell; the caller tells the owners itself.

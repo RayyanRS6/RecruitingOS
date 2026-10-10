@@ -299,6 +299,51 @@ describe("Setup: how candidates see the company, and the job boards (Q13, D3, Q1
   });
 });
 
+describe("Setup: When a candidate cancels (founder decisions 1A to 4A; 3A)", () => {
+  const company = (settings: Record<string, unknown> = {}) => ({ id: "co1", name: "Bright Dental", slug: "bright-dental", vertical: "dental", sizeBand: "20-49", timezone: "America/Los_Angeles", planKey: "pilot", status: "active", locations: [{ city: "Irvine", region: "CA" }], settings: { verifiedAt: "2026-10-01T00:00:00.000Z", ...settings }, integrations: [], ai: { provider: "fake" } });
+  const page = (opts: { role?: string; settings?: Record<string, unknown>; view?: Record<string, unknown> } = {}) => {
+    const qc = client();
+    qc.setQueryData(["company"], company(opts.settings));
+    qc.setQueryData(["me"], { user: { id: "u1" }, activeCompanyId: "co1", memberships: [{ companyId: "co1", role: opts.role ?? "owner", companyName: "Bright Dental" }] });
+    qc.setQueryData(["public-profile"], { hiringContact: null, contactShown: { email: "help@its.test", name: null, kind: "its" } });
+    if (opts.view) qc.setQueryData(["new-times-setting"], opts.view);
+    return render(qc, createElement(Setup));
+  };
+
+  it("sits after the job boards, on by default after 3 working days, with the number and its hint", () => {
+    const html = page();
+    const words = text(html);
+    expect(html.indexOf('id="setup-boards"')).toBeLessThan(html.indexOf('id="setup-new-times"'));
+    expect(html).toContain('<a href="#setup-new-times">When a candidate cancels</a>');
+    expect(words).toContain("When candidates cancel a booked interview, they choose: send me new times later, or I'm no longer interested.");
+    expect(html).toMatch(/<input type="checkbox" checked=""\/>Send new times automatically to people who ask for them/);
+    expect(html).toMatch(/<input id="new-times-days" class="input" type="number" min="1" max="10" step="1" style="width:100px" value="3"\/>/);
+    expect(words).toContain("Working days to wait");
+    expect(words).toContain("1 to 10. Weekends and holidays are not counted. The email goes out in the morning, your company's time.");
+    expect(words).toContain("Each person gets one set of new times by email, 3 working days after they cancel, for the same interview.");
+    // a confirmed company: nothing about the ITS check
+    expect(words).not.toContain("Automatic new times start once ITS confirms your company.");
+  });
+
+  it("switched off: nobody gets times automatically, and there is no number to set", () => {
+    const html = page({ view: { auto: false, workingDays: 5, pending: 0, companyConfirmed: true } });
+    expect(html).toMatch(/<input type="checkbox"\/>Send new times automatically to people who ask for them/);
+    expect(html).not.toContain('id="new-times-days"');
+    expect(text(html)).toContain("Nobody gets new times automatically. People who ask for them wait under Cancelled until you send times or decide.");
+  });
+
+  it("before ITS confirms the company, says automatic times start then", () => {
+    expect(text(page({ view: { auto: true, workingDays: 3, pending: 0, companyConfirmed: false } }))).toContain("Automatic new times start once ITS confirms your company. Until then, emails to candidates wait.");
+  });
+
+  it("reads as one line for someone who may not change it", () => {
+    const html = page({ role: "hr", settings: { newTimesAfterCancel: { auto: true, workingDays: 5 } } });
+    expect(text(html)).toContain("Automatic new times: on, after 5 working days. Only owners and admins change this.");
+    expect(html).not.toContain('id="new-times-days"');
+    expect(text(page({ role: "hiring_manager", view: { auto: false, workingDays: 3, pending: 0, companyConfirmed: true } }))).toContain("Automatic new times: off. Only owners and admins change this.");
+  });
+});
+
 describe("the guided answers of someone without a résumé (D10)", () => {
   it("shows each answer on its own labelled line, and an older one-box answer as it was written", () => {
     const guided = text(renderToStaticMarkup(createElement(NoResumeAnswers, { answers: { recentWork: "Hygienist at Coastal Dental, 2019 to now", skills: "Active CA RDH license", summary: "Most recent work: Hygienist at Coastal Dental, 2019 to now\nSkills, licenses or tools: Active CA RDH license" } })));
@@ -312,7 +357,7 @@ describe("the empty applicant list of a live job (D8)", () => {
   it("offers to share the job instead of an empty box", () => {
     const qc = client();
     qc.setQueryData(["roles"], [{ id: "r1", title: "Dental hygienist", status: "open", openedAt: "2026-10-08T10:00:00.000Z", counts: { total: 0 }, needsYou: 0, daysOpen: 0 }]);
-    qc.setQueryData(["applications", "r1"], { applications: [], counts: { total: 0, byOwnerStage: { new: 0, longlist: 0, shortlist: 0, interviewing: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 0, in_process: 0, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0 } });
+    qc.setQueryData(["applications", "r1"], { applications: [], counts: { total: 0, byOwnerStage: { new: 0, longlist: 0, shortlist: 0, interviewing: 0, cancelled: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 0, in_process: 0, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0 } });
     const html = render(qc, createElement(People));
     expect(text(html)).toContain("Nobody has applied yet");
     expect(html).toContain('<fieldset class="share-buttons" aria-label="Share the job">');

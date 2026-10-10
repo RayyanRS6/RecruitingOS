@@ -1,5 +1,6 @@
 import { MARK_LABEL, type MarkKind } from "@ros/contracts";
 import type { ApplicationDetail, TimelineEvent } from "../../api/client";
+import { notSentReasonText } from "../../cancelled";
 
 /**
  * The candidate panel's rules (plan A10), kept free of React so they can be tested (tests/web/candidate-panel.test.ts):
@@ -207,7 +208,25 @@ export function whoDid(actor: TimelineEvent["actor"]): string {
 }
 
 const shortDay = (iso: unknown) => (typeof iso === "string" && !Number.isNaN(Date.parse(iso)) ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "");
+const longDay = (iso: unknown) => (typeof iso === "string" && !Number.isNaN(Date.parse(iso)) ? new Date(iso).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }) : "");
 const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+
+/**
+ * The Cancelled column (founder decisions 1A to 4A) in the History tab: someone went under Cancelled (their choice, a
+ * no-show, or back after a decision was taken back) or left it. Leaving the process, or a new entry replacing an old one,
+ * says nothing more: the stage line or the new entry already says it.
+ */
+const LEFT_CANCELLED: Record<string, string> = { rebooked: "Booked a new interview time", moved_by_team: "Moved on from Cancelled", team_cancelled: "The team cancelled the interview with new times" };
+function movedToCancelled(p: Record<string, unknown>): { what: string; why?: string; told?: string } {
+  if (p.restored) return { what: "Back under Cancelled: the decision was taken back" };
+  if (p.reason === "no_show") return { what: "Did not come to the interview", ...(p.backfill ? { why: "Recorded when the Cancelled column was added." } : {}) };
+  if (p.reason === "not_interested") return { what: "Cancelled the interview: no longer interested" };
+  // The day the candidate was told, in the company's calendar (`dueDay`, YYYY-MM-DD), whatever the reader's time zone.
+  const auto = (p.auto ?? {}) as { state?: unknown; dueAt?: unknown; dueDay?: unknown };
+  const companyDay = typeof auto.dueDay === "string" && /^\d{4}-\d{2}-\d{2}$/.test(auto.dueDay) ? `${auto.dueDay}T12:00:00` : null;
+  const day = auto.state === "waiting" ? longDay(companyDay ?? auto.dueAt) : "";
+  return { what: "Cancelled the interview and asked for new times", ...(day ? { told: `New times go to them automatically on ${day}.` } : {}) };
+}
 
 /** A person's decision already said by its own event: the matching "human decision" record would only repeat it. */
 const SAID_ELSEWHERE = new Set(["reject", "set_mark", "clear_mark", "hold", "advance_to_interview", "told_in_person", "send_decision", "interview.decision", "offer_made"]);
@@ -290,7 +309,8 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
       const label = MARK_LABEL[p.mark as MarkKind] ?? "mark";
       const reason = String(p.reason ?? "");
       if (reason.startsWith("replaced by")) return null; // the new mark's own line says it
-      const what = reason === "left_process" ? `${label} mark ended: they left the process` : reason === "moved_on" ? `${label} mark ended: they moved on` : `Taken off ${label === "On hold" ? "hold" : `the ${label.toLowerCase()}`}`;
+      const movedOn = p.to === "cancelled" ? "they went under Cancelled" : "they moved on";
+      const what = reason === "left_process" ? `${label} mark ended: they left the process` : reason === "moved_on" ? `${label} mark ended: ${movedOn}` : `Taken off ${label === "On hold" ? "hold" : `the ${label.toLowerCase()}`}`;
       return { ...base, what, ...(note ? { why: note } : {}) };
     }
     case "application.told":
@@ -326,6 +346,20 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
       return { ...base, what: "Recommended for interview" };
     case "interview.decision_recorded":
       return { ...base, what: `Decision after the interview: ${String(p.decision ?? "").replace(/_/g, " ")}`, ...(note ? { why: note } : {}) };
+    // The Cancelled column (founder decisions 1A to 4A): in, out, and what became of the new times.
+    case "application.moved_to_cancelled":
+      return { ...base, ...movedToCancelled(p) };
+    case "application.left_cancelled": {
+      const what = LEFT_CANCELLED[String(p.how ?? "")];
+      return what ? { ...base, what } : null;
+    }
+    case "interview.new_times_sent":
+      return p.via === "auto" ? { ...base, what: "New times sent automatically, as they asked", who: "The system" } : { ...base, what: "New times sent" };
+    case "interview.new_times_not_sent": {
+      if (p.reason === "left_process" || p.reason === "details_deleted") return null;
+      const why = notSentReasonText(p.reason);
+      return { ...base, what: "The automatic new times did not go", ...(why ? { why } : {}) };
+    }
     case "human.override": {
       const action = String(p.action ?? "");
       if (SAID_ELSEWHERE.has(action)) return null;
@@ -341,6 +375,8 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
         move_to_talent_pool: "Moved to the talent pool",
         cancel_screen: "Stopped the screen invitation",
         undo_decision: "Took back the decision before they were told; nothing was sent",
+        "interview.new_times": "Sent new times",
+        "interview.new_times_stop": "Stopped the automatic new times",
       };
       return { ...base, what: words[action] ?? `Decision: ${action.replace(/[._]/g, " ")}`, ...(note ? { why: note } : {}) };
     }

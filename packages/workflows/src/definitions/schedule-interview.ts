@@ -1,17 +1,22 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { MembershipRole } from "@ros/contracts";
-import { can, computeSlots, createEscalation, emit, notify, slotStillFree, transition } from "@ros/core";
+import { can, computeSlots, createEscalation, emit, newTimesOffered, notify, openFollowUpOf, slotStillFree, transition } from "@ros/core";
 import { applications, candidates, companies, interviewParticipants, interviews, memberships, rolePackets, roles } from "@ros/db";
-import { composeInterviewerBrief, constraintsFor, createInterviewEvents, participantsOf, queueCommunication, redactBriefPay, renderInterviewerBriefText, sendInterviewConfirmation, sendInterviewReminder, sendSlotsOffered, sendSlotsReminder, type InvitationNote } from "@ros/agents";
+import { HELD_REASON, composeInterviewerBrief, constraintsFor, createInterviewEvents, participantsOf, queueCommunication, redactBriefPay, renderInterviewerBriefText, sendInterviewConfirmation, sendInterviewReminder, sendSlotsOffered, sendSlotsReminder, type InvitationNote } from "@ros/agents";
 import { randomToken } from "@ros/db";
+import type { NewTimesOfferKind, NewTimesVia } from "../new-times-reopen";
 import type { StepContext, WorkflowDefinition } from "../types";
 
 /**
  * `invitationNote`: a personal line for the invitation (founder decision Q28), written by the person who approved the
  * interview or suggested by the assistant and kept by them (`aiHelped`; the email then says so). The interview request
  * route checks it (`checkPersonalLine`) and puts it here; the first attempt's invitation carries it.
+ *
+ * `offerKind`, `followUpId` and `via`: the interview carries new times for someone under Cancelled (founder decisions
+ * 2A and 4A), set when the automatic set or a person reopens it, or a person approves a new one for them. The times
+ * email then uses the new-times opening, and counts as sent for the follow-up only once it is on its way.
  */
-type State = { interviewId: string; applicationId: string; roleId: string; roundKey: string; attempt: number; remindedAt?: string; offeredAt?: string; invitationNote?: InvitationNote | null };
+type State = { interviewId: string; applicationId: string; roleId: string; roundKey: string; attempt: number; remindedAt?: string; offeredAt?: string; invitationNote?: InvitationNote | null; offerKind?: NewTimesOfferKind; followUpId?: string; via?: NewTimesVia };
 
 const OFFER_WAIT_HOURS = 48;
 const REMIND_WAIT_HOURS = 48;
@@ -72,6 +77,23 @@ async function gatherConstraints(b: Bundle, ctx: StepContext<State>) {
 function hoursFromNow(ctx: StepContext<State>, h: number): string {
   return new Date(ctx.now.getTime() + h * 3600_000).toISOString();
 }
+/**
+ * Locks the application before this step changes the interview and moves the stage: every path that changes both takes
+ * the application first (a team cancel, the candidate's own cancel, a send of new times). False when the interview
+ * changed while this step waited for the lock (cancelled, or a newer attempt), so the step ends instead.
+ */
+async function stillOursAfterLock(ctx: StepContext<State>, b: Bundle): Promise<boolean> {
+  await ctx.q.select({ id: applications.id }).from(applications).where(eq(applications.id, b.app.id)).limit(1).for("update");
+  const [current] = await ctx.q.select({ status: interviews.status, attempt: interviews.attempt }).from(interviews).where(eq(interviews.id, b.iv.id)).limit(1);
+  return !!current && current.status === b.iv.status && current.attempt === ctx.state.attempt;
+}
+
+/** The sentence the team's notices gain while the times being worked out are new times for someone under Cancelled. */
+function newTimesSentence(b: Bundle, ctx: StepContext<State>): string {
+  if (ctx.state.offerKind === "new_times_asked") return ` ${b.candidate.firstName} cancelled and asked for new times; they go out as soon as there are times to offer.`;
+  if (ctx.state.offerKind === "new_times_team") return ` ${b.candidate.firstName} is waiting for new interview times from your team.`;
+  return "";
+}
 
 export const scheduleInterview: WorkflowDefinition<State> = {
   key: "schedule_interview",
@@ -90,7 +112,7 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       const constraints = await gatherConstraints(b, ctx);
       if (constraints.every((c) => c.source === "none")) {
         if (!(await ctx.alreadyDone("prepare"))) {
-          await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.no_availability", title: `Nobody's availability is known for ${b.candidate.firstName}'s interview`, body: `${b.participants.map((p) => p.firstName).join(", ")} need to connect a calendar or declare hours before times can be offered.`, action: { label: "Open Setup", href: "/setup" } });
+          await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.no_availability", title: `Nobody's availability is known for ${b.candidate.firstName}'s interview`, body: `${b.participants.map((p) => p.firstName).join(", ")} need to connect a calendar or declare hours before times can be offered.${newTimesSentence(b, ctx)}`, action: { label: "Open Setup", href: "/setup" } });
           await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.declare_availability", title: "Tell us when you can interview", body: `${b.candidate.firstName} ${b.candidate.lastName} is waiting for interview times for ${b.role.title}. Connect your calendar or declare your hours.`, action: { label: "My availability", href: "/setup" }, userIds: b.participants.map((p) => p.userId) });
         }
         return { kind: "wait", wait: { kind: "event", eventTypes: ["availability.updated"], until: hoursFromNow(ctx, AVAILABILITY_WAIT_HOURS), reason: "waiting for an interviewer's availability" }, resumeStep: "prepare" };
@@ -105,7 +127,7 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       const w = windowOf(b);
       const { slots } = computeSlots({ participants: constraints, durationMinutes: b.iv.durationMinutes, fromDate: w.fromDate, toDate: w.toDate, companyTimezone: b.company.timezone, businessDaysOnly: w.businessDaysOnly, now: ctx.now });
       if (!slots.length) {
-        await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.no_slots", title: `No common times for ${b.candidate.firstName}'s interview`, body: `Between ${w.fromDate} and ${w.toDate} the interviewers have no shared free time of ${b.iv.durationMinutes} minutes. Widen the window, change interviewers, or free some time.`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
+        await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.no_slots", title: `No common times for ${b.candidate.firstName}'s interview`, body: `Between ${w.fromDate} and ${w.toDate} the interviewers have no shared free time of ${b.iv.durationMinutes} minutes. Widen the window, change interviewers, or free some time.${newTimesSentence(b, ctx)}`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
         return { kind: "wait", wait: { kind: "event", eventTypes: ["availability.updated", "window.updated"], subjectId: b.iv.id, until: hoursFromNow(ctx, AVAILABILITY_WAIT_HOURS), reason: "no common free time; waiting for availability or a wider window" }, resumeStep: "propose_slots" };
       }
       await ctx.q.update(interviews).set({ offeredSlots: slots, selectedSlot: null, status: "scheduling" }).where(eq(interviews.id, b.iv.id));
@@ -119,12 +141,25 @@ export const scheduleInterview: WorkflowDefinition<State> = {
         await ctx.q.update(interviews).set({ scheduleToken: randomToken(24), scheduleTokenExpiresAt: new Date(ctx.now.getTime() + TOKEN_DAYS * 86_400_000).toISOString() }).where(eq(interviews.id, b.iv.id));
       }
       const fresh = (await load(ctx))!;
-      const sent = await sendSlotsOffered(ctx.q, ctx.services.integrations, { ...messageInput(fresh, ctx), note: ctx.state.invitationNote ?? null });
+      const sent = await sendSlotsOffered(ctx.q, ctx.services.integrations, { ...messageInput(fresh, ctx), note: ctx.state.invitationNote ?? null, variant: ctx.state.offerKind ?? "first" });
       if (sent.status === "failed" && sent.retryable) return { kind: "fail", error: `slots email failed: ${sent.error}`, retryable: true };
+      if (ctx.state.followUpId) {
+        // New times for someone under Cancelled count as sent only once their email is on its way (`newTimesOffered`),
+        // and once per interview: offering again after a picked time was taken (`offeredAt` is set) moves only the key.
+        const held = sent.status === "pending" && sent.reason === HELD_REASON;
+        await newTimesOffered(ctx.q, { followUpId: ctx.state.followUpId, interviewId: fresh.iv.id, attempt: fresh.iv.attempt, outcome: sent.status === "failed" ? "failed" : held ? "held" : "queued", via: ctx.state.via ?? "person", actor: ctx.actor, now: ctx.now, reoffer: !!ctx.state.offeredAt });
+        // Held for the ITS check (founder decision B7): the candidate cannot see these times, so the 48-hour offer clock
+        // does not start. When ITS confirms the company the email is released, this step runs again, finds it on its way,
+        // and only then records the offer and starts the clock.
+        if (held) return { kind: "wait", wait: { kind: "event", eventTypes: ["company.verified"], subjectId: ctx.companyId, reason: "the new times wait for ITS to confirm the company" }, resumeStep: "offer_slots" };
+      }
       if (sent.status === "failed") {
         await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.unreachable", title: `${b.candidate.firstName} ${b.candidate.lastName} cannot be reached by email`, body: "Offer the times by phone, or pick one on their behalf from the interview page.", action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
       }
       await emit(ctx.q, { type: "interview.slots_offered", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { attempt: ctx.state.attempt, slots: fresh.iv.offeredSlots.length, expiresAt: fresh.iv.scheduleTokenExpiresAt }, correlationId: ctx.run.id });
+      // A time picked while the new times' email waited for the ITS check (a race with the pick page, which says the
+      // times are being got ready then): the pick is not lost; it is booked now.
+      if (ctx.state.followUpId && fresh.iv.selectedSlot) return { kind: "next", step: "book", state: { offeredAt: ctx.now.toISOString(), remindedAt: undefined } };
       return { kind: "wait", wait: { kind: "event", eventTypes: ["interview.slot_selected", "interview.none_work"], subjectId: b.iv.id, until: hoursFromNow(ctx, OFFER_WAIT_HOURS), reason: "waiting for the candidate to pick a time" }, state: { offeredAt: ctx.now.toISOString(), remindedAt: undefined }, resumeStep: "after_offer" };
     },
 
@@ -158,7 +193,10 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       if (b.iv.selectedSlot) return { kind: "next", step: "book" };
       await ctx.q.update(interviews).set({ status: "offer_expired", scheduleToken: null, scheduleTokenExpiresAt: null }).where(eq(interviews.id, b.iv.id));
       await emit(ctx.q, { type: "interview.offer_expired", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { attempt: ctx.state.attempt }, correlationId: ctx.run.id });
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.offer_expired", title: `${b.candidate.firstName} ${b.candidate.lastName} did not pick an interview time`, body: "Four days passed with a reminder. Offer times again, decide, or bring in a recruiter.", action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
+      // New times for someone under Cancelled that lapsed: they stay there, and only a person sends again (one automatic set, ever).
+      const followUp = await openFollowUpOf(ctx.q, b.app.id);
+      const body = followUp?.currentInterviewId === b.iv.id ? "Four days passed with a reminder. They stay under Cancelled: send new times again, or decide." : "Four days passed with a reminder. Offer times again, decide, or bring in a recruiter.";
+      await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.offer_expired", title: `${b.candidate.firstName} ${b.candidate.lastName} did not pick an interview time`, body, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
       return { kind: "complete" };
     },
 
@@ -181,6 +219,9 @@ export const scheduleInterview: WorkflowDefinition<State> = {
         }
         return { kind: "next", step: "propose_slots", state: { attempt: nextAttempt } };
       }
+      // The application first, then the interview: the order a team cancel and a send of new times take them, so a
+      // booking and a cancel at the same moment take turns. A cancel that got there first ends this run.
+      if (!(await stillOursAfterLock(ctx, b))) return { kind: "complete" };
       await ctx.q.update(interviews).set({ startsAt: slot.startsAt, endsAt: slot.endsAt, timezone: b.company.timezone }).where(eq(interviews.id, b.iv.id));
       const fresh = (await load(ctx))!;
       const { refs, meetingUrl } = await createInterviewEvents(ctx.q, ctx.services.integrations, { interview: fresh.iv, participants: fresh.participants, candidate: fresh.candidate, roleTitle: fresh.role.title, companyName: fresh.company.name, companyTimezone: fresh.company.timezone, actor: ctx.actor, appBaseUrl: ctx.services.env.appBaseUrl });
@@ -247,6 +288,7 @@ export const scheduleInterview: WorkflowDefinition<State> = {
     async close(ctx) {
       const b = await load(ctx);
       if (!b || superseded(b, ctx) || b.iv.status !== "scheduled") return { kind: "complete" };
+      if (!(await stillOursAfterLock(ctx, b))) return { kind: "complete" };
       await ctx.q.update(interviews).set({ status: "completed" }).where(eq(interviews.id, b.iv.id));
       if (b.app.stage === "interview_scheduled") await transition(ctx.q, { applicationId: b.app.id, companyId: ctx.companyId, to: "interview_complete", by: "system", actor: ctx.actor, reason: "interview ended", correlationId: ctx.run.id });
       await emit(ctx.q, { type: "interview.completed", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { attempt: ctx.state.attempt }, correlationId: ctx.run.id });

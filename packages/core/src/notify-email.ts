@@ -41,6 +41,11 @@ const HEADLINES: Record<string, string> = {
   "interview.unreachable": "A candidate cannot be reached about interview times",
   "interview.offer_expired": "A candidate did not pick an interview time",
   "interview.stuck": "An interview time could not be booked",
+  "interview.no_show": "A candidate did not come to an interview",
+  "interview.new_times_sent": "New interview times went to a candidate who asked for them",
+  "interview.new_times_not_sent": "New interview times a candidate asked for were not sent",
+  // The interviewers' notice when new times are set up; "interview.rescheduled" is the candidate asking to move one.
+  "interview.new_times": "New times are going to a candidate for your interview",
   "calendar.needs_attention": "Your calendar connection needs attention",
   "calendar.cancel_failed": "Please remove a cancelled interview from your calendar",
   "member.removed_interviews": "Someone who left your team had interviews coming up",

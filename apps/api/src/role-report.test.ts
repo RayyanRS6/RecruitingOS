@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, gte, inArray, isNull } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { createApplicationLink, entitlements, findPostingLink, groupFor, ownerGroup } from "@ros/core";
+import { createApplicationLink, entitlements, findPostingLink, groupFor, openFollowUp, ownerGroup, setAutoState } from "@ros/core";
 import { applicationMarks, applications, approvalRequests, assessments, auditRecords, communications, events, interviews, postings, recruiterEscalations, users, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { localDays } from "@ros/workflows";
@@ -224,8 +224,10 @@ describe("role report", () => {
     const rows = await roleApps();
     expect(report.stages.total).toBe(8);
     expect(report.stages.byGroup).toEqual(await groupCounts(rows));
-    // the stage strip: Ana is on hold (privately, until a date), Gia was declined and has not been told
-    expect(report.stages.byOwnerStage).toMatchObject({ on_hold: 1, hired: 1 });
+    // the stage strip: Ana is on hold (privately, until a date), Gia was declined and has not been told. Cara's interview
+    // was cancelled by her before the Cancelled column existed (a row written directly): nobody asked her the choice the
+    // column shows, so she is not under Cancelled (founder decisions 1A to 4A; only an open follow-up puts someone there).
+    expect(report.stages.byOwnerStage).toMatchObject({ on_hold: 1, hired: 1, cancelled: 0 });
     expect(Object.values(report.stages.byOwnerStage).reduce((a, b) => a + b, 0)).toBe(8);
     expect(report.stages.marks).toMatchObject({ onHold: 1, holdsEnded: 0, longlist: 0, shortlist: 0, notAFitForNow: 0, holdsEverSet: 1 });
     expect(report.stages.told).toEqual({ decisions: 1, notTold: 1, queued: 0, sent: 0, toldInPerson: 0, beforeTracking: 0 });
@@ -389,6 +391,8 @@ describe("role report", () => {
     expect(col("Ana Lopez", "Mark")).toBe("On hold");
     expect(col("Ana Lopez", "Hold ends")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(col("Ben Osei", "Pipeline stage")).toBe("Interviewing");
+    expect(col("Ben Osei", "Cancelled")).toBe("");
+    expect(col("Cara Diaz", "Cancelled")).toBe("");
     expect(col("Ana Lopez", "Interviews")).toBe("2");
     expect(col("Ana Lopez", "Interviews completed")).toBe("1");
     expect(col("Ana Lopez", "Decision")).toBe("Assessment flagged");
@@ -420,6 +424,7 @@ describe("role report", () => {
     expect(lines).toContain("Decline reasons,Experience not a match,1");
     expect(lines.filter((l) => l.startsWith("Suggestions vs decisions,")).length).toBe(report.recommendationsVsDecisions.rows.length * 7);
     expect(lines).toContain("Pipeline stages,On hold,1");
+    expect(lines).toContain("Pipeline stages,Cancelled,0");
     expect(lines).toContain("Marks,On hold now,1");
     expect(lines).toContain("Decisions told,Not told yet,1");
     expect(lines.length).toBe(summaryRows(report).length + 1);
@@ -493,6 +498,42 @@ describe("role report", () => {
     // the administrator's read is audited like every other console read
     const bypass = await container.db.select().from(auditRecords).where(eq(auditRecords.action, "admin.bypass"));
     expect(bypass.some((a) => (a.reason ?? "").includes(`/api/v1/admin/customers/${companyId}/report`))).toBe(true);
+  });
+
+  // Last: it puts Ben under Cancelled, which the figures above do not expect.
+  it("J18 under Cancelled: the roles list, the Talent list, the report and its CSV agree whether new times are promised or they wait on you", async () => {
+    const groups = ["waiting_on_you", "waiting_on_candidate", "in_process", "not_moving_forward", "hired"] as const;
+    const agree = async () => {
+      const fresh = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/report`)).json()) as RoleReport;
+      const talent = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/applications?counts=1`)).json()) as { counts: { byOwnerStage: Record<string, number>; byGroup: Record<string, number> } };
+      const mine = ((await (await json(owner, "GET", "/api/v1/roles")).json()) as Array<{ id: string; counts: Record<string, number>; stageCounts: Record<string, number> }>).find((r) => r.id === roleId)!;
+      expect(mine.stageCounts).toEqual(fresh.stages.byOwnerStage);
+      expect(talent.counts.byOwnerStage).toEqual(fresh.stages.byOwnerStage);
+      for (const g of groups) {
+        expect(mine.counts[g] ?? 0, g).toBe(fresh.stages.byGroup[g]);
+        expect(talent.counts.byGroup[g], g).toBe(fresh.stages.byGroup[g]);
+      }
+      return fresh;
+    };
+    // Ben, recommended for interview, cancelled it and asked for new times: they are promised for a day, so nothing waits on you
+    const [missed] = await container.db.select().from(interviews).where(eq(interviews.applicationId, ids.ben));
+    const candidate: Actor = { kind: "candidate", id: "candidate" };
+    const { row } = await withTenant(container.db, companyId, (tx) => openFollowUp(tx, { companyId, applicationId: ids.ben, interviewId: missed.id, interviewAttempt: missed.attempt, kind: "candidate_cancelled", choice: "new_times", auto: { state: "waiting", dueAt: at(5 * DAY), workingDays: 3 }, actor: candidate }));
+    const parked = await agree();
+    expect(parked.stages.byOwnerStage).toMatchObject({ cancelled: 1, interviewing: report.stages.byOwnerStage.interviewing - 1 });
+    expect(parked.stages.byGroup).toMatchObject({ waiting_on_you: report.stages.byGroup.waiting_on_you - 1, in_process: report.stages.byGroup.in_process + 1 });
+    expect(parked.pendingDecisions.candidates).toBe(report.pendingDecisions.candidates - 1);
+    // the team stopped the automatic set: now they wait on you, under Cancelled
+    await withTenant(container.db, companyId, (tx) => setAutoState(tx, { followUpId: row.id, to: "not_sent", reason: "stopped_by_team", actor: ownerActor }));
+    const waiting = await agree();
+    expect(waiting.stages.byOwnerStage.cancelled).toBe(1);
+    expect(waiting.stages.byGroup).toEqual(report.stages.byGroup);
+    expect(waiting.pendingDecisions.candidates).toBe(report.pendingDecisions.candidates);
+    // the applicant list says it, with why
+    const lines = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/report.csv`)).text()).replace(/^﻿/, "").split("\r\n").filter(Boolean);
+    const ben = lines.find((l) => l.includes("Ben Osei"))!.split(",");
+    expect(ben[APPLICANT_COLUMNS.indexOf("Pipeline stage")]).toBe("Cancelled");
+    expect(ben[APPLICANT_COLUMNS.indexOf("Cancelled")]).toBe("Asked for new times");
   });
 });
 
@@ -592,6 +633,26 @@ describe("role report arithmetic on hand-made rows", () => {
     expect(rows).toContainEqual(["Pipeline stages", "On hold", 1]);
     expect(rows).toContainEqual(["Marks", "On hold now", 1]);
     expect(rows).toContainEqual(["Decisions told", "Not told yet", 1]);
+  });
+
+  it("reads the Cancelled column: promised or prepared new times are in process, anyone else under it waits on you, named by why (founder decisions 1A to 4A)", () => {
+    const interviewing = [app("a4", "interview_recommended", d(-6), d(-5)), app("a5", "interview_complete", d(-6), d(-4)), app("a6", "interview_recommended", d(-6), d(-3)), app("a7", "finalist", d(-6), d(-2))];
+    const withFollowUps = (followUps: NonNullable<ReportData["followUps"]>) => composeRoleReport({ ...data, apps: [...data.apps, ...interviewing], followUps }, new Date(BASE));
+    const r = withFollowUps([
+      { applicationId: "a4", reason: "asked_new_times", autoState: "waiting", interviewOpen: false },
+      { applicationId: "a5", reason: "no_show", autoState: "none", interviewOpen: false },
+      { applicationId: "a6", reason: "not_interested", autoState: "none", interviewOpen: true },
+      // an open follow-up past the interview steps never shows as Cancelled (a resolve that was missed)
+      { applicationId: "a7", reason: "no_show", autoState: "none", interviewOpen: false },
+    ]);
+    expect(r.stages.byOwnerStage).toMatchObject({ cancelled: 3, interviewing: 1 });
+    // a1 waits on you as before, a5 (the no-show, nothing in motion) and the finalist too; a4 and a6 are in process
+    expect(r.stages.byGroup).toEqual({ waiting_on_you: 3, waiting_on_candidate: 0, in_process: 3, not_moving_forward: 1, hired: 0 });
+    expect(r.pendingDecisions.list.find((p) => p.applicationId === "a5")?.label).toBe("Cancelled: no-show");
+    expect(r.pendingDecisions.list.some((p) => p.applicationId === "a4" || p.applicationId === "a6")).toBe(false);
+    expect(summaryRows(r)).toContainEqual(["Pipeline stages", "Cancelled", 3]);
+    // without follow-ups the same people are simply interviewing, waiting on you
+    expect(withFollowUps([]).stages.byOwnerStage).toMatchObject({ cancelled: 0, interviewing: 4 });
   });
 
   it("names every pending approval and the role's status in plain words, never a key", () => {

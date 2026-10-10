@@ -111,7 +111,8 @@ export function TellCard({ a, roleId, myRole }: { a: ApplicationDetail; roleId: 
       ) : null}
       {takingBack && backTo ? (
         <div className="stack" style={{ gap: 8, marginTop: 10 }}>
-          <p className="small" style={{ margin: 0 }}>Take back this decision? {first} goes back to {backTo.label}. Nothing was sent to them, and nothing will be.</p>
+          {/* Someone declined from Cancelled goes back there, with what they chose (their promised new times may still go). */}
+          <p className="small" style={{ margin: 0 }}>{backTo.to === "cancelled" ? `Take back this decision? ${first} goes back under Cancelled, with what they chose. Nothing about this decision was sent to them, and nothing will be.` : `Take back this decision? ${first} goes back to ${backTo.label}. Nothing was sent to them, and nothing will be.`}</p>
           <div className="row">
             <Button size="sm" variant="primary" loading={act.isPending} onClick={() => act.mutate({ action: "undo_decision" })}>Yes, take it back</Button>
             <Button size="sm" variant="quiet" onClick={() => setTakingBack(false)}>Cancel</Button>

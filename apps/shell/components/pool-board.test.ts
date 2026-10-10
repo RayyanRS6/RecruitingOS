@@ -61,7 +61,7 @@ const summary = {
 };
 const board = { role: { id: "r1", title: "Dental Hygienist", status: "open", currentPacketVersion: 1 }, columns: { shortlist: [maria, eve], longlist: [ben], not_moving_forward: [luis] }, stillApplying: [sofia], summary, generatedAt: "2026-10-09T10:42:00.000Z" };
 
-const counts = { total: 5, byOwnerStage: { new: 4, longlist: 0, shortlist: 1, interviewing: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 3, in_process: 2, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0, stillApplying: 1 };
+const counts = { total: 5, byOwnerStage: { new: 4, longlist: 0, shortlist: 1, interviewing: 0, cancelled: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 3, in_process: 2, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0, stillApplying: 1 };
 function client() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
   qc.setQueryData(["me"], owner);

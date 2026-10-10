@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { BOARD_COLUMN_LABEL, BoardColumn, type ActiveMark, type BoardCard, type BoardPlacement, type BoardView, type MatchScore, type MustHaveSummary, type ReadingVersion, type RolePacket } from "@ros/contracts";
-import { CLOSER_LOOK_LABEL, STAGE_LABEL, activeMarksFor, baseOwnerStage, boardPlacement, daysSince, evidenceView, matchScore, mustHaveSummary, ownerStage, ownerStageLabel, poolSummary, readingPair, readingVersion, unsentScreenReadings, type EvidenceView, type PoolPerson } from "@ros/core";
+import { CLOSER_LOOK_LABEL, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, baseOwnerStage, boardPlacement, daysSince, evidenceView, matchScore, mustHaveSummary, ownerStage, ownerStageLabel, poolSummary, readingPair, readingVersion, unsentScreenReadings, type EvidenceView, type FollowUpView, type PoolPerson } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, documents, events, interviews, rolePackets, roles, screens, type Tx } from "@ros/db";
 import { HttpError } from "../middleware/errors";
 import type { Tenant } from "../middleware/session";
@@ -100,6 +100,8 @@ export type PoolRow = ScoredPerson & {
   name: string;
   assessments: AssessmentRow[];
   mark: ActiveMark | null;
+  /** Their open follow-up (the Cancelled column, founder decisions 1A to 4A): the card's stage label reads it. */
+  followUp: FollowUpView | null;
   stillApplying: boolean;
   openScreen: boolean;
   invitedAutomatically: boolean;
@@ -133,6 +135,7 @@ export async function loadPool(tx: Tx, input: { roleId: string; tenant?: Pick<Te
   const docIds = apps.filter((a) => a.resumeDocumentId).map((a) => a.resumeDocumentId!);
   const docs = docIds.length ? await tx.select({ id: documents.id, status: documents.status, hasText: sql<boolean>`${documents.textExtracted} is not null` }).from(documents).where(inArray(documents.id, docIds)) : [];
   const marks = await activeMarksFor(tx, appIds);
+  const followUps = await activeFollowUpsFor(tx, appIds);
   const scr = await tx.select({ id: screens.id, applicationId: screens.applicationId, status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.applicationId, appIds)).orderBy(desc(screens.createdAt));
   const hidden = unsentScreenReadings(scr, asmts);
   const applying = await stillApplyingFor(tx, appIds);
@@ -155,6 +158,7 @@ export async function loadPool(tx: Tx, input: { roleId: string; tenant?: Pick<Te
       name: names.get(app.candidateId) || "Unknown",
       assessments: own,
       mark,
+      followUp: followUps.get(app.id) ?? null,
       stillApplying,
       openScreen,
       invitedAutomatically: !!ownScreens[0] && automatic.has(ownScreens[0].id),
@@ -177,7 +181,8 @@ const READING_WORDS: Record<string, string> = { strong: "Strong match", potentia
 
 export function boardCard(row: PoolRow, roleId: string, now: Date): BoardCard {
   const { app, latest, match } = row;
-  const strip = ownerStage(app, row.mark);
+  // The board keeps its three columns (`boardPlacement`); someone under Cancelled is labelled so on their card.
+  const strip = ownerStage(app, row.mark, row.followUp);
   const quoteOf = (f: { claim: string; evidence: { source: string; quote?: string; unquoted?: boolean } }) => ({ claim: f.claim, quote: f.evidence.quote?.trim() || null, source: f.evidence.source, unquoted: !!f.evidence.unquoted || !f.evidence.quote?.trim() });
   // The gap that cost the most, with its quote, before the reading's own first concern.
   const top = match?.breakdown.find((c) => c.pointsLost > 0) ?? null;
@@ -190,7 +195,7 @@ export function boardCard(row: PoolRow, roleId: string, now: Date): BoardCard {
     stage: app.stage,
     stageLabel: row.evidence.needsCloserLook ? CLOSER_LOOK_LABEL : STAGE_LABEL[app.stage],
     ownerStage: strip,
-    ownerStageLabel: ownerStageLabel(strip, row.mark),
+    ownerStageLabel: ownerStageLabel(strip, row.mark, row.followUp),
     mark: row.mark,
     score: match,
     mustHaves: row.mustHaves,

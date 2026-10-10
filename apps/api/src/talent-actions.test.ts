@@ -1,8 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, like } from "drizzle-orm";
 import type { ApplicationStage, MembershipRole } from "@ros/contracts";
-import { entitlements } from "@ros/core";
-import { applications, candidates, communications, events, policies, randomToken, recruiterEscalations, screens, users, withTenant, workflowRuns } from "@ros/db";
+import { entitlements, openFollowUp, type FollowUpStrip } from "@ros/core";
+import { newTimesDayWords } from "@ros/agents";
+import { applications, candidates, communications, companies, events, interviewFollowups, interviews, policies, randomToken, recruiterEscalations, screens, users, withTenant, workflowRuns } from "@ros/db";
+import { armNewTimes } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { applicationActionState, settlesSuggestions, stageMoves, type ApplicationFacts } from "./services/application-actions";
@@ -36,11 +38,11 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       // an interviewer is offered nothing, and told why on each
       const interviewer = applicationActionState(facts({ role: "interviewer" }));
       expect(interviewer.allowed).toEqual([]);
-      expect(Object.keys(interviewer.blockedReasons)).toHaveLength(18);
+      expect(Object.keys(interviewer.blockedReasons)).toHaveLength(20);
       // every choice not allowed has a reason, for every role
       for (const role of ["owner", "admin", "hiring_manager", "hr", "recruiter", "interviewer"] as MembershipRole[]) {
         const s = applicationActionState(facts({ role }));
-        expect(s.allowed.length + Object.keys(s.blockedReasons).length, role).toBe(18);
+        expect(s.allowed.length + Object.keys(s.blockedReasons).length, role).toBe(20);
         for (const reason of Object.values(s.blockedReasons)) expect(reason, role).not.toMatch(/_|undefined/);
       }
     });
@@ -83,7 +85,9 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
     it("builds the stage button from the same rule: every stage, how it is reached, and why not", () => {
       const moves = (over: Partial<ApplicationFacts> = {}) => Object.fromEntries(stageMoves(facts(over)).map((m) => [m.to, m]));
       const owner = moves();
-      expect(Object.keys(owner)).toEqual(["new", "longlist", "shortlist", "interviewing", "on_hold", "offer", "hired", "not_moving_forward"]);
+      expect(Object.keys(owner)).toEqual(["new", "longlist", "shortlist", "interviewing", "cancelled", "on_hold", "offer", "hired", "not_moving_forward"]);
+      // nobody is moved into Cancelled by hand: never the decline the default would open
+      expect(owner.cancelled).toMatchObject({ allowed: false, via: "none", label: "Cancelled", blockedReason: "Only the candidate's own cancellation, or an interview they missed, puts someone here." });
       expect(owner.new).toMatchObject({ current: true, allowed: false, via: "none" });
       expect(owner.shortlist).toMatchObject({ allowed: true, via: "set_mark", mark: "shortlist", label: "Shortlist" });
       expect(owner.on_hold).toMatchObject({ allowed: true, via: "set_mark", mark: "on_hold" });
@@ -129,6 +133,10 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect(moves.new).toMatchObject({ allowed: true, via: "undo_decision" });
       expect(moves.shortlist.allowed).toBe(false);
       expect(Object.fromEntries(stageMoves(declined({ decidedFrom: "interview_scheduled" })).map((m) => [m.to, m])).interviewing).toMatchObject({ allowed: true, via: "undo_decision" });
+      // declined from Cancelled: taking it back puts them back there, so the choice sits on the Cancelled row, not on Interviewing
+      const fromCancelled = Object.fromEntries(stageMoves(declined({ decidedFrom: "interview_recommended", undoToCancelled: true })).map((m) => [m.to, m]));
+      expect(fromCancelled.cancelled).toMatchObject({ allowed: true, via: "undo_decision", label: "Cancelled" });
+      expect(fromCancelled.interviewing.allowed).toBe(false);
       // never once they were told or a message is on its way, nor while one waits for approval, nor on a closed role
       expect(applicationActionState(declined({ toldState: "sent" })).blockedReasons.undo_decision).toBe("They have been told, or the message is on its way, so the decision can't be taken back here.");
       expect(applicationActionState(declined({ toldState: "queued" })).allowed).not.toContain("undo_decision");
@@ -139,6 +147,44 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect(applicationActionState(declined({ decidedFrom: undefined })).allowed).not.toContain("undo_decision");
       expect(applicationActionState(facts()).blockedReasons.undo_decision).toBe("Only for a decision not to move forward.");
       expect(applicationActionState(declined({ role: "hr" })).blockedReasons.undo_decision).toMatch(/^Your role can't take back a decision/);
+    });
+
+    it("under Cancelled: new times while nothing is in motion, stop while a set waits for its day, and the stage button (founder decisions 1A to 4A)", () => {
+      const asked: FollowUpStrip = { reason: "asked_new_times", autoState: "waiting", interviewOpen: false };
+      const under = (over: Partial<ApplicationFacts> = {}, f: Partial<FollowUpStrip> = {}) => facts({ stage: "interview_recommended", followUp: { ...asked, ...f }, ...over });
+      // a promised set: they can be sent times now, or the set stopped
+      expect(applicationActionState(under()).allowed).toEqual(expect.arrayContaining(["send_new_times", "stop_new_times"]));
+      // nothing promised (they said no, did not come, or the set ended): new times, nothing to stop
+      const noShow = applicationActionState(under({ stage: "interview_complete" }, { reason: "no_show", autoState: "none" }));
+      expect(noShow.allowed).toContain("send_new_times");
+      expect(noShow.blockedReasons.stop_new_times).toBe("Nothing is due to go to them automatically.");
+      expect(applicationActionState(under({}, { reason: "not_interested", autoState: "none" })).allowed).toContain("send_new_times");
+      // times being prepared or out: nothing more to send, and a set being prepared cannot be stopped here
+      const preparing = applicationActionState(under({ hasActiveInterview: true }, { autoState: "preparing", interviewOpen: true }));
+      expect(preparing.blockedReasons.send_new_times).toBe("New times are already being prepared or are out to them.");
+      expect(preparing.blockedReasons.stop_new_times).toBe("Nothing is due to go to them automatically.");
+      // nobody else
+      expect(applicationActionState(facts()).blockedReasons.send_new_times).toBe("Only for someone under Cancelled.");
+      expect(applicationActionState(facts({ stage: "interview_scheduled" })).blockedReasons.send_new_times).toBe("Only for someone under Cancelled.");
+      // only those who manage interviews (HR does not)
+      expect(applicationActionState(under({ role: "hr" })).blockedReasons.send_new_times).toBe("Your role can't send new interview times; ask an owner, an admin, a hiring manager or a recruiter.");
+      expect(applicationActionState(under({ role: "hr" })).blockedReasons.stop_new_times).toBe("Your role can't stop automatic new interview times; ask an owner, an admin, a hiring manager or a recruiter.");
+      expect(applicationActionState(under({ role: "recruiter" })).allowed).toEqual(expect.arrayContaining(["send_new_times", "stop_new_times"]));
+
+      // the stage button: they are under Cancelled; Interviewing comes back by booking a time, never by hand
+      const moves = Object.fromEntries(stageMoves(under()).map((m) => [m.to, m]));
+      expect(Object.keys(moves)).toHaveLength(9);
+      expect(moves.cancelled).toMatchObject({ current: true, allowed: false, via: "none" });
+      expect(moves.interviewing).toMatchObject({ allowed: false, via: "none", blockedReason: "They move back to Interviewing when they book a time. Send them new times from their page." });
+      // a hold takes them out of Cancelled; a decline is the private decline; the earlier steps keep their reasons
+      expect(moves.on_hold).toMatchObject({ allowed: true, via: "set_mark", mark: "on_hold" });
+      expect(moves.not_moving_forward).toMatchObject({ allowed: true, via: "decline" });
+      expect(moves.new).toMatchObject({ allowed: false, blockedReason: "They are past this step." });
+      expect(moves.shortlist).toMatchObject({ allowed: false, blockedReason: "They are interviewing already." });
+      expect(moves.offer).toMatchObject({ allowed: false, via: "offer" });
+      expect(moves.hired).toMatchObject({ allowed: true, via: "record_hire" });
+      // an open follow-up outside the interview steps never shows as Cancelled (a resolve that was missed)
+      expect(Object.fromEntries(stageMoves(under({ stage: "finalist" })).map((m) => [m.to, m])).interviewing).toMatchObject({ current: true });
     });
 
     it("without a known role (a system caller) only the state counts", () => {
@@ -254,6 +300,64 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       const kept = await seed("Kit");
       expect(await (await act(owner, kept, { action: "hold", note: "Holding for now" })).json()).toMatchObject({ candidateNotice: "not_told", mark: { mark: "on_hold" }, ownerStage: "on_hold" });
       expect(await (await act(owner, kept, { action: "advance_to_interview" })).json()).toMatchObject({ stage: "interview_recommended", candidateNotice: "not_told" });
+    });
+
+    it("someone under Cancelled: the stage button and the new-times choices; a decision taken back puts them back there, with their promised set while its day is ahead", async () => {
+      type Row = { ownerStage: string; ownerStageLabel: string; allowedActions: string[]; blockedReasons: Record<string, string>; stageMoves: Array<{ to: string; current: boolean; allowed: boolean; blockedReason?: string }>; cancelled: { reason: string; status: string; auto: { state: string } } | null };
+      type Undo = { stage: string; ownerStage: string; next: string };
+      const candidate = { kind: "candidate" as const, id: "candidate" };
+      const due = new Date(container.engine.clock().getTime() + 5 * 86_400_000).toISOString();
+      const [{ timezone }] = await container.db.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId));
+      /** Recommended for interview, then they cancelled it and asked for new times: under Cancelled, the set armed when promised. */
+      const cancelledPerson = async (first: string, promised: boolean) => {
+        const id = await seed(first, { stage: "interview_recommended" });
+        await withTenant(container.db, companyId, async (tx) => {
+          const [iv] = await tx.insert(interviews).values({ companyId, applicationId: id, roundKey: "first", title: "First interview", format: "video", durationMinutes: 30, status: "cancelled", attempt: 2, cancelReason: "cancelled by the candidate", createdBy: candidate }).returning();
+          const { row } = await openFollowUp(tx, { companyId, applicationId: id, interviewId: iv.id, interviewAttempt: 2, kind: "candidate_cancelled", choice: "new_times", auto: promised ? { state: "waiting", dueAt: due, workingDays: 3 } : { state: "none", reason: "switched_off" }, actor: candidate });
+          if (promised) await armNewTimes(tx, container.engine, { companyId, followUpId: row.id, applicationId: id, roleId, interviewId: iv.id, actor: candidate });
+        });
+        await container.drain();
+        return id;
+      };
+      const followUpOf = async (id: string) => (await container.db.select().from(interviewFollowups).where(eq(interviewFollowups.applicationId, id)))[0];
+
+      const ana = await cancelledPerson("Ana", true);
+      const before = (await (await json(owner, "GET", `/api/v1/applications/${ana}`)).json()) as Row;
+      expect(before).toMatchObject({ ownerStage: "cancelled", ownerStageLabel: "Asked for new times", cancelled: { reason: "asked_new_times", auto: { state: "waiting" } } });
+      expect(before.cancelled!.status).toMatch(/^New times go out automatically /);
+      expect(before.allowedActions).toEqual(expect.arrayContaining(["send_new_times", "stop_new_times"]));
+      expect(before.stageMoves.find((m) => m.to === "cancelled")).toMatchObject({ current: true, allowed: false });
+      expect(before.stageMoves.find((m) => m.to === "interviewing")).toMatchObject({ allowed: false, blockedReason: "They move back to Interviewing when they book a time. Send them new times from their page." });
+      // HR may not send or stop new times, and is told who can
+      const asHr = (await (await json(hr, "GET", `/api/v1/applications/${ana}`)).json()) as Row;
+      expect(asHr.allowedActions).not.toContain("send_new_times");
+      expect(asHr.blockedReasons.send_new_times).toMatch(/^Your role can't send new interview times/);
+
+      // declined privately: out of Cancelled, the set does not go; taken back before the day: back, and the set waits again
+      expect((await act(owner, ana, { action: "reject", reason: "not_a_match_experience" })).status).toBe(200);
+      expect(await followUpOf(ana)).toMatchObject({ resolvedHow: "left_process", autoState: "not_sent", autoReason: "left_process" });
+      // the stage button offers taking it back on the Cancelled row, where it puts them, not on Interviewing
+      const declinedRow = (await (await json(owner, "GET", `/api/v1/applications/${ana}`)).json()) as Row;
+      expect(declinedRow.stageMoves.find((m) => m.to === "cancelled")).toMatchObject({ allowed: true, via: "undo_decision" });
+      expect(declinedRow.stageMoves.find((m) => m.to === "interviewing")).toMatchObject({ allowed: false });
+      const undone = (await (await act(owner, ana, { action: "undo_decision" })).json()) as Undo;
+      expect(undone).toEqual(expect.objectContaining({ stage: "interview_recommended", ownerStage: "cancelled" }));
+      expect(undone.next).toBe(`Decision taken back: they are back under Cancelled. They were never told. Their new times still go to them automatically on ${newTimesDayWords(due, timezone)}, as they asked.`);
+      expect(await followUpOf(ana)).toMatchObject({ resolvedAt: null, autoState: "waiting" });
+      expect((await (await json(owner, "GET", `/api/v1/applications/${ana}`)).json()) as Row).toMatchObject({ ownerStage: "cancelled", cancelled: { auto: { state: "waiting" } } });
+
+      // nothing promised: back under Cancelled, and nothing goes until the team acts
+      const ben = await cancelledPerson("Ben", false);
+      expect((await act(owner, ben, { action: "reject", reason: "not_a_match_experience" })).status).toBe(200);
+      expect(((await (await act(owner, ben, { action: "undo_decision" })).json()) as Undo)).toMatchObject({ ownerStage: "cancelled", next: "Decision taken back: they are back under Cancelled. They were never told. Nothing will be sent until you act." });
+      // never under Cancelled: today's answer
+      const cy = await seed("Cy", { stage: "interview_recommended" });
+      expect((await act(owner, cy, { action: "reject", reason: "not_a_match_experience" })).status).toBe(200);
+      expect((((await (await json(owner, "GET", `/api/v1/applications/${cy}`)).json()) as Row).stageMoves.find((m) => m.to === "interviewing"))).toMatchObject({ allowed: true, via: "undo_decision" });
+      expect(((await (await act(owner, cy, { action: "undo_decision" })).json()) as Undo)).toMatchObject({ ownerStage: "interviewing", next: "Decision taken back: they are back in Interviewing. They were never told, and nothing will be sent." });
+      // a hold takes someone out of Cancelled (and their set does not go)
+      expect(await (await act(owner, ana, { action: "hold" })).json()).toMatchObject({ ownerStage: "on_hold" });
+      expect(await followUpOf(ana)).toMatchObject({ resolvedHow: "moved_by_team", autoState: "not_sent", autoReason: "team_acted" });
     });
 
     it("declining someone held on an eligibility answer is private too; the Send uses the eligibility wording", async () => {

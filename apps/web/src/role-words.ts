@@ -128,6 +128,8 @@ export function describeRoleEvent(e: RoleEvent): string {
     "interview.requested": "An interview was requested",
     "interview.scheduled": "An interview was booked",
     "interview.completed": "An interview took place",
+    // the team's "Send new times" for several people under Cancelled at once (founder decision 2A)
+    "interview.new_times_batch": `New times asked for ${Number(p.requested ?? 0) === 1 ? "1 person" : `${Number(p.requested ?? 0)} people`} under Cancelled: ${Number(p.sent ?? 0)} going ahead${Number(p.notSent ?? 0) ? `, ${Number(p.notSent)} not sent` : ""}`,
     "outcome.recorded": "An outcome was recorded",
     "recruiter.requested": "A recruiter was asked for help",
     "recruiter.claimed": "An ITS recruiter picked it up",

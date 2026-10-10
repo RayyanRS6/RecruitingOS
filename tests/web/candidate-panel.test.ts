@@ -209,6 +209,64 @@ describe("History: who did what, why, and what the candidate was told", () => {
     expect(historyItem(ev("screen.repeat_confirmed", { intent: "outage", added: true }, cand))?.what).toBe("Confirmed by email: a person to finish the conversation the assistant could not, after applying again");
   });
 
+  it("tells the Cancelled column in plain words (founder decisions 1A to 4A): in, out, and what became of the new times", () => {
+    const cand = { kind: "candidate" as const, id: "c" };
+    const sys = { kind: "system" as const, id: "workflow:interview_new_times" };
+    const asked = historyItem(ev("application.moved_to_cancelled", { followUpId: "f1", interviewId: "iv1", reason: "asked_new_times", auto: { state: "waiting", reason: null, dueAt: "2026-10-15T16:00:00.000Z", workingDays: 3 } }, cand));
+    expect(asked).toMatchObject({ what: "Cancelled the interview and asked for new times", who: "The candidate" });
+    expect(asked?.told).toMatch(/^New times go to them automatically on Thursday, October 1[45]\.$/);
+    // with the company's own calendar day recorded, that day, whatever the reader's time zone (an instant late in the day
+    // in the company's zone can be the next day for the reader)
+    const companyDay = historyItem(ev("application.moved_to_cancelled", { reason: "asked_new_times", auto: { state: "waiting", reason: null, dueAt: "2026-10-16T06:30:00.000Z", dueDay: "2026-10-15", workingDays: 3 } }, cand));
+    expect(companyDay?.told).toBe("New times go to them automatically on Thursday, October 15.");
+    // nothing armed: no promise in the history either
+    expect(historyItem(ev("application.moved_to_cancelled", { reason: "asked_new_times", auto: { state: "none", reason: "switched_off" } }, cand))?.told).toBeUndefined();
+    expect(historyItem(ev("application.moved_to_cancelled", { reason: "not_interested", auto: { state: "none", reason: "not_asked" } }, cand))?.what).toBe("Cancelled the interview: no longer interested");
+    expect(historyItem(ev("application.moved_to_cancelled", { reason: "no_show", auto: { state: "none", reason: "no_show" } }))).toMatchObject({ what: "Did not come to the interview", who: "Dana Whitfield" });
+    expect(historyItem(ev("application.moved_to_cancelled", { reason: "no_show", backfill: true }, { kind: "system", id: "migration_0035", name: "The Cancelled column (founder decision 4A)" }))).toMatchObject({ what: "Did not come to the interview", why: "Recorded when the Cancelled column was added." });
+    expect(historyItem(ev("application.moved_to_cancelled", { reason: "asked_new_times", restored: true, auto: { state: "waiting" } }))?.what).toBe("Back under Cancelled: the decision was taken back");
+    // leaving: booked, moved on, the team cancelled; leaving the process or a new entry says nothing more
+    expect(historyItem(ev("application.left_cancelled", { how: "rebooked", autoStopped: false }, cand))?.what).toBe("Booked a new interview time");
+    expect(historyItem(ev("application.left_cancelled", { how: "moved_by_team" }))?.what).toBe("Moved on from Cancelled");
+    expect(historyItem(ev("application.left_cancelled", { how: "team_cancelled" }))?.what).toBe("The team cancelled the interview with new times");
+    expect(historyItem(ev("application.left_cancelled", { how: "left_process" }))).toBeNull();
+    expect(historyItem(ev("application.left_cancelled", { how: "superseded" }))).toBeNull();
+    // the new times themselves
+    expect(historyItem(ev("interview.new_times_sent", { via: "auto", attempt: 2 }, sys))).toMatchObject({ what: "New times sent automatically, as they asked", who: "The system" });
+    expect(historyItem(ev("interview.new_times_sent", { via: "person", attempt: 2 }, sys))?.what).toBe("New times sent");
+    expect(historyItem(ev("interview.new_times_not_sent", { reason: "takeover", from: "waiting" }, sys))).toMatchObject({ what: "The automatic new times did not go", why: "An ITS recruiter is running this role, so nothing was sent automatically." });
+    expect(historyItem(ev("interview.new_times_not_sent", { reason: "switched_off", from: "waiting" }))?.why).toBe("Automatic new times were switched off in Setup.");
+    expect(historyItem(ev("interview.new_times_not_sent", { reason: "candidate_replied", from: "waiting" }))?.why).toBe("They replied to us, so nothing went automatically: read their reply first.");
+    expect(historyItem(ev("interview.new_times_not_sent", { reason: "left_process", from: "waiting" }))).toBeNull();
+    expect(historyItem(ev("interview.new_times_not_sent", { reason: "details_deleted", from: "waiting" }))).toBeNull();
+    // the team's own acts, and the hold a cancel ended
+    expect(historyItem(ev("human.override", { action: "interview.new_times", followUpId: "f1" }))?.what).toBe("Sent new times");
+    expect(historyItem(ev("human.override", { action: "interview.new_times_stop", followUpId: "f1" }))?.what).toBe("Stopped the automatic new times");
+    expect(historyItem(ev("application.mark_cleared", { mark: "on_hold", reason: "moved_on", to: "cancelled" }, cand))?.what).toBe("On hold mark ended: they went under Cancelled");
+  });
+
+  it("never prints machine words for the Cancelled column's records", () => {
+    const records = [
+      ev("application.moved_to_cancelled", { reason: "asked_new_times", auto: { state: "waiting", dueAt: "2026-10-15T16:00:00.000Z" } }),
+      ev("application.moved_to_cancelled", { reason: "not_interested" }),
+      ev("application.moved_to_cancelled", { reason: "no_show", backfill: true }),
+      ev("application.moved_to_cancelled", { reason: "no_show", restored: true }),
+      ...["rebooked", "moved_by_team", "team_cancelled"].map((how) => ev("application.left_cancelled", { how })),
+      ev("interview.new_times_sent", { via: "auto" }),
+      ev("interview.new_times_sent", { via: "batch" }),
+      ...["switched_off", "already_used", "reschedules_used", "takeover", "was_on_hold", "stopped_by_team", "team_acted", "candidate_replied", "company_not_checked", "no_interviewers", "no_email", "interview_changed"].map((reason) => ev("interview.new_times_not_sent", { reason })),
+      ev("human.override", { action: "interview.new_times" }),
+      ev("human.override", { action: "interview.new_times_stop" }),
+    ];
+    for (const e of records) {
+      const item = historyItem(e);
+      expect(item, e.type).not.toBeNull();
+      // the default prints the record's own name ("interview new times sent"), and an unknown override "Decision: …"
+      expect(item?.what, e.type).not.toMatch(/[._]|^(application|interview|human) |^Decision: /i);
+      if (e.type === "interview.new_times_not_sent") expect(item?.why, String(e.payload.reason)).toMatch(/\.$/);
+    }
+  });
+
   it("sets what the assistant suggested beside what a person decided", () => {
     const timeline = [
       ev("application.triaged", { recommendation: "screen" }, { kind: "agent", id: "triage" }, "2026-10-01T10:00:00.000Z"),

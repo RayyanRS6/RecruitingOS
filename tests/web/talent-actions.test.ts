@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveMark, ApplicationDetail, CandidateNotice, StageMove } from "../../apps/web/src/api/client";
 import { LOW_CONFIDENCE_LABEL, NO_QUOTE_LABEL, closerLook, competencyUnquoted, isUnquoted, lowConfidence, requirementUnquoted, scorecardUnavailable } from "../../apps/web/src/evidence";
-import { NOT_NOW_TOAST, NOT_TOLD, PRIVATE_DECISION, actionToast, batches, briefDecisionToast, bulkSendToast, closeRoleToast, declineConfirmText, decisionToast, interviewCancelToast, interviewWords, mergeDecisionResults, noticeText, outcomeNoticeText, outcomeToast, sendDecisionToast, stageBlocked, stageIntent } from "../../apps/web/src/talent-actions";
+import { NOT_NOW_TOAST, NOT_TOLD, PRIVATE_DECISION, actionToast, batches, briefDecisionToast, bulkSendToast, closeRoleToast, declineConfirmText, decisionToast, interviewCancelToast, interviewWords, mergeDecisionResults, newTimesToast, noticeText, outcomeNoticeText, outcomeToast, sendDecisionToast, stageBlocked, stageIntent } from "../../apps/web/src/talent-actions";
 
 /**
  * The Talent page's words (plans 0.5, 0.6, 0.9, A4, A6 and A9; founder decisions B3 and B6: moves and decisions are
@@ -179,6 +179,42 @@ describe("cancelling an interview on the Interviews page", () => {
   it("says exactly who was told, from the API's answer", () => {
     expect(interviewCancelToast({ candidateTold: true, interviewersTold: true })).toEqual({ title: "Interview cancelled.", detail: "The candidate was sent a cancellation. The interviewers were told." });
     expect(interviewCancelToast({ candidateTold: false, interviewersTold: false }).detail).toBe("The candidate had no time booked or offered, so nothing was sent to them.");
+  });
+});
+
+describe("new times for someone under Cancelled (founder decisions 1A to 4A)", () => {
+  it("says the times are being got ready, never that they went: they count as sent once their email is on its way", () => {
+    expect(newTimesToast({ kind: "sent", via: "reopened", firstName: "Ana", round: "Working interview" })).toEqual({ title: "Getting new times ready.", detail: "Ana gets an email as soon as there are times to offer from the interviewers' calendars. They stay under Cancelled until they book." });
+    // after a no-show: a new interview for the same round
+    expect(newTimesToast({ kind: "sent", via: "new_interview", firstName: "Cleo", round: "Working interview" })).toEqual({ title: "A new Working interview was set up.", detail: "Same round; Cleo gets an email as soon as there are times to offer." });
+    expect(newTimesToast({ kind: "stopped" })).toEqual({ title: "Stopped.", detail: "Nothing goes to them automatically; they stay under Cancelled." });
+    for (const t of [newTimesToast({ kind: "sent", via: "reopened", firstName: "Ana", round: "Phone screen" }), newTimesToast({ kind: "batch", results: [], sent: 2, notSent: 0 })]) expect(`${t.title} ${t.detail ?? ""}`).not.toMatch(/\bsent\b|on (its|their) way/i);
+  });
+
+  it("several people at once: how many are being got ready, and each refusal with its reason", () => {
+    expect(newTimesToast({ kind: "batch", results: [{ applicationId: "a1", name: "Ana Lopez", ok: true, interviewId: "iv1" }], sent: 1, notSent: 0 })).toEqual({ title: "Getting new times ready for 1 person." });
+    const mixed = newTimesToast({
+      kind: "batch",
+      results: [
+        { applicationId: "a1", name: "Ana Lopez", ok: true },
+        { applicationId: "a2", name: "Ben Ortiz", ok: false, code: "times_out", message: "New times are already being prepared or are out to them." },
+        { applicationId: "a3", name: "Cleo Park", ok: false, code: "no_email", message: "We have no email address for them. Call them, then book a time from the interview page." },
+      ],
+      sent: 1,
+      notSent: 2,
+    });
+    expect(mixed).toEqual({ title: "Getting new times ready for 1 person.", detail: "Not sent: Ben Ortiz (New times are already being prepared or are out to them); Cleo Park (We have no email address for them. Call them, then book a time from the interview page)." });
+    expect(newTimesToast({ kind: "batch", results: [{ applicationId: "a2", name: "Ben Ortiz", ok: false, code: "company_not_checked", message: "New times can go out once ITS confirms your company. Until then, emails to candidates wait." }], sent: 0, notSent: 1 }).title).toBe("No new times were sent.");
+    expect(newTimesToast({ kind: "batch", results: [], sent: 3, notSent: 0 }).title).toBe("Getting new times ready for 3 people.");
+  });
+
+  it("a decision taken back to Cancelled says, in the API's words, whether their new times still go by themselves", () => {
+    const back = actionToast("undo_decision", { ownerStage: "cancelled", next: "Decision taken back: they are back under Cancelled. They were never told. Their new times still go to them automatically on Thursday, October 15, as they asked." });
+    expect(back).toEqual({ title: "Decision taken back: back in Cancelled.", detail: "They were never told. Their new times still go to them automatically on Thursday, October 15, as they asked." });
+    expect(actionToast("undo_decision", { ownerStage: "cancelled", next: "Decision taken back: they are back under Cancelled. They were never told. Nothing will be sent until you act." }).detail).toBe("They were never told. Nothing will be sent until you act.");
+    expect(actionToast("undo_decision", { ownerStage: "cancelled" }).detail).toBe("They were never told.");
+    // never "nothing will be sent" about a set that will go
+    expect(back.detail).not.toMatch(/nothing will be sent/i);
   });
 });
 

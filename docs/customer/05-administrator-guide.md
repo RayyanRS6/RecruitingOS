@@ -41,7 +41,7 @@ The rail then has five entries:
 
 - **Today**: the daily brief, and the **Who are you hiring?** box that hands your first words to the job builder.
 - **Roles**: every role, its status and its pipeline. Up to eight roles you are working on are listed under it: a green dot and the number of applicants for an open role, a grey dot for a paused role, a draft or one waiting for approval. **All roles** shows the rest. For an interviewer, this list and the **Roles** page show only the roles they interview for, without applicant counts.
-- **Talent**: the candidates for a role, on a stage strip (New, Longlist, Shortlist, Interviewing, On hold, Offer, Hired, Not moving forward) with each one's match score, and a pool board that sorts them for you to review. The hiring manager guide covers it.
+- **Talent**: the candidates for a role, on a stage strip (New, Longlist, Shortlist, Interviewing, Cancelled, On hold, Offer, Hired, Not moving forward) with each one's match score, and a pool board that sorts them for you to review. **Cancelled** holds the candidates who cancelled a booked interview or did not come to one, with what each chose. The hiring manager guide covers it.
 - **Interviews**: every interview in motion or done, and each interviewer's load.
 - **Setup**: your company, your team, recruiter access, your sessions, availability, email alerts, connected services, what the assistant may do on its own, and the audit history.
 
@@ -76,7 +76,7 @@ Notes:
 
 ## 5. The Setup screen
 
-A menu beside the cards (across the top on a phone) jumps straight to each one: Company, Team, Recruiter access, Your sessions, Your availability, Keyboard shortcut, Connected services, What the AI may do, and Audit history. It lists only the cards you see.
+A menu beside the cards (across the top on a phone) jumps straight to each one: Company, Team, How candidates see you, Job boards, When a candidate cancels, Recruiter access, Your sessions, Your availability, Email alerts, Keyboard shortcut, Connected services, What the AI may do, and Audit history. It lists only the cards you see.
 
 **Keyboard shortcut.** For the people who may start a hire: **Press N to start a hire** is on unless you untick it. The choice is kept in the browser you are using.
 
@@ -90,7 +90,7 @@ Owners and admins press **Edit** on the card to change the company name, website
 
 **Your sessions.** Every place you are signed in: the device, how you signed in and when it was last used. **Sign out** ends one; **Sign out everywhere else** ends all but the one you are using. If you see one you do not recognize, sign it out and tell support.
 
-**Confirm it's you.** Changing what the assistant may do, or the wording of candidate notices, needs a recent sign-in. If you signed in more than 30 minutes ago, the product shows **Confirm it's you** and a **Confirm with my sign-in** button. It sends you through Google or Microsoft again and brings you straight back; for the next ten minutes you can make the change. Confirming with a different account changes nothing.
+**Confirm it's you.** Changing what the assistant may do, the wording of candidate notices, or the automatic new times under **When a candidate cancels** needs a recent sign-in. If you signed in more than 30 minutes ago, the product shows **Confirm it's you** and a **Confirm with my sign-in** button. It sends you through Google or Microsoft again and brings you straight back; for the next ten minutes you can make the change. Confirming with a different account changes nothing.
 
 **My availability for interviews.** Each person sets their own. Two ways:
 
@@ -108,6 +108,13 @@ If a person has both, the declared hours limit the calendar.
 
 The line under the table names the AI provider. On your live workspace it reads Anthropic.
 
+**When a candidate cancels.** When candidates cancel a booked interview from their scheduling page, they choose "Send me new times later" or "I'm no longer interested", and go under **Cancelled** on the role's Talent page with that choice. Candidates who did not come to an interview go there too, as a no-show. This card decides what happens next for the people who asked for new times:
+
+- **Send new times automatically to people who ask for them** (on unless you untick it). Each person who asked gets one set of new times by email, for the same interview with the same interviewers, after the number of working days in **Working days to wait** (1 to 10, 3 unless you change it; weekends and holidays are not counted, and the email goes out in the morning, your company's time). Press **Save** after changing the number. If they do not pick a time, they stay under Cancelled for you to decide; there is never a second automatic set.
+- Nothing ever goes automatically to people who said they are no longer interested, people who did not come, someone who had already moved the interview twice, someone you had put on hold, anyone while an ITS recruiter is running the role, or anyone before ITS has confirmed your company (the card says so until then). A reply of HUMAN or "no thanks" stops a set that was due.
+- **Switching it off** while some people were already told a day for their new times asks you first what should happen to them: **Still send them on the day they were told**, or **Stop them too; the team will be in touch**. Nothing is chosen for you. Changing the number of days never moves anyone already told a day; it applies to cancellations from then on.
+- Only owners and admins change it, after a recent sign-in (**Confirm it's you**, above); everyone else sees one line saying what is set. Every change is recorded in the audit history.
+
 **What the AI may do on its own.** A list of actions grouped by stage of hiring. Where a setting changes what happens, you choose one of four levels:
 
 - **Do it**: the assistant does it without asking.
@@ -117,7 +124,7 @@ The line under the table names the AI provider. On your live workspace it reads 
 
 Some rows are marked **always a person**. They are locked at "Only a person" and nobody can change them: declining a candidate on judgment, declining an applicant held on an eligibility answer, deciding who to hire, negotiating an offer, acting on a background check, changing these rules, changing eligibility rules, changing candidate notices, deleting candidate data, and exporting data. "Approve a drafted role, pay included" is always **Ask me first**: a person approves every role before it opens.
 
-Some rows show **Nothing to choose** with a line saying what the product does, because no setting changes it: reading and assessing applicants (information only; it never decides anything), running the screening conversation once someone is invited, sending confirmations and reminders, advancing someone to an interview (a person always approves it on the candidate's page), and booking and moving interviews on calendars once a person approved them.
+Some rows show **Nothing to choose** with a line saying what the product does, because no setting changes it: reading and assessing applicants (information only; it never decides anything), running the screening conversation once someone is invited, sending confirmations and reminders, advancing someone to an interview (a person always approves it on the candidate's page), and booking and moving interviews on calendars once a person approved them (including the one automatic set of new times after a candidate cancels, which you switch on or off under **When a candidate cancels**, above).
 
 The defaults are the recommended settings. The ones you are most likely to touch:
 

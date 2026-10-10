@@ -56,18 +56,20 @@ export function scoreBand(score: number | null | undefined): { score: number; ba
   return { score: s, band: b.band, label: b.label, tone: b.tone };
 }
 
-export type OwnerStage = "new" | "longlist" | "shortlist" | "interviewing" | "on_hold" | "offer" | "hired" | "not_moving_forward";
+export type OwnerStage = "new" | "longlist" | "shortlist" | "interviewing" | "cancelled" | "on_hold" | "offer" | "hired" | "not_moving_forward";
 
 /**
  * The stages an owner sees for a candidate (plan adjustments §2), in the order the stage strip and the stage button list
- * them, each with the colour of its dot: green for good news, amber for on hold, ink for work under way, grey for new
- * and for not moving forward (never red: a decision is not an error). A view over the internal stages, which stay.
+ * them, each with the colour of its dot: green for good news, amber for cancelled and on hold, ink for work under way,
+ * grey for new and for not moving forward (never red: a decision is not an error, and neither is a cancelled interview).
+ * A view over the internal stages, which stay.
  */
 export const OWNER_STAGES: ReadonlyArray<{ id: OwnerStage; label: string; tone: Tone }> = [
   { id: "new", label: "New", tone: "neutral" },
   { id: "longlist", label: "Longlist", tone: "accent" },
   { id: "shortlist", label: "Shortlist", tone: "good" },
   { id: "interviewing", label: "Interviewing", tone: "accent" },
+  { id: "cancelled", label: "Cancelled", tone: "caution" },
   { id: "on_hold", label: "On hold", tone: "caution" },
   { id: "offer", label: "Offer", tone: "good" },
   { id: "hired", label: "Hired", tone: "good" },

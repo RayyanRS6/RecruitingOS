@@ -71,10 +71,14 @@ describe("match score badge", () => {
 });
 
 describe("the stage button's choices", () => {
-  it("lists the owner's eight stages in order, in plain words, and never in red", () => {
-    expect(OWNER_STAGES.map((s) => s.label)).toEqual(["New", "Longlist", "Shortlist", "Interviewing", "On hold", "Offer", "Hired", "Not moving forward"]);
+  it("lists the owner's nine stages in order, in plain words, and never in red", () => {
+    expect(OWNER_STAGES.map((s) => s.label)).toEqual(["New", "Longlist", "Shortlist", "Interviewing", "Cancelled", "On hold", "Offer", "Hired", "Not moving forward"]);
     expect(OWNER_STAGES.map((s) => s.tone)).not.toContain("critical");
     expect(OWNER_STAGES.find((s) => s.id === "on_hold")?.tone).toBe("caution");
+    // Cancelled sits right after Interviewing, amber like a hold, never red: a cancelled interview is not an error
+    expect(OWNER_STAGES.find((s) => s.id === "cancelled")?.tone).toBe("caution");
+    expect(stageMenuItems("cancelled")).toHaveLength(9);
+    expect(stageMenuItems("cancelled").find((i) => i.current)?.label).toBe("Cancelled");
   });
   it("marks where the candidate is now and keeps a move that is not allowed in the list, greyed, with its reason", () => {
     const items = stageMenuItems("shortlist", { offer: "Record an interview first.", shortlist: "ignored for the current stage" });

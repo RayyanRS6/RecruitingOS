@@ -33,6 +33,14 @@ describe("the stage button", () => {
     expect(out).toContain('aria-label="Stage: Not a fit for now. Move to another stage"');
     expect(out).toContain('<span class="dot" aria-hidden="true"></span>Not a fit for now');
   });
+
+  it("shows Cancelled in amber, never red, with the reason as its word (founder decisions 1A to 4A)", () => {
+    expect(html("cancelled")).toMatch(/class="pill-button caution" aria-haspopup="menu" aria-expanded="false" aria-label="Stage: Cancelled\. Move to another stage"/);
+    const noShow = renderToStaticMarkup(createElement(StageButton, { stage: "cancelled", label: "No-show", onMove: () => undefined }));
+    expect(noShow).toContain('aria-label="Stage: No-show. Move to another stage"');
+    expect(noShow).toContain('<span class="dot" aria-hidden="true"></span>No-show');
+    expect(noShow).not.toContain("critical");
+  });
 });
 
 describe("the candidate panel's pieces (Wave A)", () => {

@@ -52,7 +52,7 @@ export function describeAuditRecord(r: Pick<AuditRow, "action" | "actor" | "reas
     case "session.reauthenticated": return `${who} confirmed their identity before a sensitive change.`;
     case "policy.changed": return `${who} changed what the AI may do on its own${r.reason ? `: ${r.reason}` : ""}.`;
     case "notice.changed": return `${who} ${str(d.version) ? "reworded" : "restored the standard text of"} ${NOTICE_WORDS[str(d.key) ?? ""] ?? "a candidate notice"}${str(d.version) ? ` (version ${str(d.version)})` : ""}.`;
-    case "company.updated": return `${who} changed the company details${Array.isArray(d.fields) && d.fields.length ? ` (${(d.fields as unknown[]).map(fieldWords).join(", ")})` : ""}.`;
+    case "company.updated": return companyUpdatedWords(who, d);
     case "company.verified": return r.actor.kind === "system" ? "The company was confirmed automatically (no ITS check is needed in this environment)." : `ITS confirmed your company${num(d.released) ? `; ${num(d.released)} waiting ${num(d.released) === 1 ? "message" : "messages"} to candidates went out` : ""}.`;
     case "company.unverified": return "ITS took back its confirmation of your company: your careers page and job pages are offline and messages to candidates wait until ITS confirms it again.";
     case "candidate.viewed": return `${who} opened a candidate's record${r.reason ? ` (${r.reason})` : ""}.`;
@@ -71,8 +71,44 @@ function roleWords(role: string | null): string {
   return ({ owner: "an owner", admin: "an admin", hiring_manager: "a hiring manager", interviewer: "an interviewer", hr: "HR" } as Record<string, string>)[role ?? ""] ?? "a team member";
 }
 
+/** "on, after 5 working days" ("on, after 5" when `short`) or "off": the automatic new times after a candidate cancels (founder decision 3A). */
+function newTimesSettingWords(v: unknown, short = false): string | null {
+  const s = v as { auto?: unknown; workingDays?: unknown } | null | undefined;
+  if (typeof s?.auto !== "boolean") return null;
+  if (!s.auto) return "off";
+  const n = num(s.workingDays);
+  if (n === null) return "on";
+  return short ? `on, after ${n}` : `on, after ${n} working ${n === 1 ? "day" : "days"}`;
+}
+
+/**
+ * What a change to the automatic new times did: the setting now and before ("on, after 5 working days (was on, after
+ * 3)"), and, when switching off asked about people already told a day, what the owner chose for them. Null when the
+ * record carries no such change.
+ */
+function newTimesWords(v: unknown): { setting: string; pending: string } | null {
+  const c = v as { before?: unknown; after?: unknown; pendingChoice?: unknown; stopped?: unknown } | null | undefined;
+  const after = newTimesSettingWords(c?.after);
+  if (!c || !after) return null;
+  const before = newTimesSettingWords(c.before, true);
+  const stopped = num(c.stopped) ?? 0;
+  const pending = c.pendingChoice === "stop" ? ` The automatic times already promised to ${stopped} ${stopped === 1 ? "person" : "people"} were stopped.` : c.pendingChoice === "keep" ? " People already told a day still get their times then." : "";
+  return { setting: `${after}${before ? ` (was ${before})` : ""}`, pending };
+}
+
+/**
+ * "Dana changed the company details (time zone, automatic new interview times): on, after 5 working days (was on, after
+ * 3)." The automatic new times are named last, so what they became follows their name.
+ */
+function companyUpdatedWords(who: string, d: Record<string, unknown>): string {
+  const fields = Array.isArray(d.fields) ? (d.fields as unknown[]) : [];
+  const newTimes = newTimesWords(d.newTimesAfterCancel);
+  const listed = newTimes ? [...fields.filter((f) => f !== "newTimesAfterCancel"), "newTimesAfterCancel"] : fields;
+  return `${who} changed the company details${listed.length ? ` (${listed.map(fieldWords).join(", ")})` : ""}${newTimes ? `: ${newTimes.setting}` : ""}.${newTimes?.pending ?? ""}`;
+}
+
 function fieldWords(f: unknown): string {
-  return ({ name: "name", website: "website", timezone: "time zone", sizeBand: "size", locations: "locations", logoUrl: "logo", benefitsSummary: "benefits summary", careersPage: "careers page intro", businessHours: "contact hours", notices: "candidate notices", about: "the text about the company on job pages", aboutDraft: "a draft of the text about the company", logo: "logo", hiringContact: "the contact candidates can reach before applying", boardPosting: "who posts the jobs on the job boards", zipRecruiterPlan: "the company's own ZipRecruiter plan", aiRulesReviewed: "the AI rules marked as reviewed", jobBoardAccess: "job-board access, confirmed by ITS", jobBoardAccessRemoved: "job-board access, no longer confirmed by ITS" } as Record<string, string>)[String(f)] ?? String(f);
+  return ({ newTimesAfterCancel: "automatic new interview times", name: "name", website: "website", timezone: "time zone", sizeBand: "size", locations: "locations", logoUrl: "logo", benefitsSummary: "benefits summary", careersPage: "careers page intro", businessHours: "contact hours", notices: "candidate notices", about: "the text about the company on job pages", aboutDraft: "a draft of the text about the company", logo: "logo", hiringContact: "the contact candidates can reach before applying", boardPosting: "who posts the jobs on the job boards", zipRecruiterPlan: "the company's own ZipRecruiter plan", aiRulesReviewed: "the AI rules marked as reviewed", jobBoardAccess: "job-board access, confirmed by ITS", jobBoardAccessRemoved: "job-board access, no longer confirmed by ITS" } as Record<string, string>)[String(f)] ?? String(f);
 }
 
 /** A timestamp as ISO 8601 whatever the driver returned (Postgres writes "2026-09-30 16:05:10.123+00"). */

@@ -8,6 +8,7 @@ export function setupSections(viewer: { mayStartHire: boolean; seesAudit: boolea
     { id: "setup-team", label: "Team" },
     { id: "setup-profile", label: "How candidates see you" },
     { id: "setup-boards", label: "Job boards" },
+    { id: "setup-new-times", label: "When a candidate cancels" },
     { id: "setup-recruiters", label: "Recruiter access" },
     { id: "setup-sessions", label: "Your sessions" },
     { id: "setup-availability", label: "Your availability" },

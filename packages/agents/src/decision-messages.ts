@@ -1,6 +1,6 @@
 import { and, count, eq, gt, gte, inArray, isNull, like, lte, sql } from "drizzle-orm";
 import { CHOOSABLE_WORDINGS, DECISION_WORDING_LABEL, type Actor, type ApplicationStage, type CandidateNotice, type DecisionWording, type DecisionWordingOption, type ToldState } from "@ros/contracts";
-import { DECISION_STAGES, activeMarksFor, adverseDecisionLineApplies, createEscalation, emit, gate, notify, resolvePolicy } from "@ros/core";
+import { DECISION_STAGES, activeFollowUpsFor, activeMarksFor, adverseDecisionLineApplies, createEscalation, emit, gate, inCancelled, notify, resolvePolicy } from "@ros/core";
 import { applications, approvalRequests, candidates, communications, companies, events, interviews, rolePackets, roles, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { dispositionMessage, sendDisposition, sendStillReviewingNote, type CancelledInterview, type PersonalLine } from "./coordinator";
@@ -346,8 +346,11 @@ export async function sendStillReviewingNotes(q: Queryable, deps: { integrations
     if (!waiting.length) continue;
     const already = new Set((await q.select({ applicationId: communications.applicationId }).from(communications).where(and(inArray(communications.applicationId, waiting.map((a) => a.id)), eq(communications.templateKey, "still_reviewing")))).map((r) => r.applicationId ?? ""));
     const marks = await activeMarksFor(q, waiting.map((a) => a.id));
+    // Not to someone under Cancelled: they cancelled an interview and chose what comes next, or did not come to it, and
+    // the team takes it from the Cancelled column; "still reviewing" would read wrong to them.
+    const followUps = await activeFollowUpsFor(q, waiting.map((a) => a.id));
     for (const app of waiting) {
-      if (already.has(app.id) || marks.get(app.id)?.mark === "not_a_fit_for_now") continue;
+      if (already.has(app.id) || marks.get(app.id)?.mark === "not_a_fit_for_now" || inCancelled(app.stage, followUps.get(app.id))) continue;
       const parts = await loadDecisionParts(q, app);
       if (!parts?.cand.email) continue;
       const g = await gate(q, { companyId, roleId: role.id, applicationId: app.id, actionType: "message.still_reviewing", subject: { type: "application", id: app.id }, proposal: { afterDays }, requestedBy: deps.actor });

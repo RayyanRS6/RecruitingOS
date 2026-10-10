@@ -116,7 +116,7 @@ When ITS posts, you do not have to do anything on the boards yourself. If a boar
 
 **Talent** shows the candidates for one role. If you have more than one role, pick it at the top right. The line under the title says what the page is for: who applied, what the evidence says, and what needs you. Nobody is declined automatically on judgment.
 
-**The stage strip.** Across the top, each stage with how many people are at it: **All**, **New**, **Longlist**, **Shortlist**, **Interviewing**, **On hold**, **Offer**, **Hired** and **Not moving forward**. Press one to see only those people. Longlist, Shortlist and On hold are private marks your team sets; the candidate never sees them. Beside the strip, **Still applying** shows the people answering the screening conversation in the same visit as their application (they are never counted as waiting on you).
+**The stage strip.** Across the top, each stage with how many people are at it: **All**, **New**, **Longlist**, **Shortlist**, **Interviewing**, **Cancelled**, **On hold**, **Offer**, **Hired** and **Not moving forward**. Press one to see only those people. **Cancelled** holds the candidates who cancelled a booked interview or did not come to one (section 11). Longlist, Shortlist and On hold are private marks your team sets; the candidate never sees them. Beside the strip, **Still applying** shows the people answering the screening conversation in the same visit as their application (they are never counted as waiting on you).
 
 **Narrowing and sorting.** **Waiting on you** keeps only the people a decision waits on, longest wait first; the page opens on it when anyone is waiting. **Not told yet** shows the people whose decision has not been sent to them (section 13). **Reading** keeps one overall reading (Strong match, Potential match, Missing a must-have, Needs a closer look), the search box finds a name, email address or source, and **Sort by** orders the list by **Score**, **Newest first**, **Waiting longest** or **Name**. The list is never ordered by the assistant's words.
 
@@ -199,7 +199,7 @@ Read the evidence, not just the chips. Unknowns are questions to ask; under them
 
 ## 10. Approving an interview and picking interviewers
 
-Nothing schedules until a person approves it. Open the candidate and choose **Interviewing** on the stage button. If the assistant proposed it, you see **The assistant suggests an interview**; **Yes, interview** (there or on Today) opens the approval below already filled in from your interview plan, so it is one more look and one click, never a second approval. Someone already in Interviewing with nothing scheduled (an interview was cancelled, they did not pick a time, you chose the next round, or you pressed **Not now**) has a card at the top of their page with **Approve an interview** (or **Approve the next round**), which opens the same approval. When a candidate does not pick a time, the interview's own page also offers **Offer new times** for the same round and interviewers.
+Nothing schedules until a person approves it. Open the candidate and choose **Interviewing** on the stage button. If the assistant proposed it, you see **The assistant suggests an interview**; **Yes, interview** (there or on Today) opens the approval below already filled in from your interview plan, so it is one more look and one click, never a second approval. Someone already in Interviewing with nothing scheduled (you cancelled an interview, they did not pick a time, you chose the next round, or you pressed **Not now**) has a card at the top of their page with **Approve an interview** (or **Approve the next round**), which opens the same approval. Someone under **Cancelled** has their own card instead, with **Send new times** (section 11). When a candidate does not pick a time, the interview's own page also offers **Offer new times** for the same round and interviewers.
 
 Under **Approve an interview**:
 
@@ -217,7 +217,15 @@ The candidate gets an email with a link to "Pick a time for your (round)". They 
 
 When they confirm, the product books the time on every connected calendar, sends the candidate a confirmation with a calendar file, tells the interviewers by email and on Today, and moves the candidate to "Interviewing". If a chosen time was taken in the meantime, new times go out on their own; after three collisions an ITS recruiter arranges it directly.
 
-The candidate can **Ask for a different time** twice on their own and can **Cancel the interview**. Either way you are told and nothing happens automatically after a cancellation.
+The candidate can **Ask for a different time** twice on their own and can **Cancel the interview**. Either way you are told.
+
+**When a candidate cancels.** To cancel, the candidate chooses what they would like next: **Send me new times later** or **I'm no longer interested**. They move to **Cancelled** on the role's Talent page, with their choice beside their name ("Asked for new times" or "No longer interested"), and you are told which they chose. A candidate you record as **Candidate did not show** (section 12) goes there too, as "No-show".
+
+- **Automatic new times.** Someone who asked for new times gets one set by email automatically, for the same interview with the same interviewers, after the working days your company chose in Setup under **When a candidate cancels** (3 unless changed; it can be switched off). The candidate is told the day. Their row says "New times go out automatically" with that day. It is one set only: if they do not pick a time, they stay under Cancelled for you to decide.
+- **Nothing goes automatically** to someone who said they are no longer interested, someone who did not come, someone who had already moved the interview twice, someone you had put on hold, anyone while an ITS recruiter is running the role, or anyone before ITS has confirmed your company. A reply of HUMAN or "no thanks" stops times that were due. Their card says why, and they wait for you.
+- **Send new times** on their card (or on the interview's own page) sends times now, for the same round: the interview they cancelled is offered again, or, after a no-show, a new interview for that round is set up. On their card it asks first; on the interview's own page the button sends at once. The toast says "Getting new times ready" (after a no-show, that a new interview for the same round was set up): the times go out as soon as there are times to offer from the interviewers' calendars. **Don't send automatically** stops times that were due to go by themselves; they stay under Cancelled. If nobody who ran the interview is still on your team, **Choose interviewers** opens the interview approval.
+- **Everyone at once.** Under Cancelled, the chips **Asked for new times**, **No longer interested** and **No-show** show each group, and **Send new times…** sends to several people at once. People who said they are no longer interested start unticked, and anyone whose new times are already being prepared or are out cannot be ticked. Each person's own result is listed.
+- **Leaving Cancelled.** They leave it when they book a time, when you move them (on hold, a decision, the next round), when you cancel the interview carrying their new times, or when they leave the process. Sending new times does not move them; booking does.
 
 If the candidate does not pick a time: a reminder after two days, and after four days the times expire and you are told to offer new times, decide, or bring in a recruiter.
 
@@ -235,7 +243,7 @@ Interviewers receive the booking, the reminders and the link, and a brief: in th
 
 ## 12. Recording the decision after an interview
 
-After the interview, the interviewers (and anyone who manages interviews) see **Did it take place?** on the interview page: **Yes**, **Candidate did not show**, or **We did not show**. Answer it; it keeps the record straight. A no-show is never held against anyone automatically.
+After the interview, the interviewers (and anyone who manages interviews) see **Did it take place?** on the interview page: **Yes**, **Candidate did not show**, or **We did not show**. Answer it; it keeps the record straight. A no-show is never held against anyone automatically. **Candidate did not show** puts the candidate under **Cancelled** as a no-show: nothing goes to them automatically, and you send new times for the same round or decide (their decision card then offers no **Next round**).
 
 Once the interview is over, the candidate waits on you: they appear under **Waiting on you** in Talent, the people who decide get a notification ("How did it go with ...?") that opens the candidate's page, and **Today** shows a card. On the candidate's page you see **How did the interview go?**. The decision is yours and is recorded with your name; nothing here is scored by software.
 
@@ -316,7 +324,7 @@ On the candidate's page, press **Email** at the top (or open the **Messages** ta
 The **Report** tab on the role page shows the role's figures, each defined at the bottom of the tab:
 
 - **Who applied**: by source (careers page, each board's link, referral links, email) and by day.
-- **Where everyone is**: how many people are at each step, grouped as waiting on you, in process, not moving forward and hired.
+- **Where everyone is**: how many people are at each step, grouped as waiting on you, in process, not moving forward and hired. Cancelled counts the candidates who cancelled an interview or did not come to one; the applicant download has a **Cancelled** column with each one's reason.
 - **How long each step takes**: the typical and average days, and the longest anyone has waited.
 - **Interviews**: requested, on the calendar, held, missed, cancelled, rescheduled by the candidate, and waiting for your decision.
 - **Decisions waiting for you**, **What the assistant suggested, and what you decided**, **When you overruled the system**.

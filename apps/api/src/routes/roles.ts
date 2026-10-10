@@ -1,11 +1,11 @@
 import { Hono } from "hono";
 import { and, count, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome, OwnerGroup, OwnerStage, PoolQuestionQuery, RoleBatchRequest, SendDecisionMessages, SetClosingDate, ApplyModeChange, DecisionMessagePreviewRequest, SendClosingMessage, RecordOfferMade, importanceOf, type ActiveMark, type AssessmentFlagKind, type CandidateNotice, type ClosingMessagePreview, type DecisionMessagePreview, type PoolAnswer } from "@ros/contracts";
+import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome, OwnerGroup, OwnerStage, PoolQuestionQuery, RoleBatchRequest, SendDecisionMessages, SetClosingDate, ApplyModeChange, DecisionMessagePreviewRequest, SendClosingMessage, RecordOfferMade, importanceOf, type ActiveMark, type AssessmentFlagKind, type CancelledReason, type CandidateNotice, type ClosingMessagePreview, type DecisionMessagePreview, type PoolAnswer } from "@ros/contracts";
 import { ESCALATION_ACCESS_DAYS, PoolQuestionError, activeStaffGrant, addEscalationReply, answerPoolQuestion, createEscalation, maskCandidateLinks, poolQuestions, resolveApplyMode, teamScreenView, unsentScreenReadings, withoutUnsentConversation, withoutUnsentScreenEvents } from "@ros/core";
 import { withPlatform, type Tx } from "@ros/db";
 import { requireRecruiterOrAdmin } from "../middleware/session";
 import { stillApplyingFor } from "../services/screens";
-import { CLOSER_LOOK_LABEL, CLOSING_DATE_REASON, DECISION_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeMarksFor, assertCan, audit, boardPostingOf, can, closingDateProblem, closingDateRequired, closingDayWords, closingMoment, emit, groupFor, holdEnded, jobNoticesFor, listOutcomes, notify, ownerStage, ownerStageLabel, ownerTags, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows, showsOldVersion } from "@ros/core";
+import { CLOSER_LOOK_LABEL, CLOSING_DATE_REASON, DECISION_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, boardPostingOf, can, cancelledView, closingDateProblem, closingDateRequired, closingDayWords, closingMoment, emit, followUpStripOf, groupFor, holdEnded, jobNoticesFor, listOutcomes, notify, ownerStage, ownerStageLabel, ownerTags, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows, showsOldVersion } from "@ros/core";
 import { boardView, loadPool, openPath, packetsOf, poolPersonOf, scoreFields, scorePerson, shownReadings } from "../services/pool";
 import { applyBatch, previewBatch } from "../services/review-apply";
 import { emailHolderAboutNote, emailItsQueue, queueNoticeOf, type HeldNote, type QueueNotice } from "../services/escalation-queue";
@@ -16,7 +16,7 @@ import { autoActionsOnOpen, boardChoices, closingDateFor } from "../services/pub
 import { withEmptyPay, withoutPay } from "../services/pay-redaction";
 import { assertMayApprovePacket, packetApprovalView } from "../services/packet-approval";
 import { createPacketVersion, currentVersionOf } from "../services/packet-versions";
-import { aiRuns, applicationMarks, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviewParticipants, interviews, postings, recruiterEscalations, rolePackets, roles, screens, withTenant } from "@ros/db";
+import { aiRuns, applicationMarks, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviewFollowups, interviewParticipants, interviews, postings, recruiterEscalations, rolePackets, roles, screens, withTenant } from "@ros/db";
 import { actorOf, applicationScopeGuard, clientIp, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { DOWNLOAD_URL_TTL_SECONDS, safeFilename } from "../uploads";
@@ -52,10 +52,19 @@ roleRoutes.get("/", requireTenant, async (c) => {
       const ids = new Set(mine.map((m) => m.roleId));
       return visible.filter((r) => ids.has(r.id)).map((r) => ({ ...r, counts: { total: 0 }, countsHidden: true, needsYou: 0, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null }));
     }
-    // Three queries for the whole list, whatever its length: the roles, their applicants by stage and private mark (a
-    // running hold does not wait on you; `stageCounts` is the stage strip), their open decisions.
+    // Three queries for the whole list, whatever its length: the roles, their applicants by stage, private mark and open
+    // follow-up (a running hold does not wait on you, nor does someone under Cancelled with new times promised, being
+    // prepared or out; `stageCounts` is the stage strip), their open decisions. `interviewOpen` is the condition the
+    // talent list and the report read through `activeFollowUpsFor`, so the three agree (J18).
     const roleIds = visible.map((r) => r.id);
-    const stageCounts = await tx.select({ roleId: applications.roleId, stage: applications.stage, mark: applicationMarks.mark, remindAt: applicationMarks.remindAt, n: count() }).from(applications).leftJoin(applicationMarks, and(eq(applicationMarks.applicationId, applications.id), isNull(applicationMarks.clearedAt))).where(inArray(applications.roleId, roleIds)).groupBy(applications.roleId, applications.stage, applicationMarks.mark, applicationMarks.remindAt);
+    const interviewOpen = sql<boolean>`EXISTS (SELECT 1 FROM interviews i WHERE i.application_id = ${applications.id} AND i.status IN ('proposed','scheduling'))`;
+    const stageCounts = await tx
+      .select({ roleId: applications.roleId, stage: applications.stage, mark: applicationMarks.mark, remindAt: applicationMarks.remindAt, kind: interviewFollowups.kind, choice: interviewFollowups.choice, autoState: interviewFollowups.autoState, interviewOpen, n: count() })
+      .from(applications)
+      .leftJoin(applicationMarks, and(eq(applicationMarks.applicationId, applications.id), isNull(applicationMarks.clearedAt)))
+      .leftJoin(interviewFollowups, and(eq(interviewFollowups.applicationId, applications.id), isNull(interviewFollowups.resolvedAt)))
+      .where(inArray(applications.roleId, roleIds))
+      .groupBy(applications.roleId, applications.stage, applicationMarks.mark, applicationMarks.remindAt, interviewFollowups.kind, interviewFollowups.choice, interviewFollowups.autoState, interviewOpen);
     const pendingCounts = await tx.select({ roleId: approvalRequests.roleId, n: count() }).from(approvalRequests).where(and(inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending"))).groupBy(approvalRequests.roleId);
     const now = c.get("container").engine.clock();
     return visible.map((r) => {
@@ -66,10 +75,11 @@ roleRoutes.get("/", requireTenant, async (c) => {
         if (row.roleId !== r.id) continue;
         const n = Number(row.n);
         const mark = row.mark ? { mark: row.mark, remindAt: row.remindAt } : null;
+        const followUp = followUpStripOf(row);
         total += n;
-        const g = groupFor({ stage: row.stage }, mark, now);
+        const g = groupFor({ stage: row.stage }, mark, now, followUp);
         counts[g] = (counts[g] ?? 0) + n;
-        stageStrip[ownerStage({ stage: row.stage }, mark)] += n;
+        stageStrip[ownerStage({ stage: row.stage }, mark, followUp)] += n;
       }
       const needsYou = Number(pendingCounts.find((p) => p.roleId === r.id)?.n ?? 0);
       return { ...r, counts: { total, ...counts }, stageCounts: stageStrip, needsYou, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null };
@@ -325,12 +335,25 @@ roleRoutes.put("/:id/apply-mode", requireRecruiterOrAdmin, async (c) => {
 /** A time in ISO form whatever the driver hands back, so the page can sort and compare it as text. */
 const iso = (value: string) => new Date(value).toISOString();
 
-/** The stage strip's counts over every applicant the caller may see (founder decision B3). */
-export type StageStripCounts = { total: number; byOwnerStage: Record<OwnerStage, number>; byGroup: Record<OwnerGroup, number>; notTold: number; holdsEnded: number; stillApplying: number };
+/**
+ * The stage strip's counts over every applicant the caller may see (founder decision B3). `cancelled`: the people under
+ * Cancelled by why they are there, for the column's chips (founder decisions 1A to 4A).
+ */
+export type StageStripCounts = { total: number; byOwnerStage: Record<OwnerStage, number>; byGroup: Record<OwnerGroup, number>; notTold: number; holdsEnded: number; stillApplying: number; cancelled: { askedNewTimes: number; notInterested: number; noShow: number } };
+
+/** Which count of `StageStripCounts.cancelled` each reason adds to. */
+const CANCELLED_COUNT_KEY: Record<CancelledReason, keyof StageStripCounts["cancelled"]> = { asked_new_times: "askedNewTimes", not_interested: "notInterested", no_show: "noShow" };
+
+/** The company's time zone, in which a promised day of new times is named. */
+async function companyTimeZone(tx: Tx, companyId: string): Promise<string> {
+  const [co] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId)).limit(1);
+  return co?.timezone ?? "UTC";
+}
 
 /**
  * The role's applicants. Each row carries, beside the evidence view: where the person sits on the stage strip
- * (`ownerStage`, `ownerStageLabel`), their active private mark (`mark`: kind, label, `remindAt`, note, who set it),
+ * (`ownerStage`, `ownerStageLabel`: under Cancelled, why they are there), with `cancelled` (why, and where their new
+ * times stand; null for everyone not under Cancelled), their active private mark (`mark`: kind, label, `remindAt`, note, who set it),
  * small `tags` ("Check eligibility", "Hold ended"), `stageChangedAt` and `appliedAt` with `daysInStage`, the told state
  * of a decision (`toldState`: null for someone whose details were deleted, who cannot be told; `candidateToldAt`,
  * `decisionMessageWaiting`), and the stage button (`stageMoves`). The match
@@ -358,8 +381,11 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
     // Whether each résumé file had text to read (a clean scan without a text layer has none): one query, no text pulled.
     const docIds = apps.filter((a) => a.resumeDocumentId).map((a) => a.resumeDocumentId!);
     const docs = docIds.length ? await tx.select({ id: documents.id, status: documents.status, hasText: sql<boolean>`${documents.textExtracted} is not null` }).from(documents).where(inArray(documents.id, docIds)) : [];
-    // What the stage button needs, for every row at once: marks, screens, interviews, decision messages waiting for approval.
+    // What the stage button needs, for every row at once: marks, open follow-ups (the Cancelled column), screens,
+    // interviews, decision messages waiting for approval.
     const marks = await activeMarksFor(tx, appIds);
+    const followUps = await activeFollowUpsFor(tx, appIds);
+    const timeZone = followUps.size ? await companyTimeZone(tx, t.companyId) : "UTC";
     const scr = appIds.length ? await tx.select({ applicationId: screens.applicationId, status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.applicationId, appIds)) : [];
     // Never a reading of a conversation the candidate did not send ("hide them until they send", 9 October 2026).
     const hiddenReadings = unsentScreenReadings(scr, asmts);
@@ -376,15 +402,17 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
       // Insufficient evidence as a state the owner can see, and the match score: derived here and on the candidate page from the same assessments, never stored.
       const scored = scorePerson({ app: a, assessments: own, packets: packets.byVersion, currentVersion: packets.currentVersion, mark, stillApplying: applying.has(a.id), resumeUnreadable: !!doc && doc.status === "clean" && !doc.hasText && !a.extraction, openScreen: scr.some((s) => s.applicationId === a.id && SCREEN_OPEN_STATUSES.includes(s.status)) });
       const evidence = scored.evidence;
-      const strip = ownerStage(a, mark);
-      const facts = applicationFactsFrom(a, scr.filter((s) => s.applicationId === a.id).map((s) => s.status), ivs.filter((i) => i.applicationId === a.id), t.role, asmt?.kind === "triage" ? asmt : null, { mark, decisionMessagePending: waitingToTell.has(a.id) });
+      const followUp = followUps.get(a.id) ?? null;
+      const strip = ownerStage(a, mark, followUp);
+      const facts = applicationFactsFrom(a, scr.filter((s) => s.applicationId === a.id).map((s) => s.status), ivs.filter((i) => i.applicationId === a.id), t.role, asmt?.kind === "triage" ? asmt : null, { mark, decisionMessagePending: waitingToTell.has(a.id), followUp });
       return {
         id: a.id,
         stage: a.stage,
         stageLabel: evidence.needsCloserLook ? CLOSER_LOOK_LABEL : STAGE_LABEL[a.stage],
-        group: groupFor(a, mark, now),
+        group: groupFor(a, mark, now, followUp),
         ownerStage: strip,
-        ownerStageLabel: ownerStageLabel(strip, mark),
+        ownerStageLabel: ownerStageLabel(strip, mark, followUp),
+        cancelled: strip === "cancelled" && followUp ? cancelledView(followUp, { timeZone }) : null,
         mark,
         tags: ownerTags(a, mark, now),
         source: a.source,
@@ -411,13 +439,14 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
         stageMoves: stageMoves(facts),
       };
     });
-    const counts: StageStripCounts = { total: rows.length, byOwnerStage: Object.fromEntries(OwnerStage.options.map((s) => [s, 0])) as Record<OwnerStage, number>, byGroup: Object.fromEntries(OwnerGroup.options.map((g) => [g, 0])) as Record<OwnerGroup, number>, notTold: 0, holdsEnded: 0, stillApplying: 0 };
+    const counts: StageStripCounts = { total: rows.length, byOwnerStage: Object.fromEntries(OwnerStage.options.map((s) => [s, 0])) as Record<OwnerStage, number>, byGroup: Object.fromEntries(OwnerGroup.options.map((g) => [g, 0])) as Record<OwnerGroup, number>, notTold: 0, holdsEnded: 0, stillApplying: 0, cancelled: { askedNewTimes: 0, notInterested: 0, noShow: 0 } };
     for (const r of rows) {
       counts.byOwnerStage[r.ownerStage] += 1;
       counts.byGroup[r.group] += 1;
       if (r.toldState === "not_told") counts.notTold += 1;
       if (holdEnded(r.mark, now)) counts.holdsEnded += 1;
       if (r.stillApplying) counts.stillApplying += 1;
+      if (r.cancelled) counts.cancelled[CANCELLED_COUNT_KEY[r.cancelled.reason]] += 1;
     }
     const nameOf = (r: (typeof rows)[number]) => r.candidate?.name.toLowerCase() ?? "";
     // By score: highest first, people with no score yet last, newest first among equals (the rows come newest first).
@@ -596,10 +625,12 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     // Every choice the page shows but cannot take comes with the reason (plan 0.5), and the decline step says before the click what the candidate will get.
     // The private mark and the stage button (founder decision B3), and whether a decision was told (B6).
     const mark = (await activeMarksFor(tx, [app.id])).get(app.id) ?? null;
+    // Under Cancelled (founder decisions 1A to 4A): why, and where their new times stand.
+    const followUp = (await activeFollowUpsFor(tx, [app.id])).get(app.id) ?? null;
     // Their own decision message waiting for an approver, or a closed role's one closing message that names them (Q30).
     const decisionMessageWaiting = (await pendingDecisionMessages(tx, [app.id])).has(app.id);
     // A decision nobody told can be taken back (plan G1): where it was made from, and whether the role has closed.
-    const facts = applicationFactsFrom(app, scr.map((s) => s.status), ivs, t.role, asmts.find((x) => x.kind === "triage") ?? null, { mark, decisionMessagePending: decisionMessageWaiting, ...(await undoFacts(tx, app)) });
+    const facts = applicationFactsFrom(app, scr.map((s) => s.status), ivs, t.role, asmts.find((x) => x.kind === "triage") ?? null, { mark, decisionMessagePending: decisionMessageWaiting, followUp, ...(await undoFacts(tx, app)) });
     const { allowed: allowedActions, blockedReasons } = applicationActionState(facts);
     // What a Send of the decision message does under the company's settings: it goes, waits for approval, or is not sent.
     const declineMessage = await declineMessagePolicy(tx, { companyId: t.companyId, roleId: app.roleId });
@@ -610,7 +641,8 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     // The day the untold safety net acts on a decision nobody has told (Q27), in the company's calendar: its time zone,
     // its working days and the ITS holidays, as the daily check counts them.
     const untoldFallbackOn = DECISION_STAGES.includes(app.stage) && app.toldState === "not_told" && !decisionMessageWaiting && !cand?.anonymizedAt ? untoldFallbackAt(new Date(app.rejectedAt ?? app.stageChangedAt), await workingDayRulesFor(tx, app.companyId, now)).day : null;
-    const strip = ownerStage(app, mark);
+    const strip = ownerStage(app, mark, followUp);
+    const cancelled = strip === "cancelled" && followUp ? cancelledView(followUp, { timeZone: await companyTimeZone(tx, app.companyId) }) : null;
     // The match score with its breakdown (founder decision B2), the must-have line, where the pool board puts them and
     // the version label, from the same assessments and rules as the list and the board.
     const [roleRow] = await tx.select({ id: roles.id, currentPacketVersion: roles.currentPacketVersion }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
@@ -623,7 +655,7 @@ applicationRoutes.get("/:id", requireTenant, async (c) => {
     // answers given after applying again): each body is shown with the tokens hidden, without the reply address (it
     // carries the reply token) and with attachments named only. Links outlive any team member's or recruiter's access.
     const thread = comms.map(({ replyTo: _replyTo, attachments, ...m }) => ({ ...m, bodyText: maskCandidateLinks(m.bodyText), bodyHtml: maskCandidateLinks(m.bodyHtml), attachments: attachments ? attachments.map((a) => ({ filename: a.filename, contentType: a.contentType })) : null }));
-    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: groupFor(app, mark, now), ownerStage: strip, ownerStageLabel: ownerStageLabel(strip, mark), mark, tags: ownerTags(app, mark, now), stageMoves: stageMoves(facts), toldState: DECISION_STAGES.includes(app.stage) ? app.toldState : null, decisionMessageWaiting, untoldFallbackOn, allowedActions, blockedReasons, declineMessage, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: thread, timeline, screens: scr.map(teamScreenView).map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedVia: s.invitedVia ?? null, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, answersShared: s.answersShared, assessmentId: shownScorecard(s) ? s.assessmentId : null, ...scorecards.get(s.id) })), pendingApprovals, packetLabels, matchScore: scored.match, mustHaves: scored.mustHaves, placement: scored.placement, readingVersion: scored.readingVersion };
+    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: groupFor(app, mark, now, followUp), ownerStage: strip, ownerStageLabel: ownerStageLabel(strip, mark, followUp), cancelled, mark, tags: ownerTags(app, mark, now), stageMoves: stageMoves(facts), toldState: DECISION_STAGES.includes(app.stage) ? app.toldState : null, decisionMessageWaiting, untoldFallbackOn, allowedActions, blockedReasons, declineMessage, candidate: cand, interviews: ivs, interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asmts, communications: thread, timeline, screens: scr.map(teamScreenView).map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedVia: s.invitedVia ?? null, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, transcript: s.transcript, answers: s.answers, progress: s.progress, answersShared: s.answersShared, assessmentId: shownScorecard(s) ? s.assessmentId : null, ...scorecards.get(s.id) })), pendingApprovals, packetLabels, matchScore: scored.match, mustHaves: scored.mustHaves, placement: scored.placement, readingVersion: scored.readingVersion };
   });
   if (!row) throw new HttpError(404, "not_found", "Application not found.");
   return c.json(row);

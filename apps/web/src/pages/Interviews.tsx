@@ -4,16 +4,18 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "../nav";
 import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, Field, PageHeader, Pill, Skeleton, Table, Timeline, type Tone } from "@ros/ui";
-import { api, ApiError, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me } from "../api/client";
+import { api, ApiError, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me, type SendNewTimesResult } from "../api/client";
 import { toast } from "../toast";
+import { interviewNewTimesText } from "../cancelled";
 import { activeCompanyOf } from "../rail";
 import { canDecideInterviews, canManageInterviews, canReadNotes, canSeeTalent } from "../roles";
-import { interviewCancelToast } from "../talent-actions";
+import { interviewCancelToast, newTimesToast } from "../talent-actions";
 import { againChoice } from "../interview-defaults";
 import { MyNote, useNotes } from "./candidate-panel/notes";
 
 const STATUS_LABEL: Record<string, string> = { proposed: "Preparing times", scheduling: "Waiting on the candidate", scheduled: "Scheduled", completed: "Completed", cancelled: "Cancelled", no_show: "No-show", offer_expired: "Times expired" };
-const DECISION_LABEL: Record<string, string> = { next_round: "Next round", finalist: "Finalist", not_moving_forward: "Not moving forward", hired: "Hired" };
+// `new_times`: the candidate did not come, and the team sent new times for the same round (the Cancelled column).
+const DECISION_LABEL: Record<string, string> = { next_round: "Next round", finalist: "Finalist", not_moving_forward: "Not moving forward", hired: "Hired", new_times: "New times sent" };
 // Red is only for a missing must-have or a critical error (docs/07), so a cancelled interview is plain grey.
 const STATUS_TONE: Record<string, Tone> = { proposed: "accent", scheduling: "caution", scheduled: "good", completed: "neutral", cancelled: "neutral", no_show: "caution", offer_expired: "caution" };
 const when = (iso: string | null, tz: string | null) => (iso ? new Date(iso).toLocaleString("en-US", { timeZone: tz ?? undefined, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "not yet");
@@ -103,6 +105,16 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
   const cancel = useMutation({ mutationFn: () => api.post<{ candidateTold?: boolean; interviewersTold?: boolean }>(`/api/v1/interviews/${id}/cancel`, { reason }), onSuccess: async (r) => { const t = interviewCancelToast(r); toast(t.title, t.detail); setConfirmCancel(false); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not cancel.") });
   const outcome = useMutation({ mutationFn: (o: string) => api.post(`/api/v1/interviews/${id}/outcome`, { outcome: o }), onSuccess: async () => { toast("Recorded."); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record.") });
   const book = useMutation({ mutationFn: (slotId: string) => api.post(`/api/v1/interviews/${id}/book-on-behalf`, { slotId, note: "chosen with the candidate by phone" }), onSuccess: async () => { toast("Booked on the candidate's behalf."); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not book.") });
+  // Someone under Cancelled (founder decision 2A): the same interview reopened for new times, or a new one for the same round after a no-show.
+  const newTimes = useMutation({
+    mutationFn: (applicationId: string) => api.post<SendNewTimesResult>(`/api/v1/applications/${applicationId}/new-times`, {}),
+    onSuccess: async (r, applicationId) => {
+      if (q.data) { const t = newTimesToast({ kind: "sent", via: r.via, firstName: q.data.candidate.firstName, round: q.data.title }); toast(t.title, t.detail); }
+      await refresh();
+      await qc.invalidateQueries({ queryKey: ["application", applicationId] });
+    },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send new times."),
+  });
   const i = q.data;
   const manage = canManageInterviews(role);
   const participant = !!i && !!userId && i.participants.some((p) => p.userId === userId);
@@ -165,7 +177,15 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
               </div>
             </Card>
           ) : null}
-          {again === "offer_again" ? (
+          {again === "send_new_times" && i.followUp ? (
+            <Card needsYou title="Send new times">
+              <p className="small" style={{ color: "var(--ink-2)" }}>{interviewNewTimesText(i.candidate.firstName, i.followUp.reason)}</p>
+              <div className="row" style={{ marginTop: 10 }}>
+                <Button size="sm" variant="primary" icon="send" loading={newTimes.isPending} onClick={() => newTimes.mutate(i.applicationId)}>Send new times</Button>
+                {canSeeTalent(role) ? <Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}`} className="btn quiet sm">Open their page</Link> : null}
+              </div>
+            </Card>
+          ) : again === "offer_again" ? (
             <Card needsYou title="Offer times again">
               <p className="small" style={{ color: "var(--ink-2)" }}>{i.candidate.firstName} did not pick a time. New times go out for the same round and interviewers, or you can decide about them from their page.</p>
               <div className="row" style={{ marginTop: 10 }}>

@@ -1,9 +1,10 @@
 import { and, desc, eq, inArray, like, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { DECISION_STAGES, createDataRequest, createEscalation, decisionTold, disclosureLine, humanResponseExpectation, loadBusinessCalendar, notify, raiseAlert } from "@ros/core";
-import { fromAddress, queueCommunication, recordInbound, replyToFor, requestHuman, sendPrivacyAcknowledgment } from "@ros/agents";
+import { CANCEL_STAGES, DECISION_STAGES, createDataRequest, createEscalation, decisionTold, disclosureLine, followUpParked, humanResponseExpectation, loadBusinessCalendar, notify, openFollowUpOf, raiseAlert, setAutoState } from "@ros/core";
+import { fromAddress, newTimesDayWords, queueCommunication, recordInbound, replyToFor, requestHuman, sendPrivacyAcknowledgment } from "@ros/agents";
 import { applications, candidates, communications, companies, dataRequests, inboundEmails, rolePackets, roles, screens, withPlatform, withTenant, type Tx } from "@ros/db";
 import type { InboundEmail } from "@ros/integrations";
+import { cancelNewTimesRuns } from "@ros/workflows";
 import type { Container } from "../container";
 import { screenDeps } from "./screens";
 import { optOutOfTalentPool } from "./talent-pool";
@@ -73,6 +74,30 @@ async function asksForReasons(tx: Tx, app: App, text: string): Promise<boolean> 
 type ExplanationAsk = { candidateId: string; email: string | null; companyName: string };
 
 /**
+ * A reply from someone under Cancelled (founder decisions 2A and 4A, founder question 8). A reply asking for a person, or
+ * "no thanks" before any decision, stops an automatic set still waiting for its day (`candidate_replied`): someone who
+ * asked for a person, or said no, is not sent times by software days later. Any other reply leaves it and names its day.
+ * Either way the team's notice says which entry the reply belongs to. The reply itself is recorded and answered as
+ * always; none of their words go on the follow-up. Returns the sentence to add to the team's notice ("" when none), and
+ * whether it stopped a set (the notice then never says nothing was changed).
+ */
+async function replyUnderCancelled(tx: Tx, container: Container, input: { app: App; companyTimezone: string; stops: boolean; actor: Actor }): Promise<{ sentence: string; stopped: boolean }> {
+  // The application first, then its follow-up: the order the automatic set and a person's send take them.
+  const [app] = await tx.select({ stage: applications.stage }).from(applications).where(eq(applications.id, input.app.id)).limit(1).for("update");
+  const f = await openFollowUpOf(tx, input.app.id, { lock: true });
+  if (!app || !f || !CANCEL_STAGES.includes(app.stage)) return { sentence: "", stopped: false };
+  const day = f.autoDueAt ? newTimesDayWords(f.autoDueAt, input.companyTimezone) : null;
+  if (followUpParked(f) && input.stops) {
+    const now = container.engine.clock();
+    await setAutoState(tx, { followUpId: f.id, to: "not_sent", reason: "candidate_replied", actor: input.actor, now });
+    await cancelNewTimesRuns(tx, container.engine, { companyId: input.app.companyId, applicationId: input.app.id, actor: input.actor, reason: "the candidate replied" });
+    return { sentence: ` Their automatic new times${day ? `, due ${day},` : ""} were stopped: a person should arrange the next step with them. They are under Cancelled.`, stopped: true };
+  }
+  if (followUpParked(f)) return { sentence: ` New times are due to go to them automatically${day ? ` on ${day}` : ""}. Open them under Cancelled to send them now or stop them.`, stopped: false };
+  return { sentence: ` They are under Cancelled${f.kind === "candidate_no_show" ? " as a no-show" : ""}.`, stopped: false };
+}
+
+/**
  * Whether a "no thanks" answers the offer about future roles. Only the decision message makes that offer, so this is
  * true only once the candidate knows the decision: the message reached them, someone recorded telling them, or the
  * decision came before decisions were private. A decision the team has not told them yet is unknown to them (founder
@@ -119,17 +144,14 @@ export async function handleCandidateReply(tx: Tx, container: Container, input: 
   // assistant; the caller files it as a privacy request once this transaction has committed.
   const wantsExplanation = await asksForReasons(tx, app, text);
   const quoted = `About ${role.title}: "${firstLine(text).slice(0, 140)}"`;
-  await notify(tx, {
-    companyId: app.companyId,
-    kind: "message.received",
-    title: `${name} wrote back`,
-    body: wantsHuman ? `They asked for a person about ${role.title}. A recruiter has been asked to follow up; you can also reply yourself.`
-      : optedOut ? `About ${role.title}: they replied "no thanks", so they will not be kept for future roles. They were sent a confirmation; nothing else changed.`
-      : saidNoThanks && !aboutFutureRoles ? `${quoted}. This may mean they do not want to go ahead with this step. Nothing was changed; reply to check with them.`
-      : wantsExplanation ? `About ${role.title}: they asked for the reasons for your decision and for a person to review it. ITS's compliance team has the request and answers them; their message is on their page.`
-      : quoted,
-    action: { label: "Read it", href: open },
-  });
+  const cancelled = await replyUnderCancelled(tx, container, { app, companyTimezone: company.timezone, stops: wantsHuman || (saidNoThanks && !aboutFutureRoles), actor: EMAIL_REPLY_ACTOR });
+  // A "no thanks" that stopped their automatic new times changed something, so the notice never says nothing was.
+  const body = wantsHuman ? `They asked for a person about ${role.title}. A recruiter has been asked to follow up; you can also reply yourself.`
+    : optedOut ? `About ${role.title}: they replied "no thanks", so they will not be kept for future roles. They were sent a confirmation; nothing else changed.`
+    : saidNoThanks && !aboutFutureRoles ? `${quoted}. This may mean they do not want to go ahead with this step.${cancelled.stopped ? " Reply to check with them." : " Nothing was changed; reply to check with them."}`
+    : wantsExplanation ? `About ${role.title}: they asked for the reasons for your decision and for a person to review it. ITS's compliance team has the request and answers them; their message is on their page.`
+    : quoted;
+  await notify(tx, { companyId: app.companyId, kind: "message.received", title: `${name} wrote back`, body: `${body}${cancelled.sentence}`, action: { label: "Read it", href: open } });
   if (wantsExplanation) return { communicationId, humanRequested: false, explanationRequested: { candidateId: candidate.id, email: candidate.email ?? mail.from ?? null, companyName: company.name } };
   if (!wantsHuman) return { communicationId, humanRequested: false, talentPoolOptOut: optedOut };
 

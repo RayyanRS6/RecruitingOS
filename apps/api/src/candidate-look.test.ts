@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { buildCandidateCsp, entitlements } from "@ros/core";
-import { applications, roles, screens } from "@ros/db";
+import { applications, interviews, roles, screens } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { SCREEN_CSS, STATUS_CSS } from "./pages/candidate";
@@ -155,19 +155,56 @@ describe("candidate pages: the look, page by page", () => {
     await container.close();
   });
 
+  /** One main heading, the shared stylesheet, the colour-scheme hint, no leftover quiet buttons, and no script it needs. */
+  const looksRight = async (path: string) => {
+    const html = await page(path);
+    expect(html.match(/<h1[\s>]/g), path).toHaveLength(1);
+    expect(html, path).toMatch(/<meta name="color-scheme" content="light dark"\s*\/?>/);
+    expect(html, path).toContain(".btn.secondary { background: var(--surface)");
+    expect(html, path).toContain('@font-face { font-family: "IBM Plex Sans"');
+    expect(html, path).not.toContain("btn-quiet");
+    expect(html, path).not.toMatch(/style="[^"]*width:auto/);
+    // the only script is the structured data on the job page and the résumé upload on the form: everything works without it
+    for (const m of html.matchAll(/<script\b([^>]*)>/g)) expect(m[1], path).toMatch(/type="application\/ld\+json"|nonce=/);
+    return html;
+  };
+
   it("every page has one main heading, the shared stylesheet, the colour-scheme hint and no leftover quiet buttons", async () => {
     expect(screenToken).toBeTruthy();
-    for (const path of [`/careers/${slug}`, `/careers/${slug}/jobs/${roleId}`, `/careers/${slug}/jobs/${roleId}/apply`, `/careers/${slug}/jobs/${roleId}/applied`, `/c/status/${statusToken}`, `/c/screen/${screenToken}`, "/c/link-request", "/c/link-request?sent=1", "/privacy", "/c/privacy-request"]) {
-      const html = await page(path);
-      expect(html.match(/<h1[\s>]/g), path).toHaveLength(1);
-      expect(html, path).toMatch(/<meta name="color-scheme" content="light dark"\s*\/?>/);
-      expect(html, path).toContain(".btn.secondary { background: var(--surface)");
-      expect(html, path).toContain('@font-face { font-family: "IBM Plex Sans"');
-      expect(html, path).not.toContain("btn-quiet");
-      expect(html, path).not.toMatch(/style="[^"]*width:auto/);
-      // the only script is the structured data on the job page and the résumé upload on the form: everything works without it
-      for (const m of html.matchAll(/<script\b([^>]*)>/g)) expect(m[1], path).toMatch(/type="application\/ld\+json"|nonce=/);
-    }
+    for (const path of [`/careers/${slug}`, `/careers/${slug}/jobs/${roleId}`, `/careers/${slug}/jobs/${roleId}/apply`, `/careers/${slug}/jobs/${roleId}/applied`, `/c/status/${statusToken}`, `/c/screen/${screenToken}`, "/c/link-request", "/c/link-request?sent=1", "/privacy", "/c/privacy-request"]) await looksRight(path);
+  });
+
+  it("the scheduling pages too: picking a time, the confirmed page with its cancel choice, and the page after cancelling", async () => {
+    expect((await json(owner, "PUT", "/api/v1/me/availability", { timezone: "America/Los_Angeles", windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 3 })).status).toBe(200);
+    const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> }; interviews: { plan: Array<{ key: string }> } } } };
+    const fd = new FormData();
+    fd.set("firstName", "Leo"); fd.set("lastName", "Park"); fd.set("email", "leo.park@example.com"); fd.set("locationText", "Tustin, CA");
+    fd.set("resume", new File(["Leo Park, RDH"], "leo.txt", { type: "text/plain" }));
+    for (const rule of role.currentPacket.packet.requirements.eligibility) fd.set(`elig_${rule.key}`, "yes");
+    fd.set("acknowledged", "yes");
+    expect((await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd })).status).toBe(302);
+    await container.drain();
+    const [leo] = await container.db.select().from(applications).where(eq(applications.statusToken, await statusTokenFor(container, { roleId, email: "leo.park@example.com" })));
+    const me = (await (await json(owner, "GET", "/api/v1/auth/me")).json()) as { user: { id: string } };
+    const approved = await json(owner, "POST", `/api/v1/applications/${leo.id}/interviews`, { roundKey: role.currentPacket.packet.interviews.plan[0].key, interviewerUserIds: [me.user.id], linkSource: "calendar" });
+    expect(approved.status, await approved.clone().text()).toBe(201);
+    const [iv] = await container.db.select().from(interviews).where(eq(interviews.applicationId, leo.id));
+    expect(iv.scheduleToken).toBeTruthy();
+    const pick = await looksRight(`/c/schedule/${iv.scheduleToken}`);
+    const slotId = pick.match(/name="slotId" value="([^"]+)"/)![1];
+    const form = (fields: Record<string, string>) => ({ method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields).toString() });
+    expect((await app.request(`/c/schedule/${iv.scheduleToken}`, form({ slotId, timezone: "America/Los_Angeles" }))).status).toBe(302);
+    await container.drain();
+    const confirmed = await looksRight(`/c/schedule/${iv.scheduleToken}/confirmed`);
+    // the choice is a group of real radio buttons with a legend, in the page's own styles
+    expect(confirmed).toContain('<legend class="question-legend">If you cancel, what would you like next?</legend>');
+    expect(confirmed.match(/<label class="check slot" for="next-[a-z-]+"><input type="radio"/g)).toHaveLength(2);
+    expect(confirmed).not.toMatch(/ style="/);
+    expect((await app.request(`/c/schedule/${iv.scheduleToken}/cancel`, form({ confirm: "yes", next: "new_times" }))).status).toBe(302);
+    await container.drain();
+    const after = await looksRight(`/c/schedule/${iv.scheduleToken}/cancelled`);
+    expect(after).toContain('<p class="notice">Reply to any of our emails with HUMAN to reach a person.</p>');
+    expect(after).not.toContain("<script");
   });
 
   it("the careers page lists each role as a card with an outlined button that names the role for a screen reader", async () => {

@@ -2,6 +2,7 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import { MARK_LABEL, type ActiveMark, type Actor, type ApplicationStage, type MarkKind, type MarkSource } from "@ros/contracts";
 import { applicationMarks, type Queryable } from "@ros/db";
 import { emit } from "./events";
+import { resolveOpenFollowUp } from "./interview-followups";
 import { markBlockedReason } from "./stages";
 
 /**
@@ -66,7 +67,8 @@ async function clearActive(q: Queryable, input: { companyId: string; application
 
 /**
  * Sets a mark, replacing the active one. Refused when the step does not allow it (MarkError "not_allowed", with the
- * reason in plain words). A hold gets its end date here (`holdUntil`); other marks carry none.
+ * reason in plain words). A hold gets its end date here (`holdUntil`); other marks carry none. A person's hold takes
+ * someone out of Cancelled, and nothing goes to them automatically (no other mark can be set while interviewing).
  */
 export async function setMark(
   q: Queryable,
@@ -83,6 +85,7 @@ export async function setMark(
     throw e;
   });
   await emit(q, { type: "application.marked", companyId: input.companyId, actor: input.actor, subject: { type: "application", id: input.app.id }, payload: { markId: row.id, mark: row.mark, remindAt, note: row.note, source: row.source, replaced: previous?.mark ?? null } });
+  if (input.mark === "on_hold") await resolveOpenFollowUp(q, { companyId: input.companyId, applicationId: input.app.id, actor: input.actor, how: "moved_by_team", now });
   return { mark: toActiveMark(row), replaced: previous?.mark ?? null };
 }
 

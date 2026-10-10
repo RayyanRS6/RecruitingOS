@@ -1,8 +1,8 @@
-import { and, count, eq, inArray } from "drizzle-orm";
+import { and, asc, count, eq, inArray } from "drizzle-orm";
 import type { Actor, InviteMember, UpdateMember } from "@ros/contracts";
 import { FRESH_SESSION_MS, REAUTH_WINDOW_MS, audit, createInvitation, disconnectCalendar, emit, invitationLink, isRecentlyAuthenticated, listPendingInvitations, membersWithCalendarStatus, normalizeEmail, notify, publicInvitation, resendInvitation, revokeAllSessions, revokeInvitation, roleInWords, type InvitationRow, type SessionContext } from "@ros/core";
 import { queueCommunication } from "@ros/agents";
-import { companies, interviewParticipants, interviews, memberships, users, withPlatform, withTenant, type Tx } from "@ros/db";
+import { applications, companies, interviewParticipants, interviews, memberships, users, withPlatform, withTenant, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
 import type { Tenant } from "../middleware/session";
@@ -196,10 +196,14 @@ export async function updateMember(team: Team, input: { userId: string; body: Up
     // keep them on the schedule, in the candidate's messages and on the bookings. The notification, the event and the
     // audit record below keep the count.
     const ahead = await tx
-      .select({ participantId: interviewParticipants.id, interviewId: interviews.id, title: interviews.title, calendarRefs: interviews.calendarRefs })
+      .select({ participantId: interviewParticipants.id, interviewId: interviews.id, applicationId: interviews.applicationId, title: interviews.title, calendarRefs: interviews.calendarRefs })
       .from(interviewParticipants)
       .innerJoin(interviews, eq(interviews.id, interviewParticipants.interviewId))
       .where(and(eq(interviewParticipants.companyId, tenant.companyId), eq(interviewParticipants.userId, userId), inArray(interviews.status, OPEN_INTERVIEW_STATUSES)));
+    // Their applications first, in one order, before any interview changes: every path that changes an interview and its
+    // application takes the application first (a booking, a cancel, a send of new times), so they take turns.
+    const appIds = [...new Set(ahead.map((p) => p.applicationId))];
+    if (appIds.length) await tx.select({ id: applications.id }).from(applications).where(inArray(applications.id, appIds)).orderBy(asc(applications.id)).for("update");
     if (ahead.length) await tx.delete(interviewParticipants).where(inArray(interviewParticipants.id, ahead.map((p) => p.participantId)));
     for (const p of ahead) {
       // A booking in their calendar cannot be managed once the calendar is disconnected; its reference goes with them.

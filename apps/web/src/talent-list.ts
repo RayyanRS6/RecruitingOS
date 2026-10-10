@@ -1,6 +1,7 @@
 import { OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum } from "@ros/contracts";
 import type { Tone } from "@ros/ui";
-import type { ApplicationSummary, OwnerStage, StageStripCounts, ToldState } from "./api/client";
+import type { ApplicationSummary, CancelledReason, OwnerStage, StageStripCounts, ToldState } from "./api/client";
+import { cancelledReasonFrom } from "./cancelled";
 
 /**
  * The Talent page's list (plan A3; founder decisions B2, B3 and B6), kept free of React so it can be tested: the stage
@@ -63,9 +64,10 @@ export const ORDERS: ReadonlyArray<{ id: Order; label: string }> = [
 /**
  * What the list shows. `stage` is a column of the strip (or everyone); `waiting` keeps the people waiting on you;
  * `applying` keeps the people still applying (plan E6); `internalStage` and `told` come from links (Today's "held on an
- * eligibility answer", "not told yet") and show as removable chips.
+ * eligibility answer", "not told yet") and show as removable chips. `cancelledReason` narrows the Cancelled column to
+ * one reason (asked for new times, no longer interested, no-show; founder decision 2A), from its chips or `?cancelled=`.
  */
-export type TalentView = { stage: OwnerStage | "all"; waiting: boolean; applying: boolean; reading: ReadingFilter; query: string; order: Order; internalStage: string | null; told: ToldState | null };
+export type TalentView = { stage: OwnerStage | "all"; waiting: boolean; applying: boolean; reading: ReadingFilter; query: string; order: Order; internalStage: string | null; told: ToldState | null; cancelledReason: CancelledReason | null };
 
 /* ------------------------------------------------------------------------------------------------------------ */
 /* Still applying (plan E6)                                                                                       */
@@ -99,13 +101,18 @@ const OWNER_STAGES = OwnerStageEnum.options as readonly OwnerStage[];
 const TOLD = ["not_told", "queued", "sent", "told_in_person"] as const;
 
 /**
- * The view the page opens on: what the link asks for (`?ownerStage=`, `?stage=`, `?told=`, `?applying=1`, `?order=`),
- * otherwise "Waiting on you", longest wait first, when anyone waits on you (plan A3), and everyone, newest first, when
- * nobody does. `counts` are the ones the page shows (people still applying never wait on you).
+ * The view the page opens on: what the link asks for (`?ownerStage=`, `?stage=`, `?told=`, `?applying=1`, `?order=`,
+ * and `?cancelled=` for one reason under Cancelled), otherwise "Waiting on you", longest wait first, when anyone waits on
+ * you (plan A3), and everyone, newest first, when nobody does. `counts` are the ones the page shows (people still
+ * applying never wait on you).
  */
 export function defaultView(params: { get: (k: string) => string | null }, counts: Pick<StageStripCounts, "byGroup"> | null | undefined): TalentView {
   const stageParam = params.get("ownerStage");
-  const stage = stageParam && (OWNER_STAGES as readonly string[]).includes(stageParam) ? (stageParam as OwnerStage) : "all";
+  const asked = stageParam && (OWNER_STAGES as readonly string[]).includes(stageParam) ? (stageParam as OwnerStage) : "all";
+  // a reason belongs to the Cancelled column: on its own it opens that column, beside another column it means nothing
+  const reason = cancelledReasonFrom(params.get("cancelled"));
+  const cancelledReason = reason && (asked === "all" || asked === "cancelled") ? reason : null;
+  const stage = cancelledReason ? "cancelled" : asked;
   const toldParam = params.get("told");
   const told = toldParam && (TOLD as readonly string[]).includes(toldParam) ? (toldParam as ToldState) : null;
   const internalStage = params.get("stage") || null;
@@ -114,7 +121,7 @@ export function defaultView(params: { get: (k: string) => string | null }, count
   const waiting = !linked && (counts?.byGroup.waiting_on_you ?? 0) > 0;
   const orderParam = params.get("order");
   const order: Order = ORDERS.some((o) => o.id === orderParam) ? (orderParam as Order) : waiting ? "waiting" : "newest";
-  return { stage, waiting, applying, reading: "any", query: "", order, internalStage, told };
+  return { stage, waiting, applying, reading: "any", query: "", order, internalStage, told, cancelledReason };
 }
 
 /** Lower case without accents, so "José" is found by "jose". */
@@ -138,6 +145,7 @@ export function applyView(rows: readonly ApplicationSummary[], view: TalentView)
     (view.reading === "any" || readingOf(a) === view.reading) &&
     (!view.internalStage || a.stage === view.internalStage) &&
     (!view.told || a.toldState === view.told) &&
+    (!view.cancelledReason || a.cancelled?.reason === view.cancelledReason) &&
     matchesQuery(a, view.query),
   );
   return orderRows(shown, view.order);
@@ -170,11 +178,11 @@ function waitsOnYou(a: Pick<ApplicationSummary, "group" | "stillApplying">): boo
   return a.group === "waiting_on_you" && !isStillApplying(a);
 }
 
-/** How many people each reading filter would show, within the strip column and the waiting and still-applying toggles. */
-export function readingCounts(rows: readonly ApplicationSummary[], view: Pick<TalentView, "stage" | "waiting"> & { applying?: boolean }): Record<ReadingFilter, number> {
+/** How many people each reading filter would show, within the strip column, a Cancelled reason and the waiting and still-applying toggles. */
+export function readingCounts(rows: readonly ApplicationSummary[], view: Pick<TalentView, "stage" | "waiting"> & { applying?: boolean; cancelledReason?: CancelledReason | null }): Record<ReadingFilter, number> {
   const out: Record<ReadingFilter, number> = { any: 0, strong: 0, potential: 0, missing_must_have: 0, closer_look: 0 };
   for (const a of rows) {
-    if ((view.stage !== "all" && a.ownerStage !== view.stage) || (view.waiting && !waitsOnYou(a)) || (view.applying && !isStillApplying(a))) continue;
+    if ((view.stage !== "all" && a.ownerStage !== view.stage) || (view.waiting && !waitsOnYou(a)) || (view.applying && !isStillApplying(a)) || (view.cancelledReason && a.cancelled?.reason !== view.cancelledReason)) continue;
     out.any += 1;
     const r = readingOf(a);
     if (r in out) out[r as ReadingFilter] += 1;
@@ -209,6 +217,7 @@ export function emptyText(view: TalentView, total: number): { title: string; bod
   if (total === 0) return { title: "Nobody has applied yet", body: "Applicants appear here as soon as they apply. The role's Posting tab has the links to share once it is live." };
   if (view.query.trim()) return { title: "Nobody matches", body: `Nobody here matches "${view.query.trim()}". Search looks at names, email addresses and where people came from.` };
   if (view.applying) return { title: "Nobody is still applying", body: "Everyone who was offered the screening conversation with their application has sent their answers, asked for a person or stopped. Turn off \"Still applying\" to see everyone." };
+  if (view.stage === "cancelled" && !view.cancelledReason && !view.waiting && view.reading === "any") return { title: "Nobody is under Cancelled", body: "Candidates who cancel an interview, or do not come to one, show here with what they chose." };
   if (view.waiting && view.stage === "all" && view.reading === "any") return { title: "Nobody is waiting on you", body: "Everyone has a next step under way. Choose All to see them." };
   return { title: "Nobody here", body: "Nobody fits these filters right now. Clear one to see more people." };
 }
