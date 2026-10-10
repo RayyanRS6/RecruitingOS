@@ -44,7 +44,7 @@ export default defineConfig({
     env: {
       // The dev server restarts itself when the V8 heap passes 80% of its limit (next/dist/server/lib/start-server.js;
       // the default limit is half the machine's memory), which wipes the in-memory database mid-run. Give it a limit
-      // well above what half the journeys need (CI runs them in two halves, each with its own server) but below the
+      // well above what one CI run needs (CI splits the journeys into three runs, each with its own server) but below the
       // runner's memory, so the runner itself is never starved, and skip development source maps, the largest part of
       // that heap.
       NODE_OPTIONS: "--max-old-space-size=6144",

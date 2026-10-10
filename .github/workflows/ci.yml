@@ -38,8 +38,9 @@ jobs:
   verify:
     name: verify # the required status check on main: lockfile install, secret scans, audit, typecheck, migration validation, tests, evals, build, browser journeys with accessibility checks
     runs-on: ubuntu-latest
-    # 32 browser journeys run one at a time against `next dev` (about 30 minutes) after about 20 minutes of other checks.
-    timeout-minutes: 75
+    # 32 browser journeys run one at a time against `next dev`, in three runs with a server each (about 50 minutes),
+    # after about 20 minutes of other checks.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -91,18 +92,25 @@ jobs:
       - name: Playwright browsers
         run: pnpm --filter @ros/e2e exec playwright install --with-deps chromium
 
-      # In two halves, each with a dev server of its own: one server for all 32 journeys grew until the runner was shut
-      # down mid-run twice (10 October 2026). Each half writes its own report; both are uploaded below.
+      # In three runs, each with a dev server of its own: one server for all 32 journeys grew until the runner was shut
+      # down mid-run twice (10 October 2026), and the route inventory, which compiles every page in one test, needs a
+      # fresh server of its own to stay under the heap limit. Each run writes its own report; all are uploaded below.
       - name: End-to-end journeys with accessibility checks (first half)
-        run: pnpm --filter @ros/e2e exec playwright test --shard=1/2
+        run: pnpm --filter @ros/e2e exec playwright test --shard=1/2 --grep-invert "route inventory"
         env:
           E2E_REPORT_DIR: report/1
 
       - name: End-to-end journeys with accessibility checks (second half)
         if: ${{ success() || failure() }}
-        run: pnpm --filter @ros/e2e exec playwright test --shard=2/2
+        run: pnpm --filter @ros/e2e exec playwright test --shard=2/2 --grep-invert "route inventory"
         env:
           E2E_REPORT_DIR: report/2
+
+      - name: Route inventory (every page, signed out, wrong role and right role)
+        if: ${{ success() || failure() }}
+        run: pnpm --filter @ros/e2e exec playwright test specs/routes.spec.ts
+        env:
+          E2E_REPORT_DIR: report/3
 
       - name: Playwright report (synthetic data only)
         if: always()
