@@ -330,6 +330,7 @@ export function Table(props: { head: Array<string | TableHead>; children?: React
         <tbody aria-busy={loading ? true : undefined}>
           {loading
             ? Array.from({ length: loading }, (_, r) => (
+                // biome-ignore lint/a11y/noAriaHiddenOnFocusable: a placeholder row in a plain table is not focusable; it is hidden while the status line says "Loading…"
                 <tr key={`loading-${r}`} aria-hidden="true">
                   {cols.map((c, i) => <td key={`${i}-${c.label}`} className={c.num ? "num" : undefined}><span className="skeleton" /></td>)}
                 </tr>

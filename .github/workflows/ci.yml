@@ -95,19 +95,22 @@ jobs:
       # In three runs, each with a dev server of its own: one server for all 32 journeys grew until the runner was shut
       # down mid-run twice (10 October 2026), and the route inventory, which compiles every page in one test, needs a
       # fresh server of its own to stay under the heap limit. Each run writes its own report; all are uploaded below.
+      # The later two run even when the first half fails (so every failure is reported), but only once the browser
+      # journeys have actually started: an earlier failing step (lint, tests, build) skips all three.
       - name: End-to-end journeys with accessibility checks (first half)
+        id: e2e_first
         run: pnpm --filter @ros/e2e exec playwright test --shard=1/2 --grep-invert "route inventory"
         env:
           E2E_REPORT_DIR: report/1
 
       - name: End-to-end journeys with accessibility checks (second half)
-        if: ${{ success() || failure() }}
+        if: ${{ !cancelled() && steps.e2e_first.outcome != 'skipped' }}
         run: pnpm --filter @ros/e2e exec playwright test --shard=2/2 --grep-invert "route inventory"
         env:
           E2E_REPORT_DIR: report/2
 
       - name: Route inventory (every page, signed out, wrong role and right role)
-        if: ${{ success() || failure() }}
+        if: ${{ !cancelled() && steps.e2e_first.outcome != 'skipped' }}
         run: pnpm --filter @ros/e2e exec playwright test specs/routes.spec.ts
         env:
           E2E_REPORT_DIR: report/3
