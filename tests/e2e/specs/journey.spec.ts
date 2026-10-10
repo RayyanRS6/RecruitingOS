@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn, signInWithoutSecondFactor, skipWithoutFakeSignIn } from "./helpers";
+import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn, signInWithoutSecondFactor, skipWithoutFakeSignIn, usePlan } from "./helpers";
 
 /**
  * The release-1 journey in a real browser: sign in, set up the company, publish a role, receive an applicant, declare
@@ -10,7 +10,7 @@ const run = Date.now().toString(36);
 
 test.describe("owner and candidate journey", () => {
   skipWithoutFakeSignIn();
-  test("from sign-in to a booked interview and a reschedule", async ({ page, baseURL }) => {
+  test("from sign-in to a booked interview and a reschedule", async ({ page, baseURL, browser }) => {
     await page.goto("/login");
     await expectAccessible(page, "login");
     await signIn(page, { email: `dana+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
@@ -18,6 +18,9 @@ test.describe("owner and candidate journey", () => {
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     await expectAccessible(page, "home");
 
+    // the trial has room for one role at a time; this journey publishes one and then drafts another
+    const company = await (await page.request.get(`${baseURL}/api/v1/companies/current`)).json() as { id: string };
+    await usePlan(browser, baseURL!, company.id, "growth");
     const seeded = await seedRoleAndApplicant(page.request, baseURL!, "Maria", "Reyes");
 
     // the job builder (/roles/new): the first message starts the draft, and the conversation announces each new reply

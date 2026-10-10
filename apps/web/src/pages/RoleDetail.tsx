@@ -141,7 +141,8 @@ export function RoleDetail() {
             {manage && r.status === "open" ? <Button loading={status.isPending} onClick={() => status.mutate("pause")}>Pause</Button> : null}
             {manage && r.status === "paused" ? <Button loading={status.isPending} onClick={() => status.mutate("resume")}>Resume</Button> : null}
             {canRecordOutcome(myRole) && ["open", "paused"].includes(r.status) ? <Button variant="danger" onClick={() => setClosing({ outcome: "filled_outside_platform" })}>Close</Button> : null}
-            {r.status === "closed" && canDecline(myRole) && !closingMessage ? <Button icon="send" onClick={() => setClosingMessage(true)}>Closing message</Button> : null}
+            {/* Not while the close card is up (it shows the closing message, then its Undo): the sheet would not open under it. */}
+            {r.status === "closed" && canDecline(myRole) && !closingMessage && !closing ? <Button icon="send" onClick={() => setClosingMessage(true)}>Closing message</Button> : null}
           </>
         }
       />

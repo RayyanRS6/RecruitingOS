@@ -35,7 +35,7 @@ test.describe("the stage strip and the candidate panel", () => {
     await page.goto(`/roles/${seeded.roleId}/talent`);
     await expect(page.getByText(`Job · Strip Dental ${run}`)).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("heading", { level: 1 })).toContainText(/Hygienist/i);
-    await expect(page.getByText("2 applicants", { exact: false })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/^2 applicants/)).toBeVisible({ timeout: 30_000 });
     const strip = page.getByRole("tablist", { name: "Stages" });
     await strip.getByRole("tab", { name: /^All/ }).click();
     await expect(strip.getByRole("tab", { name: /^All 2$/ })).toBeVisible({ timeout: 30_000 });
@@ -103,15 +103,15 @@ test.describe("the stage strip and the candidate panel", () => {
     // Text that was not sent is never thrown away without asking
     await panel.getByRole("button", { name: "Email", exact: true }).click();
     await expect(panel.getByRole("tab", { name: /^Messages/ })).toHaveAttribute("aria-selected", "true");
-    await panel.getByLabel("Message").fill("Hi Maria, are you free on Thursday?");
+    await panel.getByRole("textbox", { name: "Message" }).fill("Hi Maria, are you free on Thursday?");
     await page.keyboard.press("Escape");
     await expect(panel.getByText("You have text here that is not sent or saved. Leave it?")).toBeVisible();
     await panel.getByRole("button", { name: "Keep writing" }).click();
-    await expect(panel.getByLabel("Message")).toHaveValue("Hi Maria, are you free on Thursday?");
+    await expect(panel.getByRole("textbox", { name: "Message" })).toHaveValue("Hi Maria, are you free on Thursday?");
     // switching sections keeps it too
     await panel.getByRole("tab", { name: /^History/ }).click();
     await panel.getByRole("tab", { name: /^Messages/ }).click();
-    await expect(panel.getByLabel("Message")).toHaveValue("Hi Maria, are you free on Thursday?");
+    await expect(panel.getByRole("textbox", { name: "Message" })).toHaveValue("Hi Maria, are you free on Thursday?");
     await page.keyboard.press("Escape");
     await panel.getByRole("button", { name: "Discard it and go on" }).click();
     await expect(panel).toHaveCount(0);

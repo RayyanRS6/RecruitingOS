@@ -48,7 +48,7 @@ test("still applying on the list, the panel and the report; ITS switches the com
   await page.goto(`/roles/${seeded.roleId}?tab=report`);
   const card = page.locator(".card", { has: page.getByRole("heading", { name: "The screening conversation" }) });
   await expect(card.getByText("Offered the conversation")).toBeVisible({ timeout: 30_000 });
-  await expect(card.getByText("Still applying now")).toBeVisible();
+  await expect(card.getByText("Still applying now", { exact: true })).toBeVisible();
   await expectAccessible(page, "role report with the screening conversation");
   await card.getByRole("link", { name: "See who is still applying" }).click();
   await expect(page.getByRole("button", { name: /^Still applying 1$/ })).toHaveAttribute("aria-pressed", "true", { timeout: 30_000 });

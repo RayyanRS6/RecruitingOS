@@ -34,6 +34,7 @@ test.describe("email alerts and earlier updates", () => {
 
     // Today leads to every earlier update
     await page.goto("/");
+    await page.waitForLoadState("networkidle"); // Today still loading its cards can swap the link under the click
     await page.getByRole("link", { name: "See earlier updates" }).first().click();
     await expect(page).toHaveURL(/\/updates$/);
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Updates");

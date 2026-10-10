@@ -82,6 +82,22 @@ export async function useOneVisitFlow(browser: Browser, base: string, companyId:
   }
 }
 
+/**
+ * ITS puts a company on another plan (founder decision F8): a new company is on the trial, which has room for one role
+ * at a time, so a journey that publishes a role and then starts another needs more room. Through the admin API, as above.
+ */
+export async function usePlan(browser: Browser, base: string, companyId: string, planKey: "core" | "growth" | "company") {
+  const staff = await browser.newContext();
+  try {
+    const admin = await staff.newPage();
+    await signIn(admin, { email: "admin-e2e@identifiedtalent.com", name: "Admin", provider: "azure", aal2: true });
+    const r = await admin.request.post(`${base}/api/v1/admin/customers/${companyId}/plan`, { data: { planKey, reason: "e2e: room for a second role" }, headers: { "x-admin-reason": "e2e: plan for the journey" } });
+    expect(r.ok(), await r.text()).toBeTruthy();
+  } finally {
+    await staff.close();
+  }
+}
+
 /** The heavy data setup goes through the API with the browser's own session cookie; the journey stays in the browser. */
 export async function seedRoleAndApplicant(request: APIRequestContext, base: string, first: string, last: string) {
   const s = await (await request.post(`${base}/api/v1/intake/sessions`, { data: { initialMessage: "I need a registered dental hygienist in Tustin, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." } })).json() as { session: { id: string } };

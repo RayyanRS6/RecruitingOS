@@ -38,7 +38,7 @@ test.describe("the candidate panel's choices", () => {
     await expect(maria.getByLabel("Bring them back on")).toHaveValue(/^\d{4}-\d{2}-\d{2}$/);
     await maria.getByLabel(/^Note/).first().fill("Waiting to hear about the second chair");
     await maria.getByRole("button", { name: "Put on hold" }).click();
-    await expect(page.getByRole("status").filter({ hasText: /On hold until .+The candidate was not told\./ })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: /On hold until .+the candidate was not told\./i })).toBeVisible();
     await expect(maria.getByRole("button", { name: /^Stage: On hold/ })).toBeVisible({ timeout: 30_000 });
 
     // Not moving forward: the step says nothing is sent now, before anything happens
@@ -101,7 +101,8 @@ test.describe("the candidate panel's choices", () => {
     await expect(ana.getByText(/their answers did not show/)).toBeVisible();
     await expectAccessible(page, "candidate panel with the eligibility decline confirm step");
     await ana.getByRole("button", { name: "Confirm decline" }).click();
-    await expect(page.getByRole("status").filter({ hasText: /^Moved to Not moving forward\./ })).toBeVisible();
+    // Maria's decision message may still be in its Undo window: a plain toast waits until that one's Undo ends
+    await expect(page.getByRole("status").filter({ hasText: /Moved to Not moving forward\./ })).toBeVisible({ timeout: 45_000 });
     await expect(ana.getByRole("heading", { name: "Declined on an eligibility answer" })).toBeVisible({ timeout: 30_000 });
     await expect(ana.getByRole("heading", { name: "Ana has not been told yet" })).toBeVisible();
   });

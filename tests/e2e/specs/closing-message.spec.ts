@@ -51,8 +51,9 @@ test.describe("closing a role", () => {
     await expect(sent.getByRole("button", { name: "Undo all" })).toBeVisible();
     await expect(closing).toHaveCount(0);
 
-    // nobody is left untold: the closing message has nothing more to send
-    await page.getByRole("button", { name: "Closing message" }).click();
+    // nobody is left untold: once the close card is put away, the closing message has nothing more to send
+    await page.locator(".card", { has: page.getByRole("heading", { name: "2 closing messages on their way." }) }).getByRole("button", { name: "Close", exact: true }).click();
+    await page.getByRole("button", { name: "Closing message", exact: true }).click();
     await expect(page.getByText("Everyone the role left in your talent pool has been told already.")).toBeVisible({ timeout: 30_000 });
   });
 });

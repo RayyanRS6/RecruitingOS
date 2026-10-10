@@ -83,7 +83,9 @@ export function DraftPanel(props: {
       <div className="draft-body">
         {mode === "edit" ? (
           <FactsEditor
-            key={`${view.updatedAt}-${props.patchDone}`}
+            // Fresh after a save only: the assistant's reply landing while someone edits must not wipe what they typed.
+            // A save sends only the fields they changed, so whatever the assistant changed meanwhile is kept.
+            key={props.patchDone}
             facts={view.facts}
             team={props.team}
             saving={props.patching}
