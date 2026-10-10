@@ -1,4 +1,4 @@
-import { OWNER_STAGE_LABEL, type MarkKind, type OwnerStage } from "@ros/contracts";
+import { OWNER_STAGE_LABEL, titleMidSentence, type MarkKind, type OwnerStage } from "@ros/contracts";
 import type { ActionResult, CandidateNotice, DecisionMessagesResponse, DeclineMessagePolicy, SendNewTimesBatchResult, SendNewTimesResult, StageMove } from "./api/client";
 import { safetyNetPromise } from "./telling";
 
@@ -255,7 +255,7 @@ export function interviewCancelToast(r: { candidateTold?: boolean; interviewersT
 
 /**
  * The toast after "Send new times" for someone under Cancelled (founder decision 2A): for one person (POST
- * /applications/:id/new-times; `round` is the interview's title), stopping their automatic set (…/new-times/stop), or
+ * /applications/:id/new-times; `round` is the interview's title, said in lower case mid-sentence), stopping their automatic set (…/new-times/stop), or
  * several people at once (POST /roles/:id/new-times). Times count as sent only once their email is on its way, so the
  * words say they are being got ready, and that the person stays under Cancelled until they book.
  */
@@ -267,7 +267,7 @@ export function newTimesToast(r: NewTimesOutcome): ToastParts {
   if (r.kind === "stopped") return { title: "Stopped.", detail: "Nothing goes to them automatically; they stay under Cancelled." };
   if (r.kind === "sent") {
     return r.via === "new_interview"
-      ? { title: `A new ${r.round} was set up.`, detail: `Same round; ${r.firstName} gets an email as soon as there are times to offer.` }
+      ? { title: `A new ${titleMidSentence(r.round)} was set up.`, detail: `Same round; ${r.firstName} gets an email as soon as there are times to offer.` }
       : { title: "Getting new times ready.", detail: `${r.firstName} gets an email as soon as there are times to offer from the interviewers' calendars. They stay under Cancelled until they book.` };
   }
   const title = r.sent ? `Getting new times ready for ${r.sent} ${r.sent === 1 ? "person" : "people"}.` : "No new times were sent.";

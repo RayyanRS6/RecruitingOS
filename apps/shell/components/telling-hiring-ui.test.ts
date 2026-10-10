@@ -259,10 +259,10 @@ describe("the Interviews page for someone under Cancelled (founder decisions 1A 
     candidate: { firstName: "Ana", lastName: "Lopez", timezone: null, stage: "interview_recommended", stageLabel: "Recommended for interview" }, participants: [], calendarRefs: {}, followUp: { id: "f1", reason: "asked_new_times", times: "none" },
     ...over,
   });
-  const sheet = (i: ReturnType<typeof iv>) => {
+  const sheet = (i: ReturnType<typeof iv>, extra: Array<[unknown[], unknown]> = []) => {
     nav.params = { id: "iv1" };
     try {
-      return text(render(client([], [[["interviews"], [i]], [["interview", "iv1"], { ...i, timeline: [], availabilitySources: [], brief: null }]]), createElement(Interviews)));
+      return text(render(client([], [[["interviews"], [i]], [["interview", "iv1"], { ...i, timeline: [], availabilitySources: [], brief: null }], ...extra]), createElement(Interviews)));
     } finally {
       nav.params = { id: "r1" };
     }
@@ -279,6 +279,17 @@ describe("the Interviews page for someone under Cancelled (founder decisions 1A 
     const out = sheet(iv({ followUp: { id: "f1", reason: "asked_new_times", times: "out" } }));
     expect(out).not.toContain("New times go out for the same round.");
     expect(out).toContain("Interview again?");
+  });
+
+  it("before ITS confirms the company, never offers a send it would refuse, and does not flag them as needing you", () => {
+    const setting = (companyConfirmed: boolean): [unknown[], unknown] => [["new-times-setting"], { auto: true, workingDays: 3, pending: 0, companyConfirmed }];
+    const waiting = sheet(iv(), [setting(false)]);
+    expect(waiting).toContain("Ana cancelled and asked for new times. You can send new times once ITS confirms your company, or decide.");
+    expect(waiting).not.toContain("Send new times");
+    expect(waiting).not.toContain("New times go out for the same round.");
+    const confirmed = sheet(iv(), [setting(true)]);
+    expect(confirmed).toContain("Ana cancelled and asked for new times. New times go out for the same round.");
+    expect(confirmed).toContain("Send new times");
   });
 
   it("names the decision a team send records on a missed interview", () => {

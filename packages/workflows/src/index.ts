@@ -17,7 +17,7 @@ export { WorkflowEngine };
 export { COMPANY_CHECK_WAIT_REASON, companyVerifiedSignal } from "./definitions/publish-role";
 export { ROLE_CLOSING_DATE_KEY, armClosingDate } from "./definitions/closing-date";
 export { NEW_TIMES_KEY, armNewTimes, cancelNewTimesRuns } from "./definitions/new-times";
-export { activeInterviewersOf, reopenForNewTimes, type NewTimesOfferKind, type NewTimesVia, type ReopenRefusal, type ReopenResult } from "./new-times-reopen";
+export { activeInterviewersOf, newTimesStoppedByTakeover, reopenForNewTimes, stopPreparedNewTimes, withdrawNewTimesInterview, type NewTimesOfferKind, type NewTimesVia, type PreparedStopReason, type ReopenRefusal, type ReopenResult } from "./new-times-reopen";
 export { ALERT_TEMPLATE, DIGEST_TEMPLATE, NOTIFICATION_DIGEST_KEY, emailNotifications, startNotificationDigest } from "./definitions/notification-digest";
 export { DISCARD_OBJECT_JOB_KIND, discardUnusedObject, examineQuarantinedDocument, processQuarantinedDocument, queueObjectDiscard, recordQuarantineVerdict, type QuarantineExamination, type QuarantineOutcome } from "./documents";
 import { DISCARD_OBJECT_JOB_KIND, discardUnusedObject } from "./documents";

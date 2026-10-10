@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "../nav";
 import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, Field, PageHeader, Pill, Skeleton, Table, Timeline, type Tone } from "@ros/ui";
-import { api, ApiError, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me, type SendNewTimesResult } from "../api/client";
+import { api, ApiError, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me, type NewTimesSettingView, type SendNewTimesResult } from "../api/client";
 import { toast } from "../toast";
 import { interviewNewTimesText } from "../cancelled";
 import { activeCompanyOf } from "../rail";
@@ -120,6 +120,9 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
   const participant = !!i && !!userId && i.participants.some((p) => p.userId === userId);
   const finished = !!i && ["completed", "no_show"].includes(i.status);
   const again = !!i && againChoice(i, all, role);
+  // Before ITS confirms the company the team's send is refused (409 company_not_checked), so the card does not offer it.
+  const setting = useQuery({ queryKey: ["new-times-setting"], queryFn: () => api.get<NewTimesSettingView>("/api/v1/companies/current/new-times"), retry: false, enabled: again === "send_new_times" });
+  const companyConfirmed = setting.data?.companyConfirmed;
   return (
     <Drawer open onClose={() => nav("/interviews")} title={i ? `${i.candidate.firstName} ${i.candidate.lastName} · ${i.title}` : "Interview"} leading={i ? <Avatar name={`${i.candidate.firstName} ${i.candidate.lastName}`} size="lg" /> : undefined}>
       {q.error && !i ? <ErrorState message={q.error instanceof ApiError && (q.error.status === 404 || q.error.status === 403) ? "This interview is not one of yours, or it no longer exists." : "Could not load this interview."} onRetry={() => q.refetch()} /> : q.isLoading || !i ? <Skeleton lines={8} /> : (
@@ -178,10 +181,10 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
             </Card>
           ) : null}
           {again === "send_new_times" && i.followUp ? (
-            <Card needsYou title="Send new times">
-              <p className="small" style={{ color: "var(--ink-2)" }}>{interviewNewTimesText(i.candidate.firstName, i.followUp.reason)}</p>
+            <Card needsYou={companyConfirmed !== false} title={companyConfirmed === false ? "New times" : "Send new times"}>
+              <p className="small" style={{ color: "var(--ink-2)" }}>{interviewNewTimesText(i.candidate.firstName, i.followUp.reason, companyConfirmed)}</p>
               <div className="row" style={{ marginTop: 10 }}>
-                <Button size="sm" variant="primary" icon="send" loading={newTimes.isPending} onClick={() => newTimes.mutate(i.applicationId)}>Send new times</Button>
+                {companyConfirmed === false ? null : <Button size="sm" variant="primary" icon="send" loading={newTimes.isPending} onClick={() => newTimes.mutate(i.applicationId)}>Send new times</Button>}
                 {canSeeTalent(role) ? <Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}`} className="btn quiet sm">Open their page</Link> : null}
               </div>
             </Card>

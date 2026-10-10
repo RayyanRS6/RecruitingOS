@@ -1,7 +1,7 @@
 import { and, eq, inArray, ne } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { defaultSchedulingWindow, emit, notify, setCurrentInterview, type FollowUpRow } from "@ros/core";
-import { applications, candidates, companies, interviewParticipants, interviews, memberships, type Queryable } from "@ros/db";
+import { createEscalation, defaultSchedulingWindow, emit, notify, notifyNewTimesNotSent, setAutoState, setCurrentInterview, type FollowUpRow } from "@ros/core";
+import { applications, candidates, communications, companies, interviewParticipants, interviews, memberships, roles, workflowRuns, type Queryable } from "@ros/db";
 import type { SlotsVariant } from "@ros/agents";
 import type { WorkflowEngine } from "./engine";
 
@@ -100,4 +100,94 @@ export async function reopenForNewTimes(q: Queryable, engine: WorkflowEngine, in
   // The interview that carries their new times. Nothing counts as sent yet: that waits for the email (`newTimesOffered`).
   await setCurrentInterview(q, { followUpId: f.id, interviewId: iv.id });
   return { ok: true, interviewId: iv.id, attempt: fresh.attempt, runId };
+}
+
+/** Why the automatic set is stopped while it is being prepared: a reply asking for a person or saying no, or an ITS takeover. */
+export type PreparedStopReason = "candidate_replied" | "takeover";
+/** A times email in these states still waits (for the ITS check, or for the worker), so it can be withdrawn. */
+const EMAIL_WAITING = ["held", "queued"];
+/** A times email in these states never left: nothing reached the candidate. */
+const EMAIL_NEVER_LEFT = ["failed", "cancelled"];
+const STOPPED_BEFORE_SENT = "the new times were stopped before they went out";
+
+/**
+ * Withdraws the times email of an interview's attempt while it still waits: held for the ITS check, or queued once ITS
+ * confirmed the company and not yet claimed by the worker. Guarded as the worker's claim is (queued to sending), so
+ * whichever comes first wins. True when nothing of it left (withdrawn now, never written, or never sent); false when it
+ * is on its way or gone, which cannot be called back.
+ */
+async function withdrawTimesEmail(q: Queryable, iv: { id: string; attempt: number; companyId: string; applicationId: string }, actor: Actor): Promise<boolean> {
+  const key = `slots:${iv.id}:${iv.attempt}`;
+  const [email] = await q.select({ status: communications.status }).from(communications).where(eq(communications.idempotencyKey, key)).limit(1);
+  if (!email || EMAIL_NEVER_LEFT.includes(email.status)) return true;
+  const withdrawn = await q.update(communications).set({ status: "cancelled", error: STOPPED_BEFORE_SENT }).where(and(eq(communications.idempotencyKey, key), inArray(communications.status, EMAIL_WAITING))).returning({ id: communications.id, correlationId: communications.correlationId });
+  for (const m of withdrawn) await emit(q, { type: "message.cancelled", companyId: iv.companyId, actor, subject: { type: "communication", id: m.id }, payload: { template: "interview_slots", channel: "email", applicationId: iv.applicationId, reason: STOPPED_BEFORE_SENT }, correlationId: m.correlationId });
+  return withdrawn.length > 0;
+}
+
+/**
+ * Stops the one automatic set while it is being prepared, before its email has left (founder questions 7 and 8): the
+ * candidate replied asking for a person or saying no, or an ITS recruiter took the role over. Its times email, held for
+ * the ITS check or released and not yet sent, is withdrawn first; the set ends not sent with that reason and the interview
+ * it reopened goes back to cancelled (`withdrawNewTimesInterview`), so nothing is offered. Left as they are (null): a
+ * person's own re-offer of that interview ("Offer new times"), a time someone booked for the candidate on their behalf
+ * (both are a person's acts, not the automatic set's), and an email already on its way, which cannot be called back.
+ * Call holding the application's and the follow-up's locks.
+ */
+export async function stopPreparedNewTimes(q: Queryable, input: { followUp: FollowUpRow; reason: PreparedStopReason; actor: Actor; now: Date }): Promise<FollowUpRow | null> {
+  const f = input.followUp;
+  if (f.resolvedAt || f.autoState !== "preparing") return null;
+  const [iv] = f.currentInterviewId ? await q.select().from(interviews).where(eq(interviews.id, f.currentInterviewId)).limit(1) : [];
+  if (iv && (iv.status === "proposed" || iv.status === "scheduling")) {
+    const [run] = await q.select({ state: workflowRuns.state }).from(workflowRuns).where(eq(workflowRuns.idempotencyKey, `schedule:${iv.id}:${iv.attempt}`)).limit(1);
+    if (run && (run.state as { via?: string }).via !== "auto") return null;
+    if (iv.selectedSlot) return null;
+    if (!(await withdrawTimesEmail(q, iv, input.actor))) return null;
+  }
+  const row = await setAutoState(q, { followUpId: f.id, to: "not_sent", reason: input.reason, actor: input.actor, now: input.now });
+  await withdrawNewTimesInterview(q, { followUp: row, reason: input.reason, actor: input.actor });
+  return row;
+}
+
+/**
+ * The interview the automatic set reopened goes back to cancelled once the set was stopped before its email left
+ * (`stopPreparedNewTimes`): a new attempt, so its scheduling run ends at its next step, and a times email that still
+ * waits is withdrawn. Nothing goes to the candidate (they were offered nothing; their link says there is nothing to
+ * pick), and they stay under Cancelled for a person. The interviewers, told new times were being set up, hear it is off.
+ * False when the interview is not being set up (nothing to withdraw).
+ */
+export async function withdrawNewTimesInterview(q: Queryable, input: { followUp: FollowUpRow; reason: PreparedStopReason; actor: Actor }): Promise<boolean> {
+  const f = input.followUp;
+  if (!f.currentInterviewId) return false;
+  const [iv] = await q.select().from(interviews).where(eq(interviews.id, f.currentInterviewId)).limit(1);
+  if (!iv || (iv.status !== "proposed" && iv.status !== "scheduling")) return false;
+  // The times worked out were never offered (their email had not left), so none are kept as "offered": a later decision
+  // message never names this interview as one they knew about.
+  const [off] = await q.update(interviews).set({ status: "cancelled", attempt: iv.attempt + 1, selectedSlot: null, offeredSlots: [] }).where(and(eq(interviews.id, iv.id), eq(interviews.attempt, iv.attempt), inArray(interviews.status, ["proposed", "scheduling"]))).returning({ id: interviews.id });
+  if (!off) return false;
+  await withdrawTimesEmail(q, iv, input.actor);
+  await emit(q, { type: "interview.cancelled", companyId: iv.companyId, actor: input.actor, subject: { type: "interview", id: iv.id }, payload: { reason: input.reason, byCandidate: false, hadEvents: false, candidateTold: false, cause: "new_times_stopped", followUpId: f.id } });
+  const parts = await q.select({ userId: interviewParticipants.userId }).from(interviewParticipants).where(eq(interviewParticipants.interviewId, iv.id));
+  if (parts.length) {
+    const [cand] = await q.select({ firstName: candidates.firstName }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(eq(applications.id, iv.applicationId)).limit(1);
+    const first = cand?.firstName || "The candidate";
+    const why = input.reason === "takeover" ? "An ITS recruiter is running this role now, so the new times did not go out" : `${first} replied to us before the new times went out, so they were stopped`;
+    await notify(q, { companyId: iv.companyId, kind: "interview.cancelled", title: `Interview cancelled: ${iv.title}`, body: `${why}, and this interview is off. Nothing is booked on your calendar.`, action: { label: "Open interviews", href: "/interviews" }, userIds: parts.map((p) => p.userId) });
+  }
+  return true;
+}
+
+/**
+ * The automatic set did not go because an ITS recruiter is running the role (founder question 7): the team is told why,
+ * and ITS is asked to arrange the next time with the candidate, who asked for new times. The request goes to the ITS
+ * queue like any other, and whoever picks it up may not be the recruiter running the role, so it says an ITS recruiter
+ * is running it rather than "you".
+ */
+export async function newTimesStoppedByTakeover(q: Queryable, input: { followUp: FollowUpRow; actor: Actor; now: Date; workflowRunId?: string | null }): Promise<void> {
+  const f = input.followUp;
+  await notifyNewTimesNotSent(q, { followUp: f, reason: "takeover" });
+  const [who] = await q.select({ first: candidates.firstName, last: candidates.lastName, roleId: applications.roleId, roleTitle: roles.title }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).innerJoin(roles, eq(roles.id, applications.roleId)).where(eq(applications.id, f.applicationId)).limit(1);
+  if (!who) return;
+  const name = `${who.first} ${who.last}`.trim() || "A candidate";
+  await createEscalation(q, { companyId: f.companyId, roleId: who.roleId, applicationId: f.applicationId, kind: "candidate_issue", summaryOrigin: "system", question: `${name} cancelled their interview for ${who.roleTitle} and asked for new times. An ITS recruiter is running this role, so no times went to them automatically. Please arrange the next interview time with ${who.first || "them"}.`, requestedBy: input.actor, workflowRunId: input.workflowRunId ?? null, now: input.now });
 }

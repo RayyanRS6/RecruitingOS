@@ -333,11 +333,34 @@ describe("the Cancelled column (founder decisions 1A to 4A)", () => {
     const plan = [{ key: "r1", title: "Working interview", durationMinutes: 45, format: "in_person", interviewerUserIds: [], purpose: "" }, { key: "r2", title: "Meet the dentist", durationMinutes: 30, format: "in_person", interviewerUserIds: [], purpose: "" }];
     const panel = open(detail(cleo, { interviews: [iv({ status: "no_show", outcome: "no_show_candidate", attempt: 1 })], interviewPlan: plan, allowedActions: ["interview", "record_decision", "reject", "record_outcome", "set_mark", "send_new_times"] }));
     expect(panel).toContain("Cleo did not come to the interview");
-    expect(panel).toContain("The Working interview was booked and they did not come. Nothing goes to them automatically. Send new times for the same round, or decide below.");
+    expect(panel).toContain("The working interview was booked and they did not come. Nothing goes to them automatically. Send new times for the same round, or decide below.");
     expect(panel.indexOf("Cleo did not come to the interview")).toBeLessThan(panel.indexOf("How did the interview go?"));
     expect(panel).toContain("(the candidate did not attend)");
     expect(panel).not.toContain("Next round");
     expect(panel).toContain("Finalist");
+    // back under Cancelled after a decision was taken back, the missed interview already decided: no decision card, so
+    // the card points to the stage at the top instead of "below"
+    const decided = open(detail(cleo, { interviews: [iv({ status: "no_show", outcome: "no_show_candidate", attempt: 1, decision: "not_moving_forward" })], interviewPlan: plan, allowedActions: ["interview", "reject", "record_outcome", "set_mark", "send_new_times"] }));
+    expect(decided).toContain("Send new times for the same round, or choose their next stage at the top.");
+    expect(decided).not.toContain("decide below");
+    expect(decided).not.toContain("How did the interview go?");
+  });
+
+  it("before ITS confirms the company, the alert and the card promise nothing automatic and offer no send until it does", () => {
+    nav.search = "ownerStage=cancelled";
+    const qc = withColumn(true);
+    qc.setQueryData(["new-times-setting"], { auto: true, workingDays: 3, pending: 0, companyConfirmed: false });
+    const html = plain(render(qc, createElement(People)));
+    expect(html).toContain("2 people are under Cancelled. Nothing goes to anyone here automatically until ITS confirms your company. You can send new times after that.");
+    expect(html).not.toContain("Send new times…");
+    const notChecked = view({ status: "Waiting for you", auto: { state: "none", reason: "company_not_checked", reasonText: "ITS had not confirmed your company in time, so nothing was sent automatically.", dueAt: null, dueDay: null, sentAt: null } });
+    const d = detail({ ...ana, cancelled: notChecked }, { interviews: [iv()], allowedActions: ["interview", "reject", "record_outcome", "set_mark", "send_new_times"] });
+    const cards = client([d]);
+    cards.setQueryData(["new-times-setting"], { auto: true, workingDays: 3, pending: 0, companyConfirmed: false });
+    const panel = plain(render(cards, createElement(CandidatePanel, { id: d.id, roleId: "r1", roleTitle: "Dental Hygienist", tab: "overview", onTab: () => undefined, step: null, onStep: () => undefined, ids: [d.id], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false })));
+    expect(panel).toContain("ITS had not confirmed your company in time, so nothing was sent automatically. You can send new times once ITS confirms your company, or decide.");
+    // the API refuses a send until then, so the card offers none
+    expect(panel).not.toContain("Send new times");
   });
 
   it("putting someone under Cancelled on hold says it takes them out of it", () => {

@@ -2,7 +2,7 @@ import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { and, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { BookOnBehalf, CancelInterview, InterviewOutcome, InterviewerAvailabilityInput, RecordInterviewDecision, RequestInterviewWithLine, RescheduleInterview, type CandidateNotice, type HireFollowUp, type InterviewDraft, type InterviewFollowUpRef } from "@ros/contracts";
 import { checkPersonalLine, type InvitationNote } from "@ros/agents";
-import { CANCEL_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, assertCan, audit, availabilityFor, calendarConnectionFor, can, defaultSchedulingWindow, emit, inCancelled, interviewFollowUpRef, notify, openFollowUp, openFollowUpOf, publicConnection, recordApplicationOutcome, resolveOpenFollowUp, scopeAllows, transition, upsertAvailability } from "@ros/core";
+import { CANCEL_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, assertCan, audit, availabilityFor, calendarConnectionFor, can, defaultSchedulingWindow, emit, inCancelled, interviewFollowUpRef, notify, openFollowUp, openFollowUpOf, publicConnection, recordApplicationOutcome, resolveOpenFollowUp, scopeAllows, transition, upsertAvailability, type FollowUpView } from "@ros/core";
 import { applications, candidates, companies, events, interviewParticipants, interviews, jobs, memberships, rolePackets, roles, users, withTenant, type Tx } from "@ros/db";
 import { cancelNewTimesRuns } from "@ros/workflows";
 import { actorOf, applicationScopeGuard, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
@@ -24,13 +24,16 @@ import { staffScopeOf } from "../services/staff-scope";
  * `interview.decide` to record the decision afterwards. An interviewer records the outcome of their own interview only.
  */
 
-/** `followUp`: the candidate is under Cancelled, why, and where their new times stand (the Interviews page offers "Send new times" from it). */
-async function summary(tx: Parameters<Parameters<typeof withTenant>[2]>[0], row: typeof interviews.$inferSelect) {
+/**
+ * `followUp`: the candidate is under Cancelled, why, and where their new times stand (the Interviews page offers "Send new
+ * times" from it). A list passes `followUps`, read once for the whole page (`followUpsOf`), instead of one read per row.
+ */
+async function summary(tx: Parameters<Parameters<typeof withTenant>[2]>[0], row: typeof interviews.$inferSelect, followUps?: Map<string, FollowUpView>) {
   const [app] = await tx.select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId, stage: applications.stage }).from(applications).where(eq(applications.id, row.applicationId)).limit(1);
   const [cand] = await tx.select({ firstName: candidates.firstName, lastName: candidates.lastName, location: candidates.location }).from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
   const [role] = await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
   const parts = await tx.select({ userId: interviewParticipants.userId, status: interviewParticipants.status, name: users.name, email: users.email }).from(interviewParticipants).innerJoin(users, eq(users.id, interviewParticipants.userId)).where(eq(interviewParticipants.interviewId, row.id));
-  const view = (await activeFollowUpsFor(tx, [app.id])).get(app.id);
+  const view = (followUps ?? (await activeFollowUpsFor(tx, [app.id]))).get(app.id);
   const followUp: InterviewFollowUpRef | null = view && inCancelled(app.stage, view) ? interviewFollowUpRef(view) : null;
   return {
     id: row.id, applicationId: row.applicationId, roleId: app.roleId, roleTitle: role?.title ?? null, roundKey: row.roundKey, title: row.title, format: row.format, durationMinutes: row.durationMinutes, status: row.status,
@@ -42,6 +45,11 @@ async function summary(tx: Parameters<Parameters<typeof withTenant>[2]>[0], row:
     calendarRefs: Object.fromEntries(Object.entries((row.calendarRefs ?? {}) as Record<string, { provider: string; eventId: string; htmlLink: string | null; meetingUrl: string | null }>).map(([uid, r]) => [uid, { provider: r.provider, eventId: r.eventId, htmlLink: r.htmlLink, meetingUrl: r.meetingUrl }])),
     followUp,
   };
+}
+
+/** The open follow-ups of every candidate on a page of interviews, in one read (two queries) for the whole list. */
+function followUpsOf(tx: Parameters<Parameters<typeof withTenant>[2]>[0], list: ReadonlyArray<typeof interviews.$inferSelect>): Promise<Map<string, FollowUpView>> {
+  return activeFollowUpsFor(tx, [...new Set(list.map((r) => r.applicationId))]);
 }
 
 /**
@@ -140,8 +148,9 @@ interviewRoutes.get("/", requireTenant, async (c) => {
     }
     // a grant about one candidate shows that candidate's interviews only, the same limit as the role's applications list
     if (t.staff?.scope.applicationId) list = list.filter((r) => r.applicationId === t.staff!.scope.applicationId);
+    const followUps = await followUpsOf(tx, list);
     const out = [];
-    for (const r of list) out.push(await summary(tx, r));
+    for (const r of list) out.push(await summary(tx, r, followUps));
     return out;
   });
   return c.json(rows);
@@ -432,8 +441,9 @@ roleInterviewRoutes.get("/:id/interviews", requireTenant, async (c) => {
     const appIds = (await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.roleId, c.req.param("id")), eq(applications.companyId, t.companyId)))).map((a) => a.id);
     if (!appIds.length) return [];
     const list = await tx.select().from(interviews).where(inArray(interviews.applicationId, appIds)).orderBy(desc(interviews.createdAt));
+    const followUps = await followUpsOf(tx, list);
     const out = [];
-    for (const r of list) out.push(await summary(tx, r));
+    for (const r of list) out.push(await summary(tx, r, followUps));
     return out;
   });
   return c.json(rows);

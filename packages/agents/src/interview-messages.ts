@@ -1,4 +1,4 @@
-import type { OfferedSlot, RolePacket } from "@ros/contracts";
+import { titleMidSentence, type OfferedSlot, type RolePacket } from "@ros/contracts";
 import { buildIcs, disclosureLine, formatInZone, groupSlotsByDay } from "@ros/core";
 import type { Queryable, interviews } from "@ros/db";
 import type { Integrations, SendResult } from "@ros/integrations";
@@ -54,14 +54,6 @@ export function invitationNoteText(note: InvitationNote | null | undefined): str
 export type SlotsVariant = "first" | "new_times_asked" | "new_times_team";
 
 /**
- * An interview's title mid-sentence, in lower case: "Final Interview" reads "final interview". A word in capitals ("HR
- * interview", "Call with the CEO") is an acronym or a name and is kept.
- */
-function midSentence(title: string): string {
-  return title.replace(/\b[A-Z][a-z]+\b/g, (word) => word.toLowerCase());
-}
-
-/**
  * The times email, written but not sent: one template and one key per interview and attempt whatever the variant, so it
  * waits for the ITS check and is withdrawn when the offer ends, as every times email is (outbox.ts).
  */
@@ -72,9 +64,9 @@ export function slotsOfferedMessage(input: InterviewMessageInput & { note?: Invi
   const position = packet.identity.title;
   const variant = input.variant ?? "first";
   const opening = variant === "new_times_asked"
-    ? `As you asked when you cancelled, here are new times for your ${midSentence(interview.title)} for the ${position} position at ${company.name}. ${interview.durationMinutes} minutes, ${format}${who}.`
+    ? `As you asked when you cancelled, here are new times for your ${titleMidSentence(interview.title)} for the ${position} position at ${company.name}. ${interview.durationMinutes} minutes, ${format}${who}.`
     : variant === "new_times_team"
-      ? `${company.name} would like to find a new time for your ${midSentence(interview.title)} for the ${position} position. ${interview.durationMinutes} minutes, ${format}${who}.`
+      ? `${company.name} would like to find a new time for your ${titleMidSentence(interview.title)} for the ${position} position. ${interview.durationMinutes} minutes, ${format}${who}.`
       : `Good news: ${company.name} would like to interview you for the ${position} position. ${interview.title}${who}, ${interview.durationMinutes} minutes, ${format}.`;
   const subject = variant === "new_times_asked" ? `New times for your interview: ${position} at ${company.name}` : variant === "new_times_team" ? `New interview times: ${position} at ${company.name}` : `Pick a time for your interview: ${position} at ${company.name}`;
   const text = `Hi ${candidate.firstName},

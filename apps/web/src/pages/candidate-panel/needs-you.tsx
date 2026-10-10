@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, ErrorState, Field, Skeleton } from "@ros/ui";
-import { api, ApiError, type ActionResult, type ApplicationDetail, type CancelledView, type InterviewDraft, type InterviewPlanView, type SendNewTimesResult, type SuggestedLine } from "../../api/client";
+import { api, ApiError, type ActionResult, type ApplicationDetail, type CancelledView, type InterviewDraft, type InterviewPlanView, type NewTimesSettingView, type SendNewTimesResult, type SuggestedLine } from "../../api/client";
 import { HOLD_ENDS_CANCELLED, cancelledBody, cancelledTitle, sendNewTimesQuestion, stopNewTimesQuestion } from "../../cancelled";
 import { PERSONAL_LINE_MAX, suggestedLineNote } from "../../telling";
 import { toast } from "../../toast";
@@ -60,7 +60,7 @@ export function NeedsYou(props: Props) {
     step === "hire" ? <HireStep key="hire" a={a} roleId={roleId} mayTell={canDecline(props.myRole)} onClose={() => setStep(null)} /> : null,
     step === "outcome" ? <OutcomeStep key="outcome" a={a} roleId={roleId} onClose={() => setStep(null)} onHire={() => setStep("hire")} /> : null,
     ...suggestions.map((p) => <SuggestionCard key={p.id} a={a} roleId={roleId} p={p} onInterview={(roundKey) => setStep("interview", { roundKey })} />),
-    // under Cancelled: above the decision card, which a no-show also has ("Send new times …, or decide below")
+    // under Cancelled: above the decision card, which an undecided no-show also has ("Send new times …, or decide below")
     cancelled && step !== "interview" ? <CancelledCard key="cancelled" a={a} c={cancelled} roleId={roleId} onChooseInterviewers={() => setStep("interview")} /> : null,
     can("record_decision") && step !== "interview" && step !== "hire" ? <DecisionCard key="decision" a={a} roleId={roleId} myRole={props.myRole} onNextRound={(key) => setStep("interview", { roundKey: key })} onHire={() => setStep("hire")} onNotes={() => props.onTab?.("notes")} /> : null,
     readyToInterview ? <ReadyToInterviewCard key="ready-to-interview" a={a} onApprove={() => setStep("interview")} /> : null,
@@ -375,6 +375,8 @@ function CancelledCard({ a, c, roleId, onChooseInterviewers }: { a: ApplicationD
   const refresh = useRefreshCandidate(a.id, roleId);
   const [asking, setAsking] = useState<"send" | "stop" | null>(null);
   const [noInterviewers, setNoInterviewers] = useState(false);
+  // the company's setting and whether ITS has confirmed the company; shared with the Talent page and Setup
+  const setting = useQuery({ queryKey: ["new-times-setting"], queryFn: () => api.get<NewTimesSettingView>("/api/v1/companies/current/new-times"), retry: false });
   const first = a.candidate.firstName;
   const round = a.interviews.find((i) => i.id === c.interviewId)?.title ?? a.interviews[0]?.title ?? "interview";
   const send = useMutation({
@@ -406,19 +408,22 @@ function CancelledCard({ a, c, roleId, onChooseInterviewers }: { a: ApplicationD
     },
   });
   const can = (x: ApplicationDetail["allowedActions"][number]) => a.allowedActions.includes(x);
+  // Before ITS confirms the company nothing goes automatically and a send is refused, so the card says so and offers no send.
+  const companyConfirmed = setting.data?.companyConfirmed;
+  const maySend = can("send_new_times") && companyConfirmed !== false;
   // Waits on the team only when nothing is on its way to them: no set waiting for its day, no times being prepared or out.
   const parked = c.auto.state === "waiting" || c.auto.state === "waiting_check";
   const needsYou = !parked && (c.times === "none" || c.times === "expired" || c.times === "not_reached");
   return (
     <Card needsYou={needsYou} title={cancelledTitle(first, c.reason)}>
-      <p className="small" style={{ color: "var(--ink-2)" }}>{cancelledBody({ firstName: first, round, c })}</p>
+      <p className="small" style={{ color: "var(--ink-2)" }}>{cancelledBody({ firstName: first, round, c, companyConfirmed, decideBelow: can("record_decision") })}</p>
       {asking === "send" ? (
         <Alert tone="caution"><div className="row" style={{ justifyContent: "space-between" }}><span>{sendNewTimesQuestion(first, round)}</span><span className="row"><Button size="sm" variant="primary" icon="send" loading={send.isPending} onClick={() => send.mutate()}>Yes, send</Button><Button size="sm" variant="quiet" onClick={() => setAsking(null)}>Cancel</Button></span></div></Alert>
       ) : asking === "stop" ? (
         <Alert tone="caution"><div className="row" style={{ justifyContent: "space-between" }}><span>{stopNewTimesQuestion(first)}</span><span className="row"><Button size="sm" variant="primary" loading={stop.isPending} onClick={() => stop.mutate()}>Yes, stop</Button><Button size="sm" variant="quiet" onClick={() => setAsking(null)}>Keep it</Button></span></div></Alert>
-      ) : can("send_new_times") || can("stop_new_times") || noInterviewers ? (
+      ) : maySend || can("stop_new_times") || noInterviewers ? (
         <div className="row" style={{ marginTop: 10 }}>
-          {can("send_new_times") ? <Button size="sm" variant="primary" icon="send" onClick={() => setAsking("send")}>Send new times</Button> : null}
+          {maySend ? <Button size="sm" variant="primary" icon="send" onClick={() => setAsking("send")}>Send new times</Button> : null}
           {can("stop_new_times") ? <Button size="sm" variant="quiet" onClick={() => setAsking("stop")}>Don't send automatically</Button> : null}
           {noInterviewers ? <Button size="sm" variant="quiet" onClick={onChooseInterviewers}>Choose interviewers</Button> : null}
         </div>

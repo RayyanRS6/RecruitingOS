@@ -1,4 +1,4 @@
-import { CANCELLED_REASON_LABEL, NEW_TIMES_SETTING_DEFAULT, NEW_TIMES_WORKING_DAYS, type CancelledReason } from "@ros/contracts";
+import { CANCELLED_REASON_LABEL, NEW_TIMES_SETTING_DEFAULT, NEW_TIMES_WORKING_DAYS, titleMidSentence, type CancelledReason } from "@ros/contracts";
 import type { ApplicationSummary, CancelledCounts, CancelledView, NewTimesProgress, SendNewTimesBatchResult } from "./api/client";
 
 /**
@@ -58,27 +58,45 @@ export function cancelledTitle(firstName: string, reason: CancelledReason): stri
   return `${firstName} did not come to the interview`;
 }
 
+/** Said in place of "send new times" while ITS has not confirmed the company: the team's send is refused until then. */
+const AFTER_CHECK = "You can send new times once ITS confirms your company, or decide.";
+
 /**
  * The card's sentence, first match wins: where new times stand once an interview carries them, then the automatic set
- * waiting for its day or for the ITS check, then what the person chose. `round` is the interview's title.
+ * waiting for its day or for the ITS check, then what the person chose. `round` is the interview's title, said in lower
+ * case mid-sentence as the candidate's emails say it. `companyConfirmed` (GET /companies/current/new-times): while ITS
+ * has not confirmed the company (false), nothing goes to anyone automatically and the team's send is refused, so the
+ * card says that instead of offering either; unknown (undefined) says what it always did. `decideBelow`: the decision
+ * card shows under this one (the missed interview is still undecided); otherwise a no-show's card points to the stage at
+ * the top.
  */
-export function cancelledBody(input: { firstName: string; round: string; c: Pick<CancelledView, "reason" | "auto" | "times" | "lastSentAt"> }): string {
-  const { firstName, round, c } = input;
+export function cancelledBody(input: { firstName: string; round: string; c: Pick<CancelledView, "reason" | "auto" | "times" | "lastSentAt">; companyConfirmed?: boolean | null; decideBelow?: boolean }): string {
+  const { firstName, c } = input;
+  const round = titleMidSentence(input.round);
+  const unconfirmed = input.companyConfirmed === false;
   if (c.times === "preparing") return `Getting new times ready. ${firstName} gets them by email as soon as there are times to offer from the interviewers' calendars.`;
   if (c.times === "held") return "New times are ready. The email waits until ITS confirms your company.";
   if (c.times === "out") return `New times went out${c.lastSentAt ? ` on ${shortDay(c.lastSentAt)}` : ""}. They stay under Cancelled until they pick one.`;
   if (c.times === "not_reached") return "The email with new times did not reach them. Offer the times by phone, or pick one for them from the interview page.";
-  if (c.times === "expired") return "The new times passed without a pick. Send new times again, or decide.";
-  if (c.auto.state === "waiting") return `New times go to them automatically on ${promisedDay(c.auto)}, as your settings say. Send them now instead, or stop the automatic set.`;
+  if (c.times === "expired") return unconfirmed ? `The new times passed without a pick. Nothing more goes to them until ITS confirms your company. ${AFTER_CHECK}` : "The new times passed without a pick. Send new times again, or decide.";
+  if (c.auto.state === "waiting") {
+    return unconfirmed
+      ? `New times are due to go to them automatically on ${promisedDay(c.auto)}, but nothing goes until ITS confirms your company again, so they may go later than that. You can stop the automatic set.`
+      : `New times go to them automatically on ${promisedDay(c.auto)}, as your settings say. Send them now instead, or stop the automatic set.`;
+  }
   if (c.auto.state === "waiting_check") return `New times were due on ${promisedDay(c.auto)}. They wait until ITS confirms your company again.`;
-  if (c.reason === "not_interested") return "They told us they are no longer interested in this interview. Nothing goes to them automatically. You can still send new times, or decide.";
-  if (c.reason === "no_show") return `The ${round} was booked and they did not come. Nothing goes to them automatically. Send new times for the same round, or decide below.`;
+  if (c.reason === "not_interested") return `They told us they are no longer interested in this interview. Nothing goes to them automatically. ${unconfirmed ? AFTER_CHECK : "You can still send new times, or decide."}`;
+  if (c.reason === "no_show") {
+    const decide = input.decideBelow ? "decide below" : "choose their next stage at the top";
+    return `The ${round} was booked and they did not come. Nothing goes to them automatically. ${unconfirmed ? `You can send new times for the same round once ITS confirms your company, or ${decide}.` : `Send new times for the same round, or ${decide}.`}`;
+  }
+  if (unconfirmed) return c.auto.reasonText ? `${c.auto.reasonText} ${AFTER_CHECK}` : "Nothing goes to them automatically until ITS confirms your company. You can send new times after that, or decide.";
   return [c.auto.reasonText, "Send new times when you are ready, or decide."].filter(Boolean).join(" ");
 }
 
 /** The inline question before "Send new times" for one person. */
 export function sendNewTimesQuestion(firstName: string, round: string): string {
-  return `Send new times to ${firstName}? They get an email with times for the ${round}.`;
+  return `Send new times to ${firstName}? They get an email with times for the ${titleMidSentence(round)}.`;
 }
 
 /** The inline question before "Don't send automatically". */
@@ -89,10 +107,13 @@ export function stopNewTimesQuestion(firstName: string): string {
 /** Said on the hold step for someone under Cancelled. */
 export const HOLD_ENDS_CANCELLED = "Putting them on hold takes them out of Cancelled; nothing is sent to them automatically.";
 
-/** The Interviews page's "Send new times" card: why they are under Cancelled, and what a send does. */
-export function interviewNewTimesText(firstName: string, reason: CancelledReason): string {
+/**
+ * The Interviews page's "Send new times" card: why they are under Cancelled, and what a send does. While ITS has not
+ * confirmed the company (`companyConfirmed` false) the send is refused, so the card says when it can go instead.
+ */
+export function interviewNewTimesText(firstName: string, reason: CancelledReason, companyConfirmed?: boolean | null): string {
   const why = reason === "asked_new_times" ? "cancelled and asked for new times" : reason === "not_interested" ? "cancelled and is no longer interested" : "did not come";
-  return `${firstName} ${why}. New times go out for the same round.`;
+  return `${firstName} ${why}. ${companyConfirmed === false ? AFTER_CHECK : "New times go out for the same round."}`;
 }
 
 /**
@@ -109,7 +130,7 @@ const NOT_SENT_TEXT: Record<string, string> = {
   stopped_by_team: "Someone on your team stopped the automatic new times.",
   team_acted: "Your team took it from there.",
   candidate_replied: "They replied to us, so nothing went automatically: read their reply first.",
-  company_not_checked: "ITS has not confirmed your company yet, so nothing could be sent automatically.",
+  company_not_checked: "ITS had not confirmed your company in time, so nothing was sent automatically.",
   no_interviewers: "Nobody who ran the interview is still on your team.",
   no_email: "We have no email address for them, or the email did not reach them.",
   interview_changed: "The interview changed in the meantime.",
@@ -124,10 +145,13 @@ export function notSentReasonText(reason: unknown): string | null {
 
 /**
  * The alert above the list under Cancelled. Its second sentence follows the company's setting (GET
- * /companies/current/new-times); while that is not known, only the count is said.
+ * /companies/current/new-times); while that is not known, only the count is said. Before ITS confirms the company
+ * (`companyConfirmed` false) nothing goes to anyone automatically and the team's send waits for it too, whatever the
+ * setting, so that is what it says.
  */
-export function cancelledAlertText(n: number, auto: boolean | null | undefined): string {
+export function cancelledAlertText(n: number, auto: boolean | null | undefined, companyConfirmed?: boolean | null): string {
   const head = `${n} ${n === 1 ? "person is" : "people are"} under Cancelled.`;
+  if (companyConfirmed === false) return `${head} Nothing goes to anyone here automatically until ITS confirms your company. You can send new times after that.`;
   if (auto === true) return `${head} Only people who asked for new times get one set automatically; everyone else waits for you.`;
   if (auto === false) return `${head} Automatic new times are off, so everyone here waits for you.`;
   return head;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { titleMidSentence } from "../../packages/contracts/src/domain/interview";
 import { autoReasonText } from "../../packages/core/src/interview-followups";
 import type { ApplicationSummary, CancelledView } from "../../apps/web/src/api/client";
 import {
@@ -41,6 +42,13 @@ describe("the chips and the alert on the Talent page", () => {
     expect(cancelledAlertText(1, false)).toBe("1 person is under Cancelled. Automatic new times are off, so everyone here waits for you.");
     // the setting not known yet: only the count, nothing promised either way
     expect(cancelledAlertText(2, undefined)).toBe("2 people are under Cancelled.");
+    expect(cancelledAlertText(3, true, true)).toBe("3 people are under Cancelled. Only people who asked for new times get one set automatically; everyone else waits for you.");
+  });
+
+  it("before ITS confirms the company, promises nothing automatic, whatever the setting, and says the team can send after that", () => {
+    for (const auto of [true, false, undefined]) {
+      expect(cancelledAlertText(2, auto, false)).toBe("2 people are under Cancelled. Nothing goes to anyone here automatically until ITS confirms your company. You can send new times after that.");
+    }
   });
 });
 
@@ -98,7 +106,28 @@ describe("the candidate panel's card", () => {
     expect(body(view({ auto: { state: "not_sent", reason: "left_process", reasonText: "Nothing went automatically while a decision was in place." } }))).toBe("Nothing went automatically while a decision was in place. Send new times when you are ready, or decide.");
     expect(body(view())).toBe("Send new times when you are ready, or decide.");
     expect(body(view({ reason: "not_interested", auto: { reason: "not_asked" } }))).toBe("They told us they are no longer interested in this interview. Nothing goes to them automatically. You can still send new times, or decide.");
-    expect(body(view({ reason: "no_show", auto: { reason: "no_show" } }))).toBe("The Working interview was booked and they did not come. Nothing goes to them automatically. Send new times for the same round, or decide below.");
+    // the interview's title mid-sentence, in lower case, as the candidate's emails say it; "decide below" only when the
+    // decision card is there (a missed interview already decided has none: the stage at the top moves them on)
+    const noShow = view({ reason: "no_show", auto: { reason: "no_show" } });
+    expect(cancelledBody({ firstName: "Ana", round: "Working interview", c: noShow, decideBelow: true })).toBe("The working interview was booked and they did not come. Nothing goes to them automatically. Send new times for the same round, or decide below.");
+    expect(body(noShow)).toBe("The working interview was booked and they did not come. Nothing goes to them automatically. Send new times for the same round, or choose their next stage at the top.");
+    expect(cancelledBody({ firstName: "Ana", round: "HR Screening Call", c: noShow, decideBelow: true })).toMatch(/^The HR screening call was booked/);
+  });
+
+  it("before ITS confirms the company, never promises automatic times and says new times can be sent once it does", () => {
+    const unconfirmed = (c: CancelledView, decideBelow = false) => cancelledBody({ firstName: "Ana", round: "Working interview", c, companyConfirmed: false, decideBelow });
+    // the usual case: nothing was armed at the cancel
+    const notChecked = view({ auto: { state: "none", reason: "company_not_checked", reasonText: "ITS had not confirmed your company in time, so nothing was sent automatically." } });
+    expect(unconfirmed(notChecked)).toBe("ITS had not confirmed your company in time, so nothing was sent automatically. You can send new times once ITS confirms your company, or decide.");
+    // once ITS has confirmed it, the same reason is history, and a send is offered without contradicting it
+    expect(body(notChecked)).toBe("ITS had not confirmed your company in time, so nothing was sent automatically. Send new times when you are ready, or decide.");
+    expect(unconfirmed(view())).toBe("Nothing goes to them automatically until ITS confirms your company. You can send new times after that, or decide.");
+    // armed before ITS took its confirmation back: the day is not promised as certain
+    expect(unconfirmed(view({ auto: { state: "waiting", dueAt: "2026-10-15T16:00:00.000Z", dueDay: "2026-10-15" } }))).toBe("New times are due to go to them automatically on Thursday, October 15, but nothing goes until ITS confirms your company again, so they may go later than that. You can stop the automatic set.");
+    expect(unconfirmed(view({ reason: "not_interested", auto: { reason: "not_asked" } }))).toBe("They told us they are no longer interested in this interview. Nothing goes to them automatically. You can send new times once ITS confirms your company, or decide.");
+    expect(unconfirmed(view({ reason: "no_show", auto: { reason: "no_show" } }), true)).toBe("The working interview was booked and they did not come. Nothing goes to them automatically. You can send new times for the same round once ITS confirms your company, or decide below.");
+    expect(unconfirmed(view({ times: "expired" }))).toBe("The new times passed without a pick. Nothing more goes to them until ITS confirms your company. You can send new times once ITS confirms your company, or decide.");
+    for (const text of [unconfirmed(view()), unconfirmed(view({ reason: "no_show" })), unconfirmed(view({ reason: "not_interested" }))]) expect(text).not.toMatch(/go to them automatically on|Send new times when you are ready|Send new times for the same round/);
   });
 
   it("follows the new times once an interview carries them, whatever the reason", () => {
@@ -112,11 +141,30 @@ describe("the candidate panel's card", () => {
   });
 
   it("asks before sending or stopping, in the candidate's name", () => {
-    expect(sendNewTimesQuestion("Ana", "Working interview")).toBe("Send new times to Ana? They get an email with times for the Working interview.");
+    expect(sendNewTimesQuestion("Ana", "Working interview")).toBe("Send new times to Ana? They get an email with times for the working interview.");
+    expect(sendNewTimesQuestion("Ana", "First Interview")).toBe("Send new times to Ana? They get an email with times for the first interview.");
     expect(stopNewTimesQuestion("Ana")).toBe("Stop the automatic new times for Ana? Nothing goes to them automatically; they stay under Cancelled.");
     expect(interviewNewTimesText("Ana", "asked_new_times")).toBe("Ana cancelled and asked for new times. New times go out for the same round.");
     expect(interviewNewTimesText("Ben", "not_interested")).toBe("Ben cancelled and is no longer interested. New times go out for the same round.");
     expect(interviewNewTimesText("Cleo", "no_show")).toBe("Cleo did not come. New times go out for the same round.");
+    // before ITS confirms the company the send is refused, so the Interviews page never offers it
+    expect(interviewNewTimesText("Ana", "asked_new_times", false)).toBe("Ana cancelled and asked for new times. You can send new times once ITS confirms your company, or decide.");
+    expect(interviewNewTimesText("Cleo", "no_show", true)).toBe("Cleo did not come. New times go out for the same round.");
+  });
+
+  it("says an interview's title mid-sentence in lower case, keeping names, places and acronyms", () => {
+    expect(titleMidSentence("Final Interview")).toBe("final interview");
+    expect(titleMidSentence("Working interview")).toBe("working interview");
+    expect(titleMidSentence("HR Screening Call")).toBe("HR screening call");
+    expect(titleMidSentence("Final Interview with the CEO")).toBe("final interview with the CEO");
+    expect(titleMidSentence("Call with Paul")).toBe("call with Paul");
+    expect(titleMidSentence("Coffee with Nadine in London")).toBe("coffee with Nadine in London");
+    expect(titleMidSentence("Second Round With Dr. Patel")).toBe("second round with Dr. Patel");
+    // a first word that owns the rest is a name
+    expect(titleMidSentence("Paul's Interview")).toBe("Paul's interview");
+    expect(titleMidSentence("Nadine’s Coffee Chat")).toBe("Nadine’s coffee chat");
+    expect(sendNewTimesQuestion("Ana", "Call with Paul")).toBe("Send new times to Ana? They get an email with times for the call with Paul.");
+    expect(cancelledBody({ firstName: "Ana", round: "Coffee with Nadine", c: view({ reason: "no_show", auto: { reason: "no_show" } }), decideBelow: true })).toMatch(/^The coffee with Nadine was booked/);
   });
 
   it("reads the promised day as the company's calendar day, wherever the reader is", () => {

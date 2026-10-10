@@ -186,7 +186,8 @@ describe("new times for someone under Cancelled (founder decisions 1A to 4A)", (
   it("says the times are being got ready, never that they went: they count as sent once their email is on its way", () => {
     expect(newTimesToast({ kind: "sent", via: "reopened", firstName: "Ana", round: "Working interview" })).toEqual({ title: "Getting new times ready.", detail: "Ana gets an email as soon as there are times to offer from the interviewers' calendars. They stay under Cancelled until they book." });
     // after a no-show: a new interview for the same round
-    expect(newTimesToast({ kind: "sent", via: "new_interview", firstName: "Cleo", round: "Working interview" })).toEqual({ title: "A new Working interview was set up.", detail: "Same round; Cleo gets an email as soon as there are times to offer." });
+    expect(newTimesToast({ kind: "sent", via: "new_interview", firstName: "Cleo", round: "Working interview" })).toEqual({ title: "A new working interview was set up.", detail: "Same round; Cleo gets an email as soon as there are times to offer." });
+    expect(newTimesToast({ kind: "sent", via: "new_interview", firstName: "Cleo", round: "First Interview" }).title).toBe("A new first interview was set up.");
     expect(newTimesToast({ kind: "stopped" })).toEqual({ title: "Stopped.", detail: "Nothing goes to them automatically; they stay under Cancelled." });
     for (const t of [newTimesToast({ kind: "sent", via: "reopened", firstName: "Ana", round: "Phone screen" }), newTimesToast({ kind: "batch", results: [], sent: 2, notSent: 0 })]) expect(`${t.title} ${t.detail ?? ""}`).not.toMatch(/\bsent\b|on (its|their) way/i);
   });

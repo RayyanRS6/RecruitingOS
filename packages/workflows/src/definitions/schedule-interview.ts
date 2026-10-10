@@ -1,10 +1,10 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { MembershipRole } from "@ros/contracts";
-import { can, computeSlots, createEscalation, emit, newTimesOffered, notify, openFollowUpOf, slotStillFree, transition } from "@ros/core";
-import { applications, candidates, companies, interviewParticipants, interviews, memberships, rolePackets, roles } from "@ros/db";
-import { HELD_REASON, composeInterviewerBrief, constraintsFor, createInterviewEvents, participantsOf, queueCommunication, redactBriefPay, renderInterviewerBriefText, sendInterviewConfirmation, sendInterviewReminder, sendSlotsOffered, sendSlotsReminder, type InvitationNote } from "@ros/agents";
+import { can, computeSlots, createEscalation, emit, newTimesOffered, notify, openFollowUpOf, roleTakenOver, slotStillFree, transition } from "@ros/core";
+import { applications, candidates, communications, companies, interviewFollowups, interviewParticipants, interviews, memberships, rolePackets, roles } from "@ros/db";
+import { AUTO_TIMES_TAKEN_OVER, HELD_REASON, composeInterviewerBrief, constraintsFor, createInterviewEvents, participantsOf, queueCommunication, redactBriefPay, renderInterviewerBriefText, sendInterviewConfirmation, sendInterviewReminder, sendSlotsOffered, sendSlotsReminder, type InvitationNote } from "@ros/agents";
 import { randomToken } from "@ros/db";
-import type { NewTimesOfferKind, NewTimesVia } from "../new-times-reopen";
+import { newTimesStoppedByTakeover, stopPreparedNewTimes, withdrawNewTimesInterview, type NewTimesOfferKind, type NewTimesVia } from "../new-times-reopen";
 import type { StepContext, WorkflowDefinition } from "../types";
 
 /**
@@ -88,6 +88,34 @@ async function stillOursAfterLock(ctx: StepContext<State>, b: Bundle): Promise<b
   return !!current && current.status === b.iv.status && current.attempt === ctx.state.attempt;
 }
 
+/**
+ * The one automatic set of new times, checked again just before its email is written (founder questions 7 and 8), under
+ * the application's and the follow-up's locks (the order every path takes them). A set stopped while it was being
+ * prepared (the candidate replied asking for a person or saying no) sends nothing; an ITS recruiter who took the role over
+ * since stops it here, and the team is told and the recruiter brought in. That includes a takeover that began while its
+ * email waited for the ITS check: the outbox withdrew the email when ITS confirmed the company (`AUTO_TIMES_TAKEN_OVER`).
+ * Either way the interview goes back to cancelled and this run ends; so does an interview that changed while this step
+ * waited for the lock. False when the email goes as usual, which includes a set already sent being offered again (after
+ * "none of these work", or a picked time that was taken) and a times email already on its way.
+ */
+async function automaticSetStops(ctx: StepContext<State>, b: Bundle): Promise<boolean> {
+  if (!(await stillOursAfterLock(ctx, b))) return true;
+  const [f] = await ctx.q.select().from(interviewFollowups).where(eq(interviewFollowups.id, ctx.state.followUpId!)).limit(1).for("update");
+  if (!f || f.resolvedAt || f.currentInterviewId !== b.iv.id) return false;
+  if (f.autoState === "not_sent" && (f.autoReason === "candidate_replied" || f.autoReason === "takeover")) {
+    await withdrawNewTimesInterview(ctx.q, { followUp: f, reason: f.autoReason, actor: ctx.actor });
+    return true;
+  }
+  if (f.autoState !== "preparing") return false;
+  const [email] = await ctx.q.select({ status: communications.status, error: communications.error }).from(communications).where(eq(communications.idempotencyKey, `slots:${b.iv.id}:${b.iv.attempt}`)).limit(1);
+  const withdrawnForTakeover = email?.status === "cancelled" && email.error === AUTO_TIMES_TAKEN_OVER;
+  if (!withdrawnForTakeover && !(await roleTakenOver(ctx.q, ctx.companyId, b.role.id))) return false;
+  const stopped = await stopPreparedNewTimes(ctx.q, { followUp: f, reason: "takeover", actor: ctx.actor, now: ctx.now });
+  if (!stopped) return false;
+  await newTimesStoppedByTakeover(ctx.q, { followUp: stopped, actor: ctx.actor, now: ctx.now, workflowRunId: ctx.run.id });
+  return true;
+}
+
 /** The sentence the team's notices gain while the times being worked out are new times for someone under Cancelled. */
 function newTimesSentence(b: Bundle, ctx: StepContext<State>): string {
   if (ctx.state.offerKind === "new_times_asked") return ` ${b.candidate.firstName} cancelled and asked for new times; they go out as soon as there are times to offer.`;
@@ -130,13 +158,17 @@ export const scheduleInterview: WorkflowDefinition<State> = {
         await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.no_slots", title: `No common times for ${b.candidate.firstName}'s interview`, body: `Between ${w.fromDate} and ${w.toDate} the interviewers have no shared free time of ${b.iv.durationMinutes} minutes. Widen the window, change interviewers, or free some time.${newTimesSentence(b, ctx)}`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
         return { kind: "wait", wait: { kind: "event", eventTypes: ["availability.updated", "window.updated"], subjectId: b.iv.id, until: hoursFromNow(ctx, AVAILABILITY_WAIT_HOURS), reason: "no common free time; waiting for availability or a wider window" }, resumeStep: "propose_slots" };
       }
-      await ctx.q.update(interviews).set({ offeredSlots: slots, selectedSlot: null, status: "scheduling" }).where(eq(interviews.id, b.iv.id));
+      // Guarded: an interview cancelled or moved on while the times were worked out (a team cancel, new times stopped by a
+      // reply) is never put back to "scheduling" here.
+      const [proposed] = await ctx.q.update(interviews).set({ offeredSlots: slots, selectedSlot: null, status: "scheduling" }).where(and(eq(interviews.id, b.iv.id), eq(interviews.attempt, ctx.state.attempt), inArray(interviews.status, ["proposed", "scheduling"]))).returning({ id: interviews.id });
+      if (!proposed) return { kind: "complete" };
       return { kind: "next", step: "offer_slots" };
     },
 
     async offer_slots(ctx) {
       const b = await load(ctx);
       if (!b || stale(b, ctx)) return { kind: "complete" };
+      if (ctx.state.followUpId && ctx.state.via === "auto" && (await automaticSetStops(ctx, b))) return { kind: "complete" };
       if (!b.iv.scheduleToken || !b.iv.scheduleTokenExpiresAt || Date.parse(b.iv.scheduleTokenExpiresAt) < ctx.now.getTime()) {
         await ctx.q.update(interviews).set({ scheduleToken: randomToken(24), scheduleTokenExpiresAt: new Date(ctx.now.getTime() + TOKEN_DAYS * 86_400_000).toISOString() }).where(eq(interviews.id, b.iv.id));
       }

@@ -4,7 +4,7 @@ import { CANCEL_STAGES, DECISION_STAGES, createDataRequest, createEscalation, de
 import { fromAddress, newTimesDayWords, queueCommunication, recordInbound, replyToFor, requestHuman, sendPrivacyAcknowledgment } from "@ros/agents";
 import { applications, candidates, communications, companies, dataRequests, inboundEmails, rolePackets, roles, screens, withPlatform, withTenant, type Tx } from "@ros/db";
 import type { InboundEmail } from "@ros/integrations";
-import { cancelNewTimesRuns } from "@ros/workflows";
+import { cancelNewTimesRuns, stopPreparedNewTimes } from "@ros/workflows";
 import type { Container } from "../container";
 import { screenDeps } from "./screens";
 import { optOutOfTalentPool } from "./talent-pool";
@@ -75,8 +75,9 @@ type ExplanationAsk = { candidateId: string; email: string | null; companyName: 
 
 /**
  * A reply from someone under Cancelled (founder decisions 2A and 4A, founder question 8). A reply asking for a person, or
- * "no thanks" before any decision, stops an automatic set still waiting for its day (`candidate_replied`): someone who
- * asked for a person, or said no, is not sent times by software days later. Any other reply leaves it and names its day.
+ * "no thanks" before any decision, stops an automatic set still waiting for its day (`candidate_replied`), or one being
+ * prepared whose email has not left yet (the interview it reopened goes back to cancelled, `stopPreparedNewTimes`):
+ * someone who asked for a person, or said no, is not sent times by software. Any other reply leaves it and names its day.
  * Either way the team's notice says which entry the reply belongs to. The reply itself is recorded and answered as
  * always; none of their words go on the follow-up. Returns the sentence to add to the team's notice ("" when none), and
  * whether it stopped a set (the notice then never says nothing was changed).
@@ -92,6 +93,10 @@ async function replyUnderCancelled(tx: Tx, container: Container, input: { app: A
     await setAutoState(tx, { followUpId: f.id, to: "not_sent", reason: "candidate_replied", actor: input.actor, now });
     await cancelNewTimesRuns(tx, container.engine, { companyId: input.app.companyId, applicationId: input.app.id, actor: input.actor, reason: "the candidate replied" });
     return { sentence: ` Their automatic new times${day ? `, due ${day},` : ""} were stopped: a person should arrange the next step with them. They are under Cancelled.`, stopped: true };
+  }
+  if (f.autoState === "preparing" && input.stops) {
+    const stopped = await stopPreparedNewTimes(tx, { followUp: f, reason: "candidate_replied", actor: input.actor, now: container.engine.clock() });
+    if (stopped) return { sentence: " Their automatic new times were stopped before they went out: a person should arrange the next step with them. They are under Cancelled.", stopped: true };
   }
   if (followUpParked(f)) return { sentence: ` New times are due to go to them automatically${day ? ` on ${day}` : ""}. Open them under Cancelled to send them now or stop them.`, stopped: false };
   return { sentence: ` They are under Cancelled${f.kind === "candidate_no_show" ? " as a no-show" : ""}.`, stopped: false };

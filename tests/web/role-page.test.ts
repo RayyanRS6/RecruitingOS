@@ -194,9 +194,10 @@ describe("what an interview that never took place offers next", () => {
 });
 
 describe("the role's activity: new times for several people under Cancelled", () => {
-  it("says how many were asked for and how many went ahead, in plain words", () => {
+  it("says how many the team sent new times for and how many went ahead, never as if the candidates asked", () => {
     const ev = (payload: Record<string, unknown>) => describeRoleEvent({ id: 1, type: "interview.new_times_batch", occurredAt: "2026-10-10T10:00:00.000Z", actor: { kind: "user", id: "u1", name: "Dana" }, subjectType: "role", subjectId: "r1", payload });
-    expect(ev({ roleId: "r1", requested: 4, sent: 3, notSent: 1 })).toBe("New times asked for 4 people under Cancelled: 3 going ahead, 1 not sent");
-    expect(ev({ roleId: "r1", requested: 1, sent: 1, notSent: 0 })).toBe("New times asked for 1 person under Cancelled: 1 going ahead");
+    expect(ev({ roleId: "r1", requested: 4, sent: 3, notSent: 1 })).toBe("New times for 4 people under Cancelled: 3 going ahead, 1 not sent");
+    expect(ev({ roleId: "r1", requested: 1, sent: 1, notSent: 0 })).toBe("New times for 1 person under Cancelled: 1 going ahead");
+    expect(ev({ roleId: "r1", requested: 2, sent: 0, notSent: 2 })).not.toMatch(/asked/);
   });
 });

@@ -139,7 +139,7 @@ describe("interview_new_times", () => {
     expect(email.body_text).toContain("As you asked when you cancelled, here are new times for your conversation with the dentist");
     expect(await followUp(p.applicationId)).toMatchObject({ auto_state: "sent", auto_reason: null, resolved_how: null, current_interview_id: p.interviewId, times_sent_count: 1, last_sent_via: "auto", last_offer_key: `slots:${p.interviewId}:3` });
     expect((await followUp(p.applicationId)).auto_sent_at).not.toBeNull();
-    expect(await notices(p.companyId, "interview.new_times_sent")).toEqual([{ user_id: p.ownerId, title: "New times went to Ana Lopez", body: "Ana cancelled the Conversation with the dentist and asked for new times. They went out today. This was their one automatic set; if Ana does not pick a time, they stay under Cancelled for you to decide." }]);
+    expect(await notices(p.companyId, "interview.new_times_sent")).toEqual([{ user_id: p.ownerId, title: "New times went to Ana Lopez", body: "Ana cancelled the conversation with the dentist and asked for new times. They went out today. This was their one automatic set; if Ana does not pick a time, they stay under Cancelled for you to decide." }]);
     expect(await runOf(p.runId)).toMatchObject({ status: "completed" });
     expect((await runOf(run.id)).wait).toMatchObject({ kind: "event", reason: "waiting for the candidate to pick a time" });
     const view = (await tenant(p.companyId, (tx) => activeFollowUpsFor(tx, [p.applicationId]))).get(p.applicationId);
@@ -248,7 +248,7 @@ describe("interview_new_times", () => {
     await runAt(at(DUE, 10 * DAY));
     expect(await followUp(lost.applicationId)).toMatchObject({ auto_state: "not_sent", auto_reason: "company_not_checked", resolved_how: null });
     expect((await interview(lost.interviewId)).status).toBe("cancelled");
-    expect(await notices(lost.companyId, "interview.new_times_not_sent")).toEqual([{ user_id: lost.ownerId, title: "New times for Ana Lopez were not sent", body: "Ana asked for new times, due Thursday, October 15. ITS has not confirmed your company yet, so nothing could be sent automatically. They are under Cancelled: send new times when you are ready, or decide." }]);
+    expect(await notices(lost.companyId, "interview.new_times_not_sent")).toEqual([{ user_id: lost.ownerId, title: "New times for Ana Lopez were not sent", body: "Ana asked for new times, due Thursday, October 15. ITS had not confirmed your company in time, so nothing was sent automatically. They are under Cancelled: you can send new times once ITS confirms your company, or decide." }]);
   });
 
   it("checks everything again when it is due: a timer alone never sends anything", async () => {

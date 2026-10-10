@@ -4,7 +4,7 @@ import { notifyNewTimesNotSent, recordAutoRun, roleTakenOver, setAutoState, type
 import { companyConfirmed } from "@ros/agents";
 import { applications, candidates, interviewFollowups, interviews, roles, workflowRuns, type Queryable } from "@ros/db";
 import type { WorkflowEngine } from "../engine";
-import { activeInterviewersOf, reopenForNewTimes, type ReopenRefusal } from "../new-times-reopen";
+import { activeInterviewersOf, newTimesStoppedByTakeover, reopenForNewTimes, type ReopenRefusal } from "../new-times-reopen";
 import type { StepContext, StepResult, WorkflowDefinition } from "../types";
 
 type State = { followUpId: string; applicationId: string; roleId: string; interviewId: string };
@@ -98,10 +98,14 @@ export const interviewNewTimes: WorkflowDefinition<State> = {
   },
 };
 
-/** The set does not go: recorded with its reason, and the team told when they may need to act. */
+/**
+ * The set does not go: recorded with its reason, and the team told when they may need to act. Under an ITS takeover the
+ * recruiter running the role is brought in too, to arrange the time with the candidate (founder question 7).
+ */
 async function endNotSent(ctx: StepContext<State>, f: FollowUpRow, reason: AutoNewTimesReason): Promise<StepResult<State>> {
   const row = await setAutoState(ctx.q, { followUpId: f.id, to: "not_sent", reason, actor: ctx.actor, now: ctx.now });
-  if (TELL_TEAM.has(reason)) await notifyNewTimesNotSent(ctx.q, { followUp: row, reason });
+  if (reason === "takeover") await newTimesStoppedByTakeover(ctx.q, { followUp: row, actor: ctx.actor, now: ctx.now, workflowRunId: ctx.run.id });
+  else if (TELL_TEAM.has(reason)) await notifyNewTimesNotSent(ctx.q, { followUp: row, reason });
   return { kind: "complete" };
 }
 

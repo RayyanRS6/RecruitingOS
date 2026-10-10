@@ -1,6 +1,6 @@
 import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import { SCREEN_PERSON_ROUTE_STATUSES, isCompanyVerified, type Actor } from "@ros/contracts";
-import { DECISION_STAGES, emit, nextContactWindow, notify, raiseAlert } from "@ros/core";
+import { DECISION_STAGES, autoTimesUnderTakeover, emit, nextContactWindow, notify, raiseAlert } from "@ros/core";
 import { applications, candidates, communications, companies, events, interviews, jobs, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations, SendResult } from "@ros/integrations";
 
@@ -116,17 +116,23 @@ const LEFT_PROCESS = new Set(["withdrawn", "rejected", "declined", "talent_pool"
 const SCREEN_LINK_TEMPLATES = new Set(["screen_invite", "screen_reminder", "screen_later", "screen_not_started_reminder", "screen_idle_reminder", "screen_review_reminder", "screen_resume"]);
 /** Messages whose link opens the interview-time picker: dead once the offer lapsed or a time was picked. */
 const SLOT_LINK_TEMPLATES = new Set(["interview_slots", "interview_slots_reminder"]);
+/**
+ * Why the times email of an automatic set of new times did not go: an ITS recruiter took the role over while it waited
+ * (`autoTimesUnderTakeover`). The set's run reads it to end the set for the takeover.
+ */
+export const AUTO_TIMES_TAKEN_OVER = "an ITS recruiter is running the role now, so the automatic new times do not go";
 
-type WaitingRow = Pick<CommunicationRow, "id" | "companyId" | "channel" | "templateKey" | "candidateId" | "applicationId" | "sentBy" | "correlationId">;
+type WaitingRow = Pick<CommunicationRow, "id" | "companyId" | "channel" | "templateKey" | "candidateId" | "applicationId" | "sentBy" | "correlationId" | "idempotencyKey">;
 
 /**
  * Messages to candidates that waited (held for the ITS check, or queued for a later hour) and must no longer go, with
  * the reason: the candidate stopped texts or withdrew their consent to them, their details were deleted at their
  * request, an invitation to a next step whose person has since left the process (a closing message, such as the
  * decision or a cancellation, still goes), a link to a step that has ended since (a screening conversation no longer
- * open, interview times no longer on offer: the closing note of the step still goes), or a decision message whose
- * decision no longer applies. Read again just before a release and just before a send, because a message can wait for
- * days. The answer to a privacy request always goes.
+ * open, interview times no longer on offer: the closing note of the step still goes), the times of an automatic set of
+ * new times for a role an ITS recruiter took over meanwhile, or a decision message whose decision no longer applies.
+ * Read again just before a release and just before a send, because a message can wait for days. The answer to a privacy
+ * request always goes.
  */
 export async function reasonsNotToSend(q: Queryable, rows: readonly WaitingRow[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
@@ -141,6 +147,7 @@ export async function reasonsNotToSend(q: Queryable, rows: readonly WaitingRow[]
   const slotApps = appsWith(SLOT_LINK_TEMPLATES);
   const openScreen = new Set((screenApps.length ? await q.select({ a: screens.applicationId }).from(screens).where(and(inArray(screens.applicationId, screenApps), inArray(screens.status, [...SCREEN_PERSON_ROUTE_STATUSES]))) : []).map((s) => s.a));
   const openOffer = new Set((slotApps.length ? await q.select({ a: interviews.applicationId }).from(interviews).where(and(inArray(interviews.applicationId, slotApps), eq(interviews.status, "scheduling"))) : []).map((i) => i.a));
+  const takenOver = await autoTimesUnderTakeover(q, relevant.filter((r) => r.templateKey === "interview_slots").map((r) => r.idempotencyKey).filter((k): k is string => !!k));
   for (const r of relevant) {
     const who = r.candidateId ? people.get(r.candidateId) : undefined;
     const stage = r.applicationId ? stages.get(r.applicationId) : undefined;
@@ -149,6 +156,7 @@ export async function reasonsNotToSend(q: Queryable, rows: readonly WaitingRow[]
       : who && r.channel === "sms" && (!who.consent.sms?.granted || who.preferences.smsOptOut) ? "the candidate stopped text messages"
       : stage && LEFT_PROCESS.has(stage) && NEXT_STEP_TEMPLATES.has(template) ? "the candidate has left the process since it was written"
       : r.applicationId && ((SCREEN_LINK_TEMPLATES.has(template) && !openScreen.has(r.applicationId)) || (SLOT_LINK_TEMPLATES.has(template) && !openOffer.has(r.applicationId))) ? "the step it invites to has ended since it was written"
+      : r.idempotencyKey && takenOver.has(r.idempotencyKey) ? AUTO_TIMES_TAKEN_OVER
       : stage && template.startsWith("disposition:") && !DECISION_STAGES.includes(stage) ? "the decision no longer applies"
       : null;
     if (reason) out.set(r.id, reason);
@@ -258,7 +266,7 @@ export async function undoQueuedMessage(q: Queryable, input: { communicationId: 
  * Returns how many were released.
  */
 export async function releaseHeldCommunications(q: Queryable, input: { companyId: string; actor: Actor; now: Date }): Promise<number> {
-  const waiting = await q.select({ id: communications.id, companyId: communications.companyId, channel: communications.channel, templateKey: communications.templateKey, candidateId: communications.candidateId, applicationId: communications.applicationId, sentBy: communications.sentBy, correlationId: communications.correlationId }).from(communications).where(and(eq(communications.companyId, input.companyId), eq(communications.status, HELD_STATUS)));
+  const waiting = await q.select({ id: communications.id, companyId: communications.companyId, channel: communications.channel, templateKey: communications.templateKey, candidateId: communications.candidateId, applicationId: communications.applicationId, sentBy: communications.sentBy, correlationId: communications.correlationId, idempotencyKey: communications.idempotencyKey }).from(communications).where(and(eq(communications.companyId, input.companyId), eq(communications.status, HELD_STATUS)));
   if (!waiting.length) return 0;
   const stale = await reasonsNotToSend(q, waiting);
   for (const r of waiting) {
@@ -292,7 +300,7 @@ async function holdIfUnconfirmed(tx: Queryable, input: { communicationId: string
 
 /** The worker's other check before a send: a queued message that must no longer go (`reasonsNotToSend`) is cancelled. */
 async function cancelIfUnwanted(tx: Queryable, input: { communicationId: string; companyId: string }, now: Date): Promise<boolean> {
-  const [row] = await tx.select({ id: communications.id, companyId: communications.companyId, channel: communications.channel, templateKey: communications.templateKey, candidateId: communications.candidateId, applicationId: communications.applicationId, sentBy: communications.sentBy, correlationId: communications.correlationId }).from(communications).where(and(eq(communications.id, input.communicationId), eq(communications.companyId, input.companyId), eq(communications.status, "queued"))).limit(1);
+  const [row] = await tx.select({ id: communications.id, companyId: communications.companyId, channel: communications.channel, templateKey: communications.templateKey, candidateId: communications.candidateId, applicationId: communications.applicationId, sentBy: communications.sentBy, correlationId: communications.correlationId, idempotencyKey: communications.idempotencyKey }).from(communications).where(and(eq(communications.id, input.communicationId), eq(communications.companyId, input.companyId), eq(communications.status, "queued"))).limit(1);
   if (!row) return false;
   const reason = (await reasonsNotToSend(tx, [row])).get(row.id);
   return !!reason && (await cancelWaiting(tx, row, reason, row.sentBy, now));

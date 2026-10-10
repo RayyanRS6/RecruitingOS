@@ -66,9 +66,11 @@ describe("the times email", () => {
   it("keeps a title that starts with an acronym as written, and the invitation note where the caller gives one", () => {
     const hr = { ...base, interview: { ...interview, title: "HR interview" } } as InterviewMessageInput;
     expect(slotsOfferedMessage({ ...hr, variant: "new_times_team" }).text).toContain("a new time for your HR interview for the");
-    // a title in title case reads in lower case mid-sentence, every word of it; a name in capitals stays
+    // a title in title case reads in lower case mid-sentence; a word in capitals, and a person's name, stay as written
     const final = { ...base, interview: { ...interview, title: "Final Interview with the CEO" } } as InterviewMessageInput;
     expect(slotsOfferedMessage({ ...final, variant: "new_times_asked" }).text).toContain("here are new times for your final interview with the CEO for the");
+    const named = { ...base, interview: { ...interview, title: "Call with Paul" } } as InterviewMessageInput;
+    expect(slotsOfferedMessage({ ...named, variant: "new_times_team" }).text).toContain("a new time for your call with Paul for the");
     expect(slotsOfferedMessage({ ...base, variant: "new_times_asked", note: { text: "Looking forward to it.", aiHelped: false, senderName: "Dana" } }).text).toContain("with Grace and Ben.\n\nA note from Dana: Looking forward to it.");
   });
 });

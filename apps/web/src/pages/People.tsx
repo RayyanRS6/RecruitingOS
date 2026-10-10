@@ -246,8 +246,9 @@ export function People() {
           {mayManageInterviews && view.stage === "cancelled" && cancelledCount > 0 ? (
             <Alert tone="info">
               <div className="row" style={{ justifyContent: "space-between" }}>
-                <span>{cancelledAlertText(cancelledCount, newTimesSetting.data?.auto)}</span>
-                <Button size="sm" variant="primary" icon="send" onClick={() => setSendingNewTimes(true)}>Send new times…</Button>
+                <span>{cancelledAlertText(cancelledCount, newTimesSetting.data?.auto, newTimesSetting.data?.companyConfirmed)}</span>
+                {/* before ITS confirms the company every send is refused, so the way to send waits for it too */}
+                {newTimesSetting.data?.companyConfirmed === false ? null : <Button size="sm" variant="primary" icon="send" onClick={() => setSendingNewTimes(true)}>Send new times…</Button>}
               </div>
             </Alert>
           ) : null}

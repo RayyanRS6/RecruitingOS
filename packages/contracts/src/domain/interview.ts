@@ -45,6 +45,30 @@ export const InterviewOutcome = z.object({ outcome: z.enum(["happened", "no_show
 export const BookOnBehalf = z.object({ slotId: z.string().min(1), note: z.string().max(500).optional() });
 export const RecordDecision = z.object({ decision: z.enum(["next_round", "finalist", "hired", "not_moving_forward"]), reason: RejectReason.optional(), note: z.string().max(2000).optional() });
 
+/** The ordinary words of an interview's title, said in lower case mid-sentence even when the title capitalises them. */
+const TITLE_WORDS = new Set([
+  "a", "about", "an", "and", "at", "by", "for", "in", "of", "on", "or", "the", "to", "with",
+  "assessment", "call", "case", "catch", "chat", "check", "coffee", "conversation", "culture", "day", "demo", "discussion", "final", "first", "fit", "follow", "fourth",
+  "hiring", "initial", "interview", "interviews", "intro", "introductory", "last", "lunch", "manager", "meeting", "office", "onsite", "panel", "person", "phone", "practical",
+  "presentation", "review", "round", "screen", "screening", "second", "session", "shift", "site", "skills", "study", "sync", "team", "technical", "third", "trial", "up",
+  "video", "virtual", "visit", "working",
+]);
+
+/**
+ * An interview's title mid-sentence: "Final Interview" reads "final interview", and "Call with Paul" reads "call with
+ * Paul". The first word goes to lower case, and so does any later word that is an ordinary interview word ("Round",
+ * "Interview", "With"); any other capitalised word is a name or a place and is kept ("Coffee with Nadine in London"), as
+ * is a word in capitals ("HR interview", "Call with the CEO") and a first word that owns the rest ("Paul's interview").
+ * The candidate's emails and the team's pages say a title inside a sentence this same way.
+ */
+export function titleMidSentence(title: string): string {
+  const start = title.search(/[A-Za-z]/);
+  return title.replace(/\b[A-Z][a-z]*\b/g, (word, at: number) => {
+    const first = at === start && !/^['’]s\b/.test(title.slice(at + word.length));
+    return first || TITLE_WORDS.has(word.toLowerCase()) ? word.toLowerCase() : word;
+  });
+}
+
 /** What the candidate sends from the pick-a-time page. */
 export const SelectSlot = z.object({ slotId: z.string().min(1), timezone: z.string().min(1).optional(), accessibilityNote: z.string().max(500).optional() });
 /**

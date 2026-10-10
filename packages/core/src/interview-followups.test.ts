@@ -251,8 +251,10 @@ describe("interview follow-ups (the Cancelled column)", () => {
       await expect(move("none")).rejects.toThrow(FollowUpError);
       expect((await move("waiting_check")).autoState).toBe("waiting_check");
       expect((await move("preparing")).autoState).toBe("preparing");
-      // from being prepared only these reasons end it: no email, the team acted, they left, the interview changed
-      await expect(move("not_sent", "takeover")).rejects.toThrow(FollowUpError);
+      // from being prepared only these reasons end it: no email, the team acted, they left, the interview changed, a
+      // reply asking for a person or saying no, an ITS recruiter taking the role over (never "stop", nor the switch: the
+      // interview is open by then)
+      for (const reason of ["stopped_by_team", "switched_off", "no_interviewers", "company_not_checked"] as const) await expect(move("not_sent", reason), reason).rejects.toThrow(FollowUpError);
       await expect(move("waiting")).rejects.toThrow(FollowUpError);
       const sent = await move("sent");
       expect(sent.autoState).toBe("sent");
@@ -272,6 +274,14 @@ describe("interview follow-ups (the Cancelled column)", () => {
       const other = await cancelled(await person("interview_recommended"));
       const stopped = await tenant((tx) => setAutoState(tx, { followUpId: other.row.id, to: "not_sent", reason: "stopped_by_team", actor: owner, now: NOW }));
       expect(stopped).toMatchObject({ autoState: "not_sent", autoReason: "stopped_by_team" });
+    });
+
+    it("lets a reply asking for a person or saying no, or an ITS takeover, end a set still being prepared", async () => {
+      for (const reason of ["candidate_replied", "takeover"] as const) {
+        const { row } = await cancelled(await person("interview_recommended"));
+        await tenant((tx) => setAutoState(tx, { followUpId: row.id, to: "preparing", actor: system, now: NOW }));
+        expect(await tenant((tx) => setAutoState(tx, { followUpId: row.id, to: "not_sent", reason, actor: system, now: NOW }))).toMatchObject({ autoState: "not_sent", autoReason: reason });
+      }
     });
 
     it("lists the sets already promised a day, for Setup to ask about before switching off", async () => {
@@ -318,7 +328,7 @@ describe("interview follow-ups (the Cancelled column)", () => {
       const told = await rows<{ title: string; body: string; action: { href: string } }>(sql`SELECT title, body, action FROM notifications WHERE company_id = ${companyId} AND kind = 'interview.new_times_sent'`);
       expect(told).toHaveLength(1);
       expect(told[0].title).toBe("New times went to Ana Lopez");
-      expect(told[0].body).toBe("Ana cancelled the First interview and asked for new times. They went out today. This was their one automatic set; if Ana does not pick a time, they stay under Cancelled for you to decide.");
+      expect(told[0].body).toBe("Ana cancelled the first interview and asked for new times. They went out today. This was their one automatic set; if Ana does not pick a time, they stay under Cancelled for you to decide.");
       expect(told[0].action.href).toBe(`/roles/${roleId}/talent?open=${p.applicationId}`);
     });
 
