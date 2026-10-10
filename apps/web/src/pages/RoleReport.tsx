@@ -2,7 +2,7 @@
 
 import { Fragment } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Card, EmptyState, ErrorState, OWNER_STAGES, PipelineBar, Pill, Skeleton, Table } from "@ros/ui";
+import { Alert, Card, EmptyState, ErrorState, numHead, OWNER_STAGES, PipelineBar, Pill, Skeleton, Stat, Table } from "@ros/ui";
 import { Link } from "../nav";
 import { api, type ScreeningFunnel } from "../api/client";
 import { funnelLines } from "../screen-view";
@@ -77,8 +77,8 @@ export function MustHavesCard({ mustHaves: m, links }: { mustHaves: NonNullable<
         <>
           <p className="small" style={{ color: "var(--ink-2)" }}><strong>{m.showEveryMustHave} of {plural(m.people, "person", "people")}</strong> {m.people === 1 ? "shows" : "show"} every must-have.</p>
           <div style={{ marginTop: 8 }}>
-            <Table head={["Must-have", "Shown", "Partly shown", "Not met", "Not known yet", "People read against it"]} label="How the pool meets each must-have">
-              {m.byMustHave.map((x) => <tr key={x.key}><td>{x.label}</td><td>{x.shown}</td><td>{x.partly}</td><td>{x.notShown}</td><td>{x.unknown}</td><td>{x.total}</td></tr>)}
+            <Table head={["Must-have", numHead("Shown"), numHead("Partly shown"), numHead("Not met"), numHead("Not known yet"), numHead("People read against it")]} label="How the pool meets each must-have">
+              {m.byMustHave.map((x) => <tr key={x.key}><td>{x.label}</td><td className="num">{x.shown}</td><td className="num">{x.partly}</td><td className="num">{x.notShown}</td><td className="num">{x.unknown}</td><td className="num">{x.total}</td></tr>)}
             </Table>
           </div>
           {m.stricter ? <p className="small" style={{ marginTop: 8, color: "var(--ink-2)" }}>{m.stricter.words} {links ? <Link to={m.stricter.editPath}>Look at the must-haves</Link> : null}</p> : null}
@@ -105,7 +105,7 @@ export function ScreeningCard({ roleId }: { roleId: string }) {
     <Card title="The screening conversation">
       {!lines.length ? <p className="small muted">Nobody has been offered the screening conversation for this role yet.</p> : (
         <>
-          <div className="row" style={{ gap: 24 }}>
+          <div className="stat-row">
             <Stat n={f.offered} label={f.offered === 1 ? "person offered it" : "people offered it"} />
             <Stat n={f.finished} label="finished it" />
             {f.stillApplying ? <Stat n={f.stillApplying} label="still applying now" /> : null}
@@ -115,8 +115,8 @@ export function ScreeningCard({ roleId }: { roleId: string }) {
           </dl>
           {f.skipped.length ? (
             <div style={{ marginTop: 10 }}>
-              <Table head={["Question", "Chose not to answer"]} label="Questions people chose not to answer">
-                {f.skipped.map((s) => <tr key={s.key}><td>{s.question}</td><td>{s.count}</td></tr>)}
+              <Table head={["Question", numHead("Chose not to answer")]} label="Questions people chose not to answer">
+                {f.skipped.map((s) => <tr key={s.key}><td>{s.question}</td><td className="num">{s.count}</td></tr>)}
               </Table>
             </div>
           ) : null}
@@ -135,17 +135,17 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
   return (
     <div className="grid-2">
       <Card title="Who applied">
-        <div className="row" style={{ gap: 24 }}>
+        <div className="stat-row">
           <Stat n={r.applicants.total} label={r.applicants.total === 1 ? "applicant in total" : "applicants in total"} />
           <Stat n={r.applicants.last30Days} label="in the last 30 days" />
         </div>
-        <div className="row" style={{ gap: 2, alignItems: "flex-end", height: 40, marginTop: 10 }} role="img" aria-label={`Applicants per day over the last 30 days: ${r.applicants.byDay.filter((d) => d.count).map((d) => `${d.day} ${d.count}`).join(", ") || "none"}`}>
-          {r.applicants.byDay.map((d) => <span key={d.day} title={`${d.day}: ${d.count}`} style={{ flex: 1, minWidth: 3, height: `${maxDay ? Math.max(4, (d.count / maxDay) * 100) : 4}%`, background: d.count ? "var(--ink-2)" : "var(--line)", borderRadius: 2 }} />)}
+        <div className="daybars" role="img" aria-label={`Applicants per day over the last 30 days: ${r.applicants.byDay.filter((d) => d.count).map((d) => `${d.day} ${d.count}`).join(", ") || "none"}`}>
+          {r.applicants.byDay.map((d) => <span key={d.day} title={`${d.day}: ${d.count}`} className={d.count ? undefined : "zero"} style={{ height: `${maxDay ? Math.max(4, (d.count / maxDay) * 100) : 4}%` }} />)}
         </div>
         <p className="small muted" style={{ margin: "4px 0 10px" }}>One bar per day, oldest on the left, days in {r.applicants.timeZone}.</p>
         {r.applicants.bySource.length ? (
-          <Table head={["Where from", "Detail", "Applicants"]} label="Applicants by source">
-            {r.applicants.bySource.map((s) => <tr key={`${s.source}:${s.sourceDetail ?? ""}`}><td>{s.label}</td><td className="small muted">{s.sourceDetail ?? ""}</td><td>{s.count}</td></tr>)}
+          <Table head={["Where from", "Detail", numHead("Applicants")]} label="Applicants by source">
+            {r.applicants.bySource.map((s) => <tr key={`${s.source}:${s.sourceDetail ?? ""}`}><td>{s.label}</td><td className="small muted">{s.sourceDetail ?? ""}</td><td className="num">{s.count}</td></tr>)}
           </Table>
         ) : <p className="small muted">Nobody yet.</p>}
       </Card>
@@ -157,8 +157,8 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
         </div>
         {r.stages.byOwnerStage ? (
           <div style={{ marginTop: 10 }}>
-            <Table head={["Stage", "People"]} label="People by stage">
-              {OWNER_STAGES.map((s) => <tr key={s.id}><td>{talentHref && (r.stages.byOwnerStage?.[s.id] ?? 0) > 0 ? <Link to={`${talentHref}?ownerStage=${s.id}`}>{s.label}</Link> : s.label}</td><td>{r.stages.byOwnerStage?.[s.id] ?? 0}</td></tr>)}
+            <Table head={["Stage", numHead("People")]} label="People by stage">
+              {OWNER_STAGES.map((s) => <tr key={s.id}><td>{talentHref && (r.stages.byOwnerStage?.[s.id] ?? 0) > 0 ? <Link to={`${talentHref}?ownerStage=${s.id}`}>{s.label}</Link> : s.label}</td><td className="num">{r.stages.byOwnerStage?.[s.id] ?? 0}</td></tr>)}
             </Table>
           </div>
         ) : null}
@@ -174,8 +174,8 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
           <details style={{ marginTop: 10 }}>
             <summary className="small">The steps underneath</summary>
             <div style={{ marginTop: 8 }}>
-              <Table head={["Step", "People"]} label="People by step">
-                {r.stages.byStage.map((s) => <tr key={s.stage}><td>{s.label} <span className="small muted">({GROUP_LABEL[s.group] ?? s.group})</span></td><td>{s.count}</td></tr>)}
+              <Table head={["Step", numHead("People")]} label="People by step">
+                {r.stages.byStage.map((s) => <tr key={s.stage}><td>{s.label} <span className="small muted">({GROUP_LABEL[s.group] ?? s.group})</span></td><td className="num">{s.count}</td></tr>)}
               </Table>
             </div>
           </details>
@@ -192,8 +192,8 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
           {r.timeInStage.waitingOnYou.count ? ` · typical wait ${days(r.timeInStage.waitingOnYou.medianDays)} · longest ${days(r.timeInStage.waitingOnYou.longestDays)}` : ""}.
         </p>
         {r.timeInStage.byStage.length ? (
-          <Table head={["Step", "There now", "Longest so far", "Finished this step", "Typical stay", "Average stay"]} label="Time in each step">
-            {r.timeInStage.byStage.map((s) => <tr key={s.stage}><td>{s.label}</td><td>{s.nowHere}</td><td>{s.nowHere ? days(s.longestDays) : ""}</td><td>{s.completed}</td><td>{s.completed ? days(s.medianDays) : ""}</td><td>{s.completed ? days(s.averageDays) : ""}</td></tr>)}
+          <Table head={["Step", numHead("There now"), numHead("Longest so far"), numHead("Finished this step"), numHead("Typical stay"), numHead("Average stay")]} label="Time in each step">
+            {r.timeInStage.byStage.map((s) => <tr key={s.stage}><td>{s.label}</td><td className="num">{s.nowHere}</td><td className="num">{s.nowHere ? days(s.longestDays) : ""}</td><td className="num">{s.completed}</td><td className="num">{s.completed ? days(s.medianDays) : ""}</td><td className="num">{s.completed ? days(s.averageDays) : ""}</td></tr>)}
           </Table>
         ) : <p className="small muted">Nothing has moved yet.</p>}
         <p className="small muted" style={{ marginTop: 8 }}>"Typical" is the middle value; "average" adds every stay up and divides. A day is 24 hours from the moment the step changed.</p>
@@ -213,15 +213,15 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
         </dl>
         {r.interviews.byRound.length ? (
           <div style={{ marginTop: 10 }}>
-            <Table head={["Round", "All", "On the calendar", "Held", "Candidate did not show", "Interviewer did not show", "Cancelled"]} label="Interviews by round">
-              {r.interviews.byRound.map((x) => <tr key={x.roundKey}><td>{x.title}</td><td>{x.total}</td><td>{x.scheduled}</td><td>{x.completed}</td><td>{x.noShowCandidate}</td><td>{x.noShowInterviewer}</td><td>{x.cancelled}</td></tr>)}
+            <Table head={["Round", numHead("All"), numHead("On the calendar"), numHead("Held"), numHead("Candidate did not show"), numHead("Interviewer did not show"), numHead("Cancelled")]} label="Interviews by round" pinFirst>
+              {r.interviews.byRound.map((x) => <tr key={x.roundKey}><td>{x.title}</td><td className="num">{x.total}</td><td className="num">{x.scheduled}</td><td className="num">{x.completed}</td><td className="num">{x.noShowCandidate}</td><td className="num">{x.noShowInterviewer}</td><td className="num">{x.cancelled}</td></tr>)}
             </Table>
           </div>
         ) : null}
       </Card>
 
       <Card title="Decisions waiting for you" needsYou={r.pendingDecisions.count > 0}>
-        <div className="row" style={{ gap: 24 }}>
+        <div className="stat-row">
           <Stat n={r.pendingDecisions.count} label={r.pendingDecisions.count === 1 ? "decision only a person can make" : "decisions only a person can make"} />
           {r.pendingDecisions.oldestDays !== null ? <Stat n={r.pendingDecisions.oldestDays} label="days the oldest has waited" /> : null}
         </div>
@@ -236,8 +236,8 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
 
       <Card title="What the assistant suggested, and what you decided">
         {r.recommendationsVsDecisions.rows.length ? (
-          <Table head={["Suggestion", "Candidates", "Invited to a screen", "Moved to interview", "Longlist or shortlist", "Not moving forward", "Put on hold", "No decision yet"]} label="Suggestions and decisions">
-            {r.recommendationsVsDecisions.rows.map((x) => <tr key={x.recommendation}><td>{x.label}</td><td>{x.total}</td><td>{x.invited}</td><td>{x.interviewed}</td><td>{x.shortlisted ?? 0}</td><td>{x.declined}</td><td>{x.held}</td><td>{x.noActionYet}</td></tr>)}
+          <Table head={["Suggestion", numHead("Candidates"), numHead("Invited to a screen"), numHead("Moved to interview"), numHead("Longlist or shortlist"), numHead("Not moving forward"), numHead("Put on hold"), numHead("No decision yet")]} label="Suggestions and decisions" pinFirst>
+            {r.recommendationsVsDecisions.rows.map((x) => <tr key={x.recommendation}><td>{x.label}</td><td className="num">{x.total}</td><td className="num">{x.invited}</td><td className="num">{x.interviewed}</td><td className="num">{x.shortlisted ?? 0}</td><td className="num">{x.declined}</td><td className="num">{x.held}</td><td className="num">{x.noActionYet}</td></tr>)}
           </Table>
         ) : <p className="small muted">No assessments yet.</p>}
         <p className="small muted" style={{ marginTop: 8 }}>{r.recommendationsVsDecisions.assessed} {r.recommendationsVsDecisions.assessed === 1 ? "candidate has" : "candidates have"} an assessment. The decision counted is the first thing a person did after the suggestion. People make every decision; the assistant only suggests.</p>
@@ -291,21 +291,12 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
         </dl>
         {r.outcomes.declineReasons.length ? (
           <div style={{ marginTop: 10 }}>
-            <Table head={["Why candidates were declined", "People"]} label="Decline reasons">
-              {r.outcomes.declineReasons.map((d) => <tr key={d.reason}><td>{d.label}</td><td>{d.count}</td></tr>)}
+            <Table head={["Why candidates were declined", numHead("People")]} label="Decline reasons">
+              {r.outcomes.declineReasons.map((d) => <tr key={d.reason}><td>{d.label}</td><td className="num">{d.count}</td></tr>)}
             </Table>
           </div>
         ) : null}
       </Card>
-    </div>
-  );
-}
-
-function Stat({ n, label }: { n: number; label: string }) {
-  return (
-    <div>
-      <div style={{ fontSize: 28, fontWeight: 600, lineHeight: 1.1 }}>{n}</div>
-      <div className="small muted">{label}</div>
     </div>
   );
 }

@@ -397,7 +397,8 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
       expect(page.status, label).toBe(200);
       const html = decodeEntities(await page.text());
       expect(html, label).toContain("This position is not taking new applications right now.");
-      expect(html, label).not.toContain("Apply now");
+      // the button's own words, not the bare phrase: the candidate CSS inlined on every page names Apply now in a comment
+      expect(html, label).not.toContain(">Apply now<");
       expect(html, label).toContain('"@type":"JobPosting"');
       expect((await app.request(`/careers/${slug}/jobs/${roleId}/apply`)).status, label).toBe(404);
       expect((await apply(applyForm({ firstName: "Gus", lastName: "Hale", email: `gus.${label}@example.com` }))).status, label).toBe(404);
@@ -458,7 +459,7 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect((await json(owner, "POST", `/api/v1/roles/${roleId}/resume`, {})).status).toBe(200);
     await container.drain();
     const open = decodeEntities(await (await app.request(urls.job.replace("https://jobs.example.test", ""))).text());
-    expect(open).toContain("Apply now");
+    expect(open).toContain(">Apply now<");
     expect(open).not.toContain("not taking new applications");
     // resuming replayed the two held emails: both are applications now, nobody had to send anything again, the parked
     // résumé travelled with its application and left storage, and the team's notice says what happened
@@ -618,7 +619,7 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(page.status).toBe(200);
     const html = await page.text();
     expect(html).toContain("This position is closed and no longer taking applications.");
-    expect(html).not.toContain("Apply now");
+    expect(html).not.toContain(">Apply now<");
     const closed = jsonLdOf(html);
     expect(closed.validThrough).toBe(new Date(closedRole.closedAt ?? closedRole.updatedAt).toISOString().slice(0, 10));
     expect(closed.employmentType).toBe("FULL_TIME");

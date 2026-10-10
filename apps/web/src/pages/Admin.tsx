@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, ErrorState, Field, PageHeader, Segmented, Sheet, Skeleton, Table, Tabs } from "@ros/ui";
+import { Alert, Button, Card, Chip, ErrorState, Field, numHead, PageHeader, Segmented, Sheet, Skeleton, Table, Tabs, useTableSort } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 import { allowanceAlerts, allowanceChip } from "../allowance";
 import { APPLY_MODE_HELP, APPLY_MODE_LABEL, APPLY_MODE_NOTE, REASON_MIN, companyFlowToast, reasonReady, type ApplyMode } from "../apply-flow";
@@ -31,6 +31,26 @@ export function Admin() {
 
 /** `applyFlowDefault`: how the company's roles meet the screening conversation unless a role has its own setting (plan E1). */
 type CustomerRow = { id: string; name: string; slug: string; vertical: string; sizeBand: string; planKey: string; status: string; roles: number; applications: number; aiCostUsd: number; lastActivityAt: string | null; escalations: number; createdAt: string; settings: { website?: string }; verifiedAt: string | null; verifiedBy: { id: string; name?: string } | null; heldMessages: number; jobBoardsConfirmedAt: string | null; recruiterAsks?: RecruiterAskStanding; applyFlowDefault?: ApplyMode; screeningConversations?: { used: number; limit: number | null } };
+export const CUSTOMER_SORT = { company: (c: CustomerRow) => c.name, applicants: (c: CustomerRow) => c.applications, cost: (c: CustomerRow) => c.aiCostUsd, activity: (c: CustomerRow) => (c.lastActivityAt ? Date.parse(c.lastActivityAt) : null) };
+type CheckedRow = { verifiedAt: string | null; createdAt: string };
+
+/** Companies waiting for the ITS check, the longest waiting first (founder decision B7). */
+export function waitingCustomers<T extends CheckedRow>(rows: readonly T[]): T[] {
+  return rows.filter((c) => !c.verifiedAt).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+/**
+ * The customers table's order (founder decision B7): the companies waiting for the ITS check on top whatever order a
+ * heading gives, the longest waiting first, then the confirmed ones in the chosen order (`sortConfirmed`).
+ */
+export function customerOrder<T extends CheckedRow>(rows: readonly T[], sortConfirmed: (confirmed: T[]) => T[]): T[] {
+  return [...waitingCustomers(rows), ...sortConfirmed(rows.filter((c) => c.verifiedAt))];
+}
+
+/** What a screen reader hears after a sort; while any company waits, also that the waiting ones stay on top. */
+export function customerAnnouncement(announce: string, waiting: number): string {
+  return announce && waiting ? `${announce} Companies waiting for the ITS check stay at the top.` : announce;
+}
 
 function Customers() {
   const q = useQuery({ queryKey: ["admin", "customers"], queryFn: () => api.get<CustomerRow[]>("/api/v1/admin/customers", reason) });
@@ -41,10 +61,11 @@ function Customers() {
   const [reportFor, setReportFor] = useState<{ id: string; name: string } | null>(null);
   const [checking, setChecking] = useState<CustomerRow | null>(null);
   const [flowFor, setFlowFor] = useState<CustomerRow | null>(null);
+  const s = useTableSort<keyof typeof CUSTOMER_SORT>();
   if (q.isLoading) return <Skeleton lines={4} />;
   if (q.error) return <ErrorState message="Could not load customers." onRetry={() => q.refetch()} />;
   // Companies waiting for the ITS check come first, the longest waiting at the top (founder decision B7).
-  const waiting = q.data!.filter((c) => !c.verifiedAt).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const waiting = waitingCustomers(q.data!);
   const lowCompanies = q.data!.filter((c) => low.has(c.id));
   return (
     <div className="stack" style={{ gap: 14 }}>
@@ -61,8 +82,8 @@ function Customers() {
           <p className="small muted" style={{ marginTop: 8 }}>Talk with each about topping up. Nothing is refused: applications are still accepted, anyone part-way through finishes, and once the allowance is used up new applicants get the conversation link by email when more are added. The owners were told too.</p>
         </Card>
       ) : null}
-      <Table head={["Company", "ITS check", "Vertical", "Plan", "Roles", "Applicants", "AI cost", "Recruiter requests", "How people apply", "Last activity", "Churn signal", ""]}>
-        {[...waiting, ...q.data!.filter((c) => c.verifiedAt)].map((c) => {
+      <Table head={[s.col("company", "Company", "text"), "ITS check", "Vertical", "Plan", numHead("Roles"), s.col("applicants", "Applicants", "number", { num: true }), s.col("cost", "AI cost", "number", { num: true }), "Recruiter requests", "How people apply", s.col("activity", "Last activity", "date"), "Churn signal", ""]} scroll pinFirst empty="No customers yet." announce={customerAnnouncement(s.announce, waiting.length)}>
+        {customerOrder(q.data!, (confirmed) => s.apply(confirmed, CUSTOMER_SORT)).map((c) => {
           const idle = c.lastActivityAt ? (Date.now() - Date.parse(c.lastActivityAt)) / 86_400_000 : 999;
           return (
             <tr key={c.id}>
@@ -74,7 +95,7 @@ function Customers() {
               </td>
               <td>{c.vertical}</td>
               <td>{c.planKey} · {c.status}{c.screeningConversations ? <div className="small muted">{c.screeningConversations.used}{c.screeningConversations.limit !== null ? ` of ${c.screeningConversations.limit}` : ""} screening conversations this month</div> : null}{low.has(c.id) ? <div><Chip tone="caution">{allowanceChip(low.get(c.id)!)}</Chip></div> : null}</td>
-              <td>{c.roles}</td><td>{c.applications}</td><td>${c.aiCostUsd.toFixed(4)}</td>
+              <td className="num">{c.roles}</td><td className="num">{c.applications}</td><td className="num">${c.aiCostUsd.toFixed(4)}</td>
               <td>
                 {/* Past the plan's recruiter requests (Q33): nothing was refused; ITS talks with the customer about billing. */}
                 <div className="small">{recruiterAsksLine(c.recruiterAsks)}</div>
@@ -223,7 +244,8 @@ function CompanyCheckSheet({ company, onClose }: { company: CustomerRow; onClose
   );
 }
 
-function Runs() {
+// The console's sections are exported for the server-render tests (apps/shell/components/report-tables.test.ts); only Admin is routed.
+export function Runs() {
   const qc = useQueryClient();
   const [status, setStatus] = useState<string>("");
   const [openId, setOpenId] = useState<string | null>(null);
@@ -232,16 +254,16 @@ function Runs() {
   return (
     <div className="stack">
       <Segmented value={status} onChange={setStatus} options={[{ value: "", label: "All" }, { value: "running", label: "Running" }, { value: "waiting", label: "Waiting" }, { value: "failed", label: "Failed" }, { value: "completed", label: "Completed" }]} />
-      {q.isLoading ? <Skeleton lines={4} /> : q.error ? <ErrorState message="Could not load runs." onRetry={() => q.refetch()} /> : (
-        <Table head={["Workflow", "Subject", "Status", "Step", "Waiting on", "Attempts", "Error", "Updated", ""]}>
-          {q.data!.map((r) => (
+      {q.error ? <ErrorState message="Could not load runs." onRetry={() => q.refetch()} /> : (
+        <Table head={["Workflow", "Subject", "Status", "Step", "Waiting on", numHead("Attempts"), "Error", "Updated", ""]} scroll loading={q.isLoading ? 4 : undefined} empty={status ? "No runs with this status." : "No workflow runs yet."}>
+          {(q.data ?? []).map((r) => (
             <tr key={r.id}>
               <td><button type="button" className="btn quiet sm" onClick={() => setOpenId(r.id)}>{r.workflowKey}</button></td>
               <td className="small">{r.subject.type} {r.subject.id.slice(0, 8)}</td>
               <td><Chip tone={r.status === "failed" ? "critical" : r.status === "waiting" ? "caution" : r.status === "completed" ? "good" : "accent"}>{r.status}</Chip></td>
               <td>{r.currentStep}</td>
               <td className="small">{r.wait ? `${r.wait.kind}${r.wait.until ? ` until ${new Date(r.wait.until).toLocaleString()}` : ""}${r.wait.reason ? ` (${r.wait.reason})` : ""}` : ""}</td>
-              <td>{r.attempts}</td>
+              <td className="num">{r.attempts}</td>
               <td className="small" style={{ color: "var(--critical)" }}>{r.lastError?.slice(0, 80)}</td>
               <td className="small">{new Date(r.updatedAt).toLocaleString()}</td>
               <td>{r.status === "failed" ? <Button size="sm" onClick={() => retry.mutate(r.id)}>Retry</Button> : null}</td>
@@ -279,13 +301,14 @@ function RunSheet({ id, onClose }: { id: string; onClose: () => void }) {
   );
 }
 
-function AiRuns() {
+export function AiRuns() {
   const q = useQuery({ queryKey: ["admin", "ai"], queryFn: () => api.get<Array<{ id: string; companyId: string | null; agent: string; task: string; model: string; promptKey: string; promptVersion: number; status: string; inputTokens: number; outputTokens: number; costUsd: string; latencyMs: number; confidence: string | null; createdAt: string }>>("/api/v1/admin/ai-runs", reason) });
+  const s = useTableSort<"when" | "cost" | "latency">({ key: "when", dir: "descending" });
   if (q.isLoading) return <Skeleton lines={4} />;
   if (q.error) return <ErrorState message="Could not load AI runs." onRetry={() => q.refetch()} />;
   return (
-    <Table head={["When", "Agent", "Task", "Model", "Prompt", "Status", "Tokens in/out", "Cost", "Latency", "Confidence"]}>
-      {q.data!.map((r) => <tr key={r.id}><td className="small">{new Date(r.createdAt).toLocaleString()}</td><td>{r.agent}</td><td>{r.task}</td><td>{r.model}</td><td className="small">{r.promptKey}@v{r.promptVersion}</td><td><Chip tone={r.status === "ok" ? "good" : "critical"}>{r.status}</Chip></td><td>{r.inputTokens}/{r.outputTokens}</td><td>${Number(r.costUsd).toFixed(5)}</td><td>{r.latencyMs} ms</td><td>{r.confidence ?? ""}</td></tr>)}
+    <Table head={[s.col("when", "When", "date"), "Agent", "Task", "Model", "Prompt", "Status", numHead("Tokens in/out"), s.col("cost", "Cost", "number", { num: true }), s.col("latency", "Latency", "number", { num: true }), "Confidence"]} scroll empty="No AI runs recorded yet." announce={s.announce}>
+      {s.apply(q.data!, { when: (r) => Date.parse(r.createdAt), cost: (r) => Number(r.costUsd), latency: (r) => r.latencyMs }).map((r) => <tr key={r.id}><td className="small">{new Date(r.createdAt).toLocaleString()}</td><td>{r.agent}</td><td>{r.task}</td><td>{r.model}</td><td className="small">{r.promptKey}@v{r.promptVersion}</td><td><Chip tone={r.status === "ok" ? "good" : "critical"}>{r.status}</Chip></td><td className="num">{r.inputTokens}/{r.outputTokens}</td><td className="num">${Number(r.costUsd).toFixed(5)}</td><td className="num">{r.latencyMs} ms</td><td>{r.confidence ?? ""}</td></tr>)}
     </Table>
   );
 }
@@ -294,7 +317,7 @@ type AlertRow = { id: string; kind: string; severity: string; title: string; bod
 type Pending = { id: string; provider: string; kind: string; status: string; lastError: string | null; disconnectedAt: string | null };
 type Suppression = { id: string; address: string; reason: string; source: string; active: boolean; count: number; firstAt: string; lastAt: string; details: Record<string, unknown> };
 
-function Failures() {
+export function Failures() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["admin", "failures"], queryFn: () => api.get<{ failedRuns: Array<{ id: string; workflowKey: string; lastError: string | null; updatedAt: string }>; failedJobs: Array<{ id: number; kind: string; lastError: string | null }>; failedAi: Array<{ id: string; task: string; status: string; error: string | null; createdAt: string }>; alerts: AlertRow[]; pendingDeletions: Pending[] }>("/api/v1/admin/failures", reason), refetchInterval: 15000 });
   const ack = useMutation({ mutationFn: (id: string) => api.post(`/api/v1/admin/alerts/${id}/acknowledge`, {}, reason), onSuccess: () => { toast("Acknowledged."); qc.invalidateQueries({ queryKey: ["admin", "failures"] }); } });
@@ -338,8 +361,8 @@ function Failures() {
         {suppressions.data?.length ? (
           <>
             <Field label="How you confirmed the address (required to release)" htmlFor="rel-reason"><input id="rel-reason" className="input" value={releaseReason} onChange={(e) => setReleaseReason(e.target.value)} /></Field>
-            <Table head={["Address", "Reason", "Source", "Times", "Last", ""]}>
-              {suppressions.data.map((s) => <tr key={s.id}><td>{s.address}</td><td><Chip tone={s.reason === "spam_complaint" ? "critical" : "caution"}>{s.reason.replace(/_/g, " ")}</Chip></td><td>{s.source}</td><td>{s.count}</td><td className="small">{new Date(s.lastAt).toLocaleString()}</td><td><Button size="sm" variant="quiet" disabled={releaseReason.trim().length < 5 || s.reason === "spam_complaint"} loading={release.isPending} onClick={() => release.mutate(s.id)}>Release</Button></td></tr>)}
+            <Table head={["Address", "Reason", "Source", numHead("Times"), "Last", ""]}>
+              {suppressions.data.map((s) => <tr key={s.id}><td>{s.address}</td><td><Chip tone={s.reason === "spam_complaint" ? "critical" : "caution"}>{s.reason.replace(/_/g, " ")}</Chip></td><td>{s.source}</td><td className="num">{s.count}</td><td className="small">{new Date(s.lastAt).toLocaleString()}</td><td><Button size="sm" variant="quiet" disabled={releaseReason.trim().length < 5 || s.reason === "spam_complaint"} loading={release.isPending} onClick={() => release.mutate(s.id)}>Release</Button></td></tr>)}
             </Table>
             <p className="small muted">A spam complaint is never released from here: the person asked not to be emailed.</p>
           </>
@@ -353,7 +376,7 @@ function Failures() {
   );
 }
 
-function Costs() {
+export function Costs() {
   const q = useQuery({ queryKey: ["admin", "costs"], queryFn: () => api.get<Array<{ companyId: string | null; task: string; model: string; runs: number; inputTokens: number; outputTokens: number; costUsd: number }>>("/api/v1/admin/costs", reason) });
   if (q.isLoading) return <Skeleton lines={4} />;
   if (q.error) return <ErrorState message="Could not load costs." onRetry={() => q.refetch()} />;
@@ -361,8 +384,8 @@ function Costs() {
   return (
     <div className="stack">
       <p>Total model spend recorded: <strong>${total.toFixed(4)}</strong> (list prices; the fake provider is free).</p>
-      <Table head={["Company", "Task", "Model", "Runs", "Tokens in", "Tokens out", "Cost"]}>
-        {q.data!.map((r, i) => <tr key={i}><td className="small">{r.companyId?.slice(0, 8) ?? "platform"}</td><td>{r.task}</td><td>{r.model}</td><td>{r.runs}</td><td>{r.inputTokens}</td><td>{r.outputTokens}</td><td>${r.costUsd.toFixed(5)}</td></tr>)}
+      <Table head={["Company", "Task", "Model", numHead("Runs"), numHead("Tokens in"), numHead("Tokens out"), numHead("Cost")]} scroll empty="No model spend recorded yet.">
+        {q.data!.map((r, i) => <tr key={i}><td className="small">{r.companyId?.slice(0, 8) ?? "platform"}</td><td>{r.task}</td><td>{r.model}</td><td className="num">{r.runs}</td><td className="num">{r.inputTokens}</td><td className="num">{r.outputTokens}</td><td className="num">${r.costUsd.toFixed(5)}</td></tr>)}
       </Table>
     </div>
   );
@@ -501,13 +524,14 @@ const STATUS_TONE: Record<string, "neutral" | "accent" | "needs" | "good" | "cau
  * Privacy requests (docs/runbooks/privacy-requests.md): the recorded, deadline-tracked workflow. A deletion runs only
  * after a counsel decision is recorded and the administrator confirms; nothing here is automatic.
  */
-function PrivacyRequests() {
+export function PrivacyRequests() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["admin", "privacy"], queryFn: () => api.get<DataRequest[]>("/api/v1/admin/data-requests", reason), refetchInterval: 15000 });
   const [openId, setOpenId] = useState<string | null>(null);
   const [form, setForm] = useState({ companyId: "", requesterEmail: "", kind: "access", details: "" });
   const create = useMutation({ mutationFn: () => api.post("/api/v1/admin/data-requests", { ...form, details: form.details || undefined }, reason), onSuccess: () => { toast("Recorded and acknowledged."); setForm({ companyId: "", requesterEmail: "", kind: "access", details: "" }); qc.invalidateQueries({ queryKey: ["admin", "privacy"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record.") });
   const customers = useQuery({ queryKey: ["admin", "customers"], queryFn: () => api.get<Array<{ id: string; name: string }>>("/api/v1/admin/customers", reason) });
+  const s = useTableSort<"received" | "due">();
   if (q.isLoading) return <Skeleton lines={4} />;
   if (q.error || !q.data) return <ErrorState message="Could not load privacy requests." onRetry={() => q.refetch()} />;
   const open = q.data.filter((r) => !["fulfilled", "declined"].includes(r.status));
@@ -527,8 +551,8 @@ function PrivacyRequests() {
       </Card>
       <Card title={`Open (${open.length})`}>
         {open.length === 0 ? <p className="muted small">None.</p> : (
-          <Table head={["Received", "Customer", "Kind", "Source", "Verified", "Status", "Due", "Assigned", ""]}>
-            {open.map((r) => <tr key={r.id}><td className="small">{new Date(r.createdAt).toLocaleDateString()}</td><td>{r.companyName}</td><td>{KIND_LABEL[r.kind] ?? r.kind}</td><td><Chip tone="source">{SOURCE_LABEL[r.channel] ?? r.channel.replace(/_/g, " ")}</Chip></td><td><Chip tone={r.verificationStatus.startsWith("verified") ? "good" : r.verificationStatus === "failed" ? "critical" : "caution"}>{r.verificationStatus.replace(/_/g, " ")}</Chip></td><td><Chip tone={STATUS_TONE[r.status] ?? "neutral"}>{r.status.replace(/_/g, " ")}</Chip></td><td className="small">{daysLeft(r) < 0 ? <Chip tone="critical">overdue</Chip> : `${daysLeft(r)} days`}</td><td className="small">{r.assignedTo ? "yes" : "nobody"}</td><td><Button size="sm" onClick={() => setOpenId(r.id)}>Open</Button></td></tr>)}
+          <Table head={[s.col("received", "Received", "date"), "Customer", "Kind", "Source", "Verified", "Status", s.col("due", "Due", "date", { first: "ascending" }), "Assigned", ""]} scroll announce={s.announce}>
+            {s.apply(open, { received: (r) => Date.parse(r.createdAt), due: (r) => Date.parse(r.slaDueAt) }).map((r) => <tr key={r.id}><td className="small">{new Date(r.createdAt).toLocaleDateString()}</td><td>{r.companyName}</td><td>{KIND_LABEL[r.kind] ?? r.kind}</td><td><Chip tone="source">{SOURCE_LABEL[r.channel] ?? r.channel.replace(/_/g, " ")}</Chip></td><td><Chip tone={r.verificationStatus.startsWith("verified") ? "good" : r.verificationStatus === "failed" ? "critical" : "caution"}>{r.verificationStatus.replace(/_/g, " ")}</Chip></td><td><Chip tone={STATUS_TONE[r.status] ?? "neutral"}>{r.status.replace(/_/g, " ")}</Chip></td><td className="small">{daysLeft(r) < 0 ? <Chip tone="critical">overdue</Chip> : `${daysLeft(r)} days`}</td><td className="small">{r.assignedTo ? "yes" : "nobody"}</td><td><Button size="sm" onClick={() => setOpenId(r.id)}>Open</Button></td></tr>)}
           </Table>
         )}
       </Card>
@@ -661,7 +685,7 @@ function Administrators() {
 type OutcomeRow = { id: string; companyName: string; applicationId: string | null; roleId: string | null; milestone: string; outcome: string; hireDate: string | null; offerAcceptedAt: string | null; recordedBy: { name?: string; id: string }; recordedAt: string; correctionOf: string | null; correctedAt: string | null; correctionReason: string | null };
 
 /** Human-recorded hiring outcomes across customers; an administrator corrects one with a reason, and the original stays. */
-function Outcomes() {
+export function Outcomes() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["admin", "outcomes"], queryFn: () => api.get<{ statement: string; outcomes: OutcomeRow[] }>("/api/v1/admin/outcomes", reason) });
   // A correction to "employer declined" is filed under one of the fixed decline reasons (plan G2).
@@ -672,7 +696,7 @@ function Outcomes() {
   return (
     <div className="stack" style={{ gap: 14 }}>
       <Alert tone="info">{q.data!.statement}</Alert>
-      <Table head={["Customer", "Level", "Outcome", "Hire date", "Recorded by", "When", "Actions"]}>
+      <Table head={["Customer", "Level", "Outcome", "Hire date", "Recorded by", "When", "Actions"]} empty="No outcomes recorded yet.">
         {q.data!.outcomes.map((o) => (
           <tr key={o.id}>
             <td>{o.companyName}</td>

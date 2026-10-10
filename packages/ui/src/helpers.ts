@@ -241,3 +241,66 @@ export function toastDuration(m: ToastMessage): number {
   if (m.action && m.durationMs) return Math.min(TOAST_ACTION_MAX_MS, Math.max(1000, m.durationMs));
   return m.action ? Math.max(reading, 9000) : reading;
 }
+
+/** A table's order: up or down, in the words aria-sort uses. */
+export type SortDir = "ascending" | "descending";
+/** What a column holds, which decides the useful first order and the words said when it changes. */
+export type SortKind = "text" | "number" | "date";
+/** One cell's value for sorting; a date as its timestamp (Date.parse). Empty, null, undefined and NaN sort last. */
+export type SortValue = string | number | null | undefined;
+/**
+ * A table heading (docs/07): its words; `num` for a column of figures (right-aligned, heading included); and, for a
+ * heading that sorts, `onSort` with `sort`, the column's order now (null while it does not sort the table).
+ */
+export type TableHead = { label: string; num?: boolean; sort?: SortDir | null; onSort?: () => void };
+
+/** A heading over a column of figures. */
+export function numHead(label: string): TableHead {
+  return { label, num: true };
+}
+
+/** Made on the first comparison of words, not when the module loads: every page imports this file, few of them sort. */
+let collator: Intl.Collator | undefined;
+function collate(a: string, b: string): number {
+  collator ??= new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  return collator.compare(a, b);
+}
+const isEmpty = (v: SortValue) => v === null || v === undefined || v === "" || (typeof v === "number" && Number.isNaN(v));
+
+/**
+ * Two values in the order asked for: numbers by size; words the way a person reads them ("Role 2" before "Role 10",
+ * capitals and accents aside); an empty value always last, whichever way round.
+ */
+export function compareValues(a: SortValue, b: SortValue, dir: SortDir): number {
+  const ea = isEmpty(a);
+  const eb = isEmpty(b);
+  if (ea || eb) return ea === eb ? 0 : ea ? 1 : -1;
+  const raw = typeof a === "number" && typeof b === "number" ? a - b : collate(String(a), String(b));
+  return dir === "ascending" ? raw : -raw;
+}
+
+/** The rows in a new order (a copy; the list given is left alone). Rows that tie keep the order they came in. */
+export function sortRows<T>(rows: readonly T[], get: (row: T) => SortValue, dir: SortDir): T[] {
+  return [...rows].sort((x, y) => compareValues(get(x), get(y), dir));
+}
+
+/**
+ * The order after a heading is pressed: the same column flips; a new column starts the useful way round, which is
+ * `first` when the page gives one (earliest first for a deadline or an interview to come), else A to Z for words,
+ * highest first for numbers and latest first for dates. Two states, no hidden third "unsorted" press.
+ */
+export function nextSort<K extends string>(current: { key: K; dir: SortDir } | null, key: K, kind: SortKind, first?: SortDir): { key: K; dir: SortDir } {
+  if (current?.key === key) return { key, dir: current.dir === "ascending" ? "descending" : "ascending" };
+  return { key, dir: first ?? (kind === "text" ? "ascending" : "descending") };
+}
+
+const SORT_WORDS: Record<SortKind, Record<SortDir, string>> = {
+  text: { ascending: "A to Z", descending: "Z to A" },
+  number: { ascending: "lowest first", descending: "highest first" },
+  date: { ascending: "earliest first", descending: "latest first" },
+};
+
+/** What a screen reader is told once after a person sorts ("Sorted by Last activity, latest first."). */
+export function sortAnnouncement(label: string, kind: SortKind, dir: SortDir): string {
+  return `Sorted by ${label}, ${SORT_WORDS[kind][dir]}.`;
+}

@@ -69,7 +69,7 @@ describe("Still applying beside the stage strip (plan E6)", () => {
     expect(html).toMatch(/<div class="talent-strip"><div role="tablist" aria-label="Stages"/);
     expect(html).toMatch(/<button type="button" class="toggle-chip" aria-pressed="false" title="Sent the form and answering the screening questions now">Still applying <span class="count">2<\/span><\/button>/);
     // the strip still counts all three as New
-    expect(html).toContain('<span>New</span> <span class="count">3</span>');
+    expect(html).toContain('<span class="tab-label" data-label="New">New</span> <span class="count">3</span>');
     // the page opens on "waiting on you": Maria only; never Theo, whose group says so
     expect(text(html)).toContain("Waiting on you 1");
     expect(html).toContain('class="talent-name">Maria Reyes</button>');
@@ -84,7 +84,8 @@ describe("Still applying beside the stage strip (plan E6)", () => {
     expect(html).toContain('class="talent-name">Theo Park</button>');
     expect(html).not.toContain('class="talent-name">Maria Reyes</button>');
     expect(text(html)).toContain("Nothing about them waits on you until they send their answers");
-    expect(html.match(/<span class="pill neutral sm" title="Sent the form and answering the screening questions now"><span class="dot pulse" aria-hidden="true"><\/span>Still applying<\/span>/g)).toHaveLength(2);
+    expect(html.match(/<span class="pill neutral sm" title="Sent the form and answering the screening questions now"><span class="dot" aria-hidden="true"><\/span>Still applying<\/span>/g)).toHaveLength(2);
+    expect(html.match(/class="dot pulse"/g)).toHaveLength(1); // only the page's own Live pill pulses
     expect(text(html)).not.toContain("Waiting on you 2 days");
   });
 });
