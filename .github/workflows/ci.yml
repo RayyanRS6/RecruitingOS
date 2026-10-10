@@ -91,8 +91,18 @@ jobs:
       - name: Playwright browsers
         run: pnpm --filter @ros/e2e exec playwright install --with-deps chromium
 
-      - name: End-to-end journeys with accessibility checks
-        run: pnpm e2e
+      # In two halves, each with a dev server of its own: one server for all 32 journeys grew until the runner was shut
+      # down mid-run twice (10 October 2026). Each half writes its own report; both are uploaded below.
+      - name: End-to-end journeys with accessibility checks (first half)
+        run: pnpm --filter @ros/e2e exec playwright test --shard=1/2
+        env:
+          E2E_REPORT_DIR: report/1
+
+      - name: End-to-end journeys with accessibility checks (second half)
+        if: ${{ success() || failure() }}
+        run: pnpm --filter @ros/e2e exec playwright test --shard=2/2
+        env:
+          E2E_REPORT_DIR: report/2
 
       - name: Playwright report (synthetic data only)
         if: always()
