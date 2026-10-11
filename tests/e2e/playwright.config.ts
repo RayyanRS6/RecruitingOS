@@ -36,7 +36,10 @@ export default defineConfig({
   ],
   // A deployed address is already running; a local run starts the shell itself.
   webServer: remote ? undefined : {
-    command: `pnpm --filter @ros/shell exec next dev -p ${port} --disable-source-maps`,
+    // Turbopack compiles outside the JavaScript heap: with webpack, the route inventory alone (every page in one test)
+    // pushed the dev server past its memory threshold on CI's 7 GB runner, and the restart wiped the in-memory database
+    // mid-test. With Turbopack the whole suite ran in 18 minutes on a 3 GB heap, without a restart (11 October 2026).
+    command: `pnpm --filter @ros/shell exec next dev -p ${port} --turbopack --disable-source-maps`,
     cwd: repoRoot,
     url: `${base}/healthz`,
     reuseExistingServer: !process.env.CI,
@@ -45,8 +48,7 @@ export default defineConfig({
       // The dev server restarts itself when the V8 heap passes 80% of its limit (next/dist/server/lib/start-server.js;
       // the default limit is half the machine's memory), which wipes the in-memory database mid-run. Give it a limit
       // well above what one CI run needs (CI splits the journeys into three runs, each with its own server) but below the
-      // runner's memory, so the runner itself is never starved, and skip development source maps, the largest part of
-      // that heap.
+      // runner's memory, so the runner itself is never starved.
       NODE_OPTIONS: "--max-old-space-size=6144",
       NODE_ENV: "development", PGLITE_DIR: "memory://", APP_BASE_URL: base,
       AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", SMS_PROVIDER: "fake", AUTH_PROVIDER: "fake", CALENDAR_PROVIDER: "fake", ANALYTICS_PROVIDER: "fake",

@@ -14,6 +14,9 @@ export function skipWithoutFakeSignIn() {
 
 /** WCAG 2.1 A and AA plus best-practice rules; every violation fails the test with its nodes listed. */
 export async function expectAccessible(page: Page, name: string) {
+  // Let entrances finish first: axe measures colours as drawn, and a dialog still fading in reads as low contrast.
+  // Endless animations (loading placeholders, the Live dot) never finish, so they are left out.
+  await page.evaluate(() => Promise.all(document.getAnimations().filter((a) => a.effect?.getComputedTiming().iterations !== Infinity).map((a) => a.finished.catch(() => undefined))));
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"]).disableRules(["region"]).analyze();
   const summary = results.violations.map((v) => `${v.id} (${v.impact}): ${v.help}\n  ${v.nodes.slice(0, 4).map((n) => `${n.target.join(" ")} :: ${n.html.slice(0, 120)}`).join("\n  ")}`).join("\n");
   if (results.violations.length) throw new Error(`accessibility violations on ${name}:\n${summary}`);
