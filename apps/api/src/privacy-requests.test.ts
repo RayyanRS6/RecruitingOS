@@ -218,12 +218,19 @@ describe("candidate privacy requests", () => {
     const req = (await created.json()) as { id: string };
     const soon = new Date(Date.now() + 40 * 86_400_000);
     (container.engine as unknown as { now: () => Date }).now = () => soon;
-    const first = (await (await json(admin, "GET", "/api/v1/admin/data-requests/deadlines/check")).json()) as { soon: number; overdue: number };
+    // the check writes (alerts, and the record of them), so it is a POST: a link from another site (a GET, which carries
+    // the Lax cookie) cannot set it off, and a post from another site is refused (middleware/same-site.ts)
+    const deadlineAlerts = async () => (await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "privacy_request.deadline"))).length;
+    const before = await deadlineAlerts();
+    expect((await json(admin, "GET", "/api/v1/admin/data-requests/deadlines/check")).status).toBe(404);
+    expect((await app.request("/api/v1/admin/data-requests/deadlines/check", { method: "POST", headers: { cookie: admin, "x-admin-reason": "privacy test", "sec-fetch-site": "cross-site" } })).status).toBe(403);
+    expect(await deadlineAlerts()).toBe(before);
+    const first = (await (await json(admin, "POST", "/api/v1/admin/data-requests/deadlines/check")).json()) as { soon: number; overdue: number };
     expect(first.soon).toBeGreaterThanOrEqual(1);
-    const again = (await (await json(admin, "GET", "/api/v1/admin/data-requests/deadlines/check")).json()) as { soon: number };
+    const again = (await (await json(admin, "POST", "/api/v1/admin/data-requests/deadlines/check")).json()) as { soon: number };
     expect(again.soon).toBe(0);
     (container.engine as unknown as { now: () => Date }).now = () => new Date(Date.now() + 50 * 86_400_000);
-    const late = (await (await json(admin, "GET", "/api/v1/admin/data-requests/deadlines/check")).json()) as { overdue: number };
+    const late = (await (await json(admin, "POST", "/api/v1/admin/data-requests/deadlines/check")).json()) as { overdue: number };
     expect(late.overdue).toBeGreaterThanOrEqual(1);
     const alerts = await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "privacy_request.deadline"));
     expect(alerts.some((a) => a.severity === "critical" && (a.details as { requestId: string }).requestId === req.id)).toBe(true);

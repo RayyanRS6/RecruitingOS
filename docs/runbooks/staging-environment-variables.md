@@ -59,7 +59,7 @@ the next merge to `main`, or Deployments, **Create Deployment**, branch `main`.
 
 | Variable | Value | Where the value comes from | Sensitive |
 |---|---|---|---|
-| `APP_BASE_URL` | the `main` alias, e.g. `https://recruiting-os-git-main-<team>.vercel.app` | step 1 | no |
+| `APP_BASE_URL` | the `main` alias, e.g. `https://recruiting-os-git-main-<team>.vercel.app`; always open staging at this address (a change posted from one deployment's own address is refused as `cross_site`) | step 1 | no |
 | `SESSION_SECRET` | generated | step 2 | **yes** |
 | `ANALYTICS_SALT` | generated | step 2 | **yes** |
 | `SECRET_STORE` | `vault` | constant | no |
@@ -80,7 +80,7 @@ the next merge to `main`, or Deployments, **Create Deployment**, branch `main`.
 | `STORAGE_S3_ACCESS_KEY_ID` | the access key ID | 1Password, "Recruiting OS staging storage" | **yes** |
 | `STORAGE_S3_SECRET_ACCESS_KEY` | the secret access key | 1Password, "Recruiting OS staging storage" | **yes** |
 | `SCAN_PROVIDER` | `fake` | constant for the app, which never scans a file; the worker on Railway switches to `clamav` once the ClamAV service exists (`docs/runbooks/resume-storage.md`) | no |
-| `RATE_LIMIT_STORE` | `upstash` | constant | no |
+| `RATE_LIMIT_STORE` | `upstash` | constant; the production app refuses anything else, and refuses `upstash` without the two values below. Staging runs with `NODE_ENV=production`, so a missing value stops the app at boot (the Railway worker, also set to `upstash`, needs both values as it always did) | no |
 | `UPSTASH_REDIS_REST_URL` | `https://complete-narwhal-292092.upstash.io` | the Upstash database page (reported 22 Sep) | no |
 | `UPSTASH_REDIS_REST_TOKEN` | the REST token | Upstash console, database `recruiting-os-staging-rate-limit`, REST API panel; store it in 1Password ("Recruiting OS staging rate limit") first | **yes** |
 | `EMAIL_PROVIDER` | `fake` | constant until Postmark is set up (messages are recorded, not sent; never described as connected) | no |

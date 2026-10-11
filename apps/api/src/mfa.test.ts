@@ -97,9 +97,12 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
 
     const page = await h.get(jar, "/api/v1/auth/mfa");
     expect(page.status).toBe(200);
-    expect(page.headers.get("content-security-policy-report-only") ?? page.headers.get("content-security-policy")).toContain("img-src 'self' data:");
+    const csp = page.headers.get("content-security-policy-report-only") ?? page.headers.get("content-security-policy") ?? "";
+    expect(csp).toContain("img-src 'self' data:");
     const html = await page.text();
     expect(html).toContain("Set up your authenticator app");
+    // drawn with the nonce the policy names (two mounts match this path; app.ts issues one nonce per response)
+    expect(html).toContain(`<style nonce="${csp.match(/'nonce-([^']+)'/)?.[1]}">`);
     expect(html).toContain("data:image/svg+xml");
     primarySecret = setupKeyOf(html);
     expect(primarySecret.length).toBeGreaterThanOrEqual(32);
@@ -299,17 +302,28 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
 
   it("a request that names another site as its origin neither answers nor cancels the step", async () => {
     const { jar } = await h.browserSignIn({ email: "site@identifiedtalent.com", name: "S", provider: "azure", aal2: false });
-    const secret = setupKeyOf(await (await h.get(jar, "/api/v1/auth/mfa")).text());
+    const page = await h.get(jar, "/api/v1/auth/mfa");
+    // the page's own posts carry its real origin (middleware/same-site.ts, formPageReferrer)
+    expect(page.headers.get("referrer-policy")).toBe("same-origin");
+    const secret = setupKeyOf(await page.text());
+    // refused for every change under /api before the step is read (middleware/same-site.ts); the step is untouched
     for (const path of ["/api/v1/auth/mfa/cancel", "/api/v1/auth/mfa/skip"]) {
       const r = await h.post(jar, path, {}, { "sec-fetch-site": "cross-site" });
-      expect(r.headers.get("location")).toBe(h.mfaUrl());
+      expect(r.status).toBe(403);
+      expect(((await r.json()) as { error: { code: string } }).error.code).toBe("cross_site");
       expect(jar.ros_mfa).toBeTruthy();
     }
     const code = await h.post(jar, "/api/v1/auth/mfa", { code: totp(secret) }, { "sec-fetch-site": "cross-site" });
-    expect(code.headers.get("location")).toBe(h.mfaUrl());
+    expect(code.status).toBe(403);
+    // a sibling host of the same site names itself in Origin
+    const sibling = await h.post(jar, "/api/v1/auth/mfa", { code: totp(secret) }, { "sec-fetch-site": "same-site", origin: "https://www.example.com" });
+    expect(sibling.status).toBe(403);
+    // an opaque origin from a browser without fetch metadata names no site, so it answers nothing either
+    const opaque = await h.post(jar, "/api/v1/auth/mfa", { code: totp(secret) }, { origin: "null" });
+    expect(opaque.status).toBe(403);
     expect(jar.ros_session).toBeUndefined();
-    // the person's own cancel works and audits nothing about the secret
-    const cancel = await h.post(jar, "/api/v1/auth/mfa/cancel", {}, { "sec-fetch-site": "same-origin" });
+    // the person's own cancel, from the page at the app's address, works and audits nothing about the secret
+    const cancel = await h.post(jar, "/api/v1/auth/mfa/cancel", {}, { "sec-fetch-site": "same-origin", origin: container.env.APP_BASE_URL });
     expect(cancel.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/login`);
     expect(jar.ros_mfa).toBeUndefined();
   });

@@ -133,6 +133,18 @@ describe("content-security policy on candidate pages", () => {
     expect(logo.headers.get("content-security-policy-report-only")).toBeNull();
   });
 
+  it("the API's own pages are drawn with the nonce their policy names, though two mounts match them ('/x' and '/x/*')", async () => {
+    for (const path of ["/api/v1/auth/invite?token=not-a-real-invitation", "/api/v1/auth/consume?token=not-a-real-link"]) {
+      const r = await app.request(path);
+      expect(r.status, path).toBe(200);
+      const csp = r.headers.get("content-security-policy-report-only")!;
+      expect(csp, path).toBeTruthy();
+      const html = await r.text();
+      expect(html, path).toContain(`<style nonce="${nonceOf(csp)}">`);
+      expectEveryTagNonced(html, nonceOf(csp), path);
+    }
+  });
+
   it("CSP_MODE=enforce switches the header name and nothing else; the default anywhere else stays report-only", async () => {
     const enforcing = await createContainer({ memory: true, env: { ...baseEnv, CSP_MODE: "enforce" } });
     const app2 = createApp(enforcing);

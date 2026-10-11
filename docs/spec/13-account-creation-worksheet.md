@@ -162,8 +162,8 @@ Conventions: owners = Nadine and Paul (named human accounts); billing = `billing
   **Reset Credentials** in its settings, then update both hosts.
 - Production later: a second database on pay-as-you-go with a $10 monthly budget (the budget rate-limits the database
   rather than billing beyond it).
-- Verify: on staging the console shows no `rate_limit.not_shared` alert, and a limit tripped from two application
-  instances shows one count (`docs/readiness/03`).
+- Verify: staging starts at all (the production app refuses to start without `RATE_LIMIT_STORE=upstash` and both
+  values), and a limit tripped from two application instances shows one count (`docs/readiness/03`).
 
 ## 9. Sentry
 

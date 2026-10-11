@@ -77,8 +77,8 @@ export type Env = {
   STORAGE_DIR: string;
   /**
    * Where rate-limit counters live: "memory" (one process; local development), "upstash" (shared between every API
-   * process; decision 4; staging and production), or "fake" (an in-process stand-in for the shared store; tests and
-   * rehearsals only, refused in production).
+   * process; decision 4; staging and production, and the only value the production app accepts), or "fake" (an
+   * in-process stand-in for the shared store; tests and rehearsals only).
    */
   RATE_LIMIT_STORE: string;
   /** Upstash Redis REST endpoint and token (decision 4); the token is a secret entered by the founder at the host. */
@@ -179,7 +179,12 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     if (role === "worker" && !env.WORKER_DATABASE_URL) throw new Error("WORKER_DATABASE_URL must be set in production for the worker (the ros_worker connection string, a separate non-privileged role). Without it the process would open PGlite, the in-process development database, which production refuses.");
     if (env.WORKER_INLINE) throw new Error("WORKER_INLINE must be false in production: run the worker as its own process with WORKER_DATABASE_URL");
     if (env.STORAGE_PROVIDER !== "supabase") throw new Error("STORAGE_PROVIDER must be \"supabase\" in production: résumés live in private object storage, never on a function's disk or in memory (decision 2)");
-    if (env.RATE_LIMIT_STORE === "fake") throw new Error("RATE_LIMIT_STORE=fake is a test stand-in; production uses \"upstash\" (shared) or, until it is connected, \"memory\"");
+    // Decision 4: on Vercel's many short-lived instances a per-process count is close to no limit, so the app needs the
+    // shared store. At run time an unreachable Upstash still degrades to per-process counting with an alert (packages/core rate-limit.ts).
+    // The worker answers no request and counts none, so a missing Upstash value never stops the queue; it may not use the test stand-in.
+    if (role === "app" && env.RATE_LIMIT_STORE !== "upstash") throw new Error(`RATE_LIMIT_STORE must be "upstash" in production (it is "${env.RATE_LIMIT_STORE}"): "memory" counts in one process only and "fake" is a test stand-in. Set RATE_LIMIT_STORE=upstash with UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN (docs/runbooks/staging-environment-variables.md)`);
+    if (role === "app" && (!env.UPSTASH_REDIS_REST_URL || !env.UPSTASH_REDIS_REST_TOKEN)) throw new Error("RATE_LIMIT_STORE=upstash needs UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in production: the database's REST endpoint and its token (docs/runbooks/staging-environment-variables.md)");
+    if (env.RATE_LIMIT_STORE === "fake") throw new Error("RATE_LIMIT_STORE=fake is a test stand-in; production uses \"upstash\" (the worker may also use \"memory\")");
     if (env.COMPANY_CHECK !== "its") throw new Error("COMPANY_CHECK=auto is not allowed in production: every company that signs itself up waits for the one-time ITS check before anything is public (founder decision B7)");
   }
   return env;

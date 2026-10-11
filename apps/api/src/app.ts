@@ -41,6 +41,7 @@ import { fileRoutes } from "./routes/files";
 import { screenApplicationRoutes, screenRoleRoutes } from "./routes/screen-routes";
 import { postmarkWebhook } from "./webhooks/postmark";
 import { POLICIES, apiRateLimit, rateLimit, webhookRateLimit } from "./middleware/rate-limit";
+import { API_FORM_PAGES, formPageReferrer, sameSiteChanges } from "./middleware/same-site";
 import { contextStorage } from "hono/context-storage";
 import { buildCandidateCsp, cspHeaderName, makeNonce, normalizeCspReports, recordCspReport } from "@ros/core";
 
@@ -50,8 +51,12 @@ export function createApp(container: Container) {
   app.use("*", contextStorage());
   // Request logs never carry a credential or an OAuth code (correction 10).
   if (container.env.NODE_ENV !== "test") app.use("*", logger((line) => console.log(redactString(line))));
+  // The API's own form pages post with their real origin (Referrer-Policy: same-origin); before secureHeaders, so it has the last word.
+  for (const p of API_FORM_PAGES) app.use(p, formPageReferrer);
   app.use("*", secureHeaders());
   // The API is served by the same Next.js deployment as the app (one origin, APP_BASE_URL), so no cross-origin access is granted.
+  // Security review, 11 Oct: a change under /api that the browser says came from another site is refused before the session is read.
+  app.use("/api/*", sameSiteChanges(container.env));
   app.use("*", sessionMiddleware(container));
   // 21 Sep, item 5: per-user and per-tenant limits on the API, per-address for anonymous calls, generous per-provider limits on webhooks.
   app.use("/api/*", apiRateLimit());
@@ -59,6 +64,9 @@ export function createApp(container: Container) {
   for (const p of ["/c/*", "/careers/*", "/privacy", "/feeds/*", "/files/*", "/a/*", "/sitemap.xml", "/robots.txt"]) app.use(p, rateLimit(POLICIES.candidatePages));
   // 21 Sep, item 6: candidate pages carry a strict policy with a per-request nonce; report-only until reviewed (CSP_MODE).
   const candidateCsp: MiddlewareHandler<Vars> = async (c, next) => {
+    // One nonce per response: "/x/*" also matches "/x", so a page mounted under both runs this twice, and a second nonce
+    // would replace the one the page was drawn with in the header (every style blocked once CSP_MODE=enforce).
+    if (c.get("nonce")) return next();
     const nonce = makeNonce();
     c.set("nonce", nonce);
     await next();

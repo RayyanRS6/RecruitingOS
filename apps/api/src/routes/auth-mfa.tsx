@@ -10,6 +10,7 @@ import { IdentityError, type MfaFactor } from "@ros/integrations";
 import type { Container } from "../container";
 import { clientIp, SESSION_COOKIE, type Vars } from "../middleware/session";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
+import { fromThisSite } from "../middleware/same-site";
 import { BackupOfferPage, EnrolPage, VerifyPage } from "../pages/mfa";
 import { MFA_COOKIE, MFA_COOKIE_PATH, mfaCookieOptions, openSession, sessionCookieOptions } from "./auth-shared";
 
@@ -53,11 +54,6 @@ function toLogin(c: Context<Vars>, container: Container, code: string | null) {
 function providerFailure(c: Context<Vars>, container: Container, err: unknown) {
   if (err instanceof IdentityError) return toLogin(c, container, err.code === "mfa_session_invalid" ? "mfa_expired" : "mfa_unavailable");
   throw err;
-}
-/** Browsers name the origin of a navigation; a request that says it came from another site never clears or answers a transaction. */
-function fromThisSite(c: Context<Vars>): boolean {
-  const site = c.req.header("sec-fetch-site");
-  return !site || site === "same-origin" || site === "same-site" || site === "none";
 }
 const verifiedTotp = (factors: MfaFactor[]) => factors.filter((f) => f.type === "totp" && f.status === "verified");
 
@@ -137,7 +133,8 @@ mfaRoutes.post("/", rateLimit(POLICIES.authMfa), async (c) => {
   const tx = readTx(c, container);
   if (!tx) return toLogin(c, container, "mfa_expired");
   const p = paths(container);
-  if (!fromThisSite(c)) return c.redirect(p.base, 302);
+  // A request that says it came from another site never answers a transaction (also refused app-wide, middleware/same-site.ts).
+  if (!fromThisSite(c, container.env)) return c.redirect(p.base, 302);
   if (tx.stage !== "enrol" && tx.stage !== "verify" && tx.stage !== "backup_enrol") return c.redirect(p.base, 302);
   if (tx.stage === "backup_enrol" && !sessionOf(c, tx)) { clearTx(c, container); return c.redirect(p.home, 302); }
   const form = await c.req.parseBody();
@@ -252,13 +249,13 @@ mfaRoutes.get("/backup", async (c) => {
 mfaRoutes.post("/skip", async (c) => {
   const container = c.get("container");
   const p = paths(container);
-  if (!fromThisSite(c)) return c.redirect(p.base, 302);
+  if (!fromThisSite(c, container.env)) return c.redirect(p.base, 302);
   clearTx(c, container);
   return c.redirect(p.home, 302);
 });
 
 mfaRoutes.post("/cancel", async (c) => {
   const container = c.get("container");
-  if (!fromThisSite(c)) return c.redirect(paths(container).base, 302);
+  if (!fromThisSite(c, container.env)) return c.redirect(paths(container).base, 302);
   return toLogin(c, container, null);
 });

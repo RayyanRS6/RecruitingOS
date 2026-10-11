@@ -75,15 +75,43 @@ Before enforcement on staging:
 Before enforcement in production: staging has run enforced for at least two weeks with no new reports of the kinds above.
 The founder makes the production change; it is a configuration change, not a code change.
 
+## Local rehearsal under enforce (12 October 2026)
+
+Every browser journey (`tests/e2e`, 32 tests on Microsoft Edge against `next dev`) ran with `CSP_MODE=enforce` and
+passed, and a one-off check recorded every violation the browser reported while an owner, a signed-out candidate and a
+platform administrator used the staff pages (Today, Roles, a role and its report, Talent with the candidate panel and
+the framed résumé, Setup, Interviews, the job builder, the queue, every admin tab), the candidate pages (careers, job,
+apply, status, privacy), the job-page preview and the second-factor page. The reports reached `POST /api/csp-report`
+and were listed in the console. Found and fixed:
+
+- **The API's own pages under two mounts** (the second factor at `/api/v1/auth/mfa`, the invitation at
+  `/api/v1/auth/invite`): `"/x/*"` also matches `"/x"`, so the policy middleware ran twice, the page was drawn with one
+  nonce and the header named another, and every style on the page was blocked. One nonce per response now
+  (`apps/api/src/app.ts`); `apps/api/src/csp.test.ts` and `apps/api/src/mfa.test.ts` compare the page's nonce with the
+  header's.
+
+Left, both in development only (disposition *expected in development only*):
+
+- Next.js's development tools add about sixteen `<style>` elements without the nonce on every staff page. A production
+  build has no development tools.
+- With Turbopack, Next.js 15.5 writes the loading screen's script tag (`app/(app)/loading.tsx`) without the nonce
+  (`next/dist/server/app-render/create-component-styles-and-scripts.js`), so `strict-dynamic` blocks it; the page
+  itself is unaffected. The production build (`next build`, webpack) writes no such tag. Check again before a Next.js
+  upgrade that builds with Turbopack.
+
+Candidate pages, the job-page preview, the second-factor page after the fix, and the framed résumé reported nothing.
+
 ## Tests
 
 - `apps/api/src/csp.test.ts`: every candidate page receives the policy; one nonce per request on the style and the
   structured data; no inline handlers; no external origin; `CSP_MODE` switches the header; reports are accepted in both
-  formats, de-duplicated, stripped, listed and reviewed.
+  formats, de-duplicated, stripped, listed and reviewed; the API's own pages (sign-in link, invitation) are drawn with
+  the nonce their header names.
 - `apps/shell/lib/csp.test.ts`: the application policy names only the two font hosts, uses nonce + `strict-dynamic`,
   never `unsafe-inline` for scripts, and `unsafe-eval` only in development.
-- `tests/e2e/specs/routes.spec.ts`: the application responds with the report-only header carrying a nonce, and every
-  script the shell emits carries that nonce.
+- `tests/e2e/specs/routes.spec.ts`: the application responds with exactly one policy header (report-only or enforced,
+  so the same run works against a staging that enforces) carrying a nonce, every script the shell emits carries that
+  nonce, the pages send `X-Frame-Options: DENY`, and a candidate page keeps Hono's `SAMEORIGIN` and `no-referrer`.
 - Meeting links pasted by owners must be `http(s)` addresses (contract and rendering), so no `javascript:` link ever
   reaches a candidate page.
 
