@@ -12,6 +12,20 @@ export function skipWithoutFakeSignIn() {
   test.skip(REMOTE_TARGET, "signs in through the fake identity page, which a deployed address does not have (E2E_BASE_URL is set)");
 }
 
+/**
+ * page.goto that tries once more when the app's own navigation cancelled it (net::ERR_ABORTED): right after a staff
+ * sign-in the landing page may still send the person on while the dev server compiles the next page (seen on CI).
+ */
+export async function gotoSettled(page: Page, path: string) {
+  try {
+    await page.goto(path);
+  } catch (e) {
+    if (!String(e).includes("ERR_ABORTED")) throw e;
+    await page.waitForLoadState("networkidle");
+    await page.goto(path);
+  }
+}
+
 /** WCAG 2.1 A and AA plus best-practice rules; every violation fails the test with its nodes listed. */
 export async function expectAccessible(page: Page, name: string) {
   // Let entrances finish first: axe measures colours as drawn, and a dialog still fading in reads as low contrast.
@@ -49,6 +63,8 @@ export async function signIn(page: Page, input: { email: string; name: string; p
   if (input.aal2 === false && (await mfa.isChecked())) await mfa.uncheck();
   await page.getByRole("button", { name: "Continue" }).click();
   await page.waitForURL((u) => !u.pathname.startsWith("/api/"));
+  // The first page may still send the person on (staff go to the queue): a page.goto made before that settles is aborted.
+  await page.waitForLoadState("networkidle");
 }
 
 export async function createCompanyThroughTheForm(page: Page, name: string) {

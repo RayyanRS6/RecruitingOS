@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn, skipWithoutFakeSignIn } from "./helpers";
+import { createCompanyThroughTheForm, expectAccessible, gotoSettled, seedRoleAndApplicant, signIn, skipWithoutFakeSignIn } from "./helpers";
 
 /**
  * Route inventory coverage (docs/spec/16): every final Next.js route is visited signed out (redirect), signed in with the
@@ -123,11 +123,11 @@ test.describe("route inventory", () => {
   test("a seeded platform administrator reaches the queue and the console; both pass accessibility", async ({ page }) => {
     skipWithoutFakeSignIn();
     await signIn(page, { email: "admin-e2e@identifiedtalent.com", name: "Admin", provider: "azure", aal2: true });
-    await page.goto("/recruiter/queue");
+    await gotoSettled(page, "/recruiter/queue");
     await expect(page.getByRole("heading", { name: "Recruiter queue" })).toBeVisible({ timeout: 30_000 });
     await expectAccessible(page, "recruiter queue");
     await noHorizontalOverflow(page, "recruiter queue");
-    await page.goto("/admin");
+    await gotoSettled(page, "/admin");
     await expect(page.getByRole("heading", { name: "Admin console" })).toBeVisible({ timeout: 30_000 });
     await expectAccessible(page, "admin console");
     await noHorizontalOverflow(page, "admin console");

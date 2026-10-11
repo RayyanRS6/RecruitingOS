@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn, skipWithoutFakeSignIn, useOneVisitFlow } from "./helpers";
+import { createCompanyThroughTheForm, expectAccessible, gotoSettled, seedRoleAndApplicant, signIn, skipWithoutFakeSignIn, useOneVisitFlow } from "./helpers";
 
 /**
  * Applying and the screening conversation in one visit, from the team's side (plan Wave E; founder decision B1): an
@@ -62,7 +62,7 @@ test("still applying on the list, the panel and the report; ITS switches the com
   const staff = await browser.newContext();
   const admin = await staff.newPage();
   await signIn(admin, { email: "admin-e2e@identifiedtalent.com", name: "Admin", provider: "azure", aal2: true });
-  await admin.goto("/admin");
+  await gotoSettled(admin, "/admin");
   const company = admin.getByRole("row", { name: new RegExp(`One Visit Dental ${run}`) });
   await expect(company.getByText("Apply and talk in one visit")).toBeVisible({ timeout: 30_000 });
   await company.getByRole("button", { name: "Change" }).click();

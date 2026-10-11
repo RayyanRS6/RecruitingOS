@@ -41,6 +41,7 @@ test.describe("email alerts and earlier updates", () => {
     await expectAccessible(page, "updates");
     // The seeded applicant usually produced updates by now; when the worker has not run yet the page says there are none.
     const rows = page.getByRole("list", { name: "Updates" }).getByRole("listitem");
+    await expect(rows.first().or(page.getByText("No updates yet"))).toBeVisible({ timeout: 30_000 }); // loaded, either way
     if (await rows.count()) {
       const first = rows.first();
       const toggle = first.getByRole("button", { name: /^Mark (read|unread):/ });
