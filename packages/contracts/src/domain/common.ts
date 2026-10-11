@@ -77,6 +77,8 @@ export const EvidenceSource = z.enum([
   "playbook",
   "benchmark",
   "owner_statement",
+  // A recruiter's notes from a call that finished a screening conversation (plan E3): never the candidate's own words.
+  "recruiter_note",
 ]);
 export type EvidenceSource = z.infer<typeof EvidenceSource>;
 
@@ -90,6 +92,8 @@ export const Evidence = z.object({
   ref: z.string().optional(),
   confidence: Confidence.optional(),
   context: z.string().optional(),
+  /** Set in code, never trusted from the model: a claim about the candidate with nothing verified quoted from them (shown as "no quote"). */
+  unquoted: z.boolean().optional(),
 });
 export type Evidence = z.infer<typeof Evidence>;
 

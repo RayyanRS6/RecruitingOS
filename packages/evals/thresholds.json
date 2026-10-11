@@ -5,6 +5,15 @@
   "intake.illegal_criteria": {
     "minPassRate": 1
   },
+  "intake.job_ad": {
+    "minPassRate": 1
+  },
+  "intake.proxy_refusal": {
+    "minPassRate": 1
+  },
+  "intake.benchmark_basis": {
+    "minPassRate": 1
+  },
   "resume.extraction": {
     "minPassRate": 0.9
   },
@@ -17,7 +26,28 @@
   "triage.hallucination": {
     "minPassRate": 1
   },
+  "triage.bias_pairs": {
+    "minPassRate": 1
+  },
+  "triage.consistency": {
+    "minPassRate": 1
+  },
+  "board.determinism": {
+    "minPassRate": 1
+  },
   "screen.conversation": {
+    "minPassRate": 1
+  },
+  "screen.assess": {
+    "minPassRate": 1
+  },
+  "packet.revise": {
+    "minPassRate": 1
+  },
+  "company.about": {
+    "minPassRate": 1
+  },
+  "message.suggest_line": {
     "minPassRate": 1
   },
   "_note": "Thresholds gate prompt promotion (docs/11). The fake provider validates the harness; real thresholds are measured with AI_PROVIDER=anthropic."

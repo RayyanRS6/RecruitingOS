@@ -1,8 +1,9 @@
 import { and, eq } from "drizzle-orm";
-import type { Actor } from "@ros/contracts";
-import { emit, gate, notify, resolveDecisionMaker } from "@ros/core";
-import { approvalRequests, rolePackets, roles } from "@ros/db";
-import type { WorkflowDefinition } from "../types";
+import type { Actor, RolePacket } from "@ros/contracts";
+import { closingDateRequired, closingDayWords, closingMoment, defaultClosingDate, emit, gate, markBoardsOutdated, notify, resolveDecisionMaker } from "@ros/core";
+import { approvalRequests, companies, rolePackets, roles } from "@ros/db";
+import type { StepContext, WorkflowDefinition } from "../types";
+import { armClosingDate } from "./closing-date";
 
 type State = {
   roleId: string;
@@ -76,8 +77,11 @@ export const roleApproval: WorkflowDefinition<State> = {
         });
         return { kind: "wait", wait: { kind: "human", approvalRequestId: result.approvalRequestId, until }, state: { approvalRequestId: result.approvalRequestId, wasOpen, expiresAt: until }, resumeStep: "on_decision" };
       }
-      if (result.outcome === "execute") return { kind: "next", step: "open", state: { wasOpen } }; // a company policy could make packet approval automatic
-      return { kind: "fail", error: "packet approval is configured human_only; nothing to do", retryable: false };
+      // No policy can make packet approval automatic or "only a person": resolvePolicy holds it at "approval" (MIN_LEVELS
+      // and MAX_LEVELS in packages/core/src/policy.ts). Should either outcome ever come back, the run stops for a person
+      // instead of opening a role, and its pay, that nobody approved.
+      if (result.outcome === "execute") return { kind: "fail", error: "packet approval resolved to automatic; a person must approve every role", retryable: false };
+      return { kind: "fail", error: "packet approval resolved to human_only; nobody would be asked to approve the role", retryable: false };
     },
 
     async on_decision(ctx) {
@@ -137,12 +141,17 @@ export const roleApproval: WorkflowDefinition<State> = {
         // An approved edit to a running role: the new version becomes current; the role's status is untouched (it may have been paused meanwhile).
         await ctx.q.update(roles).set({ currentPacketVersion: ctx.state.packetVersion, ...(approved ? { title: approved.packet.identity.title } : {}) }).where(eq(roles.id, role.id));
         await emit(ctx.q, { type: "role_packet.approved", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "role_packet", id: `${role.id}:${ctx.state.packetVersion}` }, payload: { version: ctx.state.packetVersion, via: "edit_while_open" }, correlationId: ctx.run.id });
+        // The careers page and Google show the new version at once; the boards posted by hand still show the old one (plan D4).
+        await markBoardsOutdated(ctx.q, { companyId: ctx.companyId, roleId: role.id, previousVersion: role.currentPacketVersion, newVersion: ctx.state.packetVersion, actor: ctx.actor, now: ctx.now });
+        // A new place can bring Colorado's closing date with it.
+        if (approved) await ensureClosingDate(ctx, role, approved.packet, false);
         return { kind: "complete" };
       }
       if (role.status !== "open") {
         await ctx.q.update(roles).set({ status: "open", currentPacketVersion: ctx.state.packetVersion, openedAt: role.openedAt ?? now }).where(eq(roles.id, role.id));
         await emit(ctx.q, { type: "role_packet.approved", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "role_packet", id: `${role.id}:${ctx.state.packetVersion}` }, payload: { version: ctx.state.packetVersion }, correlationId: ctx.run.id });
         await emit(ctx.q, { type: "role.opened", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "role", id: role.id }, payload: { packetVersion: ctx.state.packetVersion }, correlationId: ctx.run.id });
+        if (approved) await ensureClosingDate(ctx, role, approved.packet, true);
       }
       return { kind: "next", step: "publish" };
     },
@@ -161,3 +170,42 @@ export const roleApproval: WorkflowDefinition<State> = {
     },
   },
 };
+
+/**
+ * Colorado expects the job ad to say when applications close (founder decision Q12, plan D5): a role there, or a remote
+ * one, that opens without a closing date gets one thirty days out, in the company's time zone, which the team can change.
+ * The timer is set when the role opens with a date (`arm`), or here when a date was just given.
+ *
+ * A date chosen while the role waited for approval can have passed by the time it opens. It would stop applications the
+ * moment the job went up, so it is not kept: the role gets the default date when the law asks for one, or no date, and
+ * the team is told, with the way to choose another.
+ */
+async function ensureClosingDate(ctx: StepContext<State>, role: typeof roles.$inferSelect, packet: RolePacket, arm: boolean): Promise<void> {
+  let closesOn = role.applicationsCloseOn ? role.applicationsCloseOn.slice(0, 10) : null;
+  const [company] = await ctx.q.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, ctx.companyId)).limit(1);
+  const required = closingDateRequired({ jobLocations: packet.identity.locations, remotePolicy: packet.identity.remotePolicy });
+  if (arm && closesOn && closingMoment(closesOn, company?.timezone).getTime() <= ctx.now.getTime()) {
+    const passed = closesOn;
+    closesOn = required ? defaultClosingDate(ctx.now, company?.timezone) : null;
+    await ctx.q.update(roles).set({ applicationsCloseOn: closesOn }).where(eq(roles.id, role.id));
+    await emit(ctx.q, { type: "role.closing_date_set", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "role", id: role.id }, payload: { closesOn, previous: passed, defaulted: required, reason: "The closing date had passed when the role opened." }, correlationId: ctx.run.id });
+    await notify(ctx.q, {
+      companyId: ctx.companyId,
+      kind: "stuck.closing_date_passed",
+      title: `${role.title}: the closing date had passed when it opened`,
+      body: `The closing date chosen before approval, ${closingDayWords(passed)}, was over by the time the role opened, so it would have stopped applications at once. ${closesOn ? `Colorado expects a closing date on the job ad, so it is now ${closingDayWords(closesOn)}.` : "The role now takes applications until you stop them."} Choose another date on the Posting tab at any time.`,
+      action: { label: "Choose a closing date", href: `/roles/${role.id}?tab=posting#closing-date` },
+      roles: ["owner", "admin"],
+    });
+    // No date: any timer left waiting for the old one is cancelled.
+    await armClosingDate(ctx.q, ctx.services.engine, { companyId: ctx.companyId, roleId: role.id, closesOn, actor: ctx.actor });
+    return;
+  }
+  if (!closesOn && required) {
+    closesOn = defaultClosingDate(ctx.now, company?.timezone);
+    await ctx.q.update(roles).set({ applicationsCloseOn: closesOn }).where(eq(roles.id, role.id));
+    await emit(ctx.q, { type: "role.closing_date_set", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "role", id: role.id }, payload: { closesOn, previous: null, defaulted: true, reason: "Colorado expects the job ad to say when applications close." }, correlationId: ctx.run.id });
+    arm = true;
+  }
+  if (arm && closesOn) await armClosingDate(ctx.q, ctx.services.engine, { companyId: ctx.companyId, roleId: role.id, closesOn, actor: ctx.actor });
+}

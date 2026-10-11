@@ -2,53 +2,250 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, ErrorState, Field, Segmented, Sheet, Skeleton, Table } from "@ros/ui";
+import { Alert, Button, Card, Chip, ErrorState, Field, numHead, PageHeader, Segmented, Sheet, Skeleton, Table, Tabs, useTableSort } from "@ros/ui";
 import { api, ApiError } from "../api/client";
+import { allowanceAlerts, allowanceChip } from "../allowance";
+import { APPLY_MODE_HELP, APPLY_MODE_LABEL, APPLY_MODE_NOTE, REASON_MIN, companyFlowToast, reasonReady, type ApplyMode } from "../apply-flow";
+import { RoleApplyMode } from "../components/ApplyMode";
+import { RECRUITER_ASKS_OVER_CHIP, recruiterAsksLine, type RecruiterAskStanding } from "../recruiter-requests";
 import { toast } from "../toast";
 import { CustomerReportSheet } from "./AdminCustomerReport";
+import { DECLINE_REASONS } from "./candidate-panel/helpers";
 
 type Tab = "customers" | "runs" | "ai" | "failures" | "costs" | "queue" | "calendar" | "privacy" | "admins" | "outcomes";
 const reason = { headers: { "x-admin-reason": "admin console" } };
+const SECTIONS: Array<{ id: Tab; label: string }> = [{ id: "customers", label: "Customers" }, { id: "runs", label: "Workflows" }, { id: "ai", label: "AI runs" }, { id: "failures", label: "Failures" }, { id: "costs", label: "Costs" }, { id: "queue", label: "Queue" }, { id: "calendar", label: "Business calendar" }, { id: "privacy", label: "Privacy requests" }, { id: "admins", label: "Administrators" }, { id: "outcomes", label: "Outcomes" }];
 
 /** The internal console (docs/16). Every read is audited server-side with the reason header. */
 export function Admin() {
   const [tab, setTab] = useState<Tab>("customers");
   return (
     <div className="stack" style={{ gap: 18 }}>
-      <div className="page-head"><div><h1>Admin console</h1><p>Customers, workflows, AI runs, failures, and cost. Reads are audited.</p></div></div>
-      <Segmented value={tab} onChange={setTab} ariaLabel="Admin sections" options={[{ value: "customers", label: "Customers" }, { value: "runs", label: "Workflows" }, { value: "ai", label: "AI runs" }, { value: "failures", label: "Failures" }, { value: "costs", label: "Costs" }, { value: "queue", label: "Queue" }, { value: "calendar", label: "Business calendar" }, { value: "privacy", label: "Privacy requests" }, { value: "admins", label: "Administrators" }, { value: "outcomes", label: "Outcomes" }]} />
-      {tab === "customers" ? <Customers /> : tab === "runs" ? <Runs /> : tab === "ai" ? <AiRuns /> : tab === "failures" ? <Failures /> : tab === "costs" ? <Costs /> : tab === "calendar" ? <CalendarAdmin /> : tab === "privacy" ? <PrivacyRequests /> : tab === "admins" ? <Administrators /> : tab === "outcomes" ? <Outcomes /> : <Queue />}
+      <PageHeader eyebrow="ITS" title="Admin console" sub="Customers, workflows, AI runs, failures, and cost. Reads are audited." />
+      <Tabs label="Admin sections" value={tab} onChange={(v) => setTab(v as Tab)} items={SECTIONS}>
+        {tab === "customers" ? <Customers /> : tab === "runs" ? <Runs /> : tab === "ai" ? <AiRuns /> : tab === "failures" ? <Failures /> : tab === "costs" ? <Costs /> : tab === "calendar" ? <CalendarAdmin /> : tab === "privacy" ? <PrivacyRequests /> : tab === "admins" ? <Administrators /> : tab === "outcomes" ? <Outcomes /> : <Queue />}
+      </Tabs>
     </div>
   );
 }
 
+/** `applyFlowDefault`: how the company's roles meet the screening conversation unless a role has its own setting (plan E1). */
+type CustomerRow = { id: string; name: string; slug: string; vertical: string; sizeBand: string; planKey: string; status: string; roles: number; applications: number; aiCostUsd: number; lastActivityAt: string | null; escalations: number; createdAt: string; settings: { website?: string }; verifiedAt: string | null; verifiedBy: { id: string; name?: string } | null; heldMessages: number; jobBoardsConfirmedAt: string | null; recruiterAsks?: RecruiterAskStanding; applyFlowDefault?: ApplyMode; screeningConversations?: { used: number; limit: number | null } };
+export const CUSTOMER_SORT = { company: (c: CustomerRow) => c.name, applicants: (c: CustomerRow) => c.applications, cost: (c: CustomerRow) => c.aiCostUsd, activity: (c: CustomerRow) => (c.lastActivityAt ? Date.parse(c.lastActivityAt) : null) };
+type CheckedRow = { verifiedAt: string | null; createdAt: string };
+
+/** Companies waiting for the ITS check, the longest waiting first (founder decision B7). */
+export function waitingCustomers<T extends CheckedRow>(rows: readonly T[]): T[] {
+  return rows.filter((c) => !c.verifiedAt).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+/**
+ * The customers table's order (founder decision B7): the companies waiting for the ITS check on top whatever order a
+ * heading gives, the longest waiting first, then the confirmed ones in the chosen order (`sortConfirmed`).
+ */
+export function customerOrder<T extends CheckedRow>(rows: readonly T[], sortConfirmed: (confirmed: T[]) => T[]): T[] {
+  return [...waitingCustomers(rows), ...sortConfirmed(rows.filter((c) => c.verifiedAt))];
+}
+
+/** What a screen reader hears after a sort; while any company waits, also that the waiting ones stay on top. */
+export function customerAnnouncement(announce: string, waiting: number): string {
+  return announce && waiting ? `${announce} Companies waiting for the ITS check stay at the top.` : announce;
+}
+
 function Customers() {
-  const q = useQuery({ queryKey: ["admin", "customers"], queryFn: () => api.get<Array<{ id: string; name: string; vertical: string; planKey: string; status: string; roles: number; applications: number; aiCostUsd: number; lastActivityAt: string | null; escalations: number; createdAt: string }>>("/api/v1/admin/customers", reason) });
+  const q = useQuery({ queryKey: ["admin", "customers"], queryFn: () => api.get<CustomerRow[]>("/api/v1/admin/customers", reason) });
+  // Companies at 80% of their screening conversations, or past them (Q17): from the alerts ITS was sent.
+  const alerts = useQuery({ queryKey: ["admin", "alerts"], queryFn: () => api.get<AlertRow[]>("/api/v1/admin/alerts", reason) });
+  const low = allowanceAlerts(alerts.data ?? []);
   // The customer's report (the ten role-report figures over every role) opens in a sheet; the read is audited like every other.
   const [reportFor, setReportFor] = useState<{ id: string; name: string } | null>(null);
+  const [checking, setChecking] = useState<CustomerRow | null>(null);
+  const [flowFor, setFlowFor] = useState<CustomerRow | null>(null);
+  const s = useTableSort<keyof typeof CUSTOMER_SORT>();
   if (q.isLoading) return <Skeleton lines={4} />;
   if (q.error) return <ErrorState message="Could not load customers." onRetry={() => q.refetch()} />;
+  // Companies waiting for the ITS check come first, the longest waiting at the top (founder decision B7).
+  const waiting = waitingCustomers(q.data!);
+  const lowCompanies = q.data!.filter((c) => low.has(c.id));
   return (
-    <>
-      <Table head={["Company", "Vertical", "Plan", "Roles", "Applicants", "AI cost", "Escalations", "Last activity", "Churn signal", ""]}>
-        {q.data!.map((c) => {
+    <div className="stack" style={{ gap: 14 }}>
+      {waiting.length ? (
+        <Alert tone="caution">
+          {waiting.length === 1 ? "1 company is" : `${waiting.length} companies are`} waiting for the ITS check: {waiting.map((c) => c.name).join(", ")}. Until you confirm a company, its careers page, job pages and Google listing are offline and its emails to candidates wait.
+        </Alert>
+      ) : null}
+      {lowCompanies.length ? (
+        <Card needsYou title="Screening conversations running low">
+          <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+            {lowCompanies.map((c) => <li key={c.id}><strong>{c.name}</strong>: {allowanceChip(low.get(c.id)!)}, since {new Date(low.get(c.id)!.since).toLocaleDateString()}</li>)}
+          </ul>
+          <p className="small muted" style={{ marginTop: 8 }}>Talk with each about topping up. Nothing is refused: applications are still accepted, anyone part-way through finishes, and once the allowance is used up new applicants get the conversation link by email when more are added. The owners were told too.</p>
+        </Card>
+      ) : null}
+      <Table head={[s.col("company", "Company", "text"), "ITS check", "Vertical", "Plan", numHead("Roles"), s.col("applicants", "Applicants", "number", { num: true }), s.col("cost", "AI cost", "number", { num: true }), "Recruiter requests", "How people apply", s.col("activity", "Last activity", "date"), "Churn signal", ""]} scroll pinFirst empty="No customers yet." announce={customerAnnouncement(s.announce, waiting.length)}>
+        {customerOrder(q.data!, (confirmed) => s.apply(confirmed, CUSTOMER_SORT)).map((c) => {
           const idle = c.lastActivityAt ? (Date.now() - Date.parse(c.lastActivityAt)) / 86_400_000 : 999;
           return (
             <tr key={c.id}>
-              <td>{c.name}</td><td>{c.vertical}</td><td>{c.planKey} · {c.status}</td><td>{c.roles}</td><td>{c.applications}</td><td>${c.aiCostUsd.toFixed(4)}</td><td>{c.escalations}</td>
+              <td>{c.name}</td>
+              <td>
+                {c.verifiedAt ? <Chip tone="good">confirmed</Chip> : <Chip tone="caution">waiting since {new Date(c.createdAt).toLocaleDateString()}</Chip>}
+                {c.heldMessages ? <div className="small muted">{c.heldMessages} {c.heldMessages === 1 ? "message" : "messages"} to candidates held</div> : null}
+                <div className="small muted">job boards: {c.jobBoardsConfirmedAt ? "ITS can sign in" : "not confirmed"}</div>
+              </td>
+              <td>{c.vertical}</td>
+              <td>{c.planKey} · {c.status}{c.screeningConversations ? <div className="small muted">{c.screeningConversations.used}{c.screeningConversations.limit !== null ? ` of ${c.screeningConversations.limit}` : ""} screening conversations this month</div> : null}{low.has(c.id) ? <div><Chip tone="caution">{allowanceChip(low.get(c.id)!)}</Chip></div> : null}</td>
+              <td className="num">{c.roles}</td><td className="num">{c.applications}</td><td className="num">${c.aiCostUsd.toFixed(4)}</td>
+              <td>
+                {/* Past the plan's recruiter requests (Q33): nothing was refused; ITS talks with the customer about billing. */}
+                <div className="small">{recruiterAsksLine(c.recruiterAsks)}</div>
+                {c.recruiterAsks?.over ? <Chip tone="caution">{RECRUITER_ASKS_OVER_CHIP}</Chip> : null}
+                <div className="small muted">{c.escalations} in all</div>
+              </td>
+              <td>
+                <div className="small">{APPLY_MODE_LABEL[c.applyFlowDefault ?? "form_then_screen"]}</div>
+                <Button size="sm" variant="quiet" onClick={() => setFlowFor(c)}>Change</Button>
+              </td>
               <td>{c.lastActivityAt ? new Date(c.lastActivityAt).toLocaleString() : "never"}</td>
               <td>{idle > 14 ? <Chip tone="critical">no activity {Math.round(idle)}d</Chip> : idle > 7 ? <Chip tone="caution">quiet {Math.round(idle)}d</Chip> : <Chip tone="good">active</Chip>}</td>
-              <td><Button size="sm" variant="secondary" onClick={() => setReportFor({ id: c.id, name: c.name })}>Report</Button></td>
+              <td><div className="row"><Button size="sm" variant={c.verifiedAt ? "secondary" : "primary"} onClick={() => setChecking(c)}>{c.verifiedAt ? "Check" : "Confirm"}</Button><Button size="sm" variant="secondary" onClick={() => setReportFor({ id: c.id, name: c.name })}>Report</Button></div></td>
             </tr>
           );
         })}
       </Table>
       {reportFor ? <CustomerReportSheet companyId={reportFor.id} companyName={reportFor.name} onClose={() => setReportFor(null)} /> : null}
-    </>
+      {checking ? <CompanyCheckSheet company={q.data!.find((c) => c.id === checking.id) ?? checking} onClose={() => setChecking(null)} /> : null}
+      {flowFor ? <ApplyFlowSheet company={q.data!.find((c) => c.id === flowFor.id) ?? flowFor} onClose={() => setFlowFor(null)} /> : null}
+    </div>
   );
 }
 
-function Runs() {
+/**
+ * How a customer's applicants meet the screening conversation (plan E1; founder decision B1), ITS only: the company's
+ * default ("form now, conversation later" until ITS switches the one-visit flow on for pilot roles or the whole company) and each role's own setting. Every change needs a reason, which is
+ * audited and kept with who made it. Roles that already have their own setting keep it when the default changes.
+ */
+function ApplyFlowSheet({ company, onClose }: { company: CustomerRow; onClose: () => void }) {
+  const qc = useQueryClient();
+  const current: ApplyMode = company.applyFlowDefault ?? "form_then_screen";
+  const [flow, setFlow] = useState<ApplyMode>(current);
+  const [why, setWhy] = useState("");
+  const roles = useQuery({ queryKey: ["admin", "customer-report", company.id], queryFn: () => api.get<{ roles: Array<{ id: string; title: string; status: string }> }>(`/api/v1/admin/customers/${company.id}/report`, reason) });
+  const save = useMutation({
+    mutationFn: () => api.post<{ applyFlow: ApplyMode; changed: boolean }>(`/api/v1/admin/customers/${company.id}/apply-flow`, { applyFlow: flow, reason: why.trim() }, reason),
+    onSuccess: (r) => {
+      const t = companyFlowToast(company.name, r.applyFlow, r.changed);
+      toast(t.title, t.detail);
+      setWhy("");
+      qc.invalidateQueries({ queryKey: ["admin", "customers"] });
+      // each role's "the company's default" now names the new one
+      qc.invalidateQueries({ queryKey: ["role"] });
+    },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not save the default."),
+  });
+  const open = (roles.data?.roles ?? []).filter((r) => r.status !== "closed");
+  return (
+    <Sheet open onClose={onClose} title={`How people apply: ${company.name}`}>
+      <div className="stack" style={{ gap: 14 }}>
+        <Card title="The company's default">
+          <p className="small muted">For every role of {company.name} without its own setting. {APPLY_MODE_NOTE}</p>
+          <div className="stack" style={{ gap: 8, marginTop: 8 }}>
+            <Segmented value={flow} onChange={setFlow} ariaLabel="The company's default" options={[{ value: "one_visit", label: APPLY_MODE_LABEL.one_visit }, { value: "form_then_screen", label: APPLY_MODE_LABEL.form_then_screen }]} />
+            <p className="small" style={{ margin: 0, color: "var(--ink-2)" }}>{APPLY_MODE_HELP[flow]}</p>
+            {flow !== current ? (
+              <>
+                <Field label="Why (required, kept with the change)" htmlFor="apply-flow-why" hint={`At least ${REASON_MIN} characters. The customer sees it in their activity history.`}><input id="apply-flow-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
+                <div className="row"><Button variant="primary" disabled={!reasonReady(why)} loading={save.isPending} onClick={() => save.mutate()}>Save the default</Button><Button variant="quiet" onClick={() => { setFlow(current); setWhy(""); }}>Cancel</Button></div>
+              </>
+            ) : null}
+          </div>
+        </Card>
+        <Card title="Each role">
+          {roles.isLoading ? <Skeleton lines={3} /> : roles.error ? <ErrorState message="Could not load the roles." onRetry={() => roles.refetch()} /> : open.length ? (
+            <div className="stack" style={{ gap: 12 }}>
+              {open.map((r) => (
+                <div key={r.id} className="stack" style={{ gap: 6, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
+                  <strong>{r.title} <span className="small muted">({r.status.replace(/_/g, " ")})</span></strong>
+                  <RoleApplyMode roleId={r.id} roleTitle={r.title} compact />
+                </div>
+              ))}
+            </div>
+          ) : <p className="small muted">No open or draft roles.</p>}
+        </Card>
+      </div>
+    </Sheet>
+  );
+}
+
+/**
+ * The one-time ITS check of a company (founder decision B7): confirm it after checking it is real, or take a confirmation
+ * back; both need a reason, which the customer sees in their own history, and a second press to confirm. Below, whether
+ * ITS can sign in to the company's job boards, which ticks the owner's getting-started step.
+ */
+function CompanyCheckSheet({ company, onClose }: { company: CustomerRow; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [why, setWhy] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const verified = !!company.verifiedAt;
+  const change = useMutation({
+    mutationFn: () => api.post<{ changed: boolean; releasedMessages: number }>(`/api/v1/admin/customers/${company.id}/verification`, { verified: !verified, reason: why.trim(), confirm: true }, reason),
+    onSuccess: (r) => {
+      toast(verified ? `${company.name} is no longer confirmed.` : `${company.name} is confirmed.`, verified ? "Its public pages are offline and its messages to candidates wait. The owners were told." : `Its pages are public now${r.releasedMessages ? ` and ${r.releasedMessages} held ${r.releasedMessages === 1 ? "message is" : "messages are"} on ${r.releasedMessages === 1 ? "its" : "their"} way` : ""}. The owners were told.`);
+      setWhy("");
+      setConfirming(false);
+      qc.invalidateQueries({ queryKey: ["admin", "customers"] });
+    },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not change the check."),
+  });
+  const boards = useMutation({
+    mutationFn: (confirmed: boolean) => api.post(`/api/v1/admin/customers/${company.id}/job-boards`, { confirmed }, reason),
+    onSuccess: (_r, confirmed) => { toast(confirmed ? "Job-board access confirmed." : "Job-board access no longer confirmed."); qc.invalidateQueries({ queryKey: ["admin", "customers"] }); },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record it."),
+  });
+  // A confirmed company with messages still held (one held while the confirmation was being made): confirming again sends them.
+  const release = useMutation({
+    mutationFn: () => api.post<{ releasedMessages: number }>(`/api/v1/admin/customers/${company.id}/verification`, { verified: true, reason: "Held messages sent after the company was confirmed.", confirm: true }, reason),
+    onSuccess: (r) => { toast(r.releasedMessages ? `${r.releasedMessages} held ${r.releasedMessages === 1 ? "message is" : "messages are"} on ${r.releasedMessages === 1 ? "its" : "their"} way.` : "Nothing was held any more."); qc.invalidateQueries({ queryKey: ["admin", "customers"] }); },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send the held messages."),
+  });
+  return (
+    <Sheet open onClose={onClose} title={`ITS check: ${company.name}`}>
+      <div className="stack" style={{ gap: 14 }}>
+        <Card title="The company">
+          <p className="small">{company.name} · {company.vertical} · {company.sizeBand} employees · {company.settings.website || "no website given"} · signed up {new Date(company.createdAt).toLocaleDateString()}</p>
+          <p className="small muted">{verified ? `Confirmed ${new Date(company.verifiedAt!).toLocaleString()}${company.verifiedBy?.name ? ` by ${company.verifiedBy.name}` : ""}.` : "Not confirmed yet: its careers page, job pages and Google listing are offline, and its emails to candidates wait. It can draft and approve roles."}</p>
+          {company.heldMessages && !verified ? <p className="small">{company.heldMessages} {company.heldMessages === 1 ? "message" : "messages"} to candidates {company.heldMessages === 1 ? "is" : "are"} held and will go out when you confirm.</p> : null}
+          {company.heldMessages && verified ? (
+            <div className="row" style={{ justifyContent: "space-between", marginTop: 6 }}>
+              <span className="small">{company.heldMessages} {company.heldMessages === 1 ? "message" : "messages"} to candidates {company.heldMessages === 1 ? "is" : "are"} still held although the company is confirmed.</span>
+              <Button size="sm" variant="primary" loading={release.isPending} onClick={() => release.mutate()}>Send the held messages</Button>
+            </div>
+          ) : null}
+        </Card>
+        <Card title={verified ? "Take the confirmation back" : "Confirm the company"}>
+          <p className="small muted">{verified ? "Its careers page, job pages and feeds go offline at once and its messages to candidates wait again. Roles, candidates and decisions are kept." : "Confirm only after checking the company is real: the kick-off call, its website, a phone number. Its pages go public, approved roles are published and held messages go out."} The owners are told, and they see your reason in their activity history.</p>
+          <div className="stack" style={{ gap: 8, marginTop: 8 }}>
+            <Field label={verified ? "Why you are taking it back" : "How you checked the company"} htmlFor="co-check-why"><input id="co-check-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
+            {confirming ? (
+              <Alert tone="caution"><div className="row" style={{ justifyContent: "space-between" }}><span>{verified ? `Take back the confirmation of ${company.name}?` : `Confirm ${company.name} and make its pages public?`}</span><span className="row"><Button size="sm" variant={verified ? "destructive" : "primary"} loading={change.isPending} onClick={() => change.mutate()}>{verified ? "Yes, take it back" : "Yes, confirm it"}</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
+            ) : <div className="row"><Button variant={verified ? "secondary" : "primary"} disabled={why.trim().length < 5} onClick={() => setConfirming(true)}>{verified ? "Take back the confirmation" : "Confirm the company"}</Button></div>}
+          </div>
+        </Card>
+        <Card title="Job-board access">
+          <p className="small muted">The owner adds the ITS recruiter as a user on the company's LinkedIn, Indeed and ZipRecruiter accounts. Record here once ITS can sign in to each; it ticks the owner's getting-started step.</p>
+          <div className="row" style={{ marginTop: 8 }}>
+            {company.jobBoardsConfirmedAt
+              ? <><Chip tone="good">ITS can sign in</Chip><Button size="sm" variant="secondary" loading={boards.isPending} onClick={() => boards.mutate(false)}>No longer confirmed</Button></>
+              : <Button size="sm" variant="primary" loading={boards.isPending} onClick={() => boards.mutate(true)}>ITS can sign in to the job boards</Button>}
+          </div>
+        </Card>
+      </div>
+    </Sheet>
+  );
+}
+
+// The console's sections are exported for the server-render tests (apps/shell/components/report-tables.test.ts); only Admin is routed.
+export function Runs() {
   const qc = useQueryClient();
   const [status, setStatus] = useState<string>("");
   const [openId, setOpenId] = useState<string | null>(null);
@@ -57,16 +254,16 @@ function Runs() {
   return (
     <div className="stack">
       <Segmented value={status} onChange={setStatus} options={[{ value: "", label: "All" }, { value: "running", label: "Running" }, { value: "waiting", label: "Waiting" }, { value: "failed", label: "Failed" }, { value: "completed", label: "Completed" }]} />
-      {q.isLoading ? <Skeleton lines={4} /> : q.error ? <ErrorState message="Could not load runs." onRetry={() => q.refetch()} /> : (
-        <Table head={["Workflow", "Subject", "Status", "Step", "Waiting on", "Attempts", "Error", "Updated", ""]}>
-          {q.data!.map((r) => (
+      {q.error ? <ErrorState message="Could not load runs." onRetry={() => q.refetch()} /> : (
+        <Table head={["Workflow", "Subject", "Status", "Step", "Waiting on", numHead("Attempts"), "Error", "Updated", ""]} scroll loading={q.isLoading ? 4 : undefined} empty={status ? "No runs with this status." : "No workflow runs yet."}>
+          {(q.data ?? []).map((r) => (
             <tr key={r.id}>
               <td><button type="button" className="btn quiet sm" onClick={() => setOpenId(r.id)}>{r.workflowKey}</button></td>
               <td className="small">{r.subject.type} {r.subject.id.slice(0, 8)}</td>
               <td><Chip tone={r.status === "failed" ? "critical" : r.status === "waiting" ? "caution" : r.status === "completed" ? "good" : "accent"}>{r.status}</Chip></td>
               <td>{r.currentStep}</td>
               <td className="small">{r.wait ? `${r.wait.kind}${r.wait.until ? ` until ${new Date(r.wait.until).toLocaleString()}` : ""}${r.wait.reason ? ` (${r.wait.reason})` : ""}` : ""}</td>
-              <td>{r.attempts}</td>
+              <td className="num">{r.attempts}</td>
               <td className="small" style={{ color: "var(--critical)" }}>{r.lastError?.slice(0, 80)}</td>
               <td className="small">{new Date(r.updatedAt).toLocaleString()}</td>
               <td>{r.status === "failed" ? <Button size="sm" onClick={() => retry.mutate(r.id)}>Retry</Button> : null}</td>
@@ -104,13 +301,14 @@ function RunSheet({ id, onClose }: { id: string; onClose: () => void }) {
   );
 }
 
-function AiRuns() {
+export function AiRuns() {
   const q = useQuery({ queryKey: ["admin", "ai"], queryFn: () => api.get<Array<{ id: string; companyId: string | null; agent: string; task: string; model: string; promptKey: string; promptVersion: number; status: string; inputTokens: number; outputTokens: number; costUsd: string; latencyMs: number; confidence: string | null; createdAt: string }>>("/api/v1/admin/ai-runs", reason) });
+  const s = useTableSort<"when" | "cost" | "latency">({ key: "when", dir: "descending" });
   if (q.isLoading) return <Skeleton lines={4} />;
   if (q.error) return <ErrorState message="Could not load AI runs." onRetry={() => q.refetch()} />;
   return (
-    <Table head={["When", "Agent", "Task", "Model", "Prompt", "Status", "Tokens in/out", "Cost", "Latency", "Confidence"]}>
-      {q.data!.map((r) => <tr key={r.id}><td className="small">{new Date(r.createdAt).toLocaleString()}</td><td>{r.agent}</td><td>{r.task}</td><td>{r.model}</td><td className="small">{r.promptKey}@v{r.promptVersion}</td><td><Chip tone={r.status === "ok" ? "good" : "critical"}>{r.status}</Chip></td><td>{r.inputTokens}/{r.outputTokens}</td><td>${Number(r.costUsd).toFixed(5)}</td><td>{r.latencyMs} ms</td><td>{r.confidence ?? ""}</td></tr>)}
+    <Table head={[s.col("when", "When", "date"), "Agent", "Task", "Model", "Prompt", "Status", numHead("Tokens in/out"), s.col("cost", "Cost", "number", { num: true }), s.col("latency", "Latency", "number", { num: true }), "Confidence"]} scroll empty="No AI runs recorded yet." announce={s.announce}>
+      {s.apply(q.data!, { when: (r) => Date.parse(r.createdAt), cost: (r) => Number(r.costUsd), latency: (r) => r.latencyMs }).map((r) => <tr key={r.id}><td className="small">{new Date(r.createdAt).toLocaleString()}</td><td>{r.agent}</td><td>{r.task}</td><td>{r.model}</td><td className="small">{r.promptKey}@v{r.promptVersion}</td><td><Chip tone={r.status === "ok" ? "good" : "critical"}>{r.status}</Chip></td><td className="num">{r.inputTokens}/{r.outputTokens}</td><td className="num">${Number(r.costUsd).toFixed(5)}</td><td className="num">{r.latencyMs} ms</td><td>{r.confidence ?? ""}</td></tr>)}
     </Table>
   );
 }
@@ -119,7 +317,7 @@ type AlertRow = { id: string; kind: string; severity: string; title: string; bod
 type Pending = { id: string; provider: string; kind: string; status: string; lastError: string | null; disconnectedAt: string | null };
 type Suppression = { id: string; address: string; reason: string; source: string; active: boolean; count: number; firstAt: string; lastAt: string; details: Record<string, unknown> };
 
-function Failures() {
+export function Failures() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["admin", "failures"], queryFn: () => api.get<{ failedRuns: Array<{ id: string; workflowKey: string; lastError: string | null; updatedAt: string }>; failedJobs: Array<{ id: number; kind: string; lastError: string | null }>; failedAi: Array<{ id: string; task: string; status: string; error: string | null; createdAt: string }>; alerts: AlertRow[]; pendingDeletions: Pending[] }>("/api/v1/admin/failures", reason), refetchInterval: 15000 });
   const ack = useMutation({ mutationFn: (id: string) => api.post(`/api/v1/admin/alerts/${id}/acknowledge`, {}, reason), onSuccess: () => { toast("Acknowledged."); qc.invalidateQueries({ queryKey: ["admin", "failures"] }); } });
@@ -163,8 +361,8 @@ function Failures() {
         {suppressions.data?.length ? (
           <>
             <Field label="How you confirmed the address (required to release)" htmlFor="rel-reason"><input id="rel-reason" className="input" value={releaseReason} onChange={(e) => setReleaseReason(e.target.value)} /></Field>
-            <Table head={["Address", "Reason", "Source", "Times", "Last", ""]}>
-              {suppressions.data.map((s) => <tr key={s.id}><td>{s.address}</td><td><Chip tone={s.reason === "spam_complaint" ? "critical" : "caution"}>{s.reason.replace(/_/g, " ")}</Chip></td><td>{s.source}</td><td>{s.count}</td><td className="small">{new Date(s.lastAt).toLocaleString()}</td><td><Button size="sm" variant="quiet" disabled={releaseReason.trim().length < 5 || s.reason === "spam_complaint"} loading={release.isPending} onClick={() => release.mutate(s.id)}>Release</Button></td></tr>)}
+            <Table head={["Address", "Reason", "Source", numHead("Times"), "Last", ""]}>
+              {suppressions.data.map((s) => <tr key={s.id}><td>{s.address}</td><td><Chip tone={s.reason === "spam_complaint" ? "critical" : "caution"}>{s.reason.replace(/_/g, " ")}</Chip></td><td>{s.source}</td><td className="num">{s.count}</td><td className="small">{new Date(s.lastAt).toLocaleString()}</td><td><Button size="sm" variant="quiet" disabled={releaseReason.trim().length < 5 || s.reason === "spam_complaint"} loading={release.isPending} onClick={() => release.mutate(s.id)}>Release</Button></td></tr>)}
             </Table>
             <p className="small muted">A spam complaint is never released from here: the person asked not to be emailed.</p>
           </>
@@ -178,7 +376,7 @@ function Failures() {
   );
 }
 
-function Costs() {
+export function Costs() {
   const q = useQuery({ queryKey: ["admin", "costs"], queryFn: () => api.get<Array<{ companyId: string | null; task: string; model: string; runs: number; inputTokens: number; outputTokens: number; costUsd: number }>>("/api/v1/admin/costs", reason) });
   if (q.isLoading) return <Skeleton lines={4} />;
   if (q.error) return <ErrorState message="Could not load costs." onRetry={() => q.refetch()} />;
@@ -186,8 +384,8 @@ function Costs() {
   return (
     <div className="stack">
       <p>Total model spend recorded: <strong>${total.toFixed(4)}</strong> (list prices; the fake provider is free).</p>
-      <Table head={["Company", "Task", "Model", "Runs", "Tokens in", "Tokens out", "Cost"]}>
-        {q.data!.map((r, i) => <tr key={i}><td className="small">{r.companyId?.slice(0, 8) ?? "platform"}</td><td>{r.task}</td><td>{r.model}</td><td>{r.runs}</td><td>{r.inputTokens}</td><td>{r.outputTokens}</td><td>${r.costUsd.toFixed(5)}</td></tr>)}
+      <Table head={["Company", "Task", "Model", numHead("Runs"), numHead("Tokens in"), numHead("Tokens out"), numHead("Cost")]} scroll empty="No model spend recorded yet.">
+        {q.data!.map((r, i) => <tr key={i}><td className="small">{r.companyId?.slice(0, 8) ?? "platform"}</td><td>{r.task}</td><td>{r.model}</td><td className="num">{r.runs}</td><td className="num">{r.inputTokens}</td><td className="num">{r.outputTokens}</td><td className="num">${r.costUsd.toFixed(5)}</td></tr>)}
       </Table>
     </div>
   );
@@ -326,13 +524,14 @@ const STATUS_TONE: Record<string, "neutral" | "accent" | "needs" | "good" | "cau
  * Privacy requests (docs/runbooks/privacy-requests.md): the recorded, deadline-tracked workflow. A deletion runs only
  * after a counsel decision is recorded and the administrator confirms; nothing here is automatic.
  */
-function PrivacyRequests() {
+export function PrivacyRequests() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["admin", "privacy"], queryFn: () => api.get<DataRequest[]>("/api/v1/admin/data-requests", reason), refetchInterval: 15000 });
   const [openId, setOpenId] = useState<string | null>(null);
   const [form, setForm] = useState({ companyId: "", requesterEmail: "", kind: "access", details: "" });
   const create = useMutation({ mutationFn: () => api.post("/api/v1/admin/data-requests", { ...form, details: form.details || undefined }, reason), onSuccess: () => { toast("Recorded and acknowledged."); setForm({ companyId: "", requesterEmail: "", kind: "access", details: "" }); qc.invalidateQueries({ queryKey: ["admin", "privacy"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record.") });
   const customers = useQuery({ queryKey: ["admin", "customers"], queryFn: () => api.get<Array<{ id: string; name: string }>>("/api/v1/admin/customers", reason) });
+  const s = useTableSort<"received" | "due">();
   if (q.isLoading) return <Skeleton lines={4} />;
   if (q.error || !q.data) return <ErrorState message="Could not load privacy requests." onRetry={() => q.refetch()} />;
   const open = q.data.filter((r) => !["fulfilled", "declined"].includes(r.status));
@@ -352,8 +551,8 @@ function PrivacyRequests() {
       </Card>
       <Card title={`Open (${open.length})`}>
         {open.length === 0 ? <p className="muted small">None.</p> : (
-          <Table head={["Received", "Customer", "Kind", "Source", "Verified", "Status", "Due", "Assigned", ""]}>
-            {open.map((r) => <tr key={r.id}><td className="small">{new Date(r.createdAt).toLocaleDateString()}</td><td>{r.companyName}</td><td>{KIND_LABEL[r.kind] ?? r.kind}</td><td><Chip tone="source">{SOURCE_LABEL[r.channel] ?? r.channel.replace(/_/g, " ")}</Chip></td><td><Chip tone={r.verificationStatus.startsWith("verified") ? "good" : r.verificationStatus === "failed" ? "critical" : "caution"}>{r.verificationStatus.replace(/_/g, " ")}</Chip></td><td><Chip tone={STATUS_TONE[r.status] ?? "neutral"}>{r.status.replace(/_/g, " ")}</Chip></td><td className="small">{daysLeft(r) < 0 ? <Chip tone="critical">overdue</Chip> : `${daysLeft(r)} days`}</td><td className="small">{r.assignedTo ? "yes" : "nobody"}</td><td><Button size="sm" onClick={() => setOpenId(r.id)}>Open</Button></td></tr>)}
+          <Table head={[s.col("received", "Received", "date"), "Customer", "Kind", "Source", "Verified", "Status", s.col("due", "Due", "date", { first: "ascending" }), "Assigned", ""]} scroll announce={s.announce}>
+            {s.apply(open, { received: (r) => Date.parse(r.createdAt), due: (r) => Date.parse(r.slaDueAt) }).map((r) => <tr key={r.id}><td className="small">{new Date(r.createdAt).toLocaleDateString()}</td><td>{r.companyName}</td><td>{KIND_LABEL[r.kind] ?? r.kind}</td><td><Chip tone="source">{SOURCE_LABEL[r.channel] ?? r.channel.replace(/_/g, " ")}</Chip></td><td><Chip tone={r.verificationStatus.startsWith("verified") ? "good" : r.verificationStatus === "failed" ? "critical" : "caution"}>{r.verificationStatus.replace(/_/g, " ")}</Chip></td><td><Chip tone={STATUS_TONE[r.status] ?? "neutral"}>{r.status.replace(/_/g, " ")}</Chip></td><td className="small">{daysLeft(r) < 0 ? <Chip tone="critical">overdue</Chip> : `${daysLeft(r)} days`}</td><td className="small">{r.assignedTo ? "yes" : "nobody"}</td><td><Button size="sm" onClick={() => setOpenId(r.id)}>Open</Button></td></tr>)}
           </Table>
         )}
       </Card>
@@ -486,17 +685,18 @@ function Administrators() {
 type OutcomeRow = { id: string; companyName: string; applicationId: string | null; roleId: string | null; milestone: string; outcome: string; hireDate: string | null; offerAcceptedAt: string | null; recordedBy: { name?: string; id: string }; recordedAt: string; correctionOf: string | null; correctedAt: string | null; correctionReason: string | null };
 
 /** Human-recorded hiring outcomes across customers; an administrator corrects one with a reason, and the original stays. */
-function Outcomes() {
+export function Outcomes() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["admin", "outcomes"], queryFn: () => api.get<{ statement: string; outcomes: OutcomeRow[] }>("/api/v1/admin/outcomes", reason) });
-  const [fix, setFix] = useState<{ id: string; outcome: string; hireDate: string; reason: string } | null>(null);
-  const correct = useMutation({ mutationFn: (f: { id: string; outcome: string; hireDate: string; reason: string }) => api.post(`/api/v1/admin/outcomes/${f.id}/correct`, { confirm: true, reason: f.reason, outcome: f.outcome === "voided" ? undefined : f.outcome, hireDate: f.hireDate || undefined }, reason), onSuccess: () => { toast("Corrected. The original record stays, marked corrected."); setFix(null); qc.invalidateQueries({ queryKey: ["admin", "outcomes"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not correct.") });
+  // A correction to "employer declined" is filed under one of the fixed decline reasons (plan G2).
+  const [fix, setFix] = useState<{ id: string; outcome: string; hireDate: string; reason: string; declineReason: string } | null>(null);
+  const correct = useMutation({ mutationFn: (f: { id: string; outcome: string; hireDate: string; reason: string; declineReason: string }) => api.post(`/api/v1/admin/outcomes/${f.id}/correct`, { confirm: true, reason: f.reason, outcome: f.outcome === "voided" ? undefined : f.outcome, hireDate: f.hireDate || undefined, declineReason: f.outcome === "employer_declined" ? f.declineReason : undefined }, reason), onSuccess: () => { toast("Corrected. The original record stays, marked corrected."); setFix(null); qc.invalidateQueries({ queryKey: ["admin", "outcomes"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not correct.") });
   if (q.isLoading) return <Skeleton lines={4} />;
   if (q.error) return <ErrorState message="Could not load outcomes." onRetry={() => q.refetch()} />;
   return (
     <div className="stack" style={{ gap: 14 }}>
       <Alert tone="info">{q.data!.statement}</Alert>
-      <Table head={["Customer", "Level", "Outcome", "Hire date", "Recorded by", "When", "Actions"]}>
+      <Table head={["Customer", "Level", "Outcome", "Hire date", "Recorded by", "When", "Actions"]} empty="No outcomes recorded yet.">
         {q.data!.outcomes.map((o) => (
           <tr key={o.id}>
             <td>{o.companyName}</td>
@@ -512,10 +712,11 @@ function Outcomes() {
                   {o.applicationId ? <><option value="hired_externally">Hired (outside the platform)</option><option value="offer_declined_externally">Declined an external offer</option><option value="candidate_withdrew">Candidate withdrew</option><option value="employer_declined">Employer declined</option><option value="no_hire">No hire</option></> : <><option value="filled">Filled</option><option value="filled_outside_platform">Filled outside the platform</option><option value="role_cancelled">Cancelled</option><option value="no_hire">No hire</option></>}
                 </select></Field>
                 {fix.outcome === "hired_externally" ? <Field label="Hire date" htmlFor={`fx-d-${o.id}`}><input id={`fx-d-${o.id}`} className="input" type="date" value={fix.hireDate} onChange={(e) => setFix({ ...fix, hireDate: e.target.value })} /></Field> : null}
+                {fix.outcome === "employer_declined" ? <Field label="Decline reason" htmlFor={`fx-dr-${o.id}`}><select id={`fx-dr-${o.id}`} className="select" value={fix.declineReason} onChange={(e) => setFix({ ...fix, declineReason: e.target.value })}>{DECLINE_REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field> : null}
                 <Field label="Reason for the correction" htmlFor={`fx-r-${o.id}`}><input id={`fx-r-${o.id}`} className="input" value={fix.reason} onChange={(e) => setFix({ ...fix, reason: e.target.value })} /></Field>
                 <div className="row"><Button size="sm" variant="primary" disabled={fix.reason.trim().length < 5} loading={correct.isPending} onClick={() => correct.mutate(fix)}>Confirm correction</Button><Button size="sm" variant="quiet" onClick={() => setFix(null)}>Cancel</Button></div>
               </div>
-            ) : <Button size="sm" variant="secondary" onClick={() => setFix({ id: o.id, outcome: "voided", hireDate: "", reason: "" })}>Correct</Button>) : null}</td>
+            ) : <Button size="sm" variant="secondary" onClick={() => setFix({ id: o.id, outcome: "voided", hireDate: "", reason: "", declineReason: DECLINE_REASONS[0][0] })}>Correct</Button>) : null}</td>
           </tr>
         ))}
       </Table>

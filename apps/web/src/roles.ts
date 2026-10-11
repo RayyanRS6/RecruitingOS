@@ -36,9 +36,59 @@ export const canManageRole = (role: string | null | undefined): boolean => !!rol
 const PACKET_EDIT_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin", "hiring_manager", "recruiter"]);
 export const canEditPacket = (role: string | null | undefined): boolean => !!role && PACKET_EDIT_ROLES.has(role);
 
+/**
+ * The packet editor's "Everything (advanced)": the whole packet as JSON (plan C11). Kept to admins and recruiters; every
+ * other editor uses the plain fields, which cover everything an owner or hiring manager changes.
+ */
+const PACKET_JSON_ROLES: ReadonlySet<string> = new Set<TenantRole>(["admin", "recruiter"]);
+export const canEditPacketJson = (role: string | null | undefined): boolean => !!role && PACKET_JSON_ROLES.has(role);
+
+/** role.approve: approve a role packet (owners, admins and hiring managers; never a recruiter, so a person at the company decides). */
+const APPROVE_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin", "hiring_manager"]);
+export const canApproveRole = (role: string | null | undefined): boolean => !!role && APPROVE_ROLES.has(role);
+
+/** compensation.read: the pay, and so the job page preview that shows it (plan D1). Everyone but an interviewer. */
+export const canSeePay = (role: string | null | undefined): boolean => !!role && role !== "interviewer";
+
+/**
+ * Sharing a job (plan D8): POST /roles/:id/share-links is open to those who manage postings and to those who approve
+ * roles, so whoever approved the job can share it straight away.
+ */
+export const canShareJob = (role: string | null | undefined): boolean => canManageRole(role) || canApproveRole(role);
+
+/** company.update: the company's own details in Setup, its "about" text and logo, and who posts on the boards. Owners and admins. */
+const COMPANY_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin"]);
+export const canChangeCompany = (role: string | null | undefined): boolean => !!role && COMPANY_ROLES.has(role);
+
 /** outcome.record: close a role with its outcome (the decision-makers and HR; not a recruiter, not an interviewer). */
 const OUTCOME_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin", "hiring_manager", "hr"]);
 export const canRecordOutcome = (role: string | null | undefined): boolean => !!role && OUTCOME_ROLES.has(role);
 
+/**
+ * application.reject: move someone to Not moving forward, and tell candidates a decision (send the decision message, or
+ * record telling them in person). HR and interviewers do not hold it.
+ */
+const DECLINE_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin", "hiring_manager", "recruiter"]);
+export const canDecline = (role: string | null | undefined): boolean => !!role && DECLINE_ROLES.has(role);
+
+/**
+ * note.read and note.write: read every private team note on a candidate and write one's own (founder decision Q24).
+ * Interviewers hold neither: they write and read only their own note, on people they interviewed.
+ */
+const NOTE_ROLES: ReadonlySet<string> = new Set<TenantRole>(["owner", "admin", "hiring_manager", "hr", "recruiter"]);
+export const canReadNotes = (role: string | null | undefined): boolean => !!role && NOTE_ROLES.has(role);
+
 /** events.read: the role's Activity tab. Everyone but an interviewer. */
 export const canSeeActivity = (role: string | null | undefined): boolean => !!role && role !== "interviewer";
+
+/**
+ * escalation.work: a recruiter's notes from a call with a candidate who asked for a person (plan E3). Recruiters only:
+ * the company's own, or an ITS recruiter working under a grant (who acts with a recruiter's rights).
+ */
+export const canAddCallNotes = (role: string | null | undefined): boolean => role === "recruiter";
+
+/**
+ * escalation.create: bring in a recruiter, and read and answer the team's recruiter requests. Everyone but an
+ * interviewer (an ITS recruiter inside a customer asks only within their grant; the API holds them to it).
+ */
+export const canAskRecruiter = (role: string | null | undefined): boolean => !!role && role !== "interviewer";

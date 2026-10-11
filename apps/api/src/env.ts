@@ -92,6 +92,18 @@ export type Env = {
   SMS_ENABLED: boolean;
   /** Content-security policy: "report-only" (default everywhere until staging reports are reviewed) or "enforce". */
   CSP_MODE: "report-only" | "enforce";
+  /**
+   * The one-time ITS check of a company that signs itself up (founder decision B7): "its" (the default, and the only
+   * value production accepts) keeps the careers page, job pages, Google listing and first candidate emails waiting until
+   * ITS confirms the company in the admin console; "auto" confirms every new company at once (the default under
+   * NODE_ENV=test, and for local journeys that need a public page straight away). Recorded either way.
+   */
+  COMPANY_CHECK: "its" | "auto";
+  /**
+   * The Undo window (plan G9): how many seconds a message a person sent waits in the outbox before it goes, so they can
+   * take it back. 30 by default; 0 under NODE_ENV=test unless set, so tests that send and drain see it leave at once.
+   */
+  MESSAGE_UNDO_SECONDS: number;
   WORKER_INLINE: boolean;
   WORKER_POLL_MS: number;
   raw: Record<string, string | undefined>;
@@ -139,6 +151,8 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     UPSTASH_REDIS_REST_TOKEN: source.UPSTASH_REDIS_REST_TOKEN ?? null,
     RATE_LIMIT_OVERRIDES: (() => { try { const v = JSON.parse(get("RATE_LIMIT_OVERRIDES", "{}")) as Record<string, unknown>; return Object.fromEntries(Object.entries(v).filter(([, n]) => typeof n === "number")) as Record<string, number>; } catch { return {}; } })(),
     CSP_MODE: get("CSP_MODE", "report-only") === "enforce" ? "enforce" : "report-only",
+    COMPANY_CHECK: get("COMPANY_CHECK", get("NODE_ENV", "development") === "test" ? "auto" : "its") === "auto" ? "auto" : "its",
+    MESSAGE_UNDO_SECONDS: Math.min(120, Math.max(0, Number(get("MESSAGE_UNDO_SECONDS", get("NODE_ENV", "development") === "test" ? "0" : "30")) || 0)),
     TRUST_PROXY_HOPS: Math.max(0, Number(get("TRUST_PROXY_HOPS", "1")) || 0),
     SMS_ENABLED: get("SMS_ENABLED", get("SMS_PROVIDER", "fake") === "twilio" ? "true" : "false") === "true",
     STORAGE_DIR: fromRoot(get("STORAGE_DIR", "./.data/files")),
@@ -166,6 +180,7 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     if (env.WORKER_INLINE) throw new Error("WORKER_INLINE must be false in production: run the worker as its own process with WORKER_DATABASE_URL");
     if (env.STORAGE_PROVIDER !== "supabase") throw new Error("STORAGE_PROVIDER must be \"supabase\" in production: résumés live in private object storage, never on a function's disk or in memory (decision 2)");
     if (env.RATE_LIMIT_STORE === "fake") throw new Error("RATE_LIMIT_STORE=fake is a test stand-in; production uses \"upstash\" (shared) or, until it is connected, \"memory\"");
+    if (env.COMPANY_CHECK !== "its") throw new Error("COMPANY_CHECK=auto is not allowed in production: every company that signs itself up waits for the one-time ITS check before anything is public (founder decision B7)");
   }
   return env;
 }

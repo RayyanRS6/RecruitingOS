@@ -14,7 +14,10 @@ Status: built and tested against the in-memory store and the fake scanner on 22 
    pinned to one content type, and submits the form with a sealed grant instead of the file. Without script, or when
    the direct upload fails, the form posts the file itself as before (through the application; the hosting platform
    caps those bodies at 4.5 MB, so files over 4 MB need the direct path). Inbound email attachments follow the same
-   road as the form. Nothing about the person leaves the page except the file's name, size and type.
+   road as the form. Nothing about the person leaves the page except the file's name, size and type. A grant attaches
+   its file to one submission (`document.upload_used` on the role); sent again it is refused like an expired grant,
+   before the file is looked at, so the answer never shows whether the first submission was new or a repeat. A repeat
+   submission's file is deleted at once.
 2. **Quarantine.** Every file first lives under `quarantine/<company>/<role>/<random>.<ext>` with the document row in
    status `quarantined`. Nobody can open it: the staff download route answers 409 for anything not `clean`.
 3. **Check and scan (worker).** The intake workflow's `validate` step (`packages/workflows/src/documents.ts`) reads the
@@ -33,8 +36,8 @@ Status: built and tested against the in-memory store and the fake scanner on 22 
 6. **Delete.** A fulfilled deletion request removes the object, marks the row `deleted` and audits `document.deleted`.
 
 Audit actions: `document.uploaded`, `document.read`, `document.rejected`, `document.deleted` (`document.replaced` is
-reserved; release 1 has no path that replaces a file). Events: `document.upload_authorized`, `document.uploaded`,
-`document.validated`, `document.rejected`, `document.deleted`. None carries file contents.
+reserved; release 1 has no path that replaces a file). Events: `document.upload_authorized`, `document.upload_used`,
+`document.uploaded`, `document.validated`, `document.rejected`, `document.deleted`. None carries file contents.
 
 ## The staging bucket (founder-run, one screen at a time)
 

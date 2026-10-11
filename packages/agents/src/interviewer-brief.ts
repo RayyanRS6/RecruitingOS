@@ -1,5 +1,6 @@
 import { desc, eq } from "drizzle-orm";
 import type { EvidenceAssessment, RolePacket, ScreenAssessment } from "@ros/contracts";
+import { screenAnswersSent, unsentScreenReadings } from "@ros/core";
 import { assessments, screens, type Queryable } from "@ros/db";
 import { answersOf } from "./screen-focus";
 
@@ -67,12 +68,15 @@ function mergeFindings(first: Finding[], second: Finding[], cap: number, aboutPa
 export async function composeInterviewerBrief(q: Queryable, input: { applicationId: string; candidateFirstName: string; packet: RolePacket; roundKey: string }): Promise<InterviewerBrief | null> {
   const round = input.packet.interviews.plan.find((r) => r.key === input.roundKey);
   if (!round) return null;
-  const rows = await q.select().from(assessments).where(eq(assessments.applicationId, input.applicationId)).orderBy(desc(assessments.createdAt));
+  // A screen may have opened with the assessment's open questions; their answers sit beside them in `progress`, so the brief reads both places.
+  const screenRows = await q.select({ status: screens.status, answers: screens.answers, progress: screens.progress, completedAt: screens.completedAt, assessmentId: screens.assessmentId }).from(screens).where(eq(screens.applicationId, input.applicationId)).orderBy(desc(screens.createdAt));
+  // Only what the candidate sent (founder decision of 9 October 2026): a conversation they did not send, and any reading of it, stay out of the brief.
+  const all = await q.select().from(assessments).where(eq(assessments.applicationId, input.applicationId)).orderBy(desc(assessments.createdAt));
+  const hidden = unsentScreenReadings(screenRows, all);
+  const rows = all.filter((r) => !hidden.has(r.id));
   const screenAsmt = rows.find(isScreenAssessment) ?? null;
   const resumeAsmt = (rows.find((r) => r.kind !== "screen") as (AssessmentRow & { result: EvidenceAssessment }) | undefined) ?? null;
-  // A screen may have opened with the assessment's open questions; their answers sit beside them in `progress`, so the brief reads both places.
-  const screenRows = await q.select({ status: screens.status, answers: screens.answers, progress: screens.progress, completedAt: screens.completedAt }).from(screens).where(eq(screens.applicationId, input.applicationId)).orderBy(desc(screens.createdAt));
-  const answered = screenRows.map((s) => ({ ...s, all: answersOf(s) })).find((s) => Object.keys(s.all).length > 0) ?? null;
+  const answered = screenRows.filter(screenAnswersSent).map((s) => ({ ...s, all: answersOf(s) })).find((s) => Object.keys(s.all).length > 0) ?? null;
   const questionText = (key: string) => answered?.progress.focusQuestions?.find((f) => f.key === key)?.question ?? input.packet.screening.questions.find((x) => x.key === key)?.question ?? key.replace(/_/g, " ");
 
   const requirementFinding = (key: string) => screenAsmt?.result.requirementFindings?.find((r) => r.requirementKey === key) ?? resumeAsmt?.result.requirementFindings?.find((r) => r.requirementKey === key) ?? null;

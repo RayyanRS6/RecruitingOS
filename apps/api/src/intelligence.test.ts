@@ -4,13 +4,14 @@ import { and, eq } from "drizzle-orm";
 import type { RolePacket } from "@ros/contracts";
 import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, RESUME_UNREADABLE_TEXT, anonymizeCandidate, buildEscalationContext, exportCandidateData } from "@ros/core";
 import { composeInterviewerBrief } from "@ros/agents";
-import { applications, assessments, candidates, events, screens, withTenant } from "@ros/db";
+import { applications, assessments, auditRecords, candidates, events, screens, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { useLaterApplyFlow } from "./test-helpers";
 
 type Finding = { claim: string; evidence: { source: string; quote?: string } };
-type Evidence = { needsCloserLook: boolean; reason: string | null; assessmentUnavailable: boolean; resumeUnreadable: boolean; unknowns: string[]; unknownCount: number; topStrength: Finding | null; topConcern: Finding | null; confidenceReasons: string[] };
+type Evidence = { needsCloserLook: boolean; reason: string | null; assessmentUnavailable: boolean; resumeUnreadable: boolean; inconsistent: boolean; lowConfidence: boolean; hasProvenMiss: boolean; unknowns: string[]; unknownCount: number; topStrength: Finding | null; topConcern: Finding | null; confidenceReasons: string[] };
 type Row = { id: string; stage: string; stageLabel: string; group: string; evidence: Evidence; assessment: { overall: string; summary: string } | null };
 type Detail = { stage: string; allowedActions: string[]; assessments: Array<{ kind: string; overall: string; result: { recommendation: string; concerns: Finding[]; unknowns: Array<{ question: string }>; confidenceReasons?: string[] } }>; screens: Array<{ status: string; progress: { focusQuestions?: Array<{ key: string; question: string; answer?: string }> } }> };
 type Note = { kind: string; title: string; body: string; action: { label: string; href: string } | null };
@@ -62,8 +63,10 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     const { devLink } = (await (await json("POST", "/api/v1/auth/magic-link", { email: "dana@closerlook.test" })).json()) as { devLink: string };
     const consume = await json("POST", "/api/v1/auth/magic-link/consume", { token: new URL(devLink).searchParams.get("token") });
     cookie = consume.headers.get("set-cookie")!.split(";")[0];
-    const co = (await (await json("POST", "/api/v1/companies", { name: "Closer Look Dental", vertical: "dental", sizeBand: "20-49", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { slug: string };
+    const co = (await (await json("POST", "/api/v1/companies", { name: "Closer Look Dental", vertical: "dental", sizeBand: "20-49", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
     slug = co.slug;
+    // The résumé reading decides what comes next here, so the role takes the later path (plan Wave E).
+    await useLaterApplyFlow(container, co.id);
     const c1 = (await (await json("POST", "/api/v1/intake/conversation/messages", { message: "I need a dental hygienist in Irvine. Full time. $45 to $55 an hour. I need someone who can start within 30 days." })).json()) as { intakeSessionId: string };
     // The deal-breakers come before the must-haves so the fake intake keeps the must-have phrases clean (it reads a must-haves line to its end).
     await json("POST", `/api/v1/intake/sessions/${c1.intakeSessionId}/messages`, { message: "It's a replacement, our hygienist moved. Ceiling is $58. Interviewers: Dr. Chen and me. I decide. Deal-breakers: can't work Saturdays. Must-haves: active CA RDH license, perio experience." });
@@ -104,6 +107,9 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     expect(row.evidence.confidenceReasons).toEqual(asmt.result.confidenceReasons);
     expect(row.evidence.needsCloserLook).toBe(false); // a screen is on its way; nobody is waiting on the owner
     expect(row.stageLabel).toBe("Invited to a screen");
+    // no must-have shown in full: a low-confidence reading. That alone holds nothing (plan A8); it asks the reader to read it themselves
+    expect(asmt.confidence).toBe("low");
+    expect(row.evidence).toMatchObject({ lowConfidence: true, inconsistent: false });
     const d = await detail(a.id);
     expect(d.assessments[0].result.concerns.map((c) => c.claim)).toContain(concern.claim);
     expect(d.assessments[0].result.unknowns.map((u) => u.question)).toContain(unknown.question);
@@ -119,6 +125,9 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     expect(row.evidence.unknownCount).toBe(0);
     // "perio experience" can only ever be partly shown to the fake (it matches on "perio"); the reason says so instead of pretending certainty
     expect(row.evidence.confidenceReasons).toEqual(["one must-have is only partly shown"]);
+    expect(row.evidence.lowConfidence).toBe(false);
+    // the licence is shown, so the "Missing a must-have" filter does not catch her
+    expect(row.evidence.hasProvenMiss).toBe(false);
   });
 
   let rileyId = "";
@@ -179,15 +188,18 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     expect((await eventsOf("human.override")).some((e) => e.subjectId === rileyId && (e.payload as { action: string }).action === "ask_in_screen")).toBe(true);
     // a second click explains instead of sending twice
     expect((await json("POST", `/api/v1/applications/${rileyId}/actions`, { action: "ask_in_screen" })).status).toBe(409);
-    // the candidate opens the screen: the disclosure, the sentence about the background questions, then the first open question
+    // the candidate opens the screen: the fixed introduction (plan E2) with the sentence about the background questions;
+    // Start then shows the first open question, in its own words
     const page = await app.request(`/c/screen/${scr.token}`);
     expect(page.status).toBe(200);
-    expect(await page.text()).toContain("a few quick questions about your background");
+    const intro = await page.text();
+    expect(intro).toMatch(/AI assistant/);
+    expect(intro).toContain("a few quick questions about your background");
+    expect(intro).toContain("8 short questions");
+    expect((await form(`/c/screen/${scr.token}/start`, {})).status).toBe(302);
     let s = await screenOf(rileyId);
     expect(s.transcript[0].role).toBe("assistant");
-    expect(s.transcript[0].content).toMatch(/AI assistant/);
-    expect(s.transcript[0].content).toContain("a few quick questions about your background");
-    expect(s.transcript[0].content).toContain("First question: Can you tell me about your active CA RDH license?");
+    expect(s.transcript[0].content).toBe("Can you tell me about your active CA RDH license?");
     expect(s.transcript[0].questionKey).toBe("unknown_1");
     // the answers to the open questions sit beside them; the packet's own answers are counted separately
     expect((await form(`/c/screen/${scr.token}`, { message: "Yes, my RDH license is active in California, number RDH55555." })).status).toBe(302);
@@ -274,11 +286,51 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     void taylorId;
   });
 
+  it("a reading that disagrees with its own must-have findings holds the screen for a person, with the reason (plan A8)", async () => {
+    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: RolePacket } };
+    const licence = role.currentPacket.packet.requirements.mustHaves.find((m) => /licen/i.test(m.text))!;
+    const lapsed = "RDH license CA expired in 2021";
+    // a Potential reading whose own finding, quoted from the résumé, says the licence must-have is not met
+    container.fake!.scriptNext("triage.assess", { overall: "potential", confidence: "medium", confidenceReasons: [], summary: "Relevant hygiene work; the licence has lapsed.", strengths: [{ claim: "Works as a dental hygienist", evidence: { source: "resume", quote: "Dental Hygienist at Harbor Dental 2016 - present" } }], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: [{ requirementKey: licence.key, met: "no", evidence: { source: "resume", quote: lapsed } }], anomalies: [], recommendation: "screen", rationale: "Scripted for the consistency check." });
+    const a = await apply({ first: "Uma", last: "Patel", email: "uma@example.com", resume: `Uma Patel\nDental Hygienist at Harbor Dental 2016 - present\n${lapsed}\nPeriodontal charting, Dentrix` });
+    container.fake!.clearScripts();
+    expect(a.stage).toBe("triaged");
+    expect(await container.db.select().from(screens).where(eq(screens.applicationId, a.id))).toHaveLength(0);
+    expect(emailOutbox().filter((m) => m.to === "uma@example.com" && /screening conversation/.test(m.subject))).toHaveLength(0);
+    const note = (await notes()).find((n) => n.kind === "application.needs_review" && /Uma Patel/.test(n.title))!;
+    expect(note.title).toBe("Uma Patel needs a closer look");
+    expect(note.body).toContain(`a must-have is not met (${licence.text}): "${lapsed}"`);
+    expect(note.body).toMatch(/No screening invitation was sent\.$/);
+    const flagged = await container.db.select().from(auditRecords).where(eq(auditRecords.action, "assessment.flagged"));
+    expect(flagged.some((r) => (r.target as { id: string } | null)?.id === a.id && (r.details as { held: string }).held === "application.invite_screen")).toBe(true);
+    // the list says the same, read off the same assessment
+    const row = (await list()).find((r) => r.id === a.id)!;
+    expect(row.group).toBe("waiting_on_you");
+    expect(row.stageLabel).toBe(CLOSER_LOOK_LABEL);
+    // and the 'Missing a must-have' filter catches her, on the same checked quote (plan A3)
+    expect(row.evidence).toMatchObject({ needsCloserLook: true, inconsistent: true, lowConfidence: false, hasProvenMiss: true });
+    expect(row.evidence.reason).toContain(`"${lapsed}"`);
+  });
+
   it("the answers to the open questions are what a person reads, what an access request exports, and what an anonymization removes", async () => {
     const a = (await container.db.select().from(applications).where(eq(applications.id, rileyId)))[0];
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: RolePacket } };
     const packet = role.currentPacket.packet;
     const licence = "Can you tell me about your active CA RDH license?";
+    // while the conversation is still under way, nobody on the team or at ITS reads them (founder decision of
+    // 9 October 2026, "hide them until they send"; an emailed conversation is sent when it ends normally)
+    const open = await withTenant(container.db, a.companyId, async (tx) => ({
+      ctx: await buildEscalationContext(tx, a.companyId, roleId, rileyId),
+      brief: await composeInterviewerBrief(tx, { applicationId: rileyId, candidateFirstName: "Riley", packet, roundKey: packet.interviews.plan[0].key }),
+    }));
+    expect((await screenOf(rileyId)).status).toBe("in_progress");
+    expect(JSON.stringify(open)).not.toContain("RDH55555");
+    expect((open.ctx.screens as Array<{ answersShared: boolean }>)[0].answersShared).toBe(false);
+    const d = await detail(rileyId);
+    expect(JSON.stringify(d)).not.toContain("RDH55555");
+    expect(d.screens[0].progress.focusQuestions?.map((f) => f.key)).toEqual(["unknown_1", "unknown_2"]);
+    // the conversation ends normally (set directly here; the flow itself is tested with the screening suites)
+    await container.db.update(screens).set({ status: "completed", completedAt: new Date().toISOString() }).where(eq(screens.applicationId, rileyId));
     // what a person reads: the recruiter's context and the interviewer's brief carry the answers, the brief with the questions in the words they were asked
     const ctx = await withTenant(container.db, a.companyId, (tx) => buildEscalationContext(tx, a.companyId, roleId, rileyId));
     expect((ctx.screens as Array<{ answers: Record<string, string> }>)[0].answers.unknown_1).toMatch(/RDH55555/);

@@ -1,12 +1,15 @@
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FakeProvider, createRuntime, intakeCompilePrompt, intakeTurnPrompt, resumeExtractPrompt, runPrompt, screenTurnPrompt, triageAssessPrompt, type AiRuntime, type IntakeContext, type ScreenContext } from "@ros/ai";
-import { advanceProgress, enforceTurnRules, finalizePacket, mergeFacts, redactProtected, registerFakeHandlers, verifyQuotes } from "@ros/agents";
-import type { IntakeFacts, IntakeMessage, RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
+import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, messageLinePrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, triageAssessPrompt, type AiRuntime, type IntakeContext, type ScreenContext } from "@ros/ai";
+import {
+  REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, advanceProgress, basisFor, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, mergeFacts, mergeRevision, redactProtected, registerFakeHandlers,
+  resolveBenchmark, verifyQuotes, type BenchmarkResult,
+} from "@ros/agents";
+import type { EvidenceAssessment, IntakeFacts, IntakeMessage, RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
 import { createDb, migrate } from "@ros/db";
-import { compensationFor, findPlaybook, matchPlaybookRole } from "@ros/playbooks";
-import { EMPTY_FACTS, RDH_FACTS, assessmentQuotesGrounded, intakeGolden, intakeIllegal, quotesAreGrounded, resumeCases, screenPersonas, triageEdgeCases, type IntakeCase } from "./suites";
+import { findPlaybook, matchPlaybookRole } from "@ros/playbooks";
+import { CONSISTENCY_READS, EMPTY_FACTS, RDH_FACTS, aboutCases, lineCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, quotesAreGrounded, resumeCases, reviseCases, screenAssessCases, screenPersonas, triageEdgeCases, type IntakeCase } from "./suites";
 
 /**
  * Evaluation runner (docs/11). `pnpm eval` runs every suite against the configured provider
@@ -30,15 +33,29 @@ async function main() {
   const q = handle.db;
   const results: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; costUsd?: number }>; passRate: number }> = {};
 
-  const buildCtx = (c: IntakeCase, facts: IntakeFacts, messages: IntakeMessage[]): IntakeContext => {
+  // The eval has no live wage service: the market check falls back to the playbook's table, as production does when the
+  // service is down. The basis comes first (plan C2), and the pay the owner typed counts as confirmed.
+  const noLiveWages = { id: "eval", status: "disabled" as const, benchmark: async () => null };
+  const buildCtx = async (c: IntakeCase, facts: IntakeFacts, messages: IntakeMessage[]): Promise<{ ctx: IntakeContext; basis: "hourly" | "salary" | null; bench: BenchmarkResult }> => {
     const playbook = findPlaybook(c.vertical);
-    const role = playbook ? matchPlaybookRole(playbook, facts.title ?? c.ownerMessages[0]) : null;
-    const comp = role ? compensationFor(role, facts.locationText ?? "Irvine, CA") : null;
+    const typed = messages.filter((m) => m.role === "owner" && (!m.kind || m.kind === "text")).map((m) => m.content);
+    const title = facts.title ?? typed[0] ?? "";
+    const role = playbook && title ? matchPlaybookRole(playbook, title) : null;
+    const basis = basisFor(facts, typed, role);
+    const bench = await resolveBenchmark(noLiveWages, { basis, playbookRole: role, titleGuess: title, locationText: facts.locationText ?? "Irvine, CA" });
+    const ad = messages.find((m) => m.kind === "pasted_ad");
+    const pay = facts.compensationBasis && facts.compensationMin !== undefined && facts.compensationMax !== undefined && !ad ? { basis: facts.compensationBasis, min: facts.compensationMin, max: facts.compensationMax, ...(facts.compensationCeiling !== undefined ? { ceiling: facts.compensationCeiling } : {}) } : null;
     return {
-      company: { name: "Eval Co", vertical: c.vertical, sizeBand: "50-99", locations: [{ city: "Irvine", region: "CA", country: "US" }] },
-      playbook, playbookRole: role,
-      benchmark: comp ? { basis: comp.basis, p25: comp.p25, p50: comp.p50, p75: comp.p75, source: comp.source, metro: comp.metro } : null,
-      facts, messages,
+      ctx: {
+        company: { name: "Eval Co", vertical: c.vertical, sizeBand: "50-99", locations: [{ city: "Irvine", region: "CA", country: "US" }] },
+        playbook, playbookRole: role,
+        benchmark: bench.benchmark, benchmarkGap: bench.gap,
+        facts, messages,
+        ad: ad ? { text: ad.content } : null,
+        confirmedPay: pay,
+      },
+      basis,
+      bench,
     };
   };
 
@@ -50,9 +67,18 @@ async function main() {
       let facts: IntakeFacts = { ...EMPTY_FACTS };
       const messages: IntakeMessage[] = [];
       let lastTurn = null as null | Awaited<ReturnType<typeof runPrompt<IntakeContext, import("@ros/contracts").IntakeTurn>>>;
-      for (const m of c.ownerMessages) {
-        messages.push({ role: "owner", content: m, at: new Date().toISOString() });
-        const r = await runPrompt(q, rt, intakeTurnPrompt, buildCtx(c, facts, messages), { companyId: null, inputRef: { eval: c.id } });
+      for (const [i, m] of c.ownerMessages.entries()) {
+        const asAd = i === 0 && !!c.pastedAd;
+        messages.push({ role: "owner", content: m, at: new Date().toISOString(), kind: asAd ? "pasted_ad" : "text" });
+        // A pasted ad is read once for what it states before the market check (plan C5).
+        if (asAd) {
+          const x = await runPrompt(q, rt, intakeExtractPrompt, { text: m, companyName: "Eval Co" }, { companyId: null, inputRef: { eval: c.id, read: "pasted_ad" } });
+          if (!x.ok) { failures.push(`ad read failed: ${x.error}`); break; }
+          if (x.output.isJobDescription) facts = factsFromExtraction(facts, x.output);
+        }
+        const built = await buildCtx(c, facts, messages);
+        if (i === 0 && c.expectBenchmark) failures.push(...c.expectBenchmark({ basis: built.basis, benchmark: built.bench.benchmark, gap: built.bench.gap }));
+        const r = await runPrompt(q, rt, intakeTurnPrompt, built.ctx, { companyId: null, inputRef: { eval: c.id } });
         if (!r.ok) { failures.push(`turn failed: ${r.error}`); break; }
         facts = mergeFacts(facts, r.output.factsExtracted);
         messages.push({ role: "assistant", content: r.output.assistantMessage, at: new Date().toISOString() });
@@ -60,14 +86,15 @@ async function main() {
       }
       if (lastTurn?.ok && c.expectTurn) failures.push(...c.expectTurn({ ...lastTurn.output, factsExtracted: facts }));
       if (compile && c.expectPacket && failures.length === 0) {
-        const ctx = buildCtx(c, facts, messages);
+        const { ctx } = await buildCtx(c, facts, messages);
         const r = await runPrompt(q, rt, intakeCompilePrompt, ctx, { companyId: null, inputRef: { eval: c.id }, maxTokens: 24000 });
         if (!r.ok) failures.push(`compile failed: ${r.error}`);
         else {
           const packet = finalizePacket(r.output, ctx, { sessionId: "eval", aiRunId: r.runId });
           failures.push(...c.expectPacket(packet));
           const declined = facts.declinedCriteria.map((d) => d.requested.toLowerCase());
-          const text = JSON.stringify(packet).toLowerCase();
+          // The packet records what was declined (and any flags) in its provenance on purpose; anywhere else is a leak.
+          const text = JSON.stringify({ ...packet, provenance: { ...packet.provenance, declinedCriteria: [], flags: [] } }).toLowerCase();
           for (const d of declined) if (text.includes(d)) failures.push(`declined criterion leaked into packet: ${d}`);
         }
       }
@@ -78,6 +105,9 @@ async function main() {
 
   await runIntakeSuite("intake.golden", intakeGolden, true);
   await runIntakeSuite("intake.illegal_criteria", intakeIllegal, true);
+  await runIntakeSuite("intake.job_ad", intakeJobAd, false);
+  await runIntakeSuite("intake.proxy_refusal", intakeProxyRefusal, false);
+  await runIntakeSuite("intake.benchmark_basis", intakeBenchmarkBasis, false);
 
   if (!onlySuite || onlySuite.startsWith("resume")) {
     const ext: (typeof results)[string]["cases"] = [];
@@ -98,7 +128,7 @@ async function main() {
   /** The golden dental hygienist packet the Slice 2 suites assess against (compiled once per run). */
   async function goldenPacket(): Promise<RolePacket> {
     const c: IntakeCase = { id: "golden_rdh", provenance: "synthetic", vertical: "dental", ownerMessages: ["I need a dental hygienist in Irvine."] };
-    const ctx = buildCtx(c, RDH_FACTS, [{ role: "owner", content: c.ownerMessages[0], at: new Date().toISOString() }]);
+    const { ctx } = await buildCtx(c, RDH_FACTS, [{ role: "owner", content: c.ownerMessages[0], at: new Date().toISOString() }]);
     const r = await runPrompt(q, rt, intakeCompilePrompt, ctx, { companyId: null, inputRef: { eval: "golden_packet" }, maxTokens: 24000 });
     if (!r.ok) throw new Error(`golden packet failed: ${r.error}`);
     return finalizePacket(r.output, ctx, { sessionId: "eval", aiRunId: r.runId });
@@ -123,6 +153,85 @@ async function main() {
     }
     results["triage.edge_cases"] = { cases: edge, passRate: edge.filter((x) => x.pass).length / edge.length };
     results["triage.hallucination"] = { cases: hall, passRate: hall.filter((x) => x.pass).length / hall.length };
+
+    // Bias pairs (docs/11): the same résumé but for a name, a graduation year or a zip code must read the same.
+    const bias: (typeof results)[string]["cases"] = [];
+    const readResume = async (id: string, text: string) => {
+      const ex = await runPrompt(q, rt, resumeExtractPrompt, { text, filename: `${id}.txt` }, { companyId: null, inputRef: { eval: id } });
+      const extraction = ex.ok ? verifyQuotes(ex.output, text) : null;
+      return runPrompt(q, rt, triageAssessPrompt, { packet, extraction, resumeText: text, applicationAnswers: { eligibility: { rdh_license: "yes", schedule: "yes" } }, eligibility: { evaluatedAt: new Date().toISOString(), passed: true, failedRules: [], unverifiable: [] }, priorApplications: [] }, { companyId: null, inputRef: { eval: id } });
+    };
+    for (const pair of biasPairs) {
+      const ra = await readResume(`${pair.id}_a`, pair.a);
+      const rb = await readResume(`${pair.id}_b`, pair.b);
+      if (!ra.ok || !rb.ok) { bias.push({ id: pair.id, pass: false, failures: [ra.ok ? "" : ra.error, rb.ok ? "" : rb.error].filter(Boolean) }); continue; }
+      // the pair must read the same and score the same: the match score is worked out from these findings (founder decision B2)
+      const f = biasPairDifferences(pair, ra.output, rb.output, packet);
+      bias.push({ id: pair.id, pass: f.length === 0, failures: f });
+    }
+    results["triage.bias_pairs"] = { cases: bias, passRate: bias.filter((x) => x.pass).length / bias.length };
+
+    // Consistency (docs/11; plan Wave F gate): the same résumé read again must read, score and place the same each time.
+    const steady: (typeof results)[string]["cases"] = [];
+    for (const c of consistencyCases) {
+      const reads: EvidenceAssessment[] = [];
+      let failed: string | null = null;
+      for (let i = 1; i <= CONSISTENCY_READS && !failed; i++) {
+        const r = await readResume(`${c.id}_read_${i}`, c.resume);
+        if (r.ok) reads.push(r.output);
+        else failed = r.error;
+      }
+      const f = failed ? [failed] : consistencyDifferences(reads, packet);
+      steady.push({ id: c.id, pass: f.length === 0, failures: f });
+    }
+    results["triage.consistency"] = { cases: steady, passRate: steady.filter((x) => x.pass).length / steady.length };
+  }
+
+  // The match score and the board's placement (plan F6): rules and determinism of the code, no model call.
+  if (!onlySuite || onlySuite === "board.determinism") {
+    const out: (typeof results)[string]["cases"] = boardCases.map((c) => {
+      const f = boardCaseFailures(c);
+      return { id: c.id, pass: f.length === 0, failures: f };
+    });
+    results["board.determinism"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
+  }
+
+  // Change by chat (plan C10): each request against the golden packet, judged after the server's own merge.
+  if (!onlySuite || onlySuite === "packet.revise") {
+    const base = await goldenPacket();
+    const out: (typeof results)[string]["cases"] = [];
+    for (const c of reviseCases) {
+      const allowed = c.target === "role" ? REVISABLE_FOR_ROLE : REVISABLE_FOR_DRAFT;
+      const r = await runPrompt(q, rt, packetRevisePrompt, { companyName: "Eval Co", target: c.target, roleStatus: c.target === "role" ? "open" : null, packet: editableView(base, allowed), allowed: [...allowed], declined: [], message: c.message }, { companyId: null, inputRef: { eval: c.id }, maxTokens: 16000 });
+      if (!r.ok) { out.push({ id: c.id, pass: false, failures: [`revise failed: ${r.error}`] }); continue; }
+      const f = c.expect({ revision: r.output, merged: mergeRevision(base, r.output, c.target), base });
+      out.push({ id: c.id, pass: f.length === 0, failures: f });
+    }
+    results["packet.revise"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
+  }
+
+  // About the company (plan D10): the draft a person approves in Setup, judged as a candidate would read it.
+  if (!onlySuite || onlySuite === "company.about") {
+    const out: (typeof results)[string]["cases"] = [];
+    for (const c of aboutCases) {
+      const r = await runPrompt(q, rt, companyAboutPrompt, c.input, { companyId: null, inputRef: { eval: c.id } });
+      if (!r.ok) { out.push({ id: c.id, pass: false, failures: [`about failed: ${r.error}`] }); continue; }
+      const f = c.expect(r.output.text);
+      out.push({ id: c.id, pass: f.length === 0, failures: f });
+    }
+    results["company.about"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
+  }
+
+  // The line the assistant suggests for an invitation or an update (Q28): judged as the candidate would read it.
+  if (!onlySuite || onlySuite === "message.suggest_line") {
+    const out: (typeof results)[string]["cases"] = [];
+    for (const c of lineCases) {
+      const r = await runPrompt(q, rt, messageLinePrompt, c.input, { companyId: null, inputRef: { eval: c.id } });
+      if (!r.ok) { out.push({ id: c.id, pass: false, failures: [`suggestion failed: ${r.error}`] }); continue; }
+      const f = c.expect(r.output.line);
+      out.push({ id: c.id, pass: f.length === 0, failures: f });
+    }
+    results["message.suggest_line"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
   }
 
   if (!onlySuite || onlySuite.startsWith("screen")) {
@@ -165,6 +274,22 @@ async function main() {
       out.push({ id: persona.id, pass: failures.length === 0, failures });
     }
     results["screen.conversation"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
+  }
+
+  // The scorecard (screen.assess v3, plan Wave E): a recruiter's notes kept apart, a skip unknown, an unfinished
+  // conversation never "strong interview". Judged on the model's own output, before the code's checks.
+  if (!onlySuite || onlySuite === "screen.assess") {
+    const packet = await goldenPacket();
+    const out: (typeof results)[string]["cases"] = [];
+    for (const c of screenAssessCases) {
+      const input = c.build(packet);
+      const ctx: ScreenContext = { company: { name: "Eval Dental" }, packet, candidate: { firstName: "Alex" }, channel: "web", progress: input.progress, answers: input.answers, transcript: input.transcript, focusUnknowns: [], latestCandidateMessage: null, incomplete: input.incomplete ?? null };
+      const r = await runPrompt(q, rt, screenAssessPrompt, ctx, { companyId: null, inputRef: { eval: c.id } });
+      if (!r.ok) { out.push({ id: c.id, pass: false, failures: [`assess failed: ${r.error}`] }); continue; }
+      const f = c.expect(r.output, { packet, transcript: input.transcript });
+      out.push({ id: c.id, pass: f.length === 0, failures: f });
+    }
+    results["screen.assess"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
   }
 
   const thresholds = JSON.parse(readFileSync(join(here, "..", "thresholds.json"), "utf8")) as Record<string, { minPassRate: number }>;

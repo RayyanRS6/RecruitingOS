@@ -8,6 +8,7 @@ import { sendPrivacyAcknowledgment } from "@ros/agents";
 import { applications, candidates, companies, dataRequests, uuidv7, withPlatform } from "@ros/db";
 import type { Vars } from "../middleware/session";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
+import { Icon } from "./icons";
 import { Layout } from "./layout";
 
 /**
@@ -33,7 +34,7 @@ const KIND_WORDS: Record<string, string> = { access: "a copy of the information"
 
 function openVerifyToken(secret: string, token: string | undefined, now: Date): VerifyToken | null {
   const p = openPayload<VerifyToken>(VERIFY_PURPOSE, token, secret, now.getTime());
-  if (!p || p.v !== 2 || typeof p.id !== "string" || !UUID.test(p.id) || typeof p.email !== "string" || !p.email || !KIND_WORDS[p.kind] || typeof p.companyId !== "string") return null;
+  if (p?.v !== 2 || typeof p.id !== "string" || !UUID.test(p.id) || typeof p.email !== "string" || !p.email || !KIND_WORDS[p.kind] || typeof p.companyId !== "string") return null;
   return p;
 }
 
@@ -42,14 +43,15 @@ function RequestForm(props: { privacyEmail: string; company: string | null; erro
   const v = props.values ?? {};
   return (
     <Layout title="Request, correct or delete your information">
-      <p class="meta"><a href="/privacy">How we handle your information</a></p>
+      <p class="back"><a href="/privacy"><Icon name="arrow-left" />How we handle your information</a></p>
+      <p class="eyebrow">Privacy</p>
       <h1>Your information</h1>
-      <p>Ask for a copy of what we hold about you, correct it, or have it deleted. Use the email address you applied with. We send a link to that address to confirm it is you; nothing happens until you open it and press the button.</p>
+      <p class="lead">Ask for a copy of what we hold about you, correct it, or have it deleted. Use the email address you applied with. We send a link to that address to confirm it is you; nothing happens until you open it and press the button.</p>
       {props.error ? <div class="err" role="alert">{props.error}</div> : null}
       <form method="post" action="/c/privacy-request" class="card">
         {props.company ? <input type="hidden" name="company" value={props.company} /> : null}
         <div style="position:absolute;left:-10000px" aria-hidden="true"><label for="website">Leave this empty</label><input id="website" name="website" type="text" tabindex={-1} autocomplete="off" /></div>
-        <label for="email">Your email address</label>
+        <label for="email" class="flush">Your email address</label>
         <input id="email" name="email" type="email" required autocomplete="email" value={v.email ?? ""} />
         <label for="kind">What would you like?</label>
         <select id="kind" name="kind" required>
@@ -63,7 +65,7 @@ function RequestForm(props: { privacyEmail: string; company: string | null; erro
         <p class="notice">{privacy?.text}</p>
         <button class="btn" type="submit">Send me the confirmation link</button>
       </form>
-      <p class="notice">Prefer email? Write to <a href={`mailto:${props.privacyEmail}`}>{props.privacyEmail}</a> from the address you applied with.</p>
+      <p class="foot">Prefer email? Write to <a href={`mailto:${props.privacyEmail}`}>{props.privacyEmail}</a> from the address you applied with.</p>
     </Layout>
   );
 }
@@ -77,12 +79,13 @@ privacyRequestPages.get("/c/privacy-request", async (c) => {
 function SentPage(props: { email: string }) {
   return (
     <Layout title="Check your email">
+      <p class="eyebrow">Privacy</p>
       <h1>Check your email</h1>
       <div class="card" role="status">
         <p><strong>We sent a confirmation link to {props.email}.</strong></p>
-        <p style="margin:6px 0 0">Open it within 24 hours and press the button to confirm your request. If we hold no information under that address, the email says so and how a person can help. Nothing happens until you confirm.</p>
+        <p>Open it within 24 hours and press the button to confirm your request. If we hold no information under that address, the email says so and how a person can help. Nothing happens until you confirm.</p>
       </div>
-      <p class="notice">No email after a few minutes? Check the spam folder, or use the address you applied with. <a href="/c/privacy-request">Send the form again</a>.</p>
+      <p class="foot">No email after a few minutes? Check the spam folder, or use the address you applied with. <a href="/c/privacy-request">Send the form again</a>.</p>
     </Layout>
   );
 }
@@ -141,9 +144,10 @@ privacyRequestPages.post("/c/privacy-request", rateLimit(POLICIES.privacyForm), 
 function LinkPage(props: { title: string; body: string }) {
   return (
     <Layout title={props.title}>
+      <p class="eyebrow">Privacy</p>
       <h1>{props.title}</h1>
       <div class="card" role="status"><p>{props.body}</p></div>
-      <p class="notice"><a href="/c/privacy-request">Send a new request</a> · <a href="/privacy">How we handle your information</a></p>
+      <p class="foot"><a href="/c/privacy-request">Send a new request</a> · <a href="/privacy">How we handle your information</a></p>
     </Layout>
   );
 }
@@ -170,6 +174,7 @@ privacyRequestPages.get("/c/privacy-request/verify/:token", async (c) => {
   if (state.used) return usedLinkPage(c, payload.id);
   return c.html(
     <Layout title="Confirm your request">
+      <p class="eyebrow">Privacy</p>
       <h1>Confirm your request</h1>
       <div class="card">
         <p>Someone asked, using <strong>{payload.email}</strong>, for {KIND_WORDS[payload.kind]} held by <strong>{state.companyName}</strong>. Reference {payload.id.slice(0, 8)}.</p>
@@ -178,7 +183,7 @@ privacyRequestPages.get("/c/privacy-request/verify/:token", async (c) => {
           <button class="btn" type="submit">Yes, confirm my request</button>
         </form>
       </div>
-      <p class="notice">Not you? Close this page; nothing happens until the button is pressed. Questions? Write to <a href={`mailto:${container.env.PRIVACY_EMAIL}`}>{container.env.PRIVACY_EMAIL}</a>.</p>
+      <p class="foot">Not you? Close this page; nothing happens until the button is pressed. Questions? Write to <a href={`mailto:${container.env.PRIVACY_EMAIL}`}>{container.env.PRIVACY_EMAIL}</a>.</p>
     </Layout>,
   );
 });
@@ -214,12 +219,13 @@ privacyRequestPages.post("/c/privacy-request/verify", rateLimit(POLICIES.privacy
   const due = new Date(result.row.slaDueAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
   return c.html(
     <Layout title="Thanks, your request is confirmed">
+      <p class="eyebrow">Privacy</p>
       <h1>Thanks, your request is confirmed</h1>
       <div class="card" role="status">
         <p><strong>Reference {result.row.id.slice(0, 8)}.</strong></p>
-        <p style="margin:6px 0 0">A person will handle it and we will complete it by {due}. We confirm by email when it is done. Questions? Write to <a href={`mailto:${container.env.PRIVACY_EMAIL}`}>{container.env.PRIVACY_EMAIL}</a>.</p>
+        <p>A person will handle it and we will complete it by {due}. We confirm by email when it is done. Questions? Write to <a href={`mailto:${container.env.PRIVACY_EMAIL}`}>{container.env.PRIVACY_EMAIL}</a>.</p>
       </div>
-      <p class="notice"><a href="/privacy">How we handle your information</a></p>
+      <p class="foot"><a href="/privacy">How we handle your information</a></p>
     </Layout>,
   );
 });

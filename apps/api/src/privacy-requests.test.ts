@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { entitlements } from "@ros/core";
-import { adminAlerts, applications, auditRecords, candidates, communications, dataRequests, documents, events, recruiterEscalations, screens, users, withTenant } from "@ros/db";
+import { entitlements, recordApplicationOutcome } from "@ros/core";
+import { adminAlerts, applications, auditRecords, candidates, communications, dataRequests, documents, events, hiringOutcomes, recruiterEscalations, screens, users, withTenant } from "@ros/db";
 import type { FakeEmailAdapter, MemoryStorageAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAdmin, testContainerOptions } from "./test-helpers";
+import { signInAdmin, statusTokenFor, testContainerOptions } from "./test-helpers";
 
 /**
  * Correction 7 (docs/runbooks/privacy-requests.md), built with synthetic data: a candidate can ask for a copy, a
@@ -58,7 +58,8 @@ describe("candidate privacy requests", () => {
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
     fd.set("acknowledged", "yes");
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
-    statusToken = r.headers.get("location")!.split("/c/status/")[1].split("?")[0];
+    expect(r.status).toBe(302);
+    statusToken = await statusTokenFor(container, { roleId, email: "maria.reyes@example.com" });
     await container.drain();
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
     applicationId = a.id;
@@ -97,12 +98,22 @@ describe("candidate privacy requests", () => {
     expect(list.find((x) => x.id === req.id)?.companyName).toBe("Harbor Dental");
     expect((await json(admin, "POST", `/api/v1/admin/data-requests/${req.id}/assign`, { userId: "me" })).status).toBe(200);
     expect((await json(admin, "POST", `/api/v1/admin/data-requests/${req.id}/notes`, { text: "Located one application and one resume." })).status).toBe(200);
+    // a decision message taken back with Undo before it left, and one that went
+    const sentBy = { kind: "user" as const, id: "owner" };
+    await container.db.insert(communications).values([
+      { companyId, candidateId, applicationId, direction: "outbound", channel: "email", subject: "Your application (taken back)", bodyText: "The team has decided not to move forward (taken back).", templateKey: "disposition:v1", status: "cancelled", error: "undone by the team before it was sent", sentBy },
+      { companyId, candidateId, applicationId, direction: "outbound", channel: "email", subject: "Your application (sent)", bodyText: "A note that went out.", templateKey: "still_reviewing", status: "sent", sentBy },
+    ]);
     const exp = await json(admin, "GET", `/api/v1/admin/data-requests/${req.id}/export`);
     expect(exp.status).toBe(200);
-    const bundle = (await exp.json()) as { person: { email: string }; applications: Array<{ eligibility: unknown }>; documents: Array<{ textExtracted: string | null }>; messagesWeSent: unknown[] };
+    const bundle = (await exp.json()) as { person: { email: string }; applications: Array<{ eligibility: unknown }>; documents: Array<{ textExtracted: string | null }>; messagesWeSent: Array<{ subject: string | null }>; messagesWeDidNotSend: Array<{ subject: string | null; whatHappened: string }> };
     expect(bundle.person.email).toBe("maria.reyes@example.com");
     expect(bundle.applications).toHaveLength(1);
     expect(JSON.stringify(bundle)).not.toMatch(/rationale|strengths|concerns/);
+    // only what left us is listed as sent; what never left is apart, with what happened to it
+    expect(bundle.messagesWeSent.map((m) => m.subject)).toContain("Your application (sent)");
+    expect(bundle.messagesWeSent.map((m) => m.subject)).not.toContain("Your application (taken back)");
+    expect(bundle.messagesWeDidNotSend).toContainEqual(expect.objectContaining({ subject: "Your application (taken back)", whatHappened: "not sent: withdrawn before it was sent" }));
     const done = await json(admin, "POST", `/api/v1/admin/data-requests/${req.id}/fulfil`, { resolution: "Your information is attached." });
     expect(done.status).toBe(200);
     const [after] = await container.db.select().from(dataRequests).where(eq(dataRequests.id, req.id));
@@ -164,8 +175,26 @@ describe("candidate privacy requests", () => {
     expect((await json(admin, "POST", `/api/v1/admin/data-requests/${req.id}/fulfil`, { resolution: "Deleted." })).status).toBe(409);
     const [docBefore] = await container.db.select().from(documents).where(eq(documents.candidateId, candidateId));
     expect(storage.has(docBefore.storageKey)).toBe(true);
+    // the team's own words about her: a move to the talent pool with a note (kept as the move's reason), and a later hire
+    // recorded with a note on the outcome
+    const moveNote = "Seemed disorganised on the phone, gaps in CV";
+    const hireNote = "License expired but she is renewing it";
+    expect((await json(owner, "POST", `/api/v1/applications/${applicationId}/actions`, { action: "move_to_talent_pool", note: moveNote })).status).toBe(200);
+    await withTenant(container.db, companyId, (tx) => recordApplicationOutcome(tx, { companyId, applicationId, outcome: "hired_externally", hireDate: "2026-11-02", note: hireNote, by: "owner", actor: { kind: "user", id: "owner" } }));
+    const moves = () => container.db.select().from(events).where(and(eq(events.type, "application.stage_changed"), eq(events.subjectId, applicationId)));
+    expect(JSON.stringify(await moves())).toContain(moveNote);
+    // team mail is kept without a candidate on it; one that ever named her loses the name too
+    const [teamMail] = await container.db.insert(communications).values({ companyId, candidateId: null, direction: "outbound", channel: "email", toAddress: "owner@harbor.test", subject: "About Maria Reyes", bodyText: "Maria Reyes (maria.reyes@example.com) is waiting.", templateKey: "intervention", status: "sent", sentBy: { kind: "system", id: "test" } }).returning({ id: communications.id });
     const ok = await json(admin, "POST", `/api/v1/admin/data-requests/${req.id}/fulfil`, { resolution: "Your information was removed.", confirmAnonymize: true });
     expect(ok.status).toBe(200);
+    // those words are gone; the fixed reasons stay, so the history still reads
+    const history = JSON.stringify(await moves());
+    expect(history).not.toContain(moveNote);
+    expect(history).not.toContain(hireNote);
+    expect((await moves()).some((e) => (e.payload as { reason?: unknown }).reason === "hired_externally")).toBe(true);
+    for (const o of await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.applicationId, applicationId))) expect(o.notes).toBeNull();
+    const [scrubbedMail] = await container.db.select().from(communications).where(eq(communications.id, teamMail.id));
+    expect(`${scrubbedMail.subject} ${scrubbedMail.bodyText}`).not.toMatch(/Maria Reyes|maria\.reyes@example\.com/);
     const [cand] = await container.db.select().from(candidates).where(eq(candidates.id, candidateId));
     expect(cand.firstName).toBe("Removed");
     expect(cand.email).toBeNull();
@@ -219,7 +248,8 @@ describe("candidate privacy requests", () => {
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
     fd.set("acknowledged", "yes");
     const applied = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
-    const token = applied.headers.get("location")!.split("/c/status/")[1].split("?")[0];
+    expect(applied.status).toBe(302);
+    const token = await statusTokenFor(container, { roleId, email: "noor.haddad@example.com" });
     await container.drain();
     const [appRow0] = await container.db.select().from(applications).where(eq(applications.statusToken, token));
     const before = (await container.db.select().from(dr)).length;

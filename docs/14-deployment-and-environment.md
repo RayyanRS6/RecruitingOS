@@ -110,6 +110,7 @@ Defaults are the local development values. "prod" in the Required column means t
 | `PRIVACY_EMAIL` | | `privacy@identifiedtalent.com` | The privacy-request address shown to candidates |
 | `PRODUCT_NAME` | | `Recruiting OS` | Internal product name in owner- and staff-facing system mail |
 | `SMS_PROVIDER` | | `fake` | `fake` or `twilio` |
+| `MESSAGE_UNDO_SECONDS` | | `30` (tests `0`) | How long a message a person sends to a candidate (a decision message, a team message) waits with an Undo before it leaves; 0 to 120, 0 sends at once |
 | `SMS_ENABLED` | | on only with twilio | Texting candidates; off until counsel, carrier registration and a partner need it. Opting out always works |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_MESSAGING_SERVICE_SID` (or `TWILIO_FROM_NUMBER`) | when twilio | | The auth token also verifies inbound webhook signatures |
 | `TWILIO_WEBHOOK_URL` | | `APP_BASE_URL/webhooks/twilio/inbound` | The exact public URL Twilio posts to, when it differs |
@@ -144,6 +145,7 @@ Defaults are the local development values. "prod" in the Required column means t
 | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | when upstash | | The token is a secret entered at the host |
 | `RATE_LIMIT_OVERRIDES` | | `{}` | Per-policy limit overrides as JSON, for rehearsals |
 | `CSP_MODE` | | `report-only` | Candidate-page content-security policy; `enforce` after the staging reports are reviewed |
+| `COMPANY_CHECK` | | `its` (`auto` under `NODE_ENV=test`) | The one-time ITS check of a company that signs itself up (founder decision B7): with `its` its careers page, job pages, Google listing and first candidate emails wait until an administrator confirms it in the admin console; `auto` confirms every new company at once (tests and local journeys; `.env.example` sets it, so a company created on your own machine is live without a visit to /admin). Production refuses `auto` |
 | `ANALYTICS_PROVIDER`, `POSTHOG_PROJECT_API_KEY`, `POSTHOG_HOST` | | `fake` | Server-side funnel events only |
 | `SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `NEXT_PUBLIC_SENTRY_ENVIRONMENT`, `SENTRY_TRACES_SAMPLE_RATE` | | off | Scrubbed error reporting; empty DSN means off. `SENTRY_DSN` is read by the server processes (the shell and the worker), `NEXT_PUBLIC_SENTRY_DSN` by the staff web app's browser bundle only (candidate pages carry no script), which names its environment from `NEXT_PUBLIC_SENTRY_ENVIRONMENT` (default `development`). `SENTRY_ENVIRONMENT=staging` names the staging Preview and enables the administrators' test-error route |
 | `VERCEL_GIT_COMMIT_SHA`, `RAILWAY_GIT_COMMIT_SHA` | | set by the host | The release identifier on error reports and on the worker's heartbeat; never set by hand |

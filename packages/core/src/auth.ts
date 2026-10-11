@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash } from "node:crypto";
 import { and, eq, gt, isNull, ne } from "drizzle-orm";
 import { magicLinks, memberships, randomToken, sessions, users, type Queryable } from "@ros/db";
 import { acceptPendingInvitations } from "./invitations";
@@ -182,12 +182,6 @@ export async function revokeAllSessions(q: Queryable, userId: string, opts: { ex
     .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt), ...(opts.exceptSessionId ? [ne(sessions.id, opts.exceptSessionId)] : [])))
     .returning({ id: sessions.id });
   return rows.length;
-}
-
-export function safeEqual(a: string, b: string): boolean {
-  const ba = Buffer.from(a);
-  const bb = Buffer.from(b);
-  return ba.length === bb.length && timingSafeEqual(ba, bb);
 }
 
 /** Raised when a platform-role holder tries the email link: the answer is Microsoft 365 with a second factor. */

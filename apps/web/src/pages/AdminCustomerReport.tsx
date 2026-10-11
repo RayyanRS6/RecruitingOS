@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Card, Chip, ErrorState, Sheet, Skeleton, Table } from "@ros/ui";
+import { Card, ErrorState, numHead, Pill, Sheet, Skeleton, Table } from "@ros/ui";
 import { api } from "../api/client";
 import { ReportFigures, type RoleReport } from "./RoleReport";
 
@@ -23,8 +23,8 @@ export function CustomerReportSheet({ companyId, companyName, onClose }: { compa
           <p className="small muted">All roles of this customer together, as of {new Date(q.data.report.generatedAt).toLocaleString()}. Counts and days only; no candidate is named here.</p>
           <Card title={`Roles (${q.data.roles.length})`}>
             {q.data.roles.length ? (
-              <Table head={["Role", "Status", "Applicants", "Waiting on them", "Hired"]} label="Roles of this customer">
-                {q.data.roles.map((r) => <tr key={r.id}><td>{r.title}</td><td><Chip tone={r.status === "open" ? "accent" : r.status === "closed" ? "neutral" : "caution"}>{r.status.replace(/_/g, " ")}</Chip></td><td>{r.applicants}</td><td>{r.waitingOnYou}</td><td>{r.hired}</td></tr>)}
+              <Table head={["Role", "Status", numHead("Applicants"), numHead("Waiting on them"), numHead("Hired")]} label="Roles of this customer">
+                {q.data.roles.map((r) => <tr key={r.id}><td>{r.title}</td><td><Pill size="sm" tone={r.status === "open" ? "good" : r.status === "closed" ? "neutral" : "caution"}>{r.status.replace(/_/g, " ")}</Pill></td><td className="num">{r.applicants}</td><td className="num">{r.waitingOnYou}</td><td className="num">{r.hired}</td></tr>)}
               </Table>
             ) : <p className="small muted">No roles yet.</p>}
           </Card>

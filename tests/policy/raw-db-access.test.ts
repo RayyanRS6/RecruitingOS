@@ -17,15 +17,14 @@ const RAW_QUERY = /(?:container|c\.get\("container"\)|handle)\.db\.(?:select|ins
 /** Raw queries per file as of the audit remediation (September 2026). Lower is fine; higher needs a reason and a change here. */
 const ALLOWED: Record<string, number> = {
   "apps/api/src/app.ts": 1,
-  "apps/api/src/pages/candidate.tsx": 8,
+  "apps/api/src/pages/candidate.tsx": 9, // +1 Wave 0: the talent-pool choice looks up its status token before any tenant is known, like the other status routes
   "apps/api/src/routes/admin.ts": 11,
   "apps/api/src/routes/auth-mfa.tsx": 3,
   "apps/api/src/routes/auth-shared.ts": 1,
   "apps/api/src/routes/auth.ts": 3,
   "apps/api/src/routes/companies.ts": 2,
   "apps/api/src/routes/privacy-requests.ts": 4,
-  "apps/api/src/routes/roles.ts": 3,
-  "apps/api/src/test-helpers.ts": 4,
+  "apps/api/src/test-helpers.ts": 5, // +1 Wave 0: statusTokenFor reads a test application's link, which now travels only by email
   "apps/api/src/webhooks/postmark.ts": 8,
   "apps/api/src/webhooks/twilio.ts": 1,
 };

@@ -1,3 +1,6 @@
 # Document fixtures are byte-exact files (a PDF's cross-reference table counts bytes): never convert their line endings.
 *.pdf binary
 *.docx binary
+# Font files and their licences are pinned by SHA-256 in apps/api/src/pages/fonts.lock.json: keep their bytes exact.
+apps/shell/public/fonts/** -text
+*.woff2 binary

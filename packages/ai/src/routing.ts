@@ -4,6 +4,12 @@ import type { TaskKey, Tier } from "./types";
 export const TASK_TIER: Record<TaskKey, Tier> = {
   "intake.turn": "judgment",
   "intake.compile": "judgment",
+  // The cheap first read of a pasted job ad (C5): title, place, basis and pay before the market check.
+  "intake.extract": "fast",
+  // Changing a packet by chat (C10): the whole job is in play, so it gets the judgment tier like the draft itself.
+  "packet.revise": "judgment",
+  // A few sentences about the company for its job pages (D10); a person edits and approves them in Setup.
+  "company.about": "standard",
   "resume.extract": "fast",
   "triage.assess": "standard",
   "screen.turn": "standard",

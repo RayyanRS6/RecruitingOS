@@ -1,5 +1,5 @@
 import { and, inArray, lt } from "drizzle-orm";
-import { sweepStaleSending } from "@ros/agents";
+import { expireEmptyDrafts, sweepStaleSending } from "@ros/agents";
 import { raiseAlertOnce } from "@ros/core";
 import { cspReports, jobs, magicLinks, sessions, webhookReceipts, withPlatform, workerHeartbeats, type Db } from "@ros/db";
 import { HEARTBEAT_STALE_MS, queueSnapshot, readWorkerHealth } from "./worker-health";
@@ -31,7 +31,7 @@ export const QUEUE_STALE_MS = 30 * 60_000;
 /** A stale worker or queue raises one alert an hour at most, and none while a person already has one open. */
 export const HEALTH_ALERT_WINDOW_MS = 60 * 60_000;
 
-export type MaintenanceReport = { doneJobs: number; failedJobs: number; sessions: number; magicLinks: number; webhookReceipts: number; cspReports: number; staleHeartbeats: number; interruptedSends: number; healthAlerts: number };
+export type MaintenanceReport = { doneJobs: number; failedJobs: number; sessions: number; magicLinks: number; webhookReceipts: number; cspReports: number; staleHeartbeats: number; interruptedSends: number; emptyDrafts: number; healthAlerts: number };
 
 export type MaintenanceOptions = {
   /** True when the queue runs inside the app process (development): there is no separate worker to watch. */
@@ -51,8 +51,10 @@ export async function runMaintenance(db: Db, now: Date, opts: MaintenanceOptions
     return { doneJobs: doneJobs.length, failedJobs: failedJobs.length, sessions: expiredSessions.length, magicLinks: expiredLinks.length, webhookReceipts: receipts.length, cspReports: reports.length, staleHeartbeats: heartbeats.length };
   });
   const interruptedSends = await sweepStaleSending(db, now);
+  // Drafts nobody wrote anything into are set aside quietly (plan C3); each one is recorded as an event.
+  const emptyDrafts = await expireEmptyDrafts(db, now);
   const health = await checkOperationalHealth(db, now, opts);
-  const report = { ...swept, interruptedSends, healthAlerts: health.raised };
+  const report = { ...swept, interruptedSends, emptyDrafts, healthAlerts: health.raised };
   if (Object.values(report).some((n) => n > 0)) console.log(`[maintenance] ${Object.entries(report).map(([k, v]) => `${k}=${v}`).join(" ")}`);
   return report;
 }
@@ -97,7 +99,7 @@ export async function checkOperationalHealth(db: Db, now: Date, opts: Maintenanc
   let workerStale = false;
   if (!opts.workerInline) {
     const worker = await readWorkerHealth(db, now, HEARTBEAT_STALE_MS);
-    workerStale = !worker || !worker.healthy;
+    workerStale = !worker?.healthy;
     if (workerStale) {
       const minutes = worker ? Math.round(worker.ageSeconds / 60) : null;
       const result = await withPlatform(db, (tx) => raiseAlertOnce(tx, {

@@ -1,6 +1,6 @@
 import { desc, eq } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { emit, suppressAddress } from "@ros/core";
+import { emit, stopAlertEmailsFor, suppressAddress } from "@ros/core";
 import { candidates, communications, type Queryable } from "@ros/db";
 import type { EmailEvent } from "@ros/integrations";
 
@@ -27,6 +27,8 @@ export async function handleSubscriptionChange(q: Queryable, input: { event: Ema
     // The person said no to email: every candidate record with the address, in every company, remembers it.
     const cands = await q.select().from(candidates).where(eq(candidates.email, address));
     for (const each of cands) await q.update(candidates).set({ preferences: { ...each.preferences, emailOptOut: true } }).where(eq(candidates.id, each.id));
+    // A team member who unsubscribed has their email alerts turned off (plan B3), so Setup shows what they asked for.
+    await stopAlertEmailsFor(q, { address, actor });
   }
   return { handled: true, communicationId: comm?.id ?? null, action: "suppressed", suppressionReason: "subscription_change" };
 }

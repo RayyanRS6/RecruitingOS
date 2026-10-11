@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { can, type Permission } from "../../packages/core/src/permissions";
-import { defaultInterviewers } from "../../apps/web/src/interview-defaults";
-import { actorWords, describeRoleEvent, roleWords } from "../../apps/web/src/role-words";
-import { canDecideInterviews, canEditPacket, canManageInterviews, canManageRole, canRecordOutcome, canRequestInterviews, canSeeActivity, canSeeTalent, canStartHire } from "../../apps/web/src/roles";
+import { againChoice, defaultInterviewers } from "../../apps/web/src/interview-defaults";
+import { actorWords, describeRoleEvent, payShownLabel, roleWords } from "../../apps/web/src/role-words";
+import { canApproveRole, canChangeCompany, canDecideInterviews, canDecline, canEditPacket, canManageInterviews, canManageRole, canRecordOutcome, canRequestInterviews, canSeeActivity, canSeePay, canSeeTalent, canShareJob, canStartHire } from "../../apps/web/src/roles";
 
 /**
  * The signed-in pages decide what to show from apps/web/src/roles.ts, a copy of the permission matrix (the pages do not
@@ -21,6 +21,10 @@ const MIRRORS: Array<[string, (role: string) => boolean, Permission]> = [
   ["canRequestInterviews", canRequestInterviews, "interview.request"],
   ["canManageInterviews", canManageInterviews, "interview.manage"],
   ["canDecideInterviews", canDecideInterviews, "interview.decide"],
+  ["canDecline", canDecline, "application.reject"],
+  ["canApproveRole", canApproveRole, "role.approve"],
+  ["canSeePay", canSeePay, "compensation.read"],
+  ["canChangeCompany", canChangeCompany, "company.update"],
 ];
 
 describe("the web pages' copy of the permission matrix", () => {
@@ -35,6 +39,13 @@ describe("the web pages' copy of the permission matrix", () => {
       expect(fn(undefined as unknown as string)).toBe(false);
     }
   });
+  it("sharing a job is open to those who manage postings and to those who approve roles (plan D8)", () => {
+    for (const role of ROLES) expect(canShareJob(role), role).toBe(can(role, "role.manage") || can(role, "role.approve"));
+    expect(canShareJob("hiring_manager")).toBe(true);
+    expect(canShareJob("interviewer")).toBe(false);
+    expect(canShareJob(null)).toBe(false);
+  });
+
   it("hiring managers and HR see postings read-only; HR may close a role, a recruiter may not", () => {
     expect(canManageRole("hiring_manager")).toBe(false);
     expect(canManageRole("hr")).toBe(false);
@@ -45,12 +56,25 @@ describe("the web pages' copy of the permission matrix", () => {
   });
 });
 
+describe("the Pay card's 'Shown to candidates'", () => {
+  it("follows the public pages' rule: the owner's choice, or a pay transparency law where the job is", () => {
+    expect(payShownLabel({ payShown: true, payRequiredByLaw: false }, true)).toBe("Yes");
+    expect(payShownLabel({ payShown: true, payRequiredByLaw: true }, true)).toBe("Yes");
+    // the owner chose not to show it, but the law where the job is shows it anyway, and the page says why
+    expect(payShownLabel({ payShown: true, payRequiredByLaw: true }, false)).toBe("Yes: the law where this job is requires it");
+    expect(payShownLabel({ payShown: false, payRequiredByLaw: false }, false)).toBe("No");
+    // an older answer without the fields reads the owner's choice
+    expect(payShownLabel({}, true)).toBe("Yes");
+    expect(payShownLabel({}, false)).toBe("No");
+  });
+});
+
 describe("the role page's Activity words", () => {
   const ev = (type: string, payload: Record<string, unknown> = {}, actor: { kind: string; id: string; name?: string } = { kind: "system", id: "workflow:publish_role" }) => ({ id: 1, type, occurredAt: "2026-09-30T10:00:00.000Z", actor, subjectType: "posting", subjectId: "p1", payload });
 
   it("names the board and says what each posting state means, never a raw state name", () => {
     const cases: Array<[string, Record<string, unknown>, string]> = [
-      ["posting.ready_to_post", { channel: "linkedin_basic", roleId: "r" }, "LinkedIn: ready for you to post"],
+      ["posting.ready_to_post", { channel: "linkedin_basic", roleId: "r" }, "LinkedIn: ready to post"],
       ["posting.ready_to_post", { channel: "careers_page", roleId: "r" }, "Careers page: prepared"],
       ["posting.posted_manually", { channel: "indeed", roleId: "r" }, "Indeed: address recorded, being checked"],
       ["posting.posted_manually", { channel: "indeed", roleId: "r", corrected: true }, "Indeed: a different address recorded, being checked"],
@@ -64,12 +88,30 @@ describe("the role page's Activity words", () => {
       ["posting.closure_required", { channel: "linkedin_basic", roleId: "r" }, "LinkedIn: still to be taken down"],
       ["posting.closure_confirmed", { channel: "linkedin_basic", roleId: "r" }, "LinkedIn: confirmed taken down"],
       ["posting.published", { channel: "indeed", roleId: "r" }, "Indeed: posting updated"],
+      // an approved edit left a board behind, and it was brought up to date (plan D4)
+      ["posting.update_required", { channel: "indeed", roleId: "r" }, "Indeed: still shows the earlier version, to be updated"],
+      ["posting.updated", { channel: "linkedin_basic", roleId: "r" }, "LinkedIn: brought up to date with the new version"],
     ];
     for (const [type, payload, words] of cases) {
       const said = describeRoleEvent(ev(type, payload));
       expect(said, type).toBe(words);
       expect(said, type).not.toMatch(/_|posting\./);
     }
+  });
+
+  it("says how long an approval had before it ran out, and why a screen was closed", () => {
+    expect(describeRoleEvent(ev("approval.expired", { actionType: "application.invite_screen", windowDays: 7 }))).toBe("The approval ran out of time (7 days)");
+    expect(describeRoleEvent(ev("approval.expired", { actionType: "role_packet.approve" }))).toBe("The approval ran out of time (14 days)");
+    expect(describeRoleEvent(ev("screen.cancelled", { reason: "stopped_by_team" }))).toBe("A screening invitation was stopped by the team");
+    expect(describeRoleEvent(ev("screen.cancelled", { reason: "left_process" }))).toBe("A screen was closed: the candidate is no longer in the process");
+    expect(describeRoleEvent(ev("screen.cancelled", { reason: "deletion_request" }))).toBe("A screen was closed: the candidate's information was deleted");
+  });
+
+  it("says which boards were chosen and when applications close (plan D6, D7)", () => {
+    expect(describeRoleEvent(ev("role.boards_chosen", { channels: ["linkedin_basic", "indeed"] }))).toBe("Job boards chosen: LinkedIn, Indeed");
+    expect(describeRoleEvent(ev("role.boards_chosen", { channels: [] }))).toBe("No job boards chosen");
+    expect(describeRoleEvent(ev("role.closing_date_set", { closesOn: "2026-10-30" }))).toBe("Closing date set: last day to apply October 30, 2026");
+    expect(describeRoleEvent(ev("role.closing_date_set", { closesOn: null }))).toBe("Closing date taken off");
   });
 
   it("shows an AI step as the assistant, never its internal id; people by name", () => {
@@ -108,5 +150,54 @@ describe("who is ticked when an interview is approved", () => {
 
   it("ticks nobody until the team list is known", () => {
     expect(defaultInterviewers({ roundKey: "r1", applicationPlan, activeMemberIds: null })).toEqual([]);
+  });
+});
+
+describe("what an interview that never took place offers next", () => {
+  const at = (status: string, stage = "interview_recommended", over: Record<string, string> = {}) => ({ id: "iv1", applicationId: "a1", status, createdAt: "2026-10-01T10:00:00.000Z", candidate: { stage }, ...over });
+
+  it("offers times again when the candidate let them expire, and a new interview after a cancellation", () => {
+    expect(againChoice(at("offer_expired"), [at("offer_expired")], "owner")).toBe("offer_again");
+    expect(againChoice(at("cancelled"), [at("cancelled")], "hiring_manager")).toBe("approve_new");
+    expect(againChoice(at("cancelled", "interview_complete"), [], "recruiter")).toBe("approve_new");
+  });
+
+  it("offers nothing once they have moved on, another interview exists, or the role may not do it", () => {
+    expect(againChoice(at("cancelled", "rejected"), [], "owner")).toBeNull();
+    expect(againChoice(at("offer_expired", "talent_pool"), [], "owner")).toBeNull();
+    // a newer interview for the same candidate, in motion or not, is where things stand now
+    expect(againChoice(at("cancelled"), [at("cancelled"), { id: "iv2", applicationId: "a1", status: "scheduling", createdAt: "2026-10-02T10:00:00.000Z" }], "owner")).toBeNull();
+    expect(againChoice(at("cancelled"), [{ id: "iv2", applicationId: "a1", status: "completed", createdAt: "2026-10-03T10:00:00.000Z" }], "owner")).toBeNull();
+    // someone else's interviews do not count
+    expect(againChoice(at("cancelled"), [{ id: "iv9", applicationId: "a9", status: "scheduling", createdAt: "2026-10-03T10:00:00.000Z" }], "owner")).toBe("approve_new");
+    expect(againChoice(at("cancelled"), [], "hr")).toBeNull();
+    expect(againChoice(at("offer_expired"), [], "interviewer")).toBeNull();
+    // finished or in motion: the sheet's other cards cover it
+    expect(againChoice(at("completed"), [], "owner")).toBeNull();
+    expect(againChoice(at("scheduling"), [], "owner")).toBeNull();
+  });
+
+  it("offers 'Send new times' for someone under Cancelled with nothing in motion, before offering times again or a new interview", () => {
+    const under = (status: string, times: string, stage = "interview_recommended") => ({ ...at(status, stage), followUp: { id: "f1", reason: "asked_new_times" as const, times } });
+    expect(againChoice(under("cancelled", "none"), [], "owner")).toBe("send_new_times");
+    expect(againChoice(under("offer_expired", "expired"), [], "recruiter")).toBe("send_new_times");
+    // a candidate who did not come: a new interview for the same round, from the same card
+    expect(againChoice(under("no_show", "none", "interview_complete"), [], "hiring_manager")).toBe("send_new_times");
+    // new times already being prepared, held, out or not delivered: nothing more to send from here
+    for (const times of ["preparing", "held", "out", "not_reached"]) expect(againChoice(under("offer_expired", times), [], "owner")).toBe("offer_again");
+    expect(againChoice(under("cancelled", "out"), [], "owner")).toBe("approve_new");
+    // a role that may not manage interviews keeps what it had; an older interview of theirs offers nothing
+    expect(againChoice(under("cancelled", "none"), [], "interviewer")).toBeNull();
+    expect(againChoice(under("cancelled", "none"), [{ id: "iv2", applicationId: "a1", status: "cancelled", createdAt: "2026-10-03T10:00:00.000Z" }], "owner")).toBeNull();
+    expect(againChoice(under("cancelled", "none", "rejected"), [], "owner")).toBeNull();
+  });
+});
+
+describe("the role's activity: new times for several people under Cancelled", () => {
+  it("says how many the team sent new times for and how many went ahead, never as if the candidates asked", () => {
+    const ev = (payload: Record<string, unknown>) => describeRoleEvent({ id: 1, type: "interview.new_times_batch", occurredAt: "2026-10-10T10:00:00.000Z", actor: { kind: "user", id: "u1", name: "Dana" }, subjectType: "role", subjectId: "r1", payload });
+    expect(ev({ roleId: "r1", requested: 4, sent: 3, notSent: 1 })).toBe("New times for 4 people under Cancelled: 3 going ahead, 1 not sent");
+    expect(ev({ roleId: "r1", requested: 1, sent: 1, notSent: 0 })).toBe("New times for 1 person under Cancelled: 1 going ahead");
+    expect(ev({ roleId: "r1", requested: 2, sent: 0, notSent: 2 })).not.toMatch(/asked/);
   });
 });

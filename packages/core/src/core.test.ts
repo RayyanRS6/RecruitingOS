@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { canTransition, ownerGroup } from "./stages";
+import { ApplicationStage as ApplicationStageEnum, CANDIDATE_STEP_LABEL, OWNER_STAGE_LABEL, type ApplicationStage, type OwnerStage } from "@ros/contracts";
+import { REOPEN_TARGETS, canTransition, candidateStep, decisionTold, groupFor, holdEnded, holdRunning, markBlockedReason, mayWithdraw, ownerGroup, ownerStage, ownerStageLabel, ownerTags, reopenStage } from "./stages";
+import { MarkError, holdUntil } from "./marks";
 import { evaluateEligibility } from "./eligibility";
 import { dedupeKey, normalizePhone } from "./dedupe";
 import { DEFAULT_POLICIES, HARD_HUMAN_ONLY } from "./policy";
 import { can } from "./permissions";
 import { noticesFor, resolveJurisdictions } from "./compliance";
+import { alertHeadline } from "./notify-email";
 
 describe("state machine", () => {
   it("never lets the system reject on judgment", () => {
@@ -26,10 +29,170 @@ describe("state machine", () => {
     expect(canTransition("screening", "withdrawn", "candidate")).toBe(true);
     expect(canTransition("hired", "withdrawn", "candidate")).toBe(false);
   });
-  it("groups stages for owners", () => {
+  it("groups stages for owners; someone held on an eligibility answer waits on a person (plan A2)", () => {
     expect(ownerGroup("triaged")).toBe("waiting_on_you");
     expect(ownerGroup("screening")).toBe("in_process");
     expect(ownerGroup("rejected")).toBe("not_moving_forward");
+    expect(ownerGroup("ineligible")).toBe("waiting_on_you");
+    expect(ownerTags({ stage: "ineligible" })).toEqual(["Check eligibility"]);
+    expect(ownerTags({ stage: "triaged" })).toEqual([]);
+  });
+  it("lets a person take back a decision the candidate was never told, to the step it was made from, and nothing else (plan G1)", () => {
+    const undo = (toldState: string) => ({ undoDecision: true, toldState });
+    expect(canTransition("rejected", "triaged", "owner", undo("not_told"))).toBe(true);
+    expect(canTransition("talent_pool", "interview_recommended", "hiring_manager", undo("not_told"))).toBe(true);
+    for (const told of ["queued", "sent", "told_in_person", "before_tracking"]) expect(canTransition("rejected", "triaged", "owner", undo(told)), told).toBe(false);
+    // never without the flag, never for the system, never to a step that is not a safe place to go back to
+    expect(canTransition("rejected", "triaged", "owner")).toBe(false);
+    expect(canTransition("rejected", "triaged", "system", undo("not_told"))).toBe(false);
+    expect(canTransition("rejected", "screening", "owner", undo("not_told"))).toBe(false);
+    expect(canTransition("triaged", "screen_complete", "owner", undo("not_told"))).toBe(false);
+    // where they go back to: screens and interviews the decision called off are not reopened
+    expect(reopenStage(null)).toBe("triaged");
+    expect(reopenStage("screen_invited")).toBe("triaged");
+    expect(reopenStage("screening")).toBe("triaged");
+    expect(reopenStage("screen_complete")).toBe("screen_complete");
+    expect(reopenStage("interview_scheduled")).toBe("interview_recommended");
+    expect(reopenStage("finalist")).toBe("finalist");
+    expect(reopenStage("offer_approval")).toBe("finalist");
+    expect(reopenStage("withdrawn")).toBeNull();
+    expect(reopenStage("hired")).toBeNull();
+    for (const s of ApplicationStageEnum.options) {
+      const to = reopenStage(s);
+      if (to) expect(REOPEN_TARGETS, s).toContain(to);
+    }
+  });
+  it("lets someone withdraw from a decision they were never told, and nobody else (plan A1)", () => {
+    expect(canTransition("rejected", "withdrawn", "candidate", { decisionTold: false })).toBe(true);
+    expect(canTransition("talent_pool", "withdrawn", "candidate", { decisionTold: false })).toBe(true);
+    expect(canTransition("rejected", "withdrawn", "candidate", { decisionTold: true })).toBe(false);
+    expect(canTransition("rejected", "withdrawn", "candidate")).toBe(false);
+    expect(canTransition("rejected", "withdrawn", "owner", { decisionTold: false })).toBe(false);
+    expect(mayWithdraw("rejected", "not_told")).toBe(true);
+    expect(mayWithdraw("rejected", "queued")).toBe(true);
+    expect(mayWithdraw("rejected", "sent")).toBe(false);
+    expect(mayWithdraw("talent_pool", "told_in_person")).toBe(false);
+    // a decision made before decisions became private was already on their status page
+    expect(mayWithdraw("rejected", "before_tracking")).toBe(false);
+    expect(decisionTold("before_tracking")).toBe(true);
+    expect(mayWithdraw("screening", "not_told")).toBe(true);
+    expect(mayWithdraw("hired", "not_told")).toBe(false);
+  });
+});
+
+describe("the stage strip (founder decision B3)", () => {
+  const now = new Date("2026-10-08T12:00:00Z");
+  const later = "2026-10-20T15:00:00.000Z";
+  const earlier = "2026-10-01T15:00:00.000Z";
+  it("maps every internal stage to one owner stage", () => {
+    const expected: Record<ApplicationStage, OwnerStage> = {
+      applied: "new", received: "new", ineligible: "new", eligible: "new", triaged: "new", screen_invited: "new", screening: "new", screen_complete: "new",
+      interview_recommended: "interviewing", interview_scheduled: "interviewing", interview_complete: "interviewing", debrief: "interviewing", finalist: "interviewing", reference_check: "interviewing",
+      offer_draft: "offer", offer_approval: "offer", offer_sent: "offer", negotiation: "offer", accepted: "offer", onboarding: "offer",
+      hired: "hired", rejected: "not_moving_forward", withdrawn: "not_moving_forward", declined: "not_moving_forward", talent_pool: "not_moving_forward",
+    };
+    for (const s of ApplicationStageEnum.options) expect(ownerStage({ stage: s }), s).toBe(expected[s]);
+  });
+  it("lets marks overlay the step underneath: holds anywhere in the process, longlist and shortlist only on New", () => {
+    expect(ownerStage({ stage: "triaged" }, { mark: "shortlist" })).toBe("shortlist");
+    expect(ownerStage({ stage: "screening" }, { mark: "longlist" })).toBe("longlist");
+    expect(ownerStage({ stage: "interview_scheduled" }, { mark: "shortlist" })).toBe("interviewing");
+    expect(ownerStage({ stage: "interview_scheduled" }, { mark: "on_hold", remindAt: later })).toBe("on_hold");
+    expect(ownerStage({ stage: "triaged" }, { mark: "not_a_fit_for_now" })).toBe("not_moving_forward");
+    expect(ownerStageLabel("not_moving_forward", { mark: "not_a_fit_for_now" })).toBe("Not a fit for now");
+    // out of the process, no mark counts
+    expect(ownerStage({ stage: "rejected" }, { mark: "shortlist" })).toBe("not_moving_forward");
+    expect(ownerStage({ stage: "hired" }, { mark: "on_hold", remindAt: later })).toBe("hired");
+    expect(OWNER_STAGE_LABEL.not_moving_forward).toBe("Not moving forward");
+  });
+  it("parks a running hold, brings it back when its date comes, and sets aside not a fit for now", () => {
+    expect(groupFor({ stage: "triaged" }, { mark: "on_hold", remindAt: later }, now)).toBe("in_process");
+    expect(holdRunning({ mark: "on_hold", remindAt: later }, now)).toBe(true);
+    expect(groupFor({ stage: "screen_invited" }, { mark: "on_hold", remindAt: earlier }, now)).toBe("waiting_on_you");
+    expect(holdEnded({ mark: "on_hold", remindAt: earlier }, now)).toBe(true);
+    expect(ownerTags({ stage: "triaged" }, { mark: "on_hold", remindAt: earlier }, now)).toEqual(["Hold ended"]);
+    expect(groupFor({ stage: "triaged" }, { mark: "not_a_fit_for_now" }, now)).toBe("not_moving_forward");
+    expect(groupFor({ stage: "triaged" }, { mark: "shortlist" }, now)).toBe("waiting_on_you");
+    expect(groupFor({ stage: "hired" }, { mark: "on_hold", remindAt: later }, now)).toBe("hired");
+  });
+  it("shows someone with an open follow-up as Cancelled only while recommended for interview or interview done", () => {
+    const asked = { reason: "asked_new_times", autoState: "none", interviewOpen: false } as const;
+    expect(ownerStage({ stage: "interview_recommended" }, null, asked)).toBe("cancelled");
+    expect(ownerStage({ stage: "interview_complete" }, null, asked)).toBe("cancelled");
+    for (const stage of ["interview_scheduled", "finalist", "debrief", "triaged", "offer_sent", "hired", "rejected", "withdrawn", "talent_pool"] as const) {
+      expect(ownerStage({ stage }, null, asked), stage).toBe(ownerStage({ stage }));
+    }
+    // without a follow-up nothing changes, and the follow-up comes before a mark (the two never coexist)
+    expect(ownerStage({ stage: "interview_recommended" })).toBe("interviewing");
+    expect(ownerStage({ stage: "interview_recommended" }, { mark: "on_hold", remindAt: later }, asked)).toBe("cancelled");
+    expect(ownerStage({ stage: "interview_recommended" }, { mark: "on_hold", remindAt: later }, null)).toBe("on_hold");
+  });
+  it("labels Cancelled with why they are there", () => {
+    expect(OWNER_STAGE_LABEL.cancelled).toBe("Cancelled");
+    expect(ownerStageLabel("cancelled", null, { reason: "asked_new_times", autoState: "waiting", interviewOpen: false })).toBe("Asked for new times");
+    expect(ownerStageLabel("cancelled", null, { reason: "not_interested", autoState: "none", interviewOpen: false })).toBe("No longer interested");
+    expect(ownerStageLabel("cancelled", null, { reason: "no_show", autoState: "none", interviewOpen: false })).toBe("No-show");
+    expect(ownerStageLabel("cancelled")).toBe("Cancelled");
+    expect(ownerStageLabel("interviewing", null, { reason: "no_show", autoState: "none", interviewOpen: false })).toBe("Interviewing");
+  });
+  it("counts someone under Cancelled as waiting on you only when nothing is in motion for them", () => {
+    const at = (stage: ApplicationStage, autoState: "none" | "waiting" | "waiting_check" | "preparing" | "sent" | "not_sent", interviewOpen: boolean) => groupFor({ stage }, null, now, { reason: "asked_new_times", autoState, interviewOpen });
+    expect(at("interview_recommended", "waiting", false)).toBe("in_process");
+    expect(at("interview_recommended", "waiting_check", false)).toBe("in_process");
+    expect(at("interview_recommended", "preparing", true)).toBe("in_process");
+    expect(at("interview_recommended", "sent", true)).toBe("in_process");
+    expect(at("interview_complete", "none", true)).toBe("in_process");
+    expect(at("interview_recommended", "none", false)).toBe("waiting_on_you");
+    expect(at("interview_recommended", "not_sent", false)).toBe("waiting_on_you");
+    expect(at("interview_complete", "sent", false)).toBe("waiting_on_you");
+    // out of the column the follow-up is not read: a booked interview is in process, a decline is not moving forward
+    expect(at("interview_scheduled", "none", false)).toBe("in_process");
+    expect(at("rejected", "waiting", false)).toBe("not_moving_forward");
+    expect(groupFor({ stage: "interview_recommended" }, null, now)).toBe("waiting_on_you");
+  });
+  it("gives the Cancelled column's alerts headlines that name nobody", () => {
+    expect(alertHeadline("interview.no_show")).toBe("A candidate did not come to an interview");
+    expect(alertHeadline("interview.new_times_sent")).toBe("New interview times went to a candidate who asked for them");
+    expect(alertHeadline("interview.new_times_not_sent")).toBe("New interview times a candidate asked for were not sent");
+    expect(alertHeadline("interview.new_times")).toBe("New times are going to a candidate for your interview");
+    // a candidate moving an interview keeps its own words
+    expect(alertHeadline("interview.rescheduled")).toBe("A candidate asked to move an interview");
+  });
+  it("says why a mark cannot be set at this step", () => {
+    expect(markBlockedReason("triaged", "shortlist")).toBeNull();
+    expect(markBlockedReason("interview_scheduled", "on_hold")).toBeNull();
+    expect(markBlockedReason("interview_scheduled", "shortlist")).toBe("They are interviewing already.");
+    expect(markBlockedReason("ineligible", "on_hold")).toMatch(/^Check their eligibility answer first/);
+    expect(markBlockedReason("rejected", "on_hold")).toBe("Not available at this step (Not moving forward).");
+    expect(markBlockedReason("offer_sent", "longlist")).toBe("Not available at this step (Offer out).");
+  });
+  it("works out when a hold ends: 14 days by default, a chosen date, never in the past or beyond 8 weeks", () => {
+    expect(holdUntil(undefined, now)).toBe("2026-10-22T12:00:00.000Z");
+    expect(holdUntil("2026-10-20", now)).toBe("2026-10-20T15:00:00.000Z");
+    expect(holdUntil("2026-10-09T08:30:00Z", now)).toBe("2026-10-09T08:30:00.000Z");
+    expect(() => holdUntil("2026-10-01", now)).toThrow(/after today/);
+    expect(() => holdUntil("2027-01-30", now)).toThrow(/8 weeks at most/);
+    expect(() => holdUntil("next week", now)).toThrow(MarkError);
+  });
+});
+
+describe("the candidate's steps (plan A1)", () => {
+  it("shows four plain steps and hides the team's internal ones", () => {
+    expect(candidateStep("applied", "not_told")).toBe("received");
+    expect(candidateStep("received", "not_told")).toBe("received");
+    for (const s of ["ineligible", "eligible", "triaged", "screen_invited", "screening", "screen_complete", "interview_recommended", "finalist", "reference_check", "offer_draft", "offer_approval"] as const) expect(candidateStep(s, "not_told"), s).toBe("under_review");
+    for (const s of ["interview_scheduled", "interview_complete", "debrief"] as const) expect(candidateStep(s, "not_told"), s).toBe("interview");
+    for (const s of ["hired", "withdrawn", "declined", "offer_sent"] as const) expect(candidateStep(s, "not_told"), s).toBe("decision");
+    expect(CANDIDATE_STEP_LABEL.under_review).toBe("Under review");
+  });
+  it("shows a private decision only once the candidate was told, and the step before it until then", () => {
+    expect(candidateStep("rejected", "not_told")).toBe("under_review");
+    expect(candidateStep("rejected", "queued", "interview_complete")).toBe("interview");
+    expect(candidateStep("talent_pool", "not_told", "applied")).toBe("received");
+    expect(candidateStep("rejected", "sent")).toBe("decision");
+    expect(candidateStep("talent_pool", "told_in_person")).toBe("decision");
+    expect(candidateStep("rejected", "before_tracking")).toBe("decision");
+    expect(decisionTold("queued")).toBe(false);
   });
 });
 
@@ -68,6 +231,11 @@ describe("policy defaults", () => {
     for (const a of HARD_HUMAN_ONLY) expect(DEFAULT_POLICIES[a].level).toBe("human_only");
     expect(DEFAULT_POLICIES["role_packet.approve"].level).toBe("approval");
     expect(DEFAULT_POLICIES["message.send_templated"].level).toBe("auto");
+    // founder decision B6: declining sends nothing; the decision message goes when a person presses Send
+    expect(DEFAULT_POLICIES["disposition.send"].level).toBe("auto");
+    // founder decision of 9 October 2026: the 30-day "still reviewing" note is off unless a company switches it on
+    expect(DEFAULT_POLICIES["message.still_reviewing"].level).toBe("human_only");
+    expect(DEFAULT_POLICIES["message.still_reviewing"].params).toEqual({ afterDays: 30 });
   });
 });
 

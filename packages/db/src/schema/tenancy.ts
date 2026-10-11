@@ -1,11 +1,23 @@
 import { boolean, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import type { Actor, Location } from "@ros/contracts";
+import type { Actor, ApplyMode, CompanyOnboarding, Location } from "@ros/contracts";
 import { createdAt, id, ts, updatedAt } from "./columns";
 
 export type CompanySettings = {
   website?: string;
-  /** A public logo URL for the JobPosting structured data (docs/spec/20 item 4); optional. */
+  /**
+   * Where the team's own pages load the logo. For a logo uploaded in Setup (plan D10) it is the signed-in path
+   * `/api/v1/companies/current/logo?v=<file>`; the public pages and the structured data build the public address from
+   * `logo` instead (apps/api services/company-settings-profile.ts).
+   */
   logoUrl?: string;
+  /** The logo as stored by us (plan D10): the file under the company's careers address, its type, size and who uploaded it. */
+  logo?: { file: string; key: string; contentType: string; sizeBytes: number; width: number | null; height: number | null; uploadedAt: string; uploadedBy: Actor };
+  /** The text about the company a person approved in Setup (founder decision Q13); the only one candidates ever see. */
+  about?: { text: string; approvedAt: string; approvedBy: Actor; aiAssisted: boolean };
+  /** The assistant's draft of that text, waiting for a person; never shown to candidates. */
+  aboutDraft?: { text: string; draftedAt: string; draftedBy: Actor; aiRunId: string | null; basedOn: string[] };
+  /** Who candidates may write to before applying (plan D10); without it, the ITS inbox that answers for the company. */
+  hiringContact?: { email: string; name: string | null; setAt: string; setBy: Actor };
   benefitsSummary?: string;
   notices?: Record<string, { version: string; text: string; jurisdictions: string[] }>;
   retention?: Record<string, number>;
@@ -18,6 +30,26 @@ export type CompanySettings = {
   businessHours?: { days: number[]; start: string; end: string };
   /** Design Partner pilot term (founder decision F8): roles in progress are never cut off when it ends. */
   pilot?: { startedAt: string; endsAt: string; extendedUntil?: string };
+  /** The one-time ITS check (founder decision B7): set and cleared from the admin console only (apps/api services/company-trust.ts). */
+  verifiedAt?: string;
+  verifiedBy?: Actor;
+  /** Getting started (plan B2): who hid the card, the AI rules reviewed, job-board access confirmed by ITS. */
+  onboarding?: CompanyOnboarding;
+  /**
+   * Who posts the job on the boards (plan D3): "its" (the default) gives an ITS recruiter a posting task per board,
+   * posted from the company's own board accounts; "self" leaves the posting package and the steps to the team.
+   */
+  boardPosting?: "its" | "self";
+  /** The company has its own paid ZipRecruiter plan (Q11): only then is ZipRecruiter offered and prepared. */
+  zipRecruiterPlan?: boolean;
+  /**
+   * How new roles meet the screening conversation unless ITS set a role itself (plan E1): "form_then_screen" when unset;
+   * ITS sets "one_visit" for a pilot company. Set from the ITS admin console only, with who and when (apps/api routes/admin.ts).
+   */
+  applyFlowDefault?: ApplyMode;
+  applyFlowSetBy?: { at: string; by: Actor; reason: string };
+  /** Automatic new interview times for candidates who cancel and ask for them (founder decision 3A). Unset: on, after 3 working days. */
+  newTimesAfterCancel?: { auto: boolean; workingDays: number };
 };
 
 export const companies = pgTable(

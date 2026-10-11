@@ -5,7 +5,7 @@ import { aiRuns, applications, candidates, communications, entitlements, jobs, n
 import { fakePostmarkEvent, type FakeEmailAdapter, type FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInWithIdentity } from "./test-helpers";
+import { signInWithIdentity, useLaterApplyFlow } from "./test-helpers";
 
 /**
  * The company's contact hours reach the automated texts themselves (audit findings A8 and J16), not only the helper that
@@ -70,6 +70,8 @@ describe("the company's contact hours hold back every automated text", () => {
     const co = (await (await json("POST", "/api/v1/companies", { name: "Desert Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Phoenix", region: "AZ", country: "US" }] })).json()) as { id: string; slug: string };
     companyId = co.id;
     slug = co.slug;
+    // Texted screens come with the later path only: the conversation offered with the application is on the web (plan Wave E).
+    await useLaterApplyFlow(container, co.id);
     const started = (await (await json("POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental hygienist in Phoenix, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active RDH license. Just draft it." })).json()) as { session: { id: string } };
     roleId = ((await (await json("POST", `/api/v1/intake/sessions/${started.session.id}/compile`)).json()) as { roleId: string }).roleId;
     expect((await json("POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" })).status).toBe(200);
@@ -174,7 +176,7 @@ describe("the company's contact hours hold back every automated text", () => {
     expect(textsTo(ANA_PHONE)).toHaveLength(1);
     expect(mail().sent.filter((m) => m.to === ANA.email && /screening conversation/.test(m.subject))).toHaveLength(1);
     const [allowance] = await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, "text_screens")));
-    expect(allowance.used).toBe(2); // Ben's and Ana's screens, each counted once
+    expect(allowance.used).toBe(0); // a conversation counts at its first answer, never at the invitation (plan E9): neither has answered yet
     // Ben: the reminder and the text that replaces his bounced email
     const [benScreen] = await screensOf(benId);
     expect(benScreen.status).toBe("reminded");

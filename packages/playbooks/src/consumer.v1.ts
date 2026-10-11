@@ -80,6 +80,7 @@ const consumer: PlaybookInput = {
       ],
       benchmarks: { applicantsPerHire: 80, screensPerHire: 10, interviewsPerHire: 4, medianDaysToFill: 42 },
       channels: ["linkedin_basic", "careers_page", "google_jobs", "indeed", "referrals", "rediscovery"],
+      occupation: { soc: "11-2021", name: "Marketing managers", match: "close" },
     },
     {
       key: "ecommerce_manager",
@@ -121,6 +122,8 @@ const consumer: PlaybookInput = {
       ],
       benchmarks: { applicantsPerHire: 70, screensPerHire: 9, interviewsPerHire: 4, medianDaysToFill: 40 },
       channels: ["linkedin_basic", "careers_page", "google_jobs", "indeed", "referrals", "rediscovery"],
+      // No occupation of its own: read as marketing managers, who usually run whole teams, so only a rough guide.
+      occupation: { soc: "11-2021", name: "Marketing managers", match: "approximate" },
     },
     {
       key: "social_content_manager",
@@ -159,6 +162,9 @@ const consumer: PlaybookInput = {
       ],
       benchmarks: { applicantsPerHire: 120, screensPerHire: 12, interviewsPerHire: 4, medianDaysToFill: 35 },
       channels: ["linkedin_basic", "careers_page", "google_jobs", "indeed", "referrals", "rediscovery"],
+      // No occupation of its own: government figures for marketing specialists are the closest (marketing managers,
+      // 11-2021, run whole teams and would overstate the market), so they are told as a rough guide.
+      occupation: { soc: "13-1161", name: "Market research analysts and marketing specialists", match: "approximate" },
     },
     {
       key: "customer_success_manager",

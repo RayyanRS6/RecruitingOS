@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { RolePacket } from "@ros/contracts";
-import { BOARD_CHANNELS, POSTING_STATES, POSTING_TRANSITIONS, PostingTransitionError, assertPostingTransition, canTransitionPosting, isBoardChannel, postingPackage } from "./postings";
-import { LINK_TOKEN_LENGTH, SOURCES, applyLinkUrl, isLinkToken, newLinkToken, sourceForChannel } from "./application-links";
+import { BOARD_CHANNELS, POSTING_STATES, POSTING_TRANSITIONS, PostingTransitionError, assertPostingTransition, canTransitionPosting, isBoardChannel, payLine, postingPackage } from "./postings";
+import { jobNoticesFor, payShown, payTransparencyApplies } from "./compliance";
+import { LINK_TOKEN_LENGTH, SHARE_PLACES, SOURCES, SOURCE_LABEL, applyLinkUrl, isLinkPreviewBot, isLinkToken, newLinkToken, sourceForChannel } from "./application-links";
 import { jobUrlsFor } from "./job-urls";
 
 describe("posting state machine (docs/spec/20 item 11)", () => {
@@ -17,7 +18,7 @@ describe("posting state machine (docs/spec/20 item 11)", () => {
       ["ready_to_post", "posted_manually"], ["ready_to_post", "submitted_integration"], ["ready_to_post", "paused"], ["ready_to_post", "failed"], ["ready_to_post", "closed"],
       ["posted_manually", "live_verified"], ["posted_manually", "failed"], ["posted_manually", "paused"], ["posted_manually", "closed"],
       ["submitted_integration", "live_verified"], ["submitted_integration", "failed"], ["submitted_integration", "paused"], ["submitted_integration", "closed"],
-      ["live_verified", "paused"], ["live_verified", "closed"], ["live_verified", "failed"],
+      ["live_verified", "posted_manually"], ["live_verified", "paused"], ["live_verified", "closed"], ["live_verified", "failed"],
       ["paused", "ready_to_post"], ["paused", "posted_manually"], ["paused", "live_verified"], ["paused", "closed"],
       ["failed", "ready_to_post"], ["failed", "posted_manually"], ["failed", "submitted_integration"], ["failed", "closed"],
     ];
@@ -74,7 +75,10 @@ describe("tracked application links (items 7, 8 and 19)", () => {
   });
 
   it("maps channels to the source vocabulary", () => {
-    expect(SOURCES).toEqual(["careers_page", "email_in", "linkedin", "indeed", "ziprecruiter", "referral", "direct", "other"]);
+    // The share places (plan D8) have sources of their own, so "Applications by source" can tell a LinkedIn post from the LinkedIn board.
+    expect(SOURCES).toEqual(["careers_page", "email_in", "linkedin", "indeed", "ziprecruiter", "referral", "school", "community", "shared_email", "shared_text", "whatsapp", "linkedin_post", "facebook", "x", "direct", "other"]);
+    for (const s of SOURCES) expect(SOURCE_LABEL[s]).toBeTruthy();
+    for (const p of Object.values(SHARE_PLACES)) expect(SOURCES).toContain(p.source);
     expect(sourceForChannel("linkedin_basic")).toBe("linkedin");
     expect(sourceForChannel("indeed")).toBe("indeed");
     expect(sourceForChannel("ziprecruiter")).toBe("ziprecruiter");
@@ -82,6 +86,31 @@ describe("tracked application links (items 7, 8 and 19)", () => {
     expect(sourceForChannel("google_jobs")).toBe("careers_page");
     expect(sourceForChannel("email_in")).toBe("email_in");
     expect(sourceForChannel("something_else")).toBe("other");
+  });
+
+  it("tells link-preview fetchers and crawlers from people (plan D8): they are never counted as visits", () => {
+    for (const bot of [
+      "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+      "Twitterbot/1.0",
+      "LinkedInBot/1.0 (compatible; Mozilla/5.0; Apache-HttpClient +http://www.linkedin.com)",
+      "Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)",
+      "WhatsApp/2.23.20.0 A",
+      "TelegramBot (like TwitterBot)",
+      "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)",
+      "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+      "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
+      "RecruitingOS-LinkCheck/1.0",
+    ]) expect(isLinkPreviewBot(bot), bot).toBe(true);
+    // no user agent at all (some privacy tools strip it) counts like a person
+    expect(isLinkPreviewBot(undefined)).toBe(false);
+    expect(isLinkPreviewBot("")).toBe(false);
+    for (const person of [
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+      "Mozilla/5.0 (Linux; Android 13; CUBOT X30) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Mobile Safari/537.36",
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 [FBAN/FBIOS;FBAV/450.0]",
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 LinkedInApp",
+    ]) expect(isLinkPreviewBot(person), person).toBe(false);
   });
 
   it("builds every public URL from the jobs host, with no trailing slash doubled", () => {
@@ -110,11 +139,24 @@ describe("posting package (item 9)", () => {
     expect(pkg.text).toContain(packet.description.publicJobDescription);
   });
 
-  it("keeps an undisclosed pay range out of the package", () => {
-    const hidden = { ...packet, compensation: { ...packet.compensation, discloseRange: false } } as RolePacket;
+  it("keeps an undisclosed pay range out of the package where no pay transparency law covers the job", () => {
+    const hidden = { ...packet, identity: { ...packet.identity, locations: [{ city: "Austin", region: "TX", country: "US" }] }, compensation: { ...packet.compensation, discloseRange: false } } as RolePacket;
     const pkg = postingPackage({ packet: hidden, companyName: "Brightline Dental Group", jobUrl: "https://j/x", applyUrl: "https://j/a/t" });
     expect(pkg.fields.pay).toBe("Not disclosed publicly");
     expect(pkg.text).not.toContain("$45");
     expect(pkg.text).not.toContain("send applications instead");
+    // the company's own location counts too, as on the job page
+    expect(postingPackage({ packet: hidden, companyName: "Brightline Dental Group", jobUrl: "https://j/x", applyUrl: "https://j/a/t", companyLocations: [{ city: "Denver", region: "CO", country: "US" }] }).fields.pay).toBe("$45–$55 an hour (hourly, USD)");
+  });
+
+  it("states the range where a pay transparency law covers the job, whatever the packet says, the same rule as the job page", () => {
+    const hidden = { ...packet, compensation: { ...packet.compensation, discloseRange: false } } as RolePacket;
+    const pkg = postingPackage({ packet: hidden, companyName: "Brightline Dental Group", jobUrl: "https://j/x", applyUrl: "https://j/a/t" });
+    expect(pkg.fields.pay).toBe("$45–$55 an hour (hourly, USD)");
+    expect(payLine(hidden)).toBe(pkg.fields.pay);
+    const notices = jobNoticesFor({ jobLocations: hidden.identity.locations });
+    expect(payTransparencyApplies(notices)).toBe(true);
+    expect(payShown(hidden.compensation, notices)).toBe(true);
+    expect(payShown(hidden.compensation, jobNoticesFor({ jobLocations: [{ city: "Austin", region: "TX", country: "US" }] }))).toBe(false);
   });
 });

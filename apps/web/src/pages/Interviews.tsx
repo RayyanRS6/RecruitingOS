@@ -3,41 +3,54 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "../nav";
-import { Alert, Button, Card, Chip, EmptyState, ErrorState, Field, Sheet, Skeleton, Table, Timeline } from "@ros/ui";
-import { api, ApiError, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me } from "../api/client";
+import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, Field, PageHeader, Pill, Skeleton, type SortValue, sortRows, Table, Timeline, type Tone, useTableSort } from "@ros/ui";
+import { api, ApiError, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me, type NewTimesSettingView, type SendNewTimesResult } from "../api/client";
 import { toast } from "../toast";
-import { canDecideInterviews, canManageInterviews, canSeeTalent } from "../roles";
+import { interviewNewTimesText } from "../cancelled";
+import { activeCompanyOf } from "../rail";
+import { canDecideInterviews, canManageInterviews, canReadNotes, canSeeTalent } from "../roles";
+import { interviewCancelToast, newTimesToast } from "../talent-actions";
+import { againChoice } from "../interview-defaults";
+import { MyNote, useNotes } from "./candidate-panel/notes";
 
 const STATUS_LABEL: Record<string, string> = { proposed: "Preparing times", scheduling: "Waiting on the candidate", scheduled: "Scheduled", completed: "Completed", cancelled: "Cancelled", no_show: "No-show", offer_expired: "Times expired" };
-const DECISION_LABEL: Record<string, string> = { next_round: "Next round", finalist: "Finalist", not_moving_forward: "Not moving forward", hired: "Hired" };
-const STATUS_TONE: Record<string, "neutral" | "accent" | "needs" | "good" | "caution" | "critical"> = { proposed: "accent", scheduling: "needs", scheduled: "good", completed: "neutral", cancelled: "critical", no_show: "caution", offer_expired: "caution" };
+// `new_times`: the candidate did not come, and the team sent new times for the same round (the Cancelled column).
+const DECISION_LABEL: Record<string, string> = { next_round: "Next round", finalist: "Finalist", not_moving_forward: "Not moving forward", hired: "Hired", new_times: "New times sent" };
+// Red is only for a missing must-have or a critical error (docs/07), so a cancelled interview is plain grey.
+const STATUS_TONE: Record<string, Tone> = { proposed: "accent", scheduling: "caution", scheduled: "good", completed: "neutral", cancelled: "neutral", no_show: "caution", offer_expired: "caution" };
 const when = (iso: string | null, tz: string | null) => (iso ? new Date(iso).toLocaleString("en-US", { timeZone: tz ?? undefined, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "not yet");
+const INTERVIEW_SORT: Record<"candidate" | "round" | "when", (i: InterviewSummary) => SortValue> = { candidate: (i) => `${i.candidate.firstName} ${i.candidate.lastName}`, round: (i) => i.title, when: (i) => (i.startsAt ? Date.parse(i.startsAt) : null) };
 
 /** Interviews across roles (docs/04): who, when, who is interviewing, and what needs a person. */
 export function Interviews() {
   const { id } = useParams();
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
-  const role = me.data?.memberships.find((m) => m.companyId === me.data?.activeCompanyId)?.role ?? null;
+  const company = activeCompanyOf(me.data);
+  const role = company.role;
   const list = useQuery({ queryKey: ["interviews"], queryFn: () => api.get<InterviewSummary[]>("/api/v1/interviews"), refetchInterval: 15000 });
-  const upcoming = (list.data ?? []).filter((i) => ["proposed", "scheduling", "scheduled"].includes(i.status)).sort((a, b) => (a.startsAt ?? "9").localeCompare(b.startsAt ?? "9"));
+  const upcoming = (list.data ?? []).filter((i) => ["proposed", "scheduling", "scheduled"].includes(i.status));
   const past = (list.data ?? []).filter((i) => !["proposed", "scheduling", "scheduled"].includes(i.status));
+  // In motion opens soonest first (unscheduled last), as it always has; Past opens latest first.
+  const soon = useTableSort<"candidate" | "round" | "when">({ key: "when", dir: "ascending" });
+  const done = useTableSort<"candidate" | "round" | "when">({ key: "when", dir: "descending" });
+  // The interviewer line names people soonest interview first, whatever order the table is sorted in
   const load: Record<string, number> = {};
-  for (const i of upcoming) for (const p of i.participants) load[p.name ?? p.email] = (load[p.name ?? p.email] ?? 0) + 1;
+  for (const i of sortRows(upcoming, INTERVIEW_SORT.when, "ascending")) for (const p of i.participants) load[p.name ?? p.email] = (load[p.name ?? p.email] ?? 0) + 1;
   return (
     <div className="stack" style={{ gap: 18 }}>
-      <div className="page-head"><div><h1>Interviews</h1><p>{canManageInterviews(role) ? "Every interview a person approved: waiting on the candidate, scheduled, or done. Reschedule and cancel from here; nothing is decided by software." : "Your interviews: waiting on the candidate, scheduled, or done. Afterwards, tell us whether it took place; the hiring team records the decision."}</p></div></div>
+      <PageHeader eyebrow={company.name ?? undefined} title="Interviews" sub={canManageInterviews(role) ? "Every interview a person approved: waiting on the candidate, scheduled, or done. Reschedule and cancel from here; nothing is decided by software." : "Your interviews: waiting on the candidate, scheduled, or done. Afterwards, tell us whether it took place; the hiring team records the decision."} />
       {list.isLoading ? <Skeleton lines={4} /> : list.error ? <ErrorState message="Could not load interviews." onRetry={() => list.refetch()} /> : (
         <>
-          {upcoming.length === 0 ? <EmptyState title="No interviews in motion" body={canSeeTalent(role) ? "Open a candidate and choose Interview to start one." : "You will see an interview here as soon as you are put on one."} action={canSeeTalent(role) ? <Link to="/talent" className="btn primary">Go to Talent</Link> : undefined} /> : (
+          {upcoming.length === 0 ? <EmptyState icon="interviews" title="No interviews in motion" body={canSeeTalent(role) ? "Open a candidate and move them to Interviewing to start one." : "You will see an interview here as soon as you are put on one."} action={canSeeTalent(role) ? <Link to="/talent" className="btn primary">Go to Talent</Link> : undefined} /> : (
             <Card title={`In motion (${upcoming.length})`}>
-              <Table head={["Candidate", "Round", "When", "Interviewers", "Status", ""]}>
-                {upcoming.map((i) => (
+              <Table head={[soon.col("candidate", "Candidate", "text"), soon.col("round", "Round", "text"), soon.col("when", "When", "date", { first: "ascending" }), "Interviewers", "Status", ""]} announce={soon.announce}>
+                {soon.apply(upcoming, INTERVIEW_SORT).map((i) => (
                   <tr key={i.id}>
-                    <td>{i.candidate.firstName} {i.candidate.lastName}<br /><span className="small muted">{i.roleTitle}</span></td>
+                    <td><CandidateCell i={i} /></td>
                     <td>{i.title}</td>
                     <td>{when(i.startsAt, i.timezone)}{i.status === "scheduling" ? <><br /><span className="small muted">{i.offeredSlots.length} times offered</span></> : null}</td>
                     <td className="small">{i.participants.map((p) => p.name ?? p.email).join(", ")}</td>
-                    <td><Chip tone={STATUS_TONE[i.status] ?? "neutral"}>{STATUS_LABEL[i.status] ?? i.status}</Chip></td>
+                    <td><Pill size="sm" tone={STATUS_TONE[i.status] ?? "neutral"}>{STATUS_LABEL[i.status] ?? i.status}</Pill></td>
                     <td><Link to={`/interviews/${i.id}`} className="btn quiet sm">Open</Link></td>
                   </tr>
                 ))}
@@ -47,13 +60,13 @@ export function Interviews() {
           )}
           {past.length ? (
             <Card title={`Past (${past.length})`}>
-              <Table head={["Candidate", "Round", "When", "Outcome", "Decision", ""]}>
-                {past.map((i) => (
+              <Table head={[done.col("candidate", "Candidate", "text"), done.col("round", "Round", "text"), done.col("when", "When", "date"), "Outcome", "Decision", ""]} announce={done.announce}>
+                {done.apply(past, INTERVIEW_SORT).map((i) => (
                   <tr key={i.id}>
-                    <td>{i.candidate.firstName} {i.candidate.lastName}<br /><span className="small muted">{i.roleTitle}</span></td>
+                    <td><CandidateCell i={i} /></td>
                     <td>{i.title}</td>
                     <td>{when(i.startsAt, i.timezone)}</td>
-                    <td><Chip tone={STATUS_TONE[i.status] ?? "neutral"}>{i.outcome ? i.outcome.replace(/_/g, " ") : STATUS_LABEL[i.status] ?? i.status}</Chip></td>
+                    <td><Pill size="sm" tone={STATUS_TONE[i.status] ?? "neutral"}>{i.outcome ? i.outcome.replace(/_/g, " ") : STATUS_LABEL[i.status] ?? i.status}</Pill></td>
                     <td className="small">{i.decision ? DECISION_LABEL[i.decision] ?? i.decision.replace(/_/g, " ") : "not yet"}</td>
                     <td><Link to={`/interviews/${i.id}`} className="btn quiet sm">Open</Link></td>
                   </tr>
@@ -63,13 +76,24 @@ export function Interviews() {
           ) : null}
         </>
       )}
-      {id ? <InterviewSheet id={id} role={role} userId={me.data?.user.id ?? null} /> : null}
+      {id ? <InterviewSheet id={id} role={role} userId={me.data?.user.id ?? null} all={list.data ?? []} /> : null}
+    </div>
+  );
+}
+
+/** The candidate column: initials, the name, and the role underneath. */
+function CandidateCell({ i }: { i: InterviewSummary }) {
+  const name = `${i.candidate.firstName} ${i.candidate.lastName}`;
+  return (
+    <div className="row" style={{ flexWrap: "nowrap", alignItems: "flex-start" }}>
+      <Avatar name={name} size="sm" />
+      <span>{name}<br /><span className="small muted">{i.roleTitle}</span></span>
     </div>
   );
 }
 
 /** One interview. What can be changed here follows the person's role: interviewers see their interview and record whether it took place; the decision is recorded from the candidate's page by the hiring team. */
-function InterviewSheet({ id, role, userId }: { id: string; role: string | null; userId: string | null }) {
+function InterviewSheet({ id, role, userId, all }: { id: string; role: string | null; userId: string | null; all: InterviewSummary[] }) {
   const nav = useNavigate();
   const qc = useQueryClient();
   // A refusal or a missing interview is an answer, not a hiccup: it is not retried and the 10-second refresh stops while it stands.
@@ -83,22 +107,37 @@ function InterviewSheet({ id, role, userId }: { id: string; role: string | null;
   const [confirmCancel, setConfirmCancel] = useState(false);
   const refresh = async () => { await qc.invalidateQueries({ queryKey: ["interview", id] }); await qc.invalidateQueries({ queryKey: ["interviews"] }); await qc.invalidateQueries({ queryKey: ["brief"] }); };
   const reschedule = useMutation({ mutationFn: () => api.post(`/api/v1/interviews/${id}/reschedule`, { reason: reason || undefined }), onSuccess: async () => { toast("New times are going out."); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not reschedule.") });
-  const cancel = useMutation({ mutationFn: () => api.post(`/api/v1/interviews/${id}/cancel`, { reason }), onSuccess: async () => { toast("Cancelled. The candidate and interviewers are told."); setConfirmCancel(false); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not cancel.") });
+  const cancel = useMutation({ mutationFn: () => api.post<{ candidateTold?: boolean; interviewersTold?: boolean }>(`/api/v1/interviews/${id}/cancel`, { reason }), onSuccess: async (r) => { const t = interviewCancelToast(r); toast(t.title, t.detail); setConfirmCancel(false); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not cancel.") });
   const outcome = useMutation({ mutationFn: (o: string) => api.post(`/api/v1/interviews/${id}/outcome`, { outcome: o }), onSuccess: async () => { toast("Recorded."); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record.") });
   const book = useMutation({ mutationFn: (slotId: string) => api.post(`/api/v1/interviews/${id}/book-on-behalf`, { slotId, note: "chosen with the candidate by phone" }), onSuccess: async () => { toast("Booked on the candidate's behalf."); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not book.") });
+  // Someone under Cancelled (founder decision 2A): the same interview reopened for new times, or a new one for the same round after a no-show.
+  const newTimes = useMutation({
+    mutationFn: (applicationId: string) => api.post<SendNewTimesResult>(`/api/v1/applications/${applicationId}/new-times`, {}),
+    onSuccess: async (r, applicationId) => {
+      if (q.data) { const t = newTimesToast({ kind: "sent", via: r.via, firstName: q.data.candidate.firstName, round: q.data.title }); toast(t.title, t.detail); }
+      await refresh();
+      await qc.invalidateQueries({ queryKey: ["application", applicationId] });
+    },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send new times."),
+  });
   const i = q.data;
   const manage = canManageInterviews(role);
   const participant = !!i && !!userId && i.participants.some((p) => p.userId === userId);
   const finished = !!i && ["completed", "no_show"].includes(i.status);
+  const again = !!i && againChoice(i, all, role);
+  // Before ITS confirms the company the team's send is refused (409 company_not_checked), so the card does not offer it.
+  const setting = useQuery({ queryKey: ["new-times-setting"], queryFn: () => api.get<NewTimesSettingView>("/api/v1/companies/current/new-times"), retry: false, enabled: again === "send_new_times" });
+  const companyConfirmed = setting.data?.companyConfirmed;
   return (
-    <Sheet open onClose={() => nav("/interviews")} title={i ? `${i.candidate.firstName} ${i.candidate.lastName} · ${i.title}` : "Interview"}>
+    <Drawer open onClose={() => nav("/interviews")} title={i ? `${i.candidate.firstName} ${i.candidate.lastName} · ${i.title}` : "Interview"} leading={i ? <Avatar name={`${i.candidate.firstName} ${i.candidate.lastName}`} size="lg" /> : undefined}>
       {q.error && !i ? <ErrorState message={q.error instanceof ApiError && (q.error.status === 404 || q.error.status === 403) ? "This interview is not one of yours, or it no longer exists." : "Could not load this interview."} onRetry={() => q.refetch()} /> : q.isLoading || !i ? <Skeleton lines={8} /> : (
         <div className="stack" style={{ gap: 14 }}>
           <div className="row" style={{ justifyContent: "space-between" }}>
-            <span className="row"><Chip tone={STATUS_TONE[i.status] ?? "neutral"}>{STATUS_LABEL[i.status] ?? i.status}</Chip><span className="small muted">{i.roleTitle} · attempt {i.attempt}</span></span>
+            <span className="row"><Pill tone={STATUS_TONE[i.status] ?? "neutral"}>{STATUS_LABEL[i.status] ?? i.status}</Pill><span className="small muted">{i.roleTitle} · attempt {i.attempt}</span></span>
             {canSeeTalent(role) ? <Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}&message=1`} className="btn secondary sm">Message the candidate</Link> : null}
           </div>
           {i.brief ? <BriefCard brief={i.brief} /> : null}
+          {participant || canReadNotes(role) ? <InterviewNote applicationId={i.applicationId} roleId={i.roleId} firstName={i.candidate.firstName} seesTalent={canSeeTalent(role)} /> : null}
           {finished ? (
             <Card needsYou={!i.decision && canDecideInterviews(role)} title="After the interview">
               {i.decision ? (
@@ -139,17 +178,58 @@ function InterviewSheet({ id, role, userId }: { id: string; role: string | null;
           ) : null}
           {manage && ["proposed", "scheduling", "scheduled"].includes(i.status) ? (
             <Card title="Change it">
-              <Field label="Reason (the candidate sees it when you cancel)" htmlFor="iv-reason"><input id="iv-reason" className="input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
+              <Field label="Reason (the candidate sees it if they had a time booked or offered)" htmlFor="iv-reason"><input id="iv-reason" className="input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
               <div className="row" style={{ marginTop: 10 }}>
                 <Button size="sm" loading={reschedule.isPending} onClick={() => reschedule.mutate()}>Offer new times</Button>
                 {confirmCancel ? <Button size="sm" variant="destructive" loading={cancel.isPending} disabled={!reason.trim()} onClick={() => cancel.mutate()}>Confirm cancel</Button> : <Button size="sm" variant="destructive" onClick={() => setConfirmCancel(true)}>Cancel interview</Button>}
               </div>
             </Card>
           ) : null}
+          {again === "send_new_times" && i.followUp ? (
+            <Card needsYou={companyConfirmed !== false} title={companyConfirmed === false ? "New times" : "Send new times"}>
+              <p className="small" style={{ color: "var(--ink-2)" }}>{interviewNewTimesText(i.candidate.firstName, i.followUp.reason, companyConfirmed)}</p>
+              <div className="row" style={{ marginTop: 10 }}>
+                {companyConfirmed === false ? null : <Button size="sm" variant="primary" icon="send" loading={newTimes.isPending} onClick={() => newTimes.mutate(i.applicationId)}>Send new times</Button>}
+                {canSeeTalent(role) ? <Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}`} className="btn quiet sm">Open their page</Link> : null}
+              </div>
+            </Card>
+          ) : again === "offer_again" ? (
+            <Card needsYou title="Offer times again">
+              <p className="small" style={{ color: "var(--ink-2)" }}>{i.candidate.firstName} did not pick a time. New times go out for the same round and interviewers, or you can decide about them from their page.</p>
+              <div className="row" style={{ marginTop: 10 }}>
+                <Button size="sm" variant="primary" loading={reschedule.isPending} onClick={() => reschedule.mutate()}>Offer new times</Button>
+                {canSeeTalent(role) ? <Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}`} className="btn quiet sm">Open their page</Link> : null}
+              </div>
+            </Card>
+          ) : again === "approve_new" ? (
+            <Card title="Interview again?">
+              <p className="small" style={{ color: "var(--ink-2)" }}>This interview was cancelled. To meet {i.candidate.firstName} after all, approve a new interview; fresh times go out from there.</p>
+              <div className="row" style={{ marginTop: 10 }}><Link to={`/roles/${i.roleId}/talent?open=${i.applicationId}&step=interview`} className="btn secondary sm">Approve a new interview</Link></div>
+            </Card>
+          ) : null}
           <Card title="Timeline"><Timeline items={i.timeline.map((e) => ({ when: new Date(e.occurredAt).toLocaleString(), what: e.type.replace(/[._]/g, " "), who: e.actor.name ?? e.actor.kind }))} /></Card>
         </div>
       )}
-    </Sheet>
+    </Drawer>
+  );
+}
+
+/**
+ * Your own private note on the candidate (founder decision Q24; plan H3), beside the interview: an interviewer writes
+ * theirs once the interview has started and never sees anyone else's; the hiring team reads everyone's on the
+ * candidate's page. Never shown to the candidate, never given to the AI assistant.
+ */
+function InterviewNote({ applicationId, roleId, firstName, seesTalent }: { applicationId: string; roleId: string; firstName: string; seesTalent: boolean }) {
+  const q = useNotes(applicationId);
+  if (q.isLoading) return <Skeleton lines={2} />;
+  // a refusal (not on this candidate's interviews) shows nothing here; every other error says so
+  if (q.error instanceof ApiError && q.error.status === 403) return null;
+  if (q.error || !q.data) return <ErrorState message="Could not load your note." onRetry={() => q.refetch()} />;
+  return (
+    <div className="stack" style={{ gap: 6 }}>
+      <MyNote applicationId={applicationId} view={q.data} firstName={firstName} compact />
+      {seesTalent && q.data.canRead === "all" ? <p className="small muted" style={{ margin: 0 }}>Everyone's notes are on <Link to={`/roles/${roleId}/talent?open=${applicationId}&tab=notes`}>{firstName}'s page</Link>.</p> : <p className="small muted" style={{ margin: 0 }}>Only you and the hiring team read your note; {firstName} never does.</p>}
+    </div>
   );
 }
 

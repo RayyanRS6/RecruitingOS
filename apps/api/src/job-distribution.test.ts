@@ -54,6 +54,10 @@ describe("job distribution: postings, links and verification", () => {
     companySlug = co.slug;
     const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a bookkeeper in Irvine, $60,000 to $70,000, in the office. It's growth. Ceiling $72,000. I decide. Must-haves: QuickBooks. Just draft it." })).json()) as { session: { id: string } };
     roleId = ((await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
+    // This suite covers every board, posted by the team itself: the company has its own ZipRecruiter plan and posts
+    // on the boards itself, and the role uses all three (plan D3, D6; ITS posting is covered by publishing.test.ts).
+    await container.db.update(companies).set({ settings: { ...(await container.db.select({ s: companies.settings }).from(companies).where(eq(companies.id, companyId)))[0].s, boardPosting: "self", zipRecruiterPlan: true } }).where(eq(companies.id, companyId));
+    expect((await json(owner, "POST", `/api/v1/roles/${roleId}/channels`, { channels: ["linkedin_basic", "indeed", "ziprecruiter"] })).status).toBe(200);
     await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" });
     await container.drain();
     roleTitle = (await container.db.select({ title: roles.title }).from(roles).where(eq(roles.id, roleId)))[0].title;

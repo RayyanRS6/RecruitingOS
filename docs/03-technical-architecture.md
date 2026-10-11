@@ -121,7 +121,7 @@ The product shows adapter status in Setup and in the admin console. A `pending_*
 
 ## Development environment
 
-- `pnpm install`, `pnpm db:migrate`, `pnpm dev` (API with inline worker on PGlite, web on Vite). No Docker, no Postgres install.
+- `pnpm install`, `pnpm db:migrate`, `pnpm dev` (the Next.js app with the API mounted inside it and the worker inline, on PGlite). No Docker, no Postgres install.
 - `AI_PROVIDER=fake` by default; `AI_PROVIDER=anthropic` with `ANTHROPIC_API_KEY` for live runs.
 - `pnpm test` runs unit and scenario tests on PGlite; `pnpm eval` runs the evaluation suites; `pnpm typecheck`.
 - Production parity: the same migrations are applied to a managed Postgres in CI weekly.

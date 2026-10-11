@@ -1,7 +1,7 @@
-import { and, desc, eq, gte } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { RETRY_DELAYS_MS, SOFT_BOUNCE_LIMIT, SOFT_BOUNCE_WINDOW_MS, emit, nextContactWindow, notify, raiseAlert, suppressAddress } from "@ros/core";
-import { applications, candidates, communications, companies, jobs, rolePackets, roles, users, type Queryable } from "@ros/db";
+import { DECISION_STAGES, RETRY_DELAYS_MS, SOFT_BOUNCE_LIMIT, SOFT_BOUNCE_WINDOW_MS, emit, nextContactWindow, notify, raiseAlert, suppressAddress } from "@ros/core";
+import { applications, candidates, communications, companies, events, jobs, rolePackets, roles, users, type Queryable } from "@ros/db";
 import type { EmailEvent, Integrations } from "@ros/integrations";
 import { deliverSms } from "./coordinator";
 import { queueCommunication } from "./outbox";
@@ -30,6 +30,8 @@ export async function handleEmailEvent(q: Queryable, integrations: Integrations,
   if (comm) {
     await q.update(communications).set({ status: event.complaint ? "complained" : "bounced", error: `${event.type}: ${event.description}`.slice(0, 500), failureType }).where(eq(communications.id, comm.id));
     await emit(q, { type: event.complaint ? "message.complained" : "message.bounced", companyId: comm.companyId, actor, subject: { type: "communication", id: comm.id }, payload: { type: event.type, failureType, template: comm.templateKey, address } });
+    // A decision message that bounced for good never reached them (`untellDecision`). A spam complaint means it arrived.
+    if (event.hard && !event.complaint) await untellDecision(q, comm);
   }
   const companyId = comm?.companyId ?? null;
   // Who is behind the address: a candidate, or a person on a customer's team (or ITS)?
@@ -63,6 +65,8 @@ export async function handleEmailEvent(q: Queryable, integrations: Integrations,
   if (recent.length >= SOFT_BOUNCE_LIMIT) {
     await suppressAddress(q, { address, reason: "soft_bounce_repeated", source: "postmark", providerMessageId: event.messageId, details: { recentSoftBounces: recent.length }, actor, companyId, now });
     if (comm) await emit(q, { type: "message.suppressed", companyId: comm.companyId, actor, subject: { type: "communication", id: comm.id }, payload: { reason: "soft_bounce_repeated", address } });
+    // a decision message that will not be tried again, since the address is now stopped, never reached them
+    if (comm) await untellDecision(q, comm);
     if (cand && companyId) await notify(q, { companyId, kind: "candidate.unreachable", title: `${cand.firstName} ${cand.lastName} cannot be reached by email`, body: "Their mailbox keeps rejecting messages. Please call them or reach them another way.", action: { label: "Open talent", href: "/talent" } });
     return { handled: true, communicationId: comm?.id ?? null, action: "suppressed", suppressionReason: "soft_bounce_repeated" };
   }
@@ -70,8 +74,45 @@ export async function handleEmailEvent(q: Queryable, integrations: Integrations,
     await q.insert(jobs).values({ kind: "email.retry", payload: { communicationId: comm.id, attempt: comm.retryAttempt + 1 }, runAt: new Date(now.getTime() + RETRY_DELAYS_MS[comm.retryAttempt]).toISOString(), maxAttempts: 3 });
     return { handled: true, communicationId: comm.id, action: "retry_scheduled" };
   }
+  // no retries left: a decision message among them never reached them
+  if (comm) await untellDecision(q, comm);
   return { handled: true, communicationId: comm?.id ?? null, action: "recorded" };
 }
+
+/**
+ * A decision message that never reached them (founder decision B6): it bounced for good, or kept soft-bouncing until
+ * its retries ran out or the address was stopped. The decision is not told after all, so it shows on Today again, the
+ * untold safety net looks after it, and the team can send it again or tell them another way. Only a decision still
+ * standing whose message was on its way or counted as sent moves.
+ */
+async function untellDecision(q: Queryable, comm: Pick<typeof communications.$inferSelect, "applicationId" | "templateKey">): Promise<void> {
+  if (!comm.applicationId || !comm.templateKey?.startsWith("disposition:")) return;
+  await q.update(applications).set({ toldState: "not_told", candidateToldAt: null }).where(and(eq(applications.id, comm.applicationId), inArray(applications.toldState, ["queued", "sent"]), inArray(applications.stage, [...DECISION_STAGES])));
+}
+
+/**
+ * Why a decision message must not be tried again: the decision it carried no longer applies. The person is no longer
+ * declined or in the talent pool, or the decision was taken back after the message was written (and perhaps made again:
+ * a new decision gets a message of its own). Null when it still stands.
+ */
+async function decisionGoneSince(q: Queryable, orig: Pick<typeof communications.$inferSelect, "applicationId" | "templateKey" | "createdAt">): Promise<string | null> {
+  if (!orig.applicationId || !orig.templateKey?.startsWith("disposition:")) return null;
+  const [app] = await q.select({ stage: applications.stage }).from(applications).where(eq(applications.id, orig.applicationId)).limit(1);
+  if (!app || !DECISION_STAGES.includes(app.stage)) return DECISION_NO_LONGER_APPLIES;
+  const decisions = sql.join(DECISION_STAGES.map((s) => sql`${s}`), sql`, `);
+  const [left] = await q.select({ id: events.id }).from(events).where(and(
+    eq(events.type, "application.stage_changed"),
+    eq(events.subjectType, "application"),
+    eq(events.subjectId, orig.applicationId),
+    gt(events.occurredAt, orig.createdAt),
+    sql`${events.payload}->>'from' in (${decisions})`,
+    sql`${events.payload}->>'to' not in (${decisions})`,
+  )).limit(1);
+  return left ? DECISION_NO_LONGER_APPLIES : null;
+}
+
+/** Why a retry of a decision message was not sent. */
+export const DECISION_NO_LONGER_APPLIES = "the decision no longer applies";
 
 async function roleOf(q: Queryable, applicationId: string): Promise<string | null> {
   const [a] = await q.select({ roleId: applications.roleId }).from(applications).where(eq(applications.id, applicationId)).limit(1);
@@ -109,12 +150,19 @@ export async function sendFallbackSms(q: Queryable, integrations: Integrations, 
 /**
  * Re-sends a soft-bounced message once or twice as a new outbox row that links to the original; a further failure comes
  * back through the webhook and follows the same rules. A permanent failure of the retry (an address suppressed in the
- * meantime) is reported by the outbox when it sends.
+ * meantime) is reported by the outbox when it sends. A decision message is not tried again once its decision no longer
+ * applies (`decisionGoneSince`): an old decline never reaches someone put back in the process hours later. That is
+ * recorded as a `message.retried` fact with status "cancelled", and the told state is left to the newer decision.
  */
 export async function retryCommunication(q: Queryable, integrations: Integrations, input: { communicationId: string; attempt: number; now: Date }): Promise<{ queued: boolean; reason?: string }> {
   const [orig] = await q.select().from(communications).where(eq(communications.id, input.communicationId)).limit(1);
   if (!orig?.toAddress || orig.channel !== "email") return { queued: false, reason: "nothing to retry" };
   const actor: Actor = { kind: "system", id: "email_retry" };
+  const gone = await decisionGoneSince(q, orig);
+  if (gone) {
+    await emit(q, { type: "message.retried", companyId: orig.companyId, actor, subject: { type: "communication", id: orig.id }, payload: { retryOf: orig.id, attempt: input.attempt, status: "cancelled", reason: gone } });
+    return { queued: false, reason: gone };
+  }
   const queued = await queueCommunication(q, integrations, {
     channel: "email",
     companyId: orig.companyId,

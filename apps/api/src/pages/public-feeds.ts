@@ -1,10 +1,12 @@
 import { Hono } from "hono";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
+import { jobNoticesFor } from "@ros/core";
 import { companies, rolePackets, roles, withPlatform } from "@ros/db";
 import { jobFeedJson, jobFeedXml, jobValidThrough, linkedInFeedXml, schemaEmploymentType, type FeedJob } from "@ros/integrations";
 import type { Container } from "../container";
 import type { Vars } from "../middleware/session";
 import { jobUrls } from "../services/job-urls";
+import { payShown } from "./job-facts";
 
 /**
  * The public job surfaces search engines and approved boards read (docs/spec/20 items 5 and 6): the sitemap, the
@@ -17,7 +19,7 @@ export const publicFeeds = new Hono<Vars>();
 
 export const PUBLIC_FEED_CACHE_MS = 5 * 60_000;
 
-type Listing = { roleId: string; title: string; updatedAt: string; datePosted: string; companyName: string; slug: string; vertical: string; packet: typeof rolePackets.$inferSelect.packet };
+type Listing = { roleId: string; title: string; updatedAt: string; datePosted: string; companyName: string; slug: string; vertical: string; packet: typeof rolePackets.$inferSelect.packet; /** The pay range is listed, by the same rule as the job page (pages/job-facts.tsx). */ showPay: boolean; /** The role's closing date (plan D7), when it has one. */ closesOn: string | null };
 
 type Cached = { at: number; body: string };
 const caches = new WeakMap<Container, Map<string, Cached>>();
@@ -41,18 +43,25 @@ async function cached(container: Container, key: string, build: () => Promise<st
   return body;
 }
 
-/** Open roles that accept applications, with the approved packet the role currently runs on. Platform read: the feeds span every company. */
+/**
+ * Open roles that accept applications, with the approved packet the role currently runs on, of companies ITS has
+ * confirmed (founder decision B7: an unconfirmed company is in no feed and no sitemap). Platform read: the feeds span
+ * every company.
+ */
 async function listings(container: Container): Promise<Listing[]> {
   const rows = await withPlatform(container.db, (tx) =>
     tx
-      .select({ roleId: roles.id, title: roles.title, updatedAt: roles.updatedAt, openedAt: roles.openedAt, createdAt: roles.createdAt, companyName: companies.name, slug: companies.slug, vertical: companies.vertical, packet: rolePackets.packet })
+      .select({ roleId: roles.id, title: roles.title, updatedAt: roles.updatedAt, openedAt: roles.openedAt, createdAt: roles.createdAt, closesOn: roles.applicationsCloseOn, companyName: companies.name, slug: companies.slug, vertical: companies.vertical, companyLocations: companies.locations, companySettings: companies.settings, packet: rolePackets.packet })
       .from(roles)
       .innerJoin(companies, eq(companies.id, roles.companyId))
       .innerJoin(rolePackets, and(eq(rolePackets.roleId, roles.id), eq(rolePackets.version, roles.currentPacketVersion)))
-      .where(and(eq(roles.status, "open"), eq(roles.acceptingApplications, true)))
+      .where(and(eq(roles.status, "open"), eq(roles.acceptingApplications, true), sql`coalesce(${companies.settings}->>'verifiedAt', '') <> ''`))
       .orderBy(roles.openedAt),
   );
-  return rows.map((r) => ({ roleId: r.roleId, title: r.title, updatedAt: r.updatedAt, datePosted: (r.openedAt ?? r.createdAt).slice(0, 10), companyName: r.companyName, slug: r.slug, vertical: r.vertical, packet: r.packet }));
+  return rows.map((r) => {
+    const notices = jobNoticesFor({ jobLocations: r.packet.identity.locations, companyLocations: r.companyLocations, overrides: r.companySettings.notices });
+    return { roleId: r.roleId, title: r.title, updatedAt: r.updatedAt, datePosted: (r.openedAt ?? r.createdAt).slice(0, 10), companyName: r.companyName, slug: r.slug, vertical: r.vertical, packet: r.packet, showPay: payShown(r.packet, notices), closesOn: r.closesOn ?? null };
+  });
 }
 
 const xmlText = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
@@ -93,9 +102,11 @@ function feedJob(env: Container["env"], r: Listing): FeedJob {
     postalCode: loc?.postalCode,
     description: p.description.publicJobDescription,
     datePosted: r.datePosted,
-    validThrough: jobValidThrough({ datePosted: r.datePosted }),
+    // A listed role is open and taking applications, so it has no stop date: the feed carries its closing date when it
+    // has one (plan D7), and otherwise no expiration date rather than an invented one (Wave 0 item 0.8).
+    validThrough: jobValidThrough({ closesOn: r.closesOn }),
     employmentType: schemaEmploymentType(p.identity.employmentType),
-    salary: comp.discloseRange ? { min: comp.min, max: comp.max, currency: comp.currency, basis: comp.basis } : null,
+    salary: r.showPay ? { min: comp.min, max: comp.max, currency: comp.currency, basis: comp.basis } : null,
     category: r.vertical,
     remote: p.identity.remotePolicy === "remote",
   };
@@ -140,7 +151,7 @@ publicFeeds.get("/feeds/linkedin.xml", async (c) => {
           description: r.packet.description.publicJobDescription,
           location: [loc?.city, loc?.region, loc?.country ?? "US"].filter(Boolean).join(", "),
           applyUrl: jobUrls(container.env, { slug: r.slug, roleId: r.roleId }).job,
-          salaryText: comp.discloseRange ? `${comp.max} ${comp.currency} ${comp.basis}` : undefined,
+          salaryText: r.showPay ? `${comp.max} ${comp.currency} ${comp.basis}` : undefined,
         };
       }),
       { publisherUrl: container.env.JOBS_BASE_URL, lastBuildDate: container.engine.clock() },

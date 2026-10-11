@@ -2,7 +2,7 @@
 
 **ITS AI Recruiting Department, Founding Partner Program. Release 1.**
 
-Draft of 30 September 2026 (checked again against the product the same day), for review by ITS before it is given to a customer. This sheet becomes Exhibit A of your agreement. It is written to be true. If something here does not match what you see in the product, tell us and we will correct the sheet or the product.
+Draft of 30 September 2026, brought up to date with the product on 9 October 2026, for review by ITS before it is given to a customer. This sheet becomes Exhibit A of your agreement. It is written to be true. If something here does not match what you see in the product, tell us and we will correct the sheet or the product.
 
 Two words we use throughout: **ITS** is Identified Talent Solutions, the company you contract with. **The assistant** is the software's AI helper. The assistant organizes and drafts. People decide.
 
@@ -17,21 +17,28 @@ Two words we use throughout: **ITS** is Identified Talent Solutions, the company
 
 ### Getting the job in front of candidates
 
-- A public job page and a careers page for your company on our hosting. They read well on a phone and carry the structured data that search engines such as Google use to list jobs. Your website and logo appear there if you add them in **Setup**.
+- A public job page and a careers page for your company on our hosting. They read well on a phone and carry the structured data that search engines such as Google use to list jobs. The job page shows the description, your must-haves and nice-to-haves (their words only; why each one matters stays with your team), the pay where it is shown, the benefits, every place the job is, and an **Apply now** button that stays on screen. Your website, your logo, a few sentences about your company and the address candidates can write to before they apply appear there once you add them in **Setup** (the sentences only after you approve them; until you set your own address, candidates write to the ITS inbox that answers for you).
+- Before you approve a role you can open its job page exactly as candidates will see it, in a new tab. The preview is never public.
+- A one-time check of your company by ITS, usually within a business day of creating your workspace. Until ITS confirms your company you can draft and approve roles, but your careers page, job pages and Google listing stay offline and emails to candidates wait; they go out on their own once ITS confirms. **Today**, the role page and **Setup** say so while you wait, and you are told by email when it is done.
 - A job listing file and a site map that search engines and approved job sites can read. They list only roles that are open and taking applications.
-- ITS posts your approved job to LinkedIn, Indeed and ZipRecruiter by hand, under your own employer accounts on those boards. The role's **Posting** tab has everything needed: the text to copy, the steps for each board, and each board's own application link.
+- You choose the job boards for each role: the ones the role plan names are ticked to start with, and you can change the ticks before or after approval. LinkedIn and Indeed are always offered; ZipRecruiter is offered once you tell us in **Setup** that you have your own paid ZipRecruiter plan.
+- By default ITS posts each ticked board by hand, under your own employer accounts on those boards, and you see who at ITS has it on the role's **Posting** tab. If you prefer, your team posts them instead (**Setup**, **Job boards**); the **Posting** tab then has the text to copy, the steps for each board and each board's own application link. If ITS cannot post a board (for example the board account has no job slots left), it says why, the board says so on the **Posting** tab and **Today**, and you can ask ITS again or post it yourself.
 - Each board gets its own application link. The link is how the product knows where each applicant came from. Its code never appears on the candidate's application, in their emails or on their status page.
 - After a job goes up on a board, ITS (or an owner or admin on your team) records the posting's public address. The product opens that page and checks that it shows your job. Only then is the posting called **Live and verified**. If the check fails three times, the posting says so and why, and a person can check it again or confirm it by hand with a note.
+- When a change to a live job is approved, the job page shows it straight away; Google picks it up the next time it reads the page. Each board that still shows the earlier version is listed, and ITS (or your team) updates it and confirms.
+- Sharing: the **Posting** tab and **Today**, on the day a job goes public, offer ready-made places to share it (a referral from your team, a school, a community group, email, text, WhatsApp, LinkedIn, Facebook, X). Each gets its own link, opening the job page, so you can see where applicants came from. Nothing from those networks loads on our pages.
 - You can make extra application links for a referral or a campaign. Applications through them carry the name you gave the link.
 - Every application shows which board, link or page it came from.
 - You can pause or close the posting on one board without touching the others.
-- When you close the role, the product lists the boards where the posting is still up. ITS takes each one down and ticks it off. Until every board is ticked, the role page and **Today** show what is still up.
-- You can stop accepting applications for a role without declining anyone. The job page stays up and says applications are closed. Nobody who already applied is affected. You can start again at any time.
+- When you close the role, the product lists the boards where the posting is still up. ITS takes each one down and ticks it off (or your team does, if you post yourself). Until every board is ticked, the role page shows what is still up.
+- A closing date, if you want one: the last day new applications are taken, in your time zone. The job page and careers page show "Apply by" that date. At the end of that day new applications stop; anyone part-way through the form can still send it, and nobody is turned away. **Today** then offers to extend the date or close the role. A job in Colorado, or a remote job, needs a closing date by law; it gets one 30 days out unless you choose another.
+- You can stop accepting applications for a role without declining anyone. The job page stays up and says applications are closed. Nobody who already applied is affected. You can start again at any time, unless the closing date has passed: then you choose a later date instead.
+- Before a role can be approved, the product checks what the law where the job is asks of the job ad (the pay range, a short description of the benefits, a closing date) and says what is missing.
 - The **Posting** tab shows how many people applied each day for the last two weeks, by source. If more than 100 people apply to a role in one day, owners and admins are told the next day. Nobody is turned away because of the number.
 
 ### How candidates apply
 
-- Candidates apply on a phone or a computer without creating an account. They give their name and email, a phone number and location if they wish, a resume (PDF, Word or text, up to 8 MB) or a short written summary instead of a resume, and answers to your eligibility questions. It takes about three minutes.
+- Candidates apply on a phone or a computer without creating an account. They give their name and email, a phone number and location if they wish, a resume (PDF, Word or text, up to 8 MB) or, instead of a resume, answers to four short questions about their work (their most recent job, what they did day to day, their skills or licenses, and what they are looking for), and answers to your eligibility questions. The form takes about three minutes. On roles where ITS has switched on the conversation in the same visit (it starts with a few pilot roles), they then answer a short written conversation with your AI assistant (about ten minutes), or choose to do it later or talk to a person, and the job page says about fifteen minutes in all.
 - Before they send, the form tells them who runs the hiring process, what is collected and why, who can see it, and how to ask for a copy, a correction or deletion, with a link to the full privacy notice. They tick a box to say they understand that people, not software, make the decisions. The box is never ticked for them.
 - They see a confirmation on screen and get one by email. They get a status page they can return to at any time: where their application stands, what happens next, what to prepare once an interview is booked, the messages we sent them, a one-click withdrawal, and a form for privacy requests.
 - Every candidate page and every automated message says that an AI assistant helps your hiring team and that people make the decisions. Candidates can reach a person by replying HUMAN to any email.
@@ -41,18 +48,24 @@ Two words we use throughout: **ITS** is Identified Talent Solutions, the company
 - A resume is checked and scanned before anyone on your team can open it.
 - The assistant reads the resume and pulls out positions, dates, licenses and skills. Next to each fact it shows the exact words from the resume it came from.
 - It compares the application with your must-haves and what you said you look for, and writes a short assessment: an overall reading (Strong match, Potential match, Weak match, or Insufficient evidence), a summary, strengths, concerns, what is still unknown, and how confident it is and why. Every strength and concern points to its evidence.
-- The list of candidates shows each person's top strength, top concern and how many questions are still open, so you can see at a glance where to look.
+- Each role's candidates sit on a stage strip (New, Longlist, Shortlist, Interviewing, Cancelled, On hold, Offer, Hired, Not moving forward). Cancelled holds the candidates who cancelled a booked interview or did not come to one, with what each chose: new times, or no longer interested. Longlist, Shortlist and On hold are private marks your team sets; the candidate never sees them. Each row shows the overall reading and the match score, and the list can be searched, filtered by reading and sorted by score, newest, longest wait or name. The pool board shows each person's strengths, a gap with where it came from, and how many must-haves they show, so you can see at a glance where to look.
 - When the assistant cannot say enough about someone, the candidate is marked **Needs a closer look** and the card says what is missing. You can filter the list to just those people. One click, **Ask about this in a screen**, invites the candidate to a short web conversation that starts with exactly those questions. It never starts on its own.
-- Eligibility questions are the only automatic holds. If a candidate answers no to a required question, the application is held for your decision. You are reminded every day. If nobody has decided after three days, an ITS recruiter is brought in. Nothing is sent to the candidate unless you decline.
-- Nothing is scored, ranked or rejected by software. If the assistant cannot produce an assessment, the application is shown to you without one.
-- If an assessment looks wrong, one click flags it for ITS to review.
+- Eligibility questions are the only automatic holds. If a candidate answers no to a required question, the application is held for your decision. You are reminded every day. If nobody has decided after three days, an ITS recruiter is brought in. Nothing is sent to the candidate, even if you decline, until someone on your team sends the decision message.
+- Every applicant gets a **match score** from 0 to 100, worked out from checked evidence, with the breakdown shown: which of your must-haves and skills they show, partly show or do not meet, and how many points each one cost. Your must-haves count most, then each skill by how important you marked it (Essential, Important or Helpful). Anything the application does not say is left out of the score, not counted against them, and the score says what it is based on ("based on 5 of 7 requirements"). A must-have counts as not met only when the candidate's own words show it, and then the score stays below 55 and says which must-have is missing. The assistant never writes the number; the software works it out from the checked findings, and a person always decides. You can sort the list by score.
+- Software never rejects anyone. If the assistant cannot produce an assessment, the application is shown to you without one and without a score.
+- If an assessment looks wrong, **Something wrong?** sends it to an ITS recruiter to check, as a request you can follow under **Your recruiter requests** on Today.
 
 ### Decisions
 
-- A person on your team makes every decision to invite a candidate to a screen, hold, interview or decline.
-- Declining requires a reason from a fixed list. The candidate receives a respectful message only after you decide.
+- A person on your team makes every decision to hold, interview or decline. Screening invitations follow your setting: by default the assistant invites candidates whose applications look like a fit and tells you, and you can make it ask you first; on roles with the conversation in the same visit, everyone who passes your eligibility questions is offered it.
+- Declining requires a reason from a fixed list. A decision is private: the candidate gets a respectful message only when someone on your team sends it (or you record that you told them yourself). If they had an interview booked or times offered, that is cancelled and they get a short note straight away saying only that the interview is off, so nobody turns up for it.
+- The decision message is one of a few approved wordings (the standard one, a warmer one, a shorter one, one for someone who met your team, one for when the position was filled); the screen starts on the one that fits, and you can add one or two sentences of your own, which are checked before anything is sent. A message you send waits 30 seconds, so you can press **Undo**. Until someone has told the candidate, a decision can also be taken back: they return to the step they were at and nothing is sent. You can send it to several people at once from the Talent page; each gets their own. When you close a role, one courteous closing message tells everyone it left in your talent pool, and you see it and send it once for all of them.
+- **The safety net.** Everyone not told yet is listed on Today, and after two working days you are reminded. After five working days: under the default setting (**Do it**) the standard message goes to them by itself and you are told who got it; if your settings ask for approval or keep decision messages with a person, or an ITS recruiter is running the role, nothing is sent and an ITS recruiter is brought in to make sure they hear from you. Someone whose details were deleted at their request is never written to.
 - After an interview, a person records the decision on the candidate's page: next round, finalist, or not moving forward. The candidate waits on you until someone does, and the **Interviews** page shows each decision.
-- You can put up to five candidates side by side and see how each one stands on your must-haves and what you look for. Nothing is ranked or scored.
+- You can put up to five candidates side by side and see how each one stands on your must-haves and what you look for, with each one's match score.
+- The **pool board** sorts a role's applicants into Shortlist, Longlist and Not moving forward from their own evidence, with a one-line reason and a suggested next step for each person, and a short summary on top: how many are in each group, the must-have shown least often, who has waited longest, and up to three next steps naming people. Anyone the board is unsure about (a reading that needs a closer look, low confidence, no reading, an eligibility answer to check, too little evidence to go on, a screening conversation still open, or the assistant's own suggestion and the score disagreeing) goes on the Longlist with the reason, for you to look at. The board never suggests declining someone on a low score built from too little evidence.
+- **Review and apply** lists the board's suggestions, up to 50 people at a time. People the board placed with confidence start ticked; the rest start unticked with the reason. You untick anyone you want to look at yourself, change the reason for anyone filed as not moving forward (each starts with a reason from their own evidence, such as the missing must-have), and apply. Everything it does is private: nobody is emailed, and you send decision messages later, when you are ready. Each decision is recorded under your name as "suggested by the assistant, applied by you".
+- **Ask about your candidates** offers one-click questions answered from the evidence already on file: who is missing a must-have and why, the strongest evidence for a must-have, who you might be overlooking, and a comparison of up to five people. Each answer shows the quotes it rests on and what it looked at. No new AI is involved.
 - Every decision is recorded with the name of the person who made it.
 
 ### Writing to candidates
@@ -63,9 +76,8 @@ Two words we use throughout: **ITS** is Identified Talent Solutions, the company
 
 ### Screening conversations
 
-- When you invite a candidate to a screen, they get an email with a link to a web conversation. The assistant asks your screening questions one at a time, at the candidate's pace. They can stop and come back. A reminder goes out after two days. If they have not started after five days, the invitation lapses and you are told.
-- Under your default settings, the assistant invites candidates whose applications look like a fit and tells you. You can change that in **Setup** so that it asks you first, or leave it entirely to your team.
-- The assistant says what it is. A **Talk to a person instead** button is always on the page. When a candidate asks for a person, the conversation goes to an ITS recruiter with a response time counted in business hours, and the candidate is told a true expectation.
+- On those roles, everyone who passes your eligibility questions goes straight from the form to the screening conversation: no invitation needed. The assistant asks your screening questions one at a time, in your words, at the candidate's pace; simple facts can be tapped, any question can be skipped, and they check their answers before sending. Your team sees the answers only once the candidate sends them (until then the candidate shows as "Still applying"); a conversation that runs long is brought to a close by the software, and the candidate can still check and send their answers. They can stop and come back: one reminder goes out the next day; an unfinished conversation closes and their application comes to you without the answers they never sent, marked "Didn't finish the conversation", with the reading and match score from the application alone; someone who never starts it is reminded once, and their application then comes to you without it. On every other role the form comes first and the conversation follows by email ("form now, conversation later"), and if you set screen invitations to ask you first, it goes only to the candidates you choose.
+- The assistant says what it is, on every page. **I'd rather talk to a person** is always on the page and offers two choices: send the application without the conversation, or have an ITS recruiter get in touch within four business hours (ITS covers it). The candidate is told a true expectation.
 - When the screen is complete you get a screen scorecard: a summary, how each answer compared with what you were looking for, the candidate's pay expectation and availability if they stated them, strengths, concerns, unknowns, and a recommendation you can accept or ignore.
 
 ### Interviews
@@ -73,6 +85,7 @@ Two words we use throughout: **ITS** is Identified Talent Solutions, the company
 - You approve each interview round and pick the interviewers. Your approval is what starts scheduling. The assistant never starts an interview on its own.
 - Times are offered from each interviewer's connected Google Calendar, or from the hours they declared in **Setup**. The buffer between interviews and the maximum per day are respected.
 - The candidate picks a time in their own time zone from a link, can say that none of the times work, and can ask for an accommodation. They get a confirmation with a calendar file, can reschedule twice on their own, and can cancel.
+- When a candidate cancels a booked interview, they choose "Send me new times later" or "I'm no longer interested", and go under **Cancelled** on the role's Talent page with that choice. Someone who asked gets one set of new times by email automatically, for the same interview, after 3 working days (you choose 1 to 10 in **Setup**, or switch it off). Nothing goes automatically to someone who said they are no longer interested, who already moved the interview twice, whom you had put on hold, during an ITS recruiter takeover, or before ITS has confirmed your company. A candidate who does not come goes under Cancelled as a no-show and never gets times automatically. You can send new times yourself to one person or to everyone under Cancelled at once.
 - Reminders go to the candidate and the interviewers one day before and two hours before.
 - If the candidate does not pick a time, they are reminded after two days. After four days you are told and you decide what to do. If a chosen time is taken by the time we book it, new times go out; after three collisions an ITS recruiter arranges the time directly.
 - Interviewers receive the booking, the time and the meeting link. The link is created with the calendar event or pasted by you.
@@ -81,9 +94,10 @@ Two words we use throughout: **ITS** is Identified Talent Solutions, the company
 
 ### Recruiter help
 
-- A **Bring in a recruiter** button on Today, on every role and on every candidate. You pick what you want: Review these candidates, Help me decide, or Take this role over. You can add a note and mark it Normal or Urgent.
-- The ITS recruiter receives the role, the candidates, every message and every decision so far. There is nothing to re-explain. You see the expected response time when you send the request.
-- The recruiter's access is limited to that request's role and candidate. It lasts at most 14 days and ends 24 hours after the request is resolved. Every page the recruiter opens is recorded in your activity. Owners and admins can end the access at once, and the recruiter is told.
+- A **Bring in a recruiter** button on Today, on every role and on every candidate. You pick what you want: Review these candidates, Help me decide, or Ask ITS to run this hire (an ITS recruiter contacts you to agree how; nothing changes until you have both agreed). You can add a note and mark it Normal or Urgent; Urgent puts it at the front of the ITS queue and does not change the response time.
+- Before you send, the form shows the response time, what the recruiter will be able to see, and which of your plan's recruiter requests this one would be. The ITS recruiter receives what the request covers: the role, its candidates, their messages and the decisions so far, or one candidate. There is nothing to re-explain.
+- The recruiter's access is limited to that request's role or candidate, or all of your hiring only when someone on your team chose that. It lasts at most 14 days and ends 24 hours after the request is resolved. Your team is told when it starts. Every page the recruiter opens is recorded in your activity. Owners and admins can end the access at once, and the recruiter is told.
+- **Your recruiter requests** on Today lists every request with its state, its reply-by time and who picked it up. The answer appears there in full, and the person who asked and your owners are told when it comes in. While a request is open you can add a note for the recruiter; once it is answered, **This didn't solve it** opens it again with a new reply-by time.
 
 ### Candidates' rights
 
@@ -102,45 +116,46 @@ Two words we use throughout: **ITS** is Identified Talent Solutions, the company
 - Changing what the assistant may do, or the notices candidates see, asks you to confirm it's you with a fresh sign-in if you signed in more than 30 minutes ago.
 - **Audit history** in **Setup** shows who did what in your workspace, in plain words: recruiter access, team changes, rule and company changes, candidate records opened, outcomes and downloads. You can download it as a spreadsheet; the download is recorded too.
 - Your company's data is kept separate from every other customer's.
-- **Setup** shows what the assistant may do on its own, with four levels for every action. Some decisions always stay with a person and cannot be changed by anyone.
-- A daily brief on **Today**: what needs you, who is worth a look, what is at risk, and what the assistant did since you last looked.
+- **Setup** shows what the assistant may do on its own. Where a setting changes what happens, you choose from up to four levels; work the product does the same way for everyone says what it does, and features still to come are listed under **Coming later**. Some decisions always stay with a person and cannot be changed by anyone. Letting something happen with less checking asks you to confirm first.
+- A daily brief on **Today**: what needs you, who is worth a look, what is at risk, and what the assistant did since you last looked. It refreshes itself while it is open. Every earlier update is on the **Updates** page, read or unread.
+- **Email alerts** in **Setup**: each person chooses, for each kind of update, whether it is emailed as it happens, in a summary at 8:00 each morning or each Monday morning, or not at all. A few updates are always emailed at once: an ITS recruiter is given access to your hiring, ITS confirms your company or takes the confirmation back, a candidate asks for a person, or someone waits for an eligibility decision. Alert emails carry the role's name and a link, never a candidate's name or details.
 - **Roles** shows every role with its pipeline, days open, applicant count and what needs you. **Interviews** shows every interview and each interviewer's load.
-- Each role has a **Report** tab: who applied and from where, where everyone is, how long each step takes, interviews, decisions waiting for you, what the assistant suggested and what you decided, recruiter help, messages that did not arrive, and outcomes. You can download the applicant list and the summary as spreadsheets. Every download is recorded.
+- Each role has a **Report** tab: who applied and from where, where everyone is, how long each step takes, interviews, decisions waiting for you, what the assistant suggested and what you decided, how your applicants meet each must-have, recruiter help, messages that did not arrive, and outcomes. You can download the applicant list and the summary as spreadsheets. Every download is recorded.
 
 ### Outcomes
 
 - Your team records what happened with each candidate: hired, declined an outside offer, withdrew, declined by you, or no hire. Closing a role is a separate decision with its own outcome.
-- Candidates who were still active stay in your talent pool when a role closes.
+- Candidates who were still active stay in your talent pool when a role closes, unless they asked not to be kept.
 - Outcome records carry the name of the person who recorded them. Only an ITS administrator can correct one, and the original is kept.
 
 ## What is not included in release 1
 
-- **No automatic rejection, ranking or scoring of candidates.** This is by design and cannot be switched on.
+- **No automatic rejection.** The match score and the pool board suggest; a person decides every move, and nothing moves anyone on its own. This is by design and cannot be switched on.
 - **No text messaging with candidates.** Screening runs by web chat from an email link. The product has a texting path, but it is switched off.
 - **No interview recording.**
-- **No offer letters, e-signature, background checks, reference checks, onboarding or payroll set-up.** You make and send offers your own way and record the outcome in the product.
-- **No connections to job boards.** ITS posts, pauses and takes down your postings by hand under your accounts. Paid promotion on any board is yours to buy directly from the board.
+- **No offer letters, e-signature, background checks, reference checks, onboarding or payroll set-up.** You make and send offers your own way and record in the product that an offer was made, then whether they accepted (the hire, with its start date) or declined.
+- **No connections to job boards.** ITS (or your team, if you choose) posts, pauses and takes down your postings by hand under your accounts. Paid promotion on any board is yours to buy directly from the board. ZipRecruiter needs your own paid ZipRecruiter plan.
 - **No connected Microsoft 365 calendar.** Google Calendar can be connected once ITS has enabled it for your workspace. Without a connected calendar, scheduling uses the hours each interviewer declares in Setup, and every confirmation carries a calendar file.
-- **No structured interview scorecards for interviewers.** After an interview, the decision is recorded with a note. The scorecard the assistant writes after a screening conversation does exist.
+- **No structured interview scorecards for interviewers.** After an interview, the decision is recorded with a note, and each person on the hiring team can keep one private note on a candidate (an interviewer, on someone they interviewed). Notes are never shown to the candidate or given to the assistant. The scorecard the assistant writes after a screening conversation does exist.
 - **No searching for people who did not apply, and no outreach to them.** Setup lists rows for these actions, but they are not active in release 1.
-- **No bulk messages.** You write to one candidate at a time. Everything else the product sends is a fixed message: confirmations, screening invitations, interview times, reminders, cancellations and decline notices.
+- **No free-form bulk messages.** You write your own messages to one candidate at a time. Decision messages can go to several people at once (each gets their own), new interview times can go to everyone under Cancelled at once, and a closed role has one closing message for everyone it left in your talent pool. Everything else the product sends is a fixed message: confirmations, screening invitations, interview times (including new times after a cancellation), reminders, cancellations, "still reviewing" notes and decision messages in the approved wordings.
 - **No changes to your plan or program from Setup.** Your plan, program dates and allowances are set by ITS. Email support to change them.
 - **Correcting a recorded outcome needs ITS.** Email support; an ITS administrator makes the correction and the original is kept.
 - **United States only. English only.** Your program starts with one role. More roles are added by agreement with ITS.
 
 ## What the assistant never does
 
-- It never declines, rejects or ranks a candidate.
+- It never declines or rejects a candidate, and it never writes the match score: the software works the score out from checked evidence, shows the breakdown, and a person always decides.
 - It never decides who to hire, never negotiates, and never sends an offer.
 - It never changes your eligibility rules, your notices, or the settings that say what it may do.
 - It never deletes or exports candidate data.
 - It never starts an interview without a person's approval.
-- It never sends a decline message before a person has decided.
+- It never writes a decline message: a person decides, and the message is one of the approved wordings. A person presses Send, with one exception you control: the safety net. If nobody has told someone five working days after a decision and your setting is **Do it**, the standard message goes by itself and you are told; under **Ask me first** or **Only a person** nothing is sent and an ITS recruiter is brought in instead.
 
 ## Honest statements about where the product stands
 
 - Release 1 is new. Everything above was built and tested against simulated services first, and is being verified on the live services before your first candidate. You will receive the acceptance record.
-- The posting steps for LinkedIn, Indeed and ZipRecruiter are done by ITS staff by hand under a written procedure, not by a connection to those boards.
+- The posting steps for LinkedIn, Indeed and ZipRecruiter are done by hand under a written procedure (by ITS staff, or by your team if you post yourself), not by a connection to those boards. An ITS posting task shows the recruiter the job ad and the board's link only, never your candidates.
 - Our legal documents have not yet been reviewed by an attorney unless the copy you sign says otherwise.
 - The AI provider is Anthropic. The hosting and email providers are listed in the subprocessor list you receive. We do not sell candidate data, and we never pool or share it across customers.
 - Support hours, response times and how we tell you about incidents are in the support statement attached to your agreement.

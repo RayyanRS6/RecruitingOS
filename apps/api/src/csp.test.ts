@@ -5,7 +5,7 @@ import { applications, cspReports, screens } from "@ros/db";
 import { safeJsonLd } from "./pages/layout";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAdmin } from "./test-helpers";
+import { signInAdmin, statusTokenFor } from "./test-helpers";
 
 /**
  * Founder instruction of 21 September 2026, item 6: candidate pages and the application carry a strict content-security
@@ -51,7 +51,8 @@ describe("content-security policy on candidate pages", () => {
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
     fd.set("acknowledged", "yes");
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
-    statusToken = r.headers.get("location")!.split("/c/status/")[1].split("?")[0];
+    expect(r.status).toBe(302);
+    statusToken = await statusTokenFor(container, { roleId, email: "ivy.chen@example.com" });
     await container.drain();
     const [appRow] = await container.db.select().from(applications).where(eq(applications.statusToken, statusToken));
     applicationId = appRow.id;
@@ -71,7 +72,7 @@ describe("content-security policy on candidate pages", () => {
 
   it("every candidate page carries the strict policy in report-only mode by default, with a fresh nonce on the style and the structured data", async () => {
     expect(screenToken).toBeTruthy();
-    const pages = [`/careers/${companySlug}`, `/careers/${companySlug}/jobs/${roleId}`, `/careers/${companySlug}/jobs/${roleId}/apply`, `/c/status/${statusToken}`, `/c/screen/${screenToken}`, "/privacy"];
+    const pages = [`/careers/${companySlug}`, `/careers/${companySlug}/jobs/${roleId}`, `/careers/${companySlug}/jobs/${roleId}/apply`, `/careers/${companySlug}/jobs/${roleId}/applied`, `/c/status/${statusToken}`, `/c/screen/${screenToken}`, "/c/link-request", "/privacy"];
     const nonces = new Set<string>();
     for (const path of pages) {
       const r = await app.request(path);
@@ -98,6 +99,38 @@ describe("content-security policy on candidate pages", () => {
     expect(nonces.size).toBe(pages.length); // one nonce per request, never reused
     // the API is not a document and carries no candidate policy
     expect((await app.request("/api/v1/auth/config")).headers.get("content-security-policy-report-only")).toBeNull();
+  });
+
+  it("the job-page preview (plan D1) carries the same strict policy and nonce; the logo (plan D10) loads from our own address under a policy that runs nothing", async () => {
+    const bytes = new Uint8Array(40);
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+    new DataView(bytes.buffer).setUint32(16, 120);
+    new DataView(bytes.buffer).setUint32(20, 60);
+    expect((await app.request("/api/v1/companies/current/logo", { method: "PUT", headers: { cookie: owner, "content-type": "image/png" }, body: bytes.slice().buffer as ArrayBuffer })).status).toBe(201);
+    for (const path of [`/api/v1/roles/${roleId}/preview/page`, `/api/v1/roles/${roleId}/preview/page?view=apply`, `/careers/${companySlug}`, `/careers/${companySlug}/jobs/${roleId}`]) {
+      const r = await app.request(path, { headers: { cookie: owner } });
+      expect(r.status, path).toBe(200);
+      const csp = r.headers.get("content-security-policy-report-only")!;
+      expect(csp, path).toContain("img-src 'self' data:");
+      expect(csp, path).not.toMatch(/https?:\/\//);
+      const html = await r.text();
+      expectEveryTagNonced(html, nonceOf(csp), path);
+      expect(html, path).not.toMatch(/ on(submit|click|change|load|error)=/);
+      // every image on the page, the logo included, comes from our own address
+      const images = [...html.matchAll(/<img\b[^>]*\bsrc="([^"]+)"/g)].map((m) => m[1]);
+      expect(images.length, path).toBe(path.includes("view=apply") ? 0 : 1);
+      for (const src of images) expect(src, path).toMatch(/^\/(careers|api\/v1\/companies\/current)\/[^/]/);
+    }
+    // the preview's data stays data, without the candidate policy
+    expect((await app.request(`/api/v1/roles/${roleId}/preview`, { headers: { cookie: owner } })).headers.get("content-security-policy-report-only")).toBeNull();
+    // the image itself can only ever be an image
+    const src = (await (await app.request(`/careers/${companySlug}`)).text()).match(/<img\b[^>]*\bsrc="([^"]+)"/)![1];
+    const logo = await app.request(src);
+    expect(logo.status).toBe(200);
+    expect(logo.headers.get("content-type")).toBe("image/png");
+    expect(logo.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox");
+    expect(logo.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(logo.headers.get("content-security-policy-report-only")).toBeNull();
   });
 
   it("CSP_MODE=enforce switches the header name and nothing else; the default anywhere else stays report-only", async () => {

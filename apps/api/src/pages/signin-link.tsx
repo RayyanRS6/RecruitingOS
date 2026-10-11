@@ -17,6 +17,7 @@ export function renderSignInLinkPage(p: Props) {
 
 export const SignInLinkPage: FC<Props> = (p) => (
   <Layout title={p.invite ? `Join your team on ${p.productName}` : `Sign in to ${p.productName}`}>
+    <p class="eyebrow">{p.productName}</p>
     <h1>{p.invite ? "Accept your invitation" : "Sign in"}</h1>
     <p>{p.invite ? "Press the button to join the workspace you were invited to." : "Press the button to finish signing in. The link works once."}</p>
     <div class="card">

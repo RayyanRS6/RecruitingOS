@@ -23,7 +23,7 @@ Set `AI_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` to use real models; the defa
 
 ## Layout
 
-`apps/api` (Hono API, candidate pages, webhooks, worker), `apps/web` (owner, recruiter, and admin app), `packages/contracts` (schemas), `packages/db` (Drizzle schema, migrations, RLS), `packages/core` (policy engine, state machine, auth, permissions, compliance), `packages/workflows` (durable engine and definitions), `packages/ai` (provider abstraction, prompts, run logging), `packages/agents` (intake, triage, coordinator), `packages/integrations` (email, SMS, job boards, compensation data, storage), `packages/playbooks` (vertical playbooks), `packages/evals` (evaluation suites), `packages/ui` (design system), `tests/scenario` (the end-to-end scenario).
+`apps/shell` (the Next.js app deployed to Vercel, with the API mounted inside it), `apps/api` (Hono API, candidate pages, webhooks, worker), `apps/web` (owner, recruiter, and admin pages), `packages/contracts` (schemas), `packages/db` (Drizzle schema, migrations, RLS), `packages/core` (policy engine, state machine, auth, permissions, compliance), `packages/workflows` (durable engine and definitions), `packages/ai` (provider abstraction, prompts, run logging), `packages/agents` (intake, triage, coordinator), `packages/integrations` (email, SMS, job boards, compensation data, storage), `packages/playbooks` (vertical playbooks), `packages/evals` (evaluation suites), `packages/ui` (design system), `tests/scenario` (the end-to-end scenario).
 
 ## Scripts
 

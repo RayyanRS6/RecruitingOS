@@ -23,8 +23,12 @@ const config: NextConfig = {
   outputFileTracingRoot: repoRoot,
   outputFileTracingIncludes: { "/**": ["../../packages/db/migrations/*.sql"] },
   poweredByHeader: false,
-  // Candidate pages set their own headers inside Hono; the shell adds nothing that could leak.
-  headers: async () => [{ source: "/(.*)", headers: [{ key: "X-Content-Type-Options", value: "nosniff" }, { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" }] }],
+  // Candidate pages set their own headers inside Hono; the shell adds nothing that could leak. The self-hosted font
+  // files (public/fonts, scripts/fetch-fonts.ts) are kept by browsers for a year: a changed font needs a new file name.
+  headers: async () => [
+    { source: "/(.*)", headers: [{ key: "X-Content-Type-Options", value: "nosniff" }, { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" }] },
+    { source: "/fonts/:file*", headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }] },
+  ],
 };
 
 export default config;

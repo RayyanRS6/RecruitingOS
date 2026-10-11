@@ -33,35 +33,43 @@ export type Permission =
   /** Re-offer times, cancel, book on the candidate's behalf, and record whether an interview took place for any interview. */
   | "interview.manage"
   /** Record the decision after an interview: next round, finalist, or not moving forward. */
-  | "interview.decide";
+  | "interview.decide"
+  /**
+   * Read every private team note on a candidate, and write one's own (founder decision Q24; plan H3). An interviewer
+   * holds neither: they write their own note on people they interviewed and read only that (services/interviewer-view.ts).
+   */
+  | "note.read"
+  | "note.write";
 
 const MATRIX: Record<MembershipRole, ReadonlySet<Permission>> = {
   owner: new Set<Permission>([
     "company.read", "company.update", "members.manage", "role.create", "role.read", "role.approve", "role.manage", "packet.edit",
     "application.read", "application.act", "application.reject", "candidate.search", "compensation.read", "scorecard.write",
     "offer.manage", "policy.manage", "escalation.create", "events.read", "billing.manage", "integration.manage", "staff_access.revoke", "outcome.record",
-    "interview.request", "interview.manage", "interview.decide",
+    "interview.request", "interview.manage", "interview.decide", "note.read", "note.write",
   ]),
   admin: new Set<Permission>([
     "company.read", "company.update", "members.manage", "role.create", "role.read", "role.approve", "role.manage", "packet.edit",
     "application.read", "application.act", "application.reject", "candidate.search", "compensation.read", "scorecard.write",
     "offer.manage", "policy.manage", "escalation.create", "events.read", "billing.manage", "integration.manage", "staff_access.revoke", "outcome.record",
-    "interview.request", "interview.manage", "interview.decide",
+    "interview.request", "interview.manage", "interview.decide", "note.read", "note.write",
   ]),
   hiring_manager: new Set<Permission>([
     "company.read", "role.create", "role.read", "role.approve", "packet.edit", "application.read", "application.act",
     "application.reject", "compensation.read", "scorecard.write", "escalation.create", "events.read", "outcome.record",
-    "interview.request", "interview.manage", "interview.decide",
+    "interview.request", "interview.manage", "interview.decide", "note.read", "note.write",
   ]),
   hr: new Set<Permission>([
     "company.read", "role.read", "application.read", "application.act", "candidate.search", "compensation.read", "offer.manage",
-    "escalation.create", "events.read", "members.manage", "outcome.record",
+    "escalation.create", "events.read", "members.manage", "outcome.record", "note.read", "note.write",
   ]),
   interviewer: new Set<Permission>(["company.read", "role.read", "scorecard.write"]),
+  // An ITS recruiter acts in this role while a grant gives them access (Q24: notes too, while they have access).
   recruiter: new Set<Permission>([
     "company.read", "role.create", "role.read", "role.manage", "packet.edit", "application.read", "application.act",
     "application.reject", "candidate.search", "compensation.read", "scorecard.write", "offer.manage", "escalation.create",
     "escalation.work", "workflow.control", "events.read", "interview.request", "interview.manage", "interview.decide",
+    "note.read", "note.write",
   ]),
 };
 

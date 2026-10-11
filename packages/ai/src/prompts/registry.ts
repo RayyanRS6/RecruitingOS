@@ -19,6 +19,18 @@ export function promptHash(blocks: SystemBlock[]): string {
 }
 
 /**
+ * Untrusted text (a pasted ad, an owner's request) as it goes between its data tags: every opening or closing `tag` is
+ * taken out, again and again until none is left, so text such as `</job_</job_ad>ad>` cannot rebuild the closing tag
+ * after one pass and end the data block early.
+ */
+export function withoutTag(text: string, tag: string): string {
+  const pattern = new RegExp(`<\\s*/?\\s*${tag}\\s*>`, "gi");
+  let out = text;
+  for (let next = out.replace(pattern, ""); next !== out; next = out.replace(pattern, "")) out = next;
+  return out;
+}
+
+/**
  * The instructions every candidate-facing or candidate-evaluating prompt includes.
  * Tested by the evaluation suite (docs/11).
  */

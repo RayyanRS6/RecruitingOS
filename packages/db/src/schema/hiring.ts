@@ -3,17 +3,27 @@ import { boolean, index, integer, jsonb, numeric, pgTable, text, uniqueIndex, uu
 import type {
   Actor,
   ApplicationStage,
+  ApplyMode,
+  DraftRolePacket,
   EligibilityResult,
   EvidenceAssessment,
   IntakeFacts,
   IntakeMessage,
+  IntakeServerState,
   Location,
+  MarkKind,
+  MarkSource,
   Playbook,
   ResumeExtraction,
   RolePacket,
   ScreenAssessment,
+  ScreenInvitedVia,
   ScreenProgress,
+  ScreenStatus,
   ScreenTranscriptEntry,
+  ToldState,
+  UnconfirmedConfirmation,
+  UnconfirmedIntent,
 } from "@ros/contracts";
 import { createdAt, id, ts, updatedAt } from "./columns";
 import { companies, users } from "./tenancy";
@@ -56,6 +66,19 @@ export const roles = pgTable(
     applicationsClosedReason: text("applications_closed_reason"),
     /** Applications per day above which the owner is told once a day; null means the default of 100. */
     volumeAlertPerDay: integer("volume_alert_per_day"),
+    /**
+     * The job boards a person ticked (Q11, migration 0031); null until someone chooses, and then the role plan's boards
+     * are used (packages/core/src/postings.ts, `publishChannelsFor`). The careers page, Google and email are never listed.
+     */
+    publishChannels: text("publish_channels").array(),
+    /** The last day new applications are taken, in the company's time zone (Q12); null when the role has no closing date. */
+    applicationsCloseOn: date("applications_close_on", { mode: "string" }),
+    /**
+     * How applicants meet the screening conversation (migration 0033, plan E1): "one_visit" straight after the form,
+     * "form_then_screen" by email later; null follows the company's default (`companies.settings.applyFlowDefault`).
+     * Only ITS changes it (packages/core/src/apply-flow.ts, `resolveApplyMode`).
+     */
+    applyMode: text("apply_mode").$type<ApplyMode>(),
     createdBy: jsonb("created_by").$type<Actor>().notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -92,13 +115,18 @@ export const intakeSessions = pgTable(
     messages: jsonb("messages").$type<IntakeMessage[]>().notNull().default([]),
     facts: jsonb("facts").$type<IntakeFacts>().notNull().default({ mustHaves: [], niceToHaves: [], eligibilityNotes: [], interviewers: [], dealBreakers: [], declinedCriteria: [] }),
     missingFacts: jsonb("missing_facts").$type<string[]>().notNull().default([]),
-    draftPacket: jsonb("draft_packet").$type<RolePacket | null>(),
+    /** The draft written beside the conversation (C7); pay only once a person set or confirmed it. */
+    draftPacket: jsonb("draft_packet").$type<DraftRolePacket | null>(),
     workflowRunId: uuid("workflow_run_id"),
     createdBy: jsonb("created_by").$type<Actor>().notNull(),
+    /** Who the draft belongs to, as a user id (migration 0030): drafts are listed, opened and taken over per person (C3, Q6). */
+    createdByUserId: uuid("created_by_user_id"),
+    /** What the server decides about the draft, never the model: confirmed pay, open question cards, progress (IntakeServerState). */
+    serverState: jsonb("server_state").$type<Partial<IntakeServerState>>().notNull().default({}),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index("intake_sessions_company_idx").on(t.companyId, t.status)],
+  (t) => [index("intake_sessions_company_idx").on(t.companyId, t.status), index("intake_sessions_owner_idx").on(t.companyId, t.createdByUserId, t.status)],
 );
 
 /**
@@ -139,6 +167,8 @@ export const postings = pgTable(
     closureRequired: boolean("closure_required").notNull().default(false),
     closureConfirmedAt: ts("closure_confirmed_at"),
     closureConfirmedBy: jsonb("closure_confirmed_by").$type<Actor | null>(),
+    /** The packet version a board listing was posted (or last updated) with; null when not known (migration 0031). */
+    boardVersion: integer("board_version"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -166,6 +196,8 @@ export const applicationLinks = pgTable(
     label: text("label").notNull(),
     visits: integer("visits").notNull().default(0),
     lastVisitedAt: ts("last_visited_at"),
+    /** "job": a shared link opens the job page first; "apply": a board's link goes straight to the form (migration 0032). */
+    landing: text("landing").notNull().default("job"),
     createdBy: jsonb("created_by").$type<Actor>().notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -269,6 +301,12 @@ export const applications = pgTable(
     rejectedAt: ts("rejected_at"),
     rejectReason: text("reject_reason"),
     rejectNote: text("reject_note"),
+    /**
+     * Whether the candidate was told a decision (migration 0026; founder decision B6): not_told until a person sends
+     * the message (queued, then sent once the outbox delivers it) or records that they told them (told_in_person).
+     */
+    toldState: text("told_state").$type<ToldState>().notNull().default("not_told"),
+    candidateToldAt: ts("candidate_told_at"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -278,6 +316,33 @@ export const applications = pgTable(
     index("applications_company_candidate_idx").on(t.companyId, t.candidateId),
     uniqueIndex("applications_status_token_idx").on(t.statusToken),
     uniqueIndex("applications_reply_token_idx").on(t.replyToken),
+  ],
+);
+
+/**
+ * A person's private mark on an application (migration 0026; founder decision B3): longlist, shortlist, on_hold or
+ * not_a_fit_for_now. At most one is active (cleared_at null); a hold carries the date it ends. Cleared, never deleted.
+ */
+export const applicationMarks = pgTable(
+  "application_marks",
+  {
+    id: id(),
+    companyId: uuid("company_id").notNull().references(() => companies.id),
+    applicationId: uuid("application_id").notNull().references(() => applications.id),
+    mark: text("mark").$type<MarkKind>().notNull(),
+    remindAt: ts("remind_at"),
+    note: text("note"),
+    setBy: jsonb("set_by").$type<Actor>().notNull(),
+    source: text("source").$type<MarkSource>().notNull().default("manual"),
+    createdAt: createdAt(),
+    clearedAt: ts("cleared_at"),
+    clearedBy: jsonb("cleared_by").$type<Actor | null>(),
+    clearReason: text("clear_reason"),
+  },
+  (t) => [
+    uniqueIndex("application_marks_active_idx").on(t.companyId, t.applicationId).where(sql`${t.clearedAt} is null`),
+    index("application_marks_hold_due_idx").on(t.companyId, t.remindAt).where(sql`${t.clearedAt} is null and ${t.mark} = 'on_hold'`),
+    index("application_marks_application_idx").on(t.applicationId, t.createdAt),
   ],
 );
 
@@ -321,10 +386,56 @@ export const screens = pgTable(
     lastCandidateMessageAt: ts("last_candidate_message_at"),
     assessmentId: uuid("assessment_id"),
     workflowRunId: uuid("workflow_run_id"),
+    /** "apply" (offered in the visit that sent the application), "confirmed_repeat", or null for an emailed invitation (migration 0033). */
+    invitedVia: text("invited_via").$type<ScreenInvitedVia>(),
+    /** The one reminder to someone who started and stopped part-way (plan E4). */
+    idleRemindedAt: ts("idle_reminded_at"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index("screens_application_idx").on(t.applicationId), uniqueIndex("screens_token_idx").on(t.token), index("screens_company_status_idx").on(t.companyId, t.status)],
+  (t) => [index("screens_application_idx").on(t.applicationId), uniqueIndex("screens_token_idx").on(t.token), index("screens_company_status_idx").on(t.companyId, t.status), index("screens_company_via_status_idx").on(t.companyId, t.invitedVia, t.status)],
+);
+
+/**
+ * The conversation of a repeat submission (migration 0033; Q14 x Q15): it looks exactly like a first application's, and
+ * nothing in it reaches the real application until the owner of the address on file confirms by email. Unconfirmed,
+ * its words are wiped after seven days. Never deleted.
+ */
+export const unconfirmedScreens = pgTable(
+  "unconfirmed_screens",
+  {
+    id: id(),
+    companyId: uuid("company_id").notNull().references(() => companies.id),
+    roleId: uuid("role_id").notNull().references(() => roles.id),
+    applicationId: uuid("application_id").notNull().references(() => applications.id),
+    packetVersion: integer("packet_version").notNull(),
+    /** The first name typed into the form, never the one on file. */
+    firstName: text("first_name").notNull(),
+    token: text("token").notNull(),
+    status: text("status").$type<ScreenStatus>().notNull().default("invited"),
+    intent: text("intent").$type<UnconfirmedIntent | null>(),
+    confirmation: text("confirmation").$type<UnconfirmedConfirmation | null>(),
+    confirmTokenHash: text("confirm_token_hash"),
+    transcript: jsonb("transcript").$type<ScreenTranscriptEntry[]>().notNull().default([]),
+    answers: jsonb("answers").$type<Record<string, string>>().notNull().default({}),
+    progress: jsonb("progress").$type<ScreenProgress>().notNull().default({ askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0 }),
+    startedAt: ts("started_at"),
+    lastCandidateMessageAt: ts("last_candidate_message_at"),
+    finishedAt: ts("finished_at"),
+    confirmSentAt: ts("confirm_sent_at"),
+    confirmedAt: ts("confirmed_at"),
+    mergedScreenId: uuid("merged_screen_id"),
+    discardedAt: ts("discarded_at"),
+    expiresAt: ts("expires_at").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("unconfirmed_screens_token_idx").on(t.token),
+    uniqueIndex("unconfirmed_screens_confirm_idx").on(t.confirmTokenHash).where(sql`${t.confirmTokenHash} is not null`),
+    index("unconfirmed_screens_application_idx").on(t.applicationId, t.createdAt),
+    index("unconfirmed_screens_expiry_idx").on(t.companyId, t.expiresAt).where(sql`${t.discardedAt} is null`),
+  ],
 );
 
 export const interviews = pgTable(
@@ -477,6 +588,9 @@ export const offers = pgTable(
     respondedAt: ts("responded_at"),
     declineReason: text("decline_reason"),
     negotiationLog: jsonb("negotiation_log").$type<Array<Record<string, unknown>>>().notNull().default([]),
+    /** "Offer made" (migration 0034; founder decision Q29): a person recorded an offer made outside the app, on `madeOn`. Terms stay empty. */
+    madeOutside: boolean("made_outside").notNull().default(false),
+    madeOn: date("made_on"),
     createdBy: jsonb("created_by").$type<Actor>().notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

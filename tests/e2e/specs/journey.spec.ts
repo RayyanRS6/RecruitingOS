@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn, signInWithoutSecondFactor, skipWithoutFakeSignIn } from "./helpers";
+import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn, signInWithoutSecondFactor, skipWithoutFakeSignIn, usePlan } from "./helpers";
 
 /**
  * The release-1 journey in a real browser: sign in, set up the company, publish a role, receive an applicant, declare
@@ -10,7 +10,8 @@ const run = Date.now().toString(36);
 
 test.describe("owner and candidate journey", () => {
   skipWithoutFakeSignIn();
-  test("from sign-in to a booked interview and a reschedule", async ({ page, baseURL }) => {
+  test("from sign-in to a booked interview and a reschedule", async ({ page, baseURL, browser }) => {
+    test.setTimeout(240_000); // the longest journey: two sign-ins, a published role, a draft, a booking and a reschedule
     await page.goto("/login");
     await expectAccessible(page, "login");
     await signIn(page, { email: `dana+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
@@ -18,23 +19,33 @@ test.describe("owner and candidate journey", () => {
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     await expectAccessible(page, "home");
 
+    // the trial has room for one role at a time; this journey publishes one and then drafts another
+    const company = await (await page.request.get(`${baseURL}/api/v1/companies/current`)).json() as { id: string };
+    await usePlan(browser, baseURL!, company.id, "growth");
     const seeded = await seedRoleAndApplicant(page.request, baseURL!, "Maria", "Reyes");
 
-    // the intake conversation announces each new reply to screen readers (a polite live region)
-    await page.goto("/");
-    await expect(page.getByRole("heading", { name: "Your recruiting chief of staff" })).toBeVisible({ timeout: 30_000 });
+    // the job builder (/roles/new): the first message starts the draft, and the conversation announces each new reply
+    // to screen readers (a polite live region)
+    await page.goto("/roles/new?new=1");
+    await expect(page.getByRole("heading", { name: "Who are you hiring?" })).toBeVisible({ timeout: 30_000 });
+    await expectAccessible(page, "job builder");
+    await page.getByRole("textbox", { name: "Describe the role, or paste a job ad" }).fill("I need a bookkeeper in Los Angeles, $60,000 to $70,000, in the office.");
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page).toHaveURL(/\/roles\/new\?session=/, { timeout: 30_000 });
     const announcer = page.getByTestId("intake-announcer");
     await expect(announcer).toHaveAttribute("aria-live", "polite");
     await expect(announcer).toHaveAttribute("role", "status");
-    await page.getByRole("textbox").last().fill("I need a bookkeeper in Los Angeles, $60,000 to $70,000, in the office.");
-    await page.getByRole("button", { name: "Send" }).click();
     await expect(announcer).not.toHaveText("", { timeout: 30_000 });
     await expect(announcer).not.toHaveText("The assistant is thinking.", { timeout: 30_000 });
     // what is announced is exactly the newest reply on the page, and it changes with the next reply
     const firstReply = (await announcer.textContent())!.trim();
     expect(firstReply.length).toBeGreaterThan(10);
     await expect(page.locator("main")).toContainText(firstReply);
-    await page.getByRole("textbox").last().fill("Ceiling $72,000. I decide. Must-haves: QuickBooks.");
+    await expectAccessible(page, "job builder conversation");
+    // typed words instead of the question cards: "Or type your own answer…" puts the message box back
+    const typeInstead = page.getByRole("button", { name: "Or type your own answer…" });
+    if (await typeInstead.isVisible()) await typeInstead.click();
+    await page.getByRole("textbox", { name: "Message to the assistant" }).fill("Ceiling $72,000. I decide. Must-haves: QuickBooks.");
     await page.getByRole("button", { name: "Send" }).click();
     await expect(announcer).not.toHaveText(firstReply, { timeout: 30_000 });
     await expect(announcer).not.toHaveText("The assistant is thinking.", { timeout: 30_000 });
@@ -60,13 +71,15 @@ test.describe("owner and candidate journey", () => {
 
     // the owner opens the candidate and approves an interview
     await page.goto(`/roles/${seeded.roleId}/talent`);
+    await page.getByRole("tab", { name: /^All/ }).click();
     await expect(page.getByRole("button", { name: "Maria Reyes" })).toBeVisible({ timeout: 30_000 });
     await expectAccessible(page, "talent");
     await page.getByRole("button", { name: "Maria Reyes" }).click();
     const sheet = page.getByRole("dialog", { name: "Maria Reyes" });
     await expect(sheet).toBeVisible();
-    await expectAccessible(page, "candidate sheet");
-    await sheet.getByRole("button", { name: "Interview", exact: true }).click();
+    await expectAccessible(page, "candidate panel");
+    await sheet.getByRole("button", { name: /^Stage: / }).click();
+    await sheet.getByRole("menuitemradio", { name: /^Interviewing/ }).click();
     await expect(sheet.getByRole("heading", { name: "Approve an interview" })).toBeVisible();
     await sheet.getByRole("checkbox").first().check();
     await sheet.getByRole("button", { name: "Approve and offer times" }).click();
@@ -100,7 +113,7 @@ test.describe("owner and candidate journey", () => {
     await expect(page.getByRole("cell", { name: /Maria Reyes/ })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText("Scheduled").first()).toBeVisible();
     await expectAccessible(page, "interviews");
-    await page.getByRole("link", { name: "Open" }).first().click();
+    await page.getByRole("link", { name: "Open", exact: true }).first().click();
     const ivSheet = page.getByRole("dialog");
     await expect(ivSheet.getByText(/Captions on/)).toBeVisible();
     await expectAccessible(page, "interview sheet");
@@ -130,6 +143,7 @@ test.describe("staff sign-in policy in the browser", () => {
     expect(me.auth).toMatchObject({ provider: "azure", aal: "aal2" });
     expect(me.auth.mfaVerifiedAt).toBeTruthy();
     // a platform role is granted by an administrator, never by the sign-in itself: a new staff account starts without one
+    await page.waitForLoadState("networkidle"); // the first page may still be redirecting
     await expectAccessible(page, "first page after staff sign-in");
   });
 });

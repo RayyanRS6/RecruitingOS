@@ -19,20 +19,27 @@ which carries the nonce and whose JSON is escaped so that nothing an owner types
 element. Every inline `<style>` (the page stylesheet and the screening page's own) carries the nonce; the test checks
 every style and script element on every candidate page, screening included. Inline event handlers were removed
 (the time-zone picker has a button; withdrawing an application and cancelling an interview confirm with a required
-checkbox instead of a `confirm()` dialog).
+checkbox instead of a `confirm()` dialog). The pages' stylesheet asks for their fonts (IBM Plex Sans, Bricolage
+Grotesque) only from this deployment's own origin (`/fonts/`, served from `apps/shell/public/fonts`), so `font-src 'self'`
+covers them and no font host learns who opened a job page (`apps/api/src/candidate-look.test.ts`). The files are in the
+repository, written by `scripts/fetch-fonts.ts` with the lock it keeps (`apps/api/src/pages/fonts.lock.json`: exact
+versions and a SHA-256 per file).
 
 **The application** (every Next.js page; set in `apps/shell/middleware.ts`, built by `apps/shell/lib/csp.ts`):
 
 ```
 default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none';
-img-src 'self' data: blob:; font-src 'self' https://fonts.gstatic.com;
-style-src 'self' 'nonce-…' https://fonts.googleapis.com; style-src-attr 'unsafe-inline';
+img-src 'self' data: blob:; font-src 'self';
+style-src 'self' 'nonce-…'; style-src-attr 'unsafe-inline';
 script-src 'self' 'nonce-…' 'strict-dynamic' ('unsafe-eval' in development only);
 connect-src 'self' (ws: wss: in development only); worker-src 'self' blob:; manifest-src 'self';
 upgrade-insecure-requests (production only); report-uri /api/csp-report
 ```
 
-The two font hosts are the only external origins. Next.js reads the nonce from the policy header on the request and
+No external origin at all: since 8 October 2026 the application loads the same self-hosted fonts as the candidate pages
+(`apps/shell/app/fonts.css`, written by `scripts/fetch-fonts.ts`; `apps/shell/lib/fonts.test.ts`), with IBM Plex Sans
+500, Bricolage Grotesque 600 and 800 and IBM Plex Mono added for the application's own styles, so Google Fonts is no
+longer contacted. Next.js reads the nonce from the policy header on the request and
 stamps it on the scripts it emits. Analytics run server-side only (founder decision, correction 14) and never appear in
 either policy.
 

@@ -17,6 +17,16 @@ export function boardNames(channels: string[]): string {
   return channels.map((c) => CHANNEL_LABEL[c] ?? c).join(", ");
 }
 
+/**
+ * "Shown to candidates" on the Pay card, by the public pages' rule (`payShown` in packages/core, sent by the API with
+ * each packet): the owner's choice, or a pay transparency law where the job is, which shows it whatever the choice.
+ */
+export function payShownLabel(packet: { payShown?: boolean; payRequiredByLaw?: boolean }, discloseRange: boolean): string {
+  const shown = packet.payShown ?? discloseRange;
+  if (!shown) return "No";
+  return !discloseRange && packet.payRequiredByLaw ? "Yes: the law where this job is requires it" : "Yes";
+}
+
 /** A team role as a person ("a hiring manager"), for sentences such as "planned: an owner, a hiring manager". */
 const ROLE_WORDS: Record<string, string> = { owner: "an owner", admin: "an admin", hiring_manager: "a hiring manager", hr: "someone from HR", interviewer: "an interviewer", recruiter: "a recruiter" };
 export function roleWords(roles: string[]): string {
@@ -53,7 +63,7 @@ function postingWords(type: string, p: Record<string, unknown>): string {
   switch (what) {
     case "draft": return "waiting for the role to be approved";
     case "approved": return "approved, being prepared";
-    case "ready_to_post": return p.channel === "careers_page" || p.channel === "google_jobs" ? "prepared" : "ready for you to post";
+    case "ready_to_post": return p.channel === "careers_page" || p.channel === "google_jobs" ? "prepared" : "ready to post";
     case "posted_manually": return p.corrected ? "a different address recorded, being checked" : "address recorded, being checked";
     case "submitted_integration": return "submitted, waiting to be listed";
     case "live_verified": return "checked and live";
@@ -63,6 +73,8 @@ function postingWords(type: string, p: Record<string, unknown>): string {
     case "verification_failed": return p.final ? "the last check did not pass" : "the check did not pass; it is checked again shortly";
     case "closure_required": return "still to be taken down";
     case "closure_confirmed": return "confirmed taken down";
+    case "update_required": return "still shows the earlier version, to be updated";
+    case "updated": return "brought up to date with the new version";
     default: return "posting updated";
   }
 }
@@ -78,10 +90,14 @@ export function describeRoleEvent(e: RoleEvent): string {
     "role_packet.proposed": `Packet ${v} ${p.again ? "sent for approval again" : "proposed for approval"}`.trim(),
     "role_packet.edited": `Packet ${v} edited${typeof p.changeSummary === "string" && p.changeSummary ? `: ${p.changeSummary}` : ""}`,
     "role_packet.approved": `Packet ${v} approved${p.via === "edit_while_open" ? " and made current" : ""}`,
+    "packet.revision_proposed": "The assistant suggested a change to the packet; nothing was saved",
+    "packet.revision_applied": `A change asked for in the chat was saved as packet ${v}`.trim(),
+    "packet.revision_discarded": "A suggested change was set aside",
+    "packet.check_applied": `Fixes from the requirements check were saved as packet ${v}`.trim(),
     "approval.requested": "Approval requested",
     "approval.granted": `Approved${note}`,
     "approval.denied": `Sent back${note}`,
-    "approval.expired": "The approval ran out of time (14 days)",
+    "approval.expired": `The approval ran out of time (${typeof p.windowDays === "number" ? p.windowDays : 14} days)`,
     "approval.cancelled": `Approval withdrawn${typeof p.reason === "string" && p.reason ? ` (${p.reason})` : ""}`,
     "role.sent_back": p.wasOpen ? `Proposed ${v} retired${note}` : `Back to a draft${note}`,
     "role.approved": "Role approved",
@@ -93,6 +109,8 @@ export function describeRoleEvent(e: RoleEvent): string {
     "role.applications_closed": "Stopped accepting applications",
     "role.applications_reopened": "Accepting applications again",
     "role.volume_high": "Unusually many applications in a day",
+    "role.boards_chosen": Array.isArray(e.payload.channels) && e.payload.channels.length ? `Job boards chosen: ${boardNames(e.payload.channels as string[])}` : "No job boards chosen",
+    "role.closing_date_set": typeof p.closesOn === "string" ? `Closing date set: last day to apply ${new Date(`${p.closesOn}T12:00:00Z`).toLocaleDateString("en-US", { timeZone: "UTC", month: "long", day: "numeric", year: "numeric" })}` : "Closing date taken off",
     "role.outcome_recorded": "Outcome recorded",
     "application.received": "An application arrived",
     "application.acknowledged": "An applicant was acknowledged",
@@ -106,13 +124,20 @@ export function describeRoleEvent(e: RoleEvent): string {
     "candidate.recommended": "A candidate was recommended for interview",
     "screen.invited": "A candidate was invited to a screen",
     "screen.completed": "A candidate completed the screen",
+    "screen.cancelled": p.reason === "stopped_by_team" ? "A screening invitation was stopped by the team" : p.reason === "deletion_request" ? "A screen was closed: the candidate's information was deleted" : "A screen was closed: the candidate is no longer in the process",
     "interview.requested": "An interview was requested",
     "interview.scheduled": "An interview was booked",
     "interview.completed": "An interview took place",
+    // the team's "Send new times" for several people under Cancelled at once (founder decision 2A): what the team did, never
+    // read as if the candidates asked, and never "sent" for someone it did not go to
+    "interview.new_times_batch": `New times for ${Number(p.requested ?? 0) === 1 ? "1 person" : `${Number(p.requested ?? 0)} people`} under Cancelled: ${Number(p.sent ?? 0)} going ahead${Number(p.notSent ?? 0) ? `, ${Number(p.notSent)} not sent` : ""}`,
     "outcome.recorded": "An outcome was recorded",
     "recruiter.requested": "A recruiter was asked for help",
     "recruiter.claimed": "An ITS recruiter picked it up",
     "recruiter.resolved": "The ITS recruiter responded",
+    "recruiter.replied": "The ITS recruiter wrote about a request",
+    "customer.replied": "Someone on the team added a note to a recruiter request",
+    "recruiter.reopened": "A recruiter request was reopened",
   };
   return known[e.type] ?? e.type.replace(/[._]/g, " ");
 }

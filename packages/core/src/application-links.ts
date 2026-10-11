@@ -1,15 +1,16 @@
 import { randomInt } from "node:crypto";
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
-import type { Actor } from "@ros/contracts";
+import type { Actor, SharePlace } from "@ros/contracts";
 import { applicationLinks, type Queryable } from "@ros/db";
 import { emit } from "./events";
 
 /**
  * Tracked application links (docs/spec/20 items 7, 8 and 19). Each board, referral, direct or other link is a short
- * random token that redirects to the apply page and sets a sealed cookie; the application records the source and the
+ * random token that redirects to the job page (a shared link) or the apply page (a board's link, plan D8) and sets a
+ * sealed cookie; the application records the source and the
  * detail, never the token. The same source vocabulary is written to `applications.source` and `candidates.first_source`.
  */
-export const SOURCES = ["careers_page", "email_in", "linkedin", "indeed", "ziprecruiter", "referral", "direct", "other"] as const;
+export const SOURCES = ["careers_page", "email_in", "linkedin", "indeed", "ziprecruiter", "referral", "school", "community", "shared_email", "shared_text", "whatsapp", "linkedin_post", "facebook", "x", "direct", "other"] as const;
 export type ApplicationSource = (typeof SOURCES)[number];
 
 export const SOURCE_LABEL: Record<ApplicationSource, string> = {
@@ -19,12 +20,51 @@ export const SOURCE_LABEL: Record<ApplicationSource, string> = {
   indeed: "Indeed",
   ziprecruiter: "ZipRecruiter",
   referral: "Referral",
+  school: "School or training program",
+  community: "Community group",
+  shared_email: "Shared by email",
+  shared_text: "Shared by text message",
+  whatsapp: "WhatsApp",
+  linkedin_post: "LinkedIn post",
+  facebook: "Facebook",
+  x: "X",
   direct: "Direct",
   other: "Other",
 };
 
-/** The sources a person may create a link for; boards get theirs from the publish workflow. */
-export const PERSON_LINK_SOURCES: readonly ApplicationSource[] = ["referral", "direct", "other"];
+/**
+ * The ready-made places a job is shared to (plan D8): one tap each, no form, each with its own tracked link that opens
+ * the job page. The same place reuses its link, so a second tap counts into the same row.
+ */
+export const SHARE_PLACES: Readonly<Record<SharePlace, { label: string; source: ApplicationSource }>> = {
+  referral: { label: "Referral from your team", source: "referral" },
+  school: { label: "A school or training program", source: "school" },
+  community: { label: "A community group", source: "community" },
+  email: { label: "Shared by email", source: "shared_email" },
+  text: { label: "Shared by text message", source: "shared_text" },
+  whatsapp: { label: "Shared on WhatsApp", source: "whatsapp" },
+  linkedin: { label: "Shared on LinkedIn", source: "linkedin_post" },
+  facebook: { label: "Shared on Facebook", source: "facebook" },
+  x: { label: "Shared on X", source: "x" },
+};
+
+/** Where a link lands: a board's link goes straight to the form, every shared link opens the job page first (plan D8). */
+export type LinkLanding = "job" | "apply";
+
+/**
+ * Link-preview fetchers, search crawlers and our own link check: a pasted link is fetched by the app it was pasted
+ * into before anyone clicks it. They are sent to the job page (its preview card), never counted as visits and never
+ * given the source cookie. Every such fetcher names itself; a request with no user agent at all (some privacy tools
+ * strip it) is counted like a person.
+ */
+const PREVIEW_AGENTS = /facebookexternalhit|facebot|twitterbot|linkedinbot|slackbot|slack-imgproxy|whatsapp|telegrambot|discordbot|skypeuripreview|google web preview|google-inspectiontool|applebot|embedly|iframely|vkshare|redditbot|pinterest|mastodon|bluesky|cardyb|bytespider|headlesschrome|recruitingos-linkcheck/i;
+const CRAWLER_AGENTS = /\b(\w+bot|crawler|spider)\/[\d.]/i;
+
+export function isLinkPreviewBot(userAgent: string | null | undefined): boolean {
+  const ua = (userAgent ?? "").trim();
+  if (!ua) return false;
+  return PREVIEW_AGENTS.test(ua) || CRAWLER_AGENTS.test(ua);
+}
 
 export function isSource(value: string): value is ApplicationSource {
   return (SOURCES as readonly string[]).includes(value);
@@ -72,12 +112,13 @@ export type ApplicationLinkRow = typeof applicationLinks.$inferSelect;
 
 export async function createApplicationLink(
   q: Queryable,
-  input: { companyId: string; roleId: string; postingId?: string | null; source: ApplicationSource; sourceDetail?: string | null; label: string; actor: Actor; now?: Date },
+  input: { companyId: string; roleId: string; postingId?: string | null; source: ApplicationSource; sourceDetail?: string | null; label: string; actor: Actor; now?: Date; landing?: LinkLanding },
 ): Promise<ApplicationLinkRow> {
   const now = (input.now ?? new Date()).toISOString();
+  const landing: LinkLanding = input.landing ?? (input.postingId ? "apply" : "job");
   const [row] = await q
     .insert(applicationLinks)
-    .values({ companyId: input.companyId, roleId: input.roleId, postingId: input.postingId ?? null, token: newLinkToken(), source: input.source, sourceDetail: input.sourceDetail ?? null, label: input.label, createdBy: input.actor, createdAt: now, updatedAt: now })
+    .values({ companyId: input.companyId, roleId: input.roleId, postingId: input.postingId ?? null, token: newLinkToken(), source: input.source, sourceDetail: input.sourceDetail ?? null, label: input.label, landing, createdBy: input.actor, createdAt: now, updatedAt: now })
     .returning();
   // The event carries the label and the source, never the token.
   await emit(q, { type: "application_link.created", companyId: input.companyId, actor: input.actor, subject: { type: "application_link", id: row.id }, payload: { roleId: input.roleId, postingId: row.postingId, source: row.source, label: row.label } });

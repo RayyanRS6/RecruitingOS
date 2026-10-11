@@ -1,22 +1,29 @@
 import { Hono, type Context } from "hono";
 import { desc, eq } from "drizzle-orm";
 import { CreateCompany, InviteMember, UpdateMember } from "@ros/contracts";
-import { assertCan, audit, raiseAlert, setActiveCompany, revokeStaffGrant } from "@ros/core";
-import { companies, entitlements as entitlementRows, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
+import { assertCan, audit, entitlements, raiseAlert, setActiveCompany, revokeStaffGrant } from "@ros/core";
+import { companies, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
 import { actorOf, requireTenant, requireUser, type Vars } from "../middleware/session";
 import { createCompany } from "../services/companies";
+import { tellItsAboutNewCompany } from "../services/company-trust";
 import { inviteMember, listInvitations, listTeam, resendMemberInvitation, revokeMemberInvitation, updateMember } from "../services/team";
 import { HttpError } from "../middleware/errors";
 
 export const companyRoutes = new Hono<Vars>();
 
+/**
+ * Open sign-up (founder decision B7): anyone signed in may create a company and draft and approve roles at once. Its
+ * public side waits for the one-time ITS check, so the ITS queue is told here (COMPANY_CHECK=auto confirms it instead).
+ */
 companyRoutes.post("/", requireUser, async (c) => {
   const body = CreateCompany.parse(await c.req.json());
   const s = c.get("session")!;
   const container = c.get("container");
-  const company = await createCompany(container.db, body, s.user.id, actorOf(c));
+  const autoVerify = container.env.COMPANY_CHECK === "auto";
+  const company = await createCompany(container.db, body, s.user.id, actorOf(c), { autoVerify, now: container.engine.clock() });
   await setActiveCompany(container.db, s.sessionId, company.id);
   await withTenant(container.db, company.id, (tx) => container.engine.start(tx, { workflowKey: "stuck_role_detector", companyId: company.id, subject: { type: "company", id: company.id }, state: { companyId: company.id }, idempotencyKey: `stuck_role_detector:${company.id}`, actor: actorOf(c) }));
+  if (!autoVerify) await tellItsAboutNewCompany(container, { company: { id: company.id, name: company.name, vertical: company.vertical, sizeBand: company.sizeBand, website: body.website ?? null }, owner: { name: body.ownerName ?? s.user.name ?? null, email: s.user.email } });
   await container.kick();
   return c.json(company, 201);
 });
@@ -28,8 +35,8 @@ companyRoutes.get("/current", requireTenant, async (c) => {
   const row = await withTenant(container.db, t.companyId, async (tx) => {
     const [co] = await tx.select().from(companies).where(eq(companies.id, t.companyId)).limit(1);
     const [plan] = await tx.select().from(plans).where(eq(plans.key, co.planKey)).limit(1);
-    const ents = await tx.select().from(entitlementRows).where(eq(entitlementRows.companyId, t.companyId));
-    const usage = Object.fromEntries(ents.map((e) => [e.key, { used: e.used, limit: e.limit }]));
+    // Roles are counted from the roles using a place now, so closing one shows its place free again (polish list).
+    const usage = await entitlements.usageOf(tx, t.companyId);
     return { ...co, plan: plan ? { key: plan.key, name: plan.name, limits: plan.limits } : null, usage };
   });
   return c.json({ ...row, integrations: container.integrations.statuses(), ai: { provider: container.ai.provider.id } });
@@ -52,7 +59,7 @@ companyRoutes.get("/current/invitations", requireTenant, async (c) => {
   return c.json(await listInvitations({ tenant: t, container: c.get("container") }));
 });
 
-const teamOf = (c: Context<Vars>) => ({ tenant: c.get("tenant")!, actor: actorOf(c), container: c.get("container") });
+const teamOf = (c: Context<Vars>) => ({ tenant: c.get("tenant")!, actor: actorOf(c), container: c.get("container"), session: c.get("session") });
 const inviterNameOf = (c: Context<Vars>) => c.get("session")!.user.name ?? c.get("session")!.user.email;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** A path id that is not even a uuid names nothing: a 404 in the route's own words, never a database error. */

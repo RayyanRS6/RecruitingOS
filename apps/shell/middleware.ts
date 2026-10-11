@@ -4,7 +4,8 @@ import { buildAppCsp, cspHeaderName, cspMode, makeNonce } from "./lib/csp";
 /**
  * Every page of the authenticated application gets a per-request nonce and the content-security policy (21 Sep, item 6).
  * The mounted Hono surfaces (API, candidate pages, tracked links, webhooks, feeds, the sitemap and robots, the local
- * file stand-in) set their own headers and are excluded here.
+ * file stand-in) set their own headers and are excluded here, as are the self-hosted font files (`/fonts/`, from
+ * public/fonts), which are static files that need no policy or nonce.
  * Next.js reads the nonce from the policy header on the request and stamps it on the scripts it emits.
  */
 export function middleware(req: NextRequest) {
@@ -21,5 +22,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api/|c/|careers/|a/|files/|webhooks/|feeds/|dev/|privacy|healthz|sitemap.xml|robots.txt|_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/((?!api/|c/|careers/|a/|files/|webhooks/|feeds/|dev/|privacy|healthz|sitemap.xml|robots.txt|fonts/|_next/static|_next/image|favicon.ico).*)"],
 };

@@ -7,7 +7,18 @@ with a 120-second timeout, restart on failure up to ten times). Nothing here is 
 1Password into Railway's Variables tab and are sealed.
 
 Note for the register: Railway calls the `railway.json` mechanism "Config as Code" and says it is deprecated in favour
-of its Infrastructure as Code, with legacy support ending 1 December 2026. It works today; a follow-up before then.
+of its Infrastructure as Code, with legacy support ending 1 December 2026 (a hard cutoff: the file then stops being
+read). The replacement (`.railway/railway.ts`) is not read during deploys either; it is applied from Railway's command
+line by someone signed in to the workspace, and its documented options do not cover the restart policy (checked 9
+October 2026, docs.railway.com/infrastructure-as-code). For one service, the simpler path is the dashboard:
+
+1. Railway, project `recruiting-os-staging`, service `worker`, **Settings**. Enter the values the file holds today:
+   build command `pnpm worker:check`; start command `pnpm worker:start`; health check path `/healthz`; health check
+   timeout `120`; restart policy **On Failure** with **10** retries; builder **Railpack**.
+2. Then remove `railway.json` from the repository, so the dashboard values are the only ones (until then the file
+   overrides them). The next deployment should start as in screen 4 below.
+
+Doing it in this order means nothing changes for the running worker at any point.
 
 ## Screen 1: create the service from the repository
 

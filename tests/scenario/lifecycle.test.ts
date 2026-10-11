@@ -5,6 +5,7 @@ import { aiRuns, applications, approvalRequests, assessments, auditRecords, comm
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "../../apps/api/src/app";
 import { createContainer, type Container } from "../../apps/api/src/container";
+import { useLaterApplyFlow } from "../../apps/api/src/test-helpers";
 
 /**
  * docs/13: A 100-person company (Brightline Dental Group, Irvine) hires a full-time Dental Hygienist.
@@ -43,8 +44,10 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     app = createApp(container);
     setClock(0);
     await signIn();
-    const co =(await (await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "100-199", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }] })).json()) as { slug: string };
+    const co =(await (await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "100-199", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
     slug = co.slug;
+    // docs/13 tells the later path (the screen by text after the résumé is read): the company is on it, as ITS can set (plan Wave E).
+    await useLaterApplyFlow(container, co.id);
   });
   afterAll(async () => { await container.close(); });
 
@@ -58,7 +61,7 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     // AI did: one intake.turn run, logged with cost and prompt version
     const runs = await container.db.select().from(aiRuns).where(eq(aiRuns.task, "intake.turn"));
     expect(runs).toHaveLength(1);
-    expect(runs[0].promptVersion).toBe(1);
+    expect(runs[0].promptVersion).toBe(3);
     expect(runs[0].status).toBe("ok");
     // events
     expect(await eventsOf("intake.started")).toHaveLength(1);
@@ -122,20 +125,25 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     expect(pv.status).toBe("approved");
   });
 
-  it("Step 4, Posting: the careers page is live only after its URL was checked; Google for Jobs is submitted; email-in is failed in development (no inbound domain); Indeed, LinkedIn and ZipRecruiter wait at ready to post with their own tracked links; policy role.publish = auto", async () => {
+  it("Step 4, Posting: the careers page is live only after its URL was checked; Google for Jobs is submitted; email-in is failed in development (no inbound domain); the board the role plan names (Indeed) waits at ready to post with its own tracked link, and an ITS recruiter has the task of posting it; policy role.publish = auto", async () => {
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { postings: Array<{ channel: string; status: string; instructions: string | null; steps: string[]; error: string | null }> };
     const s = Object.fromEntries(role.postings.map((p) => [p.channel, p.status]));
-    expect(s).toMatchObject({ careers_page: "live_verified", google_jobs: "submitted_integration", email_in: "failed", linkedin_basic: "ready_to_post", indeed: "ready_to_post", ziprecruiter: "ready_to_post" });
+    // only the boards the role plan names are prepared (founder decision Q11): the dental playbook names Indeed
+    expect(s).toEqual({ careers_page: "live_verified", google_jobs: "submitted_integration", email_in: "failed", indeed: "ready_to_post" });
     expect(role.postings.find((p) => p.channel === "indeed")!.instructions).toMatch(/own account/i);
     expect(role.postings.find((p) => p.channel === "indeed")!.steps.join(" ")).toMatch(/\/a\/[a-z0-9]{12}/);
     expect(role.postings.find((p) => p.channel === "email_in")!.error).toMatch(/inbound mail domain/i);
     // the careers page went ready to post, then posted (its URL is known), then live once the check answered with the title
-    expect((await eventsOf("posting.ready_to_post")).length).toBe(4);
+    expect((await eventsOf("posting.ready_to_post")).length).toBe(2);
     expect((await eventsOf("posting.posted_manually")).length).toBe(1);
     expect((await eventsOf("posting.live_verified")).length).toBe(1);
     expect((await eventsOf("posting.submitted_integration")).length).toBe(1);
     expect((await eventsOf("posting.failed")).length).toBe(1);
-    expect((await eventsOf("application_link.created")).length).toBe(3);
+    expect((await eventsOf("application_link.created")).length).toBe(1);
+    // ITS posts it from the company's own account (plan D3): one task in the ITS queue, with no access to candidates
+    const tasks = await container.db.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.roleId, roleId), eq(recruiterEscalations.kind, "post_job")));
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].contextSnapshot).not.toHaveProperty("candidate");
     const page = await app.request(`/careers/${slug}/jobs/${roleId}`);
     expect(page.status).toBe(200);
     expect(await page.text()).toContain("JobPosting");
@@ -203,7 +211,8 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     const brief = (await (await json("GET", "/api/v1/brief")).json()) as { cards: Array<{ kind: string; title: string }> };
     expect(brief.cards.some((c) => c.kind === "new_applicants")).toBe(true);
     expect(brief.cards.some((c) => c.kind === "screening")).toBe(true);
-    expect(brief.cards.some((c) => c.kind === "posting_action")).toBe(true);
+    // ITS posts the board (plan D3), so the owner is not told to post it from their own account
+    expect(brief.cards.some((c) => c.kind === "posting_action")).toBe(false);
     // "do it and tell me": the auto_notify invitations are in the owner's updates
     const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
     expect(notes.some((n) => n.kind === "screen.invited")).toBe(true);
@@ -213,7 +222,7 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
     const r = await json("POST", "/api/v1/escalations", { kind: "review", roleId, applicationId: a.id, question: "Is Maria worth a working interview?" });
     expect(r.status).toBe(201);
-    const [esc] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.roleId, roleId));
+    const [esc] = await container.db.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.roleId, roleId), eq(recruiterEscalations.kind, "review")));
     const ctx = esc.contextSnapshot as { company: { name: string }; role: { title: string }; packet: { version: number }; candidate: { name: string }; resumeText: string; timeline: unknown[] };
     expect(ctx.company.name).toBe("Brightline Dental Group");
     expect(ctx.role.title).toBe("Registered Dental Hygienist");
@@ -221,7 +230,8 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     expect(ctx.candidate.name).toBe("Maria Reyes");
     expect(ctx.resumeText).toMatch(/Smile Bright/);
     expect(ctx.timeline.length).toBeGreaterThan(3);
-    expect(await eventsOf("recruiter.requested")).toHaveLength(1);
+    // this request, beside the ITS task of posting the job on Indeed (Step 4)
+    expect((await eventsOf("recruiter.requested")).map((e) => (e.payload as { kind: string }).kind).sort()).toEqual(["post_job", "review"]);
   });
 
   it("Step 9, Human decisions are human and audited: declining needs a reason; viewing a candidate is audited", async () => {
@@ -311,7 +321,8 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     [s] = await container.db.select().from(screens).where(eq(screens.id, scr.id));
     expect(s.progress.failures).toBe(0);
     expect(s.answers.license_confirm).toMatch(/active/);
-    // HUMAN: the conversation stops, a recruiter gets the whole context with a 4-hour SLA, the owner is told
+    // HUMAN: the conversation stops, a recruiter gets the context with a 4-hour SLA, the owner is told. What Sam texted
+    // was never sent as his answers, so neither the recruiter nor the team reads it (founder decision of 9 October 2026).
     expect((await reply("Can I talk to a real person please")).status).toBe(200);
     [s] = await container.db.select().from(screens).where(eq(screens.id, scr.id));
     expect(s.status).toBe("human_requested");
@@ -319,8 +330,9 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     expect(esc.kind).toBe("candidate_issue");
     // Four business hours (Monday to Friday, 9 to 5 Pacific), never wall-clock hours (founder decision F12).
     expect(Math.abs(Date.parse(esc.slaDueAt!) - addBusinessHours(new Date(), 4).getTime())).toBeLessThanOrEqual(2 * 60_000);
-    const ctx = esc.contextSnapshot as { screens: Array<{ transcript: unknown[] }> };
-    expect(ctx.screens[0].transcript.length).toBeGreaterThanOrEqual(3);
+    const ctx = esc.contextSnapshot as { screens: Array<{ transcript: unknown[]; answers: Record<string, string>; answersShared: boolean }> };
+    expect(ctx.screens[0]).toMatchObject({ answersShared: false, answers: {}, transcript: [] });
+    expect(JSON.stringify(ctx)).not.toContain("license is active in California");
     expect(await eventsOf("screen.human_requested")).toHaveLength(1);
     expect((container.integrations.sms as FakeSmsAdapter).sent.filter((m) => m.to === "+19495550177").at(-1)!.body).toMatch(/person/);
   });
@@ -328,6 +340,8 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
   it("Step 10c, Nothing rots: the stuck-role detector nudges the owner up a ladder and, if ignored, brings in a recruiter; policy intervention.nudge sets the cooldown", async () => {
     const days = 86_400_000;
     const rungs = async () => (await container.db.select().from(interventions).where(eq(interventions.detector, "candidates_waiting"))).sort((x, y) => (x.sentAt < y.sentAt ? -1 : 1)).map((i) => i.ladderLevel);
+    // the ladder's own email reaches whoever wants roles that need attention as they happen (plan B3); Dana does
+    expect((await json("PUT", "/api/v1/notifications/preferences", { preferences: [{ group: "stuck", cadence: "immediate" }] })).status).toBe(200);
     await advance(4 * days); // Maria has been "recommended for interview" with no owner action
     expect(await rungs()).toEqual(["brief"]);
     const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string }>;
@@ -435,9 +449,11 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     expect((await container.db.select().from(aiRuns)).some((run) => /interview|scorecard/.test(run.task))).toBe(false);
   });
 
-  it("Step 13, Decision: the decision after the interview is a person's; 'hired' is refused in release 1; declining still needs a reason (debrief deferred to release 2)", async () => {
+  it("Step 13, Decision: the decision after the interview is a person's; 'hired' needs the start date agreed outside the app (plan H1); declining still needs a reason (debrief deferred to release 2)", async () => {
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
-    expect(((await json("POST", `/api/v1/applications/${a.id}/decision`, { decision: "hired" })).status)).toBe(409);
+    const hired = await json("POST", `/api/v1/applications/${a.id}/decision`, { decision: "hired" });
+    expect(hired.status).toBe(400);
+    expect(((await hired.json()) as { error: { code: string } }).error.code).toBe("hire_date_required");
     expect(((await json("POST", `/api/v1/applications/${a.id}/decision`, { decision: "not_moving_forward" })).status)).toBe(400);
     const r = await json("POST", `/api/v1/applications/${a.id}/decision`, { decision: "finalist", note: "Calm under pressure; strong charting." });
     expect(r.status).toBe(200);

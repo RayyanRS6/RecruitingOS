@@ -113,7 +113,7 @@ Supabase Auth replaces the internal magic-link system: Google and Microsoft sign
 9. Create Supabase staging and production.
 9a. Create the Microsoft Entra app registration for sign-in only (§10a) and configure Supabase Auth's Microsoft provider with it; configure the Google sign-in provider from the Google Cloud project once it exists (step 14).
 10. Create Vercel and connect the private GitHub repository.
-11. Create Trigger.dev staging and production.
+11. Create Railway for the worker (decision 1 of 22 Sep; Trigger.dev deferred) and Upstash for the shared rate-limit counters (decision 4).
 12. Create Postmark staging and production.
 13. Configure Postmark DNS only after reviewing the existing email DNS.
 14. Create Google Cloud projects for the Calendar integration (§9).

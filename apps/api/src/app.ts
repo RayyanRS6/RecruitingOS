@@ -14,16 +14,18 @@ import { privacyRequestPages } from "./pages/privacy-request";
 import { intakeRoutes } from "./routes/intake";
 import { applicationRoutes, roleRoutes } from "./routes/roles";
 import { postingRoutes } from "./routes/postings";
-import { rolePacketRoutes } from "./routes/role-packets";
+import { draftPacketRoutes, rolePacketRoutes } from "./routes/role-packets";
 import { reportRoutes } from "./routes/reports";
 import { messageRoutes } from "./routes/messages";
 import { compareRoutes } from "./routes/compare";
+import { noteRoutes } from "./routes/notes";
 import { approvalRoutes, briefRoutes, escalationRoutes, eventRoutes } from "./routes/approvals-escalations-events";
 import { adminRoutes } from "./routes/admin";
 import { policyRoutes } from "./routes/policies";
 import { notificationRoutes } from "./routes/notifications";
 import { integrationRoutes } from "./routes/integrations";
 import { applicationInterviewRoutes, interviewRoutes, meRoutes, roleInterviewRoutes } from "./routes/interviews";
+import { applicationNewTimesRoutes, roleNewTimesRoutes } from "./routes/new-times";
 import { schedulePages } from "./pages/schedule";
 import { privacyRequestRoutes } from "./routes/privacy-requests";
 import { observabilityRoutes } from "./routes/observability";
@@ -32,9 +34,11 @@ import { appHealthWatch } from "./maintenance";
 import { redactString } from "@ros/core";
 import { twilioWebhook } from "./webhooks/twilio";
 import { candidatePages } from "./pages/candidate";
+import { draftPreviewPages, rolePreviewPages } from "./pages/preview";
 import { linkPages } from "./pages/links";
 import { publicFeeds } from "./pages/public-feeds";
 import { fileRoutes } from "./routes/files";
+import { screenApplicationRoutes, screenRoleRoutes } from "./routes/screen-routes";
 import { postmarkWebhook } from "./webhooks/postmark";
 import { POLICIES, apiRateLimit, rateLimit, webhookRateLimit } from "./middleware/rate-limit";
 import { contextStorage } from "hono/context-storage";
@@ -70,6 +74,8 @@ export function createApp(container: Container) {
   app.use("/api/v1/auth/consume", candidateCsp);
   app.use("/api/v1/auth/invite", candidateCsp);
   app.use("/api/v1/auth/invite/*", candidateCsp);
+  // The authenticated job-page preview (plan D1, pages/preview.tsx) is a candidate page drawn for the team: same policy, same nonce.
+  for (const p of ["/api/v1/roles/:id/preview", "/api/v1/roles/:id/preview/page", "/api/v1/intake/sessions/:id/preview", "/api/v1/intake/sessions/:id/preview/page"]) app.use(p, candidateCsp);
   // Browsers post policy violations here (both report formats). Paths and origins only; never a token or a query string.
   app.post("/api/csp-report", rateLimit(POLICIES.cspReport), async (c) => {
     let body: unknown = null;
@@ -103,13 +109,18 @@ export function createApp(container: Container) {
   app.route("/api/v1/companies", companyRoutes);
   app.route("/api/v1/companies", companySettingsRoutes);
   app.route("/api/v1/intake", intakeRoutes);
+  // Before the data routes: a browser tab asking for the preview gets the page, the app's own requests the data.
+  app.route("/api/v1/intake", draftPreviewPages);
+  app.route("/api/v1/intake", draftPacketRoutes);
   app.route("/api/v1/roles", roleRoutes);
   app.route("/api/v1/roles", postingRoutes);
+  app.route("/api/v1/roles", rolePreviewPages);
   app.route("/api/v1/roles", rolePacketRoutes);
   app.route("/api/v1/roles", reportRoutes);
   app.route("/api/v1/roles", compareRoutes);
   app.route("/api/v1/applications", messageRoutes);
   app.route("/api/v1/applications", applicationRoutes);
+  app.route("/api/v1/applications", noteRoutes);
   app.route("/api/v1/approvals", approvalRoutes);
   app.route("/api/v1/escalations", escalationRoutes);
   app.route("/api/v1/events", eventRoutes);
@@ -122,7 +133,12 @@ export function createApp(container: Container) {
   app.route("/api/v1/integrations", integrationRoutes);
   app.route("/api/v1/interviews", interviewRoutes);
   app.route("/api/v1/applications", applicationInterviewRoutes);
+  // New times for people under Cancelled (founder decision 2A): one person, their automatic set, or a role's column.
+  app.route("/api/v1/applications", applicationNewTimesRoutes);
   app.route("/api/v1/roles", roleInterviewRoutes);
+  app.route("/api/v1/roles", roleNewTimesRoutes);
+  app.route("/api/v1/roles", screenRoleRoutes);
+  app.route("/api/v1/applications", screenApplicationRoutes);
   app.route("/api/v1/me", meRoutes);
   app.route("/", schedulePages);
   app.route("/files", fileRoutes);

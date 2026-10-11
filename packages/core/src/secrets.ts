@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { Actor, Subject } from "@ros/contracts";
 import { REDACTED, containsSecret, fingerprint, redactObject, redactText } from "@ros/contracts";
 import type { Queryable } from "@ros/db";
@@ -110,11 +109,6 @@ export async function deleteSecret(q: Queryable, store: SecretStoreLike, input: 
     throw new SecretDeletionFailed(input.ref, err);
   }
   await audit(q, { companyId: input.companyId, actor: input.actor, action: "secret.deleted", target: refTarget(input.integrationId), reason: input.purpose, ip: input.ip, details: { ...refDetails(input.ref, input), store: store.id } });
-}
-
-/** A stable digest of a value for equality checks in tests without keeping the value around. */
-export function digestForTests(value: string): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 export { REDACTED };

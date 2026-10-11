@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { findLinkByToken } from "@ros/core";
-import { applications, auditRecords, candidates, events, memberships, notifications, postings, randomToken, roles, users, withPlatform } from "@ros/db";
+import { applications, auditRecords, candidates, companies, events, memberships, notifications, postings, randomToken, roles, users, withPlatform } from "@ros/db";
 import type { FakeUrlVerifier } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -66,6 +66,11 @@ describe("posting routes: the owner's Posting tab API", () => {
     companySlug = co.slug;
     const s = await body<{ session: { id: string } }>(await post(owner, "/api/v1/intake/sessions", { initialMessage: "I need a bookkeeper in Irvine, $60,000 to $70,000, in the office. It's growth. Ceiling $72,000. I decide. Must-haves: QuickBooks. Just draft it." }));
     roleId = (await body<{ roleId: string }>(await post(owner, `/api/v1/intake/sessions/${s.session.id}/compile`))).roleId;
+    // This suite covers every board, posted by the team itself: the company has its own ZipRecruiter plan and posts on
+    // the boards itself, and the role uses all three (plan D3, D6; ITS posting is covered by publishing.test.ts).
+    const [co0] = await container.db.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId));
+    await container.db.update(companies).set({ settings: { ...co0.settings, boardPosting: "self", zipRecruiterPlan: true } }).where(eq(companies.id, companyId));
+    expect((await post(owner, `/api/v1/roles/${roleId}/channels`, { channels: ["linkedin_basic", "indeed", "ziprecruiter"] })).status).toBe(200);
     await post(owner, `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" });
     await container.drain();
     roleTitle = (await container.db.select({ title: roles.title }).from(roles).where(eq(roles.id, roleId)))[0].title;
@@ -151,15 +156,17 @@ describe("posting routes: the owner's Posting tab API", () => {
     const audited = (await container.db.select().from(auditRecords).where(eq(auditRecords.action, "posting.changed"))).filter((a) => a.target?.id === row.id);
     expect(audited).toHaveLength(1);
     expect(audited[0].actor).toMatchObject({ kind: "user", id: ownerId });
-    // a live posting does not take a new address: the state table refuses, and the answer names both states
-    const refused = await post(owner, P("indeed", "url"), { url: "https://www.indeed.com/viewjob?jk=other" });
-    expect(refused.status).toBe(409);
-    const err = await body<ErrorBody>(refused);
-    expect(err.error.code).toBe("posting_transition");
-    expect(err.error.message).toContain("Live and verified");
-    expect(err.error.message).toContain("Posted");
-    expect(err.error.details).toEqual({ from: "live_verified", to: "posted_manually" });
-    expect((await posting("indeed")).externalUrl).toBe(url);
+    // a live listing that moved takes its new address, but is not live there until that address is checked: it is
+    // "Posted" again and nothing of the earlier check is kept
+    const other = "https://www.indeed.com/viewjob?jk=other";
+    verifier().set(other, { pageText: "<h1>Page not found</h1>" });
+    const moved = await body<PostingView>(await post(owner, P("indeed", "url"), { url: other }));
+    expect(moved).toMatchObject({ status: "posted_manually", stateLabel: "Posted", externalUrl: other, verifiedAt: null, verifiedBy: null, verificationNote: null, verificationAttempts: 0 });
+    expect((await eventsOf("posting.posted_manually")).filter((e) => e.subjectId === row.id).at(-1)?.payload).toMatchObject({ from: "live_verified", to: "posted_manually", url: other });
+    // back to the right address, which is checked again and live again
+    expect((await post(owner, P("indeed", "url"), { url })).status).toBe(200);
+    await container.drain();
+    expect(await posting("indeed")).toMatchObject({ status: "live_verified", externalUrl: url });
   });
 
   it("a page that does not name the job fails after three checks; pausing and resuming in between restarts the checks; a person's own confirmation with a note recovers it", async () => {
@@ -285,8 +292,18 @@ describe("posting routes: the owner's Posting tab API", () => {
     expect((await body<{ boardsStillUp: string[] }>(await get(owner, `/api/v1/roles/${roleId}`))).boardsStillUp).toEqual(["indeed"]);
     // pausing and resuming the role prepares its channels again, and a Retry elsewhere does too: the closed board stays closed, on the checklist and in the brief
     const preparedBefore = (await eventsOf("posting.ready_to_post")).filter((e) => e.subjectId === closed.id).length;
+    // the role itself pauses only from open and resumes only from paused (Wave 0 item 0.8): a second click changes nothing
+    const openNotPaused = await post(owner, `/api/v1/roles/${roleId}/resume`);
+    expect(openNotPaused.status).toBe(409);
+    expect((await body<ErrorBody>(openNotPaused)).error).toMatchObject({ code: "not_paused", message: "This role is already open." });
+    const resumedBefore = (await eventsOf("role.resumed")).length;
     expect((await post(owner, `/api/v1/roles/${roleId}/pause`)).status).toBe(200);
+    const twice = await post(owner, `/api/v1/roles/${roleId}/pause`);
+    expect(twice.status).toBe(409);
+    expect((await body<ErrorBody>(twice)).error).toMatchObject({ code: "not_open", message: "This role is already paused." });
+    expect((await eventsOf("role.paused")).filter((e) => e.subjectId === roleId)).toHaveLength(1);
     expect((await post(owner, `/api/v1/roles/${roleId}/resume`)).status).toBe(200);
+    expect((await eventsOf("role.resumed")).length).toBe(resumedBefore + 1);
     await container.drain();
     expect((await body<{ action: string }>(await post(owner, P("email_in", "retry")))).action).toBe("republish");
     await container.drain();
@@ -316,11 +333,24 @@ describe("posting routes: the owner's Posting tab API", () => {
     expect((await body<ErrorBody>(refused)).error.message).toMatch(/from "Closed" to "Paused"/);
   });
 
-  it("Google for Jobs is marked verified by a person with a note and goes through pause and resume; the careers page can be checked again; a failed native channel is prepared again", async () => {
+  it("Google for Jobs is marked verified by a person with a note; the careers page and Google follow the role and cannot be paused or closed on their own; one an earlier version left paused can be resumed; the careers page can be checked again; a failed native channel is prepared again", async () => {
     const google = await body<PostingView>(await post(owner, P("google_jobs", "verify"), { note: "Seen in Search Console on 24 September." }));
     expect(google).toMatchObject({ status: "live_verified", verificationNote: "Seen in Search Console on 24 September." });
     expect(google.verifiedBy).toMatchObject({ kind: "user", id: ownerId });
-    expect((await body<PostingView>(await post(owner, P("google_jobs", "pause")))).status).toBe("paused");
+    // Wave 0 item 0.8: a pause or close here would change a label while the job page stayed up and kept taking applications
+    for (const channel of ["careers_page", "google_jobs"]) {
+      for (const action of ["pause", "close"]) {
+        const refused = await post(owner, P(channel, action));
+        expect(refused.status, `${channel} ${action}`).toBe(409);
+        const err = (await body<ErrorBody>(refused)).error;
+        expect(err.code).toBe("follows_the_role");
+        expect(err.message).toMatch(/accepting applications|pause the role/);
+      }
+    }
+    expect((await posting("google_jobs")).status).toBe("live_verified");
+    expect((await posting("careers_page")).status).toBe("live_verified");
+    // a Google posting an earlier version left paused comes back to where it was
+    await container.db.update(postings).set({ status: "paused", pausedAt: new Date(BASE + clockOffset).toISOString() }).where(eq(postings.id, google.id));
     const back = await body<PostingView>(await post(owner, P("google_jobs", "resume")));
     expect(back).toMatchObject({ status: "live_verified", verificationNote: "Seen in Search Console on 24 September." });
     expect((await post(owner, P("google_jobs", "retry"))).status).toBe(409); // live: nothing to retry
@@ -487,6 +517,14 @@ describe("posting routes: the owner's Posting tab API", () => {
     expect((await body<ErrorBody>(late)).error.message).toMatch(/from "Closed" to "Posted"/);
     expect((await post(owner, `/api/v1/roles/${roleId}/links`, { source: "referral", label: "Too late" })).status).toBe(409);
     expect((await body<ErrorBody>(await post(owner, `/api/v1/roles/${roleId}/applications/accepting`, { accepting: false }))).error.code).toBe("role_closed");
+    // a closed role cannot be resumed back to open, nor paused (Wave 0 item 0.8): before, resume reopened it and published it again
+    const publishRunsBefore = (await eventsOf("workflow.started")).filter((e) => (e.payload as { workflowKey?: string }).workflowKey === "publish_role").length;
+    const resumeClosed = await post(owner, `/api/v1/roles/${roleId}/resume`);
+    expect(resumeClosed.status).toBe(409);
+    expect((await body<ErrorBody>(resumeClosed)).error.code).toBe("not_paused");
+    expect((await body<ErrorBody>(await post(owner, `/api/v1/roles/${roleId}/pause`))).error.code).toBe("not_open");
+    expect((await container.db.select({ status: roles.status }).from(roles).where(eq(roles.id, roleId)))[0].status).toBe("closed");
+    expect((await eventsOf("workflow.started")).filter((e) => (e.payload as { workflowKey?: string }).workflowKey === "publish_role").length).toBe(publishRunsBefore);
     // the checklist
     expect((await body<PostingView>(await post(owner, P("linkedin_basic", "closure-confirm")))).stillUp).toBe(false);
     const half = (await body<Brief>(await get(owner, "/api/v1/brief"))).cards.find((c) => c.title.startsWith("Still posted on"));

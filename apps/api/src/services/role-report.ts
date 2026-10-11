@@ -1,8 +1,9 @@
-import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
-import { ApplicationStage as ApplicationStageEnum, type ApplicationStage, type OwnerGroup } from "@ros/contracts";
-import { OUTCOME_STATEMENT, SOURCES, SOURCE_LABEL, STAGE_LABEL, isSource, ownerGroup } from "@ros/core";
-import { applications, approvalRequests, assessments, candidates, communications, companies, events, hiringOutcomes, interviews, recruiterEscalations, roles, type Tx } from "@ros/db";
+import { and, asc, desc, eq, inArray, notInArray, or, sql } from "drizzle-orm";
+import { ApplicationStage as ApplicationStageEnum, CANCELLED_REASON_LABEL, MARK_LABEL, OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum, type ApplicationStage, type MarkKind, type OwnerGroup, type OwnerStage, type PoolMustHaveCount, type PoolSummary, type ToldState } from "@ros/contracts";
+import { DECISION_STAGES, OUTCOME_STATEMENT, POSTING_TASK_KINDS, SOURCES, SOURCE_LABEL, STAGE_LABEL, activeFollowUpsFor, groupFor, holdEnded, inCancelled, isSource, ownerGroup, ownerStage, type FollowUpStrip } from "@ros/core";
+import { applicationMarks, applications, approvalRequests, candidates, communications, companies, events, hiringOutcomes, interviews, recruiterEscalations, roles, type Tx } from "@ros/db";
 import { localDays } from "@ros/workflows";
+import { boardView, loadPool, shownLatestReadings } from "./pool";
 
 /**
  * The role report (docs/spec/21 section 7, P1): the ten figures an owner asked for, computed from the system of record
@@ -21,7 +22,12 @@ export type StageCount = { stage: ApplicationStage; label: string; group: OwnerG
 /** Completed stays come from application.stage_changed events; "now here" is the applications in the stage at report time. */
 export type StageTime = { stage: ApplicationStage; label: string; group: OwnerGroup; completed: number; medianDays: number | null; averageDays: number | null; nowHere: number; longestDays: number | null };
 export type PendingItem = { kind: "approval" | "candidate"; label: string; days: number; applicationId: string | null; approvalRequestId: string | null };
-export type RecommendationRow = { recommendation: string; label: string; total: number; invited: number; interviewed: number; declined: number; held: number; noActionYet: number };
+/** `shortlisted` counts a Longlist or Shortlist mark; `held` an On hold mark. */
+export type RecommendationRow = { recommendation: string; label: string; total: number; invited: number; interviewed: number; shortlisted: number; declined: number; held: number; noActionYet: number };
+/** The private marks (founder decision B3): who carries one now, holds whose date has come, and every hold ever set. */
+export type MarkCounts = { longlist: number; shortlist: number; onHold: number; holdsEnded: number; notAFitForNow: number; holdsEverSet: number };
+/** Decisions (declined, talent pool) by whether the candidate was told (founder decision B6); `beforeTracking`: made before decisions became private. */
+export type ToldCounts = { decisions: number; notTold: number; queued: number; sent: number; toldInPerson: number; beforeTracking: number };
 /**
  * `noShow` is every interview that did not take place because someone was missing; `noShowCandidate` and
  * `noShowInterviewer` say who, from the outcome a person recorded. A no-show recorded without saying who counts in the
@@ -33,7 +39,8 @@ export type RoleReport = {
   /** The role the report is about; null for the administrator's view across a customer's roles. */
   role: { id: string; title: string; status: string; openedAt: string | null; closedAt: string | null; daysOpen: number | null } | null;
   applicants: { total: number; last30Days: number; timeZone: string; bySource: SourceCount[]; byDay: DayCount[] };
-  stages: { total: number; byStage: StageCount[]; byGroup: Record<OwnerGroup, number> };
+  /** `byGroup` counts a running hold as in process and an ended one as waiting on you; `byOwnerStage` is the stage strip. */
+  stages: { total: number; byStage: StageCount[]; byGroup: Record<OwnerGroup, number>; byOwnerStage: Record<OwnerStage, number>; marks: MarkCounts; told: ToldCounts };
   timeInStage: { byStage: StageTime[]; waitingOnYou: { count: number; averageDays: number | null; medianDays: number | null; longestDays: number | null } };
   interviews: { total: number; requested: number; scheduled: number; completed: number; noShow: number; noShowCandidate: number; noShowInterviewer: number; cancelled: number; offerExpired: number; rescheduledByCandidate: number; awaitingDecision: number; byRound: RoundCount[] };
   /** Decisions only a person can make: pending approvals plus candidates waiting on the owner (including those held on an eligibility answer). */
@@ -46,9 +53,19 @@ export type RoleReport = {
     statement: string; hired: number; withdrew: number; declinedByEmployer: number; declinedOffer: number; noHire: number; talentPool: number; corrections: number;
     role: { outcome: string; recordedAt: string } | null; rolesByOutcome: Record<string, number>; declineReasons: Array<{ reason: string; label: string; count: number }>;
   };
+  /**
+   * One role only: how the people read so far meet each must-have (shown, partly, shown not met, not known), how many
+   * show every one, and the gentle note when one must-have is not shown by most people. Counts only, no names.
+   */
+  mustHaves?: { people: number; showEveryMustHave: number; byMustHave: PoolMustHaveCount[]; stricter: PoolSummary["stricter"] };
 };
 
-type AppRow = { id: string; roleId: string; candidateId: string; source: string; sourceDetail: string | null; stage: ApplicationStage; stageChangedAt: string; createdAt: string; latestAssessmentId: string | null; rejectReason: string | null };
+/** `talentPoolOptOut`: the person asked not to be kept for future roles, so they are never counted in the talent pool. */
+type AppRow = { id: string; roleId: string; candidateId: string; source: string; sourceDetail: string | null; stage: ApplicationStage; stageChangedAt: string; createdAt: string; latestAssessmentId: string | null; rejectReason: string | null; talentPoolOptOut?: boolean; toldState?: ToldState; /** Their details were deleted at their request: there is nobody to tell. */ dataDeleted?: boolean };
+/** Every mark set on the applications, active (clearedAt null) or not. */
+type MarkRow = { applicationId: string; mark: MarkKind; remindAt: string | null; createdAt: string; clearedAt: string | null };
+/** An open follow-up (the Cancelled column, founder decisions 1A to 4A): what the strip and the groups read of it. */
+type FollowUpRowOfReport = FollowUpStrip & { applicationId: string };
 type EventRow = { subjectId: string; occurredAt: string; payload: Record<string, unknown> };
 type AssessmentRow = { id: string; applicationId: string; createdAt: string; recommendation: string | null };
 type InterviewRow = { applicationId: string; status: string; outcome?: string | null; roundKey: string; title: string; rescheduleCountCandidate: number; decision: string | null };
@@ -70,6 +87,10 @@ export type ReportData = {
   escalations: EscalationRow[];
   messages: RoleReport["messages"];
   outcomes: OutcomeRow[];
+  /** Optional so hand-made rows from before the marks need not list any. */
+  marks?: MarkRow[];
+  /** The open follow-ups, as `activeFollowUpsFor` reads them for the Talent list (J18); optional as the marks are. */
+  followUps?: FollowUpRowOfReport[];
 };
 
 const NO_MESSAGES: RoleReport["messages"] = { total: 0, sent: 0, failed: 0, bounced: 0, unknown: 0, pending: 0, candidatesAffected: 0 };
@@ -77,7 +98,7 @@ const NO_MESSAGES: RoleReport["messages"] = { total: 0, sent: 0, failed: 0, boun
 /** One query per figure. `roleIds` null means every role of the company (the administrator's view). */
 export async function loadReportData(tx: Tx, input: { companyId: string; roleIds: string[] | null }): Promise<ReportData> {
   const { companyId } = input;
-  const empty: ReportData = { roles: [], timeZone: null, apps: [], stageEvents: [], overrides: [], assessments: [], interviews: [], approvals: [], escalations: [], messages: NO_MESSAGES, outcomes: [] };
+  const empty: ReportData = { roles: [], timeZone: null, apps: [], stageEvents: [], overrides: [], assessments: [], interviews: [], approvals: [], escalations: [], messages: NO_MESSAGES, outcomes: [], marks: [], followUps: [] };
   if (input.roleIds && input.roleIds.length === 0) return empty;
   const roleRows = await tx
     .select({ id: roles.id, title: roles.title, status: roles.status, openedAt: roles.openedAt, closedAt: roles.closedAt })
@@ -88,8 +109,9 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
   const roleIds = roleRows.map((r) => r.id);
   const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId)).limit(1);
   const apps = (await tx
-    .select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId, source: applications.source, sourceDetail: applications.sourceDetail, stage: applications.stage, stageChangedAt: applications.stageChangedAt, createdAt: applications.createdAt, latestAssessmentId: applications.latestAssessmentId, rejectReason: applications.rejectReason })
+    .select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId, source: applications.source, sourceDetail: applications.sourceDetail, stage: applications.stage, stageChangedAt: applications.stageChangedAt, createdAt: applications.createdAt, latestAssessmentId: applications.latestAssessmentId, rejectReason: applications.rejectReason, talentPoolOptOut: sql<boolean>`coalesce((${candidates.preferences}->>'talentPoolOptOut')::boolean, false)`, toldState: applications.toldState, dataDeleted: sql<boolean>`${candidates.anonymizedAt} is not null` })
     .from(applications)
+    .leftJoin(candidates, eq(candidates.id, applications.candidateId))
     .where(and(eq(applications.companyId, companyId), inArray(applications.roleId, roleIds)))
     .orderBy(asc(applications.createdAt))) as AppRow[];
   const ids = apps.map((a) => a.id);
@@ -98,10 +120,9 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
     : Promise.resolve([] as EventRow[]);
   const stageEvents = await eventsOf("application.stage_changed");
   const overrides = await eventsOf("human.override");
-  const latestIds = apps.map((a) => a.latestAssessmentId).filter((x): x is string => !!x);
-  const asmts = latestIds.length
-    ? await tx.select({ id: assessments.id, applicationId: assessments.applicationId, createdAt: assessments.createdAt, recommendation: sql<string | null>`${assessments.result}->>'recommendation'` }).from(assessments).where(and(eq(assessments.companyId, companyId), inArray(assessments.id, latestIds)))
-    : [];
+  // Never a reading of a conversation the candidate did not send (founder decision of 9 October 2026): someone whose
+  // latest reading is one counts with the newest reading left (their résumé's), as the Talent list and the board show them.
+  const asmts: AssessmentRow[] = ids.length ? [...(await shownLatestReadings(tx, { companyId, roleIds })).values()].map((r) => ({ id: r.id, applicationId: r.applicationId, createdAt: r.createdAt, recommendation: r.recommendation })) : [];
   const ivs = ids.length
     ? await tx.select({ applicationId: interviews.applicationId, status: interviews.status, outcome: interviews.outcome, roundKey: interviews.roundKey, title: interviews.title, rescheduleCountCandidate: interviews.rescheduleCountCandidate, decision: interviews.decision }).from(interviews).where(and(eq(interviews.companyId, companyId), inArray(interviews.applicationId, ids))).orderBy(asc(interviews.createdAt), asc(interviews.id))
     : [];
@@ -109,10 +130,11 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
     .select({ id: approvalRequests.id, actionType: approvalRequests.actionType, applicationId: approvalRequests.applicationId, createdAt: approvalRequests.createdAt })
     .from(approvalRequests)
     .where(and(eq(approvalRequests.companyId, companyId), inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending")));
+  // The team's recruiter requests; ITS's own job-board posting tasks (plan D3) are not requests and are left out.
   const escalations = await tx
     .select({ status: recruiterEscalations.status, createdAt: recruiterEscalations.createdAt, firstResponseAt: recruiterEscalations.firstResponseAt, slaDueAt: recruiterEscalations.slaDueAt, resolvedAt: recruiterEscalations.resolvedAt })
     .from(recruiterEscalations)
-    .where(and(eq(recruiterEscalations.companyId, companyId), ids.length ? or(inArray(recruiterEscalations.roleId, roleIds), inArray(recruiterEscalations.applicationId, ids)) : inArray(recruiterEscalations.roleId, roleIds)));
+    .where(and(eq(recruiterEscalations.companyId, companyId), notInArray(recruiterEscalations.kind, [...POSTING_TASK_KINDS]), ids.length ? or(inArray(recruiterEscalations.roleId, roleIds), inArray(recruiterEscalations.applicationId, ids)) : inArray(recruiterEscalations.roleId, roleIds)));
   const [m] = ids.length
     ? await tx
         .select({
@@ -121,7 +143,8 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
           failed: sql<string>`count(*) filter (where ${communications.status} in ('failed', 'complained'))`,
           bounced: sql<string>`count(*) filter (where ${communications.status} = 'bounced')`,
           unknown: sql<string>`count(*) filter (where ${communications.status} = 'unknown')`,
-          pending: sql<string>`count(*) filter (where ${communications.status} in ('queued', 'sending'))`,
+          // held: waiting for the ITS company check (founder decision B7); it goes out once the company is confirmed
+          pending: sql<string>`count(*) filter (where ${communications.status} in ('queued', 'sending', 'held'))`,
           candidatesAffected: sql<string>`count(distinct ${communications.applicationId}) filter (where ${communications.status} in ('failed', 'bounced', 'complained', 'unknown'))`,
         })
         .from(communications)
@@ -134,14 +157,37 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
     .select({ applicationId: hiringOutcomes.applicationId, roleId: hiringOutcomes.roleId, outcome: hiringOutcomes.outcome, milestone: hiringOutcomes.milestone, recordedAt: hiringOutcomes.recordedAt, correctionOf: hiringOutcomes.correctionOf, correctedAt: hiringOutcomes.correctedAt })
     .from(hiringOutcomes)
     .where(and(eq(hiringOutcomes.companyId, companyId), inArray(hiringOutcomes.roleId, roleIds)));
-  return { roles: roleRows, timeZone: company?.timezone ?? null, apps, stageEvents, overrides, assessments: asmts, interviews: ivs, approvals, escalations, messages, outcomes };
+  const marks = ids.length
+    ? await tx.select({ applicationId: applicationMarks.applicationId, mark: applicationMarks.mark, remindAt: applicationMarks.remindAt, createdAt: applicationMarks.createdAt, clearedAt: applicationMarks.clearedAt }).from(applicationMarks).where(and(eq(applicationMarks.companyId, companyId), inArray(applicationMarks.applicationId, ids))).orderBy(asc(applicationMarks.createdAt))
+    : [];
+  // Who is under Cancelled and whether anything is in motion for them, the same loader as the Talent list (J18).
+  const followUps = [...(await activeFollowUpsFor(tx, ids)).values()].map((f) => ({ applicationId: f.applicationId, reason: f.reason, autoState: f.autoState, interviewOpen: f.interviewOpen }));
+  return { roles: roleRows, timeZone: company?.timezone ?? null, apps, stageEvents, overrides, assessments: asmts, interviews: ivs, approvals, escalations, messages, outcomes, marks, followUps };
+}
+
+/** The active mark of each application, from the rows the report loaded. */
+function activeMarkOf(data: ReportData): Map<string, MarkRow> {
+  const out = new Map<string, MarkRow>();
+  for (const m of data.marks ?? []) if (!m.clearedAt) out.set(m.applicationId, m);
+  return out;
+}
+
+/** The open follow-up of each application, from the rows the report loaded. */
+function activeFollowUpOf(data: ReportData): Map<string, FollowUpStrip> {
+  return new Map((data.followUps ?? []).map((f) => [f.applicationId, f]));
 }
 
 /** The report for one role, or null when the role is not visible in this transaction. */
 export async function roleReport(tx: Tx, input: { companyId: string; roleId: string; now: Date }): Promise<RoleReport | null> {
   const data = await loadReportData(tx, { companyId: input.companyId, roleIds: [input.roleId] });
   if (!data.roles.length) return null;
-  return composeRoleReport(data, input.now);
+  const report = composeRoleReport(data, input.now);
+  // How the pool meets each must-have (plan F7), from the same findings as the board, with its gentle "stricter than needed?" note.
+  const pool = await loadPool(tx, { roleId: input.roleId });
+  const summary = boardView(pool, input.now).summary;
+  // Everyone on the board with a reading; each must-have's own total counts only those read against a version that had it.
+  const people = pool.rows.filter((r) => !r.stillApplying && r.placement.column && r.match).length;
+  return { ...report, mustHaves: { people, showEveryMustHave: summary.showEveryMustHave, byMustHave: summary.mustHaves, stricter: summary.stricter } };
 }
 
 export type CustomerRoleSummary = { id: string; title: string; status: string; openedAt: string | null; closedAt: string | null; applicants: number; waitingOnYou: number; hired: number };
@@ -150,9 +196,11 @@ export type CustomerRoleSummary = { id: string; title: string; status: string; o
 export async function customerReport(tx: Tx, input: { companyId: string; now: Date }): Promise<{ report: RoleReport; roles: CustomerRoleSummary[] }> {
   const data = await loadReportData(tx, { companyId: input.companyId, roleIds: null });
   const report = composeRoleReport(data, input.now);
+  const marks = activeMarkOf(data);
+  const followUps = activeFollowUpOf(data);
   const rolesOut = data.roles.map((r) => {
     const own = data.apps.filter((a) => a.roleId === r.id);
-    return { ...r, applicants: own.length, waitingOnYou: own.filter((a) => ownerGroup(a.stage) === "waiting_on_you").length, hired: own.filter((a) => a.stage === "hired").length };
+    return { ...r, applicants: own.length, waitingOnYou: own.filter((a) => groupFor(a, marks.get(a.id), input.now, followUps.get(a.id)) === "waiting_on_you").length, hired: own.filter((a) => a.stage === "hired").length };
   });
   return { report, roles: rolesOut };
 }
@@ -162,7 +210,7 @@ export async function customerReport(tx: Tx, input: { companyId: string; now: Da
 /* ------------------------------------------------------------------------------------------------------------ */
 
 /** Which human decision followed the assistant's suggestion. Other human actions (an eligibility override, a flag, an outcome) are not decisions about the suggestion and are ignored here. */
-type Decision = "invited" | "interviewed" | "declined" | "held";
+type Decision = "invited" | "interviewed" | "shortlisted" | "declined" | "held";
 const DECISION_OF_ACTION: Record<string, Decision> = {
   invite_screen: "invited",
   advance_to_interview: "interviewed",
@@ -170,6 +218,8 @@ const DECISION_OF_ACTION: Record<string, Decision> = {
   reject: "declined",
   hold: "held",
 };
+/** A private mark a person set (founder decision B3): sorting onto the longlist or shortlist, or a hold. Not a fit for now is not a decision about the suggestion. */
+const DECISION_OF_MARK: Partial<Record<string, Decision>> = { longlist: "shortlisted", shortlist: "shortlisted", on_hold: "held" };
 /** The decision after an interview is one human.override event with action "interview.decision"; the choice itself is in payload.decision. */
 const DECISION_OF_INTERVIEW: Record<string, Decision> = {
   not_moving_forward: "declined",
@@ -182,14 +232,16 @@ const DECISION_OF_INTERVIEW: Record<string, Decision> = {
 function decisionOf(payload: Record<string, unknown>): Decision | null {
   const action = typeof payload.action === "string" ? payload.action : "";
   if (action === "interview.decision") return DECISION_OF_INTERVIEW[String(payload.decision)] ?? null;
+  if (action === "set_mark") return DECISION_OF_MARK[String(payload.mark)] ?? null;
   return DECISION_OF_ACTION[action] ?? null;
 }
 
+// The assistant's "hold" reading means thin evidence, not the On hold mark a person sets: it is named so the two never mix (plan A4).
 const RECOMMENDATION_LABEL: Record<string, string> = {
   screen: "Screen suggested",
   strong_interview: "Interview strongly suggested",
   interview: "Interview suggested",
-  hold: "Hold suggested",
+  hold: "Thin evidence: your call",
   review_manually: "Needs a person's look",
   decline_recommended: "Decline suggested",
   none: "No suggestion",
@@ -216,7 +268,7 @@ export const APPROVAL_LABEL: Record<string, string> = {
   "application.invite_screen": "Invite to a screen?",
   "application.recommend_interview": "Interview this candidate?",
   "application.hold_ineligible": "Decide on an eligibility hold",
-  "disposition.send": "Send the decline message?",
+  "disposition.send": "Send the decision message?",
   "intervention.offer_recruiter": "Want a recruiter to take a look?",
 };
 
@@ -228,6 +280,13 @@ const ROLE_STATUS_LABEL: Record<string, string> = {
   filled: "filled",
   closed: "closed",
 };
+
+/** What a candidate on the pending list waits on you for: a hold that ended, why they are under Cancelled, or their step. */
+function pendingLabel(a: AppRow, mark: MarkRow | undefined, followUp: FollowUpStrip | undefined, now: Date): string {
+  if (holdEnded(mark, now)) return "Hold ended";
+  if (inCancelled(a.stage, followUp)) return `Cancelled: ${CANCELLED_REASON_LABEL[followUp.reason].toLowerCase()}`;
+  return STAGE_LABEL[a.stage];
+}
 
 export function composeRoleReport(data: ReportData, now: Date): RoleReport {
   const nowMs = now.getTime();
@@ -255,15 +314,35 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
   }
   const applicants = { total: data.apps.length, last30Days: byDay.reduce((n, d) => n + d.count, 0), timeZone: local.timeZone, bySource, byDay };
 
-  // 2. Where everyone is: counts by stage, in the stage order, and by owner group.
+  // 2. Where everyone is: counts by stage, in the stage order, by owner group (a running hold waits on nobody, nor does
+  // someone under Cancelled with new times promised, being prepared or out), on the stage strip with the private marks
+  // and the Cancelled column, and whether the people a decision was made about have been told.
+  const marks = activeMarkOf(data);
+  const followUps = activeFollowUpOf(data);
   const stageCount = new Map<ApplicationStage, number>();
-  const byGroup: Record<OwnerGroup, number> = { waiting_on_you: 0, in_process: 0, not_moving_forward: 0, hired: 0 };
+  const byGroup: Record<OwnerGroup, number> = { waiting_on_you: 0, waiting_on_candidate: 0, in_process: 0, not_moving_forward: 0, hired: 0 };
+  const byOwnerStage = Object.fromEntries(OwnerStageEnum.options.map((s) => [s, 0])) as Record<OwnerStage, number>;
+  const markCounts: MarkCounts = { longlist: 0, shortlist: 0, onHold: 0, holdsEnded: 0, notAFitForNow: 0, holdsEverSet: (data.marks ?? []).filter((m) => m.mark === "on_hold").length };
+  const told: ToldCounts = { decisions: 0, notTold: 0, queued: 0, sent: 0, toldInPerson: 0, beforeTracking: 0 };
+  const markKey: Record<MarkKind, keyof MarkCounts> = { longlist: "longlist", shortlist: "shortlist", on_hold: "onHold", not_a_fit_for_now: "notAFitForNow" };
+  const toldKey: Record<ToldState, keyof ToldCounts> = { not_told: "notTold", queued: "queued", sent: "sent", told_in_person: "toldInPerson", before_tracking: "beforeTracking" };
   for (const a of data.apps) {
+    const mark = marks.get(a.id);
+    const followUp = followUps.get(a.id);
     stageCount.set(a.stage, (stageCount.get(a.stage) ?? 0) + 1);
-    byGroup[ownerGroup(a.stage)] += 1;
+    byGroup[groupFor(a, mark, now, followUp)] += 1;
+    byOwnerStage[ownerStage(a, mark, followUp)] += 1;
+    if (mark) markCounts[markKey[mark.mark]] += 1;
+    if (holdEnded(mark, now)) markCounts.holdsEnded += 1;
+    // Someone whose details were deleted cannot be told: they are not a decision waiting to be told (as on the Talent list).
+    if (DECISION_STAGES.includes(a.stage) && !a.dataDeleted) {
+      told.decisions += 1;
+      told[toldKey[a.toldState ?? "not_told"]] += 1;
+    }
   }
   const byStage: StageCount[] = ApplicationStageEnum.options.filter((s) => stageCount.has(s)).map((s) => ({ stage: s, label: STAGE_LABEL[s], group: ownerGroup(s), count: stageCount.get(s) ?? 0 }));
-  const stages = { total: data.apps.length, byStage, byGroup };
+  const stages = { total: data.apps.length, byStage, byGroup, byOwnerStage, marks: markCounts, told };
+  const waitsOnYou = (a: AppRow) => groupFor(a, marks.get(a.id), now, followUps.get(a.id)) === "waiting_on_you";
 
   // 3. Time in stage: every completed stay from the stage-change history, and how long the people in each stage have been there now.
   const eventsByApp = new Map<string, EventRow[]>();
@@ -289,7 +368,7 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
       const here = dwell.get(s) ?? [];
       return { stage: s, label: STAGE_LABEL[s], group: ownerGroup(s), completed: done.length, medianDays: round1(median(done)), averageDays: round1(average(done)), nowHere: here.length, longestDays: here.length ? round1(Math.max(...here)) : null };
     });
-  const waiting = data.apps.filter((a) => ownerGroup(a.stage) === "waiting_on_you").map((a) => days(Date.parse(a.stageChangedAt)));
+  const waiting = data.apps.filter(waitsOnYou).map((a) => days(Date.parse(a.stageChangedAt)));
   const timeInStage = { byStage: timeByStage, waitingOnYou: { count: waiting.length, averageDays: round1(average(waiting)), medianDays: round1(median(waiting)), longestDays: waiting.length ? round1(Math.max(...waiting)) : null } };
 
   // 4. Interviews by status and by round; a request is an interview not yet on the calendar.
@@ -321,11 +400,12 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
   }
   const interviewsOut = { ...iv, byRound: [...rounds.values()] };
 
-  // 5. Decisions waiting for a person: candidates in "waiting on you" or held on an eligibility answer, plus pending approvals not already counted through their candidate.
-  const waitingApps = data.apps.filter((a) => ownerGroup(a.stage) === "waiting_on_you" || a.stage === "ineligible");
+  // 5. Decisions waiting for a person: candidates in "waiting on you" (held on an eligibility answer among them; a running
+  // hold is not), plus pending approvals not already counted through their candidate.
+  const waitingApps = data.apps.filter(waitsOnYou);
   const waitingIds = new Set(waitingApps.map((a) => a.id));
   const items: PendingItem[] = [
-    ...waitingApps.map((a) => ({ kind: "candidate" as const, label: STAGE_LABEL[a.stage], days: wholeDays(a.stageChangedAt), applicationId: a.id, approvalRequestId: null })),
+    ...waitingApps.map((a) => ({ kind: "candidate" as const, label: pendingLabel(a, marks.get(a.id), followUps.get(a.id), now), days: wholeDays(a.stageChangedAt), applicationId: a.id, approvalRequestId: null })),
     ...data.approvals.filter((p) => !p.applicationId || !waitingIds.has(p.applicationId)).map((p) => ({ kind: "approval" as const, label: APPROVAL_LABEL[p.actionType] ?? p.actionType.replace(/[._]/g, " "), days: wholeDays(p.createdAt), applicationId: p.applicationId, approvalRequestId: p.id })),
   ].sort((x, y) => y.days - x.days);
   const pendingDecisions = { count: items.length, approvals: data.approvals.length, candidates: waitingApps.length, oldestDays: items.length ? items[0].days : null, list: items.slice(0, 5) };
@@ -336,7 +416,7 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
   const recRows = new Map<string, RecommendationRow>();
   for (const a of data.assessments) {
     const rec = a.recommendation ?? "none";
-    const row = recRows.get(rec) ?? { recommendation: rec, label: RECOMMENDATION_LABEL[rec] ?? rec.replace(/_/g, " "), total: 0, invited: 0, interviewed: 0, declined: 0, held: 0, noActionYet: 0 };
+    const row = recRows.get(rec) ?? { recommendation: rec, label: RECOMMENDATION_LABEL[rec] ?? rec.replace(/_/g, " "), total: 0, invited: 0, interviewed: 0, shortlisted: 0, declined: 0, held: 0, noActionYet: 0 };
     row.total += 1;
     const assessedAt = Date.parse(a.createdAt);
     let decided: Decision | null = null;
@@ -358,7 +438,8 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
     const action = typeof e.payload.action === "string" ? e.payload.action : "other";
     byAction[action] = (byAction[action] ?? 0) + 1;
   }
-  const overrides = { eligibilityOverrides: byAction.override_eligibility ?? 0, reviewAnyway: byAction.review_anyway ?? 0, holds: byAction.hold ?? 0, flaggedAssessments: byAction.flag_assessment ?? 0, byAction };
+  // "Put on hold" reads the marks (plan A4): every hold a person set, whether it is still running or not.
+  const overrides = { eligibilityOverrides: byAction.override_eligibility ?? 0, reviewAnyway: byAction.review_anyway ?? 0, holds: markCounts.holdsEverSet, flaggedAssessments: byAction.flag_assessment ?? 0, byAction };
 
   // 8. Recruiter help on this role: open, resolved, past the promised response time, and how quickly a recruiter first responded.
   const responseHours = data.escalations.filter((e) => e.firstResponseAt).map((e) => Math.max(0, Date.parse(e.firstResponseAt!) - Date.parse(e.createdAt)) / 3_600_000);
@@ -389,7 +470,8 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
     declinedByEmployer: count("employer_declined"),
     declinedOffer: count("offer_declined_externally"),
     noHire: count("no_hire"),
-    talentPool: data.apps.filter((a) => a.stage === "talent_pool").length,
+    // Someone who asked not to be kept for future roles left the role but is not in the pool (Wave 0 item 0.11).
+    talentPool: data.apps.filter((a) => a.stage === "talent_pool" && !a.talentPoolOptOut).length,
     corrections: data.outcomes.filter((o) => o.correctionOf).length,
     role: roleOutcome ? { outcome: roleOutcome.outcome, recordedAt: roleOutcome.recordedAt } : null,
     rolesByOutcome,
@@ -418,7 +500,12 @@ function round1(value: number | null): number | null {
 /* The two CSV files: the applicant list (names; audited on export) and the figures as rows.                     */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-export const APPLICANT_COLUMNS = ["Applied on", "Name", "Source", "Source detail", "Stage", "Days in stage", "Recommendation", "Decision", "Outcome", "Interviews", "Interviews completed"] as const;
+/**
+ * "Pipeline stage" is the stage strip with the private marks and the Cancelled column; "Hold ends" is a running hold's
+ * date; "Cancelled" says why someone is under Cancelled ("Asked for new times", "No longer interested", "No-show");
+ * "Candidate told" says whether a decision was told.
+ */
+export const APPLICANT_COLUMNS = ["Applied on", "Name", "Source", "Source detail", "Stage", "Pipeline stage", "Mark", "Hold ends", "Cancelled", "Candidate told", "Days in stage", "Recommendation", "Decision", "Outcome", "Interviews", "Interviews completed"] as const;
 export type ApplicantRow = Record<(typeof APPLICANT_COLUMNS)[number], string | number>;
 
 /** The latest thing a person did with the application, in plain words. */
@@ -434,7 +521,13 @@ const ACTION_LABEL: Record<string, string> = {
   flag_assessment: "Assessment flagged",
   outcome: "Outcome recorded",
   outcome_corrected: "Outcome corrected",
+  clear_mark: "Mark taken off",
+  "interview.new_times": "New interview times sent",
+  "interview.new_times_stop": "Automatic new times stopped",
 };
+/** A "set_mark" event is labelled by the mark it set. */
+const MARK_ACTION_LABEL: Record<MarkKind, string> = { longlist: "Put on the longlist", shortlist: "Put on the shortlist", on_hold: "Put on hold", not_a_fit_for_now: "Set aside: not a fit for now" };
+const TOLD_LABEL: Record<ToldState, string> = { not_told: "Not yet", queued: "Message on its way", sent: "By message", told_in_person: "In person", before_tracking: "Shown on their status page (before decisions were private)" };
 /** An "interview.decision" event is labelled by the choice it carries, not by the generic action name. */
 const INTERVIEW_DECISION_LABEL: Record<string, string> = {
   not_moving_forward: "Not moving forward after interview",
@@ -448,6 +541,7 @@ function actionLabel(payload: Record<string, unknown>): string | null {
   const action = typeof payload.action === "string" ? payload.action : null;
   if (action === null) return null;
   if (action === "interview.decision") return INTERVIEW_DECISION_LABEL[String(payload.decision)] ?? ACTION_LABEL[action];
+  if (action === "set_mark") return MARK_ACTION_LABEL[String(payload.mark) as MarkKind] ?? "";
   return ACTION_LABEL[action] ?? "";
 }
 const OUTCOME_LABEL: Record<string, string> = {
@@ -478,16 +572,26 @@ export async function applicantRows(tx: Tx, input: { companyId: string; roleId: 
   }
   const outcomeOf = new Map<string, string>();
   for (const o of data.outcomes) if (o.applicationId && !o.correctedAt && OUTCOME_LABEL[o.outcome]) outcomeOf.set(o.applicationId, o.outcome);
+  const marks = activeMarkOf(data);
+  const followUps = activeFollowUpOf(data);
   const local = localDays(input.now, data.timeZone);
   const rows: ApplicantRow[] = apps.map((a) => {
     const ivs = data.interviews.filter((i) => i.applicationId === a.id);
     const rec = recOf.get(a.id);
+    const mark = marks.get(a.id);
+    const followUp = followUps.get(a.id);
+    const strip = ownerStage(a, mark, followUp);
     return {
       "Applied on": local.key(new Date(a.createdAt)),
       Name: nameOf.get(a.candidateId) ?? "",
       Source: isSource(a.source) ? SOURCE_LABEL[a.source] : a.source,
       "Source detail": a.sourceDetail ?? "",
       Stage: STAGE_LABEL[a.stage],
+      "Pipeline stage": OWNER_STAGE_LABEL[strip],
+      Mark: mark ? MARK_LABEL[mark.mark] : "",
+      "Hold ends": mark?.remindAt ? local.key(new Date(mark.remindAt)) : "",
+      Cancelled: strip === "cancelled" && followUp ? CANCELLED_REASON_LABEL[followUp.reason] : "",
+      "Candidate told": DECISION_STAGES.includes(a.stage) ? TOLD_LABEL[a.toldState ?? "not_told"] : "",
       "Days in stage": Math.floor(Math.max(0, input.now.getTime() - Date.parse(a.stageChangedAt)) / DAY_MS),
       Recommendation: rec ? RECOMMENDATION_LABEL[rec] ?? rec.replace(/_/g, " ") : "",
       Decision: lastAction.get(a.id) ?? "",
@@ -515,9 +619,21 @@ export function summaryRows(r: RoleReport): Array<[string, string, string | numb
   for (const s of r.applicants.bySource) add("Applicants by source", s.sourceDetail ? `${s.label}: ${s.sourceDetail}` : s.label, s.count);
   for (const d of r.applicants.byDay) if (d.count) add("Applicants by day", d.day, d.count);
   add("Stages", "Waiting on you", r.stages.byGroup.waiting_on_you);
+  add("Stages", "Waiting on the candidate", r.stages.byGroup.waiting_on_candidate);
   add("Stages", "In process", r.stages.byGroup.in_process);
   add("Stages", "Not moving forward", r.stages.byGroup.not_moving_forward);
   add("Stages", "Hired", r.stages.byGroup.hired);
+  for (const s of OwnerStageEnum.options) add("Pipeline stages", OWNER_STAGE_LABEL[s], r.stages.byOwnerStage[s]);
+  add("Marks", "On the longlist", r.stages.marks.longlist);
+  add("Marks", "On the shortlist", r.stages.marks.shortlist);
+  add("Marks", "On hold now", r.stages.marks.onHold);
+  add("Marks", "Holds ended, waiting on you", r.stages.marks.holdsEnded);
+  add("Marks", "Not a fit for now", r.stages.marks.notAFitForNow);
+  add("Decisions told", "Not told yet", r.stages.told.notTold);
+  add("Decisions told", "Message on its way", r.stages.told.queued);
+  add("Decisions told", "Told by message", r.stages.told.sent);
+  add("Decisions told", "Told in person", r.stages.told.toldInPerson);
+  if (r.stages.told.beforeTracking) add("Decisions told", "Shown on their status page (before decisions were private)", r.stages.told.beforeTracking);
   for (const s of r.stages.byStage) add("Stage counts", s.label, s.count);
   for (const s of r.timeInStage.byStage) {
     add("Time in stage (typical days)", s.label, s.medianDays);
@@ -545,6 +661,7 @@ export function summaryRows(r: RoleReport): Array<[string, string, string | numb
     add("Suggestions vs decisions", `${row.label}: total`, row.total);
     add("Suggestions vs decisions", `${row.label}: invited to a screen`, row.invited);
     add("Suggestions vs decisions", `${row.label}: moved to interview`, row.interviewed);
+    add("Suggestions vs decisions", `${row.label}: put on the longlist or shortlist`, row.shortlisted);
     add("Suggestions vs decisions", `${row.label}: declined`, row.declined);
     add("Suggestions vs decisions", `${row.label}: put on hold`, row.held);
     add("Suggestions vs decisions", `${row.label}: no decision yet`, row.noActionYet);

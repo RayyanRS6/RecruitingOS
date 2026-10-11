@@ -21,8 +21,6 @@ export type BusinessCalendar = { timeZone: string; hours: WeeklyHours; holidays:
 export type CalendarSource = BusinessCalendar | { timeZone: string; forDay(dayKey: string): BusinessCalendar };
 
 export const BUSINESS_TIMEZONE = "America/Los_Angeles";
-export const BUSINESS_START_HOUR = 9;
-export const BUSINESS_END_HOUR = 17;
 
 /** Observed US federal holidays. The default calendar carries these; administrators maintain the live list. */
 export const DEFAULT_US_FEDERAL_HOLIDAYS: readonly CalendarHoliday[] = [
@@ -35,7 +33,6 @@ export const DEFAULT_US_FEDERAL_HOLIDAYS: readonly CalendarHoliday[] = [
   { date: "2027-09-06", name: "Labor Day" }, { date: "2027-10-11", name: "Columbus Day" }, { date: "2027-11-11", name: "Veterans Day" }, { date: "2027-11-25", name: "Thanksgiving Day" },
   { date: "2027-12-24", name: "Christmas Day (observed)" }, { date: "2027-12-31", name: "New Year's Day 2028 (observed)" },
 ];
-export const US_FEDERAL_HOLIDAYS: ReadonlySet<string> = new Set(DEFAULT_US_FEDERAL_HOLIDAYS.map((h) => h.date));
 
 const WEEKDAY_WINDOW: HoursWindow[] = [{ start: "09:00", end: "17:00" }];
 export const DEFAULT_BUSINESS_CALENDAR: BusinessCalendar = {
@@ -185,7 +182,10 @@ export function businessMinutesBetween(a: Date, b: Date, src: CalendarSource = D
   return Math.round(total);
 }
 
-/** Business hours per escalation kind (decision D26). One business day is eight business hours. */
+/**
+ * Business hours per escalation kind (decision D26). One business day is eight business hours. Urgency never changes
+ * them (founder decision Q32, option A): an urgent request goes to the front of the ITS queue with the same reply-by time.
+ */
 export function slaBusinessHours(kind: string): number {
   switch (kind) {
     case "candidate_issue": return 4;
@@ -194,6 +194,11 @@ export function slaBusinessHours(kind: string): number {
     case "ask": case "review": case "search_support": case "stuck_role": case "takeover": case "data_request": return 8;
     default: return 8;
   }
+}
+
+/** When a recruiter request of this kind, raised (or reopened) at `from`, is due an answer. The form shows it before sending. */
+export function escalationReplyBy(kind: string, from: Date, src: CalendarSource = DEFAULT_BUSINESS_CALENDAR): Date {
+  return addBusinessHours(from, slaBusinessHours(kind), src);
 }
 
 const ZONE_NAMES: Record<string, string> = {
@@ -222,6 +227,12 @@ export function describeHours(src: CalendarSource = DEFAULT_BUSINESS_CALENDAR, a
   const open = WEEKDAY_KEYS.filter((d) => (cal.hours[d] ?? []).length > 0);
   if (!open.length) return `by appointment (${zone})`;
   return `${open.map((d) => `${DAY_NAMES[d]} ${windowsText(cal.hours[d])}`).join(", ")} ${zone}`;
+}
+
+/** A deadline in words for the people waiting on it, in the calendar's own zone: "Tuesday, October 13 at 2:00 PM Pacific". */
+export function deadlineWords(due: Date, src: CalendarSource = DEFAULT_BUSINESS_CALENDAR): string {
+  const zone = ZONE_NAMES[src.timeZone] ?? src.timeZone;
+  return `${due.toLocaleString("en-US", { timeZone: src.timeZone, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} ${zone}`;
 }
 
 /** Candidate-facing expectation that is true at the moment it is written (founder decision F12). */

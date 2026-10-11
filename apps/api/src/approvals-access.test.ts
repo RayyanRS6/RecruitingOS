@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { entitlements } from "@ros/core";
-import { applications, approvalRequests, candidates, communications, interviewParticipants, interviews, memberships, policies, randomToken, takeovers, users, withTenant } from "@ros/db";
+import { applications, approvalRequests, candidates, communications, companies, interviewParticipants, interviews, memberships, policies, randomToken, takeovers, users, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInStaff } from "./test-helpers";
+import { signInAs, signInStaff } from "./test-helpers";
 
 /**
  * Approvals and who may see or decide them (final review, api area): a decline message held for approval goes out when
@@ -54,7 +54,11 @@ describe("approvals: sending the held decline, who sees and decides what", () =>
       await tx.insert(interviewParticipants).values({ companyId, interviewId: iv.id, userId: ownerId, role: "interviewer", status: "invited" });
       return iv.id;
     });
-  const decline = (applicationId: string) => json(owner, "POST", `/api/v1/applications/${applicationId}/actions`, { action: "reject", reason: "not_a_match_experience", note: "Not enough chairside time." });
+  /** A decline is private (founder decision B6); its message is a person's later Send, which these settings hold for approval. */
+  const decline = async (applicationId: string) => {
+    expect((await json(owner, "POST", `/api/v1/applications/${applicationId}/actions`, { action: "reject", reason: "not_a_match_experience", note: "Not enough chairside time." })).status).toBe(200);
+    return json(owner, "POST", `/api/v1/applications/${applicationId}/actions`, { action: "send_decision" });
+  };
   const pendingFor = async (applicationId: string, actionType: string) => (await container.db.select().from(approvalRequests).where(and(eq(approvalRequests.applicationId, applicationId), eq(approvalRequests.actionType, actionType), eq(approvalRequests.status, "pending"))))[0] ?? null;
 
   beforeAll(async () => {
@@ -82,14 +86,14 @@ describe("approvals: sending the held decline, who sees and decides what", () =>
     const pat = await seedApplication(roleA, "Pat", "Lee");
     const r = await decline(pat);
     expect(r.status).toBe(200);
-    expect(await r.json()).toMatchObject({ stage: "rejected", dispositionSent: false });
+    expect(await r.json()).toMatchObject({ stage: "rejected", dispositionSent: false, candidateNotice: "waiting_approval" });
     const req = await pendingFor(pat, "disposition.send");
     expect(req).toBeTruthy();
     expect(req!.requiredRoles).toEqual([]);
     expect(emails().filter((m) => m.to === "pat.lee@example.com")).toHaveLength(0);
     // the owner's brief asks in plain words, naming the person; HR, who cannot decide it, gets no card
     const card = (await brief(owner)).find((c) => c.approvalRequestId === req!.id);
-    expect(card?.title).toBe("Send the decline message to Pat Lee?");
+    expect(card?.title).toBe("Send the decision message to Pat Lee?");
     expect(card?.title).not.toMatch(/disposition|Decision needed/);
     expect(card?.actions.map((a) => a.label)).toEqual(["Yes, send it", "Do not send", "Review first"]);
     expect((await brief(hr)).some((c) => c.approvalRequestId === req!.id)).toBe(false);
@@ -112,9 +116,13 @@ describe("approvals: sending the held decline, who sees and decides what", () =>
   });
 
   it("the brief's posting card opens the Posting tab, and a decision reserved for the takeover recruiter is not offered to the owner", async () => {
+    // the card goes to a company that posts on the boards itself; with ITS posting (the default) the boards are ITS's tasks (plan D3)
+    expect((await brief(owner)).some((c) => c.kind === "posting_action" && c.title.includes("post it on"))).toBe(false);
+    const [co] = await container.db.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId));
+    await container.db.update(companies).set({ settings: { ...co.settings, boardPosting: "self" } }).where(eq(companies.id, companyId));
     const posting = (await brief(owner)).find((c) => c.kind === "posting_action" && c.title.includes("post it on"));
     expect(posting?.actions[0]).toMatchObject({ label: "See instructions", method: "GET", path: `/roles/${roleA}?tab=posting` });
-    // during a recruiter takeover every automatic decline waits for the recruiter; the owner's Approve would be refused, so no card
+    // during a recruiter takeover every decision message waits for the recruiter; the owner's Approve would be refused, so no card
     const [recruiterUser] = await container.db.insert(users).values({ email: "takeover@its.test", name: "Takeover Recruiter" }).returning();
     const [takeover] = await container.db.insert(takeovers).values({ companyId, roleId: roleA, recruiterUserId: recruiterUser.id, status: "active" }).returning();
     const lou = await seedApplication(roleA, "Lou", "Park");
@@ -172,5 +180,24 @@ describe("approvals: sending the held decline, who sees and decides what", () =>
     expect(approvals.length).toBeGreaterThan(0);
     expect(approvals.every((a) => a.roleId === roleA || a.roleId === null)).toBe(true);
     expect((await (await json(owner, "GET", "/api/v1/approvals")).json() as Array<{ roleId: string | null }>).some((a) => a.roleId === roleB)).toBe(true);
+  });
+
+  it("the 'Approve the role' card goes only to people the approve route accepts: not the hiring manager who drafted it, not HR", async () => {
+    const manager = await signInAs(container, app, { companyId, role: "hiring_manager" });
+    // "Ask for approval" waits for the six essentials (founder decision Q8), so the draft names who decides
+    const s = (await (await json(manager, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental assistant in Irvine, $24 to $28 an hour, full time. It's growth. Ceiling $30. I decide. Must-haves: radiography certificate. Just draft it." })).json()) as { session: { id: string } };
+    const { roleId } = (await (await json(manager, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string };
+    await container.drain();
+    const [pending] = await container.db.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, roleId), eq(approvalRequests.actionType, "role_packet.approve"), eq(approvalRequests.status, "pending")));
+    expect(pending).toBeTruthy();
+    const cardFor = async (cookie: string) => (await brief(cookie)).find((c) => c.approvalRequestId === pending.id);
+    // the person who drafted it cannot approve it (they are not the sole owner), so they get no card to press
+    expect(await cardFor(manager)).toBeUndefined();
+    expect((await json(manager, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1 })).status).toBe(409);
+    // HR holds no role.approve
+    expect(await cardFor(hr)).toBeUndefined();
+    // the owner gets it, and the route agrees
+    expect((await cardFor(owner))?.title).toMatch(/Approve the role/);
+    expect((await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" })).status).toBe(200);
   });
 });

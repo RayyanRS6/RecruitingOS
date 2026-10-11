@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
-import { aiRuns, applications, approvalRequests, assessments, candidates, communications, events, jobs, postings, recruiterEscalations, roles, screens, workflowRuns } from "@ros/db";
+import { aiRuns, applications, approvalRequests, assessments, candidates, communications, documents, entitlements, events, jobs, postings, recruiterEscalations, roles, screens, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { useLaterApplyFlow } from "./test-helpers";
 
 /**
  * Slice 1 through the HTTP layer: sign up → company → intake conversation → packet → approval → publish →
@@ -79,9 +80,11 @@ describe("Slice 1 API", () => {
   it("creates the company with trial entitlements", async () => {
     const r = await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "50-99", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] });
     expect(r.status).toBe(201);
-    const co = (await r.json()) as { slug: string; planKey: string };
+    const co = (await r.json()) as { id: string; slug: string; planKey: string };
     companySlug = co.slug;
     expect(co.planKey).toBe("trial");
+    // This suite follows the later path: the form now, the screening invitation by email after the résumé is read (plan Wave E).
+    await useLaterApplyFlow(container, co.id);
     const cur = await json("GET", "/api/v1/companies/current");
     expect(cur.status).toBe(200);
   });
@@ -124,6 +127,8 @@ describe("Slice 1 API", () => {
     // the compiled session no longer resumes
     const none = (await (await json("GET", "/api/v1/intake/sessions/current")).json()) as { session: null | { id: string } };
     expect(none.session).toBeNull();
+    // the trial's one place is taken by the role above: room for a second draft here, put back at the end (plan C13)
+    await container.db.update(entitlements).set({ limit: 2 }).where(eq(entitlements.key, "active_roles"));
     const r1 = await json("POST", "/api/v1/intake/conversation/messages", { message: "I need a front office coordinator in Irvine, $22 to $26 an hour, full time." });
     const { intakeSessionId } = (await r1.json()) as { intakeSessionId: string };
     const cur = (await (await json("GET", "/api/v1/intake/sessions/current")).json()) as { session: { id: string; messages: Array<{ role: string }>; missingFacts: string[] } };
@@ -139,9 +144,10 @@ describe("Slice 1 API", () => {
     expect((await json("POST", `/api/v1/intake/sessions/${intakeSessionId}/messages`, { message: "It's a replacement." })).status).toBe(409);
     const evs = await container.db.select().from(events).where(eq(events.type, "intake.abandoned"));
     expect(evs).toHaveLength(1);
+    await container.db.update(entitlements).set({ limit: 1 }).where(eq(entitlements.key, "active_roles"));
   });
 
-  it("approval opens the role and publishes to every channel", async () => {
+  it("approval opens the role and publishes to its channels: the careers page, Google, email and the boards the role plan names", async () => {
     const r = await json("POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "Looks right." });
     expect(r.status).toBe(200);
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { status: string; currentPacketVersion: number; postings: Array<{ channel: string; status: string; intakeToken: string | null; instructions: string | null; steps: string[]; externalUrl: string | null; verifiedBy: { kind: string } | null }> };
@@ -150,20 +156,23 @@ describe("Slice 1 API", () => {
     const byChannel = Object.fromEntries(role.postings.map((p) => [p.channel, p]));
     // docs/spec/20: nothing is live until its public URL was checked. The careers page passed the (fake) check during
     // the inline drain; Google is submitted through the page's structured data; email-in is failed (no inbound domain);
-    // the three boards wait at "ready to post" with their steps until a person records the public URL.
+    // the boards the role plan names (Indeed here; founder decision Q11) wait at "ready to post" with their steps until
+    // a person records the public URL, and no board the plan does not name is prepared.
     expect(byChannel.careers_page.status).toBe("live_verified");
     expect(byChannel.careers_page.verifiedBy).toMatchObject({ kind: "system" });
     expect(byChannel.careers_page.externalUrl).toBe(`${container.env.JOBS_BASE_URL}/careers/${companySlug}/jobs/${roleId}`);
     expect(byChannel.google_jobs.status).toBe("submitted_integration");
     expect(byChannel.email_in.status).toBe("failed");
-    expect(byChannel.linkedin_basic.status).toBe("ready_to_post");
+    expect(byChannel.linkedin_basic).toBeUndefined();
+    expect(byChannel.ziprecruiter).toBeUndefined();
     expect(byChannel.indeed.status).toBe("ready_to_post");
     expect(byChannel.indeed.instructions).toMatch(/apply/);
     expect(byChannel.indeed.steps.length).toBeGreaterThanOrEqual(5);
     expect(byChannel.indeed.steps.join("\n")).toMatch(new RegExp(`${container.env.JOBS_BASE_URL}/a/[a-z0-9]{12}`));
     expect(byChannel.email_in.intakeToken).toBeTruthy();
     const runs = await container.db.select().from(workflowRuns);
-    expect(runs.map((x) => `${x.workflowKey}:${x.status}`).sort()).toEqual(["publish_role:completed", "role_approval:completed", "stuck_role_detector:waiting"]);
+    // the morning email summaries (plan B3) run beside the stuck-role check
+    expect(runs.map((x) => `${x.workflowKey}:${x.status}`).sort()).toEqual(["notification_digest:waiting", "publish_role:completed", "role_approval:completed", "stuck_role_detector:waiting"]);
     const feed = await app.request("/feeds/linkedin.xml");
     expect(await feed.text()).toContain("Registered Dental Hygienist");
   });
@@ -192,8 +201,12 @@ describe("Slice 1 API", () => {
     form.set("acknowledged", "yes");
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     expect(r.status).toBe(302);
+    // the receipt, never the status page: the link travels only by email (Wave 0 item 0.1)
     const location = r.headers.get("location")!;
-    expect(location).toMatch(/^\/c\/status\//);
+    expect(location).toBe(`/careers/${companySlug}/jobs/${roleId}/applied`);
+    const receipt = await (await app.request(location, { headers: { cookie: r.headers.get("set-cookie")!.match(/ros_applied=[^;,]+/)![0] } })).text();
+    expect(receipt).toContain("Check your email.");
+    expect(receipt).toContain("m***@example.com");
 
     const apps = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
     expect(apps).toHaveLength(1);
@@ -226,7 +239,9 @@ describe("Slice 1 API", () => {
     const runs = await container.db.select().from(aiRuns).where(eq(aiRuns.task, "resume.extract"));
     expect(runs).toHaveLength(1);
     expect(await container.db.select().from(aiRuns).where(eq(aiRuns.task, "triage.assess"))).toHaveLength(1);
-    const status = await app.request(location);
+    expect(receipt).not.toContain(a.statusToken);
+    expect(ack!.text).toContain(`/c/status/${a.statusToken}`);
+    const status = await app.request(`/c/status/${a.statusToken}`);
     const statusHtml = await status.text();
     expect(statusHtml).toMatch(/Maria/);
     expect(statusHtml).toMatch(/\/c\/screen\//);
@@ -273,13 +288,16 @@ describe("Slice 1 API", () => {
     const held = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, ana.id));
     expect(held.some((e) => e.kind === "review")).toBe(true);
     expect((await container.db.select().from(applications).where(eq(applications.id, ana.id)))[0].stage).toBe("ineligible");
-    // only a person declines, and the decline message goes out only then
+    // only a person declines; the decision is private (founder decision B6) and the message goes only when a person sends it
     const decline = await json("POST", `/api/v1/applications/${ana.id}/actions`, { action: "reject", reason: "eligibility", note: "No active license." });
     expect(decline.status).toBe(200);
-    expect(((await decline.json()) as { dispositionSent: boolean }).dispositionSent).toBe(true);
+    expect(await decline.json()).toMatchObject({ dispositionSent: false, candidateNotice: "not_told" });
     const [anaRow] = await container.db.select().from(applications).where(eq(applications.id, ana.id));
     expect(anaRow.stage).toBe("rejected");
     expect(anaRow.rejectReason).toBe("eligibility");
+    outbox = (container.integrations.email as FakeEmailAdapter).sent;
+    expect(outbox.find((m) => m.to === "ana@example.com" && /Your application to/.test(m.subject))).toBeFalsy();
+    expect(await (await json("POST", `/api/v1/applications/${ana.id}/actions`, { action: "send_decision" })).json()).toMatchObject({ dispositionSent: true, candidateNotice: "queued" });
     outbox = (container.integrations.email as FakeEmailAdapter).sent;
     expect(outbox.find((m) => m.to === "ana@example.com" && /Your application to/.test(m.subject))).toBeTruthy();
     expect(outbox.find((m) => m.to === "jon@example.com" && /Your application to/.test(m.subject))).toBeFalsy();
@@ -307,19 +325,46 @@ describe("Slice 1 API", () => {
     expect(a.extraction?.positions[0]?.employer).toBe("Harbor Dental");
   });
 
-  it("dedupes a repeat application from the same candidate", async () => {
+  it("dedupes a repeat application from the same candidate: the same receipt, nothing on the record changed, the link emailed to the address on file", async () => {
+    const [maria] = await container.db.select().from(candidates).where(eq(candidates.email, "maria.reyes@example.com"));
+    const [mariaApp] = await container.db.select().from(applications).where(and(eq(applications.roleId, roleId), eq(applications.candidateId, maria.id)));
+    const sentBefore = (container.integrations.email as FakeEmailAdapter).sent.length;
+    // someone else types Maria's address, with their own phone, place, text consent and résumé
     const form = new FormData();
     form.set("firstName", "Maria");
     form.set("lastName", "Reyes");
     form.set("email", "Maria.Reyes@example.com");
-    form.set("noResume", "Applying again");
+    form.set("phone", "(714) 555-0199");
+    form.set("smsConsent", "yes");
+    form.set("locationText", "Somewhere Else, NV");
+    form.set("resume", new File(["Not Maria at all"], "other.txt", { type: "text/plain" }));
     form.set("acknowledged", "yes");
     const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: form });
     expect(r.status).toBe(302);
+    // exactly what a first application gets: the receipt, never a status link
+    expect(r.headers.get("location")).toBe(`/careers/${companySlug}/jobs/${roleId}/applied`);
+    const receipt = await (await app.request(r.headers.get("location")!, { headers: { cookie: r.headers.get("set-cookie")!.match(/ros_applied=[^;,]+/)![0] } })).text();
+    expect(receipt).toContain("Check your email.");
+    expect(receipt).toContain("M***@example.com");
+    expect(`${r.headers.get("location")} ${r.headers.get("set-cookie")} ${receipt}`).not.toContain(mariaApp.statusToken);
     const apps = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
     expect(apps.filter((x) => x.source === "careers_page")).toHaveLength(3);
     const dup = await container.db.select().from(events).where(eq(events.type, "application.duplicate_detected"));
     expect(dup).toHaveLength(1);
+    // nothing about Maria changed: consent, phone, place, résumé
+    const [after] = await container.db.select().from(candidates).where(eq(candidates.id, maria.id));
+    expect(after.consent).toEqual(maria.consent);
+    expect(after.phone).toBe(maria.phone);
+    expect(after.locationText).toBe(maria.locationText);
+    const [appAfter] = await container.db.select().from(applications).where(eq(applications.id, mariaApp.id));
+    expect(appAfter.resumeDocumentId).toBe(mariaApp.resumeDocumentId);
+    expect(appAfter.answers).toEqual(mariaApp.answers);
+    expect((await container.db.select().from(documents).where(eq(documents.applicationId, mariaApp.id))).length).toBe(1);
+    // the address on file learns about it, with its own link
+    const notice = (container.integrations.email as FakeEmailAdapter).sent.slice(sentBefore).find((m) => m.to === "maria.reyes@example.com");
+    expect(notice?.subject).toMatch(/^Your application for /);
+    expect(notice?.text).toContain(`/c/status/${mariaApp.statusToken}`);
+    expect(notice?.text).toContain("Nothing in it was changed or replaced.");
   });
 
   it("recovers from a transient email outage: the message is queued, the workflow moves on, and the outbox retries the send exactly once", async () => {
@@ -385,11 +430,16 @@ describe("Slice 1 API", () => {
     expect(detail.timeline.some((e) => e.type === "human.override")).toBe(true);
   });
 
-  it("enforces the trial's one-active-role entitlement", async () => {
-    const s = await json("POST", "/api/v1/intake/sessions", { initialMessage: "I need a front office coordinator in Irvine, $22 to $26 an hour, full time. Just draft it." });
-    const { session } = (await s.json()) as { session: { id: string } };
-    const r = await json("POST", `/api/v1/intake/sessions/${session.id}/compile`);
+  it("enforces the trial's one-active-role entitlement before any draft or assistant run (plan C13)", async () => {
+    const runsBefore = (await container.db.select().from(aiRuns)).length;
+    const r = await json("POST", "/api/v1/intake/sessions", { initialMessage: "I need a front office coordinator in Irvine, $22 to $26 an hour, full time. Just draft it." });
     expect(r.status).toBe(402);
+    const err = ((await r.json()) as { error: { code: string; message: string; details: { room: { holding: Array<{ title: string }> } } } }).error;
+    expect(err.code).toBe("limit_reached");
+    // the role using the place is named, and the message says plainly that closing a role frees its place (polish list)
+    expect(err.details.room.holding.map((h) => h.title)).toEqual(["Registered Dental Hygienist"]);
+    expect(err.message).toMatch(/A role uses a place while it is open, paused or waiting for approval, and closing a role gives its place back/);
+    expect((await container.db.select().from(aiRuns)).length).toBe(runsBefore);
   });
 
   it("blocks admin routes for non-admins and exposes runs to admins", async () => {
@@ -416,8 +466,9 @@ describe("Slice 1 API", () => {
   });
 
   it("keeps postings and approvals consistent", async () => {
+    // the careers page, Google, email and the one board the role plan names (Indeed; founder decision Q11)
     const posts = await container.db.select().from(postings).where(eq(postings.roleId, roleId));
-    expect(posts.length).toBe(6);
+    expect(posts.length).toBe(4);
     const pend = await container.db.select().from(approvalRequests).where(eq(approvalRequests.status, "pending"));
     expect(pend.filter((p) => p.roleId === roleId)).toHaveLength(0);
     const [role] = await container.db.select().from(roles).where(eq(roles.id, roleId));

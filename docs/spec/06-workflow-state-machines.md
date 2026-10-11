@@ -29,6 +29,9 @@ stateDiagram-v2
   interview_complete --> interview_scheduled: human next round → booked
   interview_complete --> finalist: human (D10): owner, admin, hiring manager, recruiter (the roles that hold interview.decide)
   finalist --> hired: human, recorded outside the product (D10)
+  finalist --> offer_sent: human "Offer made", record-only (Q29, plan H2): owner, admin, hiring manager, HR (outcome.record)
+  offer_sent --> hired: human, accepted (hire sheet, start date)
+  offer_sent --> declined: human, the candidate turned it down (offer_declined_externally)
   interview_complete --> rejected: human with reason
   finalist --> rejected: human with reason
   applied --> withdrawn: candidate or human, any active stage
@@ -36,15 +39,16 @@ stateDiagram-v2
   withdrawn --> talent_pool: human
 ```
 
-Rules that hold in code (`packages/core/src/stages.ts`): `rejected` from any active stage requires a human, including from `ineligible` (correction 6); `withdrawn` from any active stage by the candidate, a human, or the system on the candidate's behalf; `talent_pool` from rejected, declined, withdrawn, or any active stage. Release 1 adds: `interview_recommended` → `interview_scheduled` by system only after an `interviews` row exists with a human `created_by` (the approval); `interview_complete` → `finalist` and `finalist` → `hired` by human only (already true); `interview_complete` → `interview_scheduled` by system after a new booking. As built (30 Sep 2026, audit fixes): `interview_scheduled` → `interview_complete` is open to every membership role including HR, because recording that an interview ended is a fact any member who sat on it may state (the outcome route checks they did, or that they hold `interview.manage`); `interview_complete` → `finalist` lists exactly the roles that hold `interview.decide` (owner, admin, hiring manager, recruiter), so the permission and the state machine agree.
+Rules that hold in code (`packages/core/src/stages.ts`): `rejected` from any active stage requires a human, including from `ineligible` (correction 6); `withdrawn` from any active stage by the candidate, a human, or the system on the candidate's behalf; `talent_pool` from rejected, declined, withdrawn, or any active stage. Release 1 adds: `interview_recommended` → `interview_scheduled` by system only after an `interviews` row exists with a human `created_by` (the approval); `interview_complete` → `finalist` and `finalist` → `hired` by human only (already true); `interview_complete` → `interview_scheduled` by system after a new booking. As built (30 Sep 2026, audit fixes): `interview_scheduled` → `interview_complete` is open to every membership role including HR, because recording that an interview ended is a fact any member who sat on it may state (the outcome route checks they did, or that they hold `interview.manage`); `interview_complete` → `finalist` lists exactly the roles that hold `interview.decide` (owner, admin, hiring manager, recruiter), so the permission and the state machine agree. Plan H2 (founder decision Q29): `finalist` (or `reference_check`) → `offer_sent` is "Offer made", recorded by the roles that hold `outcome.record` (owner, admin, hiring manager, HR), never the system; the app writes, approves and sends no offer, and the candidate's answer is recorded as an outcome (accepted: `hired` with the start date; declined: `declined`). Someone at `offer_sent` is in the owner group "waiting on the candidate".
 
 ## 2. Role, packet, screen, interview, escalation, run
 
 - Role: `draft → pending_approval → open ⇄ paused → closed | filled` (filled is set by the human decision "hired" when the owner confirms the role is filled; otherwise stays open).
 - Packet: `proposed → approved → superseded`; a rejected approval returns the role to `draft` with the packet still `proposed`.
 - Screen: `invited → reminded → in_progress → completed | expired | abandoned | human_requested`.
-- Interview (new definition): `proposed → scheduling → scheduled → completed | cancelled | no_show`; `scheduling → offer_expired` (no slot chosen); `scheduled → scheduling` on reschedule.
-- Escalation: `open → claimed → in_progress → resolved | cancelled`.
+- Interview (new definition): `proposed → scheduling → scheduled → completed | cancelled | no_show`; `scheduling → offer_expired` (no slot chosen); `scheduled → scheduling` on reschedule. New times for someone under Cancelled (founder decisions 1A to 4A, 10 Oct 2026) reopen the same row: `cancelled | offer_expired → scheduling` with `attempt + 1`, a fresh window and the same token, by a guarded update (`reopenForNewTimes`); after a candidate no-show a new row is created for the same round instead, and the missed one gets `decision = 'new_times'`.
+- Interview follow-up (`interview_followups`, migration 0035; the Cancelled column): open (one per application at most) → resolved (`rebooked | moved_by_team | team_cancelled | left_process | superseded`); `left_process → open` only when a private decision is taken back before the candidate was told. Its automatic set (`auto_state`): `none` (not armed, with the reason) and `sent` are final; `waiting → waiting_check` (due, the ITS confirmation taken back since arming); `waiting | waiting_check → preparing` (the run reopened the interview); `preparing → sent` (the slots email is on its way); `waiting | waiting_check → not_sent` (stopped by the team, switched off with "stop", the team acted, the candidate replied, left the process, details deleted, interview changed, takeover, no interviewers, no email, company not checked); `preparing → not_sent` (no email, the team acted, left the process, interview changed); `not_sent (left_process) → waiting` only after a decision taken back before the promised day, its run still waiting. At most one set per application ever counts as prepared or sent.
+- Escalation: `open → claimed → in_progress → resolved | cancelled`; `resolved → claimed | open` when the team reopens it ("this didn't solve it", plan B5). A reopened request goes back to the recruiter who answered, with fresh access, when they still hold an ITS role and the company did not end their access to it (`claimed`); otherwise to the queue (`open`). A recruiter's first reply without resolving moves `claimed → in_progress`.
 - Workflow run: `running ⇄ waiting → completed | failed | cancelled | paused`.
 - Approval request: `pending → approved | rejected | expired | cancelled`.
 - Calendar connection: `connected ⇄ needs_attention → disconnected`.
@@ -87,17 +91,23 @@ State: `{ interviewId, applicationId, roleId, roundKey, attempt, offerToken?, re
 
 Reschedule (human or candidate): a route cancels the calendar events (idempotent), sets status `scheduling`, increments the candidate count when the candidate did it (limit 2), and signals `window.updated`; the run resumes at propose_slots (the run is `waiting` on the timer token, so the signal wakes it; if the run completed, a new run starts with the same interview id and `attempt` incremented). Cancel: route sets `cancelled`, deletes events, notifies, cancels the run. Interviewer no-show: outcome recorded; the owner is offered a reschedule.
 
+The Cancelled column (founder decisions 1A to 4A, 10 Oct 2026). The candidate's own cancel (POST `/c/schedule/:token/cancel`, only for a booked interview still ahead) also records their choice and opens a follow-up; with "Send me new times later" and the plan allowing it, it arms `interview_new_times` (state `{ followUpId, applicationId, roleId, interviewId }`, key `new_times:{followUpId}`): `wait` sleeps until the stored `auto_due_at` (N working days later, 09:00 company time or the start of contact hours if later), then `send` locks the application and the follow-up, re-checks (left the process, details deleted, no email, interview changed, another interview open, takeover, no interviewers), waits for `company.verified` up to `auto_due_at` + 10 days if ITS took its confirmation back, then reopens the interview and starts `schedule_interview` with `offerKind`, `followUpId` and `via` in its state. `offer_slots` reports the slots email to the follow-up (`newTimesOffered`): queued counts the set as sent; failed ends a set being prepared (`no_email`); held for the ITS check waits for `company.verified` before `interview.slots_offered` and the 48-hour clock. A candidate no-show (`POST /interviews/:id/outcome`, `no_show_candidate`) opens a follow-up after the stage move and is never armed; the owner's "How did it go?" becomes "{name} did not come to the interview". A team's "Send new times" (one person, or `POST /roles/:id/new-times` for several) reopens the interview, or after a no-show creates one for the same round; a waiting automatic set then ends `not_sent` (`team_acted`) and its run is cancelled.
+
 ### stuck_role_detector (existing, changed)
 
 Adds detectors: `slots_unanswered` (offer open ≥ 3 days), `decision_pending_after_interview` (interview_complete with no decision ≥ 2 days), `no_availability` (an approved interview waiting on availability ≥ 1 day). Same ladder and cooldown policy. As built (30 Sep 2026, audit F3): the existing `candidates_waiting` rule counts `interview_complete` among the decisions pending, at its 3-day threshold, and its message says "decide after an interview"; a separate 2-day `decision_pending_after_interview` detector is not built.
+
+Email alerts (8 Oct 2026, plan B3): the ladder's `message` and `offer_recruiter` rungs email only the owners, admins and hiring managers who want "Roles that need attention" as it happens; everyone else's copy of the update follows their own setting (the morning or Monday summary, or the app only). While ITS has not confirmed the company (founder decision B7), `no_applicants` and `screens_unanswered` are not raised: nothing of the company is public and its invitations wait in the outbox.
 
 ### calendar_health (new, platform-level per company)
 
 Daily: for each connection, a free/busy probe; on auth failure set `needs_attention`, emit `integration.failed`, notify the user and the owner; three consecutive failures → `disconnected` and credentials deleted.
 
-### escalation (existing service, unchanged)
+### escalation (existing service, changed by plan B4 to B8)
 
-create → notify queue → claim → resolve → notify customer.
+create (counted against the plan's recruiter requests when the team asked, never refused: founder decision Q33) → notify queue → claim (scoped, time-limited grant) → notes either way on the thread (`escalation_messages`, migration 0029; events `customer.replied`, `recruiter.replied`) → resolve (the answer kept on the thread; the person who asked and the owners get it in full with a link to the request) → reopen by the team with a reason (event `recruiter.reopened`; the running grant ends, a fresh one is given and recorded, and the reply-by time is counted again from the reopening).
+
+The ITS queue lists urgent requests first, then by the soonest reply-by time (founder decision Q32, option A). Urgency never changes the reply-by time.
 
 ## 4. Timers and SLAs
 
@@ -108,10 +118,11 @@ create → notify queue → claim → resolve → notify customer.
 | Ineligible review window | 24 h | policy param |
 | Screen: reminder / expiry | 48 h / +72 h | no |
 | Slots: reminder / expiry | 48 h / +48 h | no |
+| Automatic new times after a candidate's cancel (founder decision 3A) | 3 working days (company time zone, Monday to Friday contact days, ITS holidays), sent at 09:00 or the start of contact hours; waits for the ITS check up to 10 days past that | company setting: 1 to 10 working days, or off (Setup, "When a candidate cancels") |
 | Schedule token | 14 d | no |
 | Interview reminders | −24 h, −2 h | no |
 | Interview close | end +1 h | no |
-| Escalation SLA | 4 h candidate_issue; 8 h takeover, negotiation; 24 h ask, review, stuck_role; 48 h search_support | D14 |
+| Escalation SLA (reply-by time) | Business hours on the ITS calendar (F12, D26): 2 h negotiation, platform_blocking; 4 h candidate_issue; 8 h (one business day) ask, review, takeover, search_support, stuck_role, data_request. The same for urgent requests (Q32 A); a reopened request counts again from the reopening | ITS calendar (admin console) |
 | Intervention cooldown | 48 h | policy param |
 | Data request SLA | 30 d | no |
 | Job lease | 5 min | engine option |

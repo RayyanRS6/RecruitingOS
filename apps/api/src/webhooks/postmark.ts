@@ -46,7 +46,7 @@ postmarkWebhook.post("/inbound", async (c) => {
   const replyToken = extractReplyToken(mail.to, container.integrations.env.intakeDomain);
   if (replyToken) {
     const outcome = await receiveCandidateReply(container, { inbound, mail, replyToken });
-    return c.json(outcome.body, outcome.status as 200 | 202);
+    return c.json(outcome.body, outcome.status as 200 | 202 | 503);
   }
   if (!token) {
     await container.db.update(inboundEmails).set({ status: "unmatched", error: "no intake token in recipient address" }).where(eq(inboundEmails.id, inbound.id));
@@ -177,10 +177,10 @@ export async function replayHeldEmails(container: Container, input: { companyId:
   const { companyId, roleId } = input;
   const found = await withTenant(container.db, companyId, async (tx) => {
     const [role] = await tx.select().from(roles).where(eq(roles.id, roleId)).limit(1);
-    if (!role || role.status !== "open" || !role.acceptingApplications) return null;
+    if (role?.status !== "open" || !role.acceptingApplications) return null;
     return { role, held: await heldEmailsFor(tx, container, companyId, roleId) };
   });
-  if (!found || !found.held.length) return { replayed: 0, failed: 0 };
+  if (!found?.held.length) return { replayed: 0, failed: 0 };
   const { replayed, failed } = await admitHeldEmails(container, { companyId, roleId, held: found.held });
   await withTenant(container.db, companyId, async (tx) => {
     const unread = await unreadHeldNotices(tx, companyId, roleId);
@@ -234,10 +234,10 @@ export async function settleHeldEmailsOnClose(container: Container, input: { com
   const { companyId, roleId } = input;
   const found = await withTenant(container.db, companyId, async (tx) => {
     const [role] = await tx.select().from(roles).where(eq(roles.id, roleId)).limit(1);
-    if (!role || role.status !== "closed") return null;
+    if (role?.status !== "closed") return null;
     return { role, held: await heldEmailsFor(tx, container, companyId, roleId) };
   });
-  if (!found || !found.held.length) return { addedToTalentPool: 0, failed: 0 };
+  if (!found?.held.length) return { addedToTalentPool: 0, failed: 0 };
   const { replayed, failed } = await admitHeldEmails(container, { companyId, roleId, held: found.held, intoTalentPool: true });
   await withTenant(container.db, companyId, async (tx) => {
     const one = replayed === 1;

@@ -29,7 +29,7 @@ The full list, with each provider's role, is in the subprocessor list you receiv
 - The owner and admins see everything in your company's workspace.
 - Hiring managers see roles, candidates, pay and the activity timeline, and can decide on candidates.
 - HR sees roles, candidates and pay, can act on candidates but cannot decline them, and can manage the team.
-- Interviewers see the roles and their own interviews. For each candidate they interview they get a short brief: what the round is for, how the candidate stands on your must-haves, strengths and what is worth exploring. They can open only those candidates, never others, and never see pay.
+- Interviewers can read the role descriptions and see their own interviews; their list of roles shows only the roles they interview for, without applicant numbers. For each candidate they interview they get a short brief: what the round is for, how the candidate stands on your must-haves, strengths and what is worth exploring. They can open only those candidates, never others, and never see pay.
 
 **ITS recruiters.** Only when you ask for one, only for that request, and only for the time it takes (section 4).
 
@@ -55,7 +55,9 @@ The full list, with each provider's role, is in the subprocessor list you receiv
 
 - Access exists only after someone on your team presses **Bring in a recruiter**, or after the product itself brings a recruiter in because a candidate asked for a person or a held application waited three days.
 - Before a recruiter accepts the request, they see only your company name, the role title, the kind of request, its urgency, the skill it needs, the time remaining and a generic one-line summary. They do not see your words or any candidate information.
-- When they accept, their access covers that request's role and, if there is one, the one candidate it concerns. Other roles and candidates are refused.
+- When they accept, their access covers what the request names: one candidate (and the role they applied for), or one role and its candidates. Other roles and candidates are refused, including on Today and in the activity list. A request covers all of your hiring only when someone on your team chose "All of your hiring" when asking. A request the product raises on its own always names the candidate or role involved; a failed step with nothing attached goes to ITS administrators instead of a recruiter.
+- You are told as soon as a recruiter starts, with what they can see and until when.
+- When a candidate's data is deleted, it is also removed from the recruiter's copy of the request and from requests and notices that name them.
 - The access lasts at most 14 days. It shrinks to 24 hours after the recruiter marks the request resolved. It ends at once if the recruiter releases it.
 - Every page the recruiter opens is recorded, with the time and the request it belongs to. You can see this under **ITS recruiter access** in **Setup**.
 - An owner or admin can end the access at any moment from the same place. You give a short reason, the access ends immediately, the recruiter is told, and the request goes back to the queue.

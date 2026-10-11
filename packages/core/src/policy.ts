@@ -7,11 +7,34 @@ import { emit } from "./events";
  * Platform defaults (docs/06). Company and role rows override them.
  * `human_only` actions are never executed by the system, whatever a row says.
  */
-/** Actions that may never be set below a level (AC10.1: the AI never starts scheduling on its own). */
-export const MIN_LEVELS: Partial<Record<ActionType, PolicyLevel>> = { "interview.request": "approval" };
+/**
+ * Actions that may never be set below a level (AC10.1: the AI never starts scheduling on its own). A drafted role is
+ * always approved by a person before it opens, pay included, and offers are never drafted, sent or revised on their own.
+ */
+export const MIN_LEVELS: Partial<Record<ActionType, PolicyLevel>> = {
+  "interview.request": "approval",
+  "role_packet.approve": "approval",
+  "offer.draft": "approval",
+  "offer.send": "approval",
+  "offer.revise": "approval",
+};
+/**
+ * Actions that may never be set above a level. Role approval is a person's click: "only a person" would leave every new
+ * role waiting for a decision the system is told never to ask for, so it stays at "ask me first".
+ */
+export const MAX_LEVELS: Partial<Record<ActionType, PolicyLevel>> = { "role_packet.approve": "approval" };
 const LEVEL_RANK: Record<PolicyLevel, number> = { auto: 0, auto_notify: 1, approval: 2, human_only: 3 };
 export function levelAtLeast(level: PolicyLevel, min: PolicyLevel): boolean {
   return LEVEL_RANK[level] >= LEVEL_RANK[min];
+}
+
+/** The level an action actually runs at: a saved row outside the floor or the ceiling is read as the nearest allowed level. */
+export function clampLevel(actionType: ActionType, level: PolicyLevel): PolicyLevel {
+  const min = MIN_LEVELS[actionType];
+  if (min && !levelAtLeast(level, min)) return min;
+  const max = MAX_LEVELS[actionType];
+  if (max && LEVEL_RANK[level] > LEVEL_RANK[max]) return max;
+  return level;
 }
 
 export const HARD_HUMAN_ONLY: ReadonlySet<ActionType> = new Set([
@@ -35,6 +58,14 @@ export const DEFAULT_POLICIES: Record<ActionType, { level: PolicyLevel; approver
   "message.send_templated": { level: "auto", approverRoles: [] },
   /** A message a team member wrote to a candidate (F11). Under "approval" and "human_only", owners and admins decide; their own messages go at once, since their click is the approval. */
   "message.send_freeform": { level: "auto_notify", approverRoles: ["owner", "admin"] },
+  /**
+   * The courtesy note to someone still waiting for a decision `afterDays` after they applied (plan G10): one short,
+   * disclosed "still reviewing" note, once per application. "Do it" sends it; any other level sends none (the team, or a
+   * recruiter running the role, keeps in touch themselves). Off unless a company switches it on in Setup (founder
+   * decision of 9 October 2026: with many applicants a team picks the best few, so automatic notes are not wanted). A
+   * company that saved a level keeps it: its row overrides this default.
+   */
+  "message.still_reviewing": { level: "human_only", approverRoles: [], params: { afterDays: 30 } },
   "application.triage": { level: "auto", approverRoles: [] },
   /** The hold is operational, never permission for adverse action: notify, review timer, reminders, escalation of an overdue review. */
   "application.hold_ineligible": { level: "auto_notify", approverRoles: [], params: { reviewWindowHours: 24, remindEveryHours: 24, escalateAfterHours: 72 } },
@@ -54,7 +85,16 @@ export const DEFAULT_POLICIES: Record<ActionType, { level: PolicyLevel; approver
   "offer.send": { level: "approval", approverRoles: ["owner", "admin"] },
   "offer.negotiate": { level: "human_only", approverRoles: [] },
   "offer.revise": { level: "approval", approverRoles: ["owner", "admin"] },
-  "disposition.send": { level: "auto_notify", approverRoles: [] },
+  /**
+   * The decision message (founder decision B6). Declining never sends anything by itself: a decision is private until a
+   * person presses Send. This policy says what that Send does: "auto" (the default) sends it then; "approval" holds it
+   * for a second person; "human_only" means the product sends no decision messages and the team tells candidates
+   * themselves. Saved send-at-once settings moved to the new default in migration 0026; "Ask me first" and "only a person" stayed.
+   * It also governs the untold safety net (Q27): under "auto", someone not told five working days after the decision
+   * gets the standard message by itself; under any other level, or during a recruiter takeover, a recruiter is brought
+   * in instead and nothing is sent. And the closing message for a closed role (Q30), approved once for everyone.
+   */
+  "disposition.send": { level: "auto", approverRoles: [] },
   "reference.request": { level: "auto_notify", approverRoles: [] },
   "background_check.order": { level: "approval", approverRoles: ["owner", "admin", "hr"] },
   "background_check.adverse_action": { level: "human_only", approverRoles: [] },
@@ -73,7 +113,12 @@ export const DEFAULT_POLICIES: Record<ActionType, { level: PolicyLevel; approver
   "outreach.send": { level: "auto_notify", approverRoles: [] },
 };
 
-/** Resolution order: takeover overlay → role → company → platform default. */
+/**
+ * Resolution order: takeover overlay → role → company → platform default. The floors, the ceiling and the hard
+ * "only a person" list are applied to the saved rows first; the takeover overlay comes last and only ever turns an
+ * automatic action into the recruiter's approval, so an action that already needs a person (role approval among them)
+ * keeps its own approvers during a takeover.
+ */
 export async function resolvePolicy(q: Queryable, companyId: string, roleId: string | null, actionType: ActionType): Promise<PolicyDecision> {
   const def = DEFAULT_POLICIES[actionType];
   let decision: PolicyDecision = { actionType, level: def.level, approverRoles: def.approverRoles, source: "default", params: def.params ?? {} };
@@ -95,17 +140,32 @@ export async function resolvePolicy(q: Queryable, companyId: string, roleId: str
     if (roleRows[0]) {
       decision = { actionType, level: roleRows[0].level as PolicyLevel, approverRoles: roleRows[0].approverRoles, source: "role", params: roleRows[0].params };
     }
-    const active = await q
-      .select()
-      .from(takeovers)
-      .where(and(eq(takeovers.companyId, companyId), eq(takeovers.roleId, roleId), eq(takeovers.status, "active")))
-      .limit(1);
-    if (active[0] && (decision.level === "auto" || decision.level === "auto_notify")) {
-      decision = { ...decision, level: "approval", approverRoles: ["recruiter"], source: "takeover" };
-    }
   }
   if (HARD_HUMAN_ONLY.has(actionType)) decision = { ...decision, level: "human_only" };
+  // Rows saved before a floor or ceiling existed are read through it, so no data migration is needed. A row moved to
+  // "approval" with no approver list gets the action's own list; so does packet approval, which is decided by role with
+  // no fallback list (approval-deciders.ts), or nobody could approve the role.
+  const clamped = clampLevel(actionType, decision.level);
+  const moved = clamped !== decision.level;
+  if (moved) decision = { ...decision, level: clamped };
+  if (decision.level === "approval" && !decision.approverRoles.length && (moved || actionType === "role_packet.approve")) decision = { ...decision, approverRoles: def.approverRoles };
+  if (roleId && (decision.level === "auto" || decision.level === "auto_notify") && (await roleTakenOver(q, companyId, roleId))) {
+    decision = { ...decision, level: "approval", approverRoles: ["recruiter"], source: "takeover" };
+  }
   return decision;
+}
+
+/**
+ * Whether an ITS recruiter is running the role (an active takeover). During one the recruiter manages candidate contact:
+ * automatic actions wait for them (`resolvePolicy`), and no automatic new interview times go (founder question 7).
+ */
+export async function roleTakenOver(q: Queryable, companyId: string, roleId: string): Promise<boolean> {
+  const active = await q
+    .select({ id: takeovers.id })
+    .from(takeovers)
+    .where(and(eq(takeovers.companyId, companyId), eq(takeovers.roleId, roleId), eq(takeovers.status, "active")))
+    .limit(1);
+  return !!active[0];
 }
 
 export type GateResult =

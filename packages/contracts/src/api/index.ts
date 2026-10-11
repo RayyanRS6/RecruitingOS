@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { Location } from "../domain/common";
-import { RolePacket } from "../domain/role-packet";
-import { ApplicationStage, RejectReason } from "../domain/stages";
+import { CompensationBasis, RolePacket } from "../domain/role-packet";
+import { INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX } from "../domain/intake";
+import { ApplicationStage, DecisionWording, MarkKind, OwnerStage, PERSONAL_LINE_MAX, RejectReason, ToldState, type CancelledView, type CandidateNotice } from "../domain/stages";
 import { ActionType, PolicyLevel } from "../domain/policy";
+import { RequestInterview } from "../domain/interview";
 
 /** Slice 1 API request and response schemas. docs/12 is the map. */
 
@@ -30,11 +32,21 @@ export const MeResponse = z.object({
 export type MeResponse = z.infer<typeof MeResponse>;
 
 // Companies
+/** A real IANA time zone name ("America/Chicago"): interview times and the hours texts may be sent are worked out in it. */
+export function isTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
 export const CreateCompany = z.object({
   name: z.string().min(2).max(120),
   vertical: z.string().min(2).max(60),
   sizeBand: z.enum(["1-19", "20-49", "50-99", "100-199", "200-499", "500+"]),
-  timezone: z.string().default("America/Los_Angeles"),
+  /** The sign-up form sends the owner's own zone; the default stays only for callers that send none. */
+  timezone: z.string().min(1).max(64).refine(isTimeZone, { message: "Choose a time zone from the list." }).default("America/Los_Angeles"),
   locations: z.array(Location).min(1),
   ownerName: z.string().min(1).optional(),
   website: z.string().optional(),
@@ -64,8 +76,23 @@ export const CompanySettingsInput = z.object({
   careersPage: z.object({ intro: z.string().trim().max(1000).optional() }).strict().optional(),
   businessHours: BusinessHoursInput.nullable().optional(),
   notices: z.partialRecord(NoticeKey, NoticeOverrideInput.nullable()).optional(),
+  /** Who posts the job on the boards (plan D3): an ITS recruiter from the company's own accounts (default), or the team. */
+  boardPosting: z.enum(["its", "self"]).optional(),
+  /** The company has its own paid ZipRecruiter plan (Q11); only then is ZipRecruiter offered. */
+  zipRecruiterPlan: z.boolean().optional(),
+  /**
+   * Automatic new interview times for candidates who cancel and ask for them (founder decision 3A): on or off, after 1 to
+   * 10 working days. `pending` is never stored: it says what happens to people already told a day when automatic times
+   * are switched off (keep their day, or stop them too); the owner is asked, never assumed for.
+   */
+  newTimesAfterCancel: z.object({ auto: z.boolean(), workingDays: z.number().int().min(1).max(10), pending: z.enum(["keep", "stop"]).optional() }).strict().optional(),
 }).strict();
 export type CompanySettingsInput = z.infer<typeof CompanySettingsInput>;
+/**
+ * GET /companies/current/new-times: the automatic new-times setting, how many people were already told a day for theirs
+ * (`pending`: automatic sets waiting for their day or for the ITS check), and whether ITS has confirmed the company.
+ */
+export type NewTimesSettingView = { auto: boolean; workingDays: number; pending: number; companyConfirmed: boolean };
 export const UpdateCompany = z.object({
   name: z.string().trim().min(2).max(120),
   website: WebsiteInput,
@@ -88,8 +115,61 @@ export const UpdateMember = z.object({ role: TeamRole.optional(), status: z.enum
 export type UpdateMember = z.infer<typeof UpdateMember>;
 
 // Intake
-export const StartIntake = z.object({ initialMessage: z.string().min(1).max(4000).optional() });
-export const IntakeMessageRequest = z.object({ message: z.string().min(1).max(4000) });
+/**
+ * POST /intake/sessions. A draft starts only with its first message (C3): the owner's words (a pasted job ad fits, up to
+ * 20,000 characters, C5), or "hire again" from an earlier role (C14), or both. The words never travel in a URL.
+ */
+export const StartIntake = z.object({ initialMessage: z.string().trim().min(1).max(INTAKE_FIRST_MESSAGE_MAX).optional(), fromRoleId: z.string().min(1).max(64).optional() });
+export const IntakeMessageRequest = z.object({ message: z.string().trim().min(1).max(INTAKE_MESSAGE_MAX) });
+
+/** One answered question card (C6): ticked offered values, the owner's own words, a skip, or the pay card's figures. */
+export const IntakeAnswer = z.object({
+  questionId: z.string().min(1).max(60),
+  selected: z.array(z.string().max(500)).max(8).default([]),
+  own: z.array(z.string().trim().min(1).max(500)).max(6).default([]),
+  skipped: z.boolean().default(false),
+  pay: z.object({ basis: CompensationBasis, min: z.number().nonnegative().max(10_000_000), max: z.number().nonnegative().max(10_000_000), ceiling: z.number().nonnegative().max(10_000_000).optional() }).optional(),
+});
+export type IntakeAnswer = z.infer<typeof IntakeAnswer>;
+
+/** The facts a person may edit from the draft panel, one list item or one field at a time (set / add / remove / clear). */
+export const IntakeListFact = z.enum(["mustHaves", "niceToHaves", "dealBreakers", "interviewers", "eligibilityNotes", "responsibilities", "screeningQuestions"]);
+export type IntakeListFact = z.infer<typeof IntakeListFact>;
+export const IntakeTextFact = z.enum(["title", "locationText", "employmentType", "schedule", "remotePolicy", "reason", "reasonDetail", "benefits", "targetStartDate", "urgency", "whatFailureLooksLike", "decisionMaker"]);
+export type IntakeTextFact = z.infer<typeof IntakeTextFact>;
+const FactText = z.string().trim().min(1).max(500);
+export const IntakeFactsPatch = z.object({
+  set: z.object({
+    title: FactText, locationText: FactText, employmentType: FactText, schedule: FactText, remotePolicy: FactText, reason: FactText, reasonDetail: FactText,
+    benefits: FactText, targetStartDate: FactText, urgency: FactText, whatFailureLooksLike: FactText, decisionMaker: FactText,
+    decisionMakerUserId: z.string().min(1).max(64),
+    interviewerUserIds: z.array(z.string().min(1).max(64)).max(10),
+    /** Pay set from the panel counts as a person setting it, like the pay card. */
+    pay: z.object({ basis: CompensationBasis, min: z.number().nonnegative().max(10_000_000), max: z.number().nonnegative().max(10_000_000), ceiling: z.number().nonnegative().max(10_000_000).optional() }),
+  }).partial().strict().optional(),
+  add: z.array(z.object({ field: IntakeListFact, value: FactText })).max(20).optional(),
+  remove: z.array(z.object({ field: IntakeListFact, value: z.string().max(500) })).max(20).optional(),
+  clear: z.array(IntakeTextFact).max(20).optional(),
+}).strict();
+export type IntakeFactsPatch = z.infer<typeof IntakeFactsPatch>;
+
+/**
+ * POST /intake/sessions/:id/answers. The answers to the open cards, an optional panel edit, "draft it", and any words
+ * typed beside them. The server writes one short summary to the conversation and, unless `reply` is false (a quiet
+ * edit from the panel), asks the assistant for the next turn.
+ */
+export const IntakeAnswersRequest = z.object({
+  answers: z.array(IntakeAnswer).max(3).default([]),
+  patch: IntakeFactsPatch.optional(),
+  draftIt: z.boolean().default(false),
+  note: z.string().trim().max(INTAKE_MESSAGE_MAX).optional(),
+  reply: z.boolean().default(true),
+}).refine((b) => b.answers.length > 0 || !!b.patch || b.draftIt || !!b.note, { message: "Answer a question, change something or say what to do next." });
+export type IntakeAnswersRequest = z.infer<typeof IntakeAnswersRequest>;
+
+/** Keep a flagged phrase in a draft, with the reason (C1); the approver sees who kept it and why. */
+export const KeepPacketFlag = z.object({ flagId: z.string().min(1).max(300), reason: z.string().trim().min(5).max(500) });
+export type KeepPacketFlag = z.infer<typeof KeepPacketFlag>;
 
 // Roles
 export const CreatePacketVersion = z.object({ packet: RolePacket, changeSummary: z.string().min(1).max(500) });
@@ -103,20 +183,130 @@ export const RequestRoleApproval = z.object({ version: z.number().int().min(1).o
 export type RequestRoleApproval = z.infer<typeof RequestRoleApproval>;
 
 // Applications
+/** A date ("2026-10-22") or a full time; checked against today and the longest hold on the server. */
+const RemindAt = z.string().trim().max(40).refine((v) => !Number.isNaN(Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(v) ? `${v}T00:00:00Z` : v)), { message: "Use a date like 2026-10-22." });
 export const ApplicationAction = z.object({
-  /** ask_in_screen: invite_screen with `focus: "unknowns"`, the one-click follow-up on an assessment that needs a closer look. */
-  action: z.enum(["invite_screen", "ask_in_screen", "advance_to_interview", "reject", "hold", "move_to_talent_pool", "override_eligibility", "review_anyway"]),
+  /**
+   * ask_in_screen: invite_screen with `focus: "unknowns"`, the one-click follow-up on an assessment that needs a closer look.
+   * reject: files a private decision (founder decision B6); the decision is not sent, but a booked interview or offered
+   * times are called off and the candidate gets a short note, with no reason, that the interview is off.
+   * set_mark / clear_mark: the private Longlist, Shortlist, On hold and Not a fit for now marks; hold is set_mark with
+   * on_hold. send_decision: a person sends the
+   * standard decision message (or asks for its approval, under the company's settings). told_in_person: records that
+   * someone told the candidate themselves, so nothing more is sent. cancel_screen: "Stop this screen invitation" before
+   * the candidate starts; they get a short, polite note and go back to waiting on the team. undo_decision: takes back a
+   * decision (declined, or moved to the talent pool) the candidate was never told: they go back to the step they were at,
+   * and nothing was or will be sent (plan G1).
+   */
+  action: z.enum(["invite_screen", "ask_in_screen", "advance_to_interview", "reject", "hold", "move_to_talent_pool", "override_eligibility", "review_anyway", "set_mark", "clear_mark", "send_decision", "told_in_person", "cancel_screen", "undo_decision"]),
   reason: RejectReason.optional(),
   note: z.string().max(2000).optional(),
   /** invite_screen: preferred channel; defaults to SMS with consent, else web chat by email. */
   channel: z.enum(["web", "sms"]).optional(),
   /** invite_screen: "unknowns" opens the screen with the résumé assessment's open questions before the packet's own. */
   focus: z.enum(["unknowns"]).optional(),
+  /** set_mark: which mark. */
+  mark: MarkKind.optional(),
+  /** set_mark on_hold and hold: when the hold ends and they come back to Today; 14 days when left out, 56 at most. */
+  remindAt: RemindAt.optional(),
+  /** send_decision: one of the approved wordings (Q28); the suggested one when left out. The eligibility wording is fixed. */
+  wording: DecisionWording.optional(),
+  /** send_decision: an optional personal line, written by the person and checked before sending (no scores, reasons or personal characteristics). */
+  personalLine: z.string().trim().max(PERSONAL_LINE_MAX).optional(),
 });
+export type ApplicationAction = z.infer<typeof ApplicationAction>;
 
-/** POST /applications/:id/messages: a message a person writes to a candidate (F11). The product adds the sending name and the footer; no disclosure line, since no AI wrote it. */
-export const SendCandidateMessage = z.object({ subject: z.string().trim().max(200).optional(), text: z.string().trim().min(1, "Write the message first.").max(5000) });
+/** POST /roles/:id/decision-messages: send the decision message to several people at once; each gets its own result. `wording`: one approved wording for all; each person's suggested one when left out. */
+export const SendDecisionMessages = z.object({ applicationIds: z.array(z.string().min(1)).min(1).max(100), wording: DecisionWording.optional() });
+export type SendDecisionMessages = z.infer<typeof SendDecisionMessages>;
+
+/**
+ * POST /roles/:id/new-times: new times to several people under Cancelled at once (founder decision 2A); each gets its own
+ * result, and one refusal never blocks the rest. POST /applications/:id/new-times sends to one person (body `{}`).
+ */
+export const SendNewTimesBatch = z.object({ applicationIds: z.array(z.uuid()).min(1).max(100) }).strict();
+export type SendNewTimesBatch = z.infer<typeof SendNewTimesBatch>;
+/**
+ * What "Send new times" did: `reopened`, the interview they cancelled (or whose times lapsed) is offered again for the
+ * same round; `new_interview`, a new interview for the same round after a no-show. They stay under Cancelled until they
+ * book; the times count as sent once their email is on its way.
+ */
+export type SendNewTimesResult = { ok: true; interviewId: string; via: "reopened" | "new_interview"; cancelled: CancelledView };
+export type SendNewTimesBatchResult = { results: Array<{ applicationId: string; name: string; ok: boolean; code?: string; message?: string; interviewId?: string }>; sent: number; notSent: number };
+
+/** POST /applications/:id/decision-message/preview: the exact message with a chosen wording and personal line, checked, before Send. */
+export const DecisionMessagePreviewRequest = z.object({ wording: DecisionWording.optional(), personalLine: z.string().trim().max(PERSONAL_LINE_MAX).optional() }).strict();
+export type DecisionMessagePreviewRequest = z.infer<typeof DecisionMessagePreviewRequest>;
+
+/** One approved wording as the Send screen offers it. */
+export type DecisionWordingOption = { id: DecisionWording; label: string; suggested: boolean };
+/**
+ * The decision message before Send (GET /applications/:id/decision-message, POST .../preview): the exact words, the
+ * address, the wording used and the others on offer, whether a personal line was added, whether Colorado's line is in it,
+ * and what Send does under the company's settings (`policy`). `undoSeconds`: how long the Undo lasts after Send.
+ */
+export type DecisionMessagePreview = {
+  to: string | null; subject: string; text: string; wording: DecisionWording; wordings: DecisionWordingOption[];
+  personalLine: string | null; adverseDecisionLine: boolean; policy: "sends" | "needs_approval" | "not_sent";
+  toldState: ToldState; candidateToldAt: string | null; waitingApproval: boolean; undoSeconds: number;
+};
+
+/**
+ * POST /roles/:id/closing-message: the one closing message for everyone a closed role left untold (Q30), approved once
+ * for all of them. `applicationIds` narrows it to some of the people the preview listed; everyone listed when left out.
+ */
+export const SendClosingMessage = z.object({ confirm: z.literal(true, { message: "Confirm sending the closing message." }), applicationIds: z.array(z.string().min(1)).min(1).max(500).optional() }).strict();
+export type SendClosingMessage = z.infer<typeof SendClosingMessage>;
+/**
+ * The closing message's preview (GET /roles/:id/closing-message; also `closingMessage` on POST /roles/:id/outcome):
+ * who it goes to (`people`, with `hasEmail` and `optedOut`), the words for one of them with "[first name]" in place of
+ * the name, those left out because they were already told or a message waits for approval, and what Send does.
+ * `waitingApprovalId` names the one approval request when the batch already waits for it.
+ */
+export type ClosingMessagePreview = {
+  roleId: string; roleTitle: string; count: number; people: Array<{ applicationId: string; name: string; hasEmail: boolean; optedOut: boolean }>;
+  subject: string; text: string; alreadyTold: number; waitingApproval: number; noEmail: number; optedOut: number;
+  policy: "sends" | "needs_approval" | "not_sent"; waitingApprovalId: string | null; sendPath: string;
+};
+/**
+ * What POST /roles/:id/closing-message did: sent to each (per-person results), or one approval request for all, or
+ * nothing under "only a person", or nothing because the role was reopened (`role_reopened`, when an approval comes after
+ * an administrator voided the role's outcome). Each message still waiting out a person's Undo window carries its
+ * `communicationId` and `undoUntil` (plan G9: POST /applications/:id/messages/:communicationId/undo).
+ */
+export type ClosingMessageResult = {
+  status: "sent" | "waiting_approval" | "not_sent_settings" | "role_reopened"; approvalRequestId?: string; queued: number; held: number; notSent: number;
+  results: Array<{ applicationId: string; ok: boolean; candidateNotice?: CandidateNotice; communicationId?: string | null; undoUntil?: string | null; code?: string; message?: string }>;
+};
+
+/**
+ * POST /applications/:id/messages: a message a person writes to a candidate (F11). The product adds the sending name and
+ * the footer. No disclosure line, since no AI wrote it, unless `aiHelped`: the person used a line the assistant suggested
+ * (Q28; POST /applications/:id/messages/suggest), and the footer then says the assistant helped. `suggestionRunId`: the
+ * suggestion's AI run, kept on the message for the record.
+ */
+export const SendCandidateMessage = z.object({ subject: z.string().trim().max(200).optional(), text: z.string().trim().min(1, "Write the message first.").max(5000), aiHelped: z.boolean().optional(), suggestionRunId: z.string().min(1).max(64).optional() });
 export type SendCandidateMessage = z.infer<typeof SendCandidateMessage>;
+
+/**
+ * POST /applications/:id/messages/suggest: the assistant suggests one line for an interview invitation (`roundKey`: the
+ * round being approved, for its title) or an update (Q28); never for a decision.
+ */
+export const SuggestMessageLine = z.object({ purpose: z.enum(["interview_invite", "update"]), roundKey: z.string().min(1).max(60).optional() }).strict();
+export type SuggestMessageLine = z.infer<typeof SuggestMessageLine>;
+/** What the suggestion answers: the line (checked like a personal line), the AI run, and the note the page shows. Null `line` when nothing usable came back. */
+export type SuggestedLine = { line: string | null; aiHelped: true; suggestionRunId: string | null; note: string };
+
+/**
+ * A personal line on an interview invitation (Q28): written by the person, or suggested by the assistant and kept by the
+ * person (`aiHelped`, and the email then says the assistant helped). Checked like a decision message's personal line.
+ * The interview request (POST /applications/:id/interviews) carries it to the invitation.
+ */
+export const InvitationLine = z.object({ text: z.string().trim().min(1).max(PERSONAL_LINE_MAX), aiHelped: z.boolean().default(false), suggestionRunId: z.string().min(1).max(64).optional() }).strict();
+export type InvitationLine = z.infer<typeof InvitationLine>;
+/** POST /applications/:id/interviews: the interview approval (`RequestInterview`), with an optional personal line for the invitation (Q28). */
+export const RequestInterviewWithLine = RequestInterview.extend({ invitationLine: InvitationLine.optional() });
+export type RequestInterviewWithLine = z.infer<typeof RequestInterviewWithLine>;
 
 /**
  * Human-recorded hiring outcomes (21 Sep, item 4). A person records what happened; the platform never generates,
@@ -124,22 +314,41 @@ export type SendCandidateMessage = z.infer<typeof SendCandidateMessage>;
  */
 export const ApplicationOutcome = z.enum(["hired_externally", "candidate_withdrew", "employer_declined", "offer_declined_externally", "no_hire"]);
 const OutcomeDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a date like 2026-10-01").refine((d) => { const t = new Date(`${d}T00:00:00Z`); return !Number.isNaN(t.getTime()) && t.toISOString().slice(0, 10) === d; }, "That date does not exist");
+/**
+ * `reason` is one of the fixed reasons every decline uses (plan G2), required for "We declined the candidate"; anything
+ * the person wants to add in their own words goes in `note`, kept internally.
+ */
 export const RecordApplicationOutcome = z.object({
   outcome: ApplicationOutcome,
   confirm: z.literal(true, { message: "Confirm the outcome." }),
   hireDate: OutcomeDate.optional(),
   offerAcceptedAt: OutcomeDate.optional(),
-  reason: z.string().max(500).optional(),
+  reason: RejectReason.optional(),
   note: z.string().max(2000).optional(),
 }).strict();
 export const RoleOutcome = z.enum(["filled", "filled_outside_platform", "role_cancelled", "no_hire"]);
 export const RecordRoleOutcome = z.object({ outcome: RoleOutcome, confirm: z.literal(true, { message: "Confirm the outcome." }), reason: z.string().max(500).optional() }).strict();
-export const CorrectOutcome = z.object({ confirm: z.literal(true), reason: z.string().min(5).max(1000), outcome: z.enum([...ApplicationOutcome.options, ...RoleOutcome.options, "voided"]).optional(), hireDate: OutcomeDate.optional(), offerAcceptedAt: OutcomeDate.optional() }).strict()
-  .refine((v) => v.outcome !== "hired_externally" || !!v.hireDate, { message: "A corrected hire needs the hire date.", path: ["hireDate"] });
+/**
+ * An administrator's correction of a recorded outcome. `declineReason`: when the corrected outcome is "we declined the
+ * candidate" (`employer_declined`), the fixed reason it is filed under (plan G2); the original's reason when left out.
+ */
+export const CorrectOutcome = z.object({ confirm: z.literal(true), reason: z.string().min(5).max(1000), outcome: z.enum([...ApplicationOutcome.options, ...RoleOutcome.options, "voided"]).optional(), hireDate: OutcomeDate.optional(), offerAcceptedAt: OutcomeDate.optional(), declineReason: RejectReason.optional() }).strict()
+  .refine((v) => v.outcome !== "hired_externally" || !!v.hireDate, { message: "A corrected hire needs the hire date.", path: ["hireDate"] })
+  .refine((v) => !v.declineReason || v.outcome === "employer_declined", { message: "A decline reason goes only with \"we declined the candidate\".", path: ["declineReason"] });
 
+/**
+ * GET /roles/:id/applications. `ownerStage` narrows to one column of the stage strip and `told` to decisions in that told
+ * state; `order` (or `sort`) is newest first (default), waiting longest, by name, or by match score, highest first (the
+ * number worked out by code from checked evidence, founder decision B2; never the AI reading's words). `counts=1`
+ * answers `{ applications, counts }` with the strip's counts over every visible applicant instead of the bare list.
+ */
 export const OwnerGroupQuery = z.object({
-  group: z.enum(["waiting_on_you", "in_process", "not_moving_forward", "hired"]).optional(),
+  group: z.enum(["waiting_on_you", "waiting_on_candidate", "in_process", "not_moving_forward", "hired"]).optional(),
   stage: ApplicationStage.optional(),
+  ownerStage: OwnerStage.optional(),
+  told: ToldState.optional(),
+  order: z.enum(["newest", "waiting", "name", "score"]).optional(),
+  counts: z.enum(["1", "true"]).optional(),
 });
 
 // Public apply (candidate)
@@ -176,27 +385,62 @@ export const DecideApproval = z.object({
 });
 
 // Escalations
+/**
+ * What a recruiter brought in for a request may see: one candidate (and the role they applied for), one role and its
+ * candidates, or all of the company's hiring. The ids carry it; "company" must be chosen out loud, never inferred from
+ * missing ids, so a request with no role and no candidate is refused unless it says `scope: "company"`.
+ */
+export const EscalationScope = z.enum(["application", "role", "company"]);
+export type EscalationScope = z.infer<typeof EscalationScope>;
 export const CreateEscalation = z.object({
   kind: z.enum(["ask", "review", "takeover", "negotiation", "search_support", "candidate_issue"]),
+  scope: EscalationScope.optional(),
   roleId: z.string().optional(),
   applicationId: z.string().optional(),
   question: z.string().min(1).max(4000),
   /** Optional; the category sets a default. Shown to recruiters before acceptance (correction 11). */
   urgency: z.enum(["low", "normal", "high", "critical"]).optional(),
+  /**
+   * "plan": a talk with ITS about the plan itself (more roles than it includes), offered when the plan refuses a new
+   * role. It is not a request for recruiting help, so it never counts against the plan's recruiter requests (Q33).
+   */
+  topic: z.enum(["plan"]).optional(),
+  /**
+   * A role still being drafted (C12): the recruiter's view of the request carries the whole conversation and the current
+   * draft. Only with `scope: "company"`, since a draft has no role yet; the asker must be able to open the draft.
+   */
+  intakeSessionId: z.string().min(1).max(64).optional(),
 });
+export type CreateEscalation = z.infer<typeof CreateEscalation>;
 export const ResolveEscalation = z.object({ resolution: z.string().min(1).max(4000), /** Recruiter effort, for capacity and pricing (founder decision F12). */ minutesSpent: z.number().int().min(0).max(1440).optional() });
+/** A note on a request: from the team while a recruiter works on it, or from the recruiter holding it (plan B5). */
+export const EscalationReply = z.object({ body: z.string().trim().min(1).max(4000) });
+/** "This didn't solve it": the team reopens an answered request and says why; the recruiter reads it (plan B5). */
+export const ReopenEscalation = z.object({ note: z.string().trim().min(5).max(4000) });
+/** The reply-by time a request would get if it were sent now (plan B6): the form shows it before anything is sent. */
+export const EscalationEstimateQuery = z.object({ kind: CreateEscalation.shape.kind.default("ask"), topic: CreateEscalation.shape.topic });
+
+/** One entry in a request's thread as the team reads it: what they asked, every note, every answer, every reopening. */
+export type EscalationThreadEntry = { id: string; side: "customer" | "recruiter"; kind: "question" | "reply" | "answer" | "reopen"; body: string; by: string | null; at: string };
+/**
+ * A request as "Your recruiter requests" on Today shows it (plan B4): its state, the reply-by time, who picked it up and
+ * the full answer. `askedBy.kind` is "you" for the reader's own requests; `recruiterName` is null until someone picks it up.
+ */
+export type RecruiterRequestView = {
+  id: string; kind: string; status: string; urgency: string; summary: string; question: string;
+  scope: EscalationScope; roleId: string | null; roleTitle: string | null; applicationId: string | null; candidateName: string | null;
+  askedBy: { kind: "you" | "team" | "recruiter" | "system" | "candidate"; name: string | null };
+  createdAt: string; slaDueAt: string | null; firstResponseAt: string | null; resolvedAt: string | null; resolution: string | null; accessExpiresAt: string | null;
+  recruiterName: string | null; reopenedCount: number; thread: EscalationThreadEntry[];
+};
 
 // Emergency access for platform administrators (founder decision F10): MFA, a recorded reason, a short expiry.
 export const PlanChange = z.object({ planKey: z.string().min(1), pilotDays: z.number().int().min(1).max(365).optional(), extendUntil: z.string().optional(), reason: z.string().max(500).optional() });
 
 export const BreakGlass = z.object({ companyId: z.string().min(1), reason: z.string().min(10).max(1000), minutes: z.number().int().min(5).max(60).default(30) });
 
-// Owner conversation
-export const ConversationMessage = z.object({ message: z.string().min(1).max(4000) });
-
-// Screening (Slice 2)
-export const ScreenCandidateMessage = z.object({ message: z.string().min(1).max(2000) });
-export const InviteScreenOptions = z.object({ channel: z.enum(["web", "sms"]).optional() });
+// Owner conversation: a thin wrapper that always drafts (C4); the first message of a draft may be a pasted ad.
+export const ConversationMessage = z.object({ message: z.string().trim().min(1).max(INTAKE_FIRST_MESSAGE_MAX) });
 
 // Notifications
 export const MarkNotificationsRead = z.object({ ids: z.array(z.string()).min(1).max(200) });
@@ -223,7 +467,6 @@ export const BusinessCalendarInput = z.object({
   coverageChanges: z.array(z.object({ from: IsoDate, to: IsoDate, reason: z.string().min(1).max(200), hours: z.array(HoursWindowInput).max(4).nullable() }).refine((c) => c.from <= c.to, { message: "a coverage change must end on or after it starts" })).max(200).default([]),
   note: z.string().max(1000).optional(),
 });
-export type BusinessCalendarInputT = z.infer<typeof BusinessCalendarInput>;
 export const RecalculateDeadlines = z.object({ escalationIds: z.array(z.string().min(1)).max(500).optional(), reason: z.string().min(5).max(500) });
 
 // Candidate privacy requests (correction 7; docs/runbooks/privacy-requests.md)

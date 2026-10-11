@@ -17,6 +17,5 @@ Identified Talent Solutions uses the following providers to deliver the Service.
 | PostHog, Inc. | product analytics (no candidate identifiers) | United States |
 | Railway Corporation | hosting of the background processing service | United States |
 | Upstash, Inc. | request-rate counters (no personal data) | United States |
-| Trigger.dev (deferred) | background workflow execution | United States |
 
 Changes: we notify customers [30] days before adding a subprocessor that will process candidate data.

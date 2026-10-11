@@ -177,6 +177,8 @@ export const recruiterEscalations = pgTable(
     /** When the recruiter's scoped access to this customer's data ends. */
     accessExpiresAt: ts("access_expires_at"),
     billing: jsonb("billing").$type<Record<string, unknown>>().notNull().default({}),
+    /** The posting an ITS posting task is about (post_job, update_job, take_down_job; migration 0031); null otherwise. */
+    postingId: uuid("posting_id"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -229,8 +231,29 @@ export const notifications = pgTable(
     channel: text("channel").notNull().default("in_app"),
     readAt: ts("read_at"),
     createdAt: createdAt(),
+    /** When it went out by email, at once or in a summary (plan B3, migration 0028); a summary takes only rows still null. */
+    emailedAt: ts("emailed_at"),
   },
-  (t) => [index("notifications_user_idx").on(t.userId, t.readAt, t.createdAt)],
+  (t) => [index("notifications_user_idx").on(t.userId, t.readAt, t.createdAt), index("notifications_person_history_idx").on(t.companyId, t.userId, t.createdAt, t.id)],
+);
+
+/**
+ * How often one person hears by email about one group of updates (plan B3, migration 0028): immediate, daily, weekly or
+ * off. No row means the group's default (packages/core/src/notify-groups.ts). Changed in place, never deleted.
+ */
+export const notificationPreferences = pgTable(
+  "notification_preferences",
+  {
+    id: id(),
+    companyId: uuid("company_id").notNull().references(() => companies.id),
+    userId: uuid("user_id").notNull().references(() => users.id),
+    groupKey: text("group_key").notNull(),
+    cadence: text("cadence").notNull(),
+    setBy: jsonb("set_by").$type<Actor>().notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("notification_preferences_person_group_idx").on(t.companyId, t.userId, t.groupKey)],
 );
 
 export const inboundEmails = pgTable(

@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import type { MembershipRole } from "@ros/contracts";
 import { grantPlatformRole, type PlatformRole } from "@ros/core";
-import { memberships, users, withPlatform } from "@ros/db";
+import { applications, candidates, companies, memberships, users, withPlatform } from "@ros/db";
 import type { FakeIdentityProvider } from "@ros/integrations";
 import type { createApp } from "./app";
 import type { Container } from "./container";
@@ -26,14 +26,6 @@ export async function signInStaff(app: ReturnType<typeof createApp>, container: 
   if (!user) [user] = await container.db.insert(users).values({ email: email.toLowerCase(), name: name ?? email.split("@")[0], authProvider: "azure", authSubject: `seed-${email}` }).returning();
   if (user.platformRole !== role) await grantPlatformRole(container.db, { userId: user.id, role, actor: { kind: "system", id: "test_seed" }, reason: "test seed", source: "test_seed" });
   return signInWithIdentity(app, container, { email, name: name ?? user.name ?? undefined, provider: "azure", aal2: true, subject: user.authProvider === "azure" && user.authSubject ? user.authSubject : undefined });
-}
-
-/** Seeds a platform role through the ledger without opening a session (for accounts that sign in later in a test). */
-export async function seedPlatformRole(container: Container, email: string, role: PlatformRole, name?: string): Promise<string> {
-  let [user] = await container.db.select().from(users).where(eq(users.email, email.toLowerCase())).limit(1);
-  if (!user) [user] = await container.db.insert(users).values({ email: email.toLowerCase(), name: name ?? email.split("@")[0], authProvider: "azure", authSubject: `seed-${email}` }).returning();
-  if (user.platformRole !== role) await grantPlatformRole(container.db, { userId: user.id, role, actor: { kind: "system", id: "test_seed" }, reason: "test seed", source: "test_seed" });
-  return user.id;
 }
 
 export const signInAdmin = (app: ReturnType<typeof createApp>, container: Container, email: string, name?: string) => signInStaff(app, container, email, "platform_admin", name);
@@ -68,6 +60,33 @@ export function refuseApplicationRole(url: string): void {
   // Through the Supabase pooler the user is written `<role>.<project ref>`.
   if (/^(ros_app|ros_worker|app_tenant)(\.|$)/.test(user)) throw new Error(`TEST_DATABASE_URL connects as ${user}: use the owner role of an empty test database (the one that applied its migrations), never ros_app or ros_worker; the application roles cannot read the migration ledger and the suites' direct reads rely on seeing every row (docs/readiness/03 section 2)`);
 }
+
+/**
+ * The status token of the application an address made for a role. Since Wave 0 item 0.1 the apply form answers every
+ * submission with the same receipt and the link travels only by email, so suites read it from the database.
+ */
+export async function statusTokenFor(container: Container, input: { roleId: string; email: string }): Promise<string> {
+  const [row] = await container.db.select({ token: applications.statusToken }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(eq(applications.roleId, input.roleId), eq(candidates.email, input.email.trim().toLowerCase()))).limit(1);
+  if (!row) throw new Error(`no application from ${input.email} for role ${input.roleId}`);
+  return row.token;
+}
+
+/**
+ * Sets how a company's roles meet the screening conversation (plan Wave E), as ITS does from its console. A company
+ * with no setting takes "form now, conversation later" (the one-visit flow runs on pilot roles first, founder decision
+ * B1); suites about the conversation offered in the same visit as the form start their company with `useOneVisitApplyFlow`.
+ * Suites about the emailed invitation say so with `useLaterApplyFlow`, so they keep testing it whatever the default.
+ */
+async function setApplyFlowDefault(container: Container, companyId: string, flow: "one_visit" | "form_then_screen"): Promise<void> {
+  await withPlatform(container.db, async (tx) => {
+    const [co] = await tx.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1);
+    if (!co) throw new Error(`no company ${companyId}`);
+    await tx.update(companies).set({ settings: { ...co.settings, applyFlowDefault: flow } }).where(eq(companies.id, companyId));
+  });
+}
+
+export const useLaterApplyFlow = (container: Container, companyId: string) => setApplyFlowDefault(container, companyId, "form_then_screen");
+export const useOneVisitApplyFlow = (container: Container, companyId: string) => setApplyFlowDefault(container, companyId, "one_visit");
 
 /**
  * A customer with a membership of the given role in the company, signed in through the fake Google issuer (docs/spec/21,

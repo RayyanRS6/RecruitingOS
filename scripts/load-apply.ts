@@ -136,7 +136,10 @@ export async function runLoad(opts: LoadOptions): Promise<LoadSummary> {
       status = r.status;
       const ms = performance.now() - t0;
       statuses[String(status)] = (statuses[String(status)] ?? 0) + 1;
-      if (status === 302 && (r.headers.get("location") ?? "").includes("/c/status/")) {
+      // an accepted application ends on the receipt page (Wave 0 item 0.1: the status link only ever travels by email), or
+      // goes on to the screening conversation offered with it (plan E1)
+      const to = r.headers.get("location") ?? "";
+      if (status === 302 && (to.endsWith("/applied") || /\/c\/screen\/[A-Za-z0-9_-]+$/.test(to))) {
         accepted++;
         latencies.push(ms);
       } else if (status === 429) {

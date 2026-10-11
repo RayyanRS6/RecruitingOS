@@ -7,33 +7,59 @@ import type { CompAdapter, CompBenchmark } from "../types";
  * Data type 03 = mean hourly wage, 04 = annual mean, 08 = hourly median... (we request 03 and 13/14 percentiles when available).
  * Metro area codes and SOC codes are looked up from small built-in tables; unknown → null (the playbook range is used).
  */
-const SOC: Record<string, string> = {
-  "dental hygienist": "291292",
-  "registered dental hygienist": "291292",
-  "dental assistant": "319091",
-  "medical secretary": "436013",
-  "receptionist": "434171",
-  "office manager": "431011",
-  "dentist": "291021",
-  "hvac technician": "499021",
-  "electrician": "472111",
-  "plumber": "472152",
-  "veterinary technician": "292056",
-  "home health aide": "311120",
-  "marketing manager": "112021",
-  "performance marketing": "112021",
-  "growth marketing": "112021",
-  "digital marketing manager": "112021",
-  "e-commerce manager": "112021",
-  "ecommerce manager": "112021",
-  "marketing coordinator": "131161",
-  "marketing specialist": "131161",
-  "social media": "131161",
-  "content marketing": "131161",
-  "account executive": "414012",
-  "sales representative": "414012",
-  "operations manager": "111021",
-  "accountant": "132011",
+/** SOC 13-1161: the occupation BLS publishes for marketing specialists (and market research analysts). */
+const MARKETING_SPECIALISTS = { soc: "131161", approximate: "Market research analysts and marketing specialists" } as const;
+/** SOC 11-2021, read for a job that runs one channel or the online store: managers of whole marketing teams earn more. */
+const MARKETING_MANAGERS_ROUGHLY = { soc: "112021", approximate: "Marketing managers" } as const;
+
+/**
+ * Title words → the occupation. `approximate` names the broader group the figures are for when the job has no
+ * occupation of its own: social media and content jobs are read as marketing specialists (13-1161), never as marketing
+ * managers (11-2021), whose figures are for people running whole marketing teams and would overstate the market.
+ * The longest name in the title wins, so "Social and Content Marketing Manager" is a social and content job.
+ */
+const SOC: Record<string, { soc: string; approximate?: string }> = {
+  "dental hygienist": { soc: "291292" },
+  "registered dental hygienist": { soc: "291292" },
+  "dental assistant": { soc: "319091" },
+  "medical secretary": { soc: "436013" },
+  "receptionist": { soc: "434171" },
+  "office manager": { soc: "431011" },
+  "dentist": { soc: "291021" },
+  "hvac technician": { soc: "499021" },
+  "electrician": { soc: "472111" },
+  "plumber": { soc: "472152" },
+  "veterinary technician": { soc: "292056" },
+  "home health aide": { soc: "311120" },
+  "marketing manager": { soc: "112021" },
+  "performance marketing": { soc: "112021" },
+  "growth marketing": { soc: "112021" },
+  "digital marketing manager": { soc: "112021" },
+  "e-commerce manager": MARKETING_MANAGERS_ROUGHLY,
+  "ecommerce manager": MARKETING_MANAGERS_ROUGHLY,
+  "marketing coordinator": { soc: "131161" },
+  "marketing specialist": { soc: "131161" },
+  "social media": MARKETING_SPECIALISTS,
+  "social media manager": MARKETING_SPECIALISTS,
+  "social media marketing": MARKETING_SPECIALISTS,
+  "social media marketing manager": MARKETING_SPECIALISTS,
+  "social and content": MARKETING_SPECIALISTS,
+  "social and content marketing manager": MARKETING_SPECIALISTS,
+  "social content": MARKETING_SPECIALISTS,
+  "content marketing": MARKETING_SPECIALISTS,
+  "content marketing manager": MARKETING_SPECIALISTS,
+  "content manager": MARKETING_SPECIALISTS,
+  "brand content": MARKETING_SPECIALISTS,
+  "community manager": MARKETING_SPECIALISTS,
+  "account executive": { soc: "414012" },
+  "sales representative": { soc: "414012" },
+  "operations manager": { soc: "111021" },
+  "accountant": { soc: "132011" },
+  "front desk": { soc: "434171" },
+  "bookkeeper": { soc: "433031" },
+  "administrative assistant": { soc: "436014" },
+  "customer service representative": { soc: "434051" },
+  "medical assistant": { soc: "319092" },
 };
 
 const AREA: Record<string, string> = {
@@ -84,22 +110,39 @@ export class BlsOewsAdapter implements CompAdapter {
     this.status = enabled ? "live" : "disabled";
   }
 
+  /**
+   * The occupation for a job title: the longest known name the title contains, so "Dental Office Manager" is an office
+   * manager and "Registered Dental Hygienist" a hygienist whatever order the table is in. The caller passes a title,
+   * never a whole pasted ad (plan C5: an ad that mentions a receptionist is not a receptionist's job).
+   */
   static socFor(title: string): string | null {
-    const t = title.toLowerCase();
-    for (const [k, v] of Object.entries(SOC)) if (t.includes(k)) return v;
-    return null;
+    return BlsOewsAdapter.occupationFor(title)?.soc ?? null;
   }
 
+  /** The occupation for a job title, and the broader group's name when it is only an approximate match. */
+  static occupationFor(title: string): { soc: string; approximate?: string } | null {
+    const t = title.toLowerCase();
+    let best: { key: string; occupation: { soc: string; approximate?: string } } | null = null;
+    for (const [k, v] of Object.entries(SOC)) if (t.includes(k) && (!best || k.length > best.key.length)) best = { key: k, occupation: v };
+    return best?.occupation ?? null;
+  }
+
+  /** The metro area for a place, named the way people write it ("Austin area"), or the national figures. */
   static areaFor(locationText: string | undefined): { code: string; label: string } {
     const l = (locationText ?? "").toLowerCase();
-    for (const [k, v] of Object.entries(AREA)) if (k !== "national" && l.includes(k)) return { code: v, label: k };
+    for (const [k, v] of Object.entries(AREA)) if (k !== "national" && l.includes(k)) return { code: v, label: placeName(k) };
     return { code: AREA.national, label: "US national" };
   }
 
+  /**
+   * Market pay for a job and place. `socCode` (from the playbook role) wins over the title; the caller knows whether that
+   * occupation is a close match. A title read as a broader occupation comes back marked `approximate`.
+   */
   async benchmark(query: { title: string; socCode?: string; locationText?: string; basis?: "hourly" | "salary" }): Promise<CompBenchmark | null> {
     if (this.status !== "live") return null;
-    const soc = query.socCode ?? BlsOewsAdapter.socFor(query.title);
-    if (!soc) return null;
+    const occupation = query.socCode ? { soc: query.socCode.replace(/\D/g, "") } : BlsOewsAdapter.occupationFor(query.title);
+    const soc = occupation?.soc;
+    if (!soc || !/^\d{6}$/.test(soc)) return null;
     const area = BlsOewsAdapter.areaFor(query.locationText);
     const prefix = area.code === "0000000" ? "OEUN" : "OEUM";
     const mk = (dt: string) => `${prefix}${area.code}000000${soc}${dt}`;
@@ -137,9 +180,15 @@ export class BlsOewsAdapter implements CompAdapter {
         p75: p75.value,
         source: `BLS OEWS ${p50.year}, SOC ${soc}, area ${area.code}`,
         asOf: p50.year,
+        ...(occupation && "approximate" in occupation && occupation.approximate ? { approximate: true as const, occupation: occupation.approximate } : {}),
       };
     } catch {
       return null;
     }
   }
+}
+
+/** "salt lake" → "Salt Lake": a place as people write it. */
+function placeName(key: string): string {
+  return key.replace(/\b[a-z]/g, (c) => c.toUpperCase());
 }

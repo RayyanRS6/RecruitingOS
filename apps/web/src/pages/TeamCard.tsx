@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, ErrorState, Field, Skeleton } from "@ros/ui";
+import { Alert, Avatar, Button, Card, Chip, ErrorState, Field, Pill, Skeleton } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 import { toast } from "../toast";
 
@@ -14,12 +14,16 @@ const ROLES: Array<{ value: string; label: string; help: string }> = [
   { value: "owner", label: "Owner", help: "Everything, including making other owners." },
   { value: "admin", label: "Admin", help: "Everything except the owner role." },
   { value: "hiring_manager", label: "Hiring manager", help: "Runs hires: approves roles, decides on candidates. Owners and admins handle the job-board postings." },
-  { value: "interviewer", label: "Interviewer", help: "Sees roles and fills in scorecards. Never sees pay." },
-  { value: "hr", label: "HR", help: "Talent pool, offers and the team list." },
+  { value: "interviewer", label: "Interviewer", help: "Sees the interviews they are on and the candidates in them, and says whether each took place. Never sees pay." },
+  { value: "hr", label: "HR", help: "Talent pool, offers and the team list. Cannot make anyone an admin or an owner." },
 ];
 const roleLabel = (r: string) => ROLES.find((x) => x.value === r)?.label ?? r.replace(/_/g, " ");
 /** members.manage in packages/core/src/permissions.ts: owner, admin and HR. */
 const CAN_MANAGE_MEMBERS = ["owner", "admin", "hr"];
+/** Who may make someone an admin, or change or remove an admin (apps/api/src/services/team.ts, plan B7): never HR. */
+const CAN_GRANT_ADMIN = ["owner", "admin"];
+/** The roles a person may give: an owner gives any; an admin any but owner; HR neither owner nor admin. */
+const grantable = (myRole: string) => ROLES.filter((r) => (r.value !== "owner" || myRole === "owner") && (r.value !== "admin" || CAN_GRANT_ADMIN.includes(myRole)));
 
 /** The API's codes, in plain words. */
 function explain(e: unknown, fallback: string): string {
@@ -30,6 +34,8 @@ function explain(e: unknown, fallback: string): string {
     case "already_member": return "That person is already on your team.";
     case "self_change": return "You cannot change your own role or remove yourself. Ask another owner or admin.";
     case "owner_only": return "Only an owner can make someone an owner or change an owner's role.";
+    case "admin_only": return "Only an owner or an admin can make someone an admin, or change or remove an admin.";
+    case "reauth_required": return "Making someone an admin or an owner needs a fresh sign-in. Confirm it's you (at the top of this page), then try again.";
     case "not_found": return "That person is no longer on the team. Refresh the page.";
     case "forbidden": return "Your role cannot do that.";
     case "invalid_request": return "Check the email address and the role.";
@@ -41,10 +47,13 @@ function explain(e: unknown, fallback: string): string {
  * The team (docs/spec/21, area A): who is here and as what, who is invited and not yet in, and the changes an owner,
  * admin or HR can make. Every change that affects someone else asks first and says what will happen.
  */
-export function TeamCard({ myRole, myUserId }: { myRole: string; myUserId: string }) {
+export function TeamCard({ myRole, myUserId, onReauthRequired }: { myRole: string; myUserId: string; onReauthRequired?: () => void }) {
   const qc = useQueryClient();
   const canManage = CAN_MANAGE_MEMBERS.includes(myRole);
   const isOwner = myRole === "owner";
+  const mayGrantAdmin = CAN_GRANT_ADMIN.includes(myRole);
+  // A refusal for an old sign-in brings up "Confirm it's you" at the top of Setup, as a rule change does.
+  const failed = (e: unknown, fallback: string) => { if (e instanceof ApiError && e.code === "reauth_required") onReauthRequired?.(); setError(explain(e, fallback)); };
   const members = useQuery({ queryKey: ["members"], queryFn: () => api.get<Member[]>("/api/v1/companies/current/members") });
   const invitations = useQuery({ queryKey: ["invitations"], queryFn: () => api.get<Invitation[]>("/api/v1/companies/current/invitations") });
   const refresh = async () => { await qc.invalidateQueries({ queryKey: ["members"] }); await qc.invalidateQueries({ queryKey: ["invitations"] }); };
@@ -58,12 +67,12 @@ export function TeamCard({ myRole, myUserId }: { myRole: string; myUserId: strin
   const sendInvite = useMutation({
     mutationFn: () => api.post<{ ok: boolean; devLink?: string; replaced: number }>("/api/v1/companies/current/members/invite", { email: invite.email, role: invite.role, ...(invite.name.trim() ? { name: invite.name.trim() } : {}) }),
     onSuccess: async (r) => { toast(r.replaced ? "Invitation sent again with a new link; the old one no longer works." : "Invitation sent. It works for seven days."); setInviteLink(r.devLink ?? null); setError(null); setInvite({ email: "", role: "hiring_manager", name: "" }); await refresh(); },
-    onError: (e) => setError(explain(e, "Could not send the invitation.")),
+    onError: (e) => failed(e, "Could not send the invitation."),
   });
   const resend = useMutation({
     mutationFn: (id: string) => api.post<{ ok: boolean; devLink?: string }>(`/api/v1/companies/current/invitations/${id}/resend`),
     onSuccess: async (r) => { toast("Invitation sent again with a new link."); setInviteLink(r.devLink ?? null); setError(null); await refresh(); },
-    onError: (e) => setError(explain(e, "Could not send the invitation again.")),
+    onError: (e) => failed(e, "Could not send the invitation again."),
   });
   const revoke = useMutation({
     mutationFn: (id: string) => api.post(`/api/v1/companies/current/invitations/${id}/revoke`),
@@ -79,7 +88,7 @@ export function TeamCard({ myRole, myUserId }: { myRole: string; myUserId: strin
       else toast("Role changed. They are signed out and get the new role when they sign in again.");
       setRoleChange(null); setRemoving(null); setError(null); await refresh();
     },
-    onError: (e) => { setError(explain(e, "Could not change the team.")); setRoleChange(null); setRemoving(null); },
+    onError: (e) => { failed(e, "Could not change the team."); setRoleChange(null); setRemoving(null); },
   });
 
   const list = members.data ?? [];
@@ -93,17 +102,18 @@ export function TeamCard({ myRole, myUserId }: { myRole: string; myUserId: strin
         <div className="stack" style={{ gap: 6 }}>
           {list.map((m) => {
             const self = m.userId === myUserId;
-            // Only an owner touches an owner (the API says owner_only otherwise), and nobody touches themselves.
-            const canTouch = canManage && !self && (isOwner || m.role !== "owner");
+            // Only an owner touches an owner, only an owner or admin touches an admin (the API says owner_only or
+            // admin_only otherwise), and nobody touches themselves.
+            const canTouch = canManage && !self && (isOwner || m.role !== "owner") && (mayGrantAdmin || m.role !== "admin");
             return (
               <div key={m.userId} className="stack" style={{ gap: 4, padding: "6px 0", borderTop: "1px solid var(--line)" }}>
                 <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-                  <span>{nameOf(m)}{self ? <span className="muted small"> (you)</span> : null} <span className="muted small">{m.email}</span></span>
+                  <span className="row" style={{ flexWrap: "nowrap", minWidth: 0 }}><Avatar name={nameOf(m)} size="sm" /><span>{nameOf(m)}{self ? <span className="muted small"> (you)</span> : null} <span className="muted small">{m.email}</span></span></span>
                   <span className="row" style={{ gap: 6, flexWrap: "wrap" }}>
-                    <Chip tone={m.schedulable ? "good" : "caution"}>{m.calendar?.status === "live" ? `${m.calendar.provider} calendar` : m.availability ? "hours declared" : "no availability"}</Chip>
+                    <Pill size="sm" tone={m.schedulable ? "good" : "caution"}>{m.calendar?.status === "live" ? `${m.calendar.provider} calendar` : m.availability ? "hours declared" : "no availability"}</Pill>
                     {canTouch ? (
                       <select className="select" aria-label={`Role of ${nameOf(m)}`} value={roleChange?.userId === m.userId ? roleChange.role : m.role} onChange={(e) => setRoleChange({ userId: m.userId, role: e.target.value })} disabled={update.isPending}>
-                        {ROLES.filter((r) => isOwner || r.value !== "owner").map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+                        {grantable(myRole).map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
                       </select>
                     ) : <Chip>{roleLabel(m.role)}</Chip>}
                     {canTouch && removing !== m.userId ? <Button size="sm" variant="quiet" onClick={() => { setRemoving(m.userId); setRoleChange(null); }}>Remove</Button> : null}
@@ -112,7 +122,7 @@ export function TeamCard({ myRole, myUserId }: { myRole: string; myUserId: strin
                 {roleChange?.userId === m.userId && roleChange.role !== m.role ? (
                   <Alert tone="caution">
                     <div className="stack" style={{ gap: 6 }}>
-                      <span>Make {nameOf(m)} {ROLES.find((r) => r.value === roleChange.role)?.label.toLowerCase() ?? roleChange.role}? {ROLES.find((r) => r.value === roleChange.role)?.help} They are signed out and get the new role when they sign in again.</span>
+                      <span>Make {nameOf(m)} {ROLES.find((r) => r.value === roleChange.role)?.label.toLowerCase() ?? roleChange.role}? {ROLES.find((r) => r.value === roleChange.role)?.help} They are signed out and get the new role when they sign in again.{roleChange.role === "admin" || roleChange.role === "owner" ? " Making someone an admin or an owner needs a recent sign-in; if yours is older, you are asked to confirm it's you first." : ""}</span>
                       <div className="row"><Button size="sm" variant="primary" loading={update.isPending} onClick={() => update.mutate({ userId: m.userId, body: { role: roleChange.role } })}>Change role</Button><Button size="sm" variant="quiet" onClick={() => setRoleChange(null)}>Keep as is</Button></div>
                     </div>
                   </Alert>
@@ -152,7 +162,7 @@ export function TeamCard({ myRole, myUserId }: { myRole: string; myUserId: strin
           <div className="row" style={{ alignItems: "flex-end", flexWrap: "wrap", gap: 8 }}>
             <Field label="Invite by email" htmlFor="inv"><input id="inv" className="input" type="email" required value={invite.email} onChange={(e) => setInvite({ ...invite, email: e.target.value })} /></Field>
             <Field label="Name (optional)" htmlFor="invname"><input id="invname" className="input" type="text" value={invite.name} onChange={(e) => setInvite({ ...invite, name: e.target.value })} /></Field>
-            <Field label="Role" htmlFor="invrole"><select id="invrole" className="select" value={invite.role} onChange={(e) => setInvite({ ...invite, role: e.target.value })}>{ROLES.filter((r) => isOwner || r.value !== "owner").map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}</select></Field>
+            <Field label="Role" htmlFor="invrole"><select id="invrole" className="select" value={invite.role} onChange={(e) => setInvite({ ...invite, role: e.target.value })}>{grantable(myRole).map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}</select></Field>
             <Button type="submit" variant="primary" loading={sendInvite.isPending}>Invite</Button>
           </div>
           <p className="small muted">{ROLES.find((r) => r.value === invite.role)?.help} They get one email with a link that works for seven days, and sign in with Google or Microsoft using that address.</p>
@@ -161,7 +171,7 @@ export function TeamCard({ myRole, myUserId }: { myRole: string; myUserId: strin
         <p className="small muted" style={{ marginTop: 12 }}>Owners, admins and HR invite people and change roles. Ask one of them to add someone or change a role.</p>
       )}
       {inviteLink ? <p className="small muted" style={{ marginTop: 8 }}>Development mode: <a href={inviteLink}>invitation link</a></p> : null}
-      <p className="small muted" style={{ marginTop: 8 }}>Interviewers never see pay. Hiring managers can approve roles and decide on candidates. Only an owner can make another owner, and the last owner cannot be removed.</p>
+      <p className="small muted" style={{ marginTop: 8 }}>Interviewers never see pay. Hiring managers can approve roles and decide on candidates. Only owners and admins can make someone an admin, and only an owner can make another owner; either needs a recent sign-in. The last owner cannot be removed.</p>
     </Card>
   );
 }

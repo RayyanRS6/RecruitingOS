@@ -74,6 +74,9 @@ export type AuditAction =
   | "posting.changed"
   | "application_link.changed"
   | "role.applications_toggled"
+  /** Publishing (plan Wave D): the boards a role uses, and its closing date. */
+  | "role.boards_chosen"
+  | "role.closing_date_changed"
   /** Team invitations (docs/spec/21, area A): sent, sent again, withdrawn, accepted at sign-in. Never the token. */
   | "invitation.sent"
   | "invitation.resent"
@@ -83,13 +86,26 @@ export type AuditAction =
   | "report.exported"
   /** Company preferences changed by an owner or admin (audit finding A8): which keys, never the old and new text of a notice (notice.changed carries the versions). */
   | "company.updated"
+  /** The one-time ITS check of a self-serve company (founder decision B7): confirmed, or taken back, by whom and why. */
+  | "company.verified"
+  | "company.unverified"
   /** The customer's own audit history left as a file (audit finding A9): who, how many rows, which filters. */
   | "audit.exported"
   /** The holder of a session confirmed with their sign-in provider again before a sensitive change (audit finding A12). */
   | "session.reauthenticated"
   /** A person wrote to a candidate from the sheet (F11): who, which application, whether it went at once or waited for an approval, and who approved it. Never the text. */
   | "message.sent"
-  | "message.approval_requested";
+  | "message.approval_requested"
+  /** Undo (plan G9): a person took back a message while it waited in the outbox. Which message, never the text. */
+  | "message.undone"
+  /** The one closing message of a closed role (Q30): sent to everyone untold, or put to one approval, by whom, how many. */
+  | "role.closing_message"
+  /** A person changed which email alerts they get (plan B3): the groups, before and after. Never anything else. */
+  | "notification.preferences_changed"
+  /** Wave E: a recruiter added notes from a call to a screening conversation; ITS changed how a role or a company's roles meet the conversation. Never the notes. */
+  | "screen.recruiter_notes_added"
+  | "role.apply_mode_changed"
+  | "company.apply_flow_changed";
 
 /** Privileged and access actions. Distinct from domain events: this answers "who looked at what, and why." */
 export async function audit(

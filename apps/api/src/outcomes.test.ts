@@ -136,14 +136,18 @@ describe("human-recorded hiring outcomes", () => {
     const r = await json(owner, "POST", `/api/v1/applications/${applicationIds[1]}/outcome`, { outcome: "offer_declined_externally", confirm: true, note: "Took another job." });
     expect(r.status).toBe(201);
     expect(((await r.json()) as { stage: string }).stage).toBe("declined");
-    // a third applicant: employer declined, with the reason required; the decline message follows the human decision as always
+    // a third applicant: employer declined, with a reason from the fixed list every decline uses (plan G2); free text is refused
     const third = await apply("Cara", "Nguyen", "cara.nguyen@example.com");
     applicationIds.push(third);
-    const d = await json(owner, "POST", `/api/v1/applications/${third}/outcome`, { outcome: "employer_declined", confirm: true, reason: "Chose another finalist." });
+    expect((await json(owner, "POST", `/api/v1/applications/${third}/outcome`, { outcome: "employer_declined", confirm: true, reason: "Chose another finalist." })).status).toBe(400);
+    const d = await json(owner, "POST", `/api/v1/applications/${third}/outcome`, { outcome: "employer_declined", confirm: true, reason: "position_filled", note: "Chose another finalist." });
     expect(d.status).toBe(201);
     expect(((await d.json()) as { stage: string }).stage).toBe("rejected");
     const [row] = await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.applicationId, third));
-    expect((row.details as { reason: string }).reason).toBe("Chose another finalist.");
+    expect((row.details as { reason: string }).reason).toBe("position_filled");
+    expect(row.notes).toBe("Chose another finalist.");
+    // the reason is filed on the application exactly as the Decline button files it
+    expect((await container.db.select({ rejectReason: applications.rejectReason }).from(applications).where(eq(applications.id, third)))[0].rejectReason).toBe("position_filled");
     // withdrew and no-hire
     const fourth = await apply("Dev", "Patel", "dev.patel@example.com");
     applicationIds.push(fourth);
@@ -158,8 +162,8 @@ describe("human-recorded hiring outcomes", () => {
     expect(rehire.status).toBe(201);
     expect(((await rehire.json()) as { stage: string }).stage).toBe("hired");
     expect((await json(owner, "POST", `/api/v1/applications/${fifth}/outcome`, { outcome: "hired_externally", confirm: true, hireDate: "2026-11-02" })).status).toBe(409);
-    // the employer's decline sends the candidate the same respectful message as the Decline button, after the human decision
-    expect(email().sent.some((m) => m.to === "cara.nguyen@example.com")).toBe(true);
+    // the employer's decline is private like the Decline button's (founder decision B6): no decline message until a person sends it
+    expect(email().sent.some((m) => m.to === "cara.nguyen@example.com" && m.subject.startsWith("Your application to"))).toBe(false);
     // an impossible date is a field error, not a server error
     const sixth = await apply("Finn", "Ola", "finn.ola@example.com");
     applicationIds.push(sixth);

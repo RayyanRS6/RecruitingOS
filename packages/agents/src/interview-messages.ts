@@ -1,4 +1,4 @@
-import type { OfferedSlot, RolePacket } from "@ros/contracts";
+import { titleMidSentence, type OfferedSlot, type RolePacket } from "@ros/contracts";
 import { buildIcs, disclosureLine, formatInZone, groupSlotsByDay } from "@ros/core";
 import type { Queryable, interviews } from "@ros/db";
 import type { Integrations, SendResult } from "@ros/integrations";
@@ -31,12 +31,47 @@ function slotsText(slots: OfferedSlot[], tz: string): string {
   return groupSlotsByDay(slots, tz).map((g) => `${g.label}\n${g.slots.map((s) => `  - ${s.label}`).join("\n")}`).join("\n");
 }
 
-export async function sendSlotsOffered(q: Queryable, integrations: Integrations, input: InterviewMessageInput): Promise<SendResult> {
+/**
+ * A personal line on the invitation (founder decision Q28): written by the person who approved the interview, or
+ * suggested by the assistant and kept by them, in which case the email says the assistant helped. Checked before it
+ * gets here (`checkPersonalLine`).
+ */
+export type InvitationNote = { text: string; aiHelped: boolean; senderName: string };
+
+/** The note's paragraph in the invitation, empty when there is none. */
+export function invitationNoteText(note: InvitationNote | null | undefined): string {
+  if (!note?.text.trim()) return "";
+  const help = note.aiHelped ? ` (${note.senderName} wrote this note with help from an AI assistant.)` : "";
+  return `\n\nA note from ${note.senderName}: ${note.text.trim()}${help}`;
+}
+
+/**
+ * Which times email this is: the first offer for an interview, or new times for someone under Cancelled (founder
+ * decisions 2A and 4A): the ones they asked for when they cancelled, or the ones the team sends (after a no-show, or to
+ * someone who said they were no longer interested). The new-times openings never say why and never hint at a decision
+ * (founder decision B6).
+ */
+export type SlotsVariant = "first" | "new_times_asked" | "new_times_team";
+
+/**
+ * The times email, written but not sent: one template and one key per interview and attempt whatever the variant, so it
+ * waits for the ITS check and is withdrawn when the offer ends, as every times email is (outbox.ts).
+ */
+export function slotsOfferedMessage(input: InterviewMessageInput & { note?: InvitationNote | null; variant?: SlotsVariant }): { templateKey: "interview_slots"; idempotencyKey: string; subject: string; text: string } {
   const { candidate, company, packet, interview } = input;
   const who = input.interviewerFirstNames.length ? ` with ${input.interviewerFirstNames.join(" and ")}` : "";
+  const format = interview.format.replace("_", " ");
+  const position = packet.identity.title;
+  const variant = input.variant ?? "first";
+  const opening = variant === "new_times_asked"
+    ? `As you asked when you cancelled, here are new times for your ${titleMidSentence(interview.title)} for the ${position} position at ${company.name}. ${interview.durationMinutes} minutes, ${format}${who}.`
+    : variant === "new_times_team"
+      ? `${company.name} would like to find a new time for your ${titleMidSentence(interview.title)} for the ${position} position. ${interview.durationMinutes} minutes, ${format}${who}.`
+      : `Good news: ${company.name} would like to interview you for the ${position} position. ${interview.title}${who}, ${interview.durationMinutes} minutes, ${format}.`;
+  const subject = variant === "new_times_asked" ? `New times for your interview: ${position} at ${company.name}` : variant === "new_times_team" ? `New interview times: ${position} at ${company.name}` : `Pick a time for your interview: ${position} at ${company.name}`;
   const text = `Hi ${candidate.firstName},
 
-Good news: ${company.name} would like to interview you for the ${packet.identity.title} position. ${interview.title}${who}, ${interview.durationMinutes} minutes, ${interview.format.replace("_", " ")}.
+${opening}${invitationNoteText(input.note)}
 
 Pick a time that works for you (times shown in ${input.candidateTimezone}; you can change the time zone on the page):
 ${slotsText(interview.offeredSlots, input.candidateTimezone)}
@@ -46,7 +81,12 @@ Choose here: ${scheduleUrl(input.appBaseUrl, interview)}
 If none of these work, the same page lets you tell us what does.
 
 ${footer(packet, company)}`;
-  return deliver(q, integrations, { ...input, channel: "email", templateKey: "interview_slots", subject: `Pick a time for your interview: ${packet.identity.title} at ${company.name}`, text, idempotencyKey: `slots:${interview.id}:${interview.attempt}`, eventOnSent: "message.sent", to: candidate.email });
+  return { templateKey: "interview_slots", idempotencyKey: `slots:${interview.id}:${interview.attempt}`, subject, text };
+}
+
+export async function sendSlotsOffered(q: Queryable, integrations: Integrations, input: InterviewMessageInput & { note?: InvitationNote | null; variant?: SlotsVariant }): Promise<SendResult> {
+  const message = slotsOfferedMessage(input);
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: message.templateKey, subject: message.subject, text: message.text, idempotencyKey: message.idempotencyKey, eventOnSent: "message.sent", to: input.candidate.email });
 }
 
 export async function sendSlotsReminder(q: Queryable, integrations: Integrations, input: InterviewMessageInput): Promise<SendResult> {
@@ -115,13 +155,46 @@ ${footer(packet, company)}`;
   return deliver(q, integrations, { ...input, channel: "email", templateKey: `interview_reminder_${input.which}`, subject: `${input.which === "before24h" ? "Tomorrow" : "Soon"}: ${interview.title} at ${company.name}`, text, idempotencyKey: `iv_reminder:${interview.id}:${interview.attempt}:${input.which}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
-export async function sendInterviewCancelled(q: Queryable, integrations: Integrations, input: InterviewMessageInput & { byCandidate: boolean; reason?: string | null }): Promise<SendResult> {
+/**
+ * What the candidate chose when they cancelled from their schedule page (founder decision 2A), and the day their one
+ * automatic set of new times comes ("Thursday, October 15"), or null when none is armed for them.
+ */
+export type CandidateCancelChoice = { next: "new_times" | "not_interested"; newTimesOn: string | null };
+type CancelledInput = InterviewMessageInput & { byCandidate: boolean; reason?: string | null; leftProcess?: boolean; candidateChoice?: CandidateCancelChoice };
+
+/** The one sentence the candidate's own cancellation adds about what comes next; a day is named only when one is armed. */
+function choiceSentence(choice: CandidateCancelChoice): string {
+  if (choice.next === "not_interested") return "We let the team know you are no longer interested. If you change your mind, reply to this email.";
+  return choice.newTimesOn ? `We will email you new times on ${choice.newTimesOn}, unless the team gets in touch first.` : "You asked for new times, so someone from the team will be in touch about them.";
+}
+
+/**
+ * The interview is off. Three wordings: the candidate's own cancellation ("As requested"), with one sentence on what
+ * they chose next when they cancelled from their schedule page; the team's, with the reason the team gave; and
+ * `leftProcess`, an interview called off because the application left the process (plan A9). That last one gives no
+ * reason and promises nothing: a decision is private until a person tells the candidate (founder decision B6), but
+ * someone holding a time must know not to come.
+ */
+export function interviewCancelledMessage(input: CancelledInput): { subject: string; text: string } {
   const { candidate, company, packet, interview } = input;
+  const when = interview.startsAt ? `, ${formatInZone(interview.startsAt, input.candidateTimezone)},` : "";
+  const own = `As requested, your interview (${interview.title}) at ${company.name} is cancelled.`;
+  const what = input.byCandidate
+    ? input.candidateChoice ? `${own} ${choiceSentence(input.candidateChoice)}` : own
+    : input.leftProcess
+      ? interview.startsAt ? `Your interview (${interview.title}) at ${company.name}${when} is cancelled, so there is no need to attend.` : `The interview times ${company.name} offered you for ${interview.title} are no longer available, so there is no need to pick one.`
+      : `${company.name} had to cancel your interview (${interview.title})${input.reason ? `: ${input.reason}` : "."} They will be in touch about next steps.`;
   const text = `Hi ${candidate.firstName},
 
-${input.byCandidate ? `As requested, your interview (${interview.title}) at ${company.name} is cancelled.` : `${company.name} had to cancel your interview (${interview.title})${input.reason ? `: ${input.reason}` : "."} They will be in touch about next steps.`}
+${what}
 
 ${footer(packet, company)}`;
+  return { subject: `Cancelled: ${interview.title} at ${company.name}`, text };
+}
+
+export async function sendInterviewCancelled(q: Queryable, integrations: Integrations, input: CancelledInput): Promise<SendResult> {
+  const { candidate, company, packet, interview } = input;
+  const message = interviewCancelledMessage(input);
   const ics = interview.startsAt ? interviewIcs({ interview, company, packet, candidate, fromAddress: integrations.env.fromAddress, method: "CANCEL", appBaseUrl: input.appBaseUrl }) : null;
-  return deliver(q, integrations, { ...input, channel: "email", templateKey: "interview_cancelled", subject: `Cancelled: ${interview.title} at ${company.name}`, text, idempotencyKey: `iv_cancel:${interview.id}:${interview.attempt}`, eventOnSent: "message.sent", to: candidate.email, attachments: ics ? [{ filename: "cancel.ics", contentType: "text/calendar; method=CANCEL", contentBase64: Buffer.from(ics).toString("base64") }] : undefined });
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: "interview_cancelled", subject: message.subject, text: message.text, idempotencyKey: `iv_cancel:${interview.id}:${interview.attempt}`, eventOnSent: "message.sent", to: candidate.email, attachments: ics ? [{ filename: "cancel.ics", contentType: "text/calendar; method=CANCEL", contentBase64: Buffer.from(ics).toString("base64") }] : undefined });
 }

@@ -5,7 +5,7 @@ import { createDb, inspectConnectionRole, migrate, migrationStatus, postings, pr
 import { POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, countActiveAdmins, createRateLimitStore, emit, raiseAlert, transitionPosting, type RateLimitStore } from "@ros/core";
 import { createIntegrations, type Integrations } from "@ros/integrations";
 import { createEngine, type WorkflowEngine } from "@ros/workflows";
-import { REVOKE_JOB_KIND, checkPrivacyRequestDeadlines, listSuppressions, onSuppressionChange, revokeAndDeleteCredentials, setEventSink } from "@ros/core";
+import { REVOKE_JOB_KIND, checkPrivacyRequestDeadlines, listSuppressions, onSuppressionChange, revokeAndDeleteCredentials, setEventSink, setNotifyClock } from "@ros/core";
 import { SEND_JOB_KIND, retryCommunication, sendFallbackSms, sendQueuedCommunication } from "@ros/agents";
 import { guardEmailAdapter } from "@ros/integrations";
 import type { Actor } from "@ros/contracts";
@@ -18,6 +18,9 @@ import { checkScannerForProduction } from "./scanner-gate";
 import { reportError } from "./observability";
 import { jobFailureReport, stepFailureReport } from "./failure-reports";
 import { DAILY_MS, recurring } from "./recurring-jobs";
+import { LINK_REQUEST_JOB_KIND, emailStatusLinks } from "./services/applications";
+import { registerApplyConversationJobs } from "./services/apply-conversation";
+import { PUBLISHING_BACKFILL_JOB_KIND, backfillPublishing } from "./services/publishing-backfill";
 
 const PRIVACY_DEADLINE_JOB_KIND = "privacy.deadline_check";
 
@@ -134,6 +137,8 @@ export async function createContainer(opts: { env?: Record<string, string | unde
   );
   // The outbox stamps its send jobs on the engine's clock, so a message queued "now" is due on the clock that runs the queue.
   integrations.clock = () => engine.clock();
+  // So does the job that writes an email alert for an update (plan B3).
+  setNotifyClock(() => engine.clock());
 
   // Correction 10: disconnecting queues revocation and deletion; the worker (the only role that can read the value) runs it.
   engine.registerJob(REVOKE_JOB_KIND, async (payload, ctx) => {
@@ -181,6 +186,15 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     if (!communicationId || !companyId) return;
     await sendQueuedCommunication(handle.db, integrations, { communicationId, companyId }, ctx);
   });
+
+  // "Lost your link?" (Wave 0 item 0.1): the page queued the request and answered at once; the lookup and the emails happen here.
+  engine.registerJob(LINK_REQUEST_JOB_KIND, async (payload, ctx) => {
+    const email = typeof payload.email === "string" ? payload.email : "";
+    if (email) await emailStatusLinks({ db: handle.db, integrations, jobsBaseUrl: env.JOBS_BASE_URL }, email, ctx.now);
+  });
+
+  // A repeat submission's conversation (plan E1): wiped after seven days unconfirmed, and tried again after an outage.
+  registerApplyConversationJobs(engine, { db: handle.db, ai, integrations, engine, jobsBaseUrl: env.JOBS_BASE_URL });
 
   engine.registerJob("email.retry", async (payload, ctx) => {
     await withPlatform(handle.db, (tx) => retryCommunication(tx, integrations, { communicationId: String(payload.communicationId ?? ""), attempt: Number(payload.attempt ?? 1), now: ctx.now }));
@@ -241,9 +255,15 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     if (retry) throw new Error(`verification of posting ${postingId} failed (${result.ok ? "" : result.reason}); retrying`);
   });
 
+  // Roles already open when the publishing rules arrived (plan Wave D): their missing ITS posting tasks and Colorado
+  // closing dates. Queued once per boot; a run changes only what is still missing (services/publishing-backfill.ts).
+  engine.registerJob(PUBLISHING_BACKFILL_JOB_KIND, async () => {
+    await backfillPublishing({ db: handle.db, integrations, env, engine });
+  });
+
   // The recurring jobs exist from the first boot of any process; tests arm them explicitly so a moved clock never runs a sweep by surprise.
   if (env.NODE_ENV !== "test") {
-    for (const kind of [PRIVACY_DEADLINE_JOB_KIND, MAINTENANCE_JOB_KIND, HEALTH_CHECK_JOB_KIND]) await engine.ensureQueued(handle.db, { kind });
+    for (const kind of [PRIVACY_DEADLINE_JOB_KIND, MAINTENANCE_JOB_KIND, HEALTH_CHECK_JOB_KIND, PUBLISHING_BACKFILL_JOB_KIND]) await engine.ensureQueued(handle.db, { kind });
   }
 
   let draining: Promise<void> | null = null;

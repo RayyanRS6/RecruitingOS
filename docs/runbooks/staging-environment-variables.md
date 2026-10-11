@@ -96,6 +96,7 @@ the next merge to `main`, or Deployments, **Create Deployment**, branch `main`.
 | `ANALYTICS_PROVIDER` | `fake` | constant until PostHog is set up | no |
 | `WORKER_INLINE` | `false` | constant; production refuses `true`. Until the Railway worker runs, work that needs it (intake compilation, application processing, reminders) waits in the queue | no |
 | `CSP_MODE` | `report-only` | constant until the staging reports are reviewed | no |
+| `COMPANY_CHECK` | not set (`its`) | constant; production refuses `auto`. A company created on staging waits for an administrator's confirmation in the admin console (Customers, Confirm) before its pages are public | no |
 | `TRUST_PROXY_HOPS` | `1` | constant for Vercel | no |
 | `DATABASE_POOL_MAX` | `5` | constant | no |
 

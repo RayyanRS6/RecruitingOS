@@ -1,0 +1,26 @@
+{
+  "packages": {
+    "bricolage-grotesque": "5.3.0",
+    "ibm-plex-mono": "5.3.0",
+    "ibm-plex-sans": "5.3.0"
+  },
+  "files": {
+    "bricolage-grotesque-LICENSE.txt": "923f4ddf0fd39f9b7794ab0df7332f3d95dc43e8ad7ec2289d6d9e8491177f51",
+    "bricolage-grotesque-latin-600-normal.woff2": "b34fc8c1ef0ac8798455ac2979eae4b4f90f0d327e3584d1032fa77a8a9a66ca",
+    "bricolage-grotesque-latin-700-normal.woff2": "4c373ce3c1cca41c864eb3e27c059a59fc6310547ab9c9b6cd780d387ba24206",
+    "bricolage-grotesque-latin-800-normal.woff2": "3e1b5f0a56ee995b7c1445bc54e6ec98c5dffb585ef5c4baf86731cf68e27c61",
+    "bricolage-grotesque-latin-ext-600-normal.woff2": "9903537bd117c519eedf2d80824d1cb4591238edde5ecd00b9d69fef5c9e9375",
+    "bricolage-grotesque-latin-ext-700-normal.woff2": "25d714d702deab603819c7fbc619d6d63d86a0d055fa61b3b9f0453f9d5e697a",
+    "bricolage-grotesque-latin-ext-800-normal.woff2": "e101adfee20e88db3b345948b0bdc43da40253cc8c7139d7752d01704718d825",
+    "ibm-plex-mono-LICENSE.txt": "23b0a9d0c6d3f140a0b77e483c5cfa6bba574325ef5cb189ed9f2fec4884533f",
+    "ibm-plex-mono-latin-400-normal.woff2": "08949f728dc52d528e69b1667d15c89a5686a4ee9a296ff90983985f99c380f7",
+    "ibm-plex-mono-latin-ext-400-normal.woff2": "6bc0f226a5b7884a8170e3f62c63d7675609d4631bdc5931b5cdab81821f00eb",
+    "ibm-plex-sans-LICENSE.txt": "d0283623ef57e722fd0eb688a8041589670c608ab780cd3612d06ba6f153d3fd",
+    "ibm-plex-sans-latin-400-normal.woff2": "3b646991d30055a93a4ecc499713d4347953a74a947ecab435ab72070cbdab0e",
+    "ibm-plex-sans-latin-500-normal.woff2": "0717336fb31fcdcde4b8deb3675bb4a0f7f6d484864afcd6751ac29975962203",
+    "ibm-plex-sans-latin-600-normal.woff2": "8960851d691c054ed38e259bdcf1a6190d157b4203ed5bb32c632a863fb8ec2f",
+    "ibm-plex-sans-latin-ext-400-normal.woff2": "c93d2a12aaa280f68b9ab7b726ff8dfedda67c99ef9abed047c1847a1cc6d583",
+    "ibm-plex-sans-latin-ext-500-normal.woff2": "2846035d85100f84c79393f80f1442d4ee720129ab8b3ffa8969aae281db8c6c",
+    "ibm-plex-sans-latin-ext-600-normal.woff2": "b25dfd4f979e442ae1e25cd0894463434cf01ba21ac1a35d39f4a82bd4cc060e"
+  }
+}

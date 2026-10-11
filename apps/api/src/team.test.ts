@@ -405,7 +405,7 @@ describe("team invitations, members and roles", () => {
     expect(told).toHaveLength(1);
     expect(told[0].title).toBe("Wes Leaving was removed; an interview was cancelled");
     expect(told[0].body).toContain("Working interview: Wes Leaving was the only interviewer, so that interview was cancelled.");
-    expect(told[0].body).toContain("The candidate who had a booked time was told");
+    expect(told[0].body).toContain("The candidate was told the interview is off.");
     expect(told[0].body).toContain("approve a new interview with another interviewer");
     expect(told[0].body).toContain("Chairside interview: goes ahead with the other interviewers.");
     expect(told[0].body).not.toContain("add an interviewer");
@@ -488,7 +488,7 @@ describe("team invitations, members and roles", () => {
         "GET /roles": () => json(cookie, "GET", "/api/v1/roles"),
         "POST /roles/:id/approve": () => json(cookie, "POST", `/api/v1/roles/${rid}/approve`, { version: 1 }),
         "POST /companies/current/members/invite": () => invite(cookie, { email: `${role.replace(/_/g, "-")}-invitee@teamtest.test`, role: "interviewer" }),
-        "PUT /policies": () => json(cookie, "PUT", "/api/v1/policies", { actionType: "message.send_templated", level: "auto_notify", approverRoles: [] }),
+        "PUT /policies": () => json(cookie, "PUT", "/api/v1/policies", { actionType: "intervention.nudge", level: "auto_notify", approverRoles: [] }),
         "GET /roles/:id/packets": () => json(cookie, "GET", `/api/v1/roles/${rid}/packets`),
         "POST /applications/:id/actions reject": () => json(cookie, "POST", `/api/v1/applications/${applicationFor[role]}/actions`, { action: "reject", reason: "not_a_match_experience", note: "role coverage" }),
         "GET /companies/current/audit": () => json(cookie, "GET", "/api/v1/companies/current/audit"),

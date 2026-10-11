@@ -1,5 +1,6 @@
-import type { EvidenceAssessment, IntakeFacts, IntakeTurn, ResumeExtraction, RolePacket, ScreenAssessment, ScreenProgress, ScreenTurn } from "@ros/contracts";
+import type { DraftRolePacket, EvidenceAssessment, IntakeExtraction, IntakeFacts, IntakeQuestion, IntakeTurn, PacketRevision, ResumeExtraction, ScreenAssessment, ScreenProgress, ScreenTurn } from "@ros/contracts";
 import type { FakeProvider, IntakeContext, StructuredRequest } from "@ros/ai";
+import { marketPlace, normalizeCriterion, screenCriterion } from "@ros/core";
 import { redactProtected } from "./screening";
 import { FOCUS_INTRO, isFocusKey } from "./screen-focus";
 
@@ -11,14 +12,45 @@ import { FOCUS_INTRO, isFocusKey } from "./screen-focus";
 export function registerFakeHandlers(fake: FakeProvider): void {
   fake.register("intake.turn", (req) => fakeIntakeTurn(contextFrom(req)));
   fake.register("intake.compile", (req) => fakeCompile(contextFrom(req)));
+  fake.register("intake.extract", (req) => fakeExtract(req));
   fake.register("resume.extract", (req) => fakeResumeExtract(req));
   fake.register("triage.assess", (req) => fakeTriageAssess(req));
   fake.register("screen.turn", (req) => fakeScreenTurn(req));
   fake.register("screen.assess", (req) => fakeScreenAssess(req));
+  fake.register("packet.revise", (req) => fakeRevise(req));
+  fake.register("company.about", (req) => fakeCompanyAbout(req));
+  fake.register("message.freeform", (req) => fakeMessageLine(req));
 }
 
+/**
+ * message.suggest_line v1 (Q28): one warm line for an interview invitation or an update, the way the model is told to
+ * write it: no promise, no judgment, nothing about the person. The interview's title is used when given.
+ */
+function fakeMessageLine(req: StructuredRequest<unknown>): { line: string } {
+  const text = req.messages.map((m) => m.content).join("\n");
+  const interview = text.match(/<interview>([^<]*)<\/interview>/)?.[1]?.trim();
+  if (/Purpose: an interview invitation/.test(text)) return { line: interview ? `We are looking forward to meeting you for the ${interview.toLowerCase()} and hearing more about what you are looking for.` : "We are looking forward to meeting you and hearing more about what you are looking for." };
+  return { line: "Thank you for your patience while the team works through the applications for this role." };
+}
+
+type FakeIntakeContext = {
+  req: StructuredRequest<unknown>;
+  facts: IntakeFacts;
+  ownerMessages: string[];
+  playbookRoleTitle: string | null;
+  companyName: string;
+  benchmark: IntakeContext["benchmark"];
+  /** "basis_unknown" or "no_market_figure" when the prompt says there is no benchmark, and why. */
+  benchmarkGap: "basis_unknown" | "no_market_figure" | null;
+  locationsText: string;
+  vertical: string;
+  ad: string | null;
+  confirmedPay: { basis: "hourly" | "salary"; min: number; max: number; ceiling?: number } | null;
+  fromRole: string | null;
+};
+
 /** The prompt renders `Facts established so far (JSON): ...` and the transcript; recover them from the request. */
-function contextFrom(req: StructuredRequest<unknown>): { req: StructuredRequest<unknown>; facts: IntakeFacts; ownerMessages: string[]; playbookRoleTitle: string | null; companyName: string; benchmark: IntakeContext["benchmark"]; locationsText: string; vertical: string } {
+function contextFrom(req: StructuredRequest<unknown>): FakeIntakeContext {
   const sys = req.system.map((b) => b.text).join("\n");
   const factsMatch = sys.match(/Facts established so far \(JSON\): (\{[\s\S]*\})/);
   let facts: IntakeFacts = { mustHaves: [], niceToHaves: [], eligibilityNotes: [], interviewers: [], dealBreakers: [], declinedCriteria: [] };
@@ -33,6 +65,9 @@ function contextFrom(req: StructuredRequest<unknown>): { req: StructuredRequest<
   const verticalMatch = sys.match(/Vertical: ([^.]+)\./);
   const locMatch = sys.match(/Locations: ([^.\n]+)\./);
   const benchMatch = sys.match(/Compensation benchmark for ([^(]+) \((hourly|salary)\): p25 ([\d.]+), p50 ([\d.]+), p75 ([\d.]+)\. Source: ([^\n]+)\./);
+  const estimate = /This figure is ITS's own estimate/.test(sys);
+  const roughMatch = sys.match(/This figure is an approximate match: it is for a broader group of jobs \(([^)]+)\)/);
+  const payMatch = sys.match(/Confirmed pay \(set or confirmed by a person\): (hourly|salary) ([\d.]+) to ([\d.]+)(?:, ceiling ([\d.]+))?\./);
   const ownerMessages = req.messages.filter((m) => m.role === "user").map((m) => m.content);
   const transcript = req.messages.map((m) => m.content).join("\n");
   const fromTranscript = [...transcript.matchAll(/^owner: (.*)$/gm)].map((m) => m[1]);
@@ -43,26 +78,88 @@ function contextFrom(req: StructuredRequest<unknown>): { req: StructuredRequest<
     playbookRoleTitle: roleMatch?.[1]?.trim() ?? null,
     companyName: companyMatch?.[1]?.trim() ?? "the company",
     vertical: verticalMatch?.[1]?.trim() ?? "general",
-    benchmark: benchMatch ? { metro: benchMatch[1].trim(), basis: benchMatch[2], p25: Number(benchMatch[3]), p50: Number(benchMatch[4]), p75: Number(benchMatch[5]), source: benchMatch[6].trim() } : null,
+    benchmark: benchMatch ? { metro: benchMatch[1].trim(), basis: benchMatch[2], p25: Number(benchMatch[3]), p50: Number(benchMatch[4]), p75: Number(benchMatch[5]), source: benchMatch[6].trim(), origin: estimate ? "its_estimate" : "market", ...(roughMatch ? { approximate: true, occupation: roughMatch[1] } : {}) } : null,
+    benchmarkGap: /pay basis is not known/.test(sys) ? "basis_unknown" : /No compensation benchmark is available/.test(sys) ? "no_market_figure" : null,
     locationsText: locMatch?.[1]?.trim() ?? "",
+    ad: sys.match(/<job_ad>\n([\s\S]*?)\n<\/job_ad>/)?.[1] ?? null,
+    confirmedPay: payMatch ? { basis: payMatch[1] as "hourly" | "salary", min: Number(payMatch[2]), max: Number(payMatch[3]), ...(payMatch[4] ? { ceiling: Number(payMatch[4]) } : {}) } : null,
+    fromRole: sys.match(/This draft starts from the role "([^"]+)"/)?.[1] ?? null,
   };
 }
 
 const ILLEGAL: Array<{ pattern: RegExp; reason: string; alternative: string }> = [
-  { pattern: /\b(under|younger than|below)\s+\d{2}\b|\brecent grads?\b|\byoung\b|\bdigital native/i, reason: "Age and proxies for age cannot be hiring criteria.", alternative: "Describe the energy or skills you need (for example, comfort with new software) and we will screen for that." },
+  { pattern: /\b(under|younger than|below)\s+\d{2}\b|\brecent grad(?:uate)?s?\b|\byoung\b|\bdigital native/i, reason: "Age and proxies for age cannot be hiring criteria.", alternative: "Describe the energy or skills you need (for example, comfort with new software) and we will screen for that." },
   { pattern: /\bno (employment )?gaps?\b/i, reason: "Employment gaps are not a lawful or useful criterion.", alternative: "We will look at demonstrated skills and recent relevant experience instead." },
   { pattern: /\bnative (english )?speaker/i, reason: "Native-speaker requirements can discriminate by national origin.", alternative: "We can require the level of English proficiency the job actually needs, such as clear patient communication." },
   { pattern: /\b(no|without) (kids|children|family)\b|\bsingle\b|\bmarried\b/i, reason: "Family status cannot be a criterion.", alternative: "If the real need is schedule availability, we will ask every candidate about availability." },
   { pattern: /\bzip( ?code)?\b.*\bonly\b|\bonly\b.*\bzip( ?code)?\b/i, reason: "Zip-code restrictions are a proxy for protected characteristics and are prohibited in Illinois.", alternative: "We will ask whether candidates can reliably work at the location." },
 ];
 
-function fakeIntakeTurn(c: ReturnType<typeof contextFrom>): IntakeTurn {
+/** "Did we hire anyone?" or "what's on today?": a question about the day, not a role to open (founder decision Q5). */
+function notARole(text: string, facts: IntakeFacts, playbookRoleTitle: string | null): boolean {
+  if (facts.title) return false;
+  const t = text.trim();
+  const asksAboutTheDay = /^(?:did|how|what|what's|when|who|where|is|are|do|does|has|have|any|why)\b/i.test(t) && /\?\s*$/.test(t) && !/\b(?:hire|hiring|need|find|looking for)\s+(?:a|an|some|another|two|three)\b/i.test(t);
+  if (asksAboutTheDay) return true;
+  // "Front office coordinator in Tustin, $22 to $26 an hour. Just draft it." names a job without the word "hire".
+  const aboutHiring = /\b(?:hire|hiring|need|want|looking for|recruit|position|role|job|opening|vacancy|replace|replacement|staff)\b/i.test(t) || !!playbookRoleTitle || /\$\s?\d|\bdraft it\b/i.test(t);
+  return !aboutHiring;
+}
+
+/** The playbook block as the fake reads it: the role's qualifications, competencies, screening questions and interview plan. */
+function playbookRoleFrom(req: StructuredRequest<unknown>): { competencies: Array<{ key: string; name: string; definition: string }>; eligibility: Array<{ type: string; question: string }>; qualifications: string[]; questions: string[]; interviews: Array<{ title: string; minutes: number; format: string }> } {
+  const sys = req.system.map((b) => b.text).join("\n");
+  const block = sys.match(/Matched playbook role: ([\s\S]*?)(?:\n|$)/)?.[1] ?? "";
+  const seg = (start: string, end: string) => { const i = block.indexOf(start); if (i < 0) return ""; const rest = block.slice(i + start.length); const j = rest.indexOf(end); return (j < 0 ? rest : rest.slice(0, j)).trim(); };
+  const competencies = seg("Competencies: ", ". Screening questions:").split("; ").map((c) => c.match(/^(.*?) \((.*)\)$/)).filter((m): m is RegExpMatchArray => !!m).map((m) => ({ key: slug(m[1]), name: m[1].trim(), definition: m[2].trim() }));
+  const eligibility = seg("Typical eligibility: ", ". Common qualifications:").split(" | ").map((e) => e.match(/^([a-z_]+): (.*)$/)).filter((m): m is RegExpMatchArray => !!m).map((m) => ({ type: m[1], question: m[2].trim() }));
+  const qualifications = seg("Common qualifications: ", ". Competencies:").split("; ").map((q) => q.trim()).filter(Boolean);
+  const questions = seg("Screening questions: ", ". Interview plan:").split(" | ").map((q) => q.trim()).filter(Boolean);
+  const interviews = seg("Interview plan: ", ". Red flags").split("; ").map((r) => r.match(/^(.*?) \((\d+) min, ([a-z_]+)\)$/)).filter((m): m is RegExpMatchArray => !!m).map((m) => ({ title: m[1].trim(), minutes: Number(m[2]), format: m[3] }));
+  return { competencies, eligibility, qualifications, questions, interviews };
+}
+
+function slug(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40) || "item";
+}
+
+const money = (n: number) => `$${n.toLocaleString("en-US")}`;
+const per = (basis: string) => (basis === "hourly" ? "an hour" : "a year");
+
+/**
+ * The items of a list line ("Must-haves: ...") not already in the facts. The summary of tapped answers lists each ticked
+ * answer whole, between semicolons, and the server has already put it in the facts: it stays whole, never split into
+ * "Instagram", "TikTok", ... beside it (polish list). Words the owner typed are still read as a list (`split`).
+ */
+function newListItems(text: string, known: string[], split: RegExp): string[] {
+  const has = (s: string, more: string[]) => [...known, ...more].some((m) => normalizeCriterion(m) === normalizeCriterion(s));
+  const added: string[] = [];
+  for (const part of text.split(";").map((s) => s.trim().replace(/\.$/, "")).filter(Boolean)) {
+    if (has(part, added)) continue;
+    for (const piece of part.split(split).map((s) => s.trim().replace(/\.$/, "")).filter(Boolean)) if (!has(piece, added)) added.push(piece);
+  }
+  return added;
+}
+
+/**
+ * intake.turn v2: realistic question cards (up to three) the way the model is asked to write them, built from the
+ * playbook and what is still missing. Pay comes first when nobody has stated it, then the reason for the hire, the
+ * first thing the person would own, the true must-haves, screening questions, the team and the start date.
+ */
+function fakeIntakeTurn(c: FakeIntakeContext): IntakeTurn {
   const last = c.ownerMessages[c.ownerMessages.length - 1] ?? "";
-  const all = c.ownerMessages.join("\n");
+  // The summary of tapped answers repeats what was refused ("Not used: ..."); that is not a new request.
+  const said = (s: string) => s.split("\n").filter((l) => !/^Not used:/.test(l)).join("\n");
+  const all = c.ownerMessages.map(said).join("\n");
   const facts: IntakeFacts = { ...c.facts };
+  const firstTurn = c.ownerMessages.length === 1 && !c.fromRole;
+
+  if (firstTurn && !c.ad && notARole(last, facts, c.playbookRoleTitle)) {
+    return { assistantMessage: "That doesn't sound like a new role, so I haven't started a draft. When you're ready to hire, describe the job: the title, where it is, the pay and why you're hiring.", factsExtracted: facts, missingFacts: [], questions: [], readyToCompile: false, confidence: "low", notARole: true, takenFromAd: [] };
+  }
 
   if (!facts.title) {
-    const t = c.playbookRoleTitle ?? all.match(/(?:hire|need|looking for)\s+(?:an?|the)?\s*([A-Za-z][A-Za-z /-]{3,50}?)(?=\s+(?:in|for|at|who|with|that|\.|,|$))/i)?.[1]?.trim();
+    const t = c.playbookRoleTitle ?? all.match(/(?:hire|need|want|looking for)\s+(?:an?|the)?\s*([A-Za-z][A-Za-z /-]{3,50}?)(?=\s+(?:in|for|at|who|with|that|\.|,|$))/i)?.[1]?.trim();
     if (t) facts.title = t;
   }
   if (!facts.locationText) {
@@ -90,6 +187,10 @@ function fakeIntakeTurn(c: ReturnType<typeof contextFrom>): IntakeTurn {
     facts.compensationMin = min;
     facts.compensationMax = max;
     facts.compensationBasis = /hour|hr|hourly/i.test(pay[0]) || max < 500 ? "hourly" : "salary";
+  }
+  if (!facts.compensationBasis) {
+    if (/\b(?:hourly|by the hour|an hour|per hour)\b/i.test(all)) facts.compensationBasis = "hourly";
+    else if (/\b(?:salary|salaried|a year|per year|annual)\b/i.test(all)) facts.compensationBasis = "salary";
   }
   const ceiling = all.match(/(?:ceiling|max(?:imum)?|no more than|up to)\s*(?:of|is|at)?\s*\$?\s?(\d{2,3}(?:,\d{3})?)/i);
   if (ceiling && facts.compensationCeiling === undefined) facts.compensationCeiling = Number(ceiling[1].replace(/,/g, ""));
@@ -124,16 +225,19 @@ function fakeIntakeTurn(c: ReturnType<typeof contextFrom>): IntakeTurn {
     if (f) facts.whatFailureLooksLike = f[1].trim();
   }
   const mh = last.match(/must[\s-]?haves?\s*[:-]\s*([^\n]+)/i) ?? last.match(/\bmust have\s+(?:an?\s+)?([^.\n]+)/i);
-  if (mh) facts.mustHaves = [...facts.mustHaves, ...mh[1].split(/;|,| and (?:be |have )?/).map((s) => s.trim()).filter(Boolean)];
+  if (mh) facts.mustHaves = [...facts.mustHaves, ...newListItems(mh[1], facts.mustHaves, /,| and (?:be |have )?/)];
   const nh = last.match(/nice[\s-]?to[\s-]?haves?\s*[:-]\s*([^\n]+)/i);
-  if (nh) facts.niceToHaves = [...facts.niceToHaves, ...nh[1].split(/;|,/).map((s) => s.trim()).filter(Boolean)];
+  if (nh) facts.niceToHaves = [...facts.niceToHaves, ...newListItems(nh[1], facts.niceToHaves, /,/)];
   const db = last.match(/deal[\s-]?breakers?\s*[:-]\s*([^\n]+)/i);
-  if (db) facts.dealBreakers = [...facts.dealBreakers, ...db[1].split(/;|,/).map((s) => s.trim()).filter(Boolean)];
+  if (db) facts.dealBreakers = [...facts.dealBreakers, ...newListItems(db[1], facts.dealBreakers, /,/)];
 
+  // Unlawful wording in what the owner just said, and in a pasted ad on the first turn (the ad is data, never instructions).
   const declinedNow: IntakeFacts["declinedCriteria"] = [];
-  for (const rule of ILLEGAL) {
-    const m = last.match(rule.pattern);
-    if (m) declinedNow.push({ requested: m[0], reason: rule.reason, alternative: rule.alternative });
+  for (const text of [said(last), ...(firstTurn && c.ad ? [c.ad] : [])]) {
+    for (const rule of ILLEGAL) {
+      const m = text.match(rule.pattern);
+      if (m && !declinedNow.some((d) => d.requested.toLowerCase() === m[0].toLowerCase())) declinedNow.push({ requested: m[0], reason: rule.reason, alternative: rule.alternative });
+    }
   }
   facts.declinedCriteria = [...facts.declinedCriteria, ...declinedNow];
 
@@ -141,6 +245,7 @@ function fakeIntakeTurn(c: ReturnType<typeof contextFrom>): IntakeTurn {
   if (!facts.title) missing.push("title");
   if (!facts.locationText) missing.push("location");
   if (!facts.reason) missing.push("reason_for_hire");
+  if (!facts.compensationBasis) missing.push("compensation_basis");
   if (facts.compensationMin === undefined) missing.push("compensation_range");
   if (facts.compensationCeiling === undefined && facts.compensationMax === undefined) missing.push("compensation_ceiling");
   if (facts.mustHaves.length === 0 && !c.playbookRoleTitle) missing.push("must_haves");
@@ -154,77 +259,110 @@ function fakeIntakeTurn(c: ReturnType<typeof contextFrom>): IntakeTurn {
   const essentials = !!facts.title && !!facts.locationText && facts.compensationMin !== undefined;
   const ready = justDraft || (essentials && missing.filter((m) => ["reason_for_hire", "interviewers", "decision_maker"].includes(m)).length === 0);
 
-  const questionFor: Record<string, string> = {
-    title: "What is the job title, in your words?",
-    location: "Which location is this for?",
-    reason_for_hire: "Is this a new position, a replacement, or growth? If someone left, what did you learn from that?",
-    compensation_range: "What pay range are you offering, and is that hourly or salary?",
-    compensation_ceiling: "What is the absolute most you would pay for the right person? I will never propose above it.",
-    must_haves: "What are the true must-haves, the things you would not hire without? I will keep it to six.",
-    interviewers: "Who will interview, and who makes the final decision?",
-    decision_maker: "Who makes the final hiring decision?",
-    timeline: "When do you need them to start?",
-    what_failure_looks_like: "A year from now, what would make you say this hire did not work out?",
-    deal_breakers: "Anything that is a deal-breaker for you, in your own words?",
-  };
-  const priority = ["reason_for_hire", "compensation_range", "compensation_ceiling", "must_haves", "interviewers", "decision_maker", "timeline", "location", "title", "what_failure_looks_like", "deal_breakers"];
-  // "Who will interview, and who decides?" already covers the decision maker; do not ask it twice.
-  const askKeys = priority.filter((k) => missing.includes(k as IntakeTurn["missingFacts"][number])).filter((k, _i, arr) => !(k === "decision_maker" && arr.includes("interviewers")));
-  const nextQuestions = askKeys.slice(0, 3).map((k) => questionFor[k]);
-  const benchmarkMentioned = c.ownerMessages.length > 1; // the benchmark is stated once, on the first turn that has a range
+  const pb = playbookRoleFrom(c.req);
+  const fromAd = !!c.ad && facts.compensationMin !== undefined && !c.ownerMessages.slice(firstTurn ? 1 : 0).some((m) => /\$\s?\d/.test(m));
+  const questions: IntakeQuestion[] = [];
+  const ask = (q: Omit<IntakeQuestion, "id">) => { if (questions.length < 3) questions.push({ id: `fake_${questions.length + 1}`, ...q }); };
+  if (fromAd) ask({ field: "compensation", prompt: `Your ad says ${money(facts.compensationMin!)}–${money(facts.compensationMax ?? facts.compensationMin!)} ${per(facts.compensationBasis ?? "hourly")}. Is that still right?`, mode: "pay", options: [], allowOwn: true, why: "Pay is always shown on the job ad, so it has to be current." });
+  else if (facts.compensationMin === undefined) ask({ field: "compensation", prompt: "What will you pay?", mode: "pay", options: [], allowOwn: true, why: "Pay is always shown on the job ad, and checked against the market." });
+  if (!facts.reason) ask({ field: "reason_for_hire", prompt: "Why are you hiring?", mode: "single", options: [{ label: "A new position", value: "new_position", origin: "assistant" }, { label: "Replacing someone who left", value: "replacement", origin: "assistant" }, { label: "The team is growing", value: "growth", origin: "assistant" }, { label: "Seasonal help", value: "seasonal", origin: "assistant" }], allowOwn: true, why: "A replacement and a new position call for different questions." });
+  if (!facts.responsibilities?.length) {
+    const options = pb.competencies.length
+      ? pb.competencies.slice(0, 4).map((x) => ({ label: x.name, value: x.definition, origin: "playbook" as const }))
+      : [{ label: "The day-to-day work of the job", value: `The day-to-day ${facts.title ?? "work"}`, origin: "assistant" as const }, { label: "A project that is waiting", value: "A project that is waiting for someone to own it", origin: "assistant" as const }];
+    ask({ field: "responsibilities", prompt: "What is the first thing they would own?", mode: "single", options, allowOwn: true, why: "It shapes the job ad and the questions candidates are asked." });
+  }
+  if (!facts.mustHaves.length && pb.qualifications.length) ask({ field: "must_haves", prompt: "Which of these are genuinely must-haves?", mode: "multi", options: pb.qualifications.slice(0, 5).map((q) => ({ label: q, value: q, origin: "playbook" as const })), allowOwn: true, why: "Must-haves decide who reads as a match; keep it to the few you would not hire without." });
+  if (facts.screeningQuestions === undefined && pb.questions.length >= 3) ask({ field: "screening_questions", prompt: "Add three screening questions?", mode: "multi", options: pb.questions.slice(0, 3).map((q) => ({ label: q, value: q, origin: "playbook" as const })), allowOwn: true, why: "Candidates answer these in a short conversation marked as AI, with a person available." });
+  if (!facts.interviewers.length) ask({ field: "interviewers", prompt: "Who will interview?", mode: "team", options: [], allowOwn: true, why: "They get the interview plan and the questions to ask." });
+  if (!facts.decisionMaker) ask({ field: "decision_maker", prompt: "Who has the final say?", mode: "team", options: [], allowOwn: true, why: "Their approval opens the role." });
+  if (!facts.targetStartDate) ask({ field: "timeline", prompt: "When do you need them to start?", mode: "single", options: [{ label: "As soon as possible", value: "asap", origin: "assistant" }, { label: "Within a month", value: "within_30_days", origin: "assistant" }, { label: "Within three months", value: "within_90_days", origin: "assistant" }], allowOwn: true, why: "It sets how fast the search moves." });
 
+  const takenFromAd: string[] = [];
+  if (firstTurn && c.ad) {
+    if (facts.title) takenFromAd.push(`Job title: ${facts.title}`);
+    if (facts.locationText) takenFromAd.push(`Where: ${facts.locationText}`);
+    if (facts.employmentType) takenFromAd.push(`Type: ${facts.employmentType.replace(/_/g, " ")}`);
+    if (facts.schedule) takenFromAd.push(`Schedule: ${facts.schedule}`);
+    if (facts.compensationMin !== undefined) takenFromAd.push(`Pay in the ad: ${money(facts.compensationMin)}–${money(facts.compensationMax ?? facts.compensationMin)} ${per(facts.compensationBasis ?? "hourly")} (to confirm)`);
+  }
+
+  const benchmarkMentioned = c.ownerMessages.length > 1; // the benchmark is stated once, on the first turn that has a range
   const lines: string[] = [];
   if (declinedNow.length) for (const d of declinedNow) lines.push(`I can't build "${d.requested}" into the requirements. ${d.reason} ${d.alternative}`);
+  if (c.fromRole && c.ownerMessages.length === 1) lines.push(`I've started from your last ${c.fromRole} role. What has changed since then? Please confirm the pay again too.`);
+  if (takenFromAd.length) lines.push(`I took these from your ad: ${takenFromAd.join("; ")}. I'll only ask about what's missing.`);
   if (c.playbookRoleTitle && c.ownerMessages.length === 1) lines.push(`Got it. I'm using our ${c.vertical} playbook for a ${c.playbookRoleTitle}${facts.locationText ? ` in ${facts.locationText}` : ""}.`);
   if (c.benchmark && facts.compensationMin !== undefined && !benchmarkMentioned) {
-    const below = facts.compensationMax !== undefined && facts.compensationMax < c.benchmark.p50;
-    lines.push(`For reference, the market for ${c.benchmark.metro} runs about ${c.benchmark.p25}–${c.benchmark.p75} ${c.benchmark.basis === "hourly" ? "an hour" : "a year"} (midpoint ${c.benchmark.p50}; source: ${c.benchmark.source}).${below ? " Your range is below the midpoint, which may slow the search." : ""}`);
-  }
-  if (ready) lines.push(`I have enough to draft the role packet${missing.length ? `, with assumptions noted for: ${missing.map((m) => m.replace(/_/g, " ")).join(", ")}` : ""}. Say "draft it" or answer anything above first.`);
-  else if (nextQuestions.length) lines.push(nextQuestions.map((q, i) => `${i + 1}. ${q}`).join("\n"));
+    // intake.turn v3: money as the pay card writes it, the place with capitals, and a figure for a broader group of jobs
+    // told as a rough guide, with a range below its middle mentioned gently (polish list).
+    const b = c.benchmark;
+    const below = facts.compensationMax !== undefined && facts.compensationMax < b.p50;
+    const where = marketPlace(b.metro);
+    const whose = b.origin === "its_estimate" ? `ITS's estimate of the market for ${where}` : `the market for ${where}`;
+    const rough = b.approximate ? ` There is no government pay figure for this exact job, so this one is for a broader group${b.occupation ? ` (${b.occupation.toLowerCase()})` : ""}: take it as a rough guide.` : "";
+    const belowWords = !below ? "" : b.approximate ? " Your range is below its middle, which is worth knowing but not a worry on its own." : " Your range is below the middle, which may slow the search.";
+    lines.push(`For reference, ${whose} runs about ${money(b.p25)}–${money(b.p75)} ${per(b.basis)} (middle ${money(b.p50)}; source: ${b.source}).${rough}${belowWords}`);
+  } else if (c.benchmarkGap === "basis_unknown" && !benchmarkMentioned) lines.push("Is this job paid by the hour or a yearly salary? I'll check market pay once I know.");
+  else if (c.benchmarkGap === "no_market_figure" && !benchmarkMentioned) lines.push("I have no market pay figure for this job here, so the pay isn't checked against the market.");
+  if (ready) lines.push(`I have enough to write a first draft${missing.length ? `, with assumptions noted for: ${missing.map((m) => m.replace(/_/g, " ")).join(", ")}` : ""}. Say "draft it" or answer anything beside this first.`);
+  else if (questions.length) lines.push(`I've put ${questions.length === 1 ? "a quick question" : `${questions.length} quick questions`} beside this. Tap an answer, add your own, or just type.`);
   return {
     assistantMessage: lines.join("\n\n") || "Tell me who you need to hire.",
     factsExtracted: facts,
     missingFacts: missing,
-    nextQuestions: ready ? [] : nextQuestions,
+    questions,
     readyToCompile: ready,
     confidence: essentials ? "medium" : "low",
+    notARole: false,
+    takenFromAd,
   };
 }
 
-/** The playbook block the prompt renders: "Matched playbook role: T. Summary: ... Typical eligibility: type: q | ... Common qualifications: ... Competencies: Name (def); ... Screening questions: q | q. Interview plan: title (30 min, video); ... Red flags..." */
-function playbookRoleFrom(req: StructuredRequest<unknown>): { competencies: Array<{ key: string; name: string; definition: string }>; eligibility: Array<{ type: string; question: string }>; questions: string[]; interviews: Array<{ title: string; minutes: number; format: string }> } {
-  const sys = req.system.map((b) => b.text).join("\n");
-  const block = sys.match(/Matched playbook role: ([\s\S]*?)(?:\n|$)/)?.[1] ?? "";
-  const seg = (start: string, end: string) => { const i = block.indexOf(start); if (i < 0) return ""; const rest = block.slice(i + start.length); const j = rest.indexOf(end); return (j < 0 ? rest : rest.slice(0, j)).trim(); };
-  const competencies = seg("Competencies: ", ". Screening questions:").split("; ").map((c) => c.match(/^(.*?) \((.*)\)$/)).filter((m): m is RegExpMatchArray => !!m).map((m) => ({ key: slug(m[1]), name: m[1].trim(), definition: m[2].trim() }));
-  const eligibility = seg("Typical eligibility: ", ". Common qualifications:").split(" | ").map((e) => e.match(/^([a-z_]+): (.*)$/)).filter((m): m is RegExpMatchArray => !!m).map((m) => ({ type: m[1], question: m[2].trim() }));
-  const questions = seg("Screening questions: ", ". Interview plan:").split(" | ").map((q) => q.trim()).filter(Boolean);
-  const interviews = seg("Interview plan: ", ". Red flags").split("; ").map((r) => r.match(/^(.*?) \((\d+) min, ([a-z_]+)\)$/)).filter((m): m is RegExpMatchArray => !!m).map((m) => ({ title: m[1].trim(), minutes: Number(m[2]), format: m[3] }));
-  return { competencies, eligibility, questions, interviews };
+/** intake.extract: what a pasted ad states plainly, read with simple rules. */
+function fakeExtract(req: StructuredRequest<unknown>): IntakeExtraction {
+  const text = ((req.messages[0]?.content ?? "") as string).match(/<owner_text>\n?([\s\S]*?)\n?<\/owner_text>/)?.[1] ?? "";
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const labelled = (label: RegExp) => lines.map((l) => l.match(new RegExp(`^(?:${label.source})\\s*[:\\-–]\\s*(.+)$`, "i"))?.[1]?.trim()).find(Boolean);
+  const heading = lines[0] && lines[0].length <= 60 && !/[.!?]$/.test(lines[0]) && !/^(?:about|we are|join)/i.test(lines[0]) ? lines[0].replace(/^(?:now hiring|hiring)\s*[:\-–]?\s*/i, "") : undefined;
+  const title = labelled(/job title|title|position|role/) ?? heading ?? text.match(/\bhiring (?:a|an) ([A-Za-z][A-Za-z /-]{3,40}?)(?=[.,\n]| to | in )/i)?.[1];
+  const locationText = labelled(/location|where/) ?? text.match(/\bin ([A-Z][a-z]+(?: [A-Z][a-z]+)?, [A-Z]{2})\b/)?.[1];
+  const employmentType = /full[\s-]?time/i.test(text) ? "full_time" : /part[\s-]?time/i.test(text) ? "part_time" : undefined;
+  const schedule = labelled(/schedule|hours/);
+  const pay = text.replace(/(\d),(\d{3})/g, "$1$2").match(/\$\s?(\d+(?:\.\d+)?)\s*(k)?\s*(?:-|–|to)\s*\$?\s?(\d+(?:\.\d+)?)\s*(k)?\s*(per hour|an hour|\/hr|hourly|per year|a year|\/yr|annually|salary)?/i);
+  let basis: "hourly" | "salary" | undefined;
+  let min: number | undefined;
+  let max: number | undefined;
+  if (pay) {
+    min = Number(pay[1]) * (pay[2] || pay[4] ? 1000 : 1);
+    max = Number(pay[3]) * (pay[4] ? 1000 : 1);
+    basis = pay[5] ? (/hour|hr/i.test(pay[5]) ? "hourly" : "salary") : max >= 1000 ? "salary" : "hourly";
+  }
+  const isJobDescription = !!title || /\b(?:responsibilities|requirements|qualifications|we are hiring|join our team|apply)\b/i.test(text);
+  return { isJobDescription, ...(title ? { title } : {}), ...(locationText ? { locationText } : {}), ...(employmentType ? { employmentType } : {}), ...(schedule ? { schedule } : {}), ...(basis ? { compensationBasis: basis, compensationMin: min, compensationMax: max } : {}) };
 }
 
-function slug(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40) || "item";
-}
-
-function fakeCompile(c: ReturnType<typeof contextFrom>): RolePacket {
+/**
+ * intake.compile v4: the draft, with pay only when a person set or confirmed it (and never in the description), the
+ * owner's own choices first, and a screening conversation of five or six questions and about ten minutes (more only for
+ * the owner's own questions), since candidates answer it straight after the form (plan E8).
+ */
+function fakeCompile(c: FakeIntakeContext): DraftRolePacket {
   const f = c.facts;
   const title = f.title ?? c.playbookRoleTitle ?? "New hire";
-  const basis = (f.compensationBasis as "hourly" | "salary" | undefined) ?? (c.benchmark?.basis as "hourly" | "salary" | undefined) ?? "hourly";
-  const min = f.compensationMin ?? c.benchmark?.p25 ?? (basis === "hourly" ? 20 : 50000);
-  const max = f.compensationMax ?? c.benchmark?.p75 ?? (basis === "hourly" ? 30 : 70000);
+  const pay = c.confirmedPay;
   const [locCity, locRegion] = (f.locationText ?? c.locationsText.split(";")[0] ?? "").split(",").map((s) => s.trim());
   const assumptions: string[] = [];
-  const mustHaves = (f.mustHaves.length ? f.mustHaves : [`${title} experience relevant to a ${c.vertical} setting`, "Reliable availability for the posted schedule"]).slice(0, 6);
-  if (!f.mustHaves.length) assumptions.push("Must-haves were not stated; drafted from the playbook and should be reviewed.");
+  const pbRole = playbookRoleFrom(c.req);
+  const fromPlaybook = pbRole.qualifications.slice(0, 3);
+  const mustHaves = (f.mustHaves.length ? f.mustHaves : fromPlaybook.length ? fromPlaybook : [`${title} experience relevant to a ${c.vertical} setting`, "Reliable availability for the posted schedule"]).slice(0, 6);
+  if (!f.mustHaves.length) assumptions.push("Must-haves were not chosen; drafted from the playbook and should be reviewed.");
   if (!f.reason) assumptions.push("Reason for the hire was not stated; assumed growth.");
   if (!f.interviewers.length) assumptions.push("Interviewers were not named; assumed the owner interviews.");
-  if (f.compensationCeiling === undefined) assumptions.push(`Ceiling assumed equal to the top of the range (${max}).`);
+  if (pay && f.compensationCeiling === undefined && pay.ceiling === undefined) assumptions.push(`Ceiling assumed equal to the top of the range (${pay.max}).`);
   const isDental = c.vertical === "dental";
   const rdh = /hygien/i.test(title);
-  const pbRole = playbookRoleFrom(c.req);
-  const eligibility: RolePacket["requirements"]["eligibility"] = [];
+  const eligibility: DraftRolePacket["requirements"]["eligibility"] = [];
   if (isDental && rdh) eligibility.push({ key: "rdh_license", type: "license", question: `Do you hold an active dental hygiene (RDH) license in ${locRegion || "the state of this office"}?`, expectation: { license: "RDH", jurisdiction: locRegion || "" }, rationale: "Required by law to practice dental hygiene.", knockout: true });
   if (isDental) eligibility.push({ key: "bls", type: "certification", question: "Do you hold current CPR/BLS certification (or can you obtain it before your start date)?", expectation: { certification: "BLS" }, rationale: "Required for clinical staff.", knockout: false });
   if (!isDental) {
@@ -236,7 +374,7 @@ function fakeCompile(c: ReturnType<typeof contextFrom>): RolePacket {
     const days = Math.max(7, Math.round((Date.parse(f.targetStartDate) - Date.now()) / 86_400_000));
     eligibility.push({ key: "start", type: "start_date", question: `Can you start within ${days} days?`, expectation: { withinDays: days }, rationale: "The owner needs coverage by the target date.", knockout: true });
   }
-  const competencies: RolePacket["competencies"] = rdh
+  const competencies: DraftRolePacket["competencies"] = rdh
     ? [
         { key: "clinical_quality", name: "Clinical quality", definition: "Thorough, gentle, standards-based care.", weight: 5, evaluatedIn: "both", indicators: ["Complete perio assessment", "Infection control"] },
         { key: "patient_communication", name: "Patient communication", definition: "Explains findings plainly and builds trust.", weight: 5, evaluatedIn: "both", indicators: ["Educating a resistant patient"] },
@@ -250,39 +388,42 @@ function fakeCompile(c: ReturnType<typeof contextFrom>): RolePacket {
         { key: "communication", name: "Communication", definition: "Clear with customers and the team.", weight: 4, evaluatedIn: "both", indicators: ["Example of a hard conversation"] },
         { key: "reliability", name: "Reliability", definition: "Shows up consistently.", weight: 4, evaluatedIn: "screen", indicators: ["Attendance history"] },
       ];
-  const kindOf = (q: string): RolePacket["screening"]["questions"][number]["kind"] => /salary|pay |earn|range are you|compensation/i.test(q) ? "compensation" : /available|start|schedule|work model/i.test(q) ? "availability" : /looking for in your next/i.test(q) ? "motivation" : /tell me about|describe|walk me through|give an example/i.test(q) ? "behavioral" : "skills";
-  const playbookQuestions: RolePacket["screening"]["questions"] = !rdh && pbRole.questions.length >= 3
-    ? pbRole.questions.slice(0, 10).map((q, i) => ({ key: slug(q.split(/[,:?]/)[0].split(" ").slice(0, 4).join(" ")) || `q${i + 1}`, question: q, kind: kindOf(q), competencyKey: competencies[i % competencies.length]?.key }))
-    : [];
-  const dedupedQuestions = playbookQuestions.filter((q, i, arr) => arr.findIndex((x) => x.key === q.key) === i);
-  const description = `${c.companyName} is hiring a ${title}${locCity ? ` in ${locCity}${locRegion ? `, ${locRegion}` : ""}` : ""}. ${f.reason === "replacement" ? "We are filling an open chair on a team that values consistency and kindness." : "Our team is growing and we need someone who takes pride in careful, friendly work."} You will ${rdh ? "provide preventive care, periodontal therapy, and patient education for a loyal patient base, working alongside a dentist who respects your judgment" : `own ${title.toLowerCase()} outcomes end to end, work directly with the founder and a small team that moves quickly, and see the results of your decisions in the numbers`}. The schedule is ${f.employmentType === "part_time" ? "part time" : "full time"}${f.schedule ? ` (${f.schedule})` : ""}. Pay is ${basis === "hourly" ? `$${min}–$${max} an hour` : `$${min.toLocaleString()}–$${max.toLocaleString()} a year`} depending on experience${f.benefits ? `, plus ${f.benefits}` : ""}. We respond to every applicant within a day, keep the process short, and tell you where you stand at each step.`;
+  const kindOf = (q: string): DraftRolePacket["screening"]["questions"][number]["kind"] => /salary|pay |earn|range are you|compensation/i.test(q) ? "compensation" : /available|start|schedule|work model/i.test(q) ? "availability" : /looking for in your next/i.test(q) ? "motivation" : /tell me about|describe|walk me through|give an example/i.test(q) ? "behavioral" : "skills";
+  const asQuestion = (q: string, i: number) => ({ key: slug(q.split(/[,:?]/)[0].split(" ").slice(0, 4).join(" ")) || `q${i + 1}`, question: q, kind: kindOf(q), competencyKey: competencies[i % competencies.length]?.key });
+  const ownQuestions = (f.screeningQuestions ?? []).map(asQuestion);
+  const playbookQuestions: DraftRolePacket["screening"]["questions"] = !rdh && pbRole.questions.length >= 3 ? pbRole.questions.slice(0, 10).map(asQuestion) : [];
+  const defaults: DraftRolePacket["screening"]["questions"] = [
+    ...(rdh ? [{ key: "license_confirm", question: "Can you confirm your RDH license state and whether it is currently active?", kind: "eligibility" as const }] : []),
+    { key: "experience", question: `Tell me about your most recent ${title} work and what a typical day looked like.`, kind: "skills" as const, competencyKey: competencies[0].key },
+    { key: "hard_moment", question: "Tell me about a difficult moment with a customer or patient and what you did.", kind: "behavioral" as const, competencyKey: competencies[1].key },
+    { key: "availability", question: "Which days and hours are you available, and when could you start?", kind: "availability" as const },
+    { key: "pay", question: `What ${pay?.basis === "salary" ? "salary" : "hourly"} range are you looking for?`, kind: "compensation" as const },
+    { key: "why", question: "What are you looking for in your next role?", kind: "motivation" as const },
+  ];
+  const pooled = [...ownQuestions, ...(playbookQuestions.length >= 3 ? playbookQuestions : defaults)];
+  const questions = pooled.filter((q, i, arr) => arr.findIndex((x) => x.key === q.key) === i).slice(0, Math.min(12, Math.max(6, ownQuestions.length)));
+  const first = f.responsibilities?.[0];
+  // intake.compile v3 and v4: no pay in the description (the job page shows the range a person set beside it).
+  const benefitsLine = f.benefits ? ` Benefits include ${f.benefits.replace(/\.$/, "")}.` : "";
+  const description = `${c.companyName} is hiring a ${title}${locCity ? ` in ${locCity}${locRegion ? `, ${locRegion}` : ""}` : ""}. ${f.reason === "replacement" ? "We are filling an open chair on a team that values consistency and kindness." : "Our team is growing and we need someone who takes pride in careful, friendly work."} You will ${rdh ? "provide preventive care, periodontal therapy, and patient education for a loyal patient base, working alongside a dentist who respects your judgment" : `own ${title.toLowerCase()} outcomes end to end, work directly with the founder and a small team that moves quickly, and see the results of your decisions in the numbers`}.${first ? ` The first thing you will own: ${first.replace(/\.$/, "")}.` : ""} The schedule is ${f.employmentType === "part_time" ? "part time" : "full time"}${f.schedule ? ` (${f.schedule})` : ""}.${benefitsLine} We respond to every applicant within a day, keep the process short, and tell you where you stand at each step.`;
+  const notSet = f.whatFailureLooksLike ? `What failure looks like: ${f.whatFailureLooksLike}` : undefined;
   return {
     schemaVersion: 1,
-    identity: { title, department: undefined, locations: [{ city: locCity || undefined, region: locRegion || undefined, country: "US" }], employmentType: (f.employmentType as RolePacket["identity"]["employmentType"]) ?? "full_time", schedule: f.schedule, remotePolicy: f.remotePolicy === "hybrid" || f.remotePolicy === "remote" ? f.remotePolicy : "onsite" },
-    business: { reason: (f.reason as RolePacket["business"]["reason"]) ?? "growth", reasonDetail: f.reasonDetail, timeline: { targetStartDate: f.targetStartDate, urgency: f.targetStartDate ? "high" : "normal", inactivityDays: 10 } },
-    compensation: { basis, currency: "USD", min, mid: Math.round((min + max) / 2), max, ceiling: f.compensationCeiling ?? max, bonus: undefined, benefitsSummary: f.benefits, discloseRange: true, sources: [...(c.benchmark ? [{ name: c.benchmark.source, detail: `${c.benchmark.metro}: p25 ${c.benchmark.p25}, p50 ${c.benchmark.p50}, p75 ${c.benchmark.p75}` }] : []), { name: "owner-stated", detail: `${min}–${max} ${basis}` }], ownerStated: f.compensationMin !== undefined },
-    description: { publicJobDescription: description, internalNotes: f.whatFailureLooksLike ? `What failure looks like: ${f.whatFailureLooksLike}` : undefined },
+    identity: { title, department: undefined, locations: [{ city: locCity || undefined, region: locRegion || undefined, country: "US" }], employmentType: (["full_time", "part_time", "contract", "temporary", "per_diem", "internship"].includes(f.employmentType ?? "") ? f.employmentType : "full_time") as DraftRolePacket["identity"]["employmentType"], schedule: f.schedule, remotePolicy: f.remotePolicy === "hybrid" || f.remotePolicy === "remote" ? f.remotePolicy : "onsite" },
+    business: { reason: (["new_position", "replacement", "growth", "seasonal", "other"].includes(f.reason ?? "") ? f.reason : "growth") as DraftRolePacket["business"]["reason"], reasonDetail: f.reasonDetail, timeline: { targetStartDate: f.targetStartDate, urgency: f.targetStartDate ? "high" : "normal", inactivityDays: 10 } },
+    ...(pay ? { compensation: { basis: pay.basis, currency: "USD", min: pay.min, mid: Math.round((pay.min + pay.max) / 2), max: pay.max, ceiling: f.compensationCeiling ?? pay.ceiling ?? pay.max, bonus: undefined, benefitsSummary: f.benefits, discloseRange: true, sources: [...(c.benchmark ? [{ name: c.benchmark.source, detail: `${c.benchmark.metro}: p25 ${c.benchmark.p25}, p50 ${c.benchmark.p50}, p75 ${c.benchmark.p75}` }] : []), { name: "owner-stated", detail: `${pay.min}–${pay.max} ${pay.basis}` }], ownerStated: true } } : {}),
+    description: { publicJobDescription: description, internalNotes: notSet },
     requirements: {
-      mustHaves: mustHaves.map((m, i) => ({ key: `mh_${i + 1}_${slug(m)}`, text: m, rationale: "Stated by the owner as a must-have", evidencedBy: ["resume", "screen"] })),
+      mustHaves: mustHaves.map((m, i) => ({ key: `mh_${i + 1}_${slug(m)}`, text: m, rationale: f.mustHaves.length ? "Chosen by the owner as a must-have" : "Common for this role in our playbook", evidencedBy: ["resume", "screen"] })),
       niceToHaves: f.niceToHaves.map((m, i) => ({ key: `nh_${i + 1}_${slug(m)}`, text: m, rationale: "Nice to have per the owner", evidencedBy: ["resume", "screen"] })),
       eligibility,
     },
     competencies,
     evaluation: { criteria: ["Evidence for each must-have", "Competency indicators observed in screen and interviews", "Availability matches the schedule"], redFlags: ["Cannot confirm required license", "Availability does not match the schedule"] },
-    screening: {
-      questions: dedupedQuestions.length >= 3 ? dedupedQuestions : [
-        ...(rdh ? [{ key: "license_confirm", question: "Can you confirm your RDH license state and whether it is currently active?", kind: "eligibility" as const }] : []),
-        { key: "experience", question: `Tell me about your most recent ${title} work and what a typical day looked like.`, kind: "skills" as const, competencyKey: competencies[0].key },
-        { key: "hard_moment", question: "Tell me about a difficult moment with a customer or patient and what you did.", kind: "behavioral" as const, competencyKey: competencies[1].key },
-        { key: "availability", question: "Which days and hours are you available, and when could you start?", kind: "availability" as const },
-        { key: "pay", question: `What ${basis === "hourly" ? "hourly" : "salary"} range are you looking for?`, kind: "compensation" as const },
-        { key: "why", question: "What are you looking for in your next role?", kind: "motivation" as const },
-      ],
-      maxMinutes: 15,
-    },
+    screening: { questions: questions.length >= 3 ? questions : defaults, maxMinutes: 10 },
     interviews: {
       plan: !rdh && pbRole.interviews.length >= 1
-        ? pbRole.interviews.slice(0, 5).map((r, i, arr) => ({ key: slug(r.title) || `round_${i + 1}`, title: r.title, purpose: i === 0 ? "Fit, results, and the candidate's questions." : "See how they think about our real problems.", durationMinutes: Math.min(240, Math.max(15, r.minutes)), format: (["video", "phone", "onsite", "working_session"].includes(r.format) ? r.format : "video") as RolePacket["interviews"]["plan"][number]["format"], interviewerUserIds: [], interviewerRoles: f.interviewers.length ? f.interviewers : ["owner"], competencyKeys: competencies.filter((_, ci) => ci % arr.length === i).map((x) => x.key).concat(i === 0 ? [competencies[0].key] : []).filter((k, ki, ks) => ks.indexOf(k) === ki), suggestedQuestions: [] }))
+        ? pbRole.interviews.slice(0, 5).map((r, i, arr) => ({ key: slug(r.title) || `round_${i + 1}`, title: r.title, purpose: i === 0 ? "Fit, results, and the candidate's questions." : "See how they think about our real problems.", durationMinutes: Math.min(240, Math.max(15, r.minutes)), format: (["video", "phone", "onsite", "working_session"].includes(r.format) ? r.format : "video") as DraftRolePacket["interviews"]["plan"][number]["format"], interviewerUserIds: [], interviewerRoles: f.interviewers.length ? f.interviewers : ["owner"], competencyKeys: competencies.filter((_, ci) => ci % arr.length === i).map((x) => x.key).concat(i === 0 ? [competencies[0].key] : []).filter((k, ki, ks) => ks.indexOf(k) === ki), suggestedQuestions: [] }))
         : [
         { key: "owner", title: `Conversation with ${f.interviewers[0] ?? "the owner"}`, purpose: "Fit, expectations, and the candidate's questions.", durationMinutes: 30, format: "video", interviewerUserIds: [], interviewerRoles: f.interviewers.length ? f.interviewers : ["owner"], competencyKeys: competencies.slice(1).map((x) => x.key), suggestedQuestions: ["What does a great day look like for you?", "What would make you leave a job?"] },
         { key: "working", title: rdh ? "Working interview" : "Skills conversation on site", purpose: "See the work in practice and meet the team.", durationMinutes: rdh ? 90 : 60, format: "onsite", interviewerUserIds: [], interviewerRoles: f.interviewers.length ? f.interviewers : ["owner"], competencyKeys: [competencies[0].key], suggestedQuestions: [] },
@@ -365,6 +506,13 @@ function fakeTriageAssess(req: StructuredRequest<unknown>): EvidenceAssessment {
     const what = m.text.replace(/\(.*\)$/, "").trim().replace(/[.!]+$/, "");
     const tks = tokens(what);
     const hits = tks.filter((t) => lower.includes(t));
+    // The candidate's own line saying they do not meet it ("RDH license expired in 2021", "I do not have a forklift
+    // certificate"): a "no" with that line quoted, which the quote check keeps. It gives local runs weak readings too.
+    const miss = lines.find((l) => NOT_MET.test(l) && tks.some((t) => l.toLowerCase().includes(t)));
+    if (miss) {
+      concerns.push({ claim: `Their own words show ${plainPhrase(what)} is not met`, evidence: { source, quote: miss } });
+      return { requirementKey: m.key, met: "no" as const, evidence: { source, quote: miss } };
+    }
     const license = /licen/i.test(m.text) && (extraction.licenses?.length || /\b(rdh|rda|license|licensed)\b/i.test(text));
     const met = hits.length >= 2 || license ? "yes" : hits.length === 1 ? "partially" : "unknown";
     const quote = lineFor(hits.length ? hits : tks);
@@ -386,12 +534,14 @@ function fakeTriageAssess(req: StructuredRequest<unknown>): EvidenceAssessment {
   const yes = requirementFindings.filter((r) => r.met === "yes").length;
   const partial = requirementFindings.filter((r) => r.met === "partially").length;
   const missing = requirementFindings.filter((r) => r.met === "unknown").length;
+  const notMet = requirementFindings.filter((r) => r.met === "no").length;
   // "Thin but relevant" (the prompt's rule for "potential"): the text shows this kind of work even when no must-have is spelled out.
   const roleTitle = sys.match(/^Role: ([^(\n]+?) \(/m)?.[1] ?? "";
   const relevant = !noText && tokens(roleTitle).some((t) => lower.includes(t));
-  const overall: EvidenceAssessment["overall"] = noText ? "unknown" : mustHaves.length && yes === mustHaves.length ? "strong" : yes + partial > 0 || relevant ? "potential" : "unknown";
+  // A must-have their own words show is not met makes the reading Weak (the prompt's rule), and nothing is suggested.
+  const overall: EvidenceAssessment["overall"] = noText ? "unknown" : notMet ? "weak" : mustHaves.length && yes === mustHaves.length ? "strong" : yes + partial > 0 || relevant ? "potential" : "unknown";
   // The prompt's rule: "review_manually" when overall is unknown or the resume could not be read; the eligibility hold is reviewed by a person too.
-  const recommendation: EvidenceAssessment["recommendation"] = overall === "unknown" ? "review_manually" : eligibilityFailed ? "review_manually" : "screen";
+  const recommendation: EvidenceAssessment["recommendation"] = overall === "unknown" ? "review_manually" : eligibilityFailed ? "review_manually" : overall === "weak" ? "hold" : "screen";
   const summary = noText
     ? "No resume text or description was available, so nothing can be said yet; a person should open the file or ask the candidate."
     : `${yes} of ${mustHaves.length} must-haves evidenced${partial ? `, ${partial} partially` : ""}; ${competencyFindings.filter((c) => c.finding === "evidenced").length} of ${competencies.length} competencies evidenced. ${extraction.positions?.length ? `Most recent work: ${extraction.positions[0].title}.` : ""}`.trim();
@@ -399,6 +549,7 @@ function fakeTriageAssess(req: StructuredRequest<unknown>): EvidenceAssessment {
   const confidenceReasons: string[] = [];
   if (noText) confidenceReasons.push("no résumé text and no written summary to assess");
   else if (noResume) confidenceReasons.push("no résumé, only the written summary");
+  if (notMet) confidenceReasons.push(`${notMet === 1 ? "one must-have is" : `${notMet} must-haves are`} shown not met in their own words`);
   if (missing) confidenceReasons.push(`${missing === 1 ? "one must-have has" : `${missing} must-haves have`} no evidence`);
   if (partial) confidenceReasons.push(`${partial === 1 ? "one must-have is" : `${partial} must-haves are`} only partly shown`);
   if (eligibilityFailed) confidenceReasons.push("an eligibility answer did not match");
@@ -414,11 +565,25 @@ function fakeTriageAssess(req: StructuredRequest<unknown>): EvidenceAssessment {
     competencyFindings,
     requirementFindings,
     anomalies,
-    secondaryScore: mustHaves.length ? Math.round(((yes + partial * 0.5) / mustHaves.length) * 100) : undefined,
     recommendation,
-    rationale: recommendation === "screen" ? "Eligible, with relevant evidence for the must-haves; a screen will settle the unknowns." : noText ? "There is nothing to assess against; a human should look." : overall === "unknown" ? `The ${where} shows none of the must-haves and nothing about this kind of work; a person should look or ask.` : "Eligibility was not met; the owner reviews before anything else happens.",
+    rationale: recommendation === "screen" ? "Eligible, with relevant evidence for the must-haves; a screen will settle the unknowns." : noText ? "There is nothing to assess against; a human should look." : overall === "unknown" ? `The ${where} shows none of the must-haves and nothing about this kind of work; a person should look or ask.` : overall === "weak" ? "Their own words show a must-have is not met; a person decides what happens next." : "Eligibility was not met; the owner reviews before anything else happens.",
   };
 }
+
+/**
+ * Three dental hygienist résumés that the fake reads three ways against the hygienist role it drafts when the owner's
+ * must-haves are "active CA RDH license, periodontal charting": everything shown (a very high score, the Shortlist),
+ * the license with the rest only partly shown (a middling score, the Longlist), and the license lapsed in their own
+ * words (a missing must-have, Not moving forward). For local runs of the pool board and for tests.
+ */
+export const FAKE_SAMPLE_RESUMES = {
+  strong: "Registered Dental Hygienist at Harbor Dental 2019 - present\nRDH license CA active\nPeriodontal charting, scaling and root planing, Dentrix\nThorough, gentle clinical care to high standards\nPatient communication: explains findings plainly and builds trust\nKeeps to time without cutting corners\nShows up consistently and communicates early",
+  possible: "Dental Hygienist at Coastal Smiles 2022 - present\nRDH license CA active\nCharting in Dentrix, patient reminders",
+  weak: "Dental Hygienist at Pacific Dental 2010 - 2020\nRDH license CA expired in 2021\nPeriodontal charting, Dentrix",
+} as const;
+
+/** A line where the candidate says, in their own words, that they do not have something: lapsed, expired, never, do not have. */
+const NOT_MET = /\b(expired|lapsed|no longer (?:hold|have|active)|not (?:licensed|certified|currently licensed)|(?:do|does) not (?:have|hold)|don't (?:have|hold)|never (?:had|held|done|worked))\b/i;
 
 /** "Active CA RDH license" reads as "active CA RDH license" after "your"; an acronym at the start ("RDH license") is left alone. */
 function plainPhrase(s: string): string {
@@ -443,14 +608,40 @@ function parseScreenSystem(req: StructuredRequest<unknown>) {
   return { questions, company: company?.[1]?.trim() ?? "the company", role: company?.[2]?.trim() ?? "the role", pay: pay ? { basis: pay[1], min: Number(pay[2]), max: Number(pay[3]) } : null, progress, name, channel, minutes, competencies };
 }
 
+/** The candidate's earlier message in the transcript the prompt renders (the latest one is already the last line). */
+function earlierCandidateMessage(user: string): string | null {
+  const said = [...user.matchAll(/^candidate: (.*)$/gm)].map((m) => m[1].trim());
+  return said.length >= 2 ? said[said.length - 2] : null;
+}
+
+/** A few of the candidate's own words to build a follow-up on: the first clause, at most eight words. */
+function theirWords(text: string): string {
+  const clause = text.split(/[.!?;,]/)[0]?.trim() ?? text.trim();
+  const words = clause.split(/\s+/).slice(0, 8).join(" ").replace(/^(i|i've|i have|i'm|i am)\s+/i, "").trim();
+  return words ? `${words.charAt(0).toLowerCase()}${words.slice(1)}` : "that";
+}
+
+/** The candidate's own words, verbatim, to quote back: their first sentence, at most twelve words. */
+function quoteOf(text: string): string {
+  const sentence = (text.split(/[.!?;]/)[0] ?? text).trim();
+  const words = sentence.split(/\s+/);
+  return words.length > 12 ? `${words.slice(0, 12).join(" ")}…` : sentence;
+}
+
+/**
+ * screen.turn v3 (plan Wave E): a move to the next question is a short acknowledgment only (the code adds the packet's
+ * question word for word); a follow-up builds on the candidate's own words, at most two per question; after a follow-up
+ * the whole answer (earlier words and new ones) is recorded verbatim; skipped questions are never asked again.
+ */
 function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
   const s = parseScreenSystem(req);
   const user = req.messages[0]?.content ?? "";
   const latestRaw = user.match(/Candidate's latest message: ([\s\S]*?)\n\nProduce the next turn\./)?.[1]?.trim() ?? "(none)";
   const latest = latestRaw === "(none)" ? null : latestRaw;
   const asked = new Set(s.progress.askedKeys);
+  const declined = new Set(s.progress.declined ?? []);
   const current = s.progress.currentQuestionKey;
-  const remaining = s.questions.filter((q) => !asked.has(q.key));
+  const remaining = s.questions.filter((q) => !asked.has(q.key) && !declined.has(q.key));
   const base: ScreenTurn = { messageToCandidate: "", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
   // A screen that starts with the assessment's open questions says so in the opening, after the disclosure.
   const disclosure = `Hi ${s.name}, this is the hiring team at ${s.company}, using an AI assistant for a short screening for the ${s.role} role (about ${s.minutes} minutes, one question at a time). Reply HUMAN at any time to reach a person.${s.questions.some((q) => isFocusKey(q.key)) ? ` ${FOCUS_INTRO}` : ""}`;
@@ -460,6 +651,10 @@ function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
   }
   if (/\b(human|person|someone real)\b/i.test(latest) && !/\bnot\b/i.test(latest)) {
     return { ...base, messageToCandidate: `Understood. A person from ${s.company} will follow up with you.`, humanRequested: true };
+  }
+  // A candidate who says they are struggling is handed to a person, never pressed with another question.
+  if (/\bi('m| am) (so |really |very )?(stressed|overwhelmed|upset|anxious|frustrated|angry)\b|\bthis is (really |so )?(stressful|frustrating|ridiculous)\b|\bi can'?t do this\b/i.test(latest)) {
+    return { ...base, messageToCandidate: `I'm sorry this is hard. A person from ${s.company} will follow up with you.`, humanRequested: true, sentiment: "distressed" };
   }
   const currentQ = s.questions.find((q) => q.key === current) ?? null;
   const asksAboutPay = /\?/.test(latest) && /\b(pay|salary|rate|per hour|an hour|hourly|wage|\$)\b/i.test(latest) && currentQ?.kind !== "compensation";
@@ -471,13 +666,33 @@ function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
   let answerRecorded: ScreenTurn["answerRecorded"] = null;
   let followUpReason: string | null = null;
   if (currentQ) {
-    const complete = latest.trim().length >= 8 || /^(yes|no)\b/i.test(latest.trim());
+    const trimmed = latest.trim();
+    const complete = trimmed.length >= 8 || /^(yes|no)\b/i.test(trimmed);
     const followUpsSoFar = s.progress.followUps[currentQ.key] ?? 0;
     if (!complete && followUpsSoFar < 1 && !confused) {
       followUpReason = "answer too short to establish anything";
       return { ...base, messageToCandidate: "Could you say a bit more about that? A sentence or two is plenty.", followUpReason, answerRecorded: null, sentiment: "fine" };
     }
-    answerRecorded = { questionKey: currentQ.key, answer: redactProtected(latest), complete };
+    // A short answer about their work with nothing concrete in it gets one follow-up that builds on their own words,
+    // the way the model is asked to: an example, never anything personal.
+    // Never on anything personal: an answer that touches a protected characteristic is recorded (without it), not probed.
+    const thin = ["skills", "behavioral"].includes(currentQ.kind) && complete && trimmed.length < 40 && !/\d/.test(trimmed) && !/^(yes|no)\b/i.test(trimmed) && redactProtected(trimmed) === trimmed;
+    if (thin && followUpsSoFar < 1 && !confused && !isFocusKey(currentQ.key)) {
+      followUpReason = "answer has no example yet";
+      return { ...base, messageToCandidate: `You mentioned ${theirWords(trimmed)}. Could you give one example of how that went?`, followUpReason, answerRecorded: null, sentiment: "fine" };
+    }
+    // A fuller answer that makes a claim about their work ("I ran the brand's Instagram and grew it a lot") with no
+    // figure and no example yet gets one follow-up that quotes their own words, once in the whole conversation, so a
+    // local run shows what the model does (polish list). Never on anything personal, never on the open questions.
+    const noFollowUpYet = Object.values(s.progress.followUps).every((n) => !n);
+    const claim = ["skills", "behavioral"].includes(currentQ.kind) && complete && trimmed.length >= 40 && /^I\b/.test(trimmed) && !/\d/.test(trimmed) && !/\b(?:for example|for instance|e\.g\.|once|one time)\b/i.test(trimmed) && redactProtected(trimmed) === trimmed;
+    if (claim && noFollowUpYet && !confused && !isFocusKey(currentQ.key)) {
+      followUpReason = "a claim with no example yet";
+      return { ...base, messageToCandidate: `You said "${quoteOf(trimmed)}". Could you give one example of what that looked like, and what came of it?`, followUpReason, answerRecorded: null, sentiment: "fine" };
+    }
+    // After a follow-up, the whole answer to the question: their earlier words and the new ones, verbatim and in order.
+    const earlier = followUpsSoFar > 0 ? earlierCandidateMessage(user) : null;
+    answerRecorded = { questionKey: currentQ.key, answer: redactProtected(earlier && !confused ? `${earlier} ${latest}` : latest), complete };
   }
   if (confused) {
     const msg = currentQ ? `No problem. In plain terms: ${currentQ.question} If you would rather talk to a person, reply HUMAN.` : "No problem. If you would rather talk to a person, reply HUMAN.";
@@ -485,9 +700,10 @@ function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
   }
   const next = remaining.find((q) => q.key !== current);
   if (!next) {
-    return { ...base, answerRecorded, done: true, messageToCandidate: `Thanks ${s.name}, that is everything I needed. The hiring team at ${s.company} will review and you will hear back within a few days. Reply HUMAN at any time to reach a person.` };
+    return { ...base, answerRecorded, done: true, messageToCandidate: `Thanks ${s.name}, that is everything I needed. People on the hiring team at ${s.company} review your answers and make every decision; you will hear from them either way. Reply HUMAN at any time to reach a person.` };
   }
-  return { ...base, answerRecorded, questionKey: next.key, messageToCandidate: `Thanks. ${next.question}` };
+  // Only the acknowledgment: the code adds the next question in the packet's own words.
+  return { ...base, answerRecorded, questionKey: next.key, messageToCandidate: "Thanks." };
 }
 
 const trimDot = (t: string) => t.trim().replace(/[.!]+$/, "");
@@ -497,8 +713,11 @@ function fakeScreenAssess(req: StructuredRequest<unknown>): ScreenAssessment {
   const user = req.messages[0]?.content ?? "";
   let answers: Record<string, string> = {};
   try { answers = JSON.parse(user.match(/Recorded answers \(JSON\): (\{[\s\S]*?\})\nProgress/)?.[1] ?? "{}"); } catch { /* keep */ }
+  // A recruiter's call notes (plan E3) are their own source, quoted as notes, never as the candidate's words.
+  const notes = [...user.matchAll(/^recruiter note: (.*)$/gm)].map((m) => m[1].trim()).filter(Boolean);
   const questionFindings: ScreenAssessment["questionFindings"] = s.questions.map((q) => {
     const a = answers[q.key];
+    if (!a && notes.length) return { questionKey: q.key, answered: true, finding: "Covered in a recruiter's call notes", evidence: { source: "recruiter_note", quote: notes[0] }, meetsModelAnswer: "unknown" };
     return { questionKey: q.key, answered: !!a, finding: a ? `Answered: "${a.slice(0, 160)}"` : "Not answered", evidence: a ? { source: "screen", quote: a } : undefined, meetsModelAnswer: a ? (a.length > 20 ? "partially" : "unknown") : "unknown" };
   });
   const payQ = s.questions.find((q) => q.kind === "compensation");
@@ -515,19 +734,21 @@ function fakeScreenAssess(req: StructuredRequest<unknown>): ScreenAssessment {
     const a = q ? answers[q.key] : undefined;
     return { competencyKey: c.key, finding: a && a.length > 20 ? "evidenced" : a ? "partially_evidenced" : "not_evidenced", evidence: a ? { source: "screen", quote: a } : undefined };
   });
-  const answered = questionFindings.filter((f) => f.answered).length;
-  const strengths: ScreenAssessment["strengths"] = questionFindings.filter((f) => f.answered && f.evidence && (s.questions.find((q) => q.key === f.questionKey)?.kind === "skills" || s.questions.find((q) => q.key === f.questionKey)?.kind === "behavioral")).slice(0, 3).map((f) => { const q = s.questions.find((x) => x.key === f.questionKey); return { claim: `Gave a concrete answer ${q?.kind === "behavioral" ? "about a difficult moment" : "about recent work"}`, evidence: f.evidence! }; });
+  const answered = questionFindings.filter((f) => f.answered && f.evidence?.source !== "recruiter_note").length;
+  const strengths: ScreenAssessment["strengths"] = questionFindings.filter((f) => f.answered && f.evidence?.source === "screen" && (s.questions.find((q) => q.key === f.questionKey)?.kind === "skills" || s.questions.find((q) => q.key === f.questionKey)?.kind === "behavioral")).slice(0, 3).map((f) => { const q = s.questions.find((x) => x.key === f.questionKey); return { claim: `Gave a concrete answer ${q?.kind === "behavioral" ? "about a difficult moment" : "about recent work"}`, evidence: f.evidence! }; });
   const concerns: ScreenAssessment["concerns"] = [];
   if (withinRange === "above" && payAnswer) concerns.push({ claim: `Pay expectation (${payAnswer.slice(0, 40)}) is above the posted range`, evidence: { source: "screen", quote: payAnswer } });
   const noElig = eligibilityConfirmations.find((e) => e.confirmed === "no");
   if (noElig?.quote) concerns.push({ claim: "Did not confirm a required eligibility item", evidence: { source: "screen", quote: noElig.quote } });
   const unknowns = questionFindings.filter((f) => !f.answered).map((f) => ({ question: s.questions.find((q) => q.key === f.questionKey)?.question ?? f.questionKey, whyItMatters: "Not covered in the screen." }));
-  const recommendation: ScreenAssessment["recommendation"] = noElig ? "decline_recommended" : withinRange === "above" ? "hold" : answered >= Math.max(1, s.questions.length - 1) ? (strengths.length >= 2 ? "strong_interview" : "interview") : answered > 0 ? "interview" : "hold";
+  // screen.assess v3: a conversation that was not finished is read for what it has, says so, and is never "strong interview".
+  const unfinished = /This conversation was not finished/.test(user);
+  const recommendation: ScreenAssessment["recommendation"] = noElig ? "decline_recommended" : withinRange === "above" ? "hold" : answered >= Math.max(1, s.questions.length - 1) ? (strengths.length >= 2 && !unfinished ? "strong_interview" : "interview") : answered > 0 ? "interview" : "hold";
   const overall: ScreenAssessment["overall"] = recommendation === "strong_interview" ? "strong" : recommendation === "interview" ? "potential" : recommendation === "hold" ? "unknown" : "weak";
   return {
     overall,
     confidence: answered >= s.questions.length - 1 ? "medium" : "low",
-    summary: `${answered} of ${s.questions.length} questions answered.${payAnswer ? ` Pay expectation: ${trimDot(payAnswer.slice(0, 40))} (${withinRange === "yes" ? "within range" : withinRange}).` : ""}${availAnswer ? ` Availability: ${trimDot(availAnswer.slice(0, 60))}.` : ""}`,
+    summary: `${unfinished ? "Not finished: " : ""}${answered} of ${s.questions.length} questions answered.${payAnswer ? ` Pay expectation: ${trimDot(payAnswer.slice(0, 40))} (${withinRange === "yes" ? "within range" : withinRange}).` : ""}${availAnswer ? ` Availability: ${trimDot(availAnswer.slice(0, 60))}.` : ""}${notes.length ? " A recruiter's call notes cover the rest." : ""}`,
     strengths,
     concerns,
     unknowns,
@@ -541,4 +762,130 @@ function fakeScreenAssess(req: StructuredRequest<unknown>): ScreenAssessment {
     recommendation,
     rationale: recommendation === "decline_recommended" ? "The candidate's own answer did not confirm a required eligibility item; a person decides." : recommendation === "hold" ? (withinRange === "above" ? "Pay expectations are above the posted range; worth a conversation before an interview." : "Too few answers to recommend an interview.") : `Answered the screen with ${strengths.length} concrete example${strengths.length === 1 ? "" : "s"}; logistics look workable.`,
   };
+}
+
+/**
+ * packet.revise v1 (C10): the few kinds of change tests and local development ask for, answered the way the model is
+ * told to: only the sections that change, each written out whole; wording that stands in for a protected trait refused
+ * in notChanged; pay only where pay may change; a question back when the request is not one of these.
+ */
+function fakeRevise(req: StructuredRequest<unknown>): PacketRevision {
+  const text = req.messages.map((m) => m.content).join("\n");
+  const allowed = (text.match(/^Sections you may change: ([a-z, ]+) \(/m)?.[1] ?? "").split(", ").filter(Boolean);
+  const request = text.match(/<request>\n([\s\S]*?)\n<\/request>/)?.[1]?.trim() ?? "";
+  let packet: Partial<DraftRolePacket> = {};
+  try { packet = JSON.parse(text.match(/Current packet \(JSON\): (\{[\s\S]*\})\n\n<request>/)?.[1] ?? "{}") as Partial<DraftRolePacket>; } catch { /* keep empty */ }
+  const changes: PacketRevision["changes"] = {};
+  const notChanged: PacketRevision["notChanged"] = [];
+  const done: string[] = [];
+  const clean = (s: string) => s.trim().replace(/^["']|["'.]+$/g, "").trim();
+  const refuse = (words: string) => {
+    const hit = screenCriterion(words);
+    if (hit) notChanged.push({ request: words, reason: `${hit.reason} ${hit.alternative}` });
+    return !!hit;
+  };
+  const unusedKey = (prefix: string, words: string, taken: string[]) => {
+    let key = `${prefix}_${slug(words).slice(0, 30)}`;
+    for (let n = 2; taken.includes(key); n += 1) key = `${prefix}_${slug(words).slice(0, 30)}_${n}`;
+    return key;
+  };
+  const addMust = request.match(/\badd (?:a |another )?must[\s-]have:?\s*(.+)$/i) ?? request.match(/\bmake (.+?) a must[\s-]have\b/i);
+  const takeOut = request.match(/\b(?:take out|remove|drop|delete)\s+(?:the\s+)?(?:must[\s-]have\s+|line\s+|sentence\s+|part\s+)?(?:about\s+|on\s+|saying\s+)?(.+)$/i);
+  const rename = request.match(/\b(?:rename (?:the job|the role|it)|call (?:the job|the role|it)|change the (?:job )?title) to\s+(.+)$/i);
+  const schedule = request.match(/\b(?:change|set|make) the schedule to\s+(.+)$/i);
+  const tone = request.match(/\b(warmer|friendlier|more formal|more direct)\b/i);
+  const question = request.match(/\badd (?:a |another )?(?:screening )?question:?\s*(.+)$/i);
+  const pay = /\bpay\b|\bwage\b|\bsalary\b|\brate\b/i.test(request) ? request.match(/\$?\s?(\d[\d,]*(?:\.\d+)?)\s*(?:-|–|to)\s*\$?\s?(\d[\d,]*(?:\.\d+)?)/i) : null;
+  if (/\bdecision maker\b|\bwho decides\b|\bfinal say\b/i.test(request)) notChanged.push({ request, reason: "Who makes the final decision is chosen from your team in the editor." });
+  else if (pay) {
+    const min = Number(pay[1].replace(/,/g, ""));
+    const max = Number(pay[2].replace(/,/g, ""));
+    if (!allowed.includes("compensation") || !packet.compensation) notChanged.push({ request, reason: "Pay is set on the pay card." });
+    else {
+      changes.compensation = { ...packet.compensation, min: Math.min(min, max), max: Math.max(min, max), mid: Math.round((min + max) / 2), ceiling: Math.max(packet.compensation.ceiling, min, max) };
+      done.push(`I changed the pay to ${money(Math.min(min, max))}–${money(Math.max(min, max))} ${per(packet.compensation.basis)}.`);
+    }
+  } else if (addMust && packet.requirements) {
+    const words = clean(addMust[1]);
+    if (!refuse(words)) {
+      if (packet.requirements.mustHaves.length >= 6) notChanged.push({ request: words, reason: "There are six must-haves already, the most a role can have. Take one out first." });
+      else {
+        changes.requirements = { ...packet.requirements, mustHaves: [...packet.requirements.mustHaves, { key: unusedKey("mh", words, packet.requirements.mustHaves.map((m) => m.key)), text: words, rationale: "Added by the owner in the conversation", evidencedBy: ["resume", "screen"] }] };
+        done.push(`I added a must-have: ${words}.`);
+      }
+    }
+  } else if (question && packet.screening) {
+    const words = clean(question[1]);
+    if (!refuse(words)) {
+      if (packet.screening.questions.length >= 12) notChanged.push({ request: words, reason: "There are twelve screening questions already, the most a role can have." });
+      else {
+        changes.screening = { ...packet.screening, questions: [...packet.screening.questions, { key: unusedKey("q", words, packet.screening.questions.map((q) => q.key)), question: /\?$/.test(words) ? words : `${words}?`, kind: "skills" }] };
+        done.push(`I added a screening question: ${words}`);
+      }
+    }
+  } else if (takeOut && packet.requirements && packet.description) {
+    const target = normalizeCriterion(clean(takeOut[1]));
+    const matches = (s: string) => { const t = normalizeCriterion(s); return !!target && (t.includes(target) || target.includes(t)); };
+    const must = packet.requirements.mustHaves.filter((m) => !matches(m.text));
+    const nice = packet.requirements.niceToHaves.filter((m) => !matches(m.text));
+    const sentences = packet.description.publicJobDescription.match(/[^.!?]+[.!?]+\s*/g) ?? [packet.description.publicJobDescription];
+    const kept = sentences.filter((s) => !matches(s)).join("").trim();
+    if ((must.length > 0 && must.length < packet.requirements.mustHaves.length) || nice.length < packet.requirements.niceToHaves.length) {
+      changes.requirements = { ...packet.requirements, mustHaves: must.length ? must : packet.requirements.mustHaves, niceToHaves: nice };
+      done.push(`I took out "${clean(takeOut[1])}".`);
+    } else if (kept.length >= 50 && kept !== packet.description.publicJobDescription.trim()) {
+      changes.description = { ...packet.description, publicJobDescription: kept };
+      done.push(`I took the line about "${clean(takeOut[1])}" out of the job description.`);
+    }
+  } else if (rename && packet.identity) {
+    const words = clean(rename[1]);
+    if (!refuse(words)) {
+      changes.identity = { ...packet.identity, title: words };
+      done.push(`I renamed the job to ${words}.`);
+    }
+  } else if (schedule && packet.identity) {
+    const words = clean(schedule[1]);
+    changes.identity = { ...packet.identity, schedule: words };
+    done.push(`I changed the schedule to ${words}.`);
+  } else if (tone && packet.communication) {
+    const to = /formal/i.test(tone[1]) ? "formal" : /direct/i.test(tone[1]) ? "direct" : "warm";
+    changes.communication = { ...packet.communication, tone: to };
+    done.push(`I made the messages to candidates ${to === "warm" ? "warmer" : `more ${to}`}.`);
+  } else if (/\bshort(?:er|en)\b/i.test(request) && packet.description) {
+    const sentences = packet.description.publicJobDescription.match(/[^.!?]+[.!?]+\s*/g) ?? [];
+    const shorter = sentences.slice(0, Math.max(3, Math.ceil(sentences.length / 2))).join("").trim();
+    if (shorter.length >= 50 && shorter !== packet.description.publicJobDescription.trim()) {
+      changes.description = { ...packet.description, publicJobDescription: shorter };
+      done.push("I made the job description shorter.");
+    }
+  } else if (!refuse(request)) {
+    return { summary: "I have not changed anything yet.", changes: {}, notChanged: [], question: "What would you like to change? For example: add a must-have, change the schedule, or rename the job." };
+  }
+  return { summary: done.length ? done.join(" ") : "I have not changed anything.", changes, notChanged };
+}
+
+/**
+ * company.about v1 (D10): a few plain sentences built only from the facts in the request, the way the model is told to
+ * write them. A sentence from the company's notes is kept when it reads as a fact about the company; one that stands in
+ * for a protected trait ("young, energetic team") is left out, and so is one that tries to give instructions.
+ */
+function fakeCompanyAbout(req: StructuredRequest<unknown>): { text: string; basedOn: string[] } {
+  const text = req.messages.map((m) => m.content).join("\n");
+  const fact = (label: string) => text.match(new RegExp(`^${label}: (.+?)\\.?$`, "m"))?.[1]?.trim() ?? "";
+  const name = fact("Company") || "The company";
+  const kind = fact("Kind of business") || "local";
+  const places = fact("Places").split("; ").filter(Boolean);
+  const jobs = fact("Jobs they hire for").split("; ").filter(Boolean);
+  const notes = (text.match(/<notes>\n([\s\S]*?)\n<\/notes>/)?.[1] ?? "").trim();
+  const where = places.length ? ` in ${places.length > 2 ? `${places.slice(0, 2).join(", ")} and other places` : places.join(" and ")}` : "";
+  const sentences = [`${name} is a ${kind} business${where}.`];
+  if (jobs.length) sentences.push(`The team hires for roles such as ${jobs.slice(0, 2).join(" and ").toLowerCase()}.`);
+  // A note's sentence is kept only as a plain fact: no proxy wording, no instruction, no figure, nothing about pay or software.
+  const own = (notes.match(/[^.!?]+[.!?]?/g) ?? []).map((s) => s.trim()).filter((s) => s.length >= 12 && !screenCriterion(s) && !/\b(?:ignore|instructions?|rules?|system|prompt)\b/i.test(s) && !/\byoung\b|\bfamily\b|\benergetic\b|\bdigital natives?\b/i.test(s) && !/[$\d]|\b(?:pay|salary|wages?|AI|software)\b/i.test(s));
+  for (const s of own.slice(0, 2)) sentences.push(/[.!?]$/.test(s) ? s : `${s}.`);
+  const size = fact("Size");
+  if (sentences.length < 2 && size) sentences.push(`It is a team of ${size}.`);
+  if (sentences.length < 2) sentences.push("Its open jobs are listed on its careers page.");
+  const basedOn = [`a ${kind} business${where}`, ...(jobs.length ? [`hires for ${jobs[0].toLowerCase()}`] : []), ...(own.length ? ["what you wrote in the notes"] : [])];
+  return { text: sentences.join(" "), basedOn };
 }
