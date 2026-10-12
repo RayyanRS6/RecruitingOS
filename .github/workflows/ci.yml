@@ -37,18 +37,22 @@ env:
 jobs:
   verify:
     name: verify # the required status check on main: lockfile install, secret scans, audit, typecheck, migration validation, tests, evals, build, browser journeys with accessibility checks
-    runs-on: ubuntu-latest
+    # Pinned (12 October 2026): ubuntu-latest moves to Ubuntu 26.04 from 19 October, where /tmp is held in memory
+    # (actions/runner-images#14777) and the browsers keep their profiles and traces there. Revisit when #14777 is fixed
+    # or GitHub announces an end date for 24.04: one green run on a branch with ubuntu-26.04, then switch.
+    runs-on: ubuntu-24.04
     # 32 browser journeys run one at a time against `next dev`, in three runs with a server each (about 50 minutes),
     # after about 20 minutes of other checks.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # gitleaks scans history on pull requests
 
-      - uses: pnpm/action-setup@v4 # reads "packageManager" from package.json
+      # v5 is v4.3.0's code labelled for Node 24; v6 changes how pnpm itself is installed.
+      - uses: pnpm/action-setup@v5 # reads "packageManager" from package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
@@ -117,7 +121,7 @@ jobs:
 
       - name: Playwright report (synthetic data only)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: tests/e2e/report

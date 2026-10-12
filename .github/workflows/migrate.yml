@@ -23,7 +23,9 @@ concurrency:
 jobs:
   migrate:
     name: apply pending migrations
-    runs-on: ubuntu-latest
+    # Pinned with ci.yml (12 October 2026): ubuntu-latest moves to Ubuntu 26.04 from 19 October, and a run that changes
+    # a real database should use a known image. Move to ubuntu-26.04 together with ci.yml.
+    runs-on: ubuntu-24.04
     environment: ${{ inputs.environment }}
     timeout-minutes: 15
     env:
@@ -31,11 +33,11 @@ jobs:
       MIGRATE_DATABASE_URL: ${{ secrets.MIGRATE_DATABASE_URL }}
       DATABASE_SSL_CA: ${{ secrets.DATABASE_SSL_CA }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5 # as in ci.yml
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
