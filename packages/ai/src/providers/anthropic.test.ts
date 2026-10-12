@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { StructuredRequest } from "../types";
-import { AnthropicProvider, extractJson, isGrammarTooLarge } from "./anthropic";
+import { AnthropicProvider, extractJson, isGrammarTooLarge, withoutNulls } from "./anthropic";
 
 /**
  * The Anthropic adapter against a stand-in client (no network, no key). Pins the two faults the first live run on
@@ -77,12 +77,42 @@ describe("the Anthropic adapter", () => {
     expect(sent[2]!.output_config?.format).toBeUndefined();
   });
 
-  it("validates an unconstrained reply against the schema and records a mismatch as invalid", async () => {
+  it("falls back the same way for the too-many-optional-parameters refusal (intake.compile on staging)", async () => {
+    const schema = z.object({ title: z.string(), note: z.string().optional() });
+    const tooManyOptional = new Anthropic.BadRequestError(400, { type: "error", error: { type: "invalid_request_error", message: "Schemas contains too many optional parameters (40), which would make grammar compilation inefficient. Reduce the number of optional parameters in your tool schemas (limit: 24)." } }, undefined, new Headers());
+    const { client, sent } = fakeClient([tooManyOptional, reply({ text: '{"title":"Engineer"}' })]);
+    const out = await new AnthropicProvider(undefined, client).structured(request(schema), "claude-opus-5");
+    expect(out).toMatchObject({ kind: "ok", output: { title: "Engineer" } });
+    expect(sent[1]!.output_config?.format).toBeUndefined();
+  });
+
+  it("drops nulls an optional field cannot take, rather than failing the reply", async () => {
+    const schema = z.object({ title: z.string(), department: z.string().optional(), rounds: z.array(z.object({ name: z.string(), notes: z.string().optional() })) });
+    const { client, sent } = fakeClient([grammarError(), reply({ text: '{"title":"Engineer","department":null,"rounds":[{"name":"Screen","notes":null}]}' })]);
+    const out = await new AnthropicProvider(undefined, client).structured(request(schema), "claude-opus-5");
+    expect(out).toMatchObject({ kind: "ok", output: { title: "Engineer", rounds: [{ name: "Screen" }] } });
+    expect(sent).toHaveLength(2);
+  });
+
+  it("gives a reply that does not validate one correction turn, quoting what was wrong", async () => {
     const schema = z.object({ count: z.number() });
-    const { client } = fakeClient([grammarError(), reply({ text: '{"count":"three"}' })]);
+    const { client, sent } = fakeClient([grammarError(), reply({ text: '{"count":"three"}' }), reply({ text: '{"count":3}' })]);
+    const out = await new AnthropicProvider(undefined, client).structured(request(schema), "claude-sonnet-5");
+    expect(out).toMatchObject({ kind: "ok", output: { count: 3 }, usage: { inputTokens: 20, outputTokens: 10 } });
+    expect(sent).toHaveLength(3);
+    const turns = sent[2]!.messages as Array<{ role: string; content: string }>;
+    expect(turns.at(-2)).toEqual({ role: "assistant", content: '{"count":"three"}' });
+    expect(turns.at(-1)!.role).toBe("user");
+    expect(turns.at(-1)!.content).toContain("does not validate");
+  });
+
+  it("records the reply as invalid when the correction does not validate either", async () => {
+    const schema = z.object({ count: z.number() });
+    const { client, sent } = fakeClient([grammarError(), reply({ text: '{"count":"three"}' }), reply({ text: '{"count":"still three"}' })]);
     const out = await new AnthropicProvider(undefined, client).structured(request(schema), "claude-sonnet-5");
     expect(out.kind).toBe("invalid");
-    if (out.kind === "invalid") expect(out.rawText).toContain("three");
+    if (out.kind === "invalid") expect(out.rawText).toContain("still three");
+    expect(sent).toHaveLength(3);
   });
 
   it("records an unconstrained reply with no JSON in it as invalid, saying when the reply was cut off", async () => {
@@ -117,6 +147,10 @@ describe("reading JSON from an unconstrained reply", () => {
 
   it("throws when there is no JSON object", () => {
     expect(() => extractJson("no json here")).toThrow("no JSON object");
+  });
+
+  it("removes null-valued keys at any depth and keeps everything else", () => {
+    expect(withoutNulls({ a: null, b: 0, c: [{ d: null, e: "x" }, null], f: { g: null, h: false } })).toEqual({ b: 0, c: [{ e: "x" }, null], f: { h: false } });
   });
 
   it("recognises only the grammar refusal", () => {
