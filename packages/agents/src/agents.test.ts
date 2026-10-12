@@ -144,7 +144,9 @@ describe("market pay in the assistant's words, from the real prompt (intake.turn
   });
 
   it("writes money and places the way the pay card does", async () => {
-    expect(intakeTurnPrompt.version).toBe(3);
+    expect(intakeTurnPrompt.version).toBe(4);
+    // v4: option values and facts in plain words, never codes (staging, 13 Oct 2026).
+    expect(intakeTurnPrompt.system(ctx(null)).map((b) => b.text).join("\n")).toContain('never a code: "California RDA license", not "rda_license"');
     const c = ctx({ basis: "salary", p25: 121130, p50: 164920, p75: 212050, source: "BLS OEWS 2025, SOC 112021, area 0012420", metro: "austin area", origin: "market", asOf: "2025" });
     // the model is handed the figure already written as the pay card writes it
     expect(intakeTurnPrompt.system(c).map((b) => b.text).join("\n")).toContain("write it as the pay card does: $121,130–$212,050 a year (middle $164,920), never bare numbers, and name places with capital letters.");

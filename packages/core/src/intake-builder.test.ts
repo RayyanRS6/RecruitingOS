@@ -148,6 +148,27 @@ describe("tapped answers and panel edits (plan C6, C15)", () => {
     expect(edit.summary).toEqual(["Must-haves: Active RDH license; Perio charting"]);
   });
 
+  it("stores the words a person ticked when the model wrote a code as the option's value (staging, 13 Oct 2026)", () => {
+    const coded = q({ options: [{ label: "California RDA license", value: "rda_license", origin: "playbook" }, { label: "Current BLS/CPR", value: "bls_cpr", origin: "playbook" }] });
+    const edit = applyAnswers(empty(), [coded], [{ questionId: "q1", selected: ["rda_license"], own: [], skipped: false }], team);
+    expect(edit.facts.mustHaves).toEqual(["California RDA license"]);
+    expect(edit.facts.suggestions?.map((s) => s.text)).toEqual(["Current BLS/CPR"]);
+    expect(edit.summary).toEqual(["Must-haves: California RDA license"]);
+
+    const schedule = q({ id: "s", field: "schedule", mode: "single", options: [{ label: "Monday–Friday, standard office hours", value: "mon_fri_days", origin: "assistant" }] });
+    expect(applyAnswers(empty(), [schedule], [{ questionId: "s", selected: ["mon_fri_days"], own: [], skipped: false }], team).facts.schedule).toBe("Monday–Friday, standard office hours");
+
+    const why = q({ id: "w", field: "reason_for_hire", mode: "single", options: [{ label: "Someone left and we need a replacement", value: "backfill", origin: "assistant" }, { label: "We're busier and adding a chair", value: "capacity", origin: "assistant" }, { label: "A new kind of role", value: "new_position", origin: "assistant" }] });
+    const left = applyAnswers(empty(), [why], [{ questionId: "w", selected: ["backfill"], own: [], skipped: false }], team).facts;
+    expect([left.reason, left.reasonDetail]).toEqual(["replacement", "Someone left and we need a replacement"]);
+    expect(applyAnswers(empty(), [why], [{ questionId: "w", selected: ["capacity"], own: [], skipped: false }], team).facts.reason).toBe("growth");
+    // A valid code is kept as it is.
+    expect(applyAnswers(empty(), [why], [{ questionId: "w", selected: ["new_position"], own: [], skipped: false }], team).facts.reason).toBe("new_position");
+
+    const kind = q({ id: "k", field: "employment_type", mode: "single", options: [{ label: "Full time", value: "ft", origin: "assistant" }] });
+    expect(applyAnswers(empty(), [kind], [{ questionId: "k", selected: ["ft"], own: [], skipped: false }], team).facts.employmentType).toBe("full_time");
+  });
+
   it("refuses what a person typed when it fails the fairness check, with the reason, and records it as declined", () => {
     const edit = applyAnswers(empty(), [must], [{ questionId: "q1", selected: [], own: ["Recent graduates only"], skipped: false }], team);
     expect(edit.facts.mustHaves).toEqual([]);

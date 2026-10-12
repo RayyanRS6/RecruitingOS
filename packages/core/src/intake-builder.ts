@@ -334,7 +334,16 @@ const dedupe = (xs: string[]) => xs.filter((x, i) => xs.findIndex((y) => same(x,
 
 const EMPLOYMENT_WORDS: Array<[RegExp, string]> = [[/full/i, "full_time"], [/part/i, "part_time"], [/contract/i, "contract"], [/temp/i, "temporary"], [/per[\s_-]?diem/i, "per_diem"], [/intern/i, "internship"]];
 const REMOTE_WORDS: Array<[RegExp, string]> = [[/hybrid/i, "hybrid"], [/remote/i, "remote"], [/on[\s_-]?site|in[\s_-]?(?:office|person)/i, "onsite"]];
-const REASON_WORDS: Array<[RegExp, string]> = [[/new/i, "new_position"], [/replac|left|quit/i, "replacement"], [/grow/i, "growth"], [/season/i, "seasonal"], [/other/i, "other"]];
+const REASON_WORDS: Array<[RegExp, string]> = [[/replac|left|quit|backfill|resign|retir/i, "replacement"], [/new|first|dedicated|creat/i, "new_position"], [/grow|busier|capacity|expand|adding/i, "growth"], [/season/i, "seasonal"], [/other/i, "other"]];
+
+/**
+ * A card's answer as the role keeps it. The model is asked to make an option's value the words to store, but it sometimes
+ * writes a code instead ("rda_license", "mon_fri_days", "backfill" on staging, 13 Oct 2026), which then showed on the
+ * draft as the code. A value that looks like a code is replaced by the label the person actually ticked.
+ */
+export function storedAnswer(option: { label: string; value: string }): string {
+  return /^[a-z0-9]+(?:[_-][a-z0-9]+)*$/.test(option.value.trim()) && option.label.trim() ? option.label.trim() : option.value;
+}
 
 /** A plain word for a field the packet keeps as one of a few values ("Full time" is full_time); refused when it names none. */
 function oneOf(value: string, allowed: readonly string[], words: Array<[RegExp, string]>, what: string): string {
@@ -424,44 +433,58 @@ export function applyAnswers(facts: IntakeFacts, questions: IntakeQuestion[], an
     if (a.own.length && !q.allowOwn) throw new IntakeEditError("own_not_allowed", "Pick one of the choices on this card.");
     const own = screened(edit, q.field, a.own);
     const picked = a.selected.filter((v) => v !== SOMEONE_NEW);
-    // An offered answer the fairness check would refuse is never stored, even if a stale card still showed it.
-    const chosen = screened(edit, q.field, picked);
-    const values = [...chosen, ...own];
     const list = LIST_OF[q.field];
     if (list) {
+      // An offered answer the fairness check would refuse is never stored, even if a stale card still showed it.
+      const chosen = screened(edit, q.field, picked.map((v) => storedAnswer(offered.get(v)!)));
+      const values = [...chosen, ...own];
       const unticked = q.options.filter((o) => !a.selected.includes(o.value));
-      listSet(edit, list, values, unticked.map((o) => o.value));
+      listSet(edit, list, values, unticked.map(storedAnswer));
       const suggestions = edit.facts.suggestions ?? [];
-      for (const o of unticked) if (!suggestions.some((s) => s.field === q.field && same(s.text, o.value))) suggestions.push({ field: q.field, text: o.value, origin: o.origin });
+      for (const o of unticked) if (!suggestions.some((s) => s.field === q.field && same(s.text, storedAnswer(o)))) suggestions.push({ field: q.field, text: storedAnswer(o), origin: o.origin });
       edit.facts.suggestions = suggestions.filter((s) => !(s.field === q.field && values.some((v) => same(v, s.text))));
-      if (values.length) edit.summary.push(`${FIELD_LABEL[q.field]}: ${values.map((v) => offered.get(v)?.label ?? v).join("; ")}`);
+      if (values.length) edit.summary.push(`${FIELD_LABEL[q.field]}: ${values.join("; ")}`);
       continue;
     }
-    const value = values[0];
+    // The fairness check reads the words the person ticked, which is also what a text fact keeps.
+    const first = picked.map((v) => offered.get(v)!).find((o) => screened(edit, q.field, [storedAnswer(o)]).length > 0);
+    const value = first?.value ?? own[0];
     if (value === undefined) continue;
-    setText(edit, q.field, value, now);
-    edit.summary.push(`${FIELD_LABEL[q.field]}: ${offered.get(value)?.label ?? value}`);
+    setText(edit, q.field, value, now, first ? storedAnswer(first) : undefined);
+    edit.summary.push(`${FIELD_LABEL[q.field]}: ${first?.label ?? value}`);
   }
   return edit;
 }
 
-function setText(edit: FactsEdit, field: IntakeQuestion["field"], value: string, now: Date): void {
+/**
+ * Sets one fact from an answer. `value` is what was sent (an option's value, or words typed); `words`, for an offered
+ * option, is what the person read and ticked (`storedAnswer`). A fact kept as one of a few codes tries the value, then the
+ * words; a fact kept as text stores the words; a start keeps the value, which `startDateFor` reads ("asap", "30 days").
+ */
+function setText(edit: FactsEdit, field: IntakeQuestion["field"], value: string, now: Date, words?: string): void {
   const f = edit.facts;
+  const text = words ?? value;
+  const pick = (allowed: readonly string[], list: Array<[RegExp, string]>, what: string): string => {
+    if (allowed.includes(value)) return value;
+    const hit = list.find(([re]) => re.test(value)) ?? (words ? list.find(([re]) => re.test(words)) : undefined);
+    if (hit) return hit[1];
+    return oneOf(text, allowed, list, what);
+  };
   switch (field) {
-    case "title": f.title = value; break;
-    case "location": f.locationText = value; break;
-    case "employment_type": f.employmentType = oneOf(value, EmploymentType.options, EMPLOYMENT_WORDS, "kind of job"); break;
-    case "schedule": f.schedule = value; break;
-    case "remote_policy": f.remotePolicy = oneOf(value, RemotePolicy.options, REMOTE_WORDS, "work model"); break;
+    case "title": f.title = text; break;
+    case "location": f.locationText = text; break;
+    case "employment_type": f.employmentType = pick(EmploymentType.options, EMPLOYMENT_WORDS, "kind of job"); break;
+    case "schedule": f.schedule = text; break;
+    case "remote_policy": f.remotePolicy = pick(RemotePolicy.options, REMOTE_WORDS, "work model"); break;
     case "reason_for_hire":
       if (HireReason.options.includes(value as never)) f.reason = value;
-      else { f.reason = REASON_WORDS.find(([re]) => re.test(value))?.[1] ?? "other"; f.reasonDetail = value; }
+      else { f.reason = REASON_WORDS.find(([re]) => re.test(value))?.[1] ?? (words ? REASON_WORDS.find(([re]) => re.test(words))?.[1] : undefined) ?? "other"; f.reasonDetail = text; }
       break;
-    case "compensation_basis": f.compensationBasis = oneOf(value, ["hourly", "salary"], [[/hour/i, "hourly"], [/salar|year|annual/i, "salary"]], "pay basis"); break;
+    case "compensation_basis": f.compensationBasis = pick(["hourly", "salary"], [[/hour/i, "hourly"], [/salar|year|annual/i, "salary"]], "pay basis"); break;
     case "timeline": Object.assign(f, startDateFor(value, now)); break;
-    case "what_failure_looks_like": f.whatFailureLooksLike = value; break;
-    case "benefits": f.benefits = value; break;
-    case "decision_maker": f.decisionMaker = value; f.decisionMakerUserId = undefined; break;
+    case "what_failure_looks_like": f.whatFailureLooksLike = text; break;
+    case "benefits": f.benefits = text; break;
+    case "decision_maker": f.decisionMaker = text; f.decisionMakerUserId = undefined; break;
     default: break;
   }
 }
