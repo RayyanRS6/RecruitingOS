@@ -59,6 +59,9 @@ describe("connection error diagnosis (never the string, never the password)", ()
     [{ code: "42501", message: "permission denied for schema vault" }, "permission", /project owner/],
     [{ code: "3D000", message: `database "nope" does not exist` }, "database", /postgres/],
     [{ code: "53300", message: "too many clients already" }, "pooler", /Wait a minute/],
+    [{ message: "(EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15" }, "pooler", /Wait a minute/],
+    [{ message: "Connection terminated due to connection timeout" }, "pooler", /most likely full/],
+    [{ message: "timeout exceeded when trying to connect" }, "pooler", /most likely full/],
     [{ message: "The server does not support SSL connections" }, "tls", /verify-full/],
     [{ code: "XX999", message: `something odd ${secret}` }, "unknown", /Paste the code/],
   ])("classifies %j as %s", (err, kind, advice) => {

@@ -628,6 +628,33 @@ every platform read runs inside `withPlatform` (readiness blocker 2b). (4) Vault
 ones the grants named; the grants now resolve them at run time. (5) The pooler may refuse a freshly set password for a
 few seconds; verification retries for thirty. Nothing in any of this resets or deletes the staging database.
 
+**Incident, staging session pooler full (12 October 2026):** minutes after three redeploys of `main`, staging showed
+"Application error" with a digest, and Supabase's session pooler was refusing connections: `(EMAXCONNSESSION) max
+clients reached in session mode - max clients are limited to pool_size: 15`. Cause: the pooler lets each role hold 15
+client connections at once, idle ones included, and every Vercel instance of every live deployment drew on `ros_app`'s
+15 through its own pool (`DATABASE_POOL_MAX`, then 5). Vercel suspends an instance as soon as its requests finish and
+a suspended instance's timers do not run, so the pool's idle timer never closed what it held: the old deployments'
+instances were frozen holding their connections until Vercel discarded them minutes later, and the new deployment's
+first query (the boot check, reached through `getMe`) waited for a slot and was refused. Two defects found on the way:
+nothing listened for errors on the pool or on a connection checked out for a transaction, so a connection closed by the
+pooler or the server would have ended the process; and the `SET app.platform = 'on'` every connection runs was sent from a `connect` listener without being
+awaited, so a new connection's first query was queued behind it (node-postgres's "already executing a query"
+deprecation warning, which version 9 makes an error). Fix, with no new dependency: every route handler and `getMe`
+take the container through `getShellForRequest` (`apps/shell/lib/container.ts`), whose Next.js `after()` keeps the
+request alive until the pool's idle timer, now 5 seconds, has closed its connections, so an instance is suspended
+holding none; a query that cannot get a connection fails after 10 seconds; `DATABASE_POOL_MAX` defaults to 3, so five
+instances fit in 15 instead of three (the Railway worker keeps 5 of `ros_worker`'s own 15); platform mode is entered
+in the pool's `onConnect` hook, which the pool awaits before handing a connection out, and a connection that cannot
+enter it is closed, never used; each connection gets its own `error` listener in the same hook (and the pool has one),
+so a connection closed under the application, idle or in use, is logged and dropped; and a boot that fails
+after the pool exists closes it. Vercel's `attachDatabasePool` (`@vercel/functions`) does the same through the same
+`waitUntil` but needs a lockfile change; it is the fallback if idle `ros_app` sessions still linger after the fix. The
+pooler's Pool Size stays 15: it applies to each role, and on the Micro database (60 connections, shared with Auth and
+Storage) three roles at 20 would take them all. Founder action: set `DATABASE_POOL_MAX` to `3` in Vercel's Preview
+variables (`docs/runbooks/staging-environment-variables.md`). Residual risk: this is not a hard cap; more than five busy
+instances at once can still need more than 15, and those queries now fail in 10 seconds instead of hanging. The only
+hard cap is the transaction pooler, which waits on readiness blocker 2b (every platform read inside `withPlatform`).
+
 Staging database setup, third revision (22 Sep): the founder's rerun of the read-only status report read the
 downloaded certificate but the driver still refused the chain. Cause: node-postgres lets a connection string's
 `sslmode` override an explicit `ssl` option, discarding the certificate. The client now removes `sslmode` and

@@ -1,3 +1,4 @@
+import { after } from "next/server";
 import { createApp } from "@ros/api/src/app";
 import { createContainer, type Container } from "@ros/api/src/container";
 
@@ -40,6 +41,23 @@ export function getShell(): Promise<Shell> {
     });
   }
   return g.__rosShell;
+}
+
+/**
+ * The container for one request (route handlers and getMe). Vercel suspends an instance once its requests end, and a
+ * suspended instance's timers do not run, so the pool's idle connections would stay open on the session pooler, each
+ * holding one of ros_app's 15 slots, until Vercel discards the instance minutes later (12 Oct 2026: three redeploys
+ * filled the pooler). `after` keeps the request alive until the pool's 5-second idle timer has closed them. This is
+ * what Vercel's attachDatabasePool does, through the waitUntil Next.js already wires up.
+ */
+export async function getShellForRequest(): Promise<Shell> {
+  const shell = await getShell();
+  try {
+    after(() => shell.container.handle.whenIdle());
+  } catch {
+    // Outside a Next.js request (tests, scripts) there is no instance to keep alive.
+  }
+  return shell;
 }
 
 /** Test seam: install a prebuilt container (memory database, fake adapters). */

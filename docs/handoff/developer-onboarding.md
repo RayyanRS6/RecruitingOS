@@ -119,6 +119,11 @@ their evidence. `docs/readiness/03-staging-verification-checklist.md` is the sta
   would otherwise discard it. `sslmode=disable` and `no-verify` are refused.
 - The application strings use the Session pooler (port 5432), not the transaction pooler, because the application
   keeps per-connection state. Recorded as readiness follow-up 2b.
+- Every Vercel instance shares `ros_app`'s 15 Session pooler connections, and a suspended instance never closes its
+  idle ones. So route handlers and server components reach the database through `getShellForRequest()` (or `getMe()`,
+  which uses it), never `getShell()` directly: `getShellForRequest` keeps the request alive until the pool has closed
+  its idle connections, so the instance is suspended holding none. Without that wait, three redeploys filled the
+  staging pooler on 12 October 2026 (`EMAXCONNSESSION`; `docs/14`, "The app on Vercel").
 - The dev server used by Playwright runs with an explicit heap limit; Next restarts itself at 80 percent of the heap,
   which would wipe the in-memory database mid-run.
 - pnpm 12 refuses packages younger than 24 hours; pin the newest older release instead of adding an exclusion.

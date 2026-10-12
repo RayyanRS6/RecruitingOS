@@ -98,7 +98,7 @@ the next merge to `main`, or Deployments, **Create Deployment**, branch `main`.
 | `CSP_MODE` | `report-only` | constant until the staging reports are reviewed | no |
 | `COMPANY_CHECK` | not set (`its`) | constant; production refuses `auto`. A company created on staging waits for an administrator's confirmation in the admin console (Customers, Confirm) before its pages are public | no |
 | `TRUST_PROXY_HOPS` | `1` | constant for Vercel | no |
-| `DATABASE_POOL_MAX` | `5` | constant | no |
+| `DATABASE_POOL_MAX` | `3` | constant: each Vercel instance holds up to this many of `ros_app`'s 15 Session pooler connections (changed from `5` on 12 October 2026, after three redeploys filled the pooler; if Vercel still shows `5`, edit it to `3`). Not `1`, which slows requests that arrive together | no |
 
 Not set on purpose: `SENTRY_DSN` (the Sentry projects do not exist yet; reporting stays off), `WORKER_DATABASE_URL`
 and `MIGRATE_DATABASE_URL` (never on Vercel), `SUPABASE_SERVICE_ROLE_KEY` (never anywhere), `MAGIC_LINK_ENABLED`

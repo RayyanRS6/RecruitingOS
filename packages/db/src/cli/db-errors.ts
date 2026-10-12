@@ -37,8 +37,15 @@ export function diagnoseConnectionError(err: unknown): ConnectionDiagnosis {
   if (code === "3D000") {
     return { kind: "database", code, summary: "the database named in the string does not exist", advice: "Use the string exactly as Supabase shows it (database postgres)." };
   }
-  if (code === "53300" || /too many (clients|connections)|max client connections/i.test(message)) {
+  // EMAXCONNSESSION is Supavisor's refusal once a role's 15 Session pooler connections are all open (12 Oct 2026).
+  if (code === "53300" || /too many (clients|connections)|max client connections|EMAXCONN|max clients reached/i.test(message)) {
     return { kind: "pooler", code, summary: "the pooler has no free connection right now", advice: "Wait a minute and run again; close other database clients first." };
+  }
+  // node-postgres's own messages when createDb's 10-second connect timeout runs out (migrate, seed, status, and the app
+  // itself). The pooler can hold a client it has no room for for up to a minute before refusing it, so a full pooler can
+  // show up as one of these instead.
+  if (/connection terminated due to connection timeout|timeout exceeded when trying to connect/i.test(message)) {
+    return { kind: "pooler", code, summary: "no database connection was handed out within 10 seconds", advice: "The pooler is most likely full: wait a minute and run again, and close other database clients first. If it keeps happening, check the host and port in the string and whether the Supabase project is paused." };
   }
   return { kind: "unknown", code, summary: message.split("\n")[0]!.slice(0, 200), advice: "Paste the code and this line back; nothing sensitive is in it." };
 }

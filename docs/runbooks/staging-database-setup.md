@@ -82,16 +82,24 @@ or the password. The kinds:
 | the database host could not be reached | network, or the project is paused | check the host and port, the network, the project state |
 | the connected user lacks a privilege | not the owner | use the owner's pooler string |
 | the pooler has no free connection | pooler saturated | wait a minute, close other clients |
+| no database connection was handed out within 10 seconds | most likely the pooler is full (see the next row); less often a slow or blocked network | wait a minute and run again; if it keeps happening, check the host, the port and the project state |
+| `(EMAXCONNSESSION) max clients reached in session mode`, or node-postgres's `Connection terminated due to connection timeout` or `timeout exceeded when trying to connect` (in a report, or in the Vercel logs) | every one of the role's 15 Session pooler connections is open; idle ones count too. The application stops waiting for a connection after 10 seconds, sooner than the pooler refuses one, so a full pooler can show only the two timeout messages (which can also mean a slow network). On 12 Oct 2026 the role was `ros_app`: old Vercel instances, suspended after three redeploys, still held theirs | wait a few minutes (Vercel discards old instances); `bash scripts/staging-db-status.sh` shows the role's sessions (it connects as the owner, whose 15 are separate). If `ros_app` stays full, check that `DATABASE_POOL_MAX` is `3` on Vercel, and, once a deployment with the 12 Oct fix is live (older code ends its process when a connection is closed under it), end the idle `ros_app` sessions as the owner in the Supabase SQL editor: `select pg_terminate_backend(pid) from pg_stat_activity where usename = 'ros_app' and state = 'idle';` (the server may refuse the owner this, as in the rotation below). Do not raise the Pool Size |
 | migration X failed at statement N of M (code) | a statement Postgres refused; the file was rolled back | paste the line back; nothing sensitive is in it |
 
 ## Two decisions recorded here
 
 - **The application connects through the Session pooler (port 5432), not the transaction pooler (6543).** The
-  application sets `app.platform` once per connection and the boot check reads it back; transaction pooling does not
-  keep per-connection state, so the check could fail at random and platform reads could run without it. Session mode
-  keeps it. The cost is one server connection per pooled client; the pool size is bounded by `DATABASE_POOL_MAX`
-  (default 5). Moving to transaction mode needs every platform read to run inside `withPlatform` first; recorded in
-  the register as a follow-up.
+  application sets `app.platform` once per connection, before the pool hands the connection out (one that cannot is
+  closed, never used), and the boot check reads it back; transaction pooling does not keep per-connection state, so
+  the check could fail at random and platform reads could run without it. Session mode keeps it. The cost is one
+  server connection per pooled client, and a fixed number of them: the pooler's Pool Size (15) is the most each role
+  may hold at once, idle or busy. Each process's pool is bounded by `DATABASE_POOL_MAX` (default 3); on Vercel that is
+  per instance, and every instance of every live deployment shares `ros_app`'s 15 (the Railway worker keeps 5 of
+  `ros_worker`'s own 15). Vercel suspends an instance once its requests end, and a suspended instance's timers do not
+  run, so each Vercel request waits until the pool's 5-second idle timer has closed its idle connections before the
+  instance can be suspended (added 12 Oct 2026; see the `EMAXCONNSESSION` row above). Moving to transaction mode
+  needs every platform read to run inside `withPlatform` first; recorded in the register as a follow-up, and the only
+  hard cap on the number of connections.
 - **Supabase's Data API roles are locked out of the schema.** On Supabase every table created in `public` is granted
   to `anon`, `authenticated` and `service_role` by the project's default privileges, so the platform tables (which
   have no row-level security because only the application role reaches them) would be readable through the Data API

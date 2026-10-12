@@ -3,6 +3,8 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT, PgTransaction } from "drizzle-orm/pg-core";
 import type { ExtractTablesWithRelations } from "drizzle-orm";
+// Types only: erased at build, so the PGlite path still never loads the Postgres driver.
+import type { ClientBase, Pool } from "pg";
 import * as schema from "./schema";
 
 export type Schema = typeof schema;
@@ -30,6 +32,11 @@ export type DbHandle = {
   execAtomic(statements: string[], opts?: { onDuplicate?: "skip" | "fail" }): Promise<{ skipped: number[] }>;
   /** Parameterised query for adapters that need SQL without the ORM (the secret store). Values are never logged. */
   query(text: string, params: unknown[]): Promise<Array<Record<string, unknown>>>;
+  /**
+   * Resolves once no connection is open, or after maxWaitMs (default: the idle timeout plus one second). The Vercel
+   * shell waits for it after each request, so a suspended instance holds no pooler slot. PGlite resolves at once.
+   */
+  whenIdle(maxWaitMs?: number): Promise<void>;
 };
 
 export type CreateDbOptions = {
@@ -143,13 +150,62 @@ export function isDuplicateObjectError(err: unknown, statement = ""): boolean {
 }
 
 /**
+ * How long an unused connection stays open. Vercel suspends an instance once its requests end and a suspended
+ * instance's timers do not run, so this is short (Vercel: about 5 s) and the shell keeps each request alive until it
+ * has fired (apps/shell/lib/container.ts, getShellForRequest). `min` stays 0: pg-pool never closes connections held by
+ * `min`.
+ */
+export const POOL_IDLE_TIMEOUT_MS = 5_000;
+/** How long a query waits for a connection (from this pool, or from the session pooler, which would hold it for a minute) before it fails. */
+export const POOL_CONNECT_TIMEOUT_MS = 10_000;
+
+/**
+ * Platform mode for every connection before anyone can use it. pg-pool awaits this (through prepareConnection) before
+ * it hands a new connection out; if the SET fails the connection is closed and the query that asked for it fails. A
+ * 'connect' listener cannot do this: pg-pool hands the connection out in the same tick, so the first query was queued
+ * behind an unfinished SET (pg 8's DeprecationWarning; pg 9 refuses it).
+ */
+export async function enterPlatformMode(client: Pick<ClientBase, "query">): Promise<void> {
+  await client.query("SET app.platform = 'on'");
+}
+
+/**
+ * pg-pool's onConnect hook: what every new connection gets before the pool hands it out. First its own error listener.
+ * pg-pool listens for a connection's errors only while it is idle, so a connection that is checked out (every
+ * transaction, execAtomic) and closed under it (a pooler restart, a network drop, pg_terminate_backend) would emit
+ * 'error' with nobody listening, which Node treats as an uncaught error that ends the process (the Railway worker has
+ * nothing above it to catch it). pg has already failed the queries in flight, and the pool drops the connection when it
+ * comes back, so a log line is all that is left to do. Then platform mode.
+ */
+export async function prepareConnection(client: Pick<ClientBase, "query" | "on">): Promise<void> {
+  client.on("error", (err) => console.warn(`[db] a database connection was closed by the pooler or the server and is dropped: ${(err as { code?: string }).code ?? ""} ${err.message.slice(0, 200)}`));
+  await enterPlatformMode(client);
+}
+
+/**
+ * Pool settings for every Postgres process. DATABASE_POOL_MAX is per process, which on Vercel means per instance;
+ * every instance of every live deployment shares ros_app's 15 session-pooler slots.
+ */
+export function poolSettings(env: Record<string, string | undefined> = process.env): { max: number; idleTimeoutMillis: number; connectionTimeoutMillis: number; onConnect: typeof prepareConnection } {
+  const max = Math.max(1, Math.min(20, Number(env.DATABASE_POOL_MAX ?? "3") || 3));
+  return { max, idleTimeoutMillis: POOL_IDLE_TIMEOUT_MS, connectionTimeoutMillis: POOL_CONNECT_TIMEOUT_MS, onConnect: prepareConnection };
+}
+
+/** Resolves once the pool holds no connection (its idle timer closed them), or after maxWaitMs, whichever comes first. Never rejects. */
+export async function waitForPoolIdle(pool: Pick<Pool, "totalCount">, maxWaitMs = POOL_IDLE_TIMEOUT_MS + 1_000): Promise<void> {
+  const until = Date.now() + maxWaitMs;
+  while (pool.totalCount > 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 200));
+}
+
+/**
  * Creates the database client. Production uses DATABASE_URL (node-postgres) as a non-privileged role
  * (`ros_app` or `ros_worker`, see migrations/0003); development and tests use PGlite (Postgres in WebAssembly)
  * so nothing needs installing. The same SQL migrations run on both.
  *
- * Every Postgres connection starts in platform mode (`app.platform = 'on'`): the row-level-security policies
- * honour it for the application roles only. Tenant work switches to `app_tenant`, which the policies isolate
- * by `app.company_id` no matter what else is set.
+ * Every Postgres connection enters platform mode (`app.platform = 'on'`, enterPlatformMode) before the pool hands it
+ * out; a connection that cannot is closed, never used. The row-level-security policies honour platform mode for the
+ * application roles only. Tenant work switches to `app_tenant`, which the policies isolate by `app.company_id` no
+ * matter what else is set.
  */
 export async function createDb(opts: CreateDbOptions = {}): Promise<DbHandle> {
   const url = opts.databaseUrl ?? process.env.DATABASE_URL ?? null;
@@ -157,19 +213,18 @@ export async function createDb(opts: CreateDbOptions = {}): Promise<DbHandle> {
   if (url) {
     const { drizzle } = await import("drizzle-orm/node-postgres");
     const pg = await import("pg");
-    const max = Math.max(1, Math.min(20, Number(process.env.DATABASE_POOL_MAX ?? "5") || 5));
-    const pool = new pg.default.Pool({ ...connectionConfig(url, tlsOptionsFromEnv(process.env, opts.sslCaFile)), max });
-    pool.on("connect", (client) => {
-      client.query("SET app.platform = 'on'").catch(() => {
-        /* the boot check reports a connection that cannot enter platform mode */
-      });
-    });
+    const pool = new pg.default.Pool({ ...connectionConfig(url, tlsOptionsFromEnv(process.env, opts.sslCaFile)), ...poolSettings(process.env) });
+    // The pool drops an idle connection the pooler or the server closed (a restart, pg_terminate_backend) and then
+    // re-emits its error here; without a listener Node treats that as an uncaught error and ends the process. The
+    // connection's own listener (prepareConnection) has already logged it, so this one only has to exist.
+    pool.on("error", () => undefined);
     const db = drizzle({ client: pool, schema }) as unknown as Db;
     return {
       db,
       kind: "postgres",
       role,
       close: () => pool.end(),
+      whenIdle: (maxWaitMs) => waitForPoolIdle(pool, maxWaitMs),
       execRaw: async (text) => {
         await pool.query(text);
       },
@@ -223,6 +278,8 @@ export async function createDb(opts: CreateDbOptions = {}): Promise<DbHandle> {
     kind: "pglite",
     role,
     close: () => client.close(),
+    // PGlite has no pooler connections to give back.
+    whenIdle: async () => {},
     execRaw: async (text) => {
       await client.exec(text);
     },
