@@ -4,15 +4,32 @@ import type { MessageStreamParams, TextBlockParam } from "@anthropic-ai/sdk/reso
 import type { AiProvider, StructuredRequest, StructuredResult, Usage } from "../types";
 
 /**
- * Schemas the API would not compile into a decoding grammar ("The compiled grammar is too large"), remembered for the
- * life of the process so later calls with the same prompt go straight to the unconstrained path instead of paying for
- * a refused request first. Keyed by the prompt's schema object, which each prompt defines once.
+ * Schemas the API would not compile into a decoding grammar, remembered for the life of the process so later calls with
+ * the same prompt go straight to the unconstrained path instead of paying for a refused request first. Keyed by the
+ * prompt's schema object, which each prompt defines once.
  */
 const tooLargeForGrammar = new WeakSet<object>();
 
-/** The 400 the API returns when a schema is too large to constrain decoding with (12 Oct 2026: intake.turn). */
+/**
+ * The 400s the API returns when a schema is too complex to constrain decoding with. Seen on staging, 12 Oct 2026:
+ * intake.turn "The compiled grammar is too large, which would cause performance issues" and intake.compile "Schemas
+ * contains too many optional parameters (40), which would make grammar compilation inefficient ... (limit: 24)".
+ */
 export function isGrammarTooLarge(err: unknown): boolean {
-  return err instanceof Anthropic.BadRequestError && /compiled grammar is too large/i.test(err.message);
+  return err instanceof Anthropic.BadRequestError && /grammar|too many optional parameters/i.test(err.message);
+}
+
+/**
+ * The value with every null-valued object key removed, at any depth. Written without constrained decoding, a reply
+ * often fills an optional field it has nothing for with null, which an optional (not nullable) zod field rejects.
+ * Tried only after the reply as written fails, so a schema that does accept null keeps it.
+ */
+export function withoutNulls(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutNulls);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== null).map(([k, v]) => [k, withoutNulls(v)]));
+  }
+  return value;
 }
 
 /**
@@ -103,7 +120,11 @@ export class AnthropicProvider implements AiProvider {
     }
   }
 
-  /** The same request without constrained decoding: the schema goes into the instructions and the reply is validated here. */
+  /**
+   * The same request without constrained decoding: the schema goes into the instructions and the reply is validated
+   * here. A reply that does not validate gets one correction turn, which quotes what was wrong; the second reply is
+   * final either way.
+   */
   private async unconstrained<T>(
     req: StructuredRequest<T>,
     model: string,
@@ -113,26 +134,44 @@ export class AnthropicProvider implements AiProvider {
     usageOf: (response: Anthropic.Message) => Usage,
   ): Promise<StructuredResult<T>> {
     const schema = JSON.stringify(zodOutputFormat(req.schema).schema);
-    const instruction: TextBlockParam = { type: "text", text: `Reply with exactly one JSON object and nothing else: no words before or after it and no code fence. The object must validate against this JSON Schema:\n${schema}` };
-    const params = { ...base, system: [...(base.system as TextBlockParam[]), instruction], output_config: { effort } } satisfies MessageStreamParams;
-    const response = await this.client.messages.stream(params).finalMessage();
-    const usage = usageOf(response);
-    const latencyMs = Date.now() - started;
-    if (response.stop_reason === "refusal") {
-      return { kind: "refused", reason: response.stop_details?.category ?? "refused", model, usage, latencyMs };
+    const instruction: TextBlockParam = { type: "text", text: `Reply with exactly one JSON object and nothing else: no words before or after it and no code fence. Leave out an optional field you have nothing for rather than writing null. The object must validate against this JSON Schema:\n${schema}` };
+    const system = [...(base.system as TextBlockParam[]), instruction];
+    let messages = base.messages;
+    const usage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+    let last: { error: string; rawText: string } = { error: "no reply", rawText: "" };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const params = { ...base, system, messages, output_config: { effort } } satisfies MessageStreamParams;
+      const response = await this.client.messages.stream(params).finalMessage();
+      const used = usageOf(response);
+      usage.inputTokens += used.inputTokens;
+      usage.outputTokens += used.outputTokens;
+      usage.cacheReadTokens += used.cacheReadTokens;
+      if (response.stop_reason === "refusal") {
+        return { kind: "refused", reason: response.stop_details?.category ?? "refused", model, usage, latencyMs: Date.now() - started };
+      }
+      const text = response.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+      if (response.stop_reason === "max_tokens") {
+        // A cut-off reply is not a formatting slip: asking again would be cut off the same way.
+        return { kind: "invalid", error: "no parsed output (unconstrained): the reply hit max_tokens", model, usage, latencyMs: Date.now() - started, rawText: text.slice(0, 4000) };
+      }
+      let problem: string;
+      try {
+        const value = extractJson(text);
+        const asWritten = req.schema.safeParse(value);
+        if (asWritten.success) return { kind: "ok", output: asWritten.data, model, usage, latencyMs: Date.now() - started, raw: undefined };
+        const tidied = req.schema.safeParse(withoutNulls(value));
+        if (tidied.success) return { kind: "ok", output: tidied.data, model, usage, latencyMs: Date.now() - started, raw: undefined };
+        problem = asWritten.error.message;
+      } catch (err) {
+        problem = err instanceof Error ? err.message : String(err);
+      }
+      last = { error: `no valid output (unconstrained): ${problem}`, rawText: text.slice(0, 4000) };
+      messages = [
+        ...base.messages,
+        { role: "assistant", content: text || "(empty reply)" },
+        { role: "user", content: `That reply does not validate against the JSON Schema. What is wrong:\n${problem.slice(0, 2000)}\nReply again with only the corrected JSON object.` },
+      ];
     }
-    const text = response.content.map((c) => (c.type === "text" ? c.text : "")).join("");
-    let value: unknown;
-    try {
-      value = extractJson(text);
-    } catch (err) {
-      const why = response.stop_reason === "max_tokens" ? "the reply hit max_tokens" : err instanceof Error ? err.message : String(err);
-      return { kind: "invalid", error: `no parsed output (unconstrained): ${why}`, model, usage, latencyMs, rawText: text.slice(0, 4000) };
-    }
-    const check = req.schema.safeParse(value);
-    if (!check.success) {
-      return { kind: "invalid", error: check.error.message, model, usage, latencyMs, rawText: text.slice(0, 4000) };
-    }
-    return { kind: "ok", output: check.data, model, usage, latencyMs, raw: undefined };
+    return { kind: "invalid", error: last.error, model, usage, latencyMs: Date.now() - started, rawText: last.rawText };
   }
 }
