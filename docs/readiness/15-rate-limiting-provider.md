@@ -11,8 +11,11 @@ Status: built and tested locally on 21 September 2026 (founder instruction, item
 - Two implementations: in-process memory (local development, single process) and a shared store on a Redis-shaped
   counter (`INCR` with expiry, `GET`). The shared store ships with a **fake counter** so tests and local rehearsals run
   several API processes against one table; a real adapter is a few lines against the same `SharedCounter` interface.
-- Configuration: one setting, `RATE_LIMIT_STORE=memory|upstash|fake` (`fake` is the in-process stand-in for tests and
-  is refused in production). In production without the shared store the API starts, warns, and raises a console alert.
+- Configuration: one setting, `RATE_LIMIT_STORE=memory|upstash|fake` (`fake` is the in-process stand-in for tests).
+  The production app (`NODE_ENV=production`) refuses to start unless it is `upstash` with
+  `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` set (security review, 11 October 2026: on Vercel's many
+  short-lived instances `memory` is close to no limit). The worker counts no requests, so it refuses only `fake`. The
+  run-time fail-safe below is unchanged.
 - Policies (`apps/api/src/middleware/rate-limit.ts`): sign-in per address and per email; application submission per
   address and per role; each candidate link action per token and per address (screening, privacy request, withdrawal,
   text preference, scheduling, reschedule, cancel); every candidate-facing page and feed per address; authenticated API
@@ -43,7 +46,8 @@ Options, with the pricing the team last saw; **verify at sign-up, prices change*
 
 Recommendation for staging: **Upstash Redis through the Vercel Marketplace**, region matching the Vercel functions,
 created by the ITS-owned Vercel account (governing-account rule). The adapter is `incr` and `get` over the REST API.
-Until the founder decides, staging runs `RATE_LIMIT_STORE=memory`, which is honest about being per process.
+Until the founder decided, staging ran `RATE_LIMIT_STORE=memory`, which is honest about being per process; staging and
+production now run `upstash`, and production refuses `memory` at boot.
 
 ## Not done on purpose
 

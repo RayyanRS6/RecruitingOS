@@ -13,20 +13,29 @@ async function noHorizontalOverflow(page: Page, name: string) {
 }
 
 test.describe("route inventory", () => {
-  test("every application page and every candidate page answers with the report-only content-security policy and a nonce", async ({ page, baseURL }) => {
+  test("every application page and every candidate page answers with one content-security policy and a nonce", async ({ page, baseURL }) => {
+    // Report-only by default, blocking with CSP_MODE=enforce (a deployed address may run either): one of the two headers, never both.
+    const policyOf = (headers: Record<string, string>, path: string) => {
+      expect([headers["content-security-policy"], headers["content-security-policy-report-only"]].filter(Boolean), `${path} sends exactly one policy header`).toHaveLength(1);
+      return headers["content-security-policy"] ?? headers["content-security-policy-report-only"];
+    };
     for (const path of ["/login", "/"]) {
       const r = await page.request.get(`${baseURL}${path}`, { maxRedirects: 0 });
-      const csp = r.headers()["content-security-policy-report-only"];
-      expect(csp, path).toBeTruthy();
+      const csp = policyOf(r.headers(), path);
       expect(csp).toMatch(/script-src 'self' 'nonce-[^']+' 'strict-dynamic'/);
       expect(csp).toContain("frame-ancestors 'none'");
-      expect(r.headers()["content-security-policy"], path).toBeUndefined();
+      // no other site may frame a page, whatever the policy's mode (apps/shell/next.config.ts)
+      expect(r.headers()["x-frame-options"], path).toBe("DENY");
     }
     const privacy = await page.request.get(`${baseURL}/privacy`);
-    expect(privacy.headers()["content-security-policy-report-only"]).toContain("default-src 'none'");
+    expect(policyOf(privacy.headers(), "/privacy")).toContain("default-src 'none'");
+    // a path mounted on Hono keeps Hono's own headers: the shell's configuration replaces none of them
+    expect(privacy.headers()["x-frame-options"]).toBe("SAMEORIGIN");
+    expect(privacy.headers()["referrer-policy"]).toBe("no-referrer");
     // the shell's own scripts carry the nonce the header names
     const login = await page.request.get(`${baseURL}/login`, { maxRedirects: 0 });
-    const nonce = login.headers()["content-security-policy-report-only"].match(/'nonce-([^']+)'/)![1];
+    expect(login.headers()["referrer-policy"]).toBe("strict-origin-when-cross-origin");
+    const nonce = policyOf(login.headers(), "/login").match(/'nonce-([^']+)'/)![1];
     const html = await login.text();
     const scripts = [...html.matchAll(/<script\b([^>]*)>/g)].map((m) => m[1]);
     expect(scripts.length).toBeGreaterThan(0);

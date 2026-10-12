@@ -72,7 +72,7 @@ describe("job distribution: postings, links and verification", () => {
     expect(env.JOBS_BASE_URL).toBe("https://jobs.example.com");
     expect(jobUrls(env, { slug: "ledger", roleId: "r1" })).toEqual({ careers: "https://jobs.example.com/careers/ledger", job: "https://jobs.example.com/careers/ledger/jobs/r1", apply: "https://jobs.example.com/careers/ledger/jobs/r1/apply" });
     expect(trackedLinkUrl(env, "abc123def456")).toBe("https://jobs.example.com/a/abc123def456");
-    const prod = { NODE_ENV: "production", APP_BASE_URL: "https://app.example.com", SESSION_SECRET: "x".repeat(40), ANALYTICS_SALT: "s", SECRET_STORE: "vault", AI_PROVIDER: "anthropic", AUTH_PROVIDER: "supabase", SUPABASE_URL: "https://p.supabase.co", SUPABASE_ANON_KEY: "k", DATABASE_URL: "postgres://ros_app:pw@h/db", WORKER_INLINE: "false", STORAGE_PROVIDER: "supabase", RATE_LIMIT_STORE: "upstash" };
+    const prod = { NODE_ENV: "production", APP_BASE_URL: "https://app.example.com", SESSION_SECRET: "x".repeat(40), ANALYTICS_SALT: "s", SECRET_STORE: "vault", AI_PROVIDER: "anthropic", AUTH_PROVIDER: "supabase", SUPABASE_URL: "https://p.supabase.co", SUPABASE_ANON_KEY: "k", DATABASE_URL: "postgres://ros_app:pw@h/db", WORKER_INLINE: "false", STORAGE_PROVIDER: "supabase", RATE_LIMIT_STORE: "upstash", UPSTASH_REDIS_REST_URL: "https://complete-narwhal-292092.upstash.io", UPSTASH_REDIS_REST_TOKEN: "upstash-token-for-tests-abcdefghij" };
     expect(() => loadEnv({ ...prod, JOBS_BASE_URL: "http://jobs.example.com" })).toThrow(/JOBS_BASE_URL/);
     expect(() => loadEnv({ ...prod, JOBS_BASE_URL: "https://jobs.example.com/careers" })).toThrow(/JOBS_BASE_URL/);
     expect(loadEnv({ ...prod, JOBS_BASE_URL: "https://jobs.example.com" }).JOBS_BASE_URL).toBe("https://jobs.example.com");

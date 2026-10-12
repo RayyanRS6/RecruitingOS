@@ -63,7 +63,8 @@ privacyRequestRoutes.post("/", async (c) => {
   return c.json(publicDataRequest(row), 201);
 });
 
-privacyRequestRoutes.get("/deadlines/check", async (c) => c.json(await checkPrivacyRequestDeadlines(c.get("container").db, c.get("container").engine.clock())));
+/** The daily deadline check on demand (the worker runs it every day). A POST: it raises alerts and records them, so a link from another site cannot set it off (middleware/same-site.ts). */
+privacyRequestRoutes.post("/deadlines/check", async (c) => c.json(await checkPrivacyRequestDeadlines(c.get("container").db, c.get("container").engine.clock())));
 
 privacyRequestRoutes.get("/:id", async (c) => {
   const row = await load(c);

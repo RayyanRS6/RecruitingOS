@@ -72,6 +72,7 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     if (status.pending.length) throw new Error(`refusing to start: ${status.pending.length} migration${status.pending.length === 1 ? " is" : "s are"} not applied (${status.pending.join(", ")}). Run pnpm db:migrate (or the migrate workflow) before deploying.`);
   }
   await seedPlatform(handle.db);
+  // A production app reaches this only with the shared store (loadEnv refuses anything else); the worker counts no requests.
   const rateLimits = createRateLimitStore(env, {
     // The shared store degraded to per-process counting (decision 4 fail-safe): one alert an hour, never a refused request.
     onDegraded: (reason) => {
@@ -79,10 +80,6 @@ export async function createContainer(opts: { env?: Record<string, string | unde
       void raiseAlert(handle.db, { kind: "rate_limit.shared_unavailable", severity: "high", title: "Shared rate-limit store unreachable; limits apply per process", body: "The Upstash counter could not be reached or refused the request. Limits are counted in this process's memory until it answers again. Check the Upstash console, the monthly budget and the REST token.", details: { reason: reason.slice(0, 200) } }).catch((err) => console.warn(`[rate-limit] could not raise the degradation alert: ${err instanceof Error ? err.message : String(err)}`));
     },
   });
-  if (env.NODE_ENV === "production" && env.RATE_LIMIT_STORE !== "upstash") {
-    console.warn("[rate-limit] production is running without a shared rate-limit store; limits are per process. Set RATE_LIMIT_STORE=upstash (docs/readiness/15) before real traffic.");
-    await raiseAlert(handle.db, { kind: "rate_limit.not_shared", severity: "high", title: "Rate limits are not shared between processes", body: "RATE_LIMIT_STORE is not the shared store. Limits apply per process only. Set RATE_LIMIT_STORE=upstash (docs/readiness/15) before real candidate traffic.", details: { store: env.RATE_LIMIT_STORE } }).catch((err) => console.warn(`[rate-limit] could not raise the alert: ${err instanceof Error ? err.message : String(err)}`));
-  }
   if (env.BOOTSTRAP_ADMIN_EMAILS.length && (await countActiveAdmins(handle.db)) > 0) {
     console.warn("[auth] BOOTSTRAP_ADMIN_EMAILS is set but administrators already exist: the list grants nothing and every match is audited as ignored. Remove the variable.");
   }
