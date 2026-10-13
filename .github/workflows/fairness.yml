@@ -1,0 +1,64 @@
+# Fairness tests on the real AI (the owner's request, 13 October 2026): CV reading and CV screening, run against the
+# models the app uses (Claude Haiku 5.5; Claude Sonnet 5.5 writes the test job), with synthetic CVs only. Twin CVs that
+# differ only in a name, a graduation year or a zip code must read and score the same; the same CV read three times
+# must read and score the same; quotes must be real; a gap, a career change or no degree is never marked down alone.
+# Started by hand from the Actions tab ("Run workflow"). It never runs on a pull request, so the key is never offered
+# to a fork's code. About ten cents a run. How to use it: docs/runbooks/fairness-tests.md.
+name: fairness
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fairness
+  cancel-in-progress: false
+
+jobs:
+  fairness:
+    name: fairness tests (real AI)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v5 # reads "packageManager" from package.json
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install from the lockfile only
+        run: pnpm install --frozen-lockfile
+
+      - name: Check that the Anthropic key is set
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::Add the repository secret ANTHROPIC_API_KEY first (Settings > Secrets and variables > Actions). See docs/runbooks/fairness-tests.md."
+            exit 1
+          fi
+
+      - name: CV reading and screening on the real models (synthetic CVs only)
+        id: evals
+        env:
+          AI_PROVIDER: anthropic
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: pnpm --filter @ros/evals exec tsx src/runner.ts --suite resume,triage
+
+      - name: Summary in plain words
+        if: ${{ !cancelled() && steps.evals.outcome != 'skipped' }}
+        run: pnpm --silent --filter @ros/evals exec tsx src/summary.ts >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Result file (synthetic data only)
+        if: ${{ !cancelled() && steps.evals.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: fairness-results
+          path: packages/evals/results
+          retention-days: 90
+          if-no-files-found: warn
