@@ -41,7 +41,7 @@ async function main() {
   const q = handle.db;
   /** `notes`: what each reading decided, with its quotes, so a failed fairness case can be traced to the words. */
   const results: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; costUsd?: number; notes?: string[] }>; passRate: number }> = {};
-  const findingsOf = (label: string, a: EvidenceAssessment) => `${label}: ${a.overall}; ${a.requirementFindings.map((x) => `${x.requirementKey}=${x.met}${x.evidence?.quote ? ` ("${x.evidence.quote}")` : ""}`).join("; ")}`;
+  const findingsOf = (label: string, a: EvidenceAssessment) => `${label}: ${a.overall}; ${a.requirementFindings.map((x) => `${x.requirementKey}=${x.met}${x.evidence?.quote ? ` ("${x.evidence.quote}")` : ""}`).join("; ")} | skills: ${a.competencyFindings.map((x) => `${x.competencyKey}=${x.finding}${x.evidence?.quote ? ` ("${x.evidence.quote.slice(0, 50)}")` : ""}`).join("; ")}`;
 
   // The eval has no live wage service: the market check falls back to the playbook's table, as production does when the
   // service is down. The basis comes first (plan C2), and the pay the owner typed counts as confirmed.
