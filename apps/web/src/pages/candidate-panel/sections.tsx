@@ -17,7 +17,7 @@ import { sentWithUndoToast, suggestedLineNote, threadItems, threadWhen, undoMill
 import { AssessmentCard, NoAssessmentCard, ScorecardUnavailableCard, ScreenCard } from "./assessment";
 import { CallNotesCard } from "./call-notes";
 import { MatchCard } from "./match";
-import { historyItems, recruiterEventsFor, resumeToShow, resumeView, suggestionAndDecision, type Compose, type HistoryItem } from "./helpers";
+import { eligibilityAnswerWords, historyItems, notReadYetWords, recruiterEventsFor, resumeToShow, resumeView, suggestionAndDecision, type Compose, type HistoryItem } from "./helpers";
 
 export type { Compose } from "./helpers";
 import { useCandidateAction, useRefreshCandidate } from "./hooks";
@@ -39,7 +39,7 @@ export function OverviewTab({ a, roleId, onHistory }: { a: ApplicationDetail; ro
       {look.lowConfidence && !look.needsCloserLook ? <Alert tone="caution"><strong>{LOW_CONFIDENCE_LABEL}.</strong> {LOW_CONFIDENCE_TEXT}</Alert> : null}
       <MatchCard a={a} />
       <ScorecardUnavailableCard detail={a} roleId={roleId} />
-      {latest ? <AssessmentCard assessment={latest} detail={a} roleId={roleId} labels={a.packetLabels} title={latest.kind === "screen" ? "Latest reading: the screen" : "Latest reading: the résumé"} /> : look.assessmentUnavailable ? <NoAssessmentCard detail={a} /> : <Card title="Latest reading"><p className="small muted">The assistant has not read this application yet. It usually takes a minute or two after they apply.</p></Card>}
+      {latest ? <AssessmentCard assessment={latest} detail={a} roleId={roleId} labels={a.packetLabels} title={latest.kind === "screen" ? "Latest reading: the screen" : "Latest reading: the résumé"} /> : look.assessmentUnavailable ? <NoAssessmentCard detail={a} /> : <Card title="Latest reading"><p className="small muted">{notReadYetWords(a.stage)}</p></Card>}
       <EligibilityAnswers a={a} />
       <Card title="Recent activity" aside={<Button size="sm" variant="quiet" onClick={onHistory}>All history</Button>}>
         {recent.length ? <HistoryList items={recent} /> : <p className="small muted">Nothing yet.</p>}
@@ -95,7 +95,7 @@ function EligibilityAnswers({ a }: { a: ApplicationDetail }) {
       {a.eligibility ? (
         <div className="small">
           <p>{a.eligibility.passed ? "Met every required answer." : "Did not meet a required answer."}</p>
-          {a.eligibility.failedRules.map((f) => <p key={f.key} style={{ color: "var(--needs-you)" }}>{f.question}: {f.reason}</p>)}
+          {a.eligibility.failedRules.map((f) => <p key={f.key} style={{ color: "var(--needs-you)" }}>{f.question} → {eligibilityAnswerWords(f)}</p>)}
           {a.eligibility.unverifiable.map((u) => <p key={u.key} className="muted">{u.question}: not answered</p>)}
         </div>
       ) : <p className="muted small">Not checked yet.</p>}

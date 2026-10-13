@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { asksWhetherItTookPlace } from "../../apps/web/src/interview-defaults";
+import { eligibilityAnswerWords, notReadYetWords } from "../../apps/web/src/pages/candidate-panel/helpers";
 import { ACK_FOR_ANOTHER, ackIsForAnother, retryDeletionToast } from "../../apps/web/src/pages/Admin";
 import { meetingLinkFor } from "../../apps/web/src/pages/candidate-panel/needs-you";
 import { CATCH_UP_EVERY_MS, CATCH_UP_FOR_MS, catchUpInterval, waitingOnWorker } from "../../apps/web/src/pages/RolePlan";
@@ -151,5 +152,19 @@ describe("an interview booked for tomorrow", () => {
     expect(asksWhetherItTookPlace({ status: "completed", outcome: "happened", startsAt: "2026-10-12T16:00:00Z" }, now)).toBe(false);
     expect(asksWhetherItTookPlace({ status: "scheduling", startsAt: null }, now)).toBe(false);
     expect(read("../../apps/web/src/pages/Interviews.tsx")).toContain("{asksWhetherItTookPlace(i) && (manage || participant) ? (");
+  });
+});
+
+describe("someone held on an eligibility answer", () => {
+  it("names the question once, with what they answered", () => {
+    const question = "Do you hold a current California radiography (X-ray) certification?";
+    expect(eligibilityAnswerWords({ question, reason: `answered no to: ${question}` })).toBe("answered no");
+    expect(eligibilityAnswerWords({ question: "Can you start within 30 days?", reason: "cannot start within 30 days" })).toBe("cannot start within 30 days");
+    expect(eligibilityAnswerWords({ question: "Can you work Saturdays?", reason: "not available: Sat" })).toBe("not available: Sat");
+  });
+
+  it("never promises a reading in a minute or two: it comes once someone keeps them in", () => {
+    expect(notReadYetWords("ineligible")).toBe("The assistant reads this application once someone keeps them in.");
+    expect(notReadYetWords("received")).toContain("a minute or two");
   });
 });

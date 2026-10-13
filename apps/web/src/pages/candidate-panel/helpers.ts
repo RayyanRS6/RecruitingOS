@@ -139,6 +139,23 @@ export function activeInterviews<T extends { status: string }>(interviews: reado
   return interviews.filter((i) => ACTIVE_INTERVIEWS.includes(i.status));
 }
 
+/**
+ * What was answered on a failed eligibility question, to show after the question itself: "answered no", never the
+ * question a second time (the stored reason for a yes/no rule repeats it, for the team's notification).
+ */
+export function eligibilityAnswerWords(f: { question: string; reason: string }): string {
+  const prefix = "answered no to: ";
+  return f.reason.startsWith(prefix) && f.reason.slice(prefix.length).trim() === f.question.trim() ? "answered no" : f.reason;
+}
+
+/**
+ * Why there is no reading yet. Someone held on an eligibility answer is read only once a person keeps them in, so
+ * "a minute or two" would never come true for them.
+ */
+export function notReadYetWords(stage: string): string {
+  return stage === "ineligible" ? "The assistant reads this application once someone keeps them in." : "The assistant has not read this application yet. It usually takes a minute or two after they apply.";
+}
+
 const ROLE_WORDS: Record<string, string> = { owner: "an owner", admin: "an admin", hiring_manager: "a hiring manager", recruiter: "a recruiter", hr: "HR", interviewer: "an interviewer" };
 /** "an owner or an admin": who a waiting message is waiting for, in the reader's words. */
 export function whoDecides(roles: readonly string[]): string {
