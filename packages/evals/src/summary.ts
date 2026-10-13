@@ -10,10 +10,11 @@ import { fileURLToPath } from "node:url";
 type Result = {
   provider: string;
   models: Record<string, string>;
+  efforts?: Record<string, string>;
   suites?: string[] | "all";
   costUsd?: number;
   calls?: number;
-  results: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[] }>; passRate: number }>;
+  results: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; notes?: string[] }>; passRate: number }>;
 };
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -44,6 +45,8 @@ export function summarize(r: Result, thresholds: Record<string, { minPassRate: n
   lines.push("");
   const models = Object.entries(r.models).map(([tier, model]) => `${model} for ${TIER_WORDS[tier] ?? tier}`);
   lines.push(`Models: ${[...new Set(models)].join("; ")}.`);
+  const efforts = Object.entries(r.efforts ?? {});
+  if (efforts.length) lines.push(`Thinking effort set for this run: ${efforts.map(([tier, e]) => `${e} for ${TIER_WORDS[tier] ?? tier}`).join("; ")} (otherwise the app's own setting).`);
   if (r.costUsd !== undefined) lines.push(`Cost of this run: $${r.costUsd.toFixed(2)} for ${r.calls ?? 0} AI calls.`);
   lines.push("");
   lines.push("| Check | What it means | Result |");
@@ -52,7 +55,12 @@ export function summarize(r: Result, thresholds: Record<string, { minPassRate: n
   if (bad.length) {
     lines.push("");
     lines.push("### What needs a look");
-    for (const x of bad) for (const c of x.failed) lines.push(`- **${x.words.name}**, case \`${c.id}\`: ${c.failures.join("; ") || "failed"}`);
+    for (const x of bad) {
+      for (const c of x.failed) {
+        lines.push(`- **${x.words.name}**, case \`${c.id}\`: ${c.failures.join("; ") || "failed"}`);
+        for (const note of c.notes ?? []) lines.push(`  - ${note}`);
+      }
+    }
   }
   return lines.join("\n");
 }

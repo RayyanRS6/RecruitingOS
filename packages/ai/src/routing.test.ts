@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ALLOWED_MODELS, TASK_TIER, TIER_EFFORT, effortForTask, modelForTask, modelTableFromEnv } from "./routing";
+import { ALLOWED_MODELS, TASK_TIER, TIER_EFFORT, effortForTask, effortsFromEnv, modelForTask, modelTableFromEnv } from "./routing";
 import type { TaskKey } from "./types";
 
 /**
@@ -33,6 +33,14 @@ describe("which model each task runs on", () => {
     for (const [name, value] of [["AI_MODEL_JUDGMENT", "claude-opus-5"], ["AI_MODEL_STANDARD", "claude-sonnet-5"], ["AI_MODEL_FAST", "claude-haiku-4-5-20251001"], ["AI_MODEL_FAST", "claude-fable-5-1"]] as const) {
       expect(() => modelTableFromEnv({ [name]: value })).toThrow(`${name}=${value} is not allowed: the app runs only on claude-haiku-5-5 and claude-sonnet-5-5`);
     }
+  });
+});
+
+describe("an effort set in the environment (the fairness run's choice)", () => {
+  it("takes low, medium or high per tier, an empty value as unset, and refuses anything else", () => {
+    expect(effortsFromEnv({ AI_EFFORT_STANDARD: "high", AI_EFFORT_FAST: "" })).toEqual({ standard: "high" });
+    expect(effortsFromEnv({})).toEqual({});
+    expect(() => effortsFromEnv({ AI_EFFORT_JUDGMENT: "max" })).toThrow("AI_EFFORT_JUDGMENT=max is not an effort: use low, medium, high");
   });
 });
 

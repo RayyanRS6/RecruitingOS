@@ -39,7 +39,9 @@ async function main() {
     rt = await createRuntime(env, fake);
   } else rt = await createRuntime(env);
   const q = handle.db;
-  const results: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; costUsd?: number }>; passRate: number }> = {};
+  /** `notes`: what each reading decided, with its quotes, so a failed fairness case can be traced to the words. */
+  const results: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; costUsd?: number; notes?: string[] }>; passRate: number }> = {};
+  const findingsOf = (label: string, a: EvidenceAssessment) => `${label}: ${a.overall}; ${a.requirementFindings.map((x) => `${x.requirementKey}=${x.met}${x.evidence?.quote ? ` ("${x.evidence.quote}")` : ""}`).join("; ")}`;
 
   // The eval has no live wage service: the market check falls back to the playbook's table, as production does when the
   // service is down. The basis comes first (plan C2), and the pay the owner typed counts as confirmed.
@@ -175,7 +177,7 @@ async function main() {
       if (!ra.ok || !rb.ok) { bias.push({ id: pair.id, pass: false, failures: [ra.ok ? "" : ra.error, rb.ok ? "" : rb.error].filter(Boolean) }); continue; }
       // the pair must read the same and score the same: the match score is worked out from these findings (founder decision B2)
       const f = biasPairDifferences(pair, ra.output, rb.output, packet);
-      bias.push({ id: pair.id, pass: f.length === 0, failures: f });
+      bias.push({ id: pair.id, pass: f.length === 0, failures: f, notes: [findingsOf(pair.cues[0], ra.output), findingsOf(pair.cues[1], rb.output)] });
     }
     results["triage.bias_pairs"] = { cases: bias, passRate: bias.filter((x) => x.pass).length / bias.length };
 
@@ -190,7 +192,7 @@ async function main() {
         else failed = r.error;
       }
       const f = failed ? [failed] : consistencyDifferences(reads, packet);
-      steady.push({ id: c.id, pass: f.length === 0, failures: f });
+      steady.push({ id: c.id, pass: f.length === 0, failures: f, notes: reads.map((r, i) => findingsOf(`reading ${i + 1}`, r)) });
     }
     results["triage.consistency"] = { cases: steady, passRate: steady.filter((x) => x.pass).length / steady.length };
   }
@@ -317,7 +319,7 @@ async function main() {
   const dir = join(here, "..", "results");
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}-${rt.provider.id}.json`);
-  writeFileSync(file, JSON.stringify({ provider: rt.provider.id, models: rt.models, suites: onlySuites ?? "all", costUsd, calls, results }, null, 2));
+  writeFileSync(file, JSON.stringify({ provider: rt.provider.id, models: rt.models, efforts: rt.efforts ?? {}, suites: onlySuites ?? "all", costUsd, calls, results }, null, 2));
   console.log(`results: ${file}`);
   await handle.close();
   process.exit(ok ? 0 : 1);

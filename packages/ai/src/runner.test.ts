@@ -49,6 +49,14 @@ describe("the models and effort the runner asks for", () => {
     expect(requests.map((r) => r.effort)).toEqual(["high", "medium"]);
   });
 
+  it("sends a tier's effort from the environment instead, when the runtime carries one", async () => {
+    const { rt, requests } = runtime([ok, ok]);
+    const tuned: AiRuntime = { ...rt, efforts: { standard: "high" } };
+    await callPrompt(tuned, { ...prompt, task: "triage.assess" }, null, { companyId: null });
+    await callPrompt(tuned, { ...prompt, task: "resume.extract" }, null, { companyId: null });
+    expect(requests.map((r) => r.effort)).toEqual(["high", "medium"]);
+  });
+
   it("never sends the real provider a model outside Haiku 5.5 and Sonnet 5.5, whatever runtime was built", async () => {
     const refused = runtime([ok], { id: "anthropic", model: "claude-opus-5" });
     const call = await callPrompt(refused.rt, prompt, null, { companyId: null });
