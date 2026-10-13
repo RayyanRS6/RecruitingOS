@@ -3,14 +3,14 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, ErrorState, Field, numHead, PageHeader, Segmented, Sheet, Skeleton, Table, Tabs, useTableSort } from "@ros/ui";
-import { api, ApiError } from "../api/client";
+import { api, ApiError, type Me } from "../api/client";
 import { allowanceAlerts, allowanceChip } from "../allowance";
 import { APPLY_MODE_HELP, APPLY_MODE_LABEL, APPLY_MODE_NOTE, REASON_MIN, companyFlowToast, reasonReady, type ApplyMode } from "../apply-flow";
 import { RoleApplyMode } from "../components/ApplyMode";
 import { RECRUITER_ASKS_OVER_CHIP, recruiterAsksLine, type RecruiterAskStanding } from "../recruiter-requests";
 import { toast } from "../toast";
 import { CustomerReportSheet } from "./AdminCustomerReport";
-import { DECLINE_REASONS } from "./candidate-panel/helpers";
+import { DECLINE_REASONS, dayKey } from "./candidate-panel/helpers";
 
 type Tab = "customers" | "runs" | "ai" | "failures" | "costs" | "queue" | "calendar" | "privacy" | "admins" | "outcomes";
 const reason = { headers: { "x-admin-reason": "admin console" } };
@@ -250,7 +250,7 @@ export function Runs() {
   const [status, setStatus] = useState<string>("");
   const [openId, setOpenId] = useState<string | null>(null);
   const q = useQuery({ queryKey: ["admin", "runs", status], queryFn: () => api.get<Array<{ id: string; companyId: string | null; workflowKey: string; status: string; currentStep: string; wait: { kind: string; until?: string; reason?: string } | null; attempts: number; lastError: string | null; updatedAt: string; subject: { type: string; id: string } }>>(`/api/v1/admin/runs${status ? `?status=${status}` : ""}`, reason) });
-  const retry = useMutation({ mutationFn: (id: string) => api.post(`/api/v1/admin/runs/${id}/retry`, {}, reason), onSuccess: () => { toast("Retried."); qc.invalidateQueries({ queryKey: ["admin", "runs"] }); } });
+  const retry = useMutation({ mutationFn: (id: string) => api.post(`/api/v1/admin/runs/${id}/retry`, {}, reason), onSuccess: () => { toast("Retried."); qc.invalidateQueries({ queryKey: ["admin", "runs"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not retry the run. Try again in a moment.") });
   return (
     <div className="stack">
       <Segmented value={status} onChange={setStatus} options={[{ value: "", label: "All" }, { value: "running", label: "Running" }, { value: "waiting", label: "Waiting" }, { value: "failed", label: "Failed" }, { value: "completed", label: "Completed" }]} />
@@ -317,11 +317,35 @@ type AlertRow = { id: string; kind: string; severity: string; title: string; bod
 type Pending = { id: string; provider: string; kind: string; status: string; lastError: string | null; disconnectedAt: string | null };
 type Suppression = { id: string; address: string; reason: string; source: string; active: boolean; count: number; firstAt: string; lastAt: string; details: Record<string, unknown> };
 
+/**
+ * An alert this administrator may not acknowledge (21 Sep, item 2): one about a platform role they changed, or one that
+ * concerns them, is for another administrator. The API refuses it (second_person_required), so no button is offered.
+ */
+export function ackIsForAnother(a: Pick<AlertRow, "kind" | "details" | "target">, myUserId: string | null | undefined): boolean {
+  return !!myUserId && a.kind.startsWith("platform_role.") && (a.details?.actorId === myUserId || a.target?.id === myUserId);
+}
+export const ACK_FOR_ANOTHER = "Another administrator acknowledges this one, because it is about a platform role you changed or one that concerns you.";
+
+/**
+ * What "Retry deletion" says. Only the worker may read a stored credential, so the retry is queued for it and is rarely
+ * done by the time the answer comes back; the alert closes on its own once the credential is gone.
+ */
+export function retryDeletionToast(r: { queued?: boolean; deleted?: boolean }): { title: string; detail?: string } {
+  if (r.deleted) return { title: "Credential deleted.", detail: "The alert closes on its own." };
+  return { title: "Deletion queued.", detail: "It runs in the background in a moment. The alert closes once the credential is gone." };
+}
+
 export function Failures() {
   const qc = useQueryClient();
+  // Who is signed in: an alert about their own platform role change is acknowledged by another administrator.
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
   const q = useQuery({ queryKey: ["admin", "failures"], queryFn: () => api.get<{ failedRuns: Array<{ id: string; workflowKey: string; lastError: string | null; updatedAt: string }>; failedJobs: Array<{ id: number; kind: string; lastError: string | null }>; failedAi: Array<{ id: string; task: string; status: string; error: string | null; createdAt: string }>; alerts: AlertRow[]; pendingDeletions: Pending[] }>("/api/v1/admin/failures", reason), refetchInterval: 15000 });
-  const ack = useMutation({ mutationFn: (id: string) => api.post(`/api/v1/admin/alerts/${id}/acknowledge`, {}, reason), onSuccess: () => { toast("Acknowledged."); qc.invalidateQueries({ queryKey: ["admin", "failures"] }); } });
-  const retry = useMutation({ mutationFn: (integrationId: string) => api.post(`/api/v1/admin/integrations/${integrationId}/retry-deletion`, {}, reason), onSuccess: () => { toast("Credential deleted."); qc.invalidateQueries({ queryKey: ["admin", "failures"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Retry failed.") });
+  const ack = useMutation({ mutationFn: (id: string) => api.post(`/api/v1/admin/alerts/${id}/acknowledge`, {}, reason), onSuccess: () => { toast("Acknowledged."); qc.invalidateQueries({ queryKey: ["admin", "failures"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not acknowledge the alert. Try again in a moment.") });
+  const retry = useMutation({
+    mutationFn: (integrationId: string) => api.post<{ queued?: boolean; deleted?: boolean }>(`/api/v1/admin/integrations/${integrationId}/retry-deletion`, {}, reason),
+    onSuccess: (r) => { const t = retryDeletionToast(r); toast(t.title, t.detail); qc.invalidateQueries({ queryKey: ["admin", "failures"] }); },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not retry the deletion. Try again in a moment."),
+  });
   const suppressions = useQuery({ queryKey: ["admin", "suppressions"], queryFn: () => api.get<Suppression[]>("/api/v1/admin/email-suppressions", reason) });
   const csp = useQuery({ queryKey: ["admin", "csp"], queryFn: () => api.get<{ mode: string; reports: Array<{ id: string; mode: string; surface: string; documentPath: string; violatedDirective: string; blockedOrigin: string | null; sourceFile: string | null; count: number; lastAt: string; reviewedAt: string | null; disposition: string | null }> }>("/api/v1/admin/csp-reports", reason) });
   const [cspNote, setCspNote] = useState<Record<string, string>>({});
@@ -350,8 +374,8 @@ export function Failures() {
             <div className="row"><Chip tone={a.severity === "critical" ? "critical" : "caution"}>{a.severity}</Chip><strong>{a.title}</strong><span className="small muted">{new Date(a.createdAt).toLocaleString()}</span>{a.status === "acknowledged" ? <Chip tone="neutral">acknowledged</Chip> : null}</div>
             <p className="small">{a.body}</p>
             <div className="row">
-              {a.status === "open" ? <Button size="sm" variant="secondary" loading={ack.isPending} onClick={() => ack.mutate(a.id)}>Acknowledge</Button> : null}
-              {a.kind === "secret.delete_failed" && a.target ? <Button size="sm" variant="primary" loading={retry.isPending} onClick={() => retry.mutate(a.target!.id)}>Retry deletion</Button> : null}
+              {a.status !== "open" ? null : ackIsForAnother(a, me.data?.user.id) ? <span className="small muted">{ACK_FOR_ANOTHER}</span> : <Button size="sm" variant="secondary" loading={ack.isPending && ack.variables === a.id} onClick={() => ack.mutate(a.id)}>Acknowledge</Button>}
+              {a.kind === "secret.delete_failed" && a.target ? <Button size="sm" variant="primary" loading={retry.isPending && retry.variables === a.target.id} onClick={() => retry.mutate(a.target!.id)}>Retry deletion</Button> : null}
             </div>
           </div>
         )) : <p className="muted small">None.</p>}
@@ -368,7 +392,7 @@ export function Failures() {
           </>
         ) : <p className="muted small">None.</p>}
       </Card>
-      {q.data.pendingDeletions.length ? <Card title={`Credentials still in the store after disconnect (${q.data.pendingDeletions.length})`}><ul className="small">{q.data.pendingDeletions.map((p) => <li key={p.id}>{p.provider} {p.kind} · {p.lastError} <Button size="sm" variant="quiet" onClick={() => retry.mutate(p.id)}>Retry</Button></li>)}</ul></Card> : null}
+      {q.data.pendingDeletions.length ? <Card title={`Credentials still in the store after disconnect (${q.data.pendingDeletions.length})`}><ul className="small">{q.data.pendingDeletions.map((p) => <li key={p.id}>{p.provider} {p.kind} · {p.lastError} <Button size="sm" variant="quiet" loading={retry.isPending && retry.variables === p.id} onClick={() => retry.mutate(p.id)}>Retry</Button></li>)}</ul></Card> : null}
       <Card title={`Failed workflow runs (${q.data.failedRuns.length})`}>{q.data.failedRuns.length ? <ul className="small">{q.data.failedRuns.map((r) => <li key={r.id}>{r.workflowKey} · {r.lastError} · {new Date(r.updatedAt).toLocaleString()}</li>)}</ul> : <p className="muted small">None.</p>}</Card>
       <Card title={`Failed jobs (${q.data.failedJobs.length})`}>{q.data.failedJobs.length ? <ul className="small">{q.data.failedJobs.map((j) => <li key={j.id}>{j.kind} · {j.lastError}</li>)}</ul> : <p className="muted small">None.</p>}</Card>
       <Card title={`AI runs that were not ok (${q.data.failedAi.length})`}>{q.data.failedAi.length ? <ul className="small">{q.data.failedAi.map((a) => <li key={a.id}>{a.task} · {a.status} · {a.error} · {new Date(a.createdAt).toLocaleString()}</li>)}</ul> : <p className="muted small">None.</p>}</Card>
@@ -391,9 +415,10 @@ export function Costs() {
   );
 }
 
-function Queue() {
+export function Queue() {
   const q = useQuery({ queryKey: ["admin", "queue"], queryFn: () => api.get<{ queued: number; failed: number; oldestQueuedAt: string | null; waitingRuns: number; definitions: string[] }>("/api/v1/admin/queue", reason), refetchInterval: 5000 });
-  if (q.isLoading || !q.data) return <Skeleton lines={3} />;
+  // A failed load says so instead of loading for ever; a failed refresh keeps the last figures on screen.
+  if (!q.data) return q.error ? <ErrorState message="Could not load the queue." onRetry={() => q.refetch()} /> : <Skeleton lines={3} />;
   return (
     <Card title="Queue health">
       <dl className="kv">
@@ -421,13 +446,15 @@ const ZONES = ["America/Los_Angeles", "America/Denver", "America/Phoenix", "Amer
 const windowsToText = (ws: Window[]) => ws.map((w) => `${w.start}-${w.end}`).join(", ");
 const parseWindows = (t: string): Window[] => t.split(",").map((x) => x.trim()).filter(Boolean).map((x) => { const [start = "", end = ""] = x.split("-").map((y) => y.trim()); return { start, end }; });
 const lines = (t: string) => t.split("\n").map((l) => l.trim()).filter(Boolean);
-const todayKey = () => new Date().toISOString().slice(0, 10);
+// Today in the administrator's own calendar: the UTC date read as tomorrow on a US evening, so a version meant to start
+// now said "takes effect on its date".
+const todayKey = () => dayKey(new Date());
 
 /**
  * The ITS business calendar (correction 12): every save is a new version with an effective date; nothing is edited in
  * place; deadlines already set keep their values until an administrator recalculates them with a reason.
  */
-function CalendarAdmin() {
+export function CalendarAdmin() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["admin", "calendar"], queryFn: () => api.get<CalendarDto>("/api/v1/admin/calendar", reason) });
   const [effectiveFrom, setEffectiveFrom] = useState(todayKey());
@@ -468,8 +495,7 @@ function CalendarAdmin() {
     onSuccess: (r) => { toast(`Recalculated ${r.changed} of ${r.considered} open deadlines.`); setRecalcReason(""); },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not recalculate."),
   });
-  if (q.isLoading || !q.data) return <Skeleton lines={6} />;
-  if (q.error) return <ErrorState message="Could not load the calendar." onRetry={() => q.refetch()} />;
+  if (!q.data) return q.error ? <ErrorState message="Could not load the business calendar." onRetry={() => q.refetch()} /> : <Skeleton lines={6} />;
   return (
     <div className="stack">
       <Card title={`In force: ${q.data.description}`}>

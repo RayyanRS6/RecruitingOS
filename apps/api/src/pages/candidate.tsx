@@ -28,7 +28,7 @@ import { descriptionExcerpt } from "./description";
 import { Icon } from "./icons";
 import { JobFacts, payShown, publicPay, roleValidThrough } from "./job-facts";
 import { ApplyFormPage, CompanyLine, HelpLine, JobPage, NO_RESUME_QUESTIONS, keptSentence, noResumeAnswersFrom, noticeVersionsFor, type ApplyFormProps, type ApplyFormState, type JobPageCompany, type JobPageRole } from "./job-page";
-import { Layout } from "./layout";
+import { Layout, currentNonce } from "./layout";
 import { clearApplicationSource, resolveApplicationSource } from "./links";
 import { MessageThread, THREAD_CSS, threadOf, toldWording } from "./thread";
 import { PERSON_BY_EMAIL, PERSON_ON_THE_WEB, forTheWeb } from "./web-wording";
@@ -871,15 +871,15 @@ candidatePages.get("/privacy", async (c) => {
 });
 
 /* ------------------------------------------------------------------------------------------------------------ */
-/* The screening conversation (plan Wave E): server-rendered, no JavaScript needed, one question at a time.      */
+/* The screening conversation (plan Wave E): server-rendered, works without JavaScript, one question at a time.  */
 /* ------------------------------------------------------------------------------------------------------------ */
 
 /**
  * The conversation's own styles, on top of the page stylesheet: the line on top of every page saying it is the
  * company's AI assistant, the question in large type, the assistant's messages on the left in a sunken box and the
  * candidate's own in near-black on the right (shared with the status page's messages, thread.tsx), a thin progress bar (a native progress element, so no inline style), the
- * tap answers, the quiet actions (skip, a person, later) and the "check your answers" list. Buttons and their secondary
- * look come from the page stylesheet, like every other candidate page.
+ * tap answers, the quiet actions (skip, a person, later), the line shown while an answer is on its way, and the "check
+ * your answers" list. Buttons and their secondary look come from the page stylesheet, like every other candidate page.
  */
 export const SCREEN_CSS = `
 .ai-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 22px; padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface-2); color: var(--ink-2); font-size: 14px; line-height: 1.45; }
@@ -899,6 +899,9 @@ details.earlier > summary, details.own-words > summary { color: var(--ink-2); fo
 .pay-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
 .link-action { display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; background: none; color: var(--ink-2); font: 600 15px/1.3 var(--ui); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; cursor: pointer; }
 .link-action:hover { color: var(--ink); text-decoration-thickness: 2px; }
+.link-action:disabled { color: var(--ink-3); text-decoration: none; cursor: not-allowed; }
+.sending { margin: 16px 0 0; color: var(--ink-2); font-size: 14.5px; }
+.sending:empty { margin: 0; }
 .aside-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0 24px; margin-top: 24px; padding-top: 8px; border-top: 1px solid var(--line); }
 .aside-actions > form { display: contents; }
 .paths { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin: 20px 0; }
@@ -984,7 +987,10 @@ function AiLine(props: { companyName: string }) {
   return <p class="ai-line"><span class="ai-tag">AI assistant</span><span>This conversation is with {props.companyName}'s AI assistant, a software program, not a person. People on the hiring team make every decision.</span></p>;
 }
 
-/** Every page of the conversation: the AI line, the company and the job, the page, the AI notice, the privacy link. */
+/**
+ * Every page of the conversation: the AI line, the company and the job, the page, the line that says an answer is on its
+ * way (empty until a button is pressed), the AI notice, the privacy link, and the script that stops a second press.
+ */
 function ConversationPage(props: { view: ConversationView; title: string; children?: unknown }) {
   const { view } = props;
   return (
@@ -992,11 +998,44 @@ function ConversationPage(props: { view: ConversationView; title: string; childr
       <AiLine companyName={view.companyName} />
       <p class="eyebrow">{view.companyName} · {view.roleTitle}</p>
       {props.children}
+      <p class="sending" id="sending" role="status" />
       {view.intro.aiNotice ? <p class="notice">{view.intro.aiNotice.text}</p> : null}
       <p class="foot"><a href="/privacy">How we handle your information</a></p>
+      <script nonce={currentNonce()} dangerouslySetInnerHTML={{ __html: SCREEN_BUSY_JS }} />
     </Layout>
   );
 }
+
+/**
+ * One press at a time on the conversation's pages. A typed answer waits for the assistant's reply inside the request
+ * (often 5 to 20 seconds), so without this the page looks frozen and a second press sends the answer twice. The first
+ * submit locks the page: every button is disabled, the pressed one says "Sending…", and the line under the forms says it
+ * can take a while; any later submit, from any form on the page, is stopped. The buttons are disabled a moment after the
+ * submit, not during it, because a browser leaves a disabled button's own value (Yes, No, Skip) out of what it sends.
+ * Coming back to the page with the Back button unlocks it. Plain ES5 with no inline handlers (the policy forbids them);
+ * without script the forms still work as before.
+ */
+export const SCREEN_BUSY_JS = `(function(){
+var busy=false;var note=document.getElementById('sending');
+function lock(pressed){
+var all=document.querySelectorAll('main button');
+for(var i=0;i<all.length;i++){if(!all[i].disabled){all[i].disabled=true;all[i].setAttribute('data-busy','');}}
+if(pressed){pressed.setAttribute('data-label',pressed.textContent);pressed.textContent='Sending…';}
+if(note){note.textContent='Sending… This can take up to a minute, so please keep this page open.';}
+}
+function unlock(){
+var all=document.querySelectorAll('main button[data-busy]');
+for(var i=0;i<all.length;i++){var b=all[i];b.disabled=false;b.removeAttribute('data-busy');if(b.hasAttribute('data-label')){b.textContent=b.getAttribute('data-label');b.removeAttribute('data-label');}}
+if(note){note.textContent='';}
+busy=false;
+}
+document.addEventListener('submit',function(ev){
+if(busy){ev.preventDefault();return;}
+busy=true;var pressed=ev.submitter||null;
+window.setTimeout(function(){if(ev.defaultPrevented){busy=false;return;}lock(pressed);},0);
+},true);
+window.addEventListener('pageshow',function(ev){if(ev.persisted){unlock();}});
+})();`;
 
 /** "Question 2 of 5" over a thin bar. */
 function Progress(props: { at: number; total: number; text: string }) {

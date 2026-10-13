@@ -81,6 +81,18 @@ export function Interviews() {
   );
 }
 
+/**
+ * The Link line of an interview with no link yet. The calendar makes the link only through an interviewer's working
+ * calendar: an event it booked, or a live connection that books one with the time. With none, the interview approval
+ * records "calendar" to mean no link at all (the development stand-in on staging, or nobody connected), so the line says
+ * so rather than promise a link that never comes.
+ */
+export function noLinkText(i: Pick<InterviewDetail, "linkSource" | "calendarRefs" | "availabilitySources" | "format">): string {
+  const calendar = Object.keys(i.calendarRefs ?? {}).length > 0 || i.availabilitySources.some((s) => s.source === "calendar");
+  if (i.linkSource === "calendar" && calendar) return "created with the calendar event";
+  return i.format === "video" ? "none yet: send the candidate the video link yourself" : "none: the invitation says what kind of interview it is";
+}
+
 /** The candidate column: initials, the name, and the role underneath. */
 function CandidateCell({ i }: { i: InterviewSummary }) {
   const name = `${i.candidate.firstName} ${i.candidate.lastName}`;
@@ -157,7 +169,7 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
             <dl className="kv">
               <dt>When</dt><dd>{when(i.startsAt, i.timezone)}{i.timezone ? ` (${i.timezone})` : ""}</dd>
               <dt>Length</dt><dd>{i.durationMinutes} minutes, {i.format.replace("_", " ")}</dd>
-              <dt>Link</dt><dd>{i.meetingUrl ? <a href={i.meetingUrl} target="_blank" rel="noreferrer">{i.meetingUrl}</a> : i.linkSource === "calendar" ? "created with the calendar event" : "none"}</dd>
+              <dt>Link</dt><dd>{i.meetingUrl ? <a href={i.meetingUrl} target="_blank" rel="noreferrer">{i.meetingUrl}</a> : noLinkText(i)}</dd>
               <dt>Interviewers</dt><dd>{i.participants.map((p) => { const s = i.availabilitySources.find((x) => x.userId === p.userId); return <span key={p.userId} style={{ marginRight: 8 }}>{p.name ?? p.email} <Chip tone={s?.source === "calendar" ? "good" : s?.source === "declared" ? "accent" : "caution"}>{s?.source === "calendar" ? "calendar" : s?.source === "declared" ? "declared hours" : "no availability"}</Chip></span>; })}</dd>
               <dt>Window</dt><dd>{i.schedulingWindow.fromDate} to {i.schedulingWindow.toDate}</dd>
               <dt>Candidate reschedules</dt><dd>{i.rescheduleCountCandidate} of 2</dd>

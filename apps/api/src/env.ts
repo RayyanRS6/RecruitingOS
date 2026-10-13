@@ -60,6 +60,11 @@ export type Env = {
   /** "vault" (Supabase Vault, production) or "memory" (development and tests). Never application-side cryptography (F1). */
   SECRET_STORE: string;
   AI_PROVIDER: string;
+  /**
+   * "postmark" sends real email; anything else is the fake, which keeps each email in memory and reports it sent. Allowed
+   * in production so staging can run before Postmark exists, but there every boot warns and one standing admin alert
+   * says emails are not being sent (email-gate.ts).
+   */
   EMAIL_PROVIDER: string;
   EMAIL_FROM_DOMAIN: string;
   /** The single sending address (F6): updates@hire.identifiedtalent.com in production. Display names name the customer's hiring team. */

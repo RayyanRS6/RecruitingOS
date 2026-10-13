@@ -13,13 +13,29 @@ export type RunOutcome<T> =
   | { ok: true; output: T; runId: string; model: string }
   | { ok: false; runId: string; model: string; reason: "refused" | "invalid" | "error"; error: string };
 
-export type RunMeta = { companyId: string | null; workflowRunId?: string | null; inputRef?: Record<string, unknown>; maxTokens?: number };
+/** `deadlineAt`: the deadline of the HTTP request the call serves (`routeDeadline`), shared by every call in it. */
+export type RunMeta = { companyId: string | null; workflowRunId?: string | null; inputRef?: Record<string, unknown>; maxTokens?: number; deadlineAt?: number };
+
+/** How long the /api route may run on Vercel: maxDuration in apps/shell/app/api/[[...route]]/route.ts. */
+export const API_ROUTE_LIMIT_MS = 300_000;
+
+/**
+ * The deadline of an HTTP request that started at `startedAt`, for `RunMeta.deadlineAt`. An agent that makes two model
+ * calls in one request (a pasted ad's read, then the turn), or slow work before one, sets it once at the start, so the
+ * second call gets what is left rather than a full budget of its own that would run past the route's limit.
+ */
+export function routeDeadline(startedAt = Date.now()): number {
+  return startedAt + API_ROUTE_LIMIT_MS;
+}
 
 /** What one prompt call produced, before anything is written: the model's answer (or failure) and what it cost. */
 export type PromptCall<TOutput> = { result: StructuredResult<TOutput>; model: string; hash: string; attempts: number };
 
 /**
- * Calls the model with structured output, validates, and retries once on invalid output with the error fed back.
+ * Calls the model with structured output, validates, and retries once on invalid output with the error fed back,
+ * unless the provider marked the failure final: it already asked for a correction itself, the reply was cut off at
+ * max_tokens, or its time budget is spent. A retry on top of those would stack full model calls past the 300 s limit of
+ * the /api route (intake.compile takes about 110 s a call), which ends in a 504 with no ai_runs row.
  * Touches no database: the caller records the outcome with `recordRun` inside whichever transaction suits it, or uses
  * `runPromptDetached`, which does both without holding a transaction open around the call.
  */
@@ -47,6 +63,7 @@ export async function callPrompt<TInput, TOutput>(rt: AiRuntime, prompt: PromptD
       schema: prompt.schema,
       inputRef: meta.inputRef ?? {},
       maxTokens: meta.maxTokens,
+      deadlineAt: meta.deadlineAt,
     };
     try {
       result = await rt.provider.structured(req, model);
@@ -56,6 +73,7 @@ export async function callPrompt<TInput, TOutput>(rt: AiRuntime, prompt: PromptD
     if (result.kind === "ok" || result.kind === "refused") break;
     lastError = result.error;
     if (result.error.startsWith("provider")) break; // do not retry outages here; the workflow engine retries the step
+    if (result.final) break; // the provider already did all the asking that fits (see above)
   }
   if (!result) throw new Error("unreachable");
   return { result, model, hash, attempts };

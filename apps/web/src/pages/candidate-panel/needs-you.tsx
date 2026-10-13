@@ -138,6 +138,24 @@ function DeclineStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId: str
   );
 }
 
+type LinkChoice = "calendar" | "pasted";
+
+/**
+ * The meeting link on the interview approval (decision D3). The calendar makes the link only when an interviewer has a
+ * connected, working calendar: the event it books carries the video link. With none (the development stand-in, or nobody
+ * connected), "Create it with the calendar event" recorded no link at all, so it is not offered: the box for a link is
+ * shown instead, and left empty the invitation names the format (in person, by phone) and the team gives any details.
+ * `picked` is what the person chose in the menu when it is offered; typing a link first counts as choosing to paste one.
+ * `ready` is false while a link that is needed is missing; `body` is what the approval sends.
+ */
+export function meetingLinkFor(input: { calendarLive: boolean; picked: LinkChoice | null; url: string }): { offerCalendar: boolean; mode: LinkChoice; urlRequired: boolean; ready: boolean; body: { linkSource: LinkChoice; meetingUrl?: string } } {
+  const url = input.url.trim();
+  if (!input.calendarLive) return { offerCalendar: false, mode: "pasted", urlRequired: false, ready: true, body: url ? { linkSource: "pasted", meetingUrl: url } : { linkSource: "calendar" } };
+  const mode = input.picked ?? (url ? "pasted" : "calendar");
+  if (mode === "calendar") return { offerCalendar: true, mode, urlRequired: false, ready: true, body: { linkSource: "calendar" } };
+  return { offerCalendar: true, mode, urlRequired: true, ready: !!url, body: url ? { linkSource: "pasted", meetingUrl: url } : { linkSource: "pasted" } };
+}
+
 /**
  * Approve an interview: the round and the interviewers; a person's approval is what starts scheduling. It opens filled
  * in from the interview plan (plan H4: the next round, its interviewers who are still on the team, the scheduling
@@ -145,7 +163,8 @@ function DeclineStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId: str
  */
 function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: ApplicationDetail; roleId: string; initialRoundKey?: string; onClose: () => void }) {
   const refresh = useRefreshCandidate(a.id, roleId);
-  const members = useQuery({ queryKey: ["members"], queryFn: () => api.get<Array<{ userId: string; name: string | null; email: string; role: string; status: string; schedulable: boolean }>>("/api/v1/companies/current/members") });
+  // `calendar`: each person's calendar connection, if any; a working one ("live") is what can make the meeting link.
+  const members = useQuery({ queryKey: ["members"], queryFn: () => api.get<Array<{ userId: string; name: string | null; email: string; role: string; status: string; schedulable: boolean; calendar?: { status: string } | null }>>("/api/v1/companies/current/members") });
   // The role's current plan names who interviews in each round now, so assignments made on the Interview plan tab reach candidates who applied before them.
   const currentPlan = useQuery({ queryKey: ["interview-plan", roleId], queryFn: () => api.get<InterviewPlanView>(`/api/v1/roles/${roleId}/interview-plan`) });
   // The card filled in by the API (the answer to "Yes, interview" puts it here first); a refusal just leaves the page's own defaults.
@@ -153,7 +172,7 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
   const nextRound = a.interviewPlan.find((r) => !a.interviews.some((i) => i.roundKey === r.key && ["completed"].includes(i.status))) ?? a.interviewPlan[0];
   const [roundKey, setRoundKey] = useState<string | null>(initialRoundKey ?? null);
   const [interviewers, setInterviewers] = useState<string[] | null>(null);
-  const [linkSource, setLinkSource] = useState<"calendar" | "pasted">("calendar");
+  const [linkPicked, setLinkPicked] = useState<LinkChoice | null>(null);
   const [meetingUrl, setMeetingUrl] = useState("");
   const first = useFocusOnMount<HTMLSelectElement>();
   const activeMembers = (members.data ?? []).filter((m) => m.status === "active");
@@ -167,6 +186,10 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
     picked: interviewers ?? fromDraft,
     activeMemberIds: members.data && !currentPlan.isLoading ? new Set(activeMembers.map((m) => m.userId)) : null,
   });
+  // The calendar can make the meeting link only through an interviewer's working calendar connection (see meetingLinkFor).
+  const calendarLive = activeMembers.some((m) => chosenInterviewers.includes(m.userId) && m.calendar?.status === "live");
+  const link = meetingLinkFor({ calendarLive, picked: linkPicked, url: meetingUrl });
+  const videoRound = a.interviewPlan.find((r) => r.key === chosenRoundKey)?.format === "video";
   // An optional personal line on the invitation (Q28): the person's own, or one the assistant suggested and they kept, in
   // which case the invitation says the assistant helped. Checked by the API like a decision message's line.
   const [line, setLine] = useState("");
@@ -179,7 +202,7 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
     onError: (e) => toast(e instanceof ApiError ? e.message : "The assistant could not suggest a line just now."),
   });
   const request = useMutation({
-    mutationFn: () => api.post(`/api/v1/applications/${a.id}/interviews`, { roundKey: chosenRoundKey, interviewerUserIds: chosenInterviewers, linkSource, meetingUrl: linkSource === "pasted" ? meetingUrl : undefined, ...(line.trim() ? { invitationLine: { text: line.trim(), aiHelped: lineAiHelped, ...(kept?.runId ? { suggestionRunId: kept.runId } : {}) } } : {}) }),
+    mutationFn: () => api.post(`/api/v1/applications/${a.id}/interviews`, { roundKey: chosenRoundKey, interviewerUserIds: chosenInterviewers, ...link.body, ...(line.trim() ? { invitationLine: { text: line.trim(), aiHelped: lineAiHelped, ...(kept?.runId ? { suggestionRunId: kept.runId } : {}) } } : {}) }),
     onSuccess: async () => { toast("Interview approved.", "Times go out to the candidate as soon as they exist."); onClose(); await refresh(); },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not start the interview."),
   });
@@ -201,8 +224,13 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
             ))}
           </fieldset>
           {chosenInterviewers.length && (members.data ?? []).some((m) => chosenInterviewers.includes(m.userId) && !m.schedulable) ? <Alert tone="caution">An interviewer has neither a connected calendar nor declared hours. Times cannot be offered until they add one in Setup; they will be asked.</Alert> : null}
-          <Field label="Meeting link" htmlFor="iv-link"><select id="iv-link" className="select" value={linkSource} onChange={(e) => setLinkSource(e.target.value as "calendar" | "pasted")}><option value="calendar">Create it with the calendar event</option><option value="pasted">I'll paste a link</option></select></Field>
-          {linkSource === "pasted" ? <Field label="Link" htmlFor="iv-url"><input id="iv-url" className="input" type="url" value={meetingUrl} onChange={(e) => setMeetingUrl(e.target.value)} placeholder="https://" /></Field> : null}
+          {link.offerCalendar ? <Field label="Meeting link" htmlFor="iv-link"><select id="iv-link" className="select" value={link.mode} onChange={(e) => setLinkPicked(e.target.value as LinkChoice)}><option value="calendar">Create it with the calendar event</option><option value="pasted">I'll paste a link</option></select></Field> : null}
+          {link.mode === "pasted" ? (
+            <Field label={link.urlRequired ? "Link" : "Meeting link (optional)"} htmlFor="iv-url" hint={link.urlRequired ? undefined : "For a video call, paste its link (it starts with https://). Leave it empty for an interview in person. A link is made with the calendar event only for an interviewer who connected their calendar in Setup."}>
+              <input id="iv-url" className="input" type="url" value={meetingUrl} onChange={(e) => setMeetingUrl(e.target.value)} placeholder="https://" />
+            </Field>
+          ) : null}
+          {!link.offerCalendar && videoRound && !meetingUrl.trim() ? <p className="small muted" style={{ margin: 0 }}>This round is a video call. Without a link here, the invitation names the format only, so send {a.candidate.firstName} the link yourself.</p> : null}
           <Field label="A personal line for the invitation (optional)" htmlFor="iv-line" hint={`It goes with the times, under your name: one or two sentences, ${PERSONAL_LINE_MAX} characters at most. It is checked before anything is sent: no scores, nothing about age, family, health, religion or background.`}>
             <textarea id="iv-line" className="textarea" rows={2} maxLength={PERSONAL_LINE_MAX} value={line} onChange={(e) => { setLine(e.target.value); if (!e.target.value.trim()) setKept(null); }} placeholder={`For example: We enjoyed reading about your work, ${a.candidate.firstName}.`} />
           </Field>
@@ -223,7 +251,7 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
         </>
       )}
       <div className="row" style={{ marginTop: 10 }}>
-        <Button variant="primary" size="sm" loading={request.isPending} disabled={!chosenRoundKey || !chosenInterviewers.length || (linkSource === "pasted" && !meetingUrl)} onClick={() => request.mutate()}>Approve and offer times</Button>
+        <Button variant="primary" size="sm" loading={request.isPending} disabled={!chosenRoundKey || !chosenInterviewers.length || !link.ready} onClick={() => request.mutate()}>Approve and offer times</Button>
         <Button size="sm" variant="quiet" onClick={onClose}>Not now</Button>
       </div>
     </Card>

@@ -298,6 +298,9 @@ export type FactsEdit = {
   summary: string[];
 };
 
+/** The most must-haves a role keeps: the packet holds six, and a card or the panel refuses a seventh. */
+export const MAX_MUST_HAVES = 6;
+
 const LIST_OF: Partial<Record<IntakeQuestion["field"], IntakeListFact>> = {
   responsibilities: "responsibilities",
   must_haves: "mustHaves",
@@ -353,13 +356,48 @@ function oneOf(value: string, allowed: readonly string[], words: Array<[RegExp, 
   throw new IntakeEditError("invalid_value", `That is not a ${what} we know. Choose one of the options.`);
 }
 
-/** A start given as "asap" or "within_30_days" becomes a date, so the packet's timeline has one. */
+const COUNT_WORDS: Readonly<Record<string, number>> = { a: 1, an: 1, next: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
+const COUNT_WORD = Object.keys(COUNT_WORDS).sort((a, b) => b.length - a.length).join("|");
+const COUNT = `(\\d+|${COUNT_WORD})\\+?`;
+const UNIT = "(days?|weeks?|wks?|months?|mos?|years?|yrs?)";
+/**
+ * "2–4 weeks", "2 4 weeks" (a code's underscores read as spaces), "1 to 2 months", "a month", "30 days", "6+ wks", and "a
+ * week or two", where the second count takes the first one's unit. A range with a unit at each end ("3 days to 2 weeks")
+ * is two matches, so the pattern is global and every match is read.
+ */
+const LENGTH_OF_TIME = new RegExp(`\\b${COUNT}(?:\\s*(?:-|to|or)?\\s*\\b${COUNT})?\\s*${UNIT}\\b(?:\\s*(?:-|to|or)\\s*(\\d{1,2}|${COUNT_WORD})\\b(?!\\s*${UNIT}))?`, "g");
+const UNIT_DAYS: Readonly<Record<string, number>> = { d: 1, w: 7, m: 30, y: 365 };
+
+/**
+ * The days a length of time in words allows, reading the upper end of a range, since that is how long the person said
+ * they can wait: "Within 2–4 weeks" is 28, "1–2 months" 60 (a month is read as 30 days), "3 days to 2 weeks" 14, "a week
+ * or two" 14, "within_2_4_weeks" 28, "within_30_days" or a bare "30" 30. Null when the words name no length of time.
+ */
+export function daysWithin(text: string): number | null {
+  const t = text.toLowerCase().replace(/_/g, " ").replace(/[–—]/g, "-").trim();
+  const count = (w: string | undefined) => (w ? COUNT_WORDS[w] ?? Number(w) : 0);
+  const lengths = [...t.matchAll(LENGTH_OF_TIME)].map((m) => Math.max(count(m[1]), count(m[2]), count(m[4])) * UNIT_DAYS[m[3][0]]);
+  if (lengths.length) return Math.max(...lengths);
+  // A bare number is days, as the cards' codes have always meant it ("within_30"); a year such as 2027 is not.
+  const bare = t.match(/^(?:within|in|under)?\s*(\d+)$/);
+  return bare && Number(bare[1]) <= 365 ? Number(bare[1]) : null;
+}
+
+const ASAP_WORDS = /\b(?:asap|as soon as possible|immediately|right away)\b/i;
+
+/**
+ * A start given in words becomes a date, so the packet's timeline has one: "asap" (or "As soon as possible") is two weeks
+ * out and urgent; "Within 2–4 weeks" is four weeks out, not the first number read as days (staging, 13 Oct 2026: a start
+ * of tomorrow); a date (YYYY-MM-DD) stays as it is. Nothing is set when the words name no time.
+ */
 export function startDateFor(value: string, now: Date): { targetStartDate?: string; urgency?: string } {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return { targetStartDate: value };
-  const days = value === "asap" ? 14 : Number(value.match(/(\d+)/)?.[1] ?? NaN);
-  if (!Number.isFinite(days)) return {};
+  const v = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return { targetStartDate: v };
+  const asap = ASAP_WORDS.test(v);
+  const days = asap ? 14 : daysWithin(v);
+  if (days === null) return {};
   const d = new Date(now.getTime() + days * 86_400_000);
-  return { targetStartDate: d.toISOString().slice(0, 10), ...(value === "asap" ? { urgency: "high" } : {}) };
+  return { targetStartDate: d.toISOString().slice(0, 10), ...(asap ? { urgency: "high" } : {}) };
 }
 
 function emptyEdit(facts: IntakeFacts): FactsEdit {
@@ -401,7 +439,7 @@ function listSet(edit: FactsEdit, field: IntakeListFact, keep: string[], drop: s
   const f = edit.facts as Record<IntakeListFact, string[] | undefined>;
   const current = f[field] ?? [];
   const next = dedupe([...current.filter((x) => !drop.some((d) => same(d, x))), ...keep]);
-  if (field === "mustHaves" && next.length > 6) throw new IntakeEditError("too_many_must_haves", "Keep it to six must-haves; anything else can be a nice-to-have.");
+  if (field === "mustHaves" && next.length > MAX_MUST_HAVES) throw new IntakeEditError("too_many_must_haves", "Keep it to six must-haves; anything else can be a nice-to-have.");
   f[field] = next;
   for (const d of drop) if (current.some((x) => same(x, d))) edit.removed.push({ field, value: d });
   for (const k of keep) edit.restored.push({ field, value: k });
@@ -459,7 +497,8 @@ export function applyAnswers(facts: IntakeFacts, questions: IntakeQuestion[], an
 /**
  * Sets one fact from an answer. `value` is what was sent (an option's value, or words typed); `words`, for an offered
  * option, is what the person read and ticked (`storedAnswer`). A fact kept as one of a few codes tries the value, then the
- * words; a fact kept as text stores the words; a start keeps the value, which `startDateFor` reads ("asap", "30 days").
+ * words; a fact kept as text stores the words; a start becomes a date by `startDateFor` from the words ("Within 1 month"),
+ * or from the value ("asap", "within_30_days") when the words name no time.
  */
 function setText(edit: FactsEdit, field: IntakeQuestion["field"], value: string, now: Date, words?: string): void {
   const f = edit.facts;
@@ -481,7 +520,13 @@ function setText(edit: FactsEdit, field: IntakeQuestion["field"], value: string,
       else { f.reason = REASON_WORDS.find(([re]) => re.test(value))?.[1] ?? (words ? REASON_WORDS.find(([re]) => re.test(words))?.[1] : undefined) ?? "other"; f.reasonDetail = text; }
       break;
     case "compensation_basis": f.compensationBasis = pick(["hourly", "salary"], [[/hour/i, "hourly"], [/salar|year|annual/i, "salary"]], "pay basis"); break;
-    case "timeline": Object.assign(f, startDateFor(value, now)); break;
+    case "timeline": {
+      // The words the person ticked come first: a code can be a bare number ("1" on "Within 1 month"), which reads as one
+      // day. The code is used when the words name no time ("Soon" on "within_30_days").
+      const fromWords = words ? startDateFor(words, now) : {};
+      Object.assign(f, fromWords.targetStartDate ? fromWords : startDateFor(value, now));
+      break;
+    }
     case "what_failure_looks_like": f.whatFailureLooksLike = text; break;
     case "benefits": f.benefits = text; break;
     case "decision_maker": f.decisionMaker = text; f.decisionMakerUserId = undefined; break;
@@ -649,8 +694,13 @@ export function withoutServerOwned(facts: IntakeFacts): IntakeFacts {
   return out;
 }
 
-/** Facts as stored, with every list present (rows written before a field existed lack it). */
+/**
+ * Facts as stored, with every list present (rows written before a field existed lack it). Must-haves are kept to the
+ * first six: what the assistant reads from a conversation or a pasted ad is merged in without a limit, and a seventh
+ * would fail every draft, since the packet holds six. Reading them here caps what the panel shows and the draft is
+ * written from alike.
+ */
 export function normalizeFacts(facts: Partial<IntakeFacts> | null | undefined): IntakeFacts {
   const f = facts ?? {};
-  return { ...f, mustHaves: f.mustHaves ?? [], niceToHaves: f.niceToHaves ?? [], eligibilityNotes: f.eligibilityNotes ?? [], interviewers: f.interviewers ?? [], dealBreakers: f.dealBreakers ?? [], declinedCriteria: f.declinedCriteria ?? [] };
+  return { ...f, mustHaves: (f.mustHaves ?? []).slice(0, MAX_MUST_HAVES), niceToHaves: f.niceToHaves ?? [], eligibilityNotes: f.eligibilityNotes ?? [], interviewers: f.interviewers ?? [], dealBreakers: f.dealBreakers ?? [], declinedCriteria: f.declinedCriteria ?? [] };
 }

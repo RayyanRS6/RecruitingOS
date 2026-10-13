@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PACKET_VISIBILITY_LABEL } from "@ros/contracts";
 import { Alert, Avatar, Button, Card, Chip, EmptyState, ErrorState, Field, Icon, Pill, Skeleton, Timeline } from "@ros/ui";
@@ -26,6 +26,26 @@ export function workModelLabel(policy: string | undefined): string {
 
 const EVIDENCE_LABEL: Record<string, string> = { resume: "résumé", application: "application", screen: "screen", interview: "interview" };
 const ROUND_FORMAT: Record<string, string> = { video: "video call", phone: "phone", onsite: "on site", working_session: "working session" };
+
+/** While the role page waits on the worker it reads the role again this often, and for this long at most. */
+export const CATCH_UP_EVERY_MS = 2000;
+export const CATCH_UP_FOR_MS = 120_000;
+
+/**
+ * Whether the role page is waiting on the worker, which runs the approval workflow apart from the web server: just after
+ * "Ask for approval" the role waits for approval before its approval request exists, so there is nothing to approve yet;
+ * just after this page approved `approvedVersion`, the role opens (or, for a change to a live job, that version becomes
+ * current) a moment later. Without this the owner saw no "Approve and publish" and a stale status until a reload.
+ */
+export function waitingOnWorker(role: Pick<RoleDetail, "status" | "packetApproval" | "currentPacket">, approvedVersion: number | null): boolean {
+  if (approvedVersion !== null) return role.status === "pending_approval" || (role.currentPacket?.version ?? 0) < approvedVersion;
+  return role.status === "pending_approval" && !role.packetApproval?.pending;
+}
+
+/** The role query's refetch interval: every 2 seconds while waiting on the worker (since `since`), for two minutes at most. */
+export function catchUpInterval(waiting: boolean, since: number | null, now: number): number | false {
+  return waiting && since !== null && now - since < CATCH_UP_FOR_MS ? CATCH_UP_EVERY_MS : false;
+}
 
 /** The mark on a part of the role that is on the job page (plan D10), in the same words as the job builder's panel. */
 export function CandidatesSeeThis() {
@@ -107,9 +127,16 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
     // A refusal by the legal check (D5) names what is missing; the card lists it once the role is read again.
     onError: async (e) => { toast(e instanceof ApiError ? e.message : "Could not approve."); if (e instanceof ApiError && e.code === "legal_check") await refresh(); },
   });
+  // Sent back from this card: the API keeps saying the role waits for approval until the worker makes it a draft again,
+  // so the card says it was sent back meanwhile. Once the role is no longer waiting, this is done with: asking for
+  // approval again later reaches the same state from the API, and that one is "Getting the approval ready".
+  const [sentBackHere, setSentBackHere] = useState(false);
+  useEffect(() => {
+    if (role.status !== "pending_approval") setSentBackHere(false);
+  }, [role.status]);
   const sendBack = useMutation({
     mutationFn: () => api.post(`/api/v1/approvals/${pending!.id}/decide`, { decision: "reject", ...(note.trim() ? { note: note.trim() } : {}) }),
-    onSuccess: async () => { toast(pending?.editWhileOpen ? "Sent back. The role keeps its approved version." : "Sent back. The role is a draft again."); setSendingBack(false); setNote(""); await refresh(); },
+    onSuccess: async () => { toast(pending?.editWhileOpen ? "Sent back. The role keeps its approved version." : "Sent back. The role is a draft again in a few seconds."); setSentBackHere(true); setSendingBack(false); setNote(""); await refresh(); },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not send it back."),
   });
   const again = useMutation({
@@ -137,6 +164,7 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
       </Card>
     );
   }
+  if (!pending && role.status === "pending_approval") return <CatchingUpCard latest={latest} sentBackHere={sentBackHere} />;
   if (!pending) return null;
   const packet = pending.editWhileOpen ? role.proposedPacket?.packet ?? null : role.currentPacket?.packet ?? null;
   const assumptions = packet?.provenance.assumptions ?? [];
@@ -198,6 +226,27 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
           {canEdit ? <Button onClick={onEdit}>{pending.viewer.mayDecide ? "Edit first" : "Edit"}</Button> : null}
         </div>
       )}
+    </Card>
+  );
+}
+
+/**
+ * The approval card while the worker catches up (the role page reads the role again meanwhile), so the page says what is
+ * happening rather than show nothing: just after "Ask for approval", just after approving, and just after this page sent
+ * the role back (`sentBackHere`), when the API still says the role waits for approval until the worker makes it a draft.
+ */
+export function CatchingUpCard({ latest, sentBackHere }: { latest: RoleDetail["packetApproval"]["latest"]; sentBackHere: boolean }) {
+  const [title, words] = sentBackHere
+    ? ["Sent back", "The role goes back to a draft in a few seconds. This page updates on its own; if it does not, reload it."]
+    : latest?.status === "approved"
+      ? ["Approved: the job is opening", "The job opens in a few seconds. This page updates on its own; if it does not, reload it."]
+      : ["Getting the approval ready", "The approval shows here in a few seconds. This page updates on its own; if it does not, reload it."];
+  return (
+    <Card needsYou title={title}>
+      <p className="small row" style={{ color: "var(--ink-2)", gap: 8 }} role="status">
+        <span className="spinner" aria-hidden="true" />
+        {words}
+      </p>
     </Card>
   );
 }

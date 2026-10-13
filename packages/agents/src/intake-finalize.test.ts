@@ -87,7 +87,7 @@ describe("untrusted text cannot close its own data block", () => {
 
 describe("the screening conversation follows the form in the same visit (plan E8)", () => {
   it("the draft aims for five or six questions and about ten minutes, and a packet without a length gets ten", () => {
-    expect(intakeCompilePrompt.version).toBe(4);
+    expect(intakeCompilePrompt.version).toBe(5);
     const compile = intakeCompilePrompt.system(ctx(facts())).map((b) => b.text).join("\n");
     expect(compile).toContain("aim for five or six questions and screening.maxMinutes 10");
     expect(RolePacket.shape.screening.parse({ questions: [{ key: "a", question: "A?", kind: "skills" }, { key: "b", question: "B?", kind: "skills" }, { key: "c", question: "C?", kind: "skills" }] }).maxMinutes).toBe(10);
