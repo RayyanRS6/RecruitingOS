@@ -25,10 +25,10 @@ const usage = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0 };
 const ok: StructuredResult<Draft> = { kind: "ok", output: { title: "Engineer" }, model: "m", usage, latencyMs: 1 };
 const invalid = (over: { error?: string; final?: boolean } = {}): StructuredResult<Draft> => ({ kind: "invalid", error: "title: expected string", model: "m", usage, latencyMs: 1, ...over });
 
-function runtime(results: Array<StructuredResult<Draft>>) {
+function runtime(results: Array<StructuredResult<Draft>>, opts: { id?: string; model?: string } = {}) {
   const requests: Array<StructuredRequest<unknown>> = [];
   const provider: AiProvider = {
-    id: "stand-in",
+    id: opts.id ?? "stand-in",
     async structured<T>(req: StructuredRequest<T>): Promise<StructuredResult<T>> {
       requests.push(req as StructuredRequest<unknown>);
       const next = results.shift();
@@ -36,9 +36,28 @@ function runtime(results: Array<StructuredResult<Draft>>) {
       return next as unknown as StructuredResult<T>;
     },
   };
-  const rt: AiRuntime = { provider, models: { judgment: "m", standard: "m", fast: "m" } };
+  const m = opts.model ?? "m";
+  const rt: AiRuntime = { provider, models: { judgment: m, standard: m, fast: m } };
   return { rt, requests };
 }
+
+describe("the models and effort the runner asks for", () => {
+  it("sends each task's tier effort: high for the draft, medium for the rest", async () => {
+    const { rt, requests } = runtime([ok, ok]);
+    await callPrompt(rt, prompt, null, { companyId: null });
+    await callPrompt(rt, { ...prompt, task: "triage.assess" }, null, { companyId: null });
+    expect(requests.map((r) => r.effort)).toEqual(["high", "medium"]);
+  });
+
+  it("never sends the real provider a model outside Haiku 5.5 and Sonnet 5.5, whatever runtime was built", async () => {
+    const refused = runtime([ok], { id: "anthropic", model: "claude-opus-5" });
+    const call = await callPrompt(refused.rt, prompt, null, { companyId: null });
+    expect(refused.requests).toHaveLength(0);
+    expect(call.result).toMatchObject({ kind: "invalid", final: true, error: "provider refused: claude-opus-5 is not allowed; the app runs only on claude-haiku-5-5 and claude-sonnet-5-5" });
+    const allowed = runtime([ok], { id: "anthropic", model: "claude-sonnet-5-5" });
+    expect((await callPrompt(allowed.rt, prompt, null, { companyId: null })).result.kind).toBe("ok");
+  });
+});
 
 describe("the runner's retry", () => {
   it("asks once more, with the error fed back, when the provider leaves an invalid reply open", async () => {

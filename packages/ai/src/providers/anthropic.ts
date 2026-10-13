@@ -34,10 +34,12 @@ export const CORRECTION_FLOOR_MS = 120_000;
 /**
  * The 400s the API returns when a schema is too complex to constrain decoding with. Seen on staging, 12 Oct 2026:
  * intake.turn "The compiled grammar is too large, which would cause performance issues" and intake.compile "Schemas
- * contains too many optional parameters (40), which would make grammar compilation inefficient ... (limit: 24)".
+ * contains too many optional parameters (40), which would make grammar compilation inefficient ... (limit: 24)". The
+ * documentation names two more limits on every model, Haiku 5.5 and Sonnet 5.5 included: parameters with union types
+ * (16) and "Schema is too complex for compilation."
  */
 export function isGrammarTooLarge(err: unknown): boolean {
-  return err instanceof Anthropic.BadRequestError && /grammar|too many optional parameters/i.test(err.message);
+  return err instanceof Anthropic.BadRequestError && /grammar|too many (optional )?parameters|union types|too complex for compilation/i.test(err.message);
 }
 
 /** The lowest version, as major * 100 + minor, from which each model family takes an effort setting. */
@@ -45,8 +47,7 @@ const EFFORT_FROM: Record<string, number> = { opus: 405, sonnet: 406, haiku: 505
 
 /**
  * Whether a model takes output_config.effort: Opus 4.5 and later, Sonnet 4.6 and later, Haiku 5.5 and later, and every
- * Fable or Mythos model. Haiku 4.5 (the default fast model), Sonnet 4.5 and older models answer a request that carries
- * it with a 400. A model id this does not recognise gets no effort setting: the model then works at its own default,
+ * Fable or Mythos model. Haiku 4.5, Sonnet 4.5 and older models answer a request that carries it with a 400. A model id this does not recognise gets no effort setting: the model then works at its own default,
  * where sending one could fail every call. Reads ids with a date or a platform prefix too, such as
  * claude-haiku-4-5-20251001 or anthropic.claude-opus-5-5.
  */
@@ -112,7 +113,7 @@ type CallState = { started: number; endsAt: number; signal: AbortSignal; usage: 
  * change in the SDK's request shape fails the typecheck instead of the first live call.
  *
  * Every request streams: the SDK refuses a non-streaming request whose max_tokens could take longer than ten minutes
- * (the draft asks for 24,000), and a stream keeps a long reply from tripping an idle timeout. The schema goes to the API
+ * (the draft asks for 32,000), and a stream keeps a long reply from tripping an idle timeout. The schema goes to the API
  * as a plain JSON-schema format, without the SDK's own parse step, so a reply that breaks a rule the grammar cannot
  * express (a maximum count, a date pattern) is validated here and gets a correction turn instead of surfacing as a
  * provider error. When the API cannot compile a prompt's schema into a grammar, the request is sent again without
@@ -130,15 +131,14 @@ export class AnthropicProvider implements AiProvider {
   async structured<T>(req: StructuredRequest<T>, model: string): Promise<StructuredResult<T>> {
     const started = Date.now();
     const system: TextBlockParam[] = req.system.map((b) => (b.cache ? { type: "text", text: b.text, cache_control: { type: "ephemeral" } } : { type: "text", text: b.text }));
-    // Left out for models that reject it (Haiku 4.5 answers it with a 400); those run at their own default.
+    // The runner sends each task's effort (routing.ts, TIER_EFFORT); left out for models that reject it with a 400.
     const effort = acceptsEffort(model) ? (req.effort ?? (model.includes("opus") ? "high" : "medium")) : undefined;
-    const base = {
-      model,
-      max_tokens: req.maxTokens ?? 16000,
-      system,
-      messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
-    };
-    const usage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+    const messages = req.messages.map((m) => ({ role: m.role, content: m.content }));
+    // Haiku 5.5 and Sonnet 5.5 answer a conversation that ends with an assistant turn (a prefill) with a 400, so a
+    // request always ends with a turn from the user.
+    if (!messages.length || messages[messages.length - 1]!.role === "assistant") messages.push({ role: "user", content: "Continue." });
+    const base = { model, max_tokens: req.maxTokens ?? 16000, system, messages };
+    const usage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
     // The call's own budget, or less when the HTTP request it serves must answer sooner (see CALL_BUDGET_MS).
     const endsAt = Math.min(started + CALL_BUDGET_MS, req.deadlineAt === undefined ? Number.POSITIVE_INFINITY : req.deadlineAt - ROUTE_RESERVE_MS);
     if (endsAt <= started) {
@@ -187,13 +187,15 @@ export class AnthropicProvider implements AiProvider {
       usage.inputTokens += response.usage.input_tokens;
       usage.outputTokens += response.usage.output_tokens;
       usage.cacheReadTokens += response.usage.cache_read_input_tokens ?? 0;
+      usage.cacheWriteTokens = (usage.cacheWriteTokens ?? 0) + (response.usage.cache_creation_input_tokens ?? 0);
       if (response.stop_reason === "refusal") {
         return { kind: "refused", reason: response.stop_details?.category ?? "refused", model, usage, latencyMs: Date.now() - started };
       }
       const text = response.content.map((c) => (c.type === "text" ? c.text : "")).join("");
       if (response.stop_reason === "max_tokens") {
-        // A cut-off reply is not a formatting slip: asking again would be cut off the same way.
-        return { kind: "invalid", error: `no parsed output${label}: the reply hit max_tokens`, model, usage, latencyMs: Date.now() - started, rawText: text.slice(0, 4000), final: true };
+        // A cut-off reply is not a formatting slip: asking again would be cut off the same way. Thinking counts toward
+        // max_tokens, so a reply can stop before any text at all; the count says how much was spent.
+        return { kind: "invalid", error: `no parsed output${label}: the reply hit max_tokens (${response.usage.output_tokens} output tokens, thinking included${text ? "" : ", no text written"})`, model, usage, latencyMs: Date.now() - started, rawText: text.slice(0, 4000), final: true };
       }
       const check = validate(req.schema, text);
       if (check.ok) return { kind: "ok", output: check.data, model, usage, latencyMs: Date.now() - started, raw: undefined };

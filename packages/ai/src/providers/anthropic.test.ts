@@ -175,7 +175,7 @@ describe("the Anthropic adapter", () => {
     const schema = z.object({ a: z.string() });
     const { client, sent } = fakeClient([grammarError(), reply({ text: "I will now write the role", stop: "max_tokens" })]);
     const out = await new AnthropicProvider(undefined, client).structured(request(schema), "claude-opus-5");
-    expect(out).toMatchObject({ kind: "invalid", error: "no parsed output (unconstrained): the reply hit max_tokens", final: true });
+    expect(out).toMatchObject({ kind: "invalid", error: "no parsed output (unconstrained): the reply hit max_tokens (5 output tokens, thinking included)", final: true });
     expect(sent).toHaveLength(2);
   });
 
@@ -233,7 +233,7 @@ describe("a constrained reply that breaks a rule the grammar cannot hold", () =>
   it("is not asked again when it was cut off at max_tokens", async () => {
     const { client, sent } = fakeClient([reply({ text: '{"mustHaves":["a"', stop: "max_tokens" })]);
     const out = await new AnthropicProvider(undefined, client).structured(request(mustHaves()), "claude-sonnet-5");
-    expect(out).toMatchObject({ kind: "invalid", error: "no parsed output: the reply hit max_tokens", final: true });
+    expect(out).toMatchObject({ kind: "invalid", error: "no parsed output: the reply hit max_tokens (5 output tokens, thinking included)", final: true });
     expect(sent).toHaveLength(1);
   });
 
@@ -247,7 +247,7 @@ describe("a constrained reply that breaks a rule the grammar cannot hold", () =>
 });
 
 describe("the effort setting", () => {
-  it("is left out for Haiku 4.5 (the default fast model), on both paths", async () => {
+  it("is left out for Haiku 4.5, which rejects it, on both paths", async () => {
     const schema = z.object({ title: z.string() });
     const { client, sent } = fakeClient([grammarError(), reply({ text: '{"title":"Engineer"}' })]);
     const out = await new AnthropicProvider(undefined, client).structured(request(schema), "claude-haiku-4-5-20251001");
@@ -256,7 +256,7 @@ describe("the effort setting", () => {
     expect(sent[1]).not.toHaveProperty("output_config");
   });
 
-  it("is sent to models that take it, high for Opus and medium for the rest", async () => {
+  it("is sent to models that take it when the runner names none: high for Opus and medium for the rest", async () => {
     const cases: Array<[string, string | undefined]> = [
       ["claude-opus-4-5", "high"],
       ["claude-opus-5-5", "high"],
@@ -369,9 +369,50 @@ describe("reading JSON from an unconstrained reply", () => {
     expect(withoutNulls({ a: null, b: 0, c: [{ d: null, e: "x" }, null], f: { g: null, h: false } })).toEqual({ b: 0, c: [{ e: "x" }, null], f: { h: false } });
   });
 
-  it("recognises only the grammar refusal", () => {
+  it("recognises only the grammar refusals", () => {
     expect(isGrammarTooLarge(grammarError())).toBe(true);
-    expect(isGrammarTooLarge(new Anthropic.BadRequestError(400, undefined, "other", new Headers()))).toBe(false);
+    const bad = (message: string) => new Anthropic.BadRequestError(400, undefined, message, new Headers());
+    // the documented limits that apply to every model, Haiku 5.5 and Sonnet 5.5 included
+    expect(isGrammarTooLarge(bad("Schemas contains too many optional parameters (40), which would make grammar compilation inefficient (limit: 24)"))).toBe(true);
+    expect(isGrammarTooLarge(bad("Schemas contains too many parameters with union types (18) (limit: 16)"))).toBe(true);
+    expect(isGrammarTooLarge(bad("Schema is too complex for compilation."))).toBe(true);
+    expect(isGrammarTooLarge(bad("other"))).toBe(false);
+    expect(isGrammarTooLarge(bad("This model does not support assistant message prefill. The conversation must end with a user message."))).toBe(false);
     expect(isGrammarTooLarge(new Error("The compiled grammar is too large"))).toBe(false);
+  });
+});
+
+describe("requests to Haiku 5.5 and Sonnet 5.5", () => {
+  const schema = z.object({ title: z.string() });
+
+  it("always end with a user turn: both models refuse an assistant turn last (a prefill)", async () => {
+    const { client, sent } = fakeClient([reply({ text: '{"title":"Engineer"}' })]);
+    const req = { ...request(schema), messages: [{ role: "user" as const, content: "A role." }, { role: "assistant" as const, content: "Tell me more." }] };
+    await new AnthropicProvider(undefined, client).structured(req, "claude-haiku-5-5");
+    expect(sent[0]!.messages!.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+    expect(sent[0]!.messages!.at(-1)!.content).toBe("Continue.");
+    // a conversation that already ends with the user is sent as it is
+    const plain = fakeClient([reply({ text: '{"title":"Engineer"}' })]);
+    await new AnthropicProvider(undefined, plain.client).structured(request(schema), "claude-haiku-5-5");
+    expect(plain.sent[0]!.messages).toEqual([{ role: "user", content: "Draft it." }]);
+  });
+
+  it("carry the effort the runner chose for the task, not one guessed from the model's name", async () => {
+    const { client, sent } = fakeClient([reply({ text: '{"title":"Engineer"}' })]);
+    await new AnthropicProvider(undefined, client).structured({ ...request(schema), effort: "high" }, "claude-sonnet-5-5");
+    expect(sent[0]!.output_config?.effort).toBe("high");
+  });
+
+  it("count cache writes, so the recorded cost includes them", async () => {
+    const answer = { ...reply({ text: '{"title":"Engineer"}' }), usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 3, cache_creation_input_tokens: 700 } };
+    const { client } = fakeClient([answer as Reply]);
+    const out = await new AnthropicProvider(undefined, client).structured(request(schema), "claude-haiku-5-5");
+    expect(out.usage).toEqual({ inputTokens: 10, outputTokens: 5, cacheReadTokens: 3, cacheWriteTokens: 700 });
+  });
+
+  it("say when thinking used the whole max_tokens before any text was written", async () => {
+    const { client } = fakeClient([reply({ stop: "max_tokens" })]);
+    const out = await new AnthropicProvider(undefined, client).structured(request(schema), "claude-sonnet-5-5");
+    expect(out).toMatchObject({ kind: "invalid", final: true, error: "no parsed output: the reply hit max_tokens (5 output tokens, thinking included, no text written)" });
   });
 });

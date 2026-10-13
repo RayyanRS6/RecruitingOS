@@ -64,8 +64,21 @@ function adBlock(ctx: IntakeContext): string | null {
 
 const AD_STAND_IN = "[I pasted a job ad. It is in your notes, between <job_ad> tags.]";
 
+/** The owner's turn when they changed the facts on the panel and wrote nothing: the facts block holds the change. */
+export const PANEL_CHANGE_NOTE = "[I changed the answers on the panel. The facts in your notes are up to date; carry on from them.]";
+
 function transcript(messages: IntakeMessage[]): Array<{ role: "user" | "assistant"; content: string }> {
   return messages.map((m) => ({ role: m.role === "owner" ? ("user" as const) : ("assistant" as const), content: m.kind === "pasted_ad" ? AD_STAND_IN : m.content }));
+}
+
+/**
+ * The conversation as turns for the next reply, always ending with the owner's: Haiku 5.5 and Sonnet 5.5 refuse a
+ * request that ends with an assistant turn, and a change made on the panel adds no line of its own.
+ */
+function conversation(messages: IntakeMessage[]): Array<{ role: "user" | "assistant"; content: string }> {
+  const turns = transcript(messages);
+  if (turns.length && turns[turns.length - 1]!.role === "assistant") turns.push({ role: "user", content: PANEL_CHANGE_NOTE });
+  return turns;
 }
 
 const INTAKE_SYSTEM = `You are the intake specialist of a recruiting department serving a small business owner who is not a recruiter. Your job is to turn what the owner says into a complete, calibrated role by asking the questions an experienced recruiter asks, in plain language, no jargon.
@@ -108,7 +121,7 @@ export const intakeTurnPrompt: PromptDef<IntakeContext, IntakeTurn> = {
       { text: `Facts established so far (JSON): ${JSON.stringify(ctx.facts)}` },
     ];
   },
-  messages: (ctx) => transcript(ctx.messages),
+  messages: (ctx) => conversation(ctx.messages),
 };
 
 const COMPILE_SYSTEM = `You compile the draft Role Packet from established facts. The packet is the single object every later step of hiring reads: posting, screening, interviews, scorecards, and the offer. Be complete, specific, and honest about assumptions.
