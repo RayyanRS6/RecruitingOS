@@ -10,7 +10,7 @@ import { interviewNewTimesText } from "../cancelled";
 import { activeCompanyOf } from "../rail";
 import { canDecideInterviews, canManageInterviews, canReadNotes, canSeeTalent } from "../roles";
 import { interviewCancelToast, newTimesToast } from "../talent-actions";
-import { againChoice, asksWhetherItTookPlace } from "../interview-defaults";
+import { againChoice, tookPlaceCard } from "../interview-defaults";
 import { MyNote, useNotes } from "./candidate-panel/notes";
 
 const STATUS_LABEL: Record<string, string> = { proposed: "Preparing times", scheduling: "Waiting on the candidate", scheduled: "Scheduled", completed: "Completed", cancelled: "Cancelled", no_show: "No-show", offer_expired: "Times expired" };
@@ -182,8 +182,9 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
               {manage ? <p className="small muted">Booking on their behalf is for when you agreed a time by phone; it is recorded as your action.</p> : null}
             </Card>
           ) : null}
-          {asksWhetherItTookPlace(i) && (manage || participant) ? (
+          {tookPlaceCard(i) !== "hidden" && (manage || participant) ? (
             <Card title="Did it take place?">
+              {tookPlaceCard(i) === "early" ? <Alert tone="caution">It has not started yet: it is booked for {when(i.startsAt, i.timezone)}. Answer once it has taken place; either answer ends the interview.</Alert> : null}
               <p className="small muted" style={{ marginBottom: 8 }}>Either answer keeps the record straight; a no-show is never held against anyone automatically.</p>
               <div className="row"><Button size="sm" variant="primary" loading={outcome.isPending} onClick={() => outcome.mutate("happened")}>Yes</Button><Button size="sm" loading={outcome.isPending} onClick={() => outcome.mutate("no_show_candidate")}>Candidate did not show</Button><Button size="sm" loading={outcome.isPending} onClick={() => outcome.mutate("no_show_interviewer")}>We did not show</Button></div>
             </Card>

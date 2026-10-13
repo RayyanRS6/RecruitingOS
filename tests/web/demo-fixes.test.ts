@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { asksWhetherItTookPlace } from "../../apps/web/src/interview-defaults";
+import { tookPlaceCard } from "../../apps/web/src/interview-defaults";
 import { eligibilityAnswerWords, notReadYetWords } from "../../apps/web/src/pages/candidate-panel/helpers";
 import { ACK_FOR_ANOTHER, ackIsForAnother, retryDeletionToast } from "../../apps/web/src/pages/Admin";
 import { meetingLinkFor } from "../../apps/web/src/pages/candidate-panel/needs-you";
@@ -143,15 +143,16 @@ describe("the admin console's alerts and retries", () => {
 
 describe("an interview booked for tomorrow", () => {
   const now = Date.parse("2026-10-13T22:40:00Z");
-  it("asks whether it took place only once it has started", () => {
-    expect(asksWhetherItTookPlace({ status: "scheduled", startsAt: "2026-10-14T16:00:00Z" }, now)).toBe(false);
-    expect(asksWhetherItTookPlace({ status: "scheduled", startsAt: "2026-10-13T22:40:00Z" }, now)).toBe(true);
-    expect(asksWhetherItTookPlace({ status: "scheduled", startsAt: null }, now)).toBe(false);
+  it("says it has not started yet beside \"Did it take place?\", and still takes an answer", () => {
+    expect(tookPlaceCard({ status: "scheduled", startsAt: "2026-10-14T16:00:00Z" }, now)).toBe("early");
+    expect(tookPlaceCard({ status: "scheduled", startsAt: "2026-10-13T22:40:00Z" }, now)).toBe("ask");
     // closed by the workflow's timer, still without an answer; never again once answered, or for one never booked
-    expect(asksWhetherItTookPlace({ status: "completed", startsAt: "2026-10-12T16:00:00Z" }, now)).toBe(true);
-    expect(asksWhetherItTookPlace({ status: "completed", outcome: "happened", startsAt: "2026-10-12T16:00:00Z" }, now)).toBe(false);
-    expect(asksWhetherItTookPlace({ status: "scheduling", startsAt: null }, now)).toBe(false);
-    expect(read("../../apps/web/src/pages/Interviews.tsx")).toContain("{asksWhetherItTookPlace(i) && (manage || participant) ? (");
+    expect(tookPlaceCard({ status: "completed", startsAt: "2026-10-12T16:00:00Z" }, now)).toBe("ask");
+    expect(tookPlaceCard({ status: "completed", outcome: "happened", startsAt: "2026-10-12T16:00:00Z" }, now)).toBe("hidden");
+    expect(tookPlaceCard({ status: "scheduling", startsAt: null }, now)).toBe("hidden");
+    const page = read("../../apps/web/src/pages/Interviews.tsx");
+    expect(page).toContain('{tookPlaceCard(i) !== "hidden" && (manage || participant) ? (');
+    expect(page).toContain("It has not started yet: it is booked for {when(i.startsAt, i.timezone)}. Answer once it has taken place; either answer ends the interview.");
   });
 });
 
