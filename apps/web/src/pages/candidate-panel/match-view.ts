@@ -56,7 +56,7 @@ export type MatchCardState = { kind: "hidden" } | { kind: "unread"; text: string
 export function matchCardState(a: ApplicationDetail): MatchCardState {
   const m = matchOf(a);
   if (m === undefined) return { kind: "hidden" };
-  if (!m) return { kind: "unread", text: a.assessments.length ? "No match score yet: there is no reading of this application against the role's requirements." : "No match score yet. It is worked out from the assistant's reading, which usually comes a minute or two after they apply." };
+  if (!m) return { kind: "unread", text: a.assessments.length ? "No match score yet: there is no reading of this application against the role's requirements." : a.stage === "ineligible" ? "No match score yet. It is worked out from the assistant's reading, which comes once someone keeps them in." : "No match score yet. It is worked out from the assistant's reading, which usually comes a minute or two after they apply." };
   if (m.score === null) return { kind: "nothing", text: m.coverage.words, m };
   return { kind: "scored", score: m.score, m };
 }

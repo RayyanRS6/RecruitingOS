@@ -31,6 +31,16 @@ export function againChoice(i: SheetInterview & { candidate: { stage: string }; 
   return null;
 }
 
+/**
+ * "Did it take place?" for a booked or finished interview with no answer yet. Before its start time the card says so
+ * ("early"): either answer ends the interview and moves the candidate to "decision needed", so a click on an interview
+ * booked for tomorrow is made knowingly. It stays answerable early, for an interview held sooner than booked.
+ */
+export function tookPlaceCard(i: { status: string; outcome?: string | null; startsAt: string | null }, now: number = Date.now()): "hidden" | "ask" | "early" {
+  if (i.outcome || !["scheduled", "completed"].includes(i.status)) return "hidden";
+  return i.status === "scheduled" && !!i.startsAt && Date.parse(i.startsAt) > now ? "early" : "ask";
+}
+
 export function defaultInterviewers(input: {
   roundKey: string | undefined;
   /** The rounds of the packet version the application runs on. */

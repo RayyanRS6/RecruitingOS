@@ -14,7 +14,7 @@ import { canDecline, canReadNotes } from "../../roles";
 import { callNotesState } from "../../screen-view";
 import { NOT_NOW_TOAST, declineConfirmText, decisionToast, holdDay, newTimesToast, outcomeNoticeText, outcomeToast, type PanelStep } from "../../talent-actions";
 import { CallNotesCard } from "./call-notes";
-import { DECLINE_REASONS, activeInterviews, holdDateBounds, whoDecides, type PanelTab } from "./helpers";
+import { DECLINE_REASONS, activeInterviews, eligibilityAnswerWords, holdDateBounds, whoDecides, type PanelTab } from "./helpers";
 import { FinalistCard, HireStep, OfferStep, WaitingOnCandidateCard } from "./hiring";
 import { useCandidateAction, useDraft, useFocusOnMount, useRefreshCandidate } from "./hooks";
 import { NotesSummary } from "./notes";
@@ -531,7 +531,7 @@ function EligibilityCard({ a, roleId }: { a: ApplicationDetail; roleId: string }
   const blocked = (x: ApplicationDetail["allowedActions"][number]) => a.blockedReasons[x] ?? "Not available at this step.";
   return (
     <Card needsYou title="Held on an eligibility answer">
-      <p className="small" style={{ color: "var(--ink-2)" }}>{a.eligibility?.failedRules.map((f) => `${f.question} → ${f.reason}`).join("; ")}</p>
+      <p className="small" style={{ color: "var(--ink-2)" }}>{a.eligibility?.failedRules.map((f) => `${f.question} → ${eligibilityAnswerWords(f)}`).join("; ")}</p>
       <p className="small muted" style={{ marginTop: 6 }}>Held for your decision; nothing has been sent to them about it. Keep them in if the answer was a mistake. You are reminded daily, and an ITS recruiter is brought in after three days. Say why if you keep them in; it is recorded and the system learns from it.</p>
       <Field label="Why keep them in?" htmlFor="ovnote"><input id="ovnote" className="input" value={overrideNote} onChange={(e) => setOverrideNote(e.target.value)} placeholder="For example: sitting the licensing exam next week" /></Field>
       <div className="row" style={{ marginTop: 10 }}>
@@ -556,7 +556,7 @@ function EligibilityDeclinedCard({ a, roleId }: { a: ApplicationDetail; roleId: 
   const can = a.allowedActions.includes("review_anyway");
   return (
     <Card title="Declined on an eligibility answer">
-      <p className="small" style={{ color: "var(--ink-2)" }}>{a.eligibility?.failedRules.map((f) => `${f.question} → ${f.reason}`).join("; ") || "An eligibility rule you authored was not met."}</p>
+      <p className="small" style={{ color: "var(--ink-2)" }}>{a.eligibility?.failedRules.map((f) => `${f.question} → ${eligibilityAnswerWords(f)}`).join("; ") || "An eligibility rule you authored was not met."}</p>
       <div className="row" style={{ marginTop: 10 }}><Button size="sm" disabled={!can} title={can ? "Reopens the application so it is looked at again" : a.blockedReasons.review_anyway ?? "Not available at this step."} loading={act.isPending} onClick={() => act.mutate({ action: "review_anyway", note: "Reopened by the owner" })}>Review anyway</Button></div>
     </Card>
   );

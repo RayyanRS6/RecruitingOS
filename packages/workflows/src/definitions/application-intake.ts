@@ -11,6 +11,13 @@ import { SUGGESTION_WINDOW_HOURS, settleSuggestion, waitForSuggestion, type Sugg
 type State = { applicationId: string; roleId: string; ineligibleUntil?: string; heldAt?: string; remindersSent?: number } & SuggestionState;
 
 /**
+ * A held application waits for its review timer or for a person's decision, whichever comes first: "Keep them in"
+ * signals `heldDecisionSignal(applicationId)`, so the reading starts at once instead of when the next reminder is due.
+ */
+export const HELD_DECISION_EVENT = "eligibility.decided";
+export const heldDecisionSignal = (applicationId: string): string => `${applicationId}:${HELD_DECISION_EVENT}`;
+
+/**
  * From "application received" to "ready for the owner" (docs/06 `application_intake`).
  * acknowledge → validate (quarantined résumé checked, scanned, moved) → extract → eligibility → (ineligible: hold for a person, remind, escalate an overdue review; never decline) | (eligible → assess)
  *
@@ -157,10 +164,13 @@ export const applicationIntake: WorkflowDefinition<State> = {
       if (g.outcome === "wait_for_approval") return { kind: "wait", wait: { kind: "human", approvalRequestId: g.approvalRequestId }, resumeStep: "ineligible_review" };
       const hours = Number(g.decision.params.reviewWindowHours ?? 24);
       const until = new Date(ctx.now.getTime() + hours * 3600_000).toISOString();
-      return { kind: "wait", wait: { kind: "timer", until, reason: "review timer for a held application (operational; never adverse action)" }, state: { ineligibleUntil: until, heldAt: ctx.now.toISOString(), remindersSent: 0 }, resumeStep: "ineligible_review" };
+      return { kind: "wait", wait: { kind: "event", eventTypes: [HELD_DECISION_EVENT], subjectId: app.id, until, reason: "review timer for a held application (operational; never adverse action)" }, state: { ineligibleUntil: until, heldAt: ctx.now.toISOString(), remindersSent: 0 }, resumeStep: "ineligible_review" };
     },
 
-    /** The review timer fired. Remind the team; after the escalation threshold bring in a recruiter. Nothing declines here. */
+    /**
+     * A person decided (the run goes on to the reading), or the review timer fired: remind the team, and after the
+     * escalation threshold bring in a recruiter. Nothing declines here.
+     */
     async ineligible_review(ctx) {
       const loaded = await load(ctx.q, ctx.state.applicationId);
       if (!loaded) return { kind: "fail", error: "application not found", retryable: false };
@@ -180,7 +190,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
         return { kind: "complete", state: { remindersSent } };
       }
       const until = new Date(ctx.now.getTime() + remindEvery * 3600_000).toISOString();
-      return { kind: "wait", wait: { kind: "timer", until, reason: "reminder for a held application" }, state: { remindersSent }, resumeStep: "ineligible_review" };
+      return { kind: "wait", wait: { kind: "event", eventTypes: [HELD_DECISION_EVENT], subjectId: app.id, until, reason: "reminder for a held application" }, state: { remindersSent }, resumeStep: "ineligible_review" };
     },
 
     /**

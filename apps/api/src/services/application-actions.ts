@@ -3,6 +3,7 @@ import { OWNER_STAGE_LABEL, OwnerStage, type ActiveMark, type Actor, type Applic
 import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, stageBeforeDecision, transition, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type Permission } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, companies, interviewFollowups, interviews, roles, screens, type Tx } from "@ros/db";
 import { DecisionMessageError, checkPersonalLine, decisionMessageDraft, decisionsWaitingApproval, newTimesDayWords, queueDecisionMessage, type PersonalLine } from "@ros/agents";
+import { heldDecisionSignal } from "@ros/workflows";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
 import type { Tenant } from "../middleware/session";
@@ -546,6 +547,8 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       if (!body.note?.trim()) throw new HttpError(400, "reason_required", "Say why you are keeping them in; it is recorded so the system can learn.");
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "eligible", by, actor, reason: body.note });
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "override_eligibility", note: body.note } });
+      // The held run goes on to the reading now, not when its next reminder is due.
+      await container.engine.signal(tx, { companyId: t.companyId, key: heldDecisionSignal(app.id) });
       return { ok: true, stage: "eligible", ownerStage: "new" };
     }
     case "review_anyway": {
