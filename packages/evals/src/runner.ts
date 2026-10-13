@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, messageLinePrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, triageAssessPrompt, type AiRuntime, type IntakeContext, type ScreenContext } from "@ros/ai";
 import {
-  INTAKE_COMPILE_MAX_TOKENS, REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, advanceProgress, basisFor, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, mergeFacts, mergeRevision, redactProtected, registerFakeHandlers,
+  INTAKE_COMPILE_MAX_TOKENS, REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, TRIAGE_READINGS, advanceProgress, assessmentSources, combineOutcomes, basisFor, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, mergeFacts, mergeRevision, redactProtected, registerFakeHandlers,
   resolveBenchmark, verifyQuotes, type BenchmarkResult,
 } from "@ros/agents";
 import type { EvidenceAssessment, IntakeFacts, IntakeMessage, RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
@@ -148,17 +148,28 @@ async function main() {
     const packet = await goldenPacket();
     const edge: (typeof results)[string]["cases"] = [];
     const hall: (typeof results)[string]["cases"] = [];
-    for (const c of triageEdgeCases) {
+    /**
+     * An application read as the app reads it (agents/src/triage.ts, assessApplication): the résumé extracted, then
+     * TRIAGE_READINGS readings side by side, each through the evidence rules, combined into the middle answer. `raws` are
+     * the model's own readings before any check, which the hallucination suite measures.
+     */
+    const assess = async (id: string, text: string | null, noResumeSummary?: string) => {
       let extraction = null;
-      if (c.resumeText) {
-        const ex = await runPrompt(q, rt, resumeExtractPrompt, { text: c.resumeText, filename: `${c.id}.txt` }, { companyId: null, inputRef: { eval: c.id } });
-        if (ex.ok) extraction = verifyQuotes(ex.output, c.resumeText);
+      if (text) {
+        const ex = await runPrompt(q, rt, resumeExtractPrompt, { text, filename: `${id}.txt` }, { companyId: null, inputRef: { eval: id } });
+        if (ex.ok) extraction = verifyQuotes(ex.output, text);
       }
-      const r = await runPrompt(q, rt, triageAssessPrompt, { packet, extraction, resumeText: c.resumeText, applicationAnswers: { eligibility: { rdh_license: "yes", schedule: "yes" }, noResumeSummary: c.noResumeSummary }, eligibility: { evaluatedAt: new Date().toISOString(), passed: true, failedRules: [], unverifiable: [] }, priorApplications: [] }, { companyId: null, inputRef: { eval: c.id } });
+      const applicationAnswers = { eligibility: { rdh_license: "yes", schedule: "yes" }, ...(noResumeSummary ? { noResumeSummary } : {}) };
+      const input = { packet, extraction, resumeText: text, applicationAnswers, eligibility: { evaluatedAt: new Date().toISOString(), passed: true, failedRules: [], unverifiable: [] }, priorApplications: [] };
+      const runs = await Promise.all(Array.from({ length: TRIAGE_READINGS }, (_, i) => runPrompt(q, rt, triageAssessPrompt, input, { companyId: null, inputRef: { eval: id, reading: i + 1 } })));
+      return { combined: combineOutcomes(runs, assessmentSources({ resumeText: text, applicationAnswers })), raws: runs.flatMap((r) => (r.ok ? [r.output] : [])) };
+    };
+    for (const c of triageEdgeCases) {
+      const { combined: r, raws } = await assess(c.id, c.resumeText, c.noResumeSummary);
       if (!r.ok) { edge.push({ id: c.id, pass: false, failures: [r.error] }); hall.push({ id: c.id, pass: false, failures: [r.error] }); continue; }
       const f = c.expect(r.output);
       edge.push({ id: c.id, pass: f.length === 0, failures: f });
-      const h = assessmentQuotesGrounded(r.output, { resume: c.resumeText ?? "", application: `${c.noResumeSummary ?? ""}\n{"rdh_license":"yes","schedule":"yes"}` });
+      const h = raws.flatMap((raw, i) => assessmentQuotesGrounded(raw, { resume: c.resumeText ?? "", application: `${c.noResumeSummary ?? ""}\n{"rdh_license":"yes","schedule":"yes"}` }).map((x) => `reading ${i + 1}: ${x}`));
       hall.push({ id: c.id, pass: h.length === 0, failures: h });
     }
     results["triage.edge_cases"] = { cases: edge, passRate: edge.filter((x) => x.pass).length / edge.length };
@@ -166,11 +177,7 @@ async function main() {
 
     // Bias pairs (docs/11): the same résumé but for a name, a graduation year or a zip code must read the same.
     const bias: (typeof results)[string]["cases"] = [];
-    const readResume = async (id: string, text: string) => {
-      const ex = await runPrompt(q, rt, resumeExtractPrompt, { text, filename: `${id}.txt` }, { companyId: null, inputRef: { eval: id } });
-      const extraction = ex.ok ? verifyQuotes(ex.output, text) : null;
-      return runPrompt(q, rt, triageAssessPrompt, { packet, extraction, resumeText: text, applicationAnswers: { eligibility: { rdh_license: "yes", schedule: "yes" } }, eligibility: { evaluatedAt: new Date().toISOString(), passed: true, failedRules: [], unverifiable: [] }, priorApplications: [] }, { companyId: null, inputRef: { eval: id } });
-    };
+    const readResume = async (id: string, text: string) => (await assess(id, text)).combined;
     for (const pair of biasPairs) {
       const ra = await readResume(`${pair.id}_a`, pair.a);
       const rb = await readResume(`${pair.id}_b`, pair.b);

@@ -45,10 +45,13 @@ describe("an effort set in the environment (the fairness run's choice)", () => {
 });
 
 describe("how hard each task thinks", () => {
-  it("starts Haiku 5.5 at medium, its default, and the Sonnet 5.5 draft at high", () => {
+  it("starts Haiku 5.5 at medium, its default, the Sonnet 5.5 draft at high, and the two candidate readings at high", () => {
     expect(TIER_EFFORT).toEqual({ judgment: "high", standard: "medium", fast: "medium" });
     expect(effortForTask("intake.compile")).toBe("high");
-    expect(effortForTask("triage.assess")).toBe("medium");
+    expect(effortForTask("intake.turn")).toBe("medium");
     expect(effortForTask("resume.extract")).toBe("medium");
+    // the fairness runs (14 Oct 2026): twin résumés read and scored the same at high
+    expect(effortForTask("triage.assess")).toBe("high");
+    expect(effortForTask("screen.assess")).toBe("high");
   });
 });

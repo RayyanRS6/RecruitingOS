@@ -86,6 +86,13 @@ export function modelForTask(task: TaskKey, table: ModelTable): string {
   return table[TASK_TIER[task]];
 }
 
+/**
+ * Tasks that think harder than their tier. Anthropic's guidance for Haiku 5.5 is high for strict instruction following,
+ * and the fairness runs (14 Oct 2026) bore it out: at high, twin résumés read and scored the same, where medium and
+ * Sonnet 5.5 at either level moved by 5 to 6 points. Both readings of a candidate run there; it costs a fraction of a cent.
+ */
+export const TASK_EFFORT: Partial<Record<TaskKey, Effort>> = { "triage.assess": "high", "screen.assess": "high" };
+
 export function effortForTask(task: TaskKey): Effort {
-  return TIER_EFFORT[TASK_TIER[task]];
+  return TASK_EFFORT[task] ?? TIER_EFFORT[TASK_TIER[task]];
 }
