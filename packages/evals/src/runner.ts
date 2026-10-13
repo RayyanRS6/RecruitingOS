@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, messageLinePrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, triageAssessPrompt, type AiRuntime, type IntakeContext, type ScreenContext } from "@ros/ai";
 import {
-  INTAKE_COMPILE_MAX_TOKENS, REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, TRIAGE_READINGS, advanceProgress, assessmentSources, combineOutcomes, basisFor, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, mergeFacts, mergeRevision, redactProtected, registerFakeHandlers,
+  INTAKE_COMPILE_MAX_TOKENS, REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, TRIAGE_READINGS, advanceProgress, assessmentSources, combineOutcomes, credentialMustHaves, basisFor, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, mergeFacts, mergeRevision, redactProtected, registerFakeHandlers,
   resolveBenchmark, verifyQuotes, type BenchmarkResult,
 } from "@ros/agents";
 import type { EvidenceAssessment, IntakeFacts, IntakeMessage, RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
@@ -162,7 +162,7 @@ async function main() {
       const applicationAnswers = { eligibility: { rdh_license: "yes", schedule: "yes" }, ...(noResumeSummary ? { noResumeSummary } : {}) };
       const input = { packet, extraction, resumeText: text, applicationAnswers, eligibility: { evaluatedAt: new Date().toISOString(), passed: true, failedRules: [], unverifiable: [] }, priorApplications: [] };
       const runs = await Promise.all(Array.from({ length: TRIAGE_READINGS }, (_, i) => runPrompt(q, rt, triageAssessPrompt, input, { companyId: null, inputRef: { eval: id, reading: i + 1 } })));
-      return { combined: combineOutcomes(runs, assessmentSources({ resumeText: text, applicationAnswers })), raws: runs.flatMap((r) => (r.ok ? [r.output] : [])) };
+      return { combined: combineOutcomes(runs, assessmentSources({ resumeText: text, applicationAnswers }), credentialMustHaves(packet)), raws: runs.flatMap((r) => (r.ok ? [r.output] : [])) };
     };
     for (const c of triageEdgeCases) {
       const { combined: r, raws } = await assess(c.id, c.resumeText, c.noResumeSummary);
