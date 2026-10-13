@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ALLOWED_MODELS, TASK_TIER, TIER_EFFORT, effortForTask, modelForTask, modelTableFromEnv } from "./routing";
+import { ALLOWED_MODELS, TASK_TIER, TIER_EFFORT, effortForTask, effortsFromEnv, modelForTask, modelTableFromEnv } from "./routing";
 import type { TaskKey } from "./types";
 
 /**
@@ -36,11 +36,22 @@ describe("which model each task runs on", () => {
   });
 });
 
+describe("an effort set in the environment (the fairness run's choice)", () => {
+  it("takes low, medium or high per tier, an empty value as unset, and refuses anything else", () => {
+    expect(effortsFromEnv({ AI_EFFORT_STANDARD: "high", AI_EFFORT_FAST: "" })).toEqual({ standard: "high" });
+    expect(effortsFromEnv({})).toEqual({});
+    expect(() => effortsFromEnv({ AI_EFFORT_JUDGMENT: "max" })).toThrow("AI_EFFORT_JUDGMENT=max is not an effort: use low, medium, high");
+  });
+});
+
 describe("how hard each task thinks", () => {
-  it("starts Haiku 5.5 at medium, its default, and the Sonnet 5.5 draft at high", () => {
+  it("starts Haiku 5.5 at medium, its default, the Sonnet 5.5 draft at high, and the two candidate readings at high", () => {
     expect(TIER_EFFORT).toEqual({ judgment: "high", standard: "medium", fast: "medium" });
     expect(effortForTask("intake.compile")).toBe("high");
-    expect(effortForTask("triage.assess")).toBe("medium");
+    expect(effortForTask("intake.turn")).toBe("medium");
     expect(effortForTask("resume.extract")).toBe("medium");
+    // the fairness runs (14 Oct 2026): twin résumés read and scored the same at high
+    expect(effortForTask("triage.assess")).toBe("high");
+    expect(effortForTask("screen.assess")).toBe("high");
   });
 });

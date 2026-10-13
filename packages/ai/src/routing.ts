@@ -46,7 +46,25 @@ export const TASK_TIER: Record<TaskKey, Tier> = {
  * Sonnet 5.5 at high for knowledge work. Thinking counts toward max_tokens and is billed as output, so a tier moves off
  * these only when the evaluations show the gain.
  */
-export const TIER_EFFORT: Record<Tier, "low" | "medium" | "high"> = { judgment: "high", standard: "medium", fast: "medium" };
+export type Effort = "low" | "medium" | "high";
+export const TIER_EFFORT: Record<Tier, Effort> = { judgment: "high", standard: "medium", fast: "medium" };
+
+const EFFORTS: readonly Effort[] = ["low", "medium", "high"];
+
+/**
+ * A tier's effort named in the environment (AI_EFFORT_JUDGMENT, AI_EFFORT_STANDARD, AI_EFFORT_FAST), for measuring one
+ * against another: the fairness run sets it from its "screening effort" choice. Empty is unset; anything else is refused.
+ */
+export function effortsFromEnv(env: Record<string, string | undefined> = process.env): Partial<Record<Tier, Effort>> {
+  const out: Partial<Record<Tier, Effort>> = {};
+  for (const [tier, name] of [["judgment", "AI_EFFORT_JUDGMENT"], ["standard", "AI_EFFORT_STANDARD"], ["fast", "AI_EFFORT_FAST"]] as const) {
+    const value = env[name]?.trim();
+    if (!value) continue;
+    if (!(EFFORTS as readonly string[]).includes(value)) throw new Error(`${name}=${value} is not an effort: use ${EFFORTS.join(", ")}`);
+    out[tier] = value as Effort;
+  }
+  return out;
+}
 
 /** A runtime's model per tier: allowed models in production, "fake" with the deterministic provider in tests. */
 export type ModelTable = Record<Tier, string>;
@@ -68,6 +86,13 @@ export function modelForTask(task: TaskKey, table: ModelTable): string {
   return table[TASK_TIER[task]];
 }
 
-export function effortForTask(task: TaskKey): "low" | "medium" | "high" {
-  return TIER_EFFORT[TASK_TIER[task]];
+/**
+ * Tasks that think harder than their tier. Anthropic's guidance for Haiku 5.5 is high for strict instruction following,
+ * and the fairness runs (14 Oct 2026) bore it out: at high, twin résumés read and scored the same, where medium and
+ * Sonnet 5.5 at either level moved by 5 to 6 points. Both readings of a candidate run there; it costs a fraction of a cent.
+ */
+export const TASK_EFFORT: Partial<Record<TaskKey, Effort>> = { "triage.assess": "high", "screen.assess": "high" };
+
+export function effortForTask(task: TaskKey): Effort {
+  return TASK_EFFORT[task] ?? TIER_EFFORT[TASK_TIER[task]];
 }

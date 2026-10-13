@@ -42,11 +42,20 @@ function runtime(results: Array<StructuredResult<Draft>>, opts: { id?: string; m
 }
 
 describe("the models and effort the runner asks for", () => {
-  it("sends each task's tier effort: high for the draft, medium for the rest", async () => {
-    const { rt, requests } = runtime([ok, ok]);
+  it("sends each task's effort: high for the draft and the candidate reading, medium for the rest", async () => {
+    const { rt, requests } = runtime([ok, ok, ok]);
     await callPrompt(rt, prompt, null, { companyId: null });
     await callPrompt(rt, { ...prompt, task: "triage.assess" }, null, { companyId: null });
-    expect(requests.map((r) => r.effort)).toEqual(["high", "medium"]);
+    await callPrompt(rt, { ...prompt, task: "intake.turn" }, null, { companyId: null });
+    expect(requests.map((r) => r.effort)).toEqual(["high", "high", "medium"]);
+  });
+
+  it("sends a tier's effort from the environment instead, when the runtime carries one", async () => {
+    const { rt, requests } = runtime([ok, ok]);
+    const tuned: AiRuntime = { ...rt, efforts: { standard: "low" } };
+    await callPrompt(tuned, { ...prompt, task: "triage.assess" }, null, { companyId: null });
+    await callPrompt(tuned, { ...prompt, task: "resume.extract" }, null, { companyId: null });
+    expect(requests.map((r) => r.effort)).toEqual(["low", "medium"]);
   });
 
   it("never sends the real provider a model outside Haiku 5.5 and Sonnet 5.5, whatever runtime was built", async () => {

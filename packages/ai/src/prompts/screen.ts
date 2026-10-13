@@ -1,5 +1,5 @@
 import { ScreenAssessment, ScreenTurn, type RolePacket, type ScreenChannel, type ScreenProgress, type ScreenTranscriptEntry } from "@ros/contracts";
-import { FAIRNESS_RULES, type PromptDef } from "./registry";
+import { FAIRNESS_RULES, FINDING_RULES, type PromptDef } from "./registry";
 
 export type ScreenContext = {
   company: { name: string };
@@ -106,6 +106,8 @@ const ASSESS_SYSTEM = `You write the scorecard for a completed screening convers
 Lines marked "recruiter note" are a recruiter's notes from a phone call with the candidate, not the candidate's own words: never quote them as the candidate (source "screen"). A finding that rests on them uses source "recruiter_note" with the note's exact words as the quote; it can support "yes" or "partially", never a must-have "no".
 A question the candidate skipped (listed in progress.declined) is unknown: answered false, meetsModelAnswer "unknown", never a concern and never held against them.
 
+${FINDING_RULES}
+
 ${FAIRNESS_RULES}`;
 
 /** What the model is asked for: the scorecard without `secondaryScore` (plan 0.9); the model never writes a number. */
@@ -114,9 +116,11 @@ export const ScreenAssessModelOutput = ScreenAssessment.omit({ secondaryScore: t
 // Version 2 (plan 0.9): must-have findings with quotes, a "no" only on the candidate's words, and no number.
 // Version 3 (plan Wave E): recruiter call notes kept apart from the candidate's words, skipped questions unknown, and a
 // conversation that did not finish read for what it has.
+// Version 4 (fairness run on Haiku 5.5, 14 Oct 2026): the shared definitions of each finding (FINDING_RULES), and the
+// candidate called "the candidate" in the scorecard's own words.
 export const screenAssessPrompt: PromptDef<ScreenContext, ScreenAssessment> = {
   key: "screen.assess",
-  version: 3,
+  version: 4,
   task: "screen.assess",
   agent: "screening",
   schema: ScreenAssessModelOutput,

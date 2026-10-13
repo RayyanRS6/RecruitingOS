@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, messageLinePrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, triageAssessPrompt, type AiRuntime, type IntakeContext, type ScreenContext } from "@ros/ai";
 import {
-  INTAKE_COMPILE_MAX_TOKENS, REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, advanceProgress, basisFor, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, mergeFacts, mergeRevision, redactProtected, registerFakeHandlers,
+  INTAKE_COMPILE_MAX_TOKENS, REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, TRIAGE_READINGS, advanceProgress, assessmentSources, combineOutcomes, credentialMustHaves, basisFor, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, mergeFacts, mergeRevision, redactProtected, registerFakeHandlers,
   resolveBenchmark, verifyQuotes, type BenchmarkResult,
 } from "@ros/agents";
 import type { EvidenceAssessment, IntakeFacts, IntakeMessage, RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
@@ -39,7 +39,9 @@ async function main() {
     rt = await createRuntime(env, fake);
   } else rt = await createRuntime(env);
   const q = handle.db;
-  const results: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; costUsd?: number }>; passRate: number }> = {};
+  /** `notes`: what each reading decided, with its quotes, so a failed fairness case can be traced to the words. */
+  const results: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; costUsd?: number; notes?: string[] }>; passRate: number }> = {};
+  const findingsOf = (label: string, a: EvidenceAssessment) => `${label}: ${a.overall}; ${a.requirementFindings.map((x) => `${x.requirementKey}=${x.met}${x.evidence?.quote ? ` ("${x.evidence.quote}")` : ""}`).join("; ")} | skills: ${a.competencyFindings.map((x) => `${x.competencyKey}=${x.finding}${x.evidence?.quote ? ` ("${x.evidence.quote.slice(0, 50)}")` : ""}`).join("; ")}`;
 
   // The eval has no live wage service: the market check falls back to the playbook's table, as production does when the
   // service is down. The basis comes first (plan C2), and the pay the owner typed counts as confirmed.
@@ -146,17 +148,28 @@ async function main() {
     const packet = await goldenPacket();
     const edge: (typeof results)[string]["cases"] = [];
     const hall: (typeof results)[string]["cases"] = [];
-    for (const c of triageEdgeCases) {
+    /**
+     * An application read as the app reads it (agents/src/triage.ts, assessApplication): the résumé extracted, then
+     * TRIAGE_READINGS readings side by side, each through the evidence rules, combined into the middle answer. `raws` are
+     * the model's own readings before any check, which the hallucination suite measures.
+     */
+    const assess = async (id: string, text: string | null, noResumeSummary?: string) => {
       let extraction = null;
-      if (c.resumeText) {
-        const ex = await runPrompt(q, rt, resumeExtractPrompt, { text: c.resumeText, filename: `${c.id}.txt` }, { companyId: null, inputRef: { eval: c.id } });
-        if (ex.ok) extraction = verifyQuotes(ex.output, c.resumeText);
+      if (text) {
+        const ex = await runPrompt(q, rt, resumeExtractPrompt, { text, filename: `${id}.txt` }, { companyId: null, inputRef: { eval: id } });
+        if (ex.ok) extraction = verifyQuotes(ex.output, text);
       }
-      const r = await runPrompt(q, rt, triageAssessPrompt, { packet, extraction, resumeText: c.resumeText, applicationAnswers: { eligibility: { rdh_license: "yes", schedule: "yes" }, noResumeSummary: c.noResumeSummary }, eligibility: { evaluatedAt: new Date().toISOString(), passed: true, failedRules: [], unverifiable: [] }, priorApplications: [] }, { companyId: null, inputRef: { eval: c.id } });
+      const applicationAnswers = { eligibility: { rdh_license: "yes", schedule: "yes" }, ...(noResumeSummary ? { noResumeSummary } : {}) };
+      const input = { packet, extraction, resumeText: text, applicationAnswers, eligibility: { evaluatedAt: new Date().toISOString(), passed: true, failedRules: [], unverifiable: [] }, priorApplications: [] };
+      const runs = await Promise.all(Array.from({ length: TRIAGE_READINGS }, (_, i) => runPrompt(q, rt, triageAssessPrompt, input, { companyId: null, inputRef: { eval: id, reading: i + 1 } })));
+      return { combined: combineOutcomes(runs, assessmentSources({ resumeText: text, applicationAnswers }), credentialMustHaves(packet)), raws: runs.flatMap((r) => (r.ok ? [r.output] : [])) };
+    };
+    for (const c of triageEdgeCases) {
+      const { combined: r, raws } = await assess(c.id, c.resumeText, c.noResumeSummary);
       if (!r.ok) { edge.push({ id: c.id, pass: false, failures: [r.error] }); hall.push({ id: c.id, pass: false, failures: [r.error] }); continue; }
       const f = c.expect(r.output);
       edge.push({ id: c.id, pass: f.length === 0, failures: f });
-      const h = assessmentQuotesGrounded(r.output, { resume: c.resumeText ?? "", application: `${c.noResumeSummary ?? ""}\n{"rdh_license":"yes","schedule":"yes"}` });
+      const h = raws.flatMap((raw, i) => assessmentQuotesGrounded(raw, { resume: c.resumeText ?? "", application: `${c.noResumeSummary ?? ""}\n{"rdh_license":"yes","schedule":"yes"}` }).map((x) => `reading ${i + 1}: ${x}`));
       hall.push({ id: c.id, pass: h.length === 0, failures: h });
     }
     results["triage.edge_cases"] = { cases: edge, passRate: edge.filter((x) => x.pass).length / edge.length };
@@ -164,18 +177,14 @@ async function main() {
 
     // Bias pairs (docs/11): the same résumé but for a name, a graduation year or a zip code must read the same.
     const bias: (typeof results)[string]["cases"] = [];
-    const readResume = async (id: string, text: string) => {
-      const ex = await runPrompt(q, rt, resumeExtractPrompt, { text, filename: `${id}.txt` }, { companyId: null, inputRef: { eval: id } });
-      const extraction = ex.ok ? verifyQuotes(ex.output, text) : null;
-      return runPrompt(q, rt, triageAssessPrompt, { packet, extraction, resumeText: text, applicationAnswers: { eligibility: { rdh_license: "yes", schedule: "yes" } }, eligibility: { evaluatedAt: new Date().toISOString(), passed: true, failedRules: [], unverifiable: [] }, priorApplications: [] }, { companyId: null, inputRef: { eval: id } });
-    };
+    const readResume = async (id: string, text: string) => (await assess(id, text)).combined;
     for (const pair of biasPairs) {
       const ra = await readResume(`${pair.id}_a`, pair.a);
       const rb = await readResume(`${pair.id}_b`, pair.b);
       if (!ra.ok || !rb.ok) { bias.push({ id: pair.id, pass: false, failures: [ra.ok ? "" : ra.error, rb.ok ? "" : rb.error].filter(Boolean) }); continue; }
       // the pair must read the same and score the same: the match score is worked out from these findings (founder decision B2)
       const f = biasPairDifferences(pair, ra.output, rb.output, packet);
-      bias.push({ id: pair.id, pass: f.length === 0, failures: f });
+      bias.push({ id: pair.id, pass: f.length === 0, failures: f, notes: [findingsOf(pair.cues[0], ra.output), findingsOf(pair.cues[1], rb.output)] });
     }
     results["triage.bias_pairs"] = { cases: bias, passRate: bias.filter((x) => x.pass).length / bias.length };
 
@@ -190,7 +199,7 @@ async function main() {
         else failed = r.error;
       }
       const f = failed ? [failed] : consistencyDifferences(reads, packet);
-      steady.push({ id: c.id, pass: f.length === 0, failures: f });
+      steady.push({ id: c.id, pass: f.length === 0, failures: f, notes: reads.map((r, i) => findingsOf(`reading ${i + 1}`, r)) });
     }
     results["triage.consistency"] = { cases: steady, passRate: steady.filter((x) => x.pass).length / steady.length };
   }
@@ -317,7 +326,7 @@ async function main() {
   const dir = join(here, "..", "results");
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}-${rt.provider.id}.json`);
-  writeFileSync(file, JSON.stringify({ provider: rt.provider.id, models: rt.models, suites: onlySuites ?? "all", costUsd, calls, results }, null, 2));
+  writeFileSync(file, JSON.stringify({ provider: rt.provider.id, models: rt.models, efforts: rt.efforts ?? {}, suites: onlySuites ?? "all", costUsd, calls, results }, null, 2));
   console.log(`results: ${file}`);
   await handle.close();
   process.exit(ok ? 0 : 1);

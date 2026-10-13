@@ -8,12 +8,24 @@ name: fairness
 
 on:
   workflow_dispatch:
+    inputs:
+      screening_model:
+        description: "Model that screens the CVs (the app uses claude-haiku-5-5)"
+        type: choice
+        options: [claude-haiku-5-5, claude-sonnet-5-5]
+        default: claude-haiku-5-5
+      screening_effort:
+        description: "How hard it thinks while screening (app setting = what the app uses)"
+        type: choice
+        options: [app setting, low, medium, high]
+        default: app setting
 
 permissions:
   contents: read
 
+# One run at a time per branch and choice, so runs of different choices can be compared side by side.
 concurrency:
-  group: fairness
+  group: fairness-${{ github.ref }}-${{ inputs.screening_model }}-${{ inputs.screening_effort }}
   cancel-in-progress: false
 
 jobs:
@@ -48,6 +60,9 @@ jobs:
         env:
           AI_PROVIDER: anthropic
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Only the two allowed models are offered; the app refuses any other (packages/ai/src/routing.ts).
+          AI_MODEL_STANDARD: ${{ inputs.screening_model || 'claude-haiku-5-5' }}
+          AI_EFFORT_STANDARD: ${{ inputs.screening_effort != 'app setting' && inputs.screening_effort || '' }}
         run: pnpm --filter @ros/evals exec tsx src/runner.ts --suite resume,triage
 
       - name: Summary in plain words

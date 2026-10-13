@@ -1,12 +1,14 @@
 import { aiRuns, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import { estimateCostUsd } from "./pricing";
 import { promptHash, type PromptDef } from "./prompts/registry";
-import { ALLOWED_MODELS, effortForTask, isAllowedModel, modelForTask, modelTableFromEnv, type ModelTable } from "./routing";
-import type { AiProvider, StructuredResult } from "./types";
+import { ALLOWED_MODELS, TASK_TIER, effortForTask, effortsFromEnv, isAllowedModel, modelForTask, modelTableFromEnv, type Effort, type ModelTable } from "./routing";
+import type { AiProvider, StructuredResult, Tier } from "./types";
 
+/** `efforts`: a tier's effort when the environment sets one (AI_EFFORT_*), in place of TIER_EFFORT. */
 export type AiRuntime = {
   provider: AiProvider;
   models: ModelTable;
+  efforts?: Partial<Record<Tier, Effort>>;
 };
 
 export type RunOutcome<T> =
@@ -68,7 +70,7 @@ export async function callPrompt<TInput, TOutput>(rt: AiRuntime, prompt: PromptD
       schema: prompt.schema,
       inputRef: meta.inputRef ?? {},
       maxTokens: meta.maxTokens,
-      effort: effortForTask(prompt.task),
+      effort: rt.efforts?.[TASK_TIER[prompt.task]] ?? effortForTask(prompt.task),
       deadlineAt: meta.deadlineAt,
     };
     try {
@@ -154,14 +156,15 @@ function extractConfidence(output: unknown): string | null {
 export async function createRuntime(env: Record<string, string | undefined> = process.env, fake?: AiProvider): Promise<AiRuntime> {
   const providerId = env.AI_PROVIDER ?? "fake";
   const models = modelTableFromEnv(env);
+  const efforts = effortsFromEnv(env);
   if (providerId === "fake") {
     if (env.NODE_ENV === "production") throw new Error("AI_PROVIDER=fake is not allowed in production");
     if (!fake) throw new Error("fake provider requires an instance with registered handlers");
-    return { provider: fake, models: { judgment: "fake", standard: "fake", fast: "fake" } };
+    return { provider: fake, models: { judgment: "fake", standard: "fake", fast: "fake" }, efforts };
   }
   if (providerId === "anthropic") {
     const { AnthropicProvider } = await import("./providers/anthropic");
-    return { provider: new AnthropicProvider(env.ANTHROPIC_API_KEY), models };
+    return { provider: new AnthropicProvider(env.ANTHROPIC_API_KEY), models, efforts };
   }
   throw new Error(`unknown AI_PROVIDER ${providerId}`);
 }

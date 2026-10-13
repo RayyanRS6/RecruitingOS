@@ -1,5 +1,5 @@
 import { EvidenceAssessment, type EligibilityResult, type ResumeExtraction, type RolePacket } from "@ros/contracts";
-import { FAIRNESS_RULES, type PromptDef } from "./registry";
+import { FAIRNESS_RULES, FINDING_RULES, type PromptDef } from "./registry";
 
 export type TriageInput = {
   packet: RolePacket;
@@ -14,15 +14,17 @@ const TRIAGE_SYSTEM = `You are the triage specialist of a recruiting department.
 
 How to assess:
 - Read the resume text and the application. Every strength and concern must cite evidence: source "resume" or "application" with a verbatim quote (a contiguous excerpt of the source text). Quotes are verified in code; a quote that is not in the source is removed and the claim is discarded, so quote exactly. A claim with no quote is shown to the owner marked "no quote" and lowers what they can rely on.
-- requirementFindings: one entry per must-have (use the requirement key): met yes / partially / no / unknown, with evidence and a verbatim quote when yes, partially or no. Use "no" only when a quote shows the must-have is not met (for example a license listed as expired); when the text simply does not mention it, use "unknown" and add the question to unknowns. Code turns a "no" without a verified quote into "unknown".
-- competencyFindings: one entry per competency key: evidenced / partially_evidenced / not_evidenced / contradicted, with evidence when evidenced.
-- overall: "strong" when the must-haves are evidenced and several competencies are evidenced; "potential" when most must-haves are evidenced or the evidence is thin but relevant; "weak" ONLY when the evidence contradicts a must-have or shows the candidate does not do this kind of work; "unknown" when there is too little to say (no resume text, an unreadable file, or contradictions).
+- requirementFindings: one entry per must-have (use the requirement key), decided by the definitions below; when one is unknown, add the question to unknowns.
+- competencyFindings: one entry per competency key, decided by the definitions below.
+- overall: "strong" when the must-haves are evidenced and several competencies are evidenced; "potential" when most must-haves are evidenced or the evidence is thin but relevant; "weak" ONLY when the evidence contradicts a must-have or shows the candidate does not do this kind of work; "unknown" only when there is too little to say: no resume text and no written description of their work, an unreadable file, or contradictions. A written description of their work in the application is evidence: assess it like a short resume, quoting it with source "application".
 - Never mark "weak" for an employment gap, a career change, a non-traditional path, a missing degree, or being "overqualified". Overqualified is at most a concern with the reason stated. Contradictory information becomes an unknown, not a conclusion. Anomalies (possible AI-generated text, date inconsistencies) are listed under anomalies and have no effect on overall.
 - unknowns: the questions a screen should ask, each with why it matters for this role.
 - recommendation: "screen" when the candidate is eligible and overall is strong or potential; "hold" when overall is weak on evidence; "review_manually" when overall is unknown, the resume could not be read, or the information contradicts itself.
 - summary: two or three plain sentences an owner can read in ten seconds. rationale: why the recommendation, citing the findings.
 - confidenceReasons: one to four short plain phrases saying what drives the confidence level, written for an owner who is not a recruiter ("no resume, only the written summary", "two must-haves have no evidence", "the dates in the resume contradict each other", "the resume could not be read"). Leave the list empty only when confidence is high and nothing is missing.
 - Give no number or score of any kind; the findings are the assessment.
+
+${FINDING_RULES}
 
 ${FAIRNESS_RULES}`;
 
@@ -45,9 +47,12 @@ function packetBlock(p: RolePacket): string {
 }
 
 // Version 2 (plan 0.9): a must-have "no" needs a quote, and no number is requested.
+// Version 3 (fairness run on Haiku 5.5, 14 Oct 2026): written definitions of yes / partially / no / unknown, so the same
+// application reads the same each time (one résumé had scored 83, 71 and 67); a written description is evidence when
+// there is no resume; the candidate is "the candidate", never named, in the reading's own words.
 export const triageAssessPrompt: PromptDef<TriageInput, EvidenceAssessment> = {
   key: "triage.assess",
-  version: 2,
+  version: 3,
   task: "triage.assess",
   agent: "triage",
   schema: TriageModelOutput,
