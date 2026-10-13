@@ -298,6 +298,9 @@ export type FactsEdit = {
   summary: string[];
 };
 
+/** The most must-haves a role keeps: the packet holds six, and a card or the panel refuses a seventh. */
+export const MAX_MUST_HAVES = 6;
+
 const LIST_OF: Partial<Record<IntakeQuestion["field"], IntakeListFact>> = {
   responsibilities: "responsibilities",
   must_haves: "mustHaves",
@@ -334,7 +337,16 @@ const dedupe = (xs: string[]) => xs.filter((x, i) => xs.findIndex((y) => same(x,
 
 const EMPLOYMENT_WORDS: Array<[RegExp, string]> = [[/full/i, "full_time"], [/part/i, "part_time"], [/contract/i, "contract"], [/temp/i, "temporary"], [/per[\s_-]?diem/i, "per_diem"], [/intern/i, "internship"]];
 const REMOTE_WORDS: Array<[RegExp, string]> = [[/hybrid/i, "hybrid"], [/remote/i, "remote"], [/on[\s_-]?site|in[\s_-]?(?:office|person)/i, "onsite"]];
-const REASON_WORDS: Array<[RegExp, string]> = [[/new/i, "new_position"], [/replac|left|quit/i, "replacement"], [/grow/i, "growth"], [/season/i, "seasonal"], [/other/i, "other"]];
+const REASON_WORDS: Array<[RegExp, string]> = [[/replac|left|quit|backfill|resign|retir/i, "replacement"], [/new|first|dedicated|creat/i, "new_position"], [/grow|busier|capacity|expand|adding/i, "growth"], [/season/i, "seasonal"], [/other/i, "other"]];
+
+/**
+ * A card's answer as the role keeps it. The model is asked to make an option's value the words to store, but it sometimes
+ * writes a code instead ("rda_license", "mon_fri_days", "backfill" on staging, 13 Oct 2026), which then showed on the
+ * draft as the code. A value that looks like a code is replaced by the label the person actually ticked.
+ */
+export function storedAnswer(option: { label: string; value: string }): string {
+  return /^[a-z0-9]+(?:[_-][a-z0-9]+)*$/.test(option.value.trim()) && option.label.trim() ? option.label.trim() : option.value;
+}
 
 /** A plain word for a field the packet keeps as one of a few values ("Full time" is full_time); refused when it names none. */
 function oneOf(value: string, allowed: readonly string[], words: Array<[RegExp, string]>, what: string): string {
@@ -344,13 +356,48 @@ function oneOf(value: string, allowed: readonly string[], words: Array<[RegExp, 
   throw new IntakeEditError("invalid_value", `That is not a ${what} we know. Choose one of the options.`);
 }
 
-/** A start given as "asap" or "within_30_days" becomes a date, so the packet's timeline has one. */
+const COUNT_WORDS: Readonly<Record<string, number>> = { a: 1, an: 1, next: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
+const COUNT_WORD = Object.keys(COUNT_WORDS).sort((a, b) => b.length - a.length).join("|");
+const COUNT = `(\\d+|${COUNT_WORD})\\+?`;
+const UNIT = "(days?|weeks?|wks?|months?|mos?|years?|yrs?)";
+/**
+ * "2–4 weeks", "2 4 weeks" (a code's underscores read as spaces), "1 to 2 months", "a month", "30 days", "6+ wks", and "a
+ * week or two", where the second count takes the first one's unit. A range with a unit at each end ("3 days to 2 weeks")
+ * is two matches, so the pattern is global and every match is read.
+ */
+const LENGTH_OF_TIME = new RegExp(`\\b${COUNT}(?:\\s*(?:-|to|or)?\\s*\\b${COUNT})?\\s*${UNIT}\\b(?:\\s*(?:-|to|or)\\s*(\\d{1,2}|${COUNT_WORD})\\b(?!\\s*${UNIT}))?`, "g");
+const UNIT_DAYS: Readonly<Record<string, number>> = { d: 1, w: 7, m: 30, y: 365 };
+
+/**
+ * The days a length of time in words allows, reading the upper end of a range, since that is how long the person said
+ * they can wait: "Within 2–4 weeks" is 28, "1–2 months" 60 (a month is read as 30 days), "3 days to 2 weeks" 14, "a week
+ * or two" 14, "within_2_4_weeks" 28, "within_30_days" or a bare "30" 30. Null when the words name no length of time.
+ */
+export function daysWithin(text: string): number | null {
+  const t = text.toLowerCase().replace(/_/g, " ").replace(/[–—]/g, "-").trim();
+  const count = (w: string | undefined) => (w ? COUNT_WORDS[w] ?? Number(w) : 0);
+  const lengths = [...t.matchAll(LENGTH_OF_TIME)].map((m) => Math.max(count(m[1]), count(m[2]), count(m[4])) * UNIT_DAYS[m[3][0]]);
+  if (lengths.length) return Math.max(...lengths);
+  // A bare number is days, as the cards' codes have always meant it ("within_30"); a year such as 2027 is not.
+  const bare = t.match(/^(?:within|in|under)?\s*(\d+)$/);
+  return bare && Number(bare[1]) <= 365 ? Number(bare[1]) : null;
+}
+
+const ASAP_WORDS = /\b(?:asap|as soon as possible|immediately|right away)\b/i;
+
+/**
+ * A start given in words becomes a date, so the packet's timeline has one: "asap" (or "As soon as possible") is two weeks
+ * out and urgent; "Within 2–4 weeks" is four weeks out, not the first number read as days (staging, 13 Oct 2026: a start
+ * of tomorrow); a date (YYYY-MM-DD) stays as it is. Nothing is set when the words name no time.
+ */
 export function startDateFor(value: string, now: Date): { targetStartDate?: string; urgency?: string } {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return { targetStartDate: value };
-  const days = value === "asap" ? 14 : Number(value.match(/(\d+)/)?.[1] ?? NaN);
-  if (!Number.isFinite(days)) return {};
+  const v = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return { targetStartDate: v };
+  const asap = ASAP_WORDS.test(v);
+  const days = asap ? 14 : daysWithin(v);
+  if (days === null) return {};
   const d = new Date(now.getTime() + days * 86_400_000);
-  return { targetStartDate: d.toISOString().slice(0, 10), ...(value === "asap" ? { urgency: "high" } : {}) };
+  return { targetStartDate: d.toISOString().slice(0, 10), ...(asap ? { urgency: "high" } : {}) };
 }
 
 function emptyEdit(facts: IntakeFacts): FactsEdit {
@@ -392,7 +439,7 @@ function listSet(edit: FactsEdit, field: IntakeListFact, keep: string[], drop: s
   const f = edit.facts as Record<IntakeListFact, string[] | undefined>;
   const current = f[field] ?? [];
   const next = dedupe([...current.filter((x) => !drop.some((d) => same(d, x))), ...keep]);
-  if (field === "mustHaves" && next.length > 6) throw new IntakeEditError("too_many_must_haves", "Keep it to six must-haves; anything else can be a nice-to-have.");
+  if (field === "mustHaves" && next.length > MAX_MUST_HAVES) throw new IntakeEditError("too_many_must_haves", "Keep it to six must-haves; anything else can be a nice-to-have.");
   f[field] = next;
   for (const d of drop) if (current.some((x) => same(x, d))) edit.removed.push({ field, value: d });
   for (const k of keep) edit.restored.push({ field, value: k });
@@ -424,44 +471,65 @@ export function applyAnswers(facts: IntakeFacts, questions: IntakeQuestion[], an
     if (a.own.length && !q.allowOwn) throw new IntakeEditError("own_not_allowed", "Pick one of the choices on this card.");
     const own = screened(edit, q.field, a.own);
     const picked = a.selected.filter((v) => v !== SOMEONE_NEW);
-    // An offered answer the fairness check would refuse is never stored, even if a stale card still showed it.
-    const chosen = screened(edit, q.field, picked);
-    const values = [...chosen, ...own];
     const list = LIST_OF[q.field];
     if (list) {
+      // An offered answer the fairness check would refuse is never stored, even if a stale card still showed it.
+      const chosen = screened(edit, q.field, picked.map((v) => storedAnswer(offered.get(v)!)));
+      const values = [...chosen, ...own];
       const unticked = q.options.filter((o) => !a.selected.includes(o.value));
-      listSet(edit, list, values, unticked.map((o) => o.value));
+      listSet(edit, list, values, unticked.map(storedAnswer));
       const suggestions = edit.facts.suggestions ?? [];
-      for (const o of unticked) if (!suggestions.some((s) => s.field === q.field && same(s.text, o.value))) suggestions.push({ field: q.field, text: o.value, origin: o.origin });
+      for (const o of unticked) if (!suggestions.some((s) => s.field === q.field && same(s.text, storedAnswer(o)))) suggestions.push({ field: q.field, text: storedAnswer(o), origin: o.origin });
       edit.facts.suggestions = suggestions.filter((s) => !(s.field === q.field && values.some((v) => same(v, s.text))));
-      if (values.length) edit.summary.push(`${FIELD_LABEL[q.field]}: ${values.map((v) => offered.get(v)?.label ?? v).join("; ")}`);
+      if (values.length) edit.summary.push(`${FIELD_LABEL[q.field]}: ${values.join("; ")}`);
       continue;
     }
-    const value = values[0];
+    // The fairness check reads the words the person ticked, which is also what a text fact keeps.
+    const first = picked.map((v) => offered.get(v)!).find((o) => screened(edit, q.field, [storedAnswer(o)]).length > 0);
+    const value = first?.value ?? own[0];
     if (value === undefined) continue;
-    setText(edit, q.field, value, now);
-    edit.summary.push(`${FIELD_LABEL[q.field]}: ${offered.get(value)?.label ?? value}`);
+    setText(edit, q.field, value, now, first ? storedAnswer(first) : undefined);
+    edit.summary.push(`${FIELD_LABEL[q.field]}: ${first?.label ?? value}`);
   }
   return edit;
 }
 
-function setText(edit: FactsEdit, field: IntakeQuestion["field"], value: string, now: Date): void {
+/**
+ * Sets one fact from an answer. `value` is what was sent (an option's value, or words typed); `words`, for an offered
+ * option, is what the person read and ticked (`storedAnswer`). A fact kept as one of a few codes tries the value, then the
+ * words; a fact kept as text stores the words; a start becomes a date by `startDateFor` from the words ("Within 1 month"),
+ * or from the value ("asap", "within_30_days") when the words name no time.
+ */
+function setText(edit: FactsEdit, field: IntakeQuestion["field"], value: string, now: Date, words?: string): void {
   const f = edit.facts;
+  const text = words ?? value;
+  const pick = (allowed: readonly string[], list: Array<[RegExp, string]>, what: string): string => {
+    if (allowed.includes(value)) return value;
+    const hit = list.find(([re]) => re.test(value)) ?? (words ? list.find(([re]) => re.test(words)) : undefined);
+    if (hit) return hit[1];
+    return oneOf(text, allowed, list, what);
+  };
   switch (field) {
-    case "title": f.title = value; break;
-    case "location": f.locationText = value; break;
-    case "employment_type": f.employmentType = oneOf(value, EmploymentType.options, EMPLOYMENT_WORDS, "kind of job"); break;
-    case "schedule": f.schedule = value; break;
-    case "remote_policy": f.remotePolicy = oneOf(value, RemotePolicy.options, REMOTE_WORDS, "work model"); break;
+    case "title": f.title = text; break;
+    case "location": f.locationText = text; break;
+    case "employment_type": f.employmentType = pick(EmploymentType.options, EMPLOYMENT_WORDS, "kind of job"); break;
+    case "schedule": f.schedule = text; break;
+    case "remote_policy": f.remotePolicy = pick(RemotePolicy.options, REMOTE_WORDS, "work model"); break;
     case "reason_for_hire":
       if (HireReason.options.includes(value as never)) f.reason = value;
-      else { f.reason = REASON_WORDS.find(([re]) => re.test(value))?.[1] ?? "other"; f.reasonDetail = value; }
+      else { f.reason = REASON_WORDS.find(([re]) => re.test(value))?.[1] ?? (words ? REASON_WORDS.find(([re]) => re.test(words))?.[1] : undefined) ?? "other"; f.reasonDetail = text; }
       break;
-    case "compensation_basis": f.compensationBasis = oneOf(value, ["hourly", "salary"], [[/hour/i, "hourly"], [/salar|year|annual/i, "salary"]], "pay basis"); break;
-    case "timeline": Object.assign(f, startDateFor(value, now)); break;
-    case "what_failure_looks_like": f.whatFailureLooksLike = value; break;
-    case "benefits": f.benefits = value; break;
-    case "decision_maker": f.decisionMaker = value; f.decisionMakerUserId = undefined; break;
+    case "compensation_basis": f.compensationBasis = pick(["hourly", "salary"], [[/hour/i, "hourly"], [/salar|year|annual/i, "salary"]], "pay basis"); break;
+    case "timeline": {
+      // The words the person ticked come first: a code can be a bare number ("1" on "Within 1 month"), which reads as one
+      // day. The code is used when the words name no time ("Soon" on "within_30_days").
+      const fromWords = words ? startDateFor(words, now) : {};
+      Object.assign(f, fromWords.targetStartDate ? fromWords : startDateFor(value, now));
+      break;
+    }
+    case "what_failure_looks_like": f.whatFailureLooksLike = text; break;
+    case "benefits": f.benefits = text; break;
+    case "decision_maker": f.decisionMaker = text; f.decisionMakerUserId = undefined; break;
     default: break;
   }
 }
@@ -626,8 +694,13 @@ export function withoutServerOwned(facts: IntakeFacts): IntakeFacts {
   return out;
 }
 
-/** Facts as stored, with every list present (rows written before a field existed lack it). */
+/**
+ * Facts as stored, with every list present (rows written before a field existed lack it). Must-haves are kept to the
+ * first six: what the assistant reads from a conversation or a pasted ad is merged in without a limit, and a seventh
+ * would fail every draft, since the packet holds six. Reading them here caps what the panel shows and the draft is
+ * written from alike.
+ */
 export function normalizeFacts(facts: Partial<IntakeFacts> | null | undefined): IntakeFacts {
   const f = facts ?? {};
-  return { ...f, mustHaves: f.mustHaves ?? [], niceToHaves: f.niceToHaves ?? [], eligibilityNotes: f.eligibilityNotes ?? [], interviewers: f.interviewers ?? [], dealBreakers: f.dealBreakers ?? [], declinedCriteria: f.declinedCriteria ?? [] };
+  return { ...f, mustHaves: (f.mustHaves ?? []).slice(0, MAX_MUST_HAVES), niceToHaves: f.niceToHaves ?? [], eligibilityNotes: f.eligibilityNotes ?? [], interviewers: f.interviewers ?? [], dealBreakers: f.dealBreakers ?? [], declinedCriteria: f.declinedCriteria ?? [] };
 }

@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type { MessageStreamParams, TextBlockParam } from "@anthropic-ai/sdk/resources/messages/messages";
+import { z } from "zod";
 import type { AiProvider, StructuredRequest, StructuredResult, Usage } from "../types";
 
 /**
@@ -11,12 +12,51 @@ import type { AiProvider, StructuredRequest, StructuredResult, Usage } from "../
 const tooLargeForGrammar = new WeakSet<object>();
 
 /**
+ * The time budget of one `structured` call, every request in it together: a refused grammar request on a cold process,
+ * the reply, and its correction turn. The /api route on Vercel is stopped at 300 s (maxDuration), and a stopped route
+ * answers 504 and writes no ai_runs row. Ending the call at 270 s leaves the route time to record the run and answer
+ * with its own message, when this call is the route's only slow step. A route that runs two calls, or slow work before
+ * one, passes its own deadline (`deadlineAt`), and the call then ends `ROUTE_RESERVE_MS` before it if that is sooner.
+ * Every request is sent with the time that is left as its timeout and with a deadline signal, because the SDK's timeout
+ * only covers the wait for the reply to start, not the streamed reply itself.
+ */
+export const CALL_BUDGET_MS = 270_000;
+
+/** What a call leaves of its request's deadline for the route to record the run and answer: the same 30 s as above. */
+export const ROUTE_RESERVE_MS = 30_000;
+
+/**
+ * A correction turn starts only while this much of the budget is left. intake.compile, the slowest prompt, took about
+ * 110 s per request on staging (13 Oct 2026); a correction started with less time than that would be cut off anyway.
+ */
+export const CORRECTION_FLOOR_MS = 120_000;
+
+/**
  * The 400s the API returns when a schema is too complex to constrain decoding with. Seen on staging, 12 Oct 2026:
  * intake.turn "The compiled grammar is too large, which would cause performance issues" and intake.compile "Schemas
  * contains too many optional parameters (40), which would make grammar compilation inefficient ... (limit: 24)".
  */
 export function isGrammarTooLarge(err: unknown): boolean {
   return err instanceof Anthropic.BadRequestError && /grammar|too many optional parameters/i.test(err.message);
+}
+
+/** The lowest version, as major * 100 + minor, from which each model family takes an effort setting. */
+const EFFORT_FROM: Record<string, number> = { opus: 405, sonnet: 406, haiku: 505 };
+
+/**
+ * Whether a model takes output_config.effort: Opus 4.5 and later, Sonnet 4.6 and later, Haiku 5.5 and later, and every
+ * Fable or Mythos model. Haiku 4.5 (the default fast model), Sonnet 4.5 and older models answer a request that carries
+ * it with a 400. A model id this does not recognise gets no effort setting: the model then works at its own default,
+ * where sending one could fail every call. Reads ids with a date or a platform prefix too, such as
+ * claude-haiku-4-5-20251001 or anthropic.claude-opus-5-5.
+ */
+export function acceptsEffort(model: string): boolean {
+  const match = /claude-(opus|sonnet|haiku|fable|mythos)(?:-(\d+)(?:-(\d{1,2})(?!\d))?)?/.exec(model);
+  if (!match) return false;
+  const [, family, major, minor] = match;
+  if (family === "fable" || family === "mythos") return true;
+  if (!major) return false;
+  return Number(major) * 100 + Number(minor ?? 0) >= EFFORT_FROM[family];
 }
 
 /**
@@ -54,14 +94,29 @@ export function extractJson(text: string): unknown {
 }
 
 /**
+ * The JSON Schema written into the instructions of an unconstrained request. It is zod's own rendering, not the SDK's
+ * grammar version: that one turns a record (a rule's expectation, a scale's labels) into an object that may hold no
+ * keys at all, and moves limits such as a maximum count into a description. A model that followed that version would
+ * write {} where the prompt asks for {"days": [...]} or {"withinDays": 30}, and a revision could wipe a live role's days.
+ */
+export function instructionSchema(schema: StructuredRequest<unknown>["schema"]): string {
+  return JSON.stringify(z.toJSONSchema(schema, { reused: "ref" }));
+}
+
+/** What every request in one `structured` call shares: when it started and must end, the deadline signal, and the tokens used so far. */
+type CallState = { started: number; endsAt: number; signal: AbortSignal; usage: Usage };
+
+/**
  * The only file that imports the Anthropic SDK. Uses structured outputs (JSON-schema constrained), prompt caching on
  * the stable system blocks, and adaptive thinking (the model default). The request is typed against the SDK, so a
  * change in the SDK's request shape fails the typecheck instead of the first live call.
  *
  * Every request streams: the SDK refuses a non-streaming request whose max_tokens could take longer than ten minutes
- * (the draft asks for 24,000), and a stream keeps a long reply from tripping an idle timeout. When the API cannot
- * compile a prompt's schema into a grammar, the request is sent again without constrained decoding, with the schema
- * in the instructions, and the reply is parsed and validated here against the same schema.
+ * (the draft asks for 24,000), and a stream keeps a long reply from tripping an idle timeout. The schema goes to the API
+ * as a plain JSON-schema format, without the SDK's own parse step, so a reply that breaks a rule the grammar cannot
+ * express (a maximum count, a date pattern) is validated here and gets a correction turn instead of surfacing as a
+ * provider error. When the API cannot compile a prompt's schema into a grammar, the request is sent again without
+ * constrained decoding, with the schema in the instructions, and the reply is validated the same way.
  */
 export class AnthropicProvider implements AiProvider {
   readonly id = "anthropic";
@@ -75,103 +130,97 @@ export class AnthropicProvider implements AiProvider {
   async structured<T>(req: StructuredRequest<T>, model: string): Promise<StructuredResult<T>> {
     const started = Date.now();
     const system: TextBlockParam[] = req.system.map((b) => (b.cache ? { type: "text", text: b.text, cache_control: { type: "ephemeral" } } : { type: "text", text: b.text }));
-    const effort = req.effort ?? (model.includes("opus") ? "high" : "medium");
+    // Left out for models that reject it (Haiku 4.5 answers it with a 400); those run at their own default.
+    const effort = acceptsEffort(model) ? (req.effort ?? (model.includes("opus") ? "high" : "medium")) : undefined;
     const base = {
       model,
       max_tokens: req.maxTokens ?? 16000,
       system,
       messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
     };
-    const usageOf = (response: Anthropic.Message): Usage => ({
-      inputTokens: response.usage.input_tokens,
-      outputTokens: response.usage.output_tokens,
-      cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
-    });
+    const usage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+    // The call's own budget, or less when the HTTP request it serves must answer sooner (see CALL_BUDGET_MS).
+    const endsAt = Math.min(started + CALL_BUDGET_MS, req.deadlineAt === undefined ? Number.POSITIVE_INFINITY : req.deadlineAt - ROUTE_RESERVE_MS);
+    if (endsAt <= started) {
+      return { kind: "invalid", error: "provider error: the request had no time left for the model, so it was not asked", model, usage, latencyMs: 0, final: true };
+    }
+    // One deadline for the whole call: it stops whichever request is still running when the budget is spent.
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), endsAt - started);
+    const call: CallState = { started, endsAt, signal: deadline.signal, usage };
     try {
       if (!tooLargeForGrammar.has(req.schema)) {
         try {
-          const params = { ...base, output_config: { format: zodOutputFormat(req.schema), effort } } satisfies MessageStreamParams;
-          const response = await this.client.messages.stream(params).finalMessage();
-          const usage = usageOf(response);
-          const latencyMs = Date.now() - started;
-          if (response.stop_reason === "refusal") {
-            return { kind: "refused", reason: response.stop_details?.category ?? "refused", model, usage, latencyMs };
-          }
-          const parsed = response.parsed_output;
-          if (parsed === null || parsed === undefined) {
-            const text = response.content.map((c) => (c.type === "text" ? c.text : "")).join("");
-            return { kind: "invalid", error: response.stop_reason === "max_tokens" ? "no parsed output: the reply hit max_tokens" : "no parsed output", model, usage, latencyMs, rawText: text };
-          }
-          const check = req.schema.safeParse(parsed);
-          if (!check.success) {
-            return { kind: "invalid", error: check.error.message, model, usage, latencyMs, rawText: JSON.stringify(parsed).slice(0, 4000) };
-          }
-          return { kind: "ok", output: check.data, model, usage, latencyMs, raw: undefined };
+          const format = { type: "json_schema" as const, schema: zodOutputFormat(req.schema).schema };
+          const params = { ...base, output_config: effort ? { format, effort } : { format } } satisfies MessageStreamParams;
+          return await this.ask(req, params, "", call);
         } catch (err) {
           if (!isGrammarTooLarge(err)) throw err;
           tooLargeForGrammar.add(req.schema);
         }
       }
-      return await this.unconstrained(req, model, base, effort, started, usageOf);
+      const instruction: TextBlockParam = { type: "text", text: `Reply with exactly one JSON object and nothing else: no words before or after it and no code fence. Leave out an optional field you have nothing for rather than writing null. The object must validate against this JSON Schema:\n${instructionSchema(req.schema)}` };
+      const params = { ...base, system: [...system, instruction], ...(effort ? { output_config: { effort } } : {}) } satisfies MessageStreamParams;
+      return await this.ask(req, params, " (unconstrained)", call);
     } catch (err) {
-      const latencyMs = Date.now() - started;
-      const message = err instanceof Error ? err.message : String(err);
-      return { kind: "invalid", error: `provider error: ${message}`, model, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, latencyMs };
+      const message = deadline.signal.aborted ? `the model did not finish within ${Math.round((endsAt - started) / 1000)} seconds, so the call was stopped` : err instanceof Error ? err.message : String(err);
+      return { kind: "invalid", error: `provider error: ${message}`, model, usage, latencyMs: Date.now() - started, final: true };
+    } finally {
+      clearTimeout(timer);
     }
   }
 
   /**
-   * The same request without constrained decoding: the schema goes into the instructions and the reply is validated
-   * here. A reply that does not validate gets one correction turn, which quotes what was wrong; the second reply is
-   * final either way.
+   * Sends the request and validates the reply against the prompt's schema. A reply that does not validate gets one
+   * correction turn, which repeats the request (format included) with the reply and what was wrong with it added, as
+   * long as the budget leaves time for one; the second reply is final either way. Every invalid result is marked
+   * final, so the runner does not ask a third time. `label` names the path in the recorded error.
    */
-  private async unconstrained<T>(
-    req: StructuredRequest<T>,
-    model: string,
-    base: Pick<MessageStreamParams, "model" | "max_tokens" | "system" | "messages">,
-    effort: NonNullable<NonNullable<MessageStreamParams["output_config"]>["effort"]>,
-    started: number,
-    usageOf: (response: Anthropic.Message) => Usage,
-  ): Promise<StructuredResult<T>> {
-    const schema = JSON.stringify(zodOutputFormat(req.schema).schema);
-    const instruction: TextBlockParam = { type: "text", text: `Reply with exactly one JSON object and nothing else: no words before or after it and no code fence. Leave out an optional field you have nothing for rather than writing null. The object must validate against this JSON Schema:\n${schema}` };
-    const system = [...(base.system as TextBlockParam[]), instruction];
-    let messages = base.messages;
-    const usage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
-    let last: { error: string; rawText: string } = { error: "no reply", rawText: "" };
+  private async ask<T>(req: StructuredRequest<T>, params: MessageStreamParams, label: string, call: CallState): Promise<StructuredResult<T>> {
+    const { model } = params;
+    const { usage, started, endsAt } = call;
+    let messages = params.messages;
+    let last = { error: "no reply", rawText: "" };
     for (let attempt = 0; attempt < 2; attempt++) {
-      const params = { ...base, system, messages, output_config: { effort } } satisfies MessageStreamParams;
-      const response = await this.client.messages.stream(params).finalMessage();
-      const used = usageOf(response);
-      usage.inputTokens += used.inputTokens;
-      usage.outputTokens += used.outputTokens;
-      usage.cacheReadTokens += used.cacheReadTokens;
+      const left = Math.max(1, endsAt - Date.now());
+      const response = await this.client.messages.stream({ ...params, messages }, { timeout: left, signal: call.signal }).finalMessage();
+      usage.inputTokens += response.usage.input_tokens;
+      usage.outputTokens += response.usage.output_tokens;
+      usage.cacheReadTokens += response.usage.cache_read_input_tokens ?? 0;
       if (response.stop_reason === "refusal") {
         return { kind: "refused", reason: response.stop_details?.category ?? "refused", model, usage, latencyMs: Date.now() - started };
       }
       const text = response.content.map((c) => (c.type === "text" ? c.text : "")).join("");
       if (response.stop_reason === "max_tokens") {
         // A cut-off reply is not a formatting slip: asking again would be cut off the same way.
-        return { kind: "invalid", error: "no parsed output (unconstrained): the reply hit max_tokens", model, usage, latencyMs: Date.now() - started, rawText: text.slice(0, 4000) };
+        return { kind: "invalid", error: `no parsed output${label}: the reply hit max_tokens`, model, usage, latencyMs: Date.now() - started, rawText: text.slice(0, 4000), final: true };
       }
-      let problem: string;
-      try {
-        const value = extractJson(text);
-        const asWritten = req.schema.safeParse(value);
-        if (asWritten.success) return { kind: "ok", output: asWritten.data, model, usage, latencyMs: Date.now() - started, raw: undefined };
-        const tidied = req.schema.safeParse(withoutNulls(value));
-        if (tidied.success) return { kind: "ok", output: tidied.data, model, usage, latencyMs: Date.now() - started, raw: undefined };
-        problem = asWritten.error.message;
-      } catch (err) {
-        problem = err instanceof Error ? err.message : String(err);
+      const check = validate(req.schema, text);
+      if (check.ok) return { kind: "ok", output: check.data, model, usage, latencyMs: Date.now() - started, raw: undefined };
+      last = { error: `no valid output${label}: ${check.problem}`, rawText: text.slice(0, 4000) };
+      if (attempt === 0 && endsAt - Date.now() < CORRECTION_FLOOR_MS) {
+        return { kind: "invalid", error: `no valid output${label}, and too little time was left to ask for a correction: ${check.problem}`, model, usage, latencyMs: Date.now() - started, rawText: last.rawText, final: true };
       }
-      last = { error: `no valid output (unconstrained): ${problem}`, rawText: text.slice(0, 4000) };
       messages = [
-        ...base.messages,
+        ...params.messages,
         { role: "assistant", content: text || "(empty reply)" },
-        { role: "user", content: `That reply does not validate against the JSON Schema. What is wrong:\n${problem.slice(0, 2000)}\nReply again with only the corrected JSON object.` },
+        { role: "user", content: `That reply does not validate against the JSON Schema. What is wrong:\n${check.problem.slice(0, 2000)}\nReply again with only the corrected JSON object.` },
       ];
     }
-    return { kind: "invalid", error: last.error, model, usage, latencyMs: Date.now() - started, rawText: last.rawText };
+    return { kind: "invalid", error: last.error, model, usage, latencyMs: Date.now() - started, rawText: last.rawText, final: true };
+  }
+}
+
+/** The reply checked against the schema as written, then with null-valued keys dropped (see `withoutNulls`). */
+function validate<T>(schema: StructuredRequest<T>["schema"], text: string): { ok: true; data: T } | { ok: false; problem: string } {
+  try {
+    const value = extractJson(text);
+    const asWritten = schema.safeParse(value);
+    if (asWritten.success) return { ok: true, data: asWritten.data };
+    const tidied = schema.safeParse(withoutNulls(value));
+    if (tidied.success) return { ok: true, data: tidied.data };
+    return { ok: false, problem: asWritten.error.message };
+  } catch (err) {
+    return { ok: false, problem: err instanceof Error ? err.message : String(err) };
   }
 }

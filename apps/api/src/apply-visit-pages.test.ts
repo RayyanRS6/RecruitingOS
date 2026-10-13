@@ -5,6 +5,7 @@ import { aiRuns, applications, candidates, entitlements, notifications, screens,
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { SCREEN_BUSY_JS } from "./pages/candidate";
 import { statusTokenFor, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
@@ -37,6 +38,8 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     expect(r.status, path).toBe(200);
     return decode(await r.text());
   };
+  /** What each script element on a page runs. */
+  const scriptsOf = (html: string) => [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
   const mail = () => (container.integrations.email as FakeEmailAdapter).sent;
   const screenOf = async (token: string) => (await container.db.select().from(screens).where(eq(screens.token, token)))[0];
   const question = (key: string) => packet.screening.questions.find((q) => q.key === key)!;
@@ -128,9 +131,9 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     expect(html).toContain(`<form method="post" action="/c/screen/${mariaToken}/later"><button class="btn secondary" type="submit">Do this later</button></form>`);
     expect(html).toContain(`<a class="btn secondary" href="/c/screen/${mariaToken}/person">I'd rather talk to a person</a>`);
     expect(html).toMatch(/<p class="notice">[^<]*artificial intelligence/);
-    // nothing to type yet, no script, and the model was never asked to write an opening
+    // nothing to type yet, no script but the one that stops a second press, and the model was never asked to write an opening
     expect(html).not.toContain("<textarea");
-    expect(html).not.toContain("<script");
+    expect(scriptsOf(html)).toEqual([SCREEN_BUSY_JS]);
     expect((await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.turn"))).length).toBe(turns);
     // without the cookie (opened later from the email) the page says nothing about where the link went
     expect(await page(`/c/screen/${mariaToken}`)).not.toContain("Your application is sent.");
@@ -385,17 +388,19 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     expect((await screenOf(token)).transcript[first].content).toContain("Reply HUMAN at any time to reach a person.");
   });
 
-  it("the conversation pages need no script and every action is a plain form or link", async () => {
+  it("the conversation pages need no script: every action is a plain form or link, and the one script only stops a second press", async () => {
     const token = tokenOf(await apply({ first: "Wes", last: "Lund", email: "wes.lund@example.com" }));
     for (const path of [`/c/screen/${token}`, `/c/screen/${token}/person`]) {
       const html = await page(path);
-      expect(html, path).not.toContain("<script");
+      expect(scriptsOf(html), path).toEqual([SCREEN_BUSY_JS]);
       expect(html, path).not.toMatch(/ on[a-z]+="/);
       for (const m of html.matchAll(/<form\b([^>]*)>/g)) expect(m[1], path).toContain('method="post"');
     }
     await post(`/c/screen/${token}/start`);
     const html = await page(`/c/screen/${token}`);
-    expect(html).not.toContain("<script");
+    expect(scriptsOf(html)).toEqual([SCREEN_BUSY_JS]);
+    // the line that says an answer is on its way is there, empty, before anything is pressed
+    expect(html).toContain('<p class="sending" id="sending" role="status"></p>');
     expect(html).not.toMatch(/ style="/);
   });
 });

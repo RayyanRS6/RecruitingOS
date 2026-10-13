@@ -4,7 +4,7 @@ import {
   type Actor, type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeExtraction, type IntakeFacts, type IntakeFactsPatch, type IntakeMessage,
   type IntakeQuestion, type IntakeRefusal, type IntakeSessionView, type IntakeTurn, type PayBenchmark, type Playbook, type PlaybookRole, type RolePacket,
 } from "@ros/contracts";
-import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, runPromptDetached, type AiRuntime, type IntakeContext } from "@ros/ai";
+import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, routeDeadline, runPromptDetached, type AiRuntime, type IntakeContext } from "@ros/ai";
 import {
   DECIDER_ROLES, DRAFT_IT_WORDS, ESSENTIAL_LABEL, INTERVIEWERS_DEFAULT_NOTE, SOMEONE_NEW, applyAnswers, applyFactsPatch, basisFromText, dealBreakerOffer, draftFactsKey, emit,
   guardPacket, intakeReadiness, normalizeCriterion, normalizeFacts, payCard, payConfirmed, payKey, payTyped, screenCriterion, typedByOwner, typedCeiling, unresolvedFlags,
@@ -212,9 +212,10 @@ export type IntakeTurnOutcome = IntakeTurnOk | { error: string; aiRunId: string 
 /**
  * The cheap first read of a pasted ad (C5), once per draft, before the market check: the title, the place, the basis
  * and the pay it states go into the facts, so the job is benchmarked as itself. The pay read from an ad is never taken
- * as confirmed; the pay card asks the owner whether it is still current.
+ * as confirmed; the pay card asks the owner whether it is still current. `deadlineAt` is the request's, which the turn
+ * after it shares.
  */
-async function readPastedAd(db: Db, deps: IntakeDeps, input: { companyId: string; sessionId: string }): Promise<void> {
+async function readPastedAd(db: Db, deps: IntakeDeps, input: { companyId: string; sessionId: string }, deadlineAt: number): Promise<void> {
   const pending = await withTenant(db, input.companyId, async (q) => {
     const [s] = await q.select().from(intakeSessions).where(eq(intakeSessions.id, input.sessionId)).limit(1);
     const state = s ? stateOf(s) : null;
@@ -223,7 +224,7 @@ async function readPastedAd(db: Db, deps: IntakeDeps, input: { companyId: string
     return { text: s.messages[state.ad.messageIndex]?.content ?? "", companyName: company?.name ?? "the company" };
   });
   if (!pending) return;
-  const out = await runPromptDetached(db, deps.ai, intakeExtractPrompt, pending, { companyId: input.companyId, inputRef: { sessionId: input.sessionId, read: "pasted_ad" } });
+  const out = await runPromptDetached(db, deps.ai, intakeExtractPrompt, pending, { companyId: input.companyId, inputRef: { sessionId: input.sessionId, read: "pasted_ad" }, deadlineAt });
   await withTenant(db, input.companyId, async (q) => {
     const [s] = await q.select().from(intakeSessions).where(eq(intakeSessions.id, input.sessionId)).limit(1);
     if (!s) return;
@@ -271,8 +272,12 @@ export async function startIntakeSession(
   return session;
 }
 
-/** One owner message in (or none, when it was already recorded), one assistant reply out. Persists the transcript, the facts and the cards. */
+/**
+ * One owner message in (or none, when it was already recorded), one assistant reply out. Persists the transcript, the
+ * facts and the cards. A pasted ad is read first in the same request, so both model calls share the request's deadline.
+ */
 export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnInput): Promise<IntakeTurnOutcome> {
+  const deadlineAt = routeDeadline();
   const now = new Date().toISOString();
   await withTenant(db, input.companyId, async (q) => {
     const [session] = await q.select().from(intakeSessions).where(eq(intakeSessions.id, input.sessionId)).limit(1);
@@ -285,11 +290,11 @@ export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnI
     if (kind === "text" && DRAFT_IT_WORDS.test(input.message.content) && !state.draftRequestedAt) state.draftRequestedAt = now;
     await q.update(intakeSessions).set({ messages, serverState: state }).where(eq(intakeSessions.id, session.id));
   });
-  await readPastedAd(db, deps, input);
+  await readPastedAd(db, deps, input, deadlineAt);
   const inputs = await withTenant(db, input.companyId, (q) => loadIntakeInputs(q, input.companyId, input.sessionId));
   const bench = await resolveBenchmark(deps.comp, inputs);
   const turnNo = inputs.session.messages.filter((m) => m.role === "owner").length;
-  const out = await runPromptDetached(db, deps.ai, intakeTurnPrompt, contextFrom(inputs, bench), { companyId: input.companyId, inputRef: { sessionId: input.sessionId, turn: inputs.session.messages.length } });
+  const out = await runPromptDetached(db, deps.ai, intakeTurnPrompt, contextFrom(inputs, bench), { companyId: input.companyId, inputRef: { sessionId: input.sessionId, turn: inputs.session.messages.length }, deadlineAt });
   const agent: Actor = { kind: "agent", id: "intake", runId: out.runId };
   return withTenant(db, input.companyId, async (q) => {
     const [session] = await q.select().from(intakeSessions).where(eq(intakeSessions.id, input.sessionId)).limit(1);
@@ -423,9 +428,11 @@ async function setProgress(db: Db, companyId: string, sessionId: string, stage: 
  * turn. Each stage is recorded as it starts (benchmark, writing, then checking, which runs the checks and saves in one
  * transaction, then done) so the page can show real progress while it polls; the draft carries pay only once a person
  * set or confirmed it, then passes the packet guard. The answers the model wrote from are recorded as a key, so the page
- * can tell when they change afterwards.
+ * can tell when they change afterwards. The market check and the saves before the call count against the request's
+ * deadline, so the call ends in time for the route to answer.
  */
 export async function draftIntake(db: Db, deps: IntakeDeps, input: { companyId: string; sessionId: string; actor: Actor }): Promise<DraftOutcome> {
+  const deadlineAt = routeDeadline();
   await withTenant(db, input.companyId, async (q) => {
     const [s] = await q.select({ status: intakeSessions.status }).from(intakeSessions).where(eq(intakeSessions.id, input.sessionId)).limit(1);
     if (!s) throw new IntakeSessionError("not_found");
@@ -436,7 +443,7 @@ export async function draftIntake(db: Db, deps: IntakeDeps, input: { companyId: 
   const bench = await resolveBenchmark(deps.comp, inputs);
   await setProgress(db, input.companyId, input.sessionId, "writing");
   const ctx = contextFrom(inputs, bench);
-  const out = await runPromptDetached(db, deps.ai, intakeCompilePrompt, ctx, { companyId: input.companyId, inputRef: { sessionId: input.sessionId }, maxTokens: 24000 });
+  const out = await runPromptDetached(db, deps.ai, intakeCompilePrompt, ctx, { companyId: input.companyId, inputRef: { sessionId: input.sessionId }, maxTokens: 24000, deadlineAt });
   const agent: Actor = { kind: "agent", id: "intake", runId: out.runId };
   if (!out.ok) {
     await setProgress(db, input.companyId, input.sessionId, "failed");

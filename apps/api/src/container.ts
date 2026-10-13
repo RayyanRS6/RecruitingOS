@@ -15,6 +15,7 @@ import { registerSecretValue } from "@ros/core";
 import { UploadGrants } from "./uploads";
 import { HEALTH_CHECK_JOB_KIND, HOURLY_MS, MAINTENANCE_JOB_KIND, checkOperationalHealth, runMaintenance } from "./maintenance";
 import { checkScannerForProduction } from "./scanner-gate";
+import { checkEmailForProduction } from "./email-gate";
 import { reportError } from "./observability";
 import { jobFailureReport, stepFailureReport } from "./failure-reports";
 import { DAILY_MS, recurring } from "./recurring-jobs";
@@ -108,6 +109,8 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     }
     // The real-data gate (docs/readiness/20 blocker 8): a production worker on the fake scanner raises one standing alert (scanner-gate.ts).
     await checkScannerForProduction(handle.db, { nodeEnv: env.NODE_ENV, role, scannerStatus: integrations.scanner.status, scannerId: integrations.scanner.id });
+    // The same for email: production on the fake adapter sends nothing while the pages say it went, so one standing alert (email-gate.ts).
+    await checkEmailForProduction(handle.db, { nodeEnv: env.NODE_ENV, role, emailStatus: integrations.email.status, emailId: integrations.email.id });
     // Item 5 (18 Sep): every email send consults the do-not-send list first, whatever adapter is underneath. The list is held
     // in memory (loaded at boot, updated the moment it changes in this process, reloaded every minute for other processes) so
     // a send inside a database transaction never queries outside it.

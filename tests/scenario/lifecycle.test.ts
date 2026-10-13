@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { addBusinessHours } from "../../packages/core/src/business-hours";
 import { eq, and } from "drizzle-orm";
+import { intakeTurnPrompt } from "../../packages/ai/src/prompts/intake";
 import { aiRuns, applications, approvalRequests, assessments, auditRecords, communications, events, interventions, interviews, notifications, recruiterEscalations, rolePackets, roles, screens, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "../../apps/api/src/app";
@@ -61,7 +62,8 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     // AI did: one intake.turn run, logged with cost and prompt version
     const runs = await container.db.select().from(aiRuns).where(eq(aiRuns.task, "intake.turn"));
     expect(runs).toHaveLength(1);
-    expect(runs[0].promptVersion).toBe(3);
+    // the prompt's own version, so a new version of the intake prompt does not break the scenario
+    expect(runs[0].promptVersion).toBe(intakeTurnPrompt.version);
     expect(runs[0].status).toBe("ok");
     // events
     expect(await eventsOf("intake.started")).toHaveLength(1);

@@ -21,7 +21,7 @@ import { MUST_HAVES_SCORE_LINE, SCORE_WEIGHTS_LINE, checkedInLabel, editorFocusF
 import { CloseRoleCard, ClosingMessageCard } from "../components/ClosingMessage";
 import { AfterApproval } from "./AfterApproval";
 import { AcceptingSwitch, ClosedBanner, PostingTab, StillUpAlert } from "./RolePosting";
-import { ActivityTab, CandidatesSeeThis, InterviewPlanTab, PacketApprovalCard, PreferencesCard, RequirementList, workModelLabel } from "./RolePlan";
+import { ActivityTab, CandidatesSeeThis, InterviewPlanTab, PacketApprovalCard, PreferencesCard, RequirementList, catchUpInterval, waitingOnWorker, workModelLabel } from "./RolePlan";
 import { EditPacket } from "./RoleEditor";
 import { ReportTab } from "./RoleReport";
 import { CandidatePreview } from "./new-role/CandidatePreview";
@@ -44,7 +44,35 @@ function tabFrom(value: string | null): Tab {
 export function RoleDetail() {
   const { id } = useParams();
   const qc = useQueryClient();
-  const role = useQuery({ queryKey: ["role", id], queryFn: () => api.get<RoleDetailT>(`/api/v1/roles/${id}`) });
+  // The version this page approved: until the worker has opened the role (or made that version current), the page
+  // reads the role again. Just after "Ask for approval" it does the same until the approval request exists.
+  const [approvedVersion, setApprovedVersion] = useState<number | null>(null);
+  const waitingSince = useRef<number | null>(null);
+  const role = useQuery({
+    queryKey: ["role", id],
+    queryFn: () => api.get<RoleDetailT>(`/api/v1/roles/${id}`),
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data || !waitingOnWorker(data, approvedVersion)) {
+        waitingSince.current = null;
+        return false;
+      }
+      if (waitingSince.current === null) waitingSince.current = Date.now();
+      return catchUpInterval(true, waitingSince.current, Date.now());
+    },
+  });
+  const waiting = !!role.data && waitingOnWorker(role.data, approvedVersion);
+  const wasWaiting = useRef(false);
+  useEffect(() => {
+    // Once the worker has caught up, the roles list (the rail's dot), Today and the Posting tab read the new state too.
+    if (wasWaiting.current && !waiting) {
+      setApprovedVersion(null);
+      qc.invalidateQueries({ queryKey: ["roles"] });
+      qc.invalidateQueries({ queryKey: ["postings", id] });
+      qc.invalidateQueries({ queryKey: ["brief"] });
+    }
+    wasWaiting.current = waiting;
+  }, [waiting, qc, id]);
   const [search] = useSearchParams();
   const navigate = useNavigate();
   const wantedTab = search.get("tab");
@@ -159,7 +187,7 @@ export function RoleDetail() {
       {closing ? <CloseRoleCard roleId={r.id} initialOutcome={closing.outcome} mayTell={canDecline(myRole)} onClose={() => setClosing(null)} /> : null}
       {closingMessage && !closing && r.status === "closed" && canDecline(myRole) ? <ClosingMessageCard roleId={r.id} onDone={() => { setClosingMessage(false); if (search.get("closingMessage")) navigate(`/roles/${r.id}`, { replace: true }); }} /> : null}
 
-      {p ? <PacketApprovalCard role={r} onEdit={() => openEditor()} canEdit={editPacket} canManage={manage} canSeePay={canSeePay(myRole)} showingProposed={shown === proposed && !!proposed} onShowProposed={setShowProposed} onApproved={(info) => { setShowProposed(false); setAfterApproval(info); }} /> : null}
+      {p ? <PacketApprovalCard role={r} onEdit={() => openEditor()} canEdit={editPacket} canManage={manage} canSeePay={canSeePay(myRole)} showingProposed={shown === proposed && !!proposed} onShowProposed={setShowProposed} onApproved={(info) => { setShowProposed(false); setAfterApproval(info); setApprovedVersion(r.packetApproval?.pending?.version ?? newestVersion); }} /> : null}
 
       {p ? (
         <>

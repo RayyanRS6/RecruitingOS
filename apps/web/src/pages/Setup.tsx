@@ -276,6 +276,16 @@ function actionLabel(a: string): string {
   } as Record<string, string>)[a] ?? a;
 }
 
+/**
+ * Whether "Connect Google Calendar" can work on this deployment: only with the real Google provider set up. The
+ * development stand-in ("fake") has no consent page in production, so its button led to a page that was not found, and
+ * Google without its keys ("not_connected") refuses the connection.
+ */
+export function calendarConnectOffered(providers: MyCalendar["providers"] | undefined): boolean {
+  return !!providers?.some((p) => p.key === "google" && p.status === "live");
+}
+export const CALENDAR_OFF_LINE = "Calendar connection is not switched on for this workspace yet. Interviews are scheduled with the times you set below.";
+
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const ZONES = ["America/Los_Angeles", "America/Denver", "America/Phoenix", "America/Chicago", "America/New_York"];
 
@@ -307,6 +317,8 @@ function MyAvailability() {
   });
   const disconnect = useMutation({ mutationFn: () => api.post("/api/v1/integrations/calendar/google/disconnect", { reason: "disconnected from Setup" }), onSuccess: async () => { toast("Disconnected. The credential is being deleted."); await qc.invalidateQueries({ queryKey: ["me", "calendar"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not disconnect.") });
   const c = q.data?.connection;
+  const connectable = calendarConnectOffered(q.data?.providers);
+  const connected = !!c && c.status !== "not_connected";
   const calParam = params.get("calendar");
   return (
     <Card title="My availability for interviews">
@@ -314,18 +326,18 @@ function MyAvailability() {
       <div className="stack" style={{ gap: 12 }}>
         <div>
           <h3 style={{ marginBottom: 6 }}>Calendar</h3>
-          {q.isLoading ? <Skeleton lines={2} /> : c && c.status !== "not_connected" ? (
+          {q.isLoading ? <Skeleton lines={2} /> : c && connected ? (
             <div className="row" style={{ justifyContent: "space-between" }}>
               <span>{c.provider} · {c.externalAccountId} <Pill size="sm" tone={c.status === "live" ? "good" : "caution"}>{c.status === "live" ? "connected" : c.status.replace(/_/g, " ")}</Pill>{c.lastError ? <span className="small muted"> {c.lastError}</span> : null}</span>
-              <div className="row">{c.status !== "live" ? <a className="btn secondary sm" href="/api/v1/integrations/calendar/google/connect">Reconnect</a> : null}<Button size="sm" variant="quiet" loading={disconnect.isPending} onClick={() => disconnect.mutate()}>Disconnect</Button></div>
+              <div className="row">{c.status !== "live" && connectable ? <a className="btn secondary sm" href="/api/v1/integrations/calendar/google/connect">Reconnect</a> : null}<Button size="sm" variant="quiet" loading={disconnect.isPending} onClick={() => disconnect.mutate()}>Disconnect</Button></div>
             </div>
-          ) : (
+          ) : connectable ? (
             <div className="row" style={{ justifyContent: "space-between" }}>
               <span className="small muted">Not connected. With a calendar, times are offered from your real free time; without one, your declared hours below are used.</span>
-              {q.data?.providers.some((p) => p.key === "google" && p.status !== "not_connected") ? <a className="btn primary sm" href="/api/v1/integrations/calendar/google/connect">Connect Google Calendar</a> : <span className="small muted">Google Calendar is not configured for this deployment yet.</span>}
+              <a className="btn primary sm" href="/api/v1/integrations/calendar/google/connect">Connect Google Calendar</a>
             </div>
-          )}
-          <p className="small muted" style={{ marginTop: 6 }}>We ask only for events on your calendar and free/busy times. Disconnecting deletes the credential; you can see when that is done.</p>
+          ) : <p className="small muted" style={{ margin: 0 }}>{CALENDAR_OFF_LINE}</p>}
+          {connectable || connected ? <p className="small muted" style={{ marginTop: 6 }}>We ask only for events on your calendar and free/busy times. Disconnecting deletes the credential; you can see when that is done.</p> : null}
         </div>
         <div>
           <h3 style={{ marginBottom: 6 }}>Declared hours</h3>
