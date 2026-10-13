@@ -270,11 +270,14 @@ describe("Slice 1 API", () => {
     // the owner overrides one before the window ends
     const ov = await json("POST", `/api/v1/applications/${jon.id}/actions`, { action: "override_eligibility", note: "She is sitting the exam next week." });
     expect(ov.status).toBe(200);
+    // overridden eligibility: assessed at once, not when the review timer is due, but the owner reviews (no automatic
+    // screen when a rule was overridden)
+    await container.drain();
+    expect((await container.db.select().from(applications).where(eq(applications.id, jon.id)))[0].stage).toBe("triaged");
     // time passes: advance the engine clock by 25 hours and drain the timers
     setClock(25 * 3600_000);
     await container.drain();
     const after = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
-    // overridden eligibility: assessed, but the owner reviews (no automatic screen when a rule was overridden)
     expect(after.find((x) => x.id === jon.id)!.stage).toBe("triaged");
     // Founder decision (correction 6): the timer is operational, never adverse action. Ana is still held and reminded; nothing was sent to her.
     expect(after.find((x) => x.id === ana.id)!.stage).toBe("ineligible");
