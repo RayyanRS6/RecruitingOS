@@ -31,6 +31,15 @@ export function againChoice(i: SheetInterview & { candidate: { stage: string }; 
   return null;
 }
 
+/**
+ * "Did it take place?" is asked once the start time has passed, never before: either answer ends the interview and
+ * moves the candidate to "decision needed", so a click on a booked interview tomorrow must not be possible.
+ */
+export function asksWhetherItTookPlace(i: { status: string; outcome?: string | null; startsAt: string | null }, now: number = Date.now()): boolean {
+  if (i.outcome || !["scheduled", "completed"].includes(i.status)) return false;
+  return i.status === "completed" || (!!i.startsAt && Date.parse(i.startsAt) <= now);
+}
+
 export function defaultInterviewers(input: {
   roundKey: string | undefined;
   /** The rounds of the packet version the application runs on. */

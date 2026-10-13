@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { asksWhetherItTookPlace } from "../../apps/web/src/interview-defaults";
 import { ACK_FOR_ANOTHER, ackIsForAnother, retryDeletionToast } from "../../apps/web/src/pages/Admin";
 import { meetingLinkFor } from "../../apps/web/src/pages/candidate-panel/needs-you";
 import { CATCH_UP_EVERY_MS, CATCH_UP_FOR_MS, catchUpInterval, waitingOnWorker } from "../../apps/web/src/pages/RolePlan";
@@ -136,5 +137,19 @@ describe("the admin console's alerts and retries", () => {
     // the business calendar starts on today's date in the administrator's own calendar, never the UTC date
     expect(admin).toContain("const todayKey = () => dayKey(new Date());");
     expect(admin).not.toContain("toISOString().slice(0, 10)");
+  });
+});
+
+describe("an interview booked for tomorrow", () => {
+  const now = Date.parse("2026-10-13T22:40:00Z");
+  it("asks whether it took place only once it has started", () => {
+    expect(asksWhetherItTookPlace({ status: "scheduled", startsAt: "2026-10-14T16:00:00Z" }, now)).toBe(false);
+    expect(asksWhetherItTookPlace({ status: "scheduled", startsAt: "2026-10-13T22:40:00Z" }, now)).toBe(true);
+    expect(asksWhetherItTookPlace({ status: "scheduled", startsAt: null }, now)).toBe(false);
+    // closed by the workflow's timer, still without an answer; never again once answered, or for one never booked
+    expect(asksWhetherItTookPlace({ status: "completed", startsAt: "2026-10-12T16:00:00Z" }, now)).toBe(true);
+    expect(asksWhetherItTookPlace({ status: "completed", outcome: "happened", startsAt: "2026-10-12T16:00:00Z" }, now)).toBe(false);
+    expect(asksWhetherItTookPlace({ status: "scheduling", startsAt: null }, now)).toBe(false);
+    expect(read("../../apps/web/src/pages/Interviews.tsx")).toContain("{asksWhetherItTookPlace(i) && (manage || participant) ? (");
   });
 });
