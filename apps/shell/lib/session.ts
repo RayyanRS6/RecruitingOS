@@ -1,6 +1,6 @@
 import { cache } from "react";
 import { cookies } from "next/headers";
-import { getShell } from "./container";
+import { getShellForRequest } from "./container";
 
 export type Me = {
   user: { id: string; email: string; name: string | null; platformRole: string };
@@ -19,7 +19,7 @@ export const getMe = cache(async (): Promise<Me | null> => {
   const jar = await cookies();
   const cookie = jar.getAll().map((c) => `${c.name}=${c.value}`).join("; ");
   if (!cookie) return null;
-  const { handler } = await getShell();
+  const { handler } = await getShellForRequest();
   const res = await handler(new Request("http://shell.local/api/v1/auth/me", { headers: { cookie } }));
   if (res.status !== 200) return null;
   return (await res.json()) as Me;

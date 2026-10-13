@@ -94,7 +94,9 @@ DATABASE_POOL_MAX=5
 `SCAN_PROVIDER` stays `fake` until the ClamAV service exists, and the worker says so with a standing `scanner.fake`
 alert in the console; then `SCAN_PROVIDER=clamav` and `CLAMAV_HOST=<the ClamAV service's private hostname>`, see
 "Running ClamAV on Railway" in `docs/runbooks/resume-storage.md`. Do not set `PORT`: Railway provides it, and the
-worker's health check listens on it.)
+worker's health check listens on it. `DATABASE_POOL_MAX` stays `5` here although the app on Vercel uses `3`: the
+worker connects as `ros_worker`, which has its own 15 Session pooler connections, and runs one job at a time, so even
+two overlapping deployments hold at most 10.)
 
 Secrets, one **New Variable** each, then **Seal**:
 
