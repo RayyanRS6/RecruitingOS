@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
 import { aiRuns, applications, approvalRequests, assessments, candidates, communications, documents, entitlements, events, jobs, postings, recruiterEscalations, roles, screens, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
+import { TRIAGE_READINGS } from "@ros/agents";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { useLaterApplyFlow } from "./test-helpers";
@@ -238,7 +239,8 @@ describe("Slice 1 API", () => {
     expect(comms[0].disclosureIncluded).toBe(true);
     const runs = await container.db.select().from(aiRuns).where(eq(aiRuns.task, "resume.extract"));
     expect(runs).toHaveLength(1);
-    expect(await container.db.select().from(aiRuns).where(eq(aiRuns.task, "triage.assess"))).toHaveLength(1);
+    // the application is read TRIAGE_READINGS times side by side, and the middle answer kept (fairness, 14 Oct 2026)
+    expect(await container.db.select().from(aiRuns).where(eq(aiRuns.task, "triage.assess"))).toHaveLength(TRIAGE_READINGS);
     expect(receipt).not.toContain(a.statusToken);
     expect(ack!.text).toContain(`/c/status/${a.statusToken}`);
     const status = await app.request(`/c/status/${a.statusToken}`);

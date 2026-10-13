@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { RolePacket } from "@ros/contracts";
 import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, RESUME_UNREADABLE_TEXT, anonymizeCandidate, buildEscalationContext, exportCandidateData } from "@ros/core";
-import { composeInterviewerBrief } from "@ros/agents";
+import { TRIAGE_READINGS, composeInterviewerBrief } from "@ros/agents";
 import { applications, assessments, auditRecords, candidates, events, screens, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
@@ -260,8 +260,8 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
   });
 
   it("when the assessment is unusable twice the owner is told to review, on the card and by notification, and nothing is hidden", async () => {
-    container.fake!.failNext("triage.assess", "invalid");
-    container.fake!.failNext("triage.assess", "invalid");
+    // every reading (TRIAGE_READINGS of them, each with the runner's one retry) unusable: one usable reading would do
+    for (let i = 0; i < TRIAGE_READINGS * 2; i++) container.fake!.failNext("triage.assess", "invalid");
     const a = await apply({ first: "Casey", last: "Morgan", email: "casey@example.com", resume: "Casey Morgan, RDH\nRegistered Dental Hygienist at Coastal Dental 2018 - present\nRDH license CA active\nPerio charting, Eaglesoft" });
     expect(a.stage).toBe("triaged");
     expect(a.latestAssessmentId).toBeNull();
@@ -290,8 +290,9 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: RolePacket } };
     const licence = role.currentPacket.packet.requirements.mustHaves.find((m) => /licen/i.test(m.text))!;
     const lapsed = "RDH license CA expired in 2021";
-    // a Potential reading whose own finding, quoted from the résumé, says the licence must-have is not met
-    container.fake!.scriptNext("triage.assess", { overall: "potential", confidence: "medium", confidenceReasons: [], summary: "Relevant hygiene work; the licence has lapsed.", strengths: [{ claim: "Works as a dental hygienist", evidence: { source: "resume", quote: "Dental Hygienist at Harbor Dental 2016 - present" } }], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: [{ requirementKey: licence.key, met: "no", evidence: { source: "resume", quote: lapsed } }], anomalies: [], recommendation: "screen", rationale: "Scripted for the consistency check." });
+    // a Potential reading whose own finding, quoted from the résumé, says the licence must-have is not met (every one of
+    // the TRIAGE_READINGS readings, so the middle answer is the same)
+    for (let i = 0; i < TRIAGE_READINGS; i++) container.fake!.scriptNext("triage.assess", { overall: "potential", confidence: "medium", confidenceReasons: [], summary: "Relevant hygiene work; the licence has lapsed.", strengths: [{ claim: "Works as a dental hygienist", evidence: { source: "resume", quote: "Dental Hygienist at Harbor Dental 2016 - present" } }], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: [{ requirementKey: licence.key, met: "no", evidence: { source: "resume", quote: lapsed } }], anomalies: [], recommendation: "screen", rationale: "Scripted for the consistency check." });
     const a = await apply({ first: "Uma", last: "Patel", email: "uma@example.com", resume: `Uma Patel\nDental Hygienist at Harbor Dental 2016 - present\n${lapsed}\nPeriodontal charting, Dentrix` });
     container.fake!.clearScripts();
     expect(a.stage).toBe("triaged");
