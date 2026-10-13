@@ -23,8 +23,9 @@ on:
 permissions:
   contents: read
 
+# One run at a time per branch and choice, so runs of different choices can be compared side by side.
 concurrency:
-  group: fairness
+  group: fairness-${{ github.ref }}-${{ inputs.screening_model }}-${{ inputs.screening_effort }}
   cancel-in-progress: false
 
 jobs:
