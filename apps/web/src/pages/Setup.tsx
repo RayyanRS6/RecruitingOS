@@ -8,6 +8,7 @@ import { useSearchParams } from "../nav";
 import { STILL_REVIEWING_LABEL, STILL_REVIEWING_NOTE, hasChoice, loosens, looseningQuestion, splitRules } from "../ai-rules";
 import { NEW_TIMES_SETUP, newTimesReadOnlyText, newTimesSavedNotice, newTimesSettingFrom, newTimesSettingText, pendingQuestion, workingDaysFrom, type NewTimesSaved } from "../cancelled";
 import { CAREERS_PAGE_WAITS, companyCheckOf } from "../company-check";
+import { VERTICALS } from "../company-setup";
 import { ABOUT_MAX, LOGO_TYPES, aboutCheckOf, aboutDraftOf, aboutProblem, logoProblem, logoUrlOf } from "../publishing";
 import { LEVELS, allowedLevels, type PolicyLevel } from "../policy-levels";
 import { ACCESS_DAYS, accessChip } from "../recruiter-access";
@@ -567,7 +568,7 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
           <dt>ITS check</dt><dd>{companyCheckOf(c) === "waiting" ? <Chip tone="caution">ITS is confirming your company</Chip> : <Chip tone="good">Confirmed</Chip>}</dd>
           <dt>Careers page</dt><dd><a href={`/careers/${c.slug}`} target="_blank" rel="noreferrer">/careers/{c.slug}</a>{companyCheckOf(c) === "waiting" ? <span className="small muted"> · {CAREERS_PAGE_WAITS}</span> : null}</dd>
           <dt>Website</dt><dd>{c.settings.website || <span className="muted">not set</span>}</dd>
-          <dt>Vertical</dt><dd>{c.vertical}</dd>
+          <dt>Business type</dt><dd>{VERTICALS.find(([v]) => v === c.vertical)?.[1] ?? c.vertical.replace(/_/g, " ")}</dd>
           <dt>Size</dt><dd>{c.sizeBand} employees</dd>
           <dt>Time zone</dt><dd>{c.timezone}</dd>
           <dt>Locations</dt><dd>{c.locations.map((l) => [l.city, l.region].filter(Boolean).join(", ")).join("; ")}</dd>
