@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { tookPlaceCard } from "../../apps/web/src/interview-defaults";
+import { eligibilityAnswerWords, notReadYetWords } from "../../apps/web/src/pages/candidate-panel/helpers";
 import { ACK_FOR_ANOTHER, ackIsForAnother, retryDeletionToast } from "../../apps/web/src/pages/Admin";
 import { meetingLinkFor } from "../../apps/web/src/pages/candidate-panel/needs-you";
 import { CATCH_UP_EVERY_MS, CATCH_UP_FOR_MS, catchUpInterval, waitingOnWorker } from "../../apps/web/src/pages/RolePlan";
@@ -136,5 +138,34 @@ describe("the admin console's alerts and retries", () => {
     // the business calendar starts on today's date in the administrator's own calendar, never the UTC date
     expect(admin).toContain("const todayKey = () => dayKey(new Date());");
     expect(admin).not.toContain("toISOString().slice(0, 10)");
+  });
+});
+
+describe("an interview booked for tomorrow", () => {
+  const now = Date.parse("2026-10-13T22:40:00Z");
+  it("says it has not started yet beside \"Did it take place?\", and still takes an answer", () => {
+    expect(tookPlaceCard({ status: "scheduled", startsAt: "2026-10-14T16:00:00Z" }, now)).toBe("early");
+    expect(tookPlaceCard({ status: "scheduled", startsAt: "2026-10-13T22:40:00Z" }, now)).toBe("ask");
+    // closed by the workflow's timer, still without an answer; never again once answered, or for one never booked
+    expect(tookPlaceCard({ status: "completed", startsAt: "2026-10-12T16:00:00Z" }, now)).toBe("ask");
+    expect(tookPlaceCard({ status: "completed", outcome: "happened", startsAt: "2026-10-12T16:00:00Z" }, now)).toBe("hidden");
+    expect(tookPlaceCard({ status: "scheduling", startsAt: null }, now)).toBe("hidden");
+    const page = read("../../apps/web/src/pages/Interviews.tsx");
+    expect(page).toContain('{tookPlaceCard(i) !== "hidden" && (manage || participant) ? (');
+    expect(page).toContain("It has not started yet: it is booked for {when(i.startsAt, i.timezone)}. Answer once it has taken place; either answer ends the interview.");
+  });
+});
+
+describe("someone held on an eligibility answer", () => {
+  it("names the question once, with what they answered", () => {
+    const question = "Do you hold a current California radiography (X-ray) certification?";
+    expect(eligibilityAnswerWords({ question, reason: `answered no to: ${question}` })).toBe("answered no");
+    expect(eligibilityAnswerWords({ question: "Can you start within 30 days?", reason: "cannot start within 30 days" })).toBe("cannot start within 30 days");
+    expect(eligibilityAnswerWords({ question: "Can you work Saturdays?", reason: "not available: Sat" })).toBe("not available: Sat");
+  });
+
+  it("never promises a reading in a minute or two: it comes once someone keeps them in", () => {
+    expect(notReadYetWords("ineligible")).toBe("The assistant reads this application once someone keeps them in.");
+    expect(notReadYetWords("received")).toContain("a minute or two");
   });
 });

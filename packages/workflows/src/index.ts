@@ -16,6 +16,7 @@ export * from "./types";
 export { WorkflowEngine };
 export { COMPANY_CHECK_WAIT_REASON, companyVerifiedSignal } from "./definitions/publish-role";
 export { ROLE_CLOSING_DATE_KEY, armClosingDate } from "./definitions/closing-date";
+export { heldDecisionSignal } from "./definitions/application-intake";
 export { NEW_TIMES_KEY, armNewTimes, cancelNewTimesRuns } from "./definitions/new-times";
 export { activeInterviewersOf, newTimesStoppedByTakeover, reopenForNewTimes, stopPreparedNewTimes, withdrawNewTimesInterview, type NewTimesOfferKind, type NewTimesVia, type PreparedStopReason, type ReopenRefusal, type ReopenResult } from "./new-times-reopen";
 export { ALERT_TEMPLATE, DIGEST_TEMPLATE, NOTIFICATION_DIGEST_KEY, emailNotifications, startNotificationDigest } from "./definitions/notification-digest";

@@ -100,6 +100,28 @@ describe("Supabase storage adapter (S3 protocol)", () => {
     expect(message).toBe("storage put failed with HTTP 500");
   });
 
+  it("asks for an uncompressed head, and reads the size from the first byte's range when a proxy drops the length", async () => {
+    const sizes: Record<string, number> = { "a/notes.txt": 838, "a/empty.txt": 0 };
+    const { fetch, seen } = fakeFetch((req) => {
+      const name = new URL(req.url).pathname.split("/resumes/")[1]!;
+      if (req.method === "HEAD") return new Response(null, { status: 200, headers: { "content-type": "text/plain" } });
+      if (name === "a/whole.txt") return new Response(new Uint8Array(17), { status: 200 });
+      if (name === "a/gone.txt") return new Response("", { status: 404 });
+      const size = sizes[name]!;
+      if (size === 0) return new Response("", { status: 416 });
+      return new Response(new Uint8Array(1), { status: 206, headers: { "content-range": `bytes 0-0/${size}` } });
+    });
+    const s = new SupabaseStorageAdapter({ ...cfg, fetch });
+    expect(await s.head("a/notes.txt")).toEqual({ size: 838, contentType: "text/plain" });
+    expect(seen[0]!.headers["accept-encoding"]).toBe("identity");
+    expect(seen[0]!.headers.authorization).toContain("SignedHeaders=host;x-amz-content-sha256;x-amz-date,");
+    expect(seen[1]!).toMatchObject({ method: "GET", headers: { range: "bytes=0-0", "accept-encoding": "identity" } });
+    expect(seen[1]!.headers.authorization).toContain("SignedHeaders=host;range;x-amz-content-sha256;x-amz-date,");
+    expect(await s.head("a/empty.txt")).toEqual({ size: 0, contentType: "text/plain" });
+    expect(await s.head("a/whole.txt")).toEqual({ size: 17, contentType: "text/plain" });
+    expect(await s.head("a/gone.txt")).toBeNull();
+  });
+
   it("lists a prefix across continuation pages and decodes XML-escaped keys", async () => {
     const { fetch, seen } = fakeFetch((req) => {
       const u = new URL(req.url);
