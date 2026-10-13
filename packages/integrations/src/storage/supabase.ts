@@ -57,9 +57,10 @@ export class SupabaseStorageAdapter implements StorageAdapter {
   private objectUrl(key: string): string {
     return `${this.base}/${awsEncode(this.cfg.bucket)}/${key.split("/").map((s) => awsEncode(s)).join("/")}`;
   }
-  private async call(operation: string, method: "GET" | "PUT" | "DELETE" | "HEAD", url: string, opts: { body?: Uint8Array; headers?: Record<string, string>; okStatuses: number[] }): Promise<Response> {
+  /** `unsigned` headers ride outside the signature: a proxy may rewrite them (Accept-Encoding) and break it. */
+  private async call(operation: string, method: "GET" | "PUT" | "DELETE" | "HEAD", url: string, opts: { body?: Uint8Array; headers?: Record<string, string>; unsigned?: Record<string, string>; okStatuses: number[] }): Promise<Response> {
     const payloadHash = opts.body ? sha256HexOf(opts.body) : "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-    const headers = signRequest(this.creds, { method, url, headers: opts.headers, payloadHash });
+    const headers = { ...signRequest(this.creds, { method, url, headers: opts.headers, payloadHash }), ...opts.unsigned };
     const res = await this.fetchImpl(url, { method, headers, body: opts.body ? new Uint8Array(opts.body) : undefined });
     if (!opts.okStatuses.includes(res.status)) throw new StorageError(operation, res.status);
     this.verified = true;
@@ -74,10 +75,26 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     if (res.status === 404) return null;
     return new Uint8Array(await res.arrayBuffer());
   }
+  /**
+   * The size comes uncompressed: the storage host's proxy compresses text replies and then drops their length, so a
+   * plain-text résumé read as empty on staging (13 Oct 2026). With no usable length, the first byte's Content-Range
+   * names the full size (an empty object answers 416); a server that ignores the range sends the object, which is measured.
+   */
   async head(key: string): Promise<StoredObjectInfo | null> {
-    const res = await this.call("head", "HEAD", this.objectUrl(key), { okStatuses: [200, 404] });
+    const url = this.objectUrl(key);
+    const res = await this.call("head", "HEAD", url, { unsigned: { "accept-encoding": "identity" }, okStatuses: [200, 404] });
     if (res.status === 404) return null;
-    return { size: Number(res.headers.get("content-length") ?? "0"), contentType: res.headers.get("content-type") };
+    const contentType = res.headers.get("content-type");
+    const length = Number(res.headers.get("content-length") ?? Number.NaN);
+    if (Number.isFinite(length) && length > 0) return { size: length, contentType };
+    const probe = await this.call("head", "GET", url, { headers: { range: "bytes=0-0" }, unsigned: { "accept-encoding": "identity" }, okStatuses: [200, 206, 404, 416] });
+    if (probe.status === 404) return null;
+    const total = probe.status === 416 ? "0" : probe.headers.get("content-range")?.match(/\/(\d+)\s*$/)?.[1];
+    if (total !== undefined) {
+      await probe.body?.cancel();
+      return { size: Number(total), contentType };
+    }
+    return { size: (await probe.arrayBuffer()).byteLength, contentType };
   }
   async delete(key: string): Promise<void> {
     await this.call("delete", "DELETE", this.objectUrl(key), { okStatuses: [200, 204, 404] });
