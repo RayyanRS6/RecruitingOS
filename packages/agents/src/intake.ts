@@ -423,6 +423,9 @@ async function setProgress(db: Db, companyId: string, sessionId: string, stage: 
   });
 }
 
+/** The draft's max_tokens: room for the 3,000 to 6,000 tokens of JSON and Sonnet 5.5's thinking before it. */
+export const INTAKE_COMPILE_MAX_TOKENS = 32_000;
+
 /**
  * Writes the draft beside the conversation (C7, founder decision Q8): one model call at the judgment tier, never per
  * turn. Each stage is recorded as it starts (benchmark, writing, then checking, which runs the checks and saves in one
@@ -443,7 +446,7 @@ export async function draftIntake(db: Db, deps: IntakeDeps, input: { companyId: 
   const bench = await resolveBenchmark(deps.comp, inputs);
   await setProgress(db, input.companyId, input.sessionId, "writing");
   const ctx = contextFrom(inputs, bench);
-  const out = await runPromptDetached(db, deps.ai, intakeCompilePrompt, ctx, { companyId: input.companyId, inputRef: { sessionId: input.sessionId }, maxTokens: 24000, deadlineAt });
+  const out = await runPromptDetached(db, deps.ai, intakeCompilePrompt, ctx, { companyId: input.companyId, inputRef: { sessionId: input.sessionId }, maxTokens: INTAKE_COMPILE_MAX_TOKENS, deadlineAt });
   const agent: Actor = { kind: "agent", id: "intake", runId: out.runId };
   if (!out.ok) {
     await setProgress(db, input.companyId, input.sessionId, "failed");

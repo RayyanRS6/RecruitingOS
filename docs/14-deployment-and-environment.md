@@ -94,7 +94,7 @@ Defaults are the local development values. "prod" in the Required column means t
 |---|---|---|---|
 | `AI_PROVIDER` | prod = `anthropic` | `fake` | `fake` is deterministic and refused in production |
 | `ANTHROPIC_API_KEY` | when anthropic | | |
-| `AI_MODEL_JUDGMENT` / `AI_MODEL_STANDARD` / `AI_MODEL_FAST` | | Claude Opus 5 / Sonnet 5 / Haiku 4.5 | Model routing overrides |
+| `AI_MODEL_JUDGMENT` / `AI_MODEL_STANDARD` / `AI_MODEL_FAST` | | Claude Sonnet 5.5 / Haiku 5.5 / Haiku 5.5 | Model routing overrides: only `claude-haiku-5-5` and `claude-sonnet-5-5` are accepted; any other value stops the app at start |
 
 ### Messages
 

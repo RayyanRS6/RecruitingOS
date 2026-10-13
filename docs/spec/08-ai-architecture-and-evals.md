@@ -17,16 +17,16 @@ Code: `packages/ai` (provider interface, Anthropic adapter, routing, prompt regi
 
 | Task | Agent | Tier → model (default) | Input | Output schema | Code guards after the model |
 |---|---|---|---|---|---|
-| intake.turn | intake | judgment → claude-opus-5 | company, playbook + matched role (cached), benchmark, facts, transcript | `IntakeTurn` | facts merged with dedupe; ≤3 questions enforced by schema |
-| intake.compile | intake | judgment → claude-opus-5 | same + full transcript | `RolePacket` | `finalizePacket`: jurisdictions, mandatory notices, pay-transparency forcing, ceiling ≥ max, min ≤ max, disclosure text, must-haves ≤ 6, declined criteria stripped, provenance |
-| resume.extract | triage | fast → claude-haiku-4-5-20251001 | resume text (≤40k chars) | `ResumeExtraction` | quotes verified (`verifyQuotes`) |
-| triage.assess | triage | standard → claude-sonnet-5 | packet (cached), resume, extraction, application answers, eligibility, prior applications | `EvidenceAssessment` | `verifyAssessmentQuotes`; recommendation is information only |
-| screen.turn | screening | standard → claude-sonnet-5 | packet (cached), progress, answers, transcript, focus unknowns, latest message | `ScreenTurn` | `enforceTurnRules` (valid question keys, ≤2 follow-ups, bounded), `redactProtected` on recorded answers, keyword commands handled before the model |
-| screen.assess | screening | standard → claude-sonnet-5 | packet, transcript, answers | `ScreenAssessment` | quotes verified against the transcript |
+| intake.turn | intake | standard → claude-haiku-5-5 | company, playbook + matched role (cached), benchmark, facts, transcript | `IntakeTurn` | facts merged with dedupe; ≤3 questions enforced by schema |
+| intake.compile | intake | judgment → claude-sonnet-5-5 | same + full transcript | `RolePacket` | `finalizePacket`: jurisdictions, mandatory notices, pay-transparency forcing, ceiling ≥ max, min ≤ max, disclosure text, must-haves ≤ 6, declined criteria stripped, provenance |
+| resume.extract | triage | fast → claude-haiku-5-5 | resume text (≤40k chars) | `ResumeExtraction` | quotes verified (`verifyQuotes`) |
+| triage.assess | triage | standard → claude-haiku-5-5 | packet (cached), resume, extraction, application answers, eligibility, prior applications | `EvidenceAssessment` | `verifyAssessmentQuotes`; recommendation is information only |
+| screen.turn | screening | standard → claude-haiku-5-5 | packet (cached), progress, answers, transcript, focus unknowns, latest message | `ScreenTurn` | `enforceTurnRules` (valid question keys, ≤2 follow-ups, bounded), `redactProtected` on recorded answers, keyword commands handled before the model |
+| screen.assess | screening | standard → claude-haiku-5-5 | packet, transcript, answers | `ScreenAssessment` | quotes verified against the transcript |
 
-Not used in release 1 (routing table entries exist): brief.compose, owner.reply (the brief is deterministic), interview.brief, scorecard.draft, debrief.compose, offer.propose, message.freeform.
+Also on Haiku 5.5: intake.extract (a pasted ad), packet.revise (changing a role by chat), company.about and message.freeform (the suggested personal line). Not used in release 1 (routing table entries exist, on Haiku 5.5): brief.compose, owner.reply (the brief is deterministic), interview.brief, scorecard.draft, debrief.compose, offer.propose.
 
-Model overrides by environment (`AI_MODEL_JUDGMENT`, `AI_MODEL_STANDARD`, `AI_MODEL_FAST`). Effort: high for Opus tasks, medium otherwise. Prompt caching: system blocks marked `cache: true` (rules, playbook, packet) are stable per role, so most tokens on a role are cache reads.
+Models (the owner's decision, 13 Oct 2026): Claude Haiku 5.5 for every task and Claude Sonnet 5.5 for intake.compile alone, nothing else. `AI_MODEL_JUDGMENT`, `AI_MODEL_STANDARD` and `AI_MODEL_FAST` may choose between those two; any other value stops the app at start, and the runner refuses to call another model. Effort per tier (`TIER_EFFORT` in packages/ai/src/routing.ts): high for the draft, medium (Haiku 5.5's default) for the rest. Prompt caching: system blocks marked `cache: true` (rules, playbook, packet) are stable per role, so most tokens on a role are cache reads.
 
 ## 3. Runtime behavior
 

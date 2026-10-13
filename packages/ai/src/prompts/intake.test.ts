@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { intakeCompilePrompt, type IntakeContext } from "./intake";
+import { PANEL_CHANGE_NOTE, intakeCompilePrompt, intakeTurnPrompt, type IntakeContext } from "./intake";
 
 const ctx: IntakeContext = {
   company: { name: "Harbor Dental", vertical: "dental", sizeBand: "10-19", locations: [{ city: "Irvine", region: "CA", country: "US" }] },
@@ -29,5 +29,21 @@ describe("intake.compile v5: what staging showed the owner and candidates (13 Oc
     expect(compile()).toContain('{"days": ["Mon","Tue","Wed","Thu","Fri"]}, never "Monday–Friday"');
     expect(compile()).toContain('{"withinDays": 30}');
     expect(compile()).toContain("aim for five or six questions and screening.maxMinutes 10");
+  });
+});
+
+describe("intake.turn's conversation", () => {
+  const assistant = { role: "assistant" as const, content: "Thanks. Two quick questions on the right.", at: "2026-10-13T09:00:05.000Z" };
+  it("always ends with the owner's turn, which Haiku 5.5 and Sonnet 5.5 require", () => {
+    // the owner changed an answer on the panel and wrote nothing, so the last stored line is the assistant's
+    const turns = intakeTurnPrompt.messages({ ...ctx, messages: [...ctx.messages, assistant] });
+    expect(turns.map((t) => t.role)).toEqual(["user", "assistant", "user"]);
+    expect(turns.at(-1)!.content).toBe(PANEL_CHANGE_NOTE);
+  });
+
+  it("adds nothing when the owner spoke last, and the draft's transcript never carries the note", () => {
+    expect(intakeTurnPrompt.messages(ctx)).toEqual([{ role: "user", content: "A dental assistant in Irvine" }]);
+    const compileText = intakeCompilePrompt.messages({ ...ctx, messages: [...ctx.messages, assistant] }).map((m) => m.content).join("\n");
+    expect(compileText).not.toContain(PANEL_CHANGE_NOTE);
   });
 });

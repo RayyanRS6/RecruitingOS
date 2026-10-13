@@ -1,7 +1,7 @@
 import { aiRuns, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import { estimateCostUsd } from "./pricing";
 import { promptHash, type PromptDef } from "./prompts/registry";
-import { modelForTask, modelTableFromEnv, type ModelTable } from "./routing";
+import { ALLOWED_MODELS, effortForTask, isAllowedModel, modelForTask, modelTableFromEnv, type ModelTable } from "./routing";
 import type { AiProvider, StructuredResult } from "./types";
 
 export type AiRuntime = {
@@ -45,6 +45,11 @@ export async function callPrompt<TInput, TOutput>(rt: AiRuntime, prompt: PromptD
   const messages = prompt.messages(input);
   const hash = promptHash(system);
   const started = Date.now();
+  // The real provider calls the allowed models only (routing.ts), whatever runtime a caller built by hand.
+  if (rt.provider.id === "anthropic" && !isAllowedModel(model)) {
+    const error = `provider refused: ${model} is not allowed; the app runs only on ${ALLOWED_MODELS.join(" and ")}`;
+    return { result: { kind: "invalid", error, model, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, latencyMs: 0, final: true }, model, hash, attempts: 0 };
+  }
 
   let result: StructuredResult<TOutput> | null = null;
   let attempts = 0;
@@ -63,6 +68,7 @@ export async function callPrompt<TInput, TOutput>(rt: AiRuntime, prompt: PromptD
       schema: prompt.schema,
       inputRef: meta.inputRef ?? {},
       maxTokens: meta.maxTokens,
+      effort: effortForTask(prompt.task),
       deadlineAt: meta.deadlineAt,
     };
     try {

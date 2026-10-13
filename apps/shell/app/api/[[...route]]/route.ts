@@ -4,7 +4,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 /**
  * Seconds a request may run on Vercel. The team is on the Pro plan, which accepts up to 300: a model call in the intake
- * chat or a screening turn can take most of a minute, and writing a whole draft (up to 24,000 tokens) several.
+ * chat or a screening turn can take most of a minute, and writing a whole draft (up to 32,000 tokens) several.
  */
 export const maxDuration = 300;
 

@@ -60,7 +60,7 @@ Each step lists what the user sees, what the system does, and the acceptance cri
 ### Step 2. Role intake
 
 - User: types "I need a performance marketing manager in Los Angeles, $95,000 to $115,000, hybrid" on Today; answers at most three questions per turn; can reload and resume; can start over.
-- System: Intake agent turn (Opus 5) with the consumer playbook, the matched playbook role, and a compensation benchmark (BLS OEWS or playbook range) in context; facts merged; unlawful criteria declined with a lawful alternative recorded.
+- System: Intake agent turn (Haiku 5.5) with the consumer playbook, the matched playbook role, and a compensation benchmark (BLS OEWS or playbook range) in context; facts merged; unlawful criteria declined with a lawful alternative recorded.
 - AC2.1 The assistant never asks for a fact already given; asks about reason for hire, ceiling and basis, must-haves vs nice-to-haves, eligibility, location and schedule, interviewers and decision maker, timeline, what failure looks like, deal-breakers.
 - AC2.2 "Under 30", "no gaps", "native English", "recent grads", "local zip only", family or health criteria are declined, explained in one sentence, and never appear in the packet (eval `intake.illegal_criteria` at 100%).
 - AC2.3 A model failure shows an honest message and the "Bring in a recruiter" action; the session is preserved.
@@ -93,7 +93,7 @@ Each step lists what the user sees, what the system does, and the acceptance cri
 
 ### Step 6. Evidence-based AI assessment
 
-- System: deterministic eligibility on owner-authored rules only (unanswered = unverifiable, never a fail); resume extraction (Haiku 4.5) with quotes verified in code; assessment (Sonnet 5) with must-have findings, competency findings, strengths, concerns, unknowns, confidence, recommendation; quotes verified against the resume or the application text; unverifiable quotes discarded and counted.
+- System: deterministic eligibility on owner-authored rules only (unanswered = unverifiable, never a fail); resume extraction (Haiku 5.5) with quotes verified in code; assessment (Haiku 5.5) with must-have findings, competency findings, strengths, concerns, unknowns, confidence, recommendation; quotes verified against the resume or the application text; unverifiable quotes discarded and counted.
 - AC6.1 No application is ever rejected by the assessment; `application.reject_on_assessment` is hard human-only.
 - AC6.2 Gaps, career changes, missing degrees, "overqualified", and AI-written text never produce `weak` (eval `triage.edge_cases` at 100%).
 - AC6.3 Every quote shown to the owner is a verbatim substring of the source (eval `triage.hallucination` at 100%; runtime verification).

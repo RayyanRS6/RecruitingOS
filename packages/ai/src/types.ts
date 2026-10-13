@@ -38,7 +38,7 @@ export type StructuredRequest<T> = {
   /** References to inputs (ids and hashes), never raw PII beyond what the prompt already contains. */
   inputRef: Record<string, unknown>;
   maxTokens?: number;
-  /** Provider-specific effort hint; judgment tasks default to high. */
+  /** How hard the model thinks; the runner sets each task's tier effort (routing.ts, TIER_EFFORT). */
   effort?: "low" | "medium" | "high";
   /**
    * When the HTTP request this call serves is stopped (milliseconds since 1970), set once per request so that every
@@ -48,7 +48,8 @@ export type StructuredRequest<T> = {
   deadlineAt?: number;
 };
 
-export type Usage = { inputTokens: number; outputTokens: number; cacheReadTokens: number };
+/** `cacheWriteTokens`: input written to the prompt cache, billed above the base input price and not in `inputTokens`. */
+export type Usage = { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens?: number };
 
 export type StructuredResult<T> =
   | { kind: "ok"; output: T; model: string; usage: Usage; latencyMs: number; raw?: unknown }
