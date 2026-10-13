@@ -185,6 +185,9 @@ describe("what a recruiter request covers, and saying so", () => {
     const [withRole] = await container.db.select().from(workflowRuns).where(eq(workflowRuns.id, roleRun));
     const [esc] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, withRole.escalationId!));
     expect(esc).toMatchObject({ roleId, applicationId: null });
+    // the customer reads the request: plain words, never the error, the workflow's key or the step's
+    expect(esc.question).toBe("An automatic step stopped after the first try and needs a person to take over.");
+    expect(withRole.lastError).toBe("nothing to work on");
   });
 
   it("a request for a person's review with nothing attached goes to ITS administrators, not to a company-wide recruiter", async () => {
