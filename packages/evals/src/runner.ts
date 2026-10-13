@@ -18,7 +18,15 @@ import { CONSISTENCY_READS, EMPTY_FACTS, RDH_FACTS, aboutCases, lineCases, asses
  */
 const here = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
-const onlySuite = args.includes("--suite") ? args[args.indexOf("--suite") + 1] : null;
+/**
+ * `--suite triage` runs one suite or family; `--suite resume,triage` runs several (the fairness tests run on the real
+ * models from .github/workflows/fairness.yml). A family name runs every suite whose name starts with it.
+ */
+const onlySuites = args.includes("--suite") ? (args[args.indexOf("--suite") + 1] ?? "").split(",").map((s) => s.trim()).filter(Boolean) : null;
+/** Whether a suite runs: chosen by its own name, or by its family (the part before the dot). */
+const runs = (name: string) => !onlySuites || onlySuites.some((s) => s === name || s === name.split(".")[0]);
+/** Whether a block that writes several suites of one family runs: chosen by the family or by any suite in it. */
+const familyRuns = (family: string) => !onlySuites || onlySuites.some((s) => s === family || s.startsWith(`${family}.`));
 
 async function main() {
   const handle = await createDb({ pgliteDir: "memory://" });
@@ -60,7 +68,7 @@ async function main() {
   };
 
   async function runIntakeSuite(name: string, cases: IntakeCase[], compile: boolean) {
-    if (onlySuite && onlySuite !== name) return;
+    if (!runs(name)) return;
     const out: (typeof results)[string]["cases"] = [];
     for (const c of cases) {
       const failures: string[] = [];
@@ -109,7 +117,7 @@ async function main() {
   await runIntakeSuite("intake.proxy_refusal", intakeProxyRefusal, false);
   await runIntakeSuite("intake.benchmark_basis", intakeBenchmarkBasis, false);
 
-  if (!onlySuite || onlySuite.startsWith("resume")) {
+  if (familyRuns("resume")) {
     const ext: (typeof results)[string]["cases"] = [];
     const hall: (typeof results)[string]["cases"] = [];
     for (const c of resumeCases) {
@@ -134,7 +142,7 @@ async function main() {
     return finalizePacket(r.output, ctx, { sessionId: "eval", aiRunId: r.runId });
   }
 
-  if (!onlySuite || onlySuite.startsWith("triage")) {
+  if (familyRuns("triage")) {
     const packet = await goldenPacket();
     const edge: (typeof results)[string]["cases"] = [];
     const hall: (typeof results)[string]["cases"] = [];
@@ -188,7 +196,7 @@ async function main() {
   }
 
   // The match score and the board's placement (plan F6): rules and determinism of the code, no model call.
-  if (!onlySuite || onlySuite === "board.determinism") {
+  if (runs("board.determinism")) {
     const out: (typeof results)[string]["cases"] = boardCases.map((c) => {
       const f = boardCaseFailures(c);
       return { id: c.id, pass: f.length === 0, failures: f };
@@ -197,7 +205,7 @@ async function main() {
   }
 
   // Change by chat (plan C10): each request against the golden packet, judged after the server's own merge.
-  if (!onlySuite || onlySuite === "packet.revise") {
+  if (runs("packet.revise")) {
     const base = await goldenPacket();
     const out: (typeof results)[string]["cases"] = [];
     for (const c of reviseCases) {
@@ -211,7 +219,7 @@ async function main() {
   }
 
   // About the company (plan D10): the draft a person approves in Setup, judged as a candidate would read it.
-  if (!onlySuite || onlySuite === "company.about") {
+  if (runs("company.about")) {
     const out: (typeof results)[string]["cases"] = [];
     for (const c of aboutCases) {
       const r = await runPrompt(q, rt, companyAboutPrompt, c.input, { companyId: null, inputRef: { eval: c.id } });
@@ -223,7 +231,7 @@ async function main() {
   }
 
   // The line the assistant suggests for an invitation or an update (Q28): judged as the candidate would read it.
-  if (!onlySuite || onlySuite === "message.suggest_line") {
+  if (runs("message.suggest_line")) {
     const out: (typeof results)[string]["cases"] = [];
     for (const c of lineCases) {
       const r = await runPrompt(q, rt, messageLinePrompt, c.input, { companyId: null, inputRef: { eval: c.id } });
@@ -234,7 +242,7 @@ async function main() {
     results["message.suggest_line"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
   }
 
-  if (!onlySuite || onlySuite.startsWith("screen")) {
+  if (runs("screen.conversation")) {
     const packet = await goldenPacket();
     const out: (typeof results)[string]["cases"] = [];
     for (const persona of screenPersonas) {
@@ -278,7 +286,7 @@ async function main() {
 
   // The scorecard (screen.assess v3, plan Wave E): a recruiter's notes kept apart, a skip unknown, an unfinished
   // conversation never "strong interview". Judged on the model's own output, before the code's checks.
-  if (!onlySuite || onlySuite === "screen.assess") {
+  if (runs("screen.assess")) {
     const packet = await goldenPacket();
     const out: (typeof results)[string]["cases"] = [];
     for (const c of screenAssessCases) {
@@ -301,10 +309,15 @@ async function main() {
     console.log(`${pass ? "PASS" : "FAIL"} ${suite}: ${(r.passRate * 100).toFixed(0)}% (min ${(min * 100).toFixed(0)}%)`);
     for (const c of r.cases) if (!c.pass) console.log(`   × ${c.id}: ${c.failures.join("; ")}`);
   }
+  // What the run cost: every model call is recorded in ai_runs with its estimated cost (packages/ai/src/pricing.ts).
+  const [spent] = await handle.query("SELECT COALESCE(SUM(cost_usd), 0)::float8 AS total, COUNT(*)::int AS calls FROM ai_runs", []);
+  const costUsd = Math.round(Number(spent?.total ?? 0) * 10_000) / 10_000;
+  const calls = Number(spent?.calls ?? 0);
+  console.log(`cost: $${costUsd.toFixed(4)} over ${calls} model calls`);
   const dir = join(here, "..", "results");
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}-${rt.provider.id}.json`);
-  writeFileSync(file, JSON.stringify({ provider: rt.provider.id, models: rt.models, results }, null, 2));
+  writeFileSync(file, JSON.stringify({ provider: rt.provider.id, models: rt.models, suites: onlySuites ?? "all", costUsd, calls, results }, null, 2));
   console.log(`results: ${file}`);
   await handle.close();
   process.exit(ok ? 0 : 1);
