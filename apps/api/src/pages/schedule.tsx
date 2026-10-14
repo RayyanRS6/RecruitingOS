@@ -315,7 +315,9 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
   const start = b.iv.startsAt;
   // What "Send me new times later" would bring them, worked out now so the page only says what is true for them.
   const now = container.engine.clock();
-  const plan = !b.closed && Date.parse(start) > now.getTime() ? await withTenant(container.db, b.company.id, (tx) => autoNewTimesPlan(tx, { companyId: b.company.id, roleId: b.app.roleId, applicationId: b.app.id, rescheduleCount: b.iv.rescheduleCountCandidate, now })) : null;
+  // Once the interview has started it can no longer be moved or cancelled from here (audit 06, bug 96).
+  const ahead = Date.parse(start) > now.getTime();
+  const plan = !b.closed && ahead ? await withTenant(container.db, b.company.id, (tx) => autoNewTimesPlan(tx, { companyId: b.company.id, roleId: b.app.roleId, applicationId: b.app.id, rescheduleCount: b.iv.rescheduleCountCandidate, now })) : null;
   const missing = c.req.query("error") === "cancel";
   return c.html(
     <Layout title={`Confirmed: ${b.iv.title} at ${b.company.name}`}>
@@ -331,7 +333,9 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
       <a class="btn" href={`/c/schedule/${b.iv.scheduleToken}/ics`}><Icon name="calendar" />Add to my calendar</a>
       {/* The time stays on record for someone no longer in the process (it had already started); it can no longer be moved. */}
       {b.closed ? null : <h2>Need to change it?</h2>}
-      {b.closed ? null : b.iv.rescheduleCountCandidate < MAX_CANDIDATE_RESCHEDULES ? (
+      {b.closed ? null : !ahead ? (
+        <div class="card"><p>This interview has started, so it can no longer be moved here. If something went wrong, reply to any of our emails.</p></div>
+      ) : b.iv.rescheduleCountCandidate < MAX_CANDIDATE_RESCHEDULES ? (
         <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/reschedule`} class="card">
           <p>We will send new times. You can do this {MAX_CANDIDATE_RESCHEDULES - b.iv.rescheduleCountCandidate === 1 ? "one more time" : "twice"}.</p>
           <button class="btn secondary" type="submit">Ask for a different time</button>
@@ -379,6 +383,8 @@ schedulePages.post("/c/schedule/:token/reschedule", rateLimit(POLICIES.reschedul
   if (!b) return c.notFound();
   if (b.closed) return c.redirect(`/c/schedule/${b.iv.scheduleToken}/confirmed`); // nothing can be moved for someone no longer in the process
   if (b.iv.status !== "scheduled") return c.redirect(`/c/schedule/${b.iv.scheduleToken}`);
+  // An interview that has started (or is over and not yet closed) is never reopened from the candidate's page.
+  if (!b.iv.startsAt || Date.parse(b.iv.startsAt) <= container.engine.clock().getTime()) return c.redirect(`/c/schedule/${b.iv.scheduleToken}/confirmed`);
   if (b.iv.rescheduleCountCandidate >= MAX_CANDIDATE_RESCHEDULES) {
     await withTenant(container.db, b.company.id, (tx) => notify(tx, { companyId: b.company.id, kind: "interview.reschedule_limit", title: `${b.candidate.firstName} wants to reschedule again`, body: "They have used both self-service reschedules; please arrange a time with them directly.", action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } }));
     return c.redirect(`/c/schedule/${b.iv.scheduleToken}/confirmed`);
@@ -491,7 +497,7 @@ schedulePages.get("/c/schedule/:token/cancelled", async (c) => {
       {promise === "date" ? <p>We let {company}'s team know. We will email you new times on {day}, unless the team gets in touch first.</p>
         : promise === "soon" ? <p>We let {company}'s team know. We will email you new times as soon as they are ready.</p>
         : promise === "team" ? <p>We let {company}'s team know you would like new times. Someone from the team will be in touch about them.</p>
-        : promise === "not_interested" ? <p>We let {company}'s team know you are no longer interested in this interview. Your application stays open.{b.closed ? null : <span> To withdraw it, go to <a href={`/c/status/${b.app.statusToken}`}>your application page</a>.</span>}</p>
+        : promise === "not_interested" ? <p>We let {company}'s team know you are no longer interested in this interview. Your application stays open.{b.closed ? null : <span> To withdraw it, open your application page from our emails, or <a href="/c/link-request">get your link by email</a>.</span>}</p>
         : <p>We let {company}'s team know. The hiring team will be in touch.</p>}
       <p>If anything changes, reply to any of our emails.</p>
       <p class="notice">Reply to any of our emails with HUMAN to reach a person.</p>

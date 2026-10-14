@@ -559,3 +559,80 @@ describe("team invitations, members and roles", () => {
     });
   });
 });
+
+/**
+ * "Leave this company" (founder decision L-10) and moving between companies (rows 9 and 49): anyone may leave, an owner
+ * only while another owner remains; the session moves to the person's other company, or they are signed out; POST
+ * /auth/switch takes only a company id the person may enter.
+ */
+describe("leaving a company, and switching between companies", () => {
+  let container: Container;
+  let app: ReturnType<typeof createApp>;
+  const json = (cookie: string, method: string, path: string, body?: unknown) =>
+    app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
+  const me = async (cookie: string) => (await (await json(cookie, "GET", "/api/v1/auth/me")).json()) as { activeCompanyId: string | null; memberships: Array<{ companyId: string; role: string }> };
+  const errorOf = async (r: Response) => ((await r.json()) as { error: { code: string; message: string } }).error;
+  let owner = "";
+  let companyA = "";
+  let companyB = "";
+
+  beforeAll(async () => {
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake" } });
+    app = createApp(container);
+    owner = await signInWithIdentity(app, container, { email: "dana@leave.test", name: "Dana Owner", provider: "google", aal2: false });
+    companyA = ((await (await json(owner, "POST", "/api/v1/companies", { name: "Alpha Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string }).id;
+    const bea = await signInWithIdentity(app, container, { email: "bea@leave.test", name: "Bea Owner", provider: "google", aal2: false });
+    companyB = ((await (await json(bea, "POST", "/api/v1/companies", { name: "Beta Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string }).id;
+  });
+  afterAll(async () => {
+    await container.close();
+  });
+
+  it("switch takes only a company id the person may enter, and moves the session there and back", async () => {
+    await signInAs(container, app, { companyId: companyB, role: "interviewer", email: "hank@leave.test", name: "Hank Two" });
+    const hank = await signInAs(container, app, { companyId: companyA, role: "hiring_manager", email: "hank@leave.test", name: "Hank Two" });
+    expect((await me(hank)).memberships.map((m) => m.companyId).sort()).toEqual([companyA, companyB].sort());
+    const bad = await json(hank, "POST", "/api/v1/auth/switch", { companyId: "not-a-company" });
+    expect(bad.status).toBe(400);
+    expect((await errorOf(bad)).code).toBe("invalid_request");
+    expect((await json(hank, "POST", "/api/v1/auth/switch", {})).status).toBe(400);
+    const moved = await json(hank, "POST", "/api/v1/auth/switch", { companyId: companyB });
+    expect(await moved.json()).toEqual({ ok: true, companyId: companyB });
+    expect((await me(hank)).activeCompanyId).toBe(companyB);
+    expect((await json(hank, "POST", "/api/v1/auth/switch", { companyId: companyA })).status).toBe(200);
+    expect((await me(hank)).activeCompanyId).toBe(companyA);
+    // a company they are not in is refused as before
+    expect((await json(owner, "POST", "/api/v1/auth/switch", { companyId: companyB })).status).toBe(403);
+  });
+
+  it("anyone may leave: the session moves to their other company; the owners are told; the last owner may not leave", async () => {
+    const hank = await signInAs(container, app, { companyId: companyA, role: "hiring_manager", email: "hank@leave.test", name: "Hank Two" });
+    expect((await json(hank, "POST", "/api/v1/companies/current/leave", {})).status).toBe(400);
+    const r = await json(hank, "POST", "/api/v1/companies/current/leave", { confirm: true });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ ok: true, left: "Alpha Dental", movedTo: { companyId: companyB, companyName: "Beta Dental" }, signedOut: false });
+    const after = await me(hank);
+    expect(after.activeCompanyId).toBe(companyB);
+    expect(after.memberships.map((m) => m.companyId)).toEqual([companyB]);
+    expect((await json(hank, "POST", "/api/v1/auth/switch", { companyId: companyA })).status).toBe(403);
+    const ownerId = ((await (await json(owner, "GET", "/api/v1/auth/me")).json()) as { user: { id: string } }).user.id;
+    const told = await container.db.select().from(notifications).where(and(eq(notifications.kind, "member.left"), eq(notifications.userId, ownerId)));
+    expect(told.at(-1)?.title).toBe("Hank Two left the team");
+    const recorded = await container.db.select().from(events).where(and(eq(events.type, "member.removed"), eq(events.companyId, companyA)));
+    expect(recorded.at(-1)?.payload).toMatchObject({ left: true, role: "hiring_manager" });
+    // the last owner may not leave; a second owner may
+    const refused = await json(owner, "POST", "/api/v1/companies/current/leave", { confirm: true });
+    expect(refused.status).toBe(409);
+    expect(await errorOf(refused)).toMatchObject({ code: "last_owner", message: expect.stringMatching(/only owner/) });
+    const olive = await signInAs(container, app, { companyId: companyA, role: "owner", email: "olive@leave.test", name: "Olive Owner" });
+    expect(await (await json(olive, "POST", "/api/v1/companies/current/leave", { confirm: true })).json()).toMatchObject({ ok: true, movedTo: null, signedOut: true });
+  });
+
+  it("someone in no other company is signed out when they leave", async () => {
+    const ivy = await signInAs(container, app, { companyId: companyA, role: "interviewer", email: "ivy@leave.test", name: "Ivy Interviewer" });
+    expect(await (await json(ivy, "POST", "/api/v1/companies/current/leave", { confirm: true })).json()).toMatchObject({ ok: true, movedTo: null, signedOut: true });
+    expect((await json(ivy, "GET", "/api/v1/auth/me")).status).toBe(401);
+    const [row] = await container.db.select({ status: memberships.status }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(users.email, "ivy@leave.test"), eq(memberships.companyId, companyA)));
+    expect(row.status).toBe("removed");
+  });
+});

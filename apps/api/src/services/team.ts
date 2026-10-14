@@ -1,6 +1,6 @@
 import { and, asc, count, eq, inArray } from "drizzle-orm";
 import type { Actor, InviteMember, UpdateMember } from "@ros/contracts";
-import { FRESH_SESSION_MS, REAUTH_WINDOW_MS, audit, createInvitation, disconnectCalendar, emit, invitationLink, isRecentlyAuthenticated, listPendingInvitations, membersWithCalendarStatus, normalizeEmail, notify, publicInvitation, resendInvitation, revokeInvitation, revokeSessionsForCompany, roleInWords, type InvitationRow, type SessionContext } from "@ros/core";
+import { FRESH_SESSION_MS, REAUTH_WINDOW_MS, audit, createInvitation, disconnectCalendar, emit, invitationLink, isRecentlyAuthenticated, listPendingInvitations, membersWithCalendarStatus, normalizeEmail, notify, publicInvitation, resendInvitation, revokeInvitation, revokeSessionsForCompany, roleInWords, setActiveCompany, type InvitationRow, type SessionContext } from "@ros/core";
 import { queueCommunication } from "@ros/agents";
 import { applications, companies, interviewParticipants, interviews, invitations, memberships, users, withPlatform, withTenant, type Tx } from "@ros/db";
 import type { Container } from "../container";
@@ -207,48 +207,8 @@ export async function updateMember(team: Team, input: { userId: string; body: Up
       await audit(tx, { companyId: tenant.companyId, actor, action: "membership.changed", target: { type: "user", id: userId }, reason: `role changed from ${target.role} to ${newRole}`, details: { from: target.role, to: newRole } });
       return { row: { userId, role: updated.role, status: updated.status }, changed: true, removed: false, calendarDeletionQueued: false, interviewsFlagged: 0, interviewsCancelled: 0 };
     }
-    const [updated] = await tx.update(memberships).set({ status: "removed" }).where(eq(memberships.id, target.id)).returning();
-    // The same path as POST /integrations/calendar/:provider/disconnect: the connection is unusable now, the credential's deletion is queued.
-    const calendar = await disconnectCalendar(tx, { companyId: tenant.companyId, userId, reason: "removed from the team", actor, now });
-    // Interviews still ahead that counted on this person: they come off them outright. Nothing that reads participants
-    // (the scheduling workflow, the calendar bridge, the interview routes) looks at a status, so a row left behind would
-    // keep them on the schedule, in the candidate's messages and on the bookings. The notification, the event and the
-    // audit record below keep the count.
-    const ahead = await tx
-      .select({ participantId: interviewParticipants.id, interviewId: interviews.id, applicationId: interviews.applicationId, title: interviews.title, calendarRefs: interviews.calendarRefs })
-      .from(interviewParticipants)
-      .innerJoin(interviews, eq(interviews.id, interviewParticipants.interviewId))
-      .where(and(eq(interviewParticipants.companyId, tenant.companyId), eq(interviewParticipants.userId, userId), inArray(interviews.status, OPEN_INTERVIEW_STATUSES)));
-    // Their applications first, in one order, before any interview changes: every path that changes an interview and its
-    // application takes the application first (a booking, a cancel, a send of new times), so they take turns.
-    const appIds = [...new Set(ahead.map((p) => p.applicationId))];
-    if (appIds.length) await tx.select({ id: applications.id }).from(applications).where(inArray(applications.id, appIds)).orderBy(asc(applications.id)).for("update");
-    if (ahead.length) await tx.delete(interviewParticipants).where(inArray(interviewParticipants.id, ahead.map((p) => p.participantId)));
-    for (const p of ahead) {
-      // A booking in their calendar cannot be managed once the calendar is disconnected; its reference goes with them.
-      if (!(userId in p.calendarRefs)) continue;
-      const { [userId]: _gone, ...refs } = p.calendarRefs;
-      await tx.update(interviews).set({ calendarRefs: refs }).where(eq(interviews.id, p.interviewId));
-    }
-    // An interview that counted on nobody else cannot take place and nothing adds an interviewer to an existing one, so
-    // it is cancelled through the one cancellation path: its scheduling run ends, a candidate with a booked time is
-    // told, and the candidate goes back to "Interview approved" for the team to approve a new interview. An interview
-    // with other interviewers goes ahead with them.
-    const cancelled: Array<{ title: string; candidateTold: boolean }> = [];
-    const continuing: string[] = [];
-    for (const interviewId of [...new Set(ahead.map((p) => p.interviewId))]) {
-      const [iv] = await tx.select().from(interviews).where(eq(interviews.id, interviewId)).limit(1);
-      if (!iv) continue;
-      const [others] = await tx.select({ n: count() }).from(interviewParticipants).where(eq(interviewParticipants.interviewId, iv.id));
-      if (Number(others?.n ?? 0) > 0) { continuing.push(iv.title); continue; }
-      const done = await cancelInterviewInTx(tx, container, { companyId: tenant.companyId, interview: iv, actor, by: "system", reason: `${who} was removed from the team and was the only interviewer.`, cause: "interviewer_removed", now });
-      cancelled.push({ title: iv.title, candidateTold: done.candidateTold });
-    }
-    if (ahead.length) await notify(tx, { companyId: tenant.companyId, kind: "member.removed_interviews", ...removalNotice(who, cancelled, continuing), action: { label: "Open interviews", href: "/interviews" }, roles: ["owner", "admin"] });
-    await emit(tx, { type: "member.removed", companyId: tenant.companyId, actor, subject: { type: "user", id: userId }, payload: { role: target.role, calendarDeletionQueued: !!calendar?.queued, interviewsFlagged: ahead.length, interviewsCancelled: cancelled.length } });
-    await emit(tx, { type: "membership.changed", companyId: tenant.companyId, actor, subject: { type: "user", id: userId }, payload: { role: target.role, status: "removed" } });
-    await audit(tx, { companyId: tenant.companyId, actor, action: "membership.changed", target: { type: "user", id: userId }, reason: "removed from the team", details: { role: target.role, calendarDeletionQueued: !!calendar?.queued, interviewsFlagged: ahead.length, interviewsCancelled: cancelled.length } });
-    return { row: { userId, role: updated.role, status: updated.status }, changed: true, removed: true, calendarDeletionQueued: !!calendar?.queued, interviewsFlagged: ahead.length, interviewsCancelled: cancelled.length };
+    const done = await endMembershipInTx(tx, team, { userId, target, who, left: false });
+    return { row: { userId, role: done.role, status: done.status }, changed: true, removed: true, calendarDeletionQueued: done.calendarDeletionQueued, interviewsFlagged: done.interviewsFlagged, interviewsCancelled: done.interviewsCancelled };
   });
   let sessionsEnded = 0;
   if (outcome.changed) {
@@ -267,8 +227,114 @@ export async function updateMember(team: Team, input: { userId: string; body: Up
   return { ...outcome.row, sessionsEnded, calendarDeletionQueued: outcome.calendarDeletionQueued, interviewsFlagged: outcome.interviewsFlagged, interviewsCancelled: outcome.interviewsCancelled };
 }
 
+type Leaving = { id: string; role: string; email: string; name: string | null };
+
+/**
+ * Ends a membership inside the tenant transaction, whether someone removed the person or they left (L-10): the
+ * membership is marked removed, their calendar is disconnected (its credential's deletion queued exactly as the
+ * disconnect route does), they come off the interviews still ahead, an interview nobody else was on is cancelled through
+ * the one cancellation path, and the owners and admins are told what happened to each. Recorded as `member.removed` and
+ * `membership.changed` (with `left: true` when they left) and audited.
+ */
+async function endMembershipInTx(tx: Tx, team: Team, input: { userId: string; target: Leaving; who: string; left: boolean }) {
+  const { container, tenant, actor } = team;
+  const { userId, target, who, left } = input;
+  const now = container.engine.clock();
+  const reason = left ? "left the team" : "removed from the team";
+  const [updated] = await tx.update(memberships).set({ status: "removed" }).where(eq(memberships.id, target.id)).returning();
+  // The same path as POST /integrations/calendar/:provider/disconnect: the connection is unusable now, the credential's deletion is queued.
+  const calendar = await disconnectCalendar(tx, { companyId: tenant.companyId, userId, reason, actor, now });
+  // Interviews still ahead that counted on this person: they come off them outright. Nothing that reads participants
+  // (the scheduling workflow, the calendar bridge, the interview routes) looks at a status, so a row left behind would
+  // keep them on the schedule, in the candidate's messages and on the bookings. The notification, the event and the
+  // audit record below keep the count.
+  const ahead = await tx
+    .select({ participantId: interviewParticipants.id, interviewId: interviews.id, applicationId: interviews.applicationId, title: interviews.title, calendarRefs: interviews.calendarRefs })
+    .from(interviewParticipants)
+    .innerJoin(interviews, eq(interviews.id, interviewParticipants.interviewId))
+    .where(and(eq(interviewParticipants.companyId, tenant.companyId), eq(interviewParticipants.userId, userId), inArray(interviews.status, OPEN_INTERVIEW_STATUSES)));
+  // Their applications first, in one order, before any interview changes: every path that changes an interview and its
+  // application takes the application first (a booking, a cancel, a send of new times), so they take turns.
+  const appIds = [...new Set(ahead.map((p) => p.applicationId))];
+  if (appIds.length) await tx.select({ id: applications.id }).from(applications).where(inArray(applications.id, appIds)).orderBy(asc(applications.id)).for("update");
+  if (ahead.length) await tx.delete(interviewParticipants).where(inArray(interviewParticipants.id, ahead.map((p) => p.participantId)));
+  for (const p of ahead) {
+    // A booking in their calendar cannot be managed once the calendar is disconnected; its reference goes with them.
+    if (!(userId in p.calendarRefs)) continue;
+    const { [userId]: _gone, ...refs } = p.calendarRefs;
+    await tx.update(interviews).set({ calendarRefs: refs }).where(eq(interviews.id, p.interviewId));
+  }
+  // An interview that counted on nobody else cannot take place and nothing adds an interviewer to an existing one, so
+  // it is cancelled through the one cancellation path: its scheduling run ends, a candidate with a booked time is
+  // told, and the candidate goes back to "Interview approved" for the team to approve a new interview. An interview
+  // with other interviewers goes ahead with them.
+  const cancelled: Array<{ title: string; candidateTold: boolean }> = [];
+  const continuing: string[] = [];
+  for (const interviewId of [...new Set(ahead.map((p) => p.interviewId))]) {
+    const [iv] = await tx.select().from(interviews).where(eq(interviews.id, interviewId)).limit(1);
+    if (!iv) continue;
+    const [others] = await tx.select({ n: count() }).from(interviewParticipants).where(eq(interviewParticipants.interviewId, iv.id));
+    if (Number(others?.n ?? 0) > 0) { continuing.push(iv.title); continue; }
+    const done = await cancelInterviewInTx(tx, container, { companyId: tenant.companyId, interview: iv, actor, by: "system", reason: `${who} ${left ? "left" : "was removed from"} the team and was the only interviewer.`, cause: "interviewer_removed", now });
+    cancelled.push({ title: iv.title, candidateTold: done.candidateTold });
+  }
+  if (ahead.length) await notify(tx, { companyId: tenant.companyId, kind: "member.removed_interviews", ...removalNotice(who, cancelled, continuing, left), action: { label: "Open interviews", href: "/interviews" }, roles: ["owner", "admin"] });
+  const counts = { calendarDeletionQueued: !!calendar?.queued, interviewsFlagged: ahead.length, interviewsCancelled: cancelled.length };
+  await emit(tx, { type: "member.removed", companyId: tenant.companyId, actor, subject: { type: "user", id: userId }, payload: { role: target.role, ...counts, ...(left ? { left: true } : {}) } });
+  await emit(tx, { type: "membership.changed", companyId: tenant.companyId, actor, subject: { type: "user", id: userId }, payload: { role: target.role, status: "removed", ...(left ? { left: true } : {}) } });
+  await audit(tx, { companyId: tenant.companyId, actor, action: "membership.changed", target: { type: "user", id: userId }, reason, details: { role: target.role, ...counts } });
+  return { role: updated.role, status: updated.status, ...counts };
+}
+
+/**
+ * "Leave this company" (founder decision L-10, 15 October 2026): any member may leave; an owner only while another
+ * active owner remains (409 `last_owner`). Leaving is a removal the person makes themselves, with the same effects
+ * (`endMembershipInTx`), and the owners and admins are told. Afterwards this session moves to another company the person
+ * still works in, if any, and their sessions working in this company end; with no other company they are signed out.
+ * Closing a whole company stays a request to ITS. ITS staff under a grant are not members and cannot leave (409).
+ */
+export async function leaveCompany(team: Team, input: { sessionId: string }) {
+  const { container, tenant } = team;
+  if (tenant.staff) throw new HttpError(409, "not_a_member", "You work here through recruiter access, not as a member. Your access ends with the request.");
+  const now = container.engine.clock();
+  const outcome = await withTenant(container.db, tenant.companyId, async (tx) => {
+    const [me] = await tx
+      .select({ id: memberships.id, role: memberships.role, email: users.email, name: users.name })
+      .from(memberships)
+      .innerJoin(users, eq(users.id, memberships.userId))
+      .where(and(eq(memberships.companyId, tenant.companyId), eq(memberships.userId, tenant.userId), eq(memberships.status, "active")))
+      .limit(1);
+    if (!me) throw new HttpError(404, "not_found", "You are not an active member of this company.");
+    if (me.role === "owner") {
+      const [owners] = await tx.select({ n: count() }).from(memberships).where(and(eq(memberships.companyId, tenant.companyId), eq(memberships.role, "owner"), eq(memberships.status, "active")));
+      if (Number(owners?.n ?? 0) <= 1) throw new HttpError(409, "last_owner", "You are the only owner. Make someone else an owner first, then leave. To close the whole company, ask ITS.");
+    }
+    const who = me.name ?? me.email;
+    const done = await endMembershipInTx(tx, team, { userId: tenant.userId, target: me, who, left: true });
+    await notify(tx, { companyId: tenant.companyId, kind: "member.left", title: `${who} left the team`, body: `${who} left the company on their own. They no longer have access. What they did stays in the record.`, action: { label: "Open the team", href: "/setup?tab=team" }, roles: ["owner", "admin"] });
+    return { ...done, companyName: await companyNameOf(tx, tenant.companyId) };
+  });
+  // After the commit, on the platform side: this session moves to the person's other company, if they have one, and
+  // every session still working here ends (core `revokeSessionsForCompany` leaves those in other companies open).
+  const moved = await withPlatform(container.db, async (tx) => {
+    const [other] = await tx
+      .select({ companyId: memberships.companyId, name: companies.name })
+      .from(memberships)
+      .innerJoin(companies, eq(companies.id, memberships.companyId))
+      .where(and(eq(memberships.userId, tenant.userId), eq(memberships.status, "active")))
+      .orderBy(asc(companies.name))
+      .limit(1);
+    if (other) await setActiveCompany(tx, input.sessionId, other.companyId);
+    const r = await revokeSessionsForCompany(tx, tenant.userId, tenant.companyId, { now });
+    if (r.sessionsEnded > 0) await audit(tx, { companyId: tenant.companyId, actor: team.actor, action: "session.revoked", target: { type: "user", id: tenant.userId }, reason: "left the team", details: { sessionsEnded: r.sessionsEnded, scope: "company" } });
+    return other ? { companyId: other.companyId, companyName: other.name } : null;
+  });
+  await container.kick();
+  return { ok: true as const, left: outcome.companyName, movedTo: moved, signedOut: !moved, calendarDeletionQueued: outcome.calendarDeletionQueued, interviewsFlagged: outcome.interviewsFlagged, interviewsCancelled: outcome.interviewsCancelled };
+}
+
 /** Plain words for the owners about the interviews a removed person was on: which were cancelled and which go ahead. */
-function removalNotice(who: string, cancelled: Array<{ title: string; candidateTold: boolean }>, continuing: string[]): { title: string; body: string } {
+function removalNotice(who: string, cancelled: Array<{ title: string; candidateTold: boolean }>, continuing: string[], left = false): { title: string; body: string } {
   const list = (titles: string[]) => [...new Set(titles)].slice(0, 5).join(", ");
   const parts: string[] = [];
   if (cancelled.length) {
@@ -280,7 +346,7 @@ function removalNotice(who: string, cancelled: Array<{ title: string; candidateT
   }
   if (continuing.length) parts.push(`${list(continuing)}: ${continuing.length === 1 ? "goes" : "go"} ahead with the other interviewers.`);
   const title = cancelled.length
-    ? `${who} was removed; ${cancelled.length === 1 ? "an interview was" : `${cancelled.length} interviews were`} cancelled`
-    : `${who} was removed from ${continuing.length === 1 ? "an interview" : `${continuing.length} interviews`}`;
+    ? `${who} ${left ? "left the team" : "was removed"}; ${cancelled.length === 1 ? "an interview was" : `${cancelled.length} interviews were`} cancelled`
+    : `${who} ${left ? "left the team and came off" : "was removed from"} ${continuing.length === 1 ? "an interview" : `${continuing.length} interviews`}`;
   return { title, body: parts.join(" ") };
 }

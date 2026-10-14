@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeCompanyOf, jobHref, RAIL_ROLE_LIMIT, railCompact, railListsRoles, railRoles, rolesInProgress, teamRoleWord } from "../../apps/web/src/rail";
+import { activeCompanyOf, jobHref, otherCompanies, RAIL_ROLE_LIMIT, railCompact, railListsRoles, railRoles, rolesInProgress, teamRoleWord } from "../../apps/web/src/rail";
 import { ROLE_STATUS, roleStatus } from "../../apps/web/src/role-status";
 
 /**
@@ -105,5 +105,19 @@ describe("a role's status pill", () => {
     }
     expect(roleStatus("pending_approval").label).toBe("Waiting for approval");
     expect(roleStatus("something_new")).toEqual({ label: "something new", tone: "neutral" });
+  });
+});
+
+describe("the company switcher's choices (rows 9, 49)", () => {
+  const m = (companyId: string, companyName: string, role = "owner") => ({ companyId, companyName, role });
+  it("lists every other company the person works in, by name, and nothing for one company", () => {
+    const me = { activeCompanyId: "c2", memberships: [m("c1", "Zephyr Dental", "hr"), m("c2", "Bright Dental"), m("c3", "Alpine Clinic", "interviewer")], staffAccess: null };
+    expect(otherCompanies(me)).toEqual([{ companyId: "c3", companyName: "Alpine Clinic", role: "interviewer" }, { companyId: "c1", companyName: "Zephyr Dental", role: "hr" }]);
+    expect(otherCompanies({ activeCompanyId: "c2", memberships: [m("c2", "Bright Dental")], staffAccess: null })).toEqual([]);
+    expect(otherCompanies(null)).toEqual([]);
+  });
+
+  it("offers nothing to an ITS recruiter inside a customer under a grant", () => {
+    expect(otherCompanies({ activeCompanyId: "c9", memberships: [m("c1", "Own Co")], staffAccess: { companyName: "Customer Co" } })).toEqual([]);
   });
 });

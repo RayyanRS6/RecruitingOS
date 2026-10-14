@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import { createHash } from "node:crypto";
 import { desc, eq, inArray, sql } from "drizzle-orm";
 import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, suppressAddress, describeHours, unsentScreenReadings, withoutUnsentRunOutput, withoutUnsentScreenEvents, APPLY_FLOW_FALLBACK } from "@ros/core";
@@ -17,6 +18,7 @@ import type { Container } from "../container";
 import { customerReport } from "../services/role-report";
 import { setJobBoardAccess, unverifyCompany, verifyCompany } from "../services/company-trust";
 import { resetPublicFeedCache } from "../pages/public-feeds";
+import { failedEmailApplications, retryFailedEmail } from "../webhooks/postmark";
 
 /** Platform admin console API (docs/16). Every read is audited with the reason the admin supplies. */
 export const adminRoutes = new Hono<Vars>();
@@ -225,6 +227,22 @@ adminRoutes.get("/failures", async (c) => {
   const alerts = await openAlerts(db);
   const pendingDeletions = await pendingCredentialDeletions(db);
   return c.json({ failedRuns, failedJobs, failedAi, alerts, pendingDeletions });
+});
+
+/**
+ * Email applications that could not be imported (known-bugs row 120): the webhook answered "queued for review", and this
+ * is where they are reviewed. Each can be tried again once its job is taking applications; the email itself is shown.
+ */
+adminRoutes.get("/failed-email-applications", async (c) => c.json(await failedEmailApplications(c.get("container"))));
+adminRoutes.post("/failed-email-applications/:id/retry", async (c) => {
+  const container = c.get("container");
+  // an id that is not one never reaches the uuid column
+  if (!z.guid().safeParse(c.req.param("id")).success) throw new HttpError(404, "not_found", "This email is not waiting for a retry.");
+  const out = await retryFailedEmail(container, c.req.param("id"));
+  if (!out.ok) throw new HttpError(409, "not_retried", out.reason);
+  const s = c.get("session")!;
+  await audit(container.db, { companyId: null, actor: { kind: "user", id: s.user.id, name: s.user.name ?? s.user.email }, action: "admin.bypass", reason: "retried a failed email application", details: { inboundEmailId: c.req.param("id"), applicationId: out.applicationId, duplicate: out.duplicate } });
+  return c.json(out);
 });
 
 /** The email do-not-send list (item 5): what is suppressed, why, and a release once a person has confirmed the address. */

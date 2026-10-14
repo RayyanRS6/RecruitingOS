@@ -8,6 +8,7 @@ import { sendPrivacyAcknowledgment } from "@ros/agents";
 import { applications, candidates, companies, dataRequests, uuidv7, withPlatform } from "@ros/db";
 import type { Vars } from "../middleware/session";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
+import { addressMatch } from "../services/applications";
 import { Icon } from "./icons";
 import { Layout } from "./layout";
 
@@ -111,18 +112,21 @@ privacyRequestPages.post("/c/privacy-request", rateLimit(POLICIES.privacyForm), 
   // The employers that hold a record under this address, plus the one the form named (a link from a careers page).
   // A read only: nothing is written until the person confirms from the mailbox.
   const targets = await withPlatform(container.db, async (tx) => {
-    const matches = await tx.select({ id: candidates.id, companyId: candidates.companyId }).from(candidates).where(and(eq(candidates.email, email), isNull(candidates.anonymizedAt))).orderBy(desc(candidates.createdAt)).limit(20);
-    const byCompany = new Map<string, string | null>();
-    for (const m of matches) if (!byCompany.has(m.companyId)) byCompany.set(m.companyId, m.id);
+    // The same address-matching rule as "Lost your link?" (known-bugs row 68): the folded key, or the exact address.
+    const match = addressMatch(email);
+    const matches = match ? await tx.select({ id: candidates.id, companyId: candidates.companyId, email: candidates.email }).from(candidates).where(and(match, isNull(candidates.anonymizedAt))).orderBy(desc(candidates.createdAt)).limit(20) : [];
+    const byCompany = new Map<string, { id: string; email: string | null } | null>();
+    for (const m of matches) if (!byCompany.has(m.companyId)) byCompany.set(m.companyId, { id: m.id, email: m.email });
     if (parsed.data.company) {
       const [named] = await tx.select({ id: companies.id }).from(companies).where(eq(companies.slug, parsed.data.company)).limit(1);
       if (named && !byCompany.has(named.id)) byCompany.set(named.id, null);
     }
-    const out: Array<{ companyId: string; companyName: string; candidateId: string | null; applicationId: string | null }> = [];
-    for (const [companyId, candidateId] of byCompany) {
+    // The confirmation goes to the address the employer has on file (the typed one may only fold to it); otherwise to the typed one.
+    const out: Array<{ companyId: string; companyName: string; candidateId: string | null; applicationId: string | null; to: string }> = [];
+    for (const [companyId, person] of byCompany) {
       const [co] = await tx.select({ name: companies.name }).from(companies).where(eq(companies.id, companyId)).limit(1);
-      const [app] = candidateId ? await tx.select({ id: applications.id }).from(applications).where(eq(applications.candidateId, candidateId)).orderBy(desc(applications.createdAt)).limit(1) : [];
-      out.push({ companyId, companyName: co?.name ?? "the hiring team", candidateId, applicationId: app?.id ?? null });
+      const [app] = person ? await tx.select({ id: applications.id }).from(applications).where(eq(applications.candidateId, person.id)).orderBy(desc(applications.createdAt)).limit(1) : [];
+      out.push({ companyId, companyName: co?.name ?? "the hiring team", candidateId: person?.id ?? null, applicationId: app?.id ?? null, to: person?.email ? normalizeEmail(person.email) : email });
     }
     return out;
   });
@@ -130,9 +134,9 @@ privacyRequestPages.post("/c/privacy-request", rateLimit(POLICIES.privacyForm), 
   // Sent directly, outside any transaction (the way sign-in links are sent): never queued into the candidate's thread.
   for (const t of targets) {
     const id = uuidv7(now.getTime());
-    const token = sealPayload<VerifyToken>(VERIFY_PURPOSE, { v: 2, id, email, kind: parsed.data.kind, ...(parsed.data.details ? { details: parsed.data.details } : {}), companyId: t.companyId, candidateId: t.candidateId, applicationId: t.applicationId, exp: now.getTime() + VERIFY_TTL_MS }, container.env.SESSION_SECRET);
+    const token = sealPayload<VerifyToken>(VERIFY_PURPOSE, { v: 2, id, email: t.to, kind: parsed.data.kind, ...(parsed.data.details ? { details: parsed.data.details } : {}), companyId: t.companyId, candidateId: t.candidateId, applicationId: t.applicationId, exp: now.getTime() + VERIFY_TTL_MS }, container.env.SESSION_SECRET);
     const sent = await container.integrations.email.send({
-      to: email, from: `${t.companyName} privacy requests <${container.integrations.env.fromAddress}>`, replyTo: container.env.PRIVACY_EMAIL,
+      to: t.to, from: `${t.companyName} privacy requests <${container.integrations.env.fromAddress}>`, replyTo: container.env.PRIVACY_EMAIL,
       subject: `Confirm your request (${id.slice(0, 8)})`,
       text: `Hello,\n\nSomeone asked, using this address, for ${KIND_WORDS[parsed.data.kind]} held by ${t.companyName}.\n\nIf that was you, open this link within 24 hours and press the button to confirm:\n${link(token)}\n\nIf it was not you, ignore this email; nothing happens without the button.\n\nQuestions? Write to ${container.env.PRIVACY_EMAIL}.\n\nIdentified Talent Solutions, on behalf of ${t.companyName}`,
       idempotencyKey: `privacy_verify:${id}`, tags: { template: "privacy_verify" },

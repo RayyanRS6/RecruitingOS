@@ -254,6 +254,19 @@ describe("interviews to hire (Wave H)", () => {
     expect(t).toMatch(/Sam Doyle · After the interview ?: Explained perio charting clearly\./);
     expect(t).toContain("Add your note");
     expect(t).toMatch(/Finalist Hire Not moving forward/);
+    expect(t).not.toContain("Approve the same round again");
+  });
+
+  it("after our interviewer missed it, the same round again comes first, with the apology line (founder decision L-12)", () => {
+    const missed = detail({ stage: "interview_complete", allowedActions: ["record_decision", "record_outcome", "reject", "interview"], interviewPlan: [{ key: "working", title: "Working interview", durationMinutes: 45, format: "in_person", interviewerUserIds: [], purpose: "" }, { key: "final", title: "Final interview", durationMinutes: 30, format: "in_person", interviewerUserIds: [], purpose: "" }], interviews: [{ id: "iv1", roundKey: "working", title: "Working interview", status: "no_show", startsAt: daysAgo(1), endsAt: null, timezone: null, meetingUrl: null, attempt: 1, outcome: "no_show_interviewer", decision: null, offeredSlots: [], createdAt: daysAgo(3) }] });
+    const html = panel(client([missed]));
+    const t = text(html);
+    expect(t).toContain("Working interview (the interviewer did not attend).");
+    expect(t).toContain("Our interviewer missed it. The new invitation says sorry.");
+    // the primary button, first; next round and the other choices stay, second
+    expect(t).toMatch(/Approve the same round again Next round Finalist Hire Not moving forward/);
+    expect(html).toMatch(/<button type="button" class="btn primary sm"[^>]*>Approve the same round again<\/button>/);
+    expect(html).not.toMatch(/class="btn primary sm"[^>]*>Next round</);
   });
 
   it("the Notes tab: the reminder, your own note with the starters, everyone else's", () => {

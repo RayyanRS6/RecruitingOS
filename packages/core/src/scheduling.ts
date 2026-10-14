@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { OfferedSlot } from "@ros/contracts";
-import { zonedParts, zonedToUtc } from "./business-hours";
+import { DEFAULT_US_FEDERAL_HOLIDAYS, zonedParts, zonedToUtc, type BusinessCalendar, type CalendarSource } from "./business-hours";
 
 /**
  * Slot computation for interviews (docs/06 schedule_interview, propose_slots). Pure: the workflow gathers each
@@ -40,6 +40,11 @@ export type SlotComputationInput = {
   toDate: string;
   companyTimezone: string;
   businessDaysOnly: boolean;
+  /**
+   * Public holidays (YYYY-MM-DD in the company's zone) left out like weekends while `businessDaysOnly` holds
+   * (`holidaysBetween`). Nothing is left out when absent.
+   */
+  holidays?: ReadonlySet<string> | readonly string[];
   now: Date;
   /** Nothing sooner than this many hours from now. */
   leadHours?: number;
@@ -47,6 +52,25 @@ export type SlotComputationInput = {
   maxSlots?: number;
   maxSlotsPerDay?: number;
 };
+
+/**
+ * The public holidays between two days (inclusive) on which no interview time is offered: the holidays of the business
+ * calendar in force on each day (an administrator keeps that list), or the built-in US federal list when the calendar
+ * carries no holidays at all.
+ */
+export function holidaysBetween(src: CalendarSource | null | undefined, fromDate: string, toDate: string): Set<string> {
+  const out = new Set<string>();
+  const days = dayKeysBetween(fromDate, toDate);
+  const calendarFor = (dayKey: string): BusinessCalendar | null => (!src ? null : "forDay" in src ? src.forDay(dayKey) : src);
+  let listed = false;
+  for (const dayKey of days) {
+    const cal = calendarFor(dayKey);
+    if (cal?.holidays.length) listed = true;
+    if (cal?.holidays.some((h) => h.date === dayKey)) out.add(dayKey);
+  }
+  if (!listed) for (const h of DEFAULT_US_FEDERAL_HOLIDAYS) if (h.date >= fromDate && h.date <= toDate) out.add(h.date);
+  return out;
+}
 
 /** True for a person whose availability is unknown and who is optional on the interview: left out of the merge. */
 export function leftOutOfMerge(p: Pick<ParticipantConstraints, "source" | "optional">): boolean {
@@ -140,11 +164,12 @@ export function computeSlots(input: SlotComputationInput): { slots: OfferedSlot[
   const slots: OfferedSlot[] = [];
   const unconstrained = input.participants.filter((p) => p.source === "none").map((p) => p.userId);
   if (!merged.length) return { slots, unconstrained };
+  const holidays = new Set<string>(input.holidays ?? []);
   for (const dayKey of dayKeysBetween(input.fromDate, input.toDate)) {
     if (slots.length >= maxSlots) break;
     const [y, m, d] = dayKey.split("-").map(Number);
     const companyNoon = zonedParts(zonedToUtc(y, m, d, 12, 0, input.companyTimezone), input.companyTimezone);
-    if (input.businessDaysOnly && (companyNoon.weekday === 0 || companyNoon.weekday === 6)) continue;
+    if (input.businessDaysOnly && (companyNoon.weekday === 0 || companyNoon.weekday === 6 || holidays.has(dayKey))) continue;
     let common: TimeRange[] | null = null;
     for (const p of merged) {
       const free = freeRangesForDay(p, dayKey);

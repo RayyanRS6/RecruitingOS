@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { CalendarError, GOOGLE_CALENDAR_SCOPES, type CalendarAccount, type CalendarCredential, type CalendarEventInput, type CalendarEventRef, type CalendarProvider, type TimeRange } from "./types";
+import { CalendarError, GOOGLE_CALENDAR_SCOPES, type CalendarAccount, type CalendarErrorCode, type CalendarCredential, type CalendarEventInput, type CalendarEventRef, type CalendarProvider, type TimeRange } from "./types";
 
 /**
  * Google Calendar, mocked (slice 5 step 8; founder decision: synthetic data and mocks until accounts exist). Behaves
@@ -7,6 +7,8 @@ import { CalendarError, GOOGLE_CALENDAR_SCOPES, type CalendarAccount, type Calen
  * probes, revocation, and the failures that matter (revoked credential, rate limit, transient error). Tests script
  * busy time and failures; nothing here leaves the process.
  */
+/** The failures a test can script: the ones that matter to scheduling. */
+type FakeFailure = "auth_revoked" | "rate_limited" | "transient" | "permission_denied";
 type Account = { refreshToken: string; email: string; calendarId: string; timeZone: string; revoked: boolean };
 type StoredEvent = CalendarEventRef & { input: CalendarEventInput; status: "confirmed" | "cancelled"; sequence: number };
 
@@ -17,7 +19,7 @@ export class FakeGoogleCalendarProvider implements CalendarProvider {
   private codes = new Map<string, { email: string; timeZone: string; codeChallenge?: string }>();
   private busyByEmail = new Map<string, TimeRange[]>();
   private events = new Map<string, StoredEvent>(); // by event id
-  private nextFailure: { code: "auth_revoked" | "rate_limited" | "transient"; times: number } | null = null;
+  private nextFailure: { code: FakeFailure; times: number } | null = null;
   constructor(private cfg: { apiBaseUrl: string }) {}
 
   authorizeUrl(input: { redirectTo: string; state: string; codeChallenge?: string; loginHint?: string | null }): string {
@@ -48,7 +50,7 @@ export class FakeGoogleCalendarProvider implements CalendarProvider {
       this.nextFailure.times -= 1;
       const code = this.nextFailure.code;
       if (this.nextFailure.times === 0) this.nextFailure = null;
-      throw new CalendarError(code, code === "auth_revoked" ? "Google no longer honours this connection; reconnect the calendar." : code === "rate_limited" ? "Google asked us to slow down." : "Google returned a temporary error.");
+      throw new CalendarError(code, code === "auth_revoked" ? "Google no longer honours this connection; reconnect the calendar." : code === "rate_limited" ? "Google asked us to slow down." : code === "permission_denied" ? "Google refused access to this calendar; reconnect it and allow access to its events." : "Google returned a temporary error.");
     }
     const a = this.accounts.get(cred.refreshToken);
     if (!a || a.revoked) throw new CalendarError("auth_revoked", "Google no longer honours this connection; reconnect the calendar.", false);
@@ -92,7 +94,7 @@ export class FakeGoogleCalendarProvider implements CalendarProvider {
     if (!e) return; // already gone: cancellation is idempotent
     e.status = "cancelled";
   }
-  async probe(cred: CalendarCredential, _calendarId: string): Promise<{ ok: true; timeZone: string | null } | { ok: false; code: "auth_revoked" | "rate_limited" | "transient" | "not_found" | "conflict" | "not_configured"; error: string }> {
+  async probe(cred: CalendarCredential, _calendarId: string): Promise<{ ok: true; timeZone: string | null } | { ok: false; code: CalendarErrorCode; error: string }> {
     try {
       const a = this.account(cred);
       return { ok: true, timeZone: a.timeZone };
@@ -112,7 +114,7 @@ export class FakeGoogleCalendarProvider implements CalendarProvider {
   setBusy(email: string, ranges: TimeRange[]): void {
     this.busyByEmail.set(email.toLowerCase(), ranges);
   }
-  failNext(code: "auth_revoked" | "rate_limited" | "transient", times = 1): void {
+  failNext(code: FakeFailure, times = 1): void {
     this.nextFailure = { code, times };
   }
   /** The person revokes access at Google: every later call fails with auth_revoked. */

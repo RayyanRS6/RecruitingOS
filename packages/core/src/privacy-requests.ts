@@ -1,12 +1,13 @@
 import { randomBytes } from "node:crypto";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, notInArray, notLike, or, sql, type SQL } from "drizzle-orm";
 import { RejectReason, type Actor } from "@ros/contracts";
-import { aiRuns, applicationMarks, applicationNotes, applications, approvalRequests, assessments, candidates, communications, dataRequests, documents, escalationMessages, events, hiringOutcomes, interviewFollowups, interviewParticipants, interviews, jobs, notifications, recruiterEscalations, screens, unconfirmedScreens, workflowRuns, workflowSteps, rowsOf, type Queryable } from "@ros/db";
+import { aiRuns, applicationMarks, applicationNotes, applications, approvalRequests, assessments, candidates, communications, dataRequests, documents, escalationMessages, events, hiringOutcomes, inboundEmails, interviewFollowups, interviewParticipants, interviews, jobs, notifications, recruiterEscalations, screens, unconfirmedScreens, workflowRuns, workflowSteps, rowsOf, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { SYSTEM_ACTOR, emit } from "./events";
 import { raiseAlert, resolveAlertsFor } from "./alerts";
 import { createEscalation } from "./escalations";
 import { normalizeEmail } from "./auth";
+import { dedupeKey } from "./dedupe";
 import { notify } from "./notifications";
 import { openingQuestionsOf, screenAnswersOf, withoutFocusAnswers } from "./screen-answers";
 import { DECISION_STAGES, canTransition, transition } from "./stages";
@@ -126,9 +127,29 @@ export async function fulfilCorrectionRequest(q: Queryable, row: DataRequestRow,
   if (!row.candidateId) throw new Error("no candidate is linked to this request");
   const [cand] = await q.select().from(candidates).where(eq(candidates.id, row.candidateId)).limit(1);
   const before = cand[input.field];
-  await q.update(candidates).set({ [input.field]: input.field === "email" ? normalizeEmail(input.value) : input.value }).where(eq(candidates.id, cand.id));
-  await audit(q, { companyId: row.companyId, actor: input.actor, action: "data.corrected", target: { type: "candidate", id: cand.id }, reason: `correction request ${row.id}`, details: { requestId: row.id, field: input.field, changed: before !== input.value } });
-  return resolve(q, { ...row, notes: [...row.notes, { at: (input.now ?? new Date()).toISOString(), by: input.actor.name ?? input.actor.id, text: `corrected ${input.field}` }] }, input.resolution, input.actor, "fulfilled", input.now);
+  const value = input.field === "email" ? normalizeEmail(input.value) : input.value;
+  // A corrected address (or number) is also the key the person is found by (known-bugs row 71): "Lost your link?" and a
+  // new application from the new address find this record. If another record of the company already uses that key, the
+  // key stays as it was and the request's notes say so; the two records are never merged here.
+  const rekey = await rekeyAfterCorrection(q, { candidate: cand, field: input.field, value });
+  await q.update(candidates).set({ [input.field]: value, ...(rekey.key ? { dedupeKey: rekey.key } : {}) }).where(eq(candidates.id, cand.id));
+  await audit(q, { companyId: row.companyId, actor: input.actor, action: "data.corrected", target: { type: "candidate", id: cand.id }, reason: `correction request ${row.id}`, details: { requestId: row.id, field: input.field, changed: before !== input.value, rekeyed: !!rekey.key, ...(rekey.clash ? { keyInUse: true } : {}) } });
+  const at = (input.now ?? new Date()).toISOString();
+  const by = input.actor.name ?? input.actor.id;
+  const notes = [...row.notes, { at, by, text: `corrected ${input.field}` }, ...(rekey.clash ? [{ at, by, text: "another record of this company already uses the corrected address or number, so the record is still found by the old one; the two records were not merged" }] : [])];
+  return resolve(q, { ...row, notes }, input.resolution, input.actor, "fulfilled", input.now);
+}
+
+/** The new key after an email or phone correction, or why it stays (another record holds it). Never the person's words. */
+async function rekeyAfterCorrection(q: Queryable, input: { candidate: typeof candidates.$inferSelect; field: string; value: string }): Promise<{ key: string | null; clash: boolean }> {
+  if (input.field !== "email" && input.field !== "phone") return { key: null, clash: false };
+  const { candidate } = input;
+  if (candidate.anonymizedAt) return { key: null, clash: false };
+  const key = dedupeKey(input.field === "email" ? input.value : candidate.email, input.field === "phone" ? input.value : candidate.phone);
+  if (!key || key === candidate.dedupeKey) return { key: null, clash: false };
+  const [other] = await q.select({ id: candidates.id }).from(candidates).where(and(eq(candidates.companyId, candidate.companyId), eq(candidates.dedupeKey, key))).limit(1);
+  if (other && other.id !== candidate.id) return { key: null, clash: true };
+  return { key, clash: false };
 }
 
 const DELETION_REASON = "the candidate asked for their information to be deleted";
@@ -268,6 +289,9 @@ export async function anonymizeCandidate(
   }
   const comms = await q.select({ id: communications.id }).from(communications).where(eq(communications.candidateId, cand.id));
   for (const c of comms) await q.update(communications).set({ bodyText: "[removed at the candidate's request]", bodyHtml: null, subject: "[removed]", toAddress: null }).where(eq(communications.id, c.id));
+  // Applications they emailed in that were never admitted (a failed or held email, Wave S5 review): no candidate row
+  // links to them, so they are found by the application they became or by the address in them, and lose the file too.
+  await purgeInboundEmailsOf(q, { companyId: input.companyId, email: cand.email, appIds, deleteFile: input.deleteFile });
   const scrubbed = await scrubRecruiterCopies(q, { companyId: input.companyId, appIds, candidate: cand, now });
   // The workflow engine's copies (run state, step records) lose every word too (Wave S3 G1); a run still going is
   // cancelled first, so nothing it does next can write them back or break on a scrubbed state.
@@ -278,6 +302,31 @@ export async function anonymizeCandidate(
   await audit(q, { companyId: input.companyId, actor: input.actor, action: "data.anonymized", target: { type: "candidate", id: cand.id }, reason: "deletion request fulfilled by anonymization after a counsel decision", details: { documents: docs.length, screens: scrCount, communications: comms.length, escalations: scrubbed.escalations, notifications: scrubbed.notifications, assessments: ai.assessments, aiRuns: ai.aiRuns, workflowRunsCancelled: wf.cancelledRuns, workflowRuns: wf.workflowRuns, workflowSteps: wf.workflowSteps, workflowEvents: wf.workflowEvents } });
   await emit(q, { type: "candidate.anonymized", companyId: input.companyId, actor: input.actor, subject: { type: "candidate", id: cand.id }, payload: { documents: docs.length } });
   return { documents: docs.length, screens: scrCount, communications: comms.length, assessments: ai.assessments, aiRuns: ai.aiRuns, workflowRuns: wf.workflowRuns, workflowSteps: wf.workflowSteps };
+}
+
+/** What an emailed-in application keeps once its contents are removed: nothing that names or reaches the person. */
+export const REMOVED_INBOUND_EMAIL = { rawStorageKey: null, parsed: {}, subject: "[removed]", fromAddress: "[removed]" } as const;
+
+/**
+ * Emailed-in applications of one person in one company (inbound_emails): the ones that became one of their applications
+ * (`appIds`), and the ones whose sender or contents name their address as a whole address. The stored file is removed
+ * (`deleteFile`) and the email's words, sender and subject go. Returns how many were cleared.
+ */
+export async function purgeInboundEmailsOf(q: Queryable, input: { companyId: string; email: string | null; appIds: readonly string[]; deleteFile: (storageKey: string) => Promise<void> }): Promise<number> {
+  const address = input.email?.trim().toLowerCase() ?? "";
+  const escaped = address.replace(/[.*+?^$(){}|[\]\\]/g, "\\$&");
+  const whole = address ? `(^|[^a-z0-9._%+-])${escaped}($|[^a-z0-9._-])` : null;
+  const matches = [
+    ...(input.appIds.length ? [inArray(inboundEmails.applicationId, [...input.appIds])] : []),
+    ...(whole ? [sql`lower(${inboundEmails.fromAddress}) ~ ${whole}`, sql`lower(${inboundEmails.parsed}::text) ~ ${whole}`] : []),
+  ];
+  if (!matches.length) return 0;
+  const rows = await q.select({ id: inboundEmails.id, rawStorageKey: inboundEmails.rawStorageKey }).from(inboundEmails).where(and(eq(inboundEmails.companyId, input.companyId), or(...matches), notLike(inboundEmails.fromAddress, "[removed]")));
+  for (const r of rows) {
+    if (r.rawStorageKey) await input.deleteFile(r.rawStorageKey);
+    await q.update(inboundEmails).set({ ...REMOVED_INBOUND_EMAIL }).where(eq(inboundEmails.id, r.id));
+  }
+  return rows.length;
 }
 
 /** What an AI run about a deleted candidate shows in place of what the model read and wrote. */

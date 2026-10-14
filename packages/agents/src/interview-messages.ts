@@ -51,9 +51,10 @@ export function invitationNoteText(note: InvitationNote | null | undefined): str
  * someone who said they were no longer interested). The new-times openings never say why and never hint at a decision
  * (founder decision B6). Two more openings for times worked out again: `rescheduled` after the team moved the interview
  * (offered times, or a booked time they were told is off), and `other_times` after the candidate said none of the
- * offered times work.
+ * offered times work. And `missed_by_us`: the first offer of the same round again after our interviewer missed the
+ * last one (founder decision L-12, 15 Oct 2026), which opens with an apology.
  */
-export type SlotsVariant = "first" | "new_times_asked" | "new_times_team" | "rescheduled" | "other_times";
+export type SlotsVariant = "first" | "new_times_asked" | "new_times_team" | "rescheduled" | "other_times" | "missed_by_us";
 
 /**
  * The times email, written but not sent: one template and one key per interview and attempt whatever the variant, so it
@@ -73,8 +74,10 @@ export function slotsOfferedMessage(input: InterviewMessageInput & { note?: Invi
         ? `${company.name} has new times for your ${titleMidSentence(interview.title)} for the ${position} position. ${interview.durationMinutes} minutes, ${format}${who}.`
         : variant === "other_times"
           ? `As you asked, here are other times for your ${titleMidSentence(interview.title)} for the ${position} position at ${company.name}. ${interview.durationMinutes} minutes, ${format}${who}.`
-          : `Good news: ${company.name} would like to interview you for the ${position} position. ${interview.title}${who}, ${interview.durationMinutes} minutes, ${format}.`;
-  const subject = variant === "new_times_asked" || variant === "rescheduled" ? `New times for your interview: ${position} at ${company.name}` : variant === "new_times_team" ? `New interview times: ${position} at ${company.name}` : variant === "other_times" ? `Other times for your interview: ${position} at ${company.name}` : `Pick a time for your interview: ${position} at ${company.name}`;
+          : variant === "missed_by_us"
+            ? `We are sorry: the interviewer from ${company.name} could not join your last interview for the ${position} position. Please pick a new time for your ${titleMidSentence(interview.title)}. ${interview.durationMinutes} minutes, ${format}${who}.`
+            : `Good news: ${company.name} would like to interview you for the ${position} position. ${interview.title}${who}, ${interview.durationMinutes} minutes, ${format}.`;
+  const subject = variant === "new_times_asked" || variant === "rescheduled" || variant === "missed_by_us" ? `New times for your interview: ${position} at ${company.name}` : variant === "new_times_team" ? `New interview times: ${position} at ${company.name}` : variant === "other_times" ? `Other times for your interview: ${position} at ${company.name}` : `Pick a time for your interview: ${position} at ${company.name}`;
   const text = `Hi ${candidate.firstName},
 
 ${opening}${invitationNoteText(input.note)}

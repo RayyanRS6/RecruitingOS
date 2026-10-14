@@ -479,11 +479,54 @@ export function Failures() {
           </>
         ) : <p className="muted small">None.</p>}
       </Card>
+      <FailedEmailApplications />
       {q.data.pendingDeletions.length ? <Card title={`Credentials still in the store after disconnect (${q.data.pendingDeletions.length})`}><ul className="small">{q.data.pendingDeletions.map((p) => <li key={p.id}>{p.provider} {p.kind} · {p.lastError} <Button size="sm" variant="quiet" loading={retry.isPending && retry.variables === p.id} onClick={() => retry.mutate(p.id)}>Retry</Button></li>)}</ul></Card> : null}
       <Card title={`Failed workflow runs (${q.data.failedRuns.length})`}>{q.data.failedRuns.length ? <ul className="small">{q.data.failedRuns.map((r) => <li key={r.id}>{r.workflowKey} · {r.lastError} · {new Date(r.updatedAt).toLocaleString()}</li>)}</ul> : <p className="muted small">None.</p>}</Card>
       <Card title={`Failed jobs (${q.data.failedJobs.length})`}>{q.data.failedJobs.length ? <ul className="small">{q.data.failedJobs.map((j) => <li key={j.id}>{j.kind} · {j.lastError}</li>)}</ul> : <p className="muted small">None.</p>}</Card>
       <Card title={`AI runs that were not ok (${q.data.failedAi.length})`}>{q.data.failedAi.length ? <ul className="small">{q.data.failedAi.map((a) => <li key={a.id}>{a.task} · {a.status} · {a.error} · {new Date(a.createdAt).toLocaleString()}</li>)}</ul> : <p className="muted small">None.</p>}</Card>
     </div>
+  );
+}
+
+/** An email application that could not be imported, as GET /admin/failed-email-applications lists it. */
+export type FailedEmailRow = { id: string; receivedAt: string; companyName: string | null; roleTitle: string | null; from: string | null; subject: string | null; error: string | null; hasResume: boolean; canRetry: boolean; text: string };
+
+/** What the row says about where the email was going and what came with it, in one line. */
+export function failedEmailLine(r: FailedEmailRow): string {
+  const where = r.roleTitle ? `${r.roleTitle}${r.companyName ? ` at ${r.companyName}` : ""}` : r.companyName ?? "a job that no longer takes email";
+  return `${r.from ?? "Unknown sender"} · ${where} · ${r.hasResume ? "résumé attached" : "no résumé"}`;
+}
+
+/**
+ * Email applications that failed to import (known-bugs row 120): who sent it, for which job, why it failed, the email
+ * itself one click away, and "Try again" once the job is taking applications.
+ */
+function FailedEmailApplications() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["admin", "failed-email-applications"], queryFn: () => api.get<FailedEmailRow[]>("/api/v1/admin/failed-email-applications", reason) });
+  const retry = useMutation({
+    mutationFn: (id: string) => api.post<{ ok: true; duplicate: boolean }>(`/api/v1/admin/failed-email-applications/${id}/retry`, {}, reason),
+    onSuccess: (r) => { toast(r.duplicate ? "Done. This person had already applied, so nothing new was added." : "Done. The application is on the job now."); qc.invalidateQueries({ queryKey: ["admin", "failed-email-applications"] }); },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not try it again. Try again in a moment."),
+  });
+  const rows = q.data ?? [];
+  return (
+    <Card title={q.isLoading ? "Email applications that could not be imported (loading…)" : q.error ? "Email applications that could not be imported (could not load)" : `Email applications that could not be imported (${rows.length})`}>
+      {rows.length ? rows.map((r) => (
+        <div key={r.id} className="stack" style={{ gap: 4, padding: "8px 0", borderTop: "1px solid var(--line)" }}>
+          <div className="row"><strong>{r.subject || "(no subject)"}</strong><span className="small muted">{new Date(r.receivedAt).toLocaleString()}</span></div>
+          <p className="small">{failedEmailLine(r)}</p>
+          <p className="small muted">Why: {r.error ?? "unknown"}</p>
+          <details className="more">
+            <summary>Show the email</summary>
+            <p className="small" style={{ whiteSpace: "pre-wrap" }}>{r.text || "(no text)"}</p>
+          </details>
+          <div className="row">
+            {r.canRetry ? <Button size="sm" variant="secondary" loading={retry.isPending && retry.variables === r.id} onClick={() => retry.mutate(r.id)}>Try again</Button> : <span className="small muted">The job is not taking applications right now.</span>}
+          </div>
+        </div>
+      )) : q.isLoading || q.error ? null : <p className="muted small">None.</p>}
+    </Card>
   );
 }
 

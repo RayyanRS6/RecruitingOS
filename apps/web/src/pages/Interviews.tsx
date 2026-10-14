@@ -29,7 +29,8 @@ export function Interviews() {
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
   const company = activeCompanyOf(me.data);
   const role = company.role;
-  const list = useQuery({ queryKey: ["interviews"], queryFn: () => api.get<InterviewSummary[]>("/api/v1/interviews"), refetchInterval: 15000 });
+  // Every interview, not the newest few hundred; refreshed every 30 seconds (the open interview's sheet refreshes faster).
+  const list = useQuery({ queryKey: ["interviews"], queryFn: () => api.get<InterviewSummary[]>("/api/v1/interviews"), refetchInterval: 30000 });
   const upcoming = (list.data ?? []).filter((i) => ["proposed", "scheduling", "scheduled"].includes(i.status));
   const past = (list.data ?? []).filter((i) => !["proposed", "scheduling", "scheduled"].includes(i.status));
   // Coming up opens soonest first (unscheduled last), as it always has; Past opens latest first.

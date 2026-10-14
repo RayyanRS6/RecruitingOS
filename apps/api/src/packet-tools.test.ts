@@ -408,12 +408,16 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       expect((await errorOf(await json(manager, "POST", `/api/v1/roles/${roleId}/packets/${v.version}/flags/keep`, { flagId, reason: "Again, the same reason" }))).code).toBe("already_kept");
       const [ev] = await container.db.select().from(events).where(and(eq(events.type, "packet.flag_kept"), eq(events.subjectId, `${roleId}:${v.version}`)));
       expect(ev.payload).toMatchObject({ roleId, version: v.version, flagId });
-      // the same version (no new one, so the approval asked for stands) now shows who kept it, and may be approved
+      // the same version (no new one, so the approval asked for stands) now shows who kept it, and may be approved, by
+      // someone else: on a live job the person who kept flagged wording does not approve it too (founder decision L-01)
       expect((await versions()).length).toBe(v.version);
       const after = await pendingOf(manager);
-      expect(after).toMatchObject({ version: v.version, viewer: { mayDecide: true } });
+      expect(after).toMatchObject({ version: v.version, viewer: { mayDecide: false, maySendBack: true, reason: expect.stringMatching(/You kept wording the fairness check flagged/) } });
       expect(after!.flags[0].kept).toMatchObject({ by: { id: managerId }, reason: expect.stringMatching(/charity run/) });
-      expect((await json(manager, "POST", `/api/v1/roles/${roleId}/approve`, { version: v.version })).status).toBe(200);
+      expect((await json(manager, "POST", `/api/v1/roles/${roleId}/approve`, { version: v.version })).status).toBe(409);
+      // the company's only owner wrote the version and kept nothing: their yes is the second one
+      expect((await pendingOf(owner))?.viewer).toMatchObject({ mayDecide: true });
+      expect((await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: v.version })).status).toBe(200);
       await container.drain();
     });
 

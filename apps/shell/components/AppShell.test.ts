@@ -160,6 +160,24 @@ describe("the rail", () => {
     expect(render(meAs("owner"), { roles })).not.toContain('data-rail="compact"');
   });
 
+  it("offers a company switcher in the company chip to someone in more than one company, and to nobody else (rows 9, 49)", () => {
+    // one company: no switcher
+    expect(render(meAs("owner"))).not.toContain('aria-label="Switch company"');
+    const two = meAs("owner", { memberships: [{ ...company, role: "owner" }, { companyId: "co2", companyName: "Harbor Clinic", companySlug: "harbor-clinic", role: "hiring_manager" }] });
+    const html = render(two);
+    expect(html).toMatch(/<button[^>]*aria-label="Switch company"[^>]*aria-haspopup="menu"|<button[^>]*aria-haspopup="menu"[^>]*aria-label="Switch company"/);
+    // the chip still names the company in use and keeps its cog to Settings
+    expect(html).toContain("<strong>Bright Dental</strong>");
+    expect(html).toContain('aria-label="Company settings"');
+    // an ITS recruiter inside a customer under a grant enters companies from the queue, never from here
+    const staff = meAs(null, {
+      user: { id: "s1", email: "rae@its.test", name: "Rae Recruiter", platformRole: "its_recruiter" },
+      activeCompanyId: "co1",
+      staffAccess: { grantId: "g1", kind: "escalation", purpose: "Review", expiresAt: "2026-10-20T00:00:00Z", companyName: "Bright Dental", scope: { escalationId: "e1", roleId: null, applicationId: null } },
+    });
+    expect(render(staff)).not.toContain('aria-label="Switch company"');
+  });
+
   it("gives ITS staff without a company the queue and Sign out, and no company chip", () => {
     const html = render(meAs(null, { user: { id: "s1", email: "nadine@identifiedtalent.com", name: "Nadine", platformRole: "its_recruiter" } }));
     expect(html).toContain("ITS staff");

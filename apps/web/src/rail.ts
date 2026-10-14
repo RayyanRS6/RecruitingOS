@@ -46,6 +46,16 @@ export function activeCompanyOf(me: MeLike | null | undefined): { name: string |
 }
 
 /**
+ * The other companies the person is a member of, for the company menu's switcher (rows 9 and 49): every active
+ * membership but the one in use, by name. Empty for someone in one company, and for an ITS recruiter inside a customer
+ * under a grant (they enter companies from the queue, never from here).
+ */
+export function otherCompanies(me: MeLike | null | undefined): Array<{ companyId: string; companyName: string; role: string }> {
+  if (!me || me.staffAccess) return [];
+  return me.memberships.filter((m) => m.companyId !== me.activeCompanyId).slice().sort((a, b) => a.companyName.localeCompare(b.companyName)).map((m) => ({ companyId: m.companyId, companyName: m.companyName, role: m.role }));
+}
+
+/**
  * Whether the rail reads and lists the company's roles: only for a member of the company. An ITS recruiter working under
  * a grant never gets the list, because every request they make is recorded for the customer as a page they opened, and
  * the rail would add one on every page load that the recruiter never chose to open.

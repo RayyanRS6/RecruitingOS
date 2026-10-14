@@ -32,7 +32,7 @@ const footer = `${packet.communication.humanAlternativeText}\n\n${packet.communi
 
 describe("the times email", () => {
   it("keeps one template and one key per interview and attempt in every variant", () => {
-    for (const variant of ["first", "new_times_asked", "new_times_team", "rescheduled", "other_times"] as const) {
+    for (const variant of ["first", "new_times_asked", "new_times_team", "rescheduled", "other_times", "missed_by_us"] as const) {
       const m = slotsOfferedMessage({ ...base, variant });
       expect(m.templateKey, variant).toBe("interview_slots");
       expect(m.idempotencyKey, variant).toBe("slots:iv-1:3");
@@ -71,6 +71,13 @@ describe("the times email", () => {
     const other = slotsOfferedMessage({ ...base, variant: "other_times" });
     expect(other.subject).toBe("Other times for your interview: Dental Assistant at Harbor Dental");
     expect(other.text).toContain("As you asked, here are other times for your conversation with the dentist for the Dental Assistant position at Harbor Dental.");
+  });
+
+  it("says sorry when the same round is offered again after our interviewer missed it (founder decision L-12)", () => {
+    const m = slotsOfferedMessage({ ...base, variant: "missed_by_us" });
+    expect(m).toMatchObject({ templateKey: "interview_slots", idempotencyKey: "slots:iv-1:3", subject: "New times for your interview: Dental Assistant at Harbor Dental" });
+    expect(m.text).toContain("We are sorry: the interviewer from Harbor Dental could not join your last interview for the Dental Assistant position. Please pick a new time for your conversation with the dentist. 30 minutes, video with Grace and Ben.");
+    expect(m.text).not.toContain("Good news");
   });
 
   it("tells the candidate a booked time the team moved is off, with a calendar file that removes it and the team's reason", () => {

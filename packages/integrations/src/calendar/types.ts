@@ -27,7 +27,8 @@ export type CalendarEventInput = {
 
 export type CalendarEventRef = { provider: string; calendarId: string; eventId: string; icalUid: string | null; htmlLink: string | null; meetingUrl: string | null; idempotencyKey: string };
 
-export type CalendarErrorCode = "auth_revoked" | "rate_limited" | "not_found" | "conflict" | "transient" | "not_configured";
+/** `permission_denied`: the provider refused the call for lack of permission (never retried). */
+export type CalendarErrorCode = "auth_revoked" | "rate_limited" | "not_found" | "conflict" | "transient" | "not_configured" | "permission_denied";
 
 export class CalendarError extends Error {
   constructor(public readonly code: CalendarErrorCode, message: string, public readonly retryable = code === "rate_limited" || code === "transient") {

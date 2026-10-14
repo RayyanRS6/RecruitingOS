@@ -2,8 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { HELD_STATUS, detectStuckRoles, queueCommunication, releaseHeldCommunications } from "@ros/agents";
 import type { ApplicationStage, GettingStarted } from "@ros/contracts";
-import { createApplicationLink } from "@ros/core";
-import { applications, auditRecords, candidates, communications, companies, events, interviews, jobs, notifications, postings, randomToken, roles, screens, uuidv7, withPlatform, withTenant, workflowRuns } from "@ros/db";
+import { createApplicationLink, defaultClosingDate } from "@ros/core";
+import { applications, auditRecords, candidates, communications, companies, events, interviews, jobs, notifications, postings, randomToken, rolePackets, roles, screens, uuidv7, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { COMPANY_CHECK_WAIT_REASON } from "@ros/workflows";
 import { createApp } from "./app";
@@ -125,8 +125,10 @@ describe("the ITS company check and getting started", () => {
     const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
     // "no" to an eligibility question: she is held for the team's decision, a card that needs someone on Today
     const answers = Object.fromEntries(role.currentPacket.packet.requirements.eligibility.map((r) => [r.key, "no"]));
-    // an application that reaches the company another way (email-in, a manual add): its acknowledgment is held
-    applicationId = (await withTenant(container.db, companyId, (tx) => createApplication(tx, container, { companyId, roleId, source: "email_in", firstName: "Hana", lastName: "Held", email: "hana.held@example.com", phone: null, smsConsent: false, consentSource: "email_in", noticeVersionsShown: [], eligibilityAnswers: answers, noResumeAnswers: { summary: "Registered dental hygienist since 2019; active CA RDH license." } }, actor))).application.id;
+    // an application that reaches the company another way (here one whose person saw the notices on a form): its
+    // acknowledgment is held. (One emailed in is not read at all until that email has gone, known-bugs row 16, so it
+    // would not reach the eligibility hold below while the company waits for the check.)
+    applicationId = (await withTenant(container.db, companyId, (tx) => createApplication(tx, container, { companyId, roleId, source: "careers_page", firstName: "Hana", lastName: "Held", email: "hana.held@example.com", phone: null, smsConsent: false, consentSource: "careers_page", noticeVersionsShown: ["ai_use@1", "privacy@1"], eligibilityAnswers: answers, noResumeAnswers: { summary: "Registered dental hygienist since 2019; active CA RDH license." } }, actor))).application.id;
     await container.drain();
     const ack = (await container.db.select().from(communications).where(eq(communications.applicationId, applicationId))).find((m) => m.templateKey === "acknowledgment");
     expect(ack?.status).toBe(HELD_STATUS);
@@ -233,6 +235,91 @@ describe("the ITS company check and getting started", () => {
     // confirmed again for the next checks
     expect((await verify(admin, { verified: true, reason: "Spoke with the owner; the website was updated.", confirm: true })).status).toBe(200);
     await container.drain();
+  });
+});
+
+/**
+ * What the check means for the job boards and the closing date (Wave S5, rows 58 and 63): a Colorado job that opens
+ * while ITS has not confirmed the company gets its thirty-day default closing date only when ITS confirms it (the job
+ * goes public then), and taking the confirmation back closes every board listing that was up and names it for taking
+ * down, so no candidate meets a listing whose apply link leads nowhere.
+ */
+describe("the company check, the boards and Colorado's closing date", () => {
+  let container: Container;
+  let app: ReturnType<typeof createApp>;
+  let owner = "";
+  let admin = "";
+  let companyId = "";
+  let roleId = "";
+  const BASE = Date.now();
+  const setClock = (ms: number) => { (container.engine as unknown as { now: () => Date }).now = () => new Date(BASE + ms); };
+  const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
+  const verify = (verified: boolean, reason: string) => json(admin, "POST", `/api/v1/admin/customers/${companyId}/verification`, { verified, reason, confirm: true });
+  const roleRow = async () => (await container.db.select().from(roles).where(eq(roles.id, roleId)))[0];
+
+  beforeAll(async () => {
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", COMPANY_CHECK: "its", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", JOBS_BASE_URL: "https://jobs.example.test", SMS_ENABLED: "false" } });
+    app = createApp(container);
+    setClock(0);
+    const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@colorado.test" }) });
+    const token = new URL(((await r1.json()) as { devLink: string }).devLink).searchParams.get("token")!;
+    owner = (await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) })).headers.get("set-cookie")!.split(";")[0];
+    ({ id: companyId } = (await (await json(owner, "POST", "/api/v1/companies", { name: "Mile High Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Denver", region: "CO", country: "US" }] })).json()) as { id: string });
+    // Colorado's legal check asks for the benefits on the ad: described once for the company
+    const [co] = await container.db.select({ s: companies.settings }).from(companies).where(eq(companies.id, companyId));
+    await container.db.update(companies).set({ settings: { ...co.s, benefitsSummary: "Health and dental insurance, 401(k) with match, paid time off." } }).where(eq(companies.id, companyId));
+    admin = await signInAdmin(app, container, "ana.admin@identifiedtalent.com", "Ana Admin");
+  });
+  afterAll(async () => {
+    await container.close();
+  });
+
+  it("a Colorado job that opens before the check has no closing date yet; the thirty days start when ITS confirms the company", async () => {
+    const started = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Denver, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active RDH license. Just draft it." })).json()) as { session: { id: string } };
+    roleId = ((await (await json(owner, "POST", `/api/v1/intake/sessions/${started.session.id}/compile`)).json()) as { roleId: string }).roleId;
+    await container.drain();
+    const [pv] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, 1)));
+    const packet = structuredClone(pv.packet);
+    packet.identity.locations = [{ city: "Denver", region: "CO", country: "US" }];
+    await container.db.update(rolePackets).set({ packet }).where(eq(rolePackets.id, pv.id));
+    expect((await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1 })).status).toBe(200);
+    await container.drain();
+    expect(await roleRow()).toMatchObject({ status: "open", applicationsCloseOn: null });
+    // ITS confirms the company ten days later: the job goes public now, and its thirty days start now
+    setClock(10 * 86_400_000);
+    expect((await verify(true, "Kick-off call held; website and phone checked.")).status).toBe(200);
+    await container.drain();
+    const [company] = await container.db.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId));
+    const role = await roleRow();
+    expect(role.applicationsCloseOn).toBe(defaultClosingDate(new Date(BASE + 10 * 86_400_000), company.timezone));
+    const set = (await container.db.select().from(events).where(and(eq(events.type, "role.closing_date_set"), eq(events.subjectId, roleId)))).at(-1);
+    expect(set?.payload).toMatchObject({ defaulted: true, closesOn: role.applicationsCloseOn });
+    const timers = await container.db.select().from(workflowRuns).where(eq(workflowRuns.workflowKey, "role_closing_date"));
+    expect(timers.filter((t) => t.status === "waiting").map((t) => (t.state as { roleId: string }).roleId)).toContain(roleId);
+    // confirming again leaves the date alone
+    expect((await verify(true, "Checked again, still fine.")).status).toBe(200);
+    expect((await roleRow()).applicationsCloseOn).toBe(role.applicationsCloseOn);
+  });
+
+  it("taking the confirmation back closes every board listing that was up and names it for taking down; one not posted yet is left alone", async () => {
+    const rows = await container.db.select().from(postings).where(eq(postings.roleId, roleId));
+    const indeed = rows.find((p) => p.channel === "indeed");
+    if (indeed) await container.db.update(postings).set({ status: "posted_manually", externalUrl: "https://www.indeed.com/viewjob?jk=abc123" }).where(eq(postings.id, indeed.id));
+    else await withTenant(container.db, companyId, (tx) => tx.insert(postings).values({ companyId, roleId, channel: "indeed", status: "posted_manually", externalUrl: "https://www.indeed.com/viewjob?jk=abc123" }));
+    const linkedin = rows.find((p) => p.channel === "linkedin_basic");
+    if (linkedin) await container.db.update(postings).set({ status: "ready_to_post" }).where(eq(postings.id, linkedin.id));
+    expect((await verify(false, "The website does not match the company.")).status).toBe(200);
+    const after = await container.db.select().from(postings).where(eq(postings.roleId, roleId));
+    expect(after.find((p) => p.channel === "indeed")).toMatchObject({ status: "closed", closureRequired: true, closureConfirmedAt: null });
+    if (linkedin) expect(after.find((p) => p.channel === "linkedin_basic")?.status).toBe("ready_to_post");
+    // the careers page is not a board: it goes offline with the company, and nothing has to be taken down by hand
+    expect(after.filter((p) => p.closureRequired).map((p) => p.channel)).toEqual(["indeed"]);
+    const named = await container.db.select().from(events).where(and(eq(events.type, "posting.closure_required"), eq(events.companyId, companyId)));
+    expect(named.map((e) => (e.payload as { channel: string }).channel)).toEqual(["indeed"]);
+    const told = (await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "company.unverified")))).at(-1);
+    expect(told?.body).toContain("The job-board listing that was up is closed and must be taken down");
+    const audited = (await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "company.unverified")))).at(-1);
+    expect(audited?.details).toMatchObject({ boardsClosed: 1 });
   });
 });
 

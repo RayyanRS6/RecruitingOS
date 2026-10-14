@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { screenTurnPrompt, type ScreenContext } from "@ros/ai";
 import type { RolePacket } from "@ros/contracts";
-import { approvalRequests, entitlements, events, notifications, rolePackets, roles, withTenant, workflowRuns } from "@ros/db";
+import { approvalRequests, entitlements, events, notifications, policies, rolePackets, roles, withTenant, workflowRuns } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { putOnInterview, signInAs, signInWithIdentity } from "./test-helpers";
@@ -60,8 +60,8 @@ describe("role packets: editor, approval rules, sent back, interview plan, timel
     const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Packet Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string };
     companyId = co.id;
     ownerId = (await me(owner)).user.id;
-    // the trial plan allows one active role; this file drafts several
-    await withTenant(container.db, companyId, (tx) => tx.update(entitlements).set({ limit: 20 }).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, "active_roles"))));
+    // the trial plan allows one active role; this file drafts several (and the Wave S5 tests a few more)
+    await withTenant(container.db, companyId, (tx) => tx.update(entitlements).set({ limit: 40 }).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, "active_roles"))));
   });
   afterAll(async () => {
     await container.close();
@@ -461,6 +461,217 @@ describe("role packets: editor, approval rules, sent back, interview plan, timel
     await putOnInterview(container, app, { cookie: interviewer, roleId: one.roleId });
     expect((await json(interviewer, "GET", `/api/v1/roles/${one.roleId}/timeline`)).status).toBe(403);
     expect((await json(olive, "GET", "/api/v1/roles/00000000-0000-0000-0000-000000000000/timeline")).status).toBe(404);
+  });
+
+  it("an edit saved while the job is paused is never dropped: an approver's wording is current at once, anyone else's waits for approval, a version kept earlier asks for approval on resume, and resuming publishes what is current (row 12)", async () => {
+    const olive = await signInAs(container, app, { companyId, role: "owner", email: "olive@packet.test" });
+    const rec = await signInAs(container, app, { companyId, role: "recruiter", email: "rae@packet.test", name: "Rae Recruiter" });
+    const opened = await compileRole(owner);
+    expect((await json(olive, "POST", `/api/v1/roles/${opened.roleId}/approve`, { version: 1 })).status).toBe(200);
+    await container.drain();
+    expect((await json(olive, "POST", `/api/v1/roles/${opened.roleId}/pause`, {})).status).toBe(200);
+    // an approver's wording change during the pause is current at once, and the job stays paused
+    const wording = structuredClone(opened.packet);
+    wording.description.publicJobDescription = `${opened.packet.description.publicJobDescription} Free parking on site.`;
+    expect(await (await json(olive, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: wording, changeSummary: "Parking" })).json()).toMatchObject({ version: 2, outcome: "approved_current", paused: true });
+    let d = await detail(olive, opened.roleId);
+    expect(d).toMatchObject({ status: "paused", currentPacket: { version: 2 } });
+    // someone who may not approve: the edit waits for an approver, as on a live job, and approving it keeps the job paused
+    const theirs = structuredClone(wording);
+    theirs.description.publicJobDescription = `${wording.description.publicJobDescription} Uniforms provided.`;
+    expect(await (await json(rec, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: theirs, changeSummary: "Uniforms" })).json()).toMatchObject({ version: 3, outcome: "proposed_pending_approval" });
+    await container.drain();
+    d = await detail(olive, opened.roleId);
+    expect(d.packetApproval.pending).toMatchObject({ version: 3, editWhileOpen: true });
+    expect(d.proposedPacket?.version).toBe(3);
+    expect((await json(olive, "POST", `/api/v1/roles/${opened.roleId}/approve`, { version: 3 })).status).toBe(200);
+    await container.drain();
+    d = await detail(olive, opened.roleId);
+    expect(d).toMatchObject({ status: "paused", currentPacket: { version: 3 } });
+    // a version kept during a pause before this fix (proposed, nobody asked): resuming asks for its approval
+    const [v3] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, opened.roleId), eq(rolePackets.version, 3)));
+    const stranded = structuredClone(v3.packet);
+    stranded.description.publicJobDescription = `${theirs.description.publicJobDescription} Paid lunch.`;
+    await withTenant(container.db, companyId, (tx) => tx.insert(rolePackets).values({ companyId, roleId: opened.roleId, version: 4, packet: stranded, status: "proposed", source: "human_edit", changeSummary: "Paid lunch", createdBy: { kind: "user", id: (v3.createdBy as { id: string }).id, name: "Rae Recruiter" } }));
+    expect((await json(olive, "POST", `/api/v1/roles/${opened.roleId}/resume`, {})).status).toBe(200);
+    await container.drain();
+    d = await detail(olive, opened.roleId);
+    expect(d).toMatchObject({ status: "open", currentPacket: { version: 3 } });
+    expect(d.packetApproval.pending).toMatchObject({ version: 4, editWhileOpen: true });
+    // the publish run the resume started carries the version that is current, not the one the job had when it paused
+    const publishes = (await container.db.select().from(workflowRuns).where(eq(workflowRuns.workflowKey, "publish_role"))).filter((r) => (r.subject as { id: string }).id === opened.roleId).sort((a, b) => a.id.localeCompare(b.id)); // ids are time-ordered
+    expect((publishes.at(-1)?.state as { packetVersion: number }).packetVersion).toBe(3);
+  });
+
+  it("a closed job refuses a new version on every route, in plain words (row 64)", async () => {
+    const olive = await signInAs(container, app, { companyId, role: "owner", email: "olive@packet.test" });
+    const opened = await compileRole(owner);
+    expect((await json(olive, "POST", `/api/v1/roles/${opened.roleId}/approve`, { version: 1 })).status).toBe(200);
+    await container.drain();
+    expect((await json(olive, "POST", `/api/v1/roles/${opened.roleId}/outcome`, { outcome: "no_hire", confirm: true })).status).toBe(200);
+    const next = structuredClone(opened.packet);
+    next.compensation.ceiling = 61;
+    const saved = await json(owner, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: next, changeSummary: "Ceiling" });
+    expect(saved.status).toBe(409);
+    expect(await errorOf(saved)).toMatchObject({ code: "role_closed", message: expect.stringMatching(/closed, so it is not changed any more/) });
+    const plan = (await (await json(olive, "GET", `/api/v1/roles/${opened.roleId}/interview-plan`)).json()) as { rounds: Array<{ key: string }> };
+    const patched = await json(olive, "PATCH", `/api/v1/roles/${opened.roleId}/interview-plan`, { rounds: [{ key: plan.rounds[0].key, interviewerUserIds: [ownerId] }] });
+    expect(patched.status).toBe(409);
+    expect((await errorOf(patched)).code).toBe("role_closed");
+    expect((await container.db.select().from(rolePackets).where(eq(rolePackets.roleId, opened.roleId))).map((p) => p.version)).toEqual([1]);
+  });
+
+  it("L-01: flagged wording an approver keeps on a live job waits for a second approver; whoever kept it may not approve it; the named decision maker is told of wording-only edits that went live", async () => {
+    const olive = await signInAs(container, app, { companyId, role: "owner", email: "olive@packet.test" });
+    const rec = await signInAs(container, app, { companyId, role: "recruiter", email: "rae@packet.test", name: "Rae Recruiter" });
+    const hank = await signInAs(container, app, { companyId, role: "hiring_manager", email: "hank@packet.test", name: "Hank Manager" });
+    const hankId = (await me(hank)).user.id;
+    const opened = await compileRole(owner, "I need a dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. Hank Manager makes the final decision. Must-haves: active CA RDH license. Just draft it.");
+    expect((await json(hank, "POST", `/api/v1/roles/${opened.roleId}/approve`, { version: 1 })).status).toBe(200);
+    await container.drain();
+    // the named decision maker is told (not asked) when someone else's wording-only edit goes live
+    const wording = structuredClone(opened.packet);
+    wording.description.publicJobDescription = `${opened.packet.description.publicJobDescription} Free parking on site.`;
+    expect(await (await json(olive, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: wording, changeSummary: "Parking" })).json()).toMatchObject({ version: 2, outcome: "approved_current" });
+    const told = await container.db.select().from(notifications).where(and(eq(notifications.kind, "role.edited_live"), eq(notifications.userId, hankId)));
+    expect(told.at(-1)?.body).toMatch(/Olive Owner changed the wording of the job: Parking\. It is live now\..*nothing waits for you/);
+    // an owner adds flagged wording, then keeps it with a reason: it waits for someone else, though she may approve
+    const flagged = structuredClone(wording);
+    flagged.requirements.mustHaves.push({ key: "english", text: "Native English speaker", rationale: "Patients", evidencedBy: ["screen"] });
+    const v3 = (await (await json(olive, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: flagged, changeSummary: "Added English" })).json()) as { version: number; outcome: string; packet: RolePacket };
+    expect(v3).toMatchObject({ version: 3, outcome: "proposed_pending_approval" });
+    const flag = v3.packet.provenance.flags!.find((f) => !f.kept)!;
+    const keep = structuredClone(v3.packet);
+    keep.provenance.flags = keep.provenance.flags!.map((f) => (f.id === flag.id ? { ...f, keepReason: "Our patients need clear spoken English; we test the level, not where anyone is from." } : f));
+    const v4 = await json(olive, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: keep, changeSummary: "Kept the English line" });
+    expect(await v4.json()).toMatchObject({ version: 4, outcome: "proposed_pending_approval", needsApproval: { changes: [], youMayConfirm: false, words: expect.stringMatching(/another approver says yes/) } });
+    await container.drain();
+    expect((await detail(owner, opened.roleId)).currentPacket?.version).toBe(2);
+    const refused = await json(olive, "POST", `/api/v1/roles/${opened.roleId}/approve`, { version: 4 });
+    expect(refused.status).toBe(409);
+    expect((await errorOf(refused)).code).toBe("self_approval");
+    // the named decision maker approves it: two people said yes
+    expect((await json(hank, "POST", `/api/v1/roles/${opened.roleId}/approve`, { version: 4 })).status).toBe(200);
+    await container.drain();
+    expect((await detail(owner, opened.roleId)).currentPacket?.version).toBe(4);
+    // a flag kept on the approval card by someone who did not write the version: they may not approve it either
+    const gaps = structuredClone(keep);
+    gaps.description.publicJobDescription = `${keep.description.publicJobDescription} No employment gaps.`;
+    const v5 = (await (await json(rec, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: gaps, changeSummary: "Gaps line" })).json()) as { version: number; packet: RolePacket };
+    expect(v5.version).toBe(5);
+    await container.drain();
+    const gapFlag = v5.packet.provenance.flags!.find((f) => !f.kept && f.rule === "employment_gaps")!;
+    expect(gapFlag).toBeTruthy();
+    expect((await json(hank, "POST", `/api/v1/roles/${opened.roleId}/packets/5/flags/keep`, { flagId: gapFlag.id, reason: "We only mean recent hands-on practice, nothing else." })).status).toBe(200);
+    const view = (await detail(hank, opened.roleId)).packetApproval.pending;
+    expect(view?.viewer).toMatchObject({ mayDecide: false, reason: expect.stringMatching(/You kept wording the fairness check flagged/) });
+    const hankRefused = await json(hank, "POST", `/api/v1/roles/${opened.roleId}/approve`, { version: 5 });
+    expect(hankRefused.status).toBe(409);
+    expect((await errorOf(hankRefused)).message).toMatch(/You kept wording the fairness check flagged/);
+    // an owner who kept nothing here decides
+    expect((await json(olive, "POST", `/api/v1/roles/${opened.roleId}/approve`, { version: 5 })).status).toBe(200);
+    await container.drain();
+    expect((await detail(owner, opened.roleId)).currentPacket?.version).toBe(5);
+  });
+
+  it("L-01: kept flagged wording never goes live by saving again with a small change; the live version is what counts (Wave S5 review)", async () => {
+    const olive = await signInAs(container, app, { companyId, role: "owner", email: "olive@packet.test" });
+    const opened = await compileRole(owner);
+    expect((await json(olive, "POST", `/api/v1/roles/${opened.roleId}/approve`, { version: 1 })).status).toBe(200);
+    await container.drain();
+    const flagged = structuredClone(opened.packet);
+    flagged.description.publicJobDescription = `${opened.packet.description.publicJobDescription} No employment gaps.`;
+    const v2 = (await (await json(olive, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: flagged, changeSummary: "Gaps line" })).json()) as { version: number; outcome: string; packet: RolePacket };
+    expect(v2).toMatchObject({ version: 2, outcome: "proposed_pending_approval" });
+    const keep = structuredClone(v2.packet);
+    keep.provenance.flags = keep.provenance.flags!.map((f) => (f.kept ? f : { ...f, keepReason: "We only mean recent hands-on practice, nothing else." }));
+    const v3 = (await (await json(olive, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: keep, changeSummary: "Kept the gaps line" })).json()) as { version: number; outcome: string; packet: RolePacket };
+    expect(v3).toMatchObject({ version: 3, outcome: "proposed_pending_approval" });
+    expect(v3.packet.provenance.flags!.some((f) => f.kept)).toBe(true);
+    // saved again with an unrelated change: the kept flag is still new against the live version, so it still waits
+    const tweak = structuredClone(v3.packet);
+    tweak.description.publicJobDescription = `${tweak.description.publicJobDescription} Free parking on site.`;
+    const v4 = await (await json(olive, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: tweak, changeSummary: "Parking" })).json();
+    expect(v4).toMatchObject({ version: 4, outcome: "proposed_pending_approval", needsApproval: { youMayConfirm: false, words: expect.stringMatching(/another approver says yes/) } });
+    await container.drain();
+    expect((await detail(owner, opened.roleId)).currentPacket?.version).toBe(1);
+  });
+
+  it("L-01: when nobody but the keeper could decide (two owners: one started the job, the other kept the flag), the keeper decides, so the version is never stuck (Wave S5 review)", async () => {
+    const olive = await signInAs(container, app, { companyId, role: "owner", email: "olive@packet.test" });
+    const hana = await signInAs(container, app, { companyId, role: "hiring_manager", email: "hana@packet.test", name: "Hana Editor" });
+    // only the two owners approve jobs here (a narrowed approver list)
+    const [rule] = await withTenant(container.db, companyId, (tx) => tx.insert(policies).values({ companyId, roleId: null, actionType: "role_packet.approve", level: "approval", approverRoles: ["owner"], createdBy: { kind: "user", id: ownerId } }).returning());
+    try {
+      // Olive starts the job; the other owner approves it
+      const opened = await compileRole(olive);
+      expect((await json(owner, "POST", `/api/v1/roles/${opened.roleId}/approve`, { version: 1 })).status).toBe(200);
+      await container.drain();
+      // Hana writes flagged wording; the other owner keeps it on the approval card
+      const gaps = structuredClone(opened.packet);
+      gaps.description.publicJobDescription = `${opened.packet.description.publicJobDescription} No employment gaps.`;
+      const v2 = (await (await json(hana, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: gaps, changeSummary: "Gaps line" })).json()) as { version: number; outcome: string; packet: RolePacket };
+      expect(v2).toMatchObject({ version: 2, outcome: "proposed_pending_approval" });
+      await container.drain();
+      const flag = v2.packet.provenance.flags!.find((f) => !f.kept && f.rule === "employment_gaps")!;
+      expect((await json(owner, "POST", `/api/v1/roles/${opened.roleId}/packets/2/flags/keep`, { flagId: flag.id, reason: "We only mean recent hands-on practice, nothing else." })).status).toBe(200);
+      // Olive started the job and Hana wrote the version: neither may approve it, so the keeper is the one who decides
+      expect((await detail(owner, opened.roleId)).packetApproval.pending?.viewer).toMatchObject({ mayDecide: true, reason: null });
+      expect((await json(owner, "POST", `/api/v1/roles/${opened.roleId}/approve`, { version: 2 })).status).toBe(200);
+      await container.drain();
+      expect((await detail(owner, opened.roleId)).currentPacket?.version).toBe(2);
+    } finally {
+      await withTenant(container.db, companyId, (tx) => tx.delete(policies).where(eq(policies.id, rule.id)));
+    }
+  });
+
+  it("a narrowed approver list: the approval notice names only who may decide, and a hiring manager's wording edit to a live job waits for one of them (rows 59, 67)", async () => {
+    const olive = await signInAs(container, app, { companyId, role: "owner", email: "olive@packet.test" });
+    const hana = await signInAs(container, app, { companyId, role: "hiring_manager", email: "hana@packet.test", name: "Hana Editor" });
+    const [rule] = await withTenant(container.db, companyId, (tx) => tx.insert(policies).values({ companyId, roleId: null, actionType: "role_packet.approve", level: "approval", approverRoles: ["owner", "admin"], createdBy: { kind: "user", id: ownerId } }).returning());
+    try {
+      const opened = await compileRole(owner);
+      const req = await pendingRequest(opened.roleId);
+      expect(req!.requiredRoles).toEqual(["owner", "admin"]);
+      const notices = await container.db.select().from(notifications).where(and(eq(notifications.kind, "approval.requested"), eq(notifications.userId, ownerId)));
+      expect(notices.at(-1)?.body).toContain("Any owner or admin can decide.");
+      expect(notices.at(-1)?.body).not.toContain("hiring manager");
+      expect((await json(olive, "POST", `/api/v1/roles/${opened.roleId}/approve`, { version: 1 })).status).toBe(200);
+      await container.drain();
+      const wording = structuredClone(opened.packet);
+      wording.description.publicJobDescription = `${opened.packet.description.publicJobDescription} Free parking on site.`;
+      expect(await (await json(hana, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: wording, changeSummary: "Parking" })).json()).toMatchObject({ version: 2, outcome: "proposed_pending_approval" });
+      expect((await detail(owner, opened.roleId)).currentPacket?.version).toBe(1);
+    } finally {
+      await withTenant(container.db, companyId, (tx) => tx.delete(policies).where(eq(policies.id, rule.id)));
+    }
+  });
+
+  it("the job builder's closing date is saved with the draft and lands on the role when it asks for approval (row 61)", async () => {
+    const res = await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." });
+    const started = (await res.json()) as { session: { id: string } };
+    expect(started.session, JSON.stringify(started)).toBeTruthy();
+    const path = `/api/v1/intake/sessions/${started.session.id}/closing-date`;
+    expect(await (await json(owner, "GET", path)).json()).toEqual({ closesOn: null });
+    const bad = await json(owner, "PUT", path, { closesOn: "2020-01-01" });
+    expect(bad.status).toBe(400);
+    expect((await errorOf(bad)).code).toBe("bad_closing_date");
+    const day = new Date(container.engine.clock().getTime() + 40 * 86_400_000).toISOString().slice(0, 10);
+    expect(await (await json(owner, "PUT", path, { closesOn: day })).json()).toEqual({ closesOn: day });
+    // another device (a fresh request) reads it back from the server
+    expect(await (await json(owner, "GET", path)).json()).toEqual({ closesOn: day });
+    const interviewer = await signInAs(container, app, { companyId, role: "interviewer", email: "wes@packet.test" });
+    expect((await json(interviewer, "PUT", path, { closesOn: day })).status).toBe(403);
+    const r = await json(owner, "POST", `/api/v1/intake/sessions/${started.session.id}/compile`);
+    expect(r.status).toBe(201);
+    const { roleId } = (await r.json()) as { roleId: string };
+    await container.drain();
+    const [role] = await container.db.select().from(roles).where(eq(roles.id, roleId));
+    expect(String(role.applicationsCloseOn).slice(0, 10)).toBe(day);
+    const set = (await container.db.select().from(events).where(and(eq(events.type, "role.closing_date_set"), eq(events.subjectId, roleId)))).at(-1);
+    expect(set?.payload).toMatchObject({ closesOn: day, from: "job_builder" });
+    // the draft has produced its role: the date is changed on the job's Share tab from now on
+    expect((await json(owner, "PUT", path, { closesOn: day })).status).toBe(409);
   });
 
   it("the brief's generic decision card posts a body the decide route accepts", async () => {

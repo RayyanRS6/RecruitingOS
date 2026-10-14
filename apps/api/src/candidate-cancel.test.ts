@@ -280,7 +280,9 @@ describe("candidate cancels an interview", () => {
     const [a] = await container.db.select({ token: applications.statusToken }).from(applications).where(eq(applications.id, plain.cand.id));
     const html = await (await app.request(`/c/schedule/${plain.token}/cancelled`)).text();
     expect(html).toMatch(/We let Cancel Dental(&#39;|')s team know you are no longer interested in this interview\. Your application stays open\./);
-    expect(html).toContain(`To withdraw it, go to <a href="/c/status/${a.token}">your application page</a>.`);
+    // never the private status link itself: someone holding an old schedule link must not be handed the current one
+    expect(html).toContain(`To withdraw it, open your application page from our emails, or <a href="/c/link-request">get your link by email</a>.`);
+    expect(html).not.toContain(`/c/status/${a.token}`);
     expect(html).not.toMatch(/new times/);
     const mail = outbox().slice(mailsBefore).find((m) => m.to === plain.cand.email && /^Cancelled:/.test(m.subject))!;
     expect(mail.text).toContain("We let the team know you are no longer interested. If you change your mind, reply to this email.");

@@ -4,10 +4,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import NextLink from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { Alert, Avatar, Button, Icon, Kbd } from "@ros/ui";
-import { api, type RoleSummary } from "@ros/web/src/api/client";
+import { Alert, Avatar, Button, Icon, Kbd, Menu } from "@ros/ui";
+import { ApiError, api, type RoleSummary } from "@ros/web/src/api/client";
 import { NavLink } from "@ros/web/src/nav";
-import { railCompact, railListsRoles, railRoles, teamRoleWord } from "@ros/web/src/rail";
+import { otherCompanies, railCompact, railListsRoles, railRoles, teamRoleWord } from "@ros/web/src/rail";
 import { clearAllQuickStarts } from "@ros/web/src/pages/new-role/quick-start";
 import { canSeeTalent, canStartHire } from "@ros/web/src/roles";
 import { browserStorage, isFormControl, isStartHireShortcut, SHORTCUT_CHANGED_EVENT, START_HIRE_HREF, START_HIRE_KEY, startHireShortcutOn } from "@ros/web/src/start-hire";
@@ -17,7 +17,8 @@ import "./app-shell.css";
 /**
  * The signed-in frame (docs/07): the rail, the staff-access notice, the development-mode notice, and the page.
  *
- * The rail, top to bottom: the company chip (your role, and a cog to Settings), "Start a hire" for the people who may
+ * The rail, top to bottom: the company chip (your role, a "Switch company" menu for someone in more than one company,
+ * and a cog to Settings), "Start a hire" for the people who may
  * start one (N opens it from anywhere outside a text field, on a page with nothing changed), Home, Jobs with the jobs
  * being worked on listed underneath (for members only; a live job opens on its Candidates), Candidates, Interviews,
  * Settings (Queue and Console for ITS staff), and who is signed in with Sign out. On a job's own pages it folds to a
@@ -105,6 +106,24 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [menuOpen]);
 
+  // The company menu (rows 9 and 49): someone in more than one company moves between them here, through POST
+  // /auth/switch. Nothing read for the company they leave may show in the next one, so the cache is emptied and the
+  // frame drawn again from the new session, on Home.
+  const others = otherCompanies(me);
+  const [switchError, setSwitchError] = useState<string | null>(null);
+  const switchTo = async (companyId: string) => {
+    setSwitchError(null);
+    try {
+      await api.post("/api/v1/auth/switch", { companyId });
+    } catch (e) {
+      setSwitchError(e instanceof ApiError ? e.message : "Could not switch company. Try again.");
+      return;
+    }
+    qc.clear();
+    router.push("/");
+    router.refresh();
+  };
+
   const logout = async () => {
     await api.post("/api/v1/auth/logout");
     // The quick start's answers (pay ceiling, deal-breakers) are never left behind for the next person on this browser.
@@ -129,11 +148,24 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
               <strong>{companyName}</strong>
               {roleWord ? <span>{roleWord}</span> : null}
             </div>
+            {others.length > 0 && active ? (
+              <Menu
+                label={<Icon name="building" />}
+                ariaLabel="Switch company"
+                title="Switch company"
+                heading="Your companies"
+                buttonClassName="icon-btn"
+                align="end"
+                items={[{ id: active.companyId, label: active.companyName, current: true }, ...others.map((o) => ({ id: o.companyId, label: o.companyName, hint: teamRoleWord(o.role, false) ?? undefined, current: false }))]}
+                onSelect={(id) => { if (id !== active.companyId) void switchTo(id); }}
+              />
+            ) : null}
             <NextLink href="/setup" className="icon-btn" aria-label="Company settings" title="Company settings">
               <Icon name="settings" />
             </NextLink>
           </div>
         ) : null}
+        {switchError ? <div style={{ margin: "0 0 10px" }}><Alert tone="critical">{switchError}</Alert></div> : null}
         {mayStartHire ? (
           <NextLink href={START_HIRE_HREF} className="btn primary rail-start" aria-label="Start a hire" aria-keyshortcuts={shortcutOn ? START_HIRE_KEY : undefined} title={shortcutOn ? `Start a hire (press ${START_HIRE_KEY})` : "Start a hire"}>
             <Icon name="plus" />

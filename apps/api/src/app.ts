@@ -121,9 +121,11 @@ export function createApp(container: Container) {
   // Before the data routes: a browser tab asking for the preview gets the page, the app's own requests the data.
   app.route("/api/v1/intake", draftPreviewPages);
   app.route("/api/v1/intake", draftPacketRoutes);
+  // The role preview page first, before the role routes' scope guard: a browser tab gets the preview's own plain page for
+  // every refusal (the page applies the same scope rules itself); the app's own requests go on to the data routes.
+  app.route("/api/v1/roles", rolePreviewPages);
   app.route("/api/v1/roles", roleRoutes);
   app.route("/api/v1/roles", postingRoutes);
-  app.route("/api/v1/roles", rolePreviewPages);
   app.route("/api/v1/roles", rolePacketRoutes);
   app.route("/api/v1/roles", reportRoutes);
   app.route("/api/v1/roles", compareRoutes);

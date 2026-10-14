@@ -301,15 +301,22 @@ authRoutes.get("/me", async (c) => {
   return c.json(body);
 });
 
+/**
+ * Moves this session to another company: one the person is an active member of (the rail's company menu offers these,
+ * Wave S5), or for ITS staff one their active grant covers. `{ companyId }` must name a company id (400 otherwise);
+ * answers `{ ok, companyId }`.
+ */
 authRoutes.post("/switch", async (c) => {
   const s = c.get("session");
   if (!s) throw new HttpError(401, "unauthorized", "Not signed in.");
-  const { companyId } = (await c.req.json()) as { companyId: string };
+  const raw = (await c.req.json().catch(() => ({}))) as { companyId?: unknown };
+  const companyId = typeof raw.companyId === "string" ? raw.companyId : "";
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(companyId)) throw new HttpError(400, "invalid_request", "Say which company to switch to.");
   // Founder decision F1: only a verified membership selects a tenant. Staff access is granted per escalation (slice 2), never here.
   let ok = s.memberships.some((m) => m.companyId === companyId && m.status === "active");
   // ITS staff may enter a company only under an active, scoped grant (founder decision F10).
   if (!ok && isPlatformStaff(s)) ok = !!(await activeStaffGrant(c.get("container").db, s.user.id, companyId));
   if (!ok) throw new HttpError(403, "forbidden", "You are not a member of that company, and no recruiter assignment gives you access to it.");
   await setActiveCompany(c.get("container").db, s.sessionId, companyId);
-  return c.json({ ok: true });
+  return c.json({ ok: true, companyId });
 });

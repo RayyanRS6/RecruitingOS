@@ -8,6 +8,23 @@ import { CalendarError, GOOGLE_CALENDAR_SCOPES, type CalendarAccount, type Calen
 type Fetch = typeof fetch;
 type TokenCache = { accessToken: string; expiresAt: number };
 
+/** The reasons Google gives with a 403 that mean "slow down", not "not allowed" (Calendar API usage limits). */
+const RATE_LIMIT_REASONS = new Set(["rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded", "dailyLimitExceeded"]);
+
+/**
+ * True when a 403 body is Google's "slow down": an error reason from RATE_LIMIT_REASONS, or the RESOURCE_EXHAUSTED
+ * status. Anything else, including a body that cannot be read, is a permission refusal.
+ */
+export function googleRateLimited(body: string): boolean {
+  try {
+    const parsed = JSON.parse(body) as { error?: { status?: string; errors?: Array<{ reason?: string }> } };
+    if (parsed.error?.status === "RESOURCE_EXHAUSTED") return true;
+    return (parsed.error?.errors ?? []).some((e) => !!e.reason && RATE_LIMIT_REASONS.has(e.reason));
+  } catch {
+    return false;
+  }
+}
+
 export class GoogleCalendarProvider implements CalendarProvider {
   readonly provider = "google";
   private tokens = new Map<string, TokenCache>();
@@ -63,7 +80,14 @@ export class GoogleCalendarProvider implements CalendarProvider {
   private async api(accessToken: string, method: string, url: string, body?: unknown): Promise<Response> {
     const res = await this.f(url, { method, headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
     if (res.status === 401) throw new CalendarError("auth_revoked", "Google no longer honours this connection; reconnect the calendar.", false);
-    if (res.status === 403 || res.status === 429) throw new CalendarError("rate_limited", "Google asked us to slow down.");
+    if (res.status === 429) throw new CalendarError("rate_limited", "Google asked us to slow down.");
+    // Google answers 403 both for "slow down" (rateLimitExceeded and the like) and for "not allowed" (insufficient
+    // permissions, the API not enabled, a calendar the person cannot write to). Only the first is worth retrying; the
+    // second falls back at once (declared hours, a note to the person) instead of retrying until the run fails.
+    if (res.status === 403) {
+      if (googleRateLimited(await res.text().catch(() => ""))) throw new CalendarError("rate_limited", "Google asked us to slow down.");
+      throw new CalendarError("permission_denied", "Google refused access to this calendar; reconnect it and allow access to its events.", false);
+    }
     if (res.status === 404) throw new CalendarError("not_found", "The calendar or event was not found.", false);
     if (res.status === 409) throw new CalendarError("conflict", "The event already exists.", false);
     if (res.status >= 500) throw new CalendarError("transient", `Google returned ${res.status}.`);

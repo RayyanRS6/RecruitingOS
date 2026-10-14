@@ -669,7 +669,7 @@ describe("the loop after an interview", () => {
     expect(await followUpOf(withdrew.id)).toMatchObject({ resolvedHow: "left_process", autoState: "none" });
   });
 
-  it("after a candidate's no-show the approval card proposes the same round again, and 'Next round' takes them out of Cancelled; after an interviewer's no-show the card proposes the next round", async () => {
+  it("after a candidate's no-show the approval card proposes the same round again, and 'Next round' takes them out of Cancelled; after an interviewer's no-show the card proposes the same round again too (founder decision L-12)", async () => {
     const missed = await apply("Yara", "Haddad");
     const iv = await requestInterview(missed.id);
     await book(iv.id);
@@ -688,8 +688,12 @@ describe("the loop after an interview", () => {
     await book(iv2.id);
     expect((await json(owner, "POST", `/api/v1/interviews/${iv2.id}/outcome`, { outcome: "no_show_interviewer" })).status).toBe(200);
     expect(await followUpOf(stoodUp.id)).toBeUndefined();
-    const next = (await (await json(owner, "GET", `/api/v1/applications/${stoodUp.id}/interview-draft`)).json()) as { roundKey: string; nextRound: boolean };
-    expect(next).toMatchObject({ roundKey: plan[1].key, nextRound: true });
+    const next = (await (await json(owner, "GET", `/api/v1/applications/${stoodUp.id}/interview-draft`)).json()) as { roundKey: string; nextRound: boolean; sameRoundAgain?: string };
+    expect(next).toMatchObject({ roundKey: plan[0].key, nextRound: false, sameRoundAgain: "missed_by_us" });
+    // the owner may still choose another round: the decision moves them to the next one as before
+    const r2 = await json(owner, "POST", `/api/v1/applications/${stoodUp.id}/decision`, { decision: "next_round" });
+    expect(r2.status, await r2.clone().text()).toBe(200);
+    expect(((await r2.json()) as { nextRoundKey: string }).nextRoundKey).toBe(plan[1].key);
   });
 
   // Last: it closes the role.

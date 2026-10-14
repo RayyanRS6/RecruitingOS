@@ -1,9 +1,9 @@
 import { Hono, type Context } from "hono";
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { MAX_RESUME_BYTES, type Actor } from "@ros/contracts";
 import { claimWebhookReceipt, notify } from "@ros/core";
 import { handleEmailEvent } from "@ros/agents";
-import { inboundEmails, notifications, postings, roles, withPlatform, withTenant, type Tx } from "@ros/db";
+import { companies, inboundEmails, notifications, postings, roles, withPlatform, withTenant, type Tx } from "@ros/db";
 import { extractApplicantFromInbound, extractIntakeToken, extractReplyToken, parsePostmarkEvent, parsePostmarkInbound, verifyPostmarkWebhookAuth, type InboundEmail } from "@ros/integrations";
 import type { Container } from "../container";
 import type { Vars } from "../middleware/session";
@@ -74,10 +74,101 @@ postmarkWebhook.post("/inbound", async (c) => {
     await container.kick();
     return c.json({ ok: true, matched: true, applicationId: result.application.id, duplicate: result.duplicate });
   } catch (err) {
-    await container.db.update(inboundEmails).set({ status: "error", companyId: posting.companyId, error: err instanceof Error ? err.message : String(err) }).where(eq(inboundEmails.id, inbound.id));
+    // Kept for a person (known-bugs row 120): the row keeps the email and the résumé is parked under it, as a held email's
+    // is, so the Admin console's "Failed email applications" can try it again or open the original.
+    const parked = await parkResume(container, { inbound, mail, companyId: posting.companyId }).catch(() => ({ rawStorageKey: null, parsed: inbound.parsed }));
+    await container.db.update(inboundEmails).set({ status: "error", companyId: posting.companyId, rawStorageKey: parked.rawStorageKey, parsed: parked.parsed, error: err instanceof Error ? err.message : String(err) }).where(eq(inboundEmails.id, inbound.id));
     return c.json({ ok: false, matched: true, error: "could not create application; queued for review" }, 202);
   }
 });
+
+/**
+ * Parks an inbound email's résumé in storage under its row, with what the replay needs to rebuild the email (the
+ * sender's name and the file's name and type). Used for a held email (C19) and for one that failed to become an
+ * application, so a person can try it again.
+ */
+async function parkResume(container: Container, input: { inbound: InboundRow; mail: InboundEmail; companyId: string }): Promise<{ rawStorageKey: string | null; parsed: HeldParsed & Record<string, unknown> }> {
+  const { inbound, mail, companyId } = input;
+  const attachment = resumeAttachment(mail);
+  const bytes = attachment?.contentBase64 ? new Uint8Array(Buffer.from(attachment.contentBase64, "base64")) : null;
+  let rawStorageKey: string | null = null;
+  if (attachment && bytes && bytes.byteLength > 0 && bytes.byteLength <= MAX_RESUME_BYTES) {
+    const ext = (attachment.filename.match(/\.([a-z0-9]{1,8})$/i)?.[1] ?? "bin").toLowerCase();
+    rawStorageKey = `inbound/${companyId}/${inbound.id}.${ext}`;
+    await container.integrations.storage.put(rawStorageKey, bytes, attachment.contentType);
+  }
+  const parsed: HeldParsed & Record<string, unknown> = { ...inbound.parsed, fromName: mail.fromName ?? null, resume: rawStorageKey && attachment ? { filename: attachment.filename, contentType: attachment.contentType } : null };
+  return { rawStorageKey, parsed };
+}
+
+/** An email application that could not be imported, as the Admin console lists it (known-bugs row 120). */
+export type FailedEmailApplication = { id: string; receivedAt: string; companyId: string | null; companyName: string | null; roleId: string | null; roleTitle: string | null; from: string | null; subject: string | null; error: string | null; hasResume: boolean; canRetry: boolean; /** The start of the email as it arrived: the original, for a person to read. */ text: string };
+
+/** The intake address's role, when the token still names an email posting. Read inside the caller's platform transaction. */
+async function roleForIntake(tx: Tx, intakeDomain: string, toAddress: string): Promise<RoleRow | null> {
+  const token = extractIntakeToken(toAddress, intakeDomain);
+  if (!token) return null;
+  const [posting] = await tx.select().from(postings).where(and(eq(postings.channel, "email_in"), eq(postings.intakeToken, token))).limit(1);
+  if (!posting) return null;
+  const [role] = await tx.select().from(roles).where(eq(roles.id, posting.roleId)).limit(1);
+  return role ?? null;
+}
+
+/**
+ * Email applications that failed to import (status `error`, sent to an intake address): newest first, with the company,
+ * the role, who sent it and why it failed. Replies to our emails are not listed (services/replies.ts keeps those).
+ * Every company's rows, for the ITS console: a platform read, never a raw query on the connection.
+ */
+export async function failedEmailApplications(container: Container, limit = 100): Promise<FailedEmailApplication[]> {
+  const intakeDomain = container.integrations.env.intakeDomain;
+  return withPlatform(container.db, async (tx) => {
+    const rows = await tx.select().from(inboundEmails).where(eq(inboundEmails.status, "error")).orderBy(desc(inboundEmails.createdAt)).limit(limit * 2);
+    const out: FailedEmailApplication[] = [];
+    for (const row of rows) {
+      if (!extractIntakeToken(row.toAddress, intakeDomain) || extractReplyToken(row.toAddress, intakeDomain)) continue;
+      const role = await roleForIntake(tx, intakeDomain, row.toAddress);
+      const [company] = row.companyId ? await tx.select({ name: companies.name }).from(companies).where(eq(companies.id, row.companyId)).limit(1) : [];
+      out.push({ id: row.id, receivedAt: row.createdAt, companyId: row.companyId, companyName: company?.name ?? null, roleId: role?.id ?? null, roleTitle: role?.title ?? null, from: row.fromAddress, subject: row.subject, error: row.error, hasResume: !!row.rawStorageKey, canRetry: !!role && role.status === "open" && role.acceptingApplications, text: String((row.parsed as HeldParsed).text ?? "").slice(0, 2000) });
+      if (out.length >= limit) break;
+    }
+    return out;
+  });
+}
+
+/**
+ * A person tries a failed email application again from the Admin console: it becomes an application exactly as on
+ * arrival (the parked résumé travels with it and then leaves storage), or the row records the new reason. A role that is
+ * not open and taking applications is refused with a plain reason; nothing is changed.
+ */
+export async function retryFailedEmail(container: Container, inboundId: string): Promise<{ ok: true; applicationId: string; duplicate: boolean } | { ok: false; reason: string }> {
+  // Claimed first (Wave S5 review): two people pressing "Try again" together make one application, never two.
+  // The row may belong to any company (or none yet), so these reads and writes are platform ones.
+  const [row] = await withPlatform(container.db, (tx) => tx.update(inboundEmails).set({ status: "retrying" }).where(and(eq(inboundEmails.id, inboundId), eq(inboundEmails.status, "error"))).returning());
+  if (!row) return { ok: false, reason: "This email is not waiting for a retry." };
+  const giveBack = () => withPlatform(container.db, (tx) => tx.update(inboundEmails).set({ status: "error" }).where(and(eq(inboundEmails.id, row.id), eq(inboundEmails.status, "retrying"))));
+  const role = await withPlatform(container.db, (tx) => roleForIntake(tx, container.integrations.env.intakeDomain, row.toAddress));
+  if (!role || role.status !== "open" || !role.acceptingApplications) {
+    await giveBack();
+    return { ok: false, reason: role ? "The job is not taking applications right now. Try again once it is." : "The job this email was sent to no longer has an email address for applications." };
+  }
+  const parsed = row.parsed as HeldParsed;
+  const mail: InboundEmail = { to: row.toAddress, from: row.fromAddress, fromName: parsed.fromName ?? undefined, subject: row.subject ?? "", text: parsed.text ?? "", attachments: [], receivedAt: row.createdAt };
+  const bytes = row.rawStorageKey ? await container.integrations.storage.get(row.rawStorageKey) : null;
+  const resume: ResumeInput | null = bytes && parsed.resume ? { kind: "bytes", filename: parsed.resume.filename, mime: parsed.resume.contentType, bytes, via: "email" } : null;
+  try {
+    const result = await withTenant(container.db, role.companyId, async (tx) => {
+      const created = await createApplication(tx, container, applicationFromEmail({ companyId: role.companyId, roleId: role.id, mail, resume }), EMAIL_IN_ACTOR);
+      await tx.update(inboundEmails).set({ status: "matched", applicationId: created.application.id, rawStorageKey: null, error: null }).where(eq(inboundEmails.id, row.id));
+      return created;
+    });
+    if (row.rawStorageKey) await container.integrations.storage.delete(row.rawStorageKey);
+    await container.kick();
+    return { ok: true, applicationId: result.application.id, duplicate: result.duplicate };
+  } catch (err) {
+    await withPlatform(container.db, (tx) => tx.update(inboundEmails).set({ status: "error", error: err instanceof Error ? err.message : String(err) }).where(eq(inboundEmails.id, row.id)));
+    return { ok: false, reason: "It failed again. The reason is on the row." };
+  }
+}
 
 /** The attachment taken as the résumé: the first PDF, Word or text file. */
 function resumeAttachment(mail: InboundEmail) {
@@ -146,15 +237,7 @@ function heldEmailNotice(role: RoleRow, count: number, why: string): { title: st
  */
 async function holdInboundEmail(container: Container, input: { inbound: InboundRow; mail: InboundEmail; companyId: string; role: RoleRow }): Promise<void> {
   const { inbound, mail, companyId, role } = input;
-  const attachment = resumeAttachment(mail);
-  const bytes = attachment?.contentBase64 ? new Uint8Array(Buffer.from(attachment.contentBase64, "base64")) : null;
-  let rawStorageKey: string | null = null;
-  if (attachment && bytes && bytes.byteLength > 0 && bytes.byteLength <= MAX_RESUME_BYTES) {
-    const ext = (attachment.filename.match(/\.([a-z0-9]{1,8})$/i)?.[1] ?? "bin").toLowerCase();
-    rawStorageKey = `inbound/${companyId}/${inbound.id}.${ext}`;
-    await container.integrations.storage.put(rawStorageKey, bytes, attachment.contentType);
-  }
-  const parsed: HeldParsed & Record<string, unknown> = { ...inbound.parsed, fromName: mail.fromName ?? null, resume: rawStorageKey && attachment ? { filename: attachment.filename, contentType: attachment.contentType } : null };
+  const { rawStorageKey, parsed } = await parkResume(container, { inbound, mail, companyId });
   // The row has no company yet, so this write runs as the platform; everything after it is the company's.
   await withPlatform(container.db, (tx) => tx.update(inboundEmails).set({ status: "held", companyId, rawStorageKey, parsed }).where(eq(inboundEmails.id, inbound.id)));
   await withTenant(container.db, companyId, async (tx) => {

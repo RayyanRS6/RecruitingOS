@@ -34,6 +34,8 @@ const DECIDED = ["rejected", "talent_pool"];
 const FINALIST = ["finalist", "reference_check"];
 /** Already in the Interviewing column, where the stage button has nothing to open: the approval card offers the interview. */
 const INTERVIEW_READY = ["interview_recommended", "interview_complete"];
+/** Why the same round is proposed again (founder decision L-12): our interviewer missed it, and the invitation apologises. */
+const MISSED_BY_US_LINE = "Our interviewer missed it. The new invitation says sorry.";
 
 export function NeedsYou(props: Props) {
   const { a, roleId, step, setStep } = props;
@@ -64,7 +66,7 @@ export function NeedsYou(props: Props) {
     ...suggestions.map((p) => <SuggestionCard key={p.id} a={a} roleId={roleId} p={p} onInterview={(roundKey) => setStep("interview", { roundKey })} />),
     // under Cancelled: above the decision card, which an undecided no-show also has ("Send new times …, or decide below")
     cancelled && step !== "interview" ? <CancelledCard key="cancelled" a={a} c={cancelled} roleId={roleId} onChooseInterviewers={() => setStep("interview")} /> : null,
-    can("record_decision") && step !== "interview" && step !== "hire" ? <DecisionCard key="decision" a={a} roleId={roleId} myRole={props.myRole} onNextRound={(key) => setStep("interview", { roundKey: key })} onHire={() => setStep("hire")} onNotes={() => props.onTab?.("notes")} /> : null,
+    can("record_decision") && step !== "interview" && step !== "hire" ? <DecisionCard key="decision" a={a} roleId={roleId} myRole={props.myRole} onNextRound={(key) => setStep("interview", { roundKey: key })} onSameRound={(key) => setStep("interview", { roundKey: key })} onHire={() => setStep("hire")} onNotes={() => props.onTab?.("notes")} /> : null,
     readyToInterview ? <ReadyToInterviewCard key="ready-to-interview" a={a} onApprove={() => setStep("interview")} /> : null,
     finalist ? <FinalistCard key="finalist" a={a} setStep={(s) => setStep(s)} /> : null,
     waitingOnCandidate ? <WaitingOnCandidateCard key="waiting-on-candidate" a={a} roleId={roleId} onAccepted={() => setStep("hire")} /> : null,
@@ -232,8 +234,11 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not start the interview."),
   });
   const suggestion = suggest.data;
+  // The same round again after our interviewer missed it (founder decision L-12): the card says why it proposes it.
+  const missedByUs = !!filled && filled.roundKey === chosenRoundKey && (filled as InterviewDraft & { sameRoundAgain?: string }).sameRoundAgain === "missed_by_us";
   return (
     <Card needsYou lift title="Approve an interview">
+      {missedByUs ? <p className="small" style={{ margin: 0 }}>{MISSED_BY_US_LINE}</p> : null}
       <p className="small" style={{ color: "var(--ink-2)" }}>Times go out to {a.candidate.firstName} once you approve.{filled && filled.roundKey === chosenRoundKey ? " Filled in from your interview plan." : ""}</p>
       <Why>
         <span>Your approval is what starts scheduling; the assistant never does this on its own. Times are offered to the candidate from the interviewers' calendars or declared hours.</span>
@@ -507,7 +512,7 @@ function CancelledCard({ a, c, roleId, onChooseInterviewers }: { a: ApplicationD
  * with a reason. "Next round" opens the interview approval with that round and its interviewers; "Hire" the hire sheet.
  * The team's private notes sit on the card (plan H3), so the decision is made with them in view.
  */
-function DecisionCard({ a, roleId, myRole, onNextRound, onHire, onNotes }: { a: ApplicationDetail; roleId: string; myRole: string | null; onNextRound: (roundKey: string) => void; onHire: () => void; onNotes: () => void }) {
+function DecisionCard({ a, roleId, myRole, onNextRound, onSameRound, onHire, onNotes }: { a: ApplicationDetail; roleId: string; myRole: string | null; onNextRound: (roundKey: string) => void; onSameRound: (roundKey: string) => void; onHire: () => void; onNotes: () => void }) {
   const refresh = useRefreshCandidate(a.id, roleId);
   const [decision, setDecision] = useState<"finalist" | "not_moving_forward" | null>(null);
   const [reason, setReason] = useState(DECLINE_REASONS[0][0]);
@@ -530,14 +535,19 @@ function DecisionCard({ a, roleId, myRole, onNextRound, onHire, onNotes }: { a: 
   const idx = last ? a.interviewPlan.findIndex((r) => r.key === last.roundKey) : -1;
   // A candidate who did not come never moves on to the next round from here: new times for the same round, or a decision.
   const hasNextRound = idx >= 0 && idx + 1 < a.interviewPlan.length && last?.outcome !== "no_show_candidate";
+  // Our interviewer missed it (founder decision L-12): the same round again comes first, and records no decision; the
+  // other choices stay, second.
+  const sameRoundFirst = !!last && last.outcome === "no_show_interviewer" && a.allowedActions.includes("interview");
   return (
     <Card needsYou lift title="How did the interview go?">
       <p className="small" style={{ color: "var(--ink-2)" }}>{last ? `${last.title}${last.outcome === "no_show_candidate" ? " (the candidate did not attend)" : last.outcome === "no_show_interviewer" ? " (the interviewer did not attend)" : ""}. ` : ""}Your decision, recorded with your name.</p>
+      {sameRoundFirst ? <p className="small" style={{ margin: "6px 0 0" }}>{MISSED_BY_US_LINE}</p> : null}
       {canReadNotes(myRole) ? <NotesSummary applicationId={a.id} onOpen={onNotes} /> : null}
       {!decision ? (
         <div className="row" style={{ marginTop: 10 }}>
-          {hasNextRound ? <Button size="sm" variant="primary" loading={record.isPending} onClick={() => record.mutate({ decision: "next_round" })}>Next round</Button> : null}
-          <Button size="sm" variant={hasNextRound ? undefined : "primary"} onClick={() => setDecision("finalist")}>Finalist</Button>
+          {sameRoundFirst && last ? <Button size="sm" variant="primary" onClick={() => onSameRound(last.roundKey)}>Approve the same round again</Button> : null}
+          {hasNextRound ? <Button size="sm" variant={sameRoundFirst ? undefined : "primary"} loading={record.isPending} onClick={() => record.mutate({ decision: "next_round" })}>Next round</Button> : null}
+          <Button size="sm" variant={hasNextRound || sameRoundFirst ? undefined : "primary"} onClick={() => setDecision("finalist")}>Finalist</Button>
           {a.allowedActions.includes("record_outcome") ? <Button size="sm" onClick={onHire} title="Opens the hire sheet: the start date, then what to do with the role">Hire</Button> : null}
           <Button size="sm" variant="destructive" onClick={() => setDecision("not_moving_forward")}>Not moving forward</Button>
           <AskRecruiter roleId={roleId} applicationId={a.id} size="sm" />

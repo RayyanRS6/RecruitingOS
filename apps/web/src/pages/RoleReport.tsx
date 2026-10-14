@@ -4,7 +4,7 @@ import { Fragment } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Card, EmptyState, ErrorState, numHead, OWNER_STAGES, PipelineBar, Pill, Skeleton, Stat, Table } from "@ros/ui";
 import { Link } from "../nav";
-import { api, type ScreeningFunnel } from "../api/client";
+import { ApiError, api, type Me, type ScreeningFunnel } from "../api/client";
 import { funnelLines } from "../screen-view";
 
 /** The role report as the API answers it (apps/api/src/services/role-report.ts). Counts and days only; never a name. */
@@ -41,14 +41,30 @@ const ROLE_OUTCOME_LABEL: Record<string, string> = { filled: "Filled", filled_ou
 const days = (n: number | null) => (n === null ? "none yet" : n === 1 ? "1 day" : `${n} days`);
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
+/**
+ * What an ITS recruiter whose access covers one candidate sees on the Report tab, in plain words: the figures count that
+ * candidate alone, and figures about the job's whole group (the screening chat's) are for the hiring team.
+ */
+export const ONE_CANDIDATE_REPORT = "Your recruiter access covers one candidate on this job, so these figures count that candidate only. Figures about everyone who applied are for the hiring team.";
+export const ONE_CANDIDATE_SCREENING = "Your recruiter access covers one candidate, so how the screening chat goes for everyone on this job is not shown here. That candidate's own chat is on their page.";
+
+/** Whether a refusal is the one-candidate grant's limit (403 `staff_scope`), which is explained, never offered as a retry. */
+export function isOneCandidateLimit(err: unknown): boolean {
+  return err instanceof ApiError && err.code === "staff_scope";
+}
+
 /** The Report tab: the ten figures for one role, and the two downloads. */
 export function ReportTab({ roleId }: { roleId: string }) {
   const q = useQuery({ queryKey: ["role", roleId, "report"], queryFn: () => api.get<RoleReport>(`/api/v1/roles/${roleId}/report`) });
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
+  const oneCandidate = !!me.data?.staffAccess?.scope.applicationId;
   if (q.isLoading) return <Skeleton lines={6} />;
+  if (isOneCandidateLimit(q.error)) return <Alert tone="info">{ONE_CANDIDATE_REPORT}</Alert>;
   if (q.error || !q.data) return <ErrorState message="Could not load the report." onRetry={() => q.refetch()} />;
   const r = q.data;
   return (
     <div className="stack" style={{ gap: 14 }}>
+      {oneCandidate ? <Alert tone="info">{ONE_CANDIDATE_REPORT}</Alert> : null}
       <div className="row" style={{ justifyContent: "space-between" }}>
         <p className="small muted">Figures as of {new Date(r.generatedAt).toLocaleString()}. Counts and days only; nothing here ranks or scores a candidate.</p>
         <div className="row">
@@ -98,6 +114,7 @@ export function MustHavesCard({ mustHaves: m, links }: { mustHaves: NonNullable<
 export function ScreeningCard({ roleId }: { roleId: string }) {
   const q = useQuery({ queryKey: ["role", roleId, "screening"], queryFn: () => api.get<ScreeningFunnel>(`/api/v1/roles/${roleId}/screening`) });
   if (q.isLoading) return <Card title="The screening chat"><Skeleton lines={3} /></Card>;
+  if (isOneCandidateLimit(q.error)) return <Card title="The screening chat"><p className="small muted">{ONE_CANDIDATE_SCREENING}</p></Card>;
   if (q.error || !q.data) return <Card title="The screening chat"><ErrorState message="Could not load how the screening chat is going." onRetry={() => q.refetch()} /></Card>;
   const f = q.data;
   const lines = funnelLines(f);
