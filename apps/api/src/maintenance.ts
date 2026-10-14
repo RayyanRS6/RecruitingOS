@@ -1,12 +1,13 @@
 import { and, inArray, lt } from "drizzle-orm";
 import { expireEmptyDrafts, sweepStaleSending } from "@ros/agents";
-import { raiseAlertOnce } from "@ros/core";
+import { anonymizedCandidates, raiseAlertOnce, resolveAlertsOfKind, scrubCandidateAiData } from "@ros/core";
 import { cspReports, jobs, magicLinks, sessions, webhookReceipts, withPlatform, workerHeartbeats, type Db } from "@ros/db";
 import { HEARTBEAT_STALE_MS, queueSnapshot, readWorkerHealth } from "./worker-health";
 
 /**
- * The daily sweep of operational rows that have served their purpose. Nothing here is candidate data: that follows the
- * privacy-request process and the anonymization rules (docs/09). The periods are conservative and named in one place.
+ * The daily sweep of operational rows that have served their purpose. Nothing here deletes candidate data: that follows
+ * the privacy-request process and the anonymization rules (docs/09); the sweep only finishes an anonymization already
+ * made (the AI readings and run log of a deleted candidate). The periods are conservative and named in one place.
  */
 export const MAINTENANCE_JOB_KIND = "maintenance.daily";
 
@@ -31,12 +32,39 @@ export const QUEUE_STALE_MS = 30 * 60_000;
 /** A stale worker or queue raises one alert an hour at most, and none while a person already has one open. */
 export const HEALTH_ALERT_WINDOW_MS = 60 * 60_000;
 
-export type MaintenanceReport = { doneJobs: number; failedJobs: number; sessions: number; magicLinks: number; webhookReceipts: number; cspReports: number; staleHeartbeats: number; interruptedSends: number; emptyDrafts: number; healthAlerts: number };
+export type MaintenanceReport = { doneJobs: number; failedJobs: number; sessions: number; magicLinks: number; webhookReceipts: number; cspReports: number; staleHeartbeats: number; interruptedSends: number; emptyDrafts: number; anonymizedAssessments: number; anonymizedAiRuns: number; healthAlerts: number };
 
 export type MaintenanceOptions = {
   /** True when the queue runs inside the app process (development): there is no separate worker to watch. */
   workerInline?: boolean;
+  /** Scrub the AI data of every candidate ever deleted, not only the recent ones (the weekly pass; tests). */
+  fullAiScrub?: boolean;
+  /**
+   * Emails a critical alert this check raised to the platform administrators straight after it is committed (the
+   * container wires `emailCriticalAlert`). The queued job stays as the fallback, and both skip an alert already emailed;
+   * this matters for the stale worker, whose job would wait for the very worker that is down.
+   */
+  emailCritical?: (alertId: string) => Promise<void>;
 };
+
+/** How far back the daily pass looks for deletions whose AI data may still hold words. */
+export const AI_SCRUB_WINDOW_DAYS = 30;
+
+/** The day of the week (UTC, 0 = Sunday) the clean-up looks at every deletion ever made. */
+export const AI_SCRUB_FULL_DAY = 0;
+
+async function scrubDeletedCandidatesAi(db: Db, now: Date, opts: MaintenanceOptions): Promise<{ assessments: number; aiRuns: number }> {
+  const full = opts.fullAiScrub || now.getUTCDay() === AI_SCRUB_FULL_DAY;
+  const since = full ? undefined : new Date(now.getTime() - AI_SCRUB_WINDOW_DAYS * 86_400_000);
+  const gone = await withPlatform(db, (tx) => anonymizedCandidates(tx, { since }));
+  const total = { assessments: 0, aiRuns: 0 };
+  for (const c of gone) {
+    const n = await withPlatform(db, (tx) => scrubCandidateAiData(tx, { companyId: c.companyId, candidateId: c.id }));
+    total.assessments += n.assessments;
+    total.aiRuns += n.aiRuns;
+  }
+  return total;
+}
 
 export async function runMaintenance(db: Db, now: Date, opts: MaintenanceOptions = {}): Promise<MaintenanceReport> {
   const before = (days: number) => new Date(now.getTime() - days * 86_400_000).toISOString();
@@ -53,8 +81,13 @@ export async function runMaintenance(db: Db, now: Date, opts: MaintenanceOptions
   const interruptedSends = await sweepStaleSending(db, now);
   // Drafts nobody wrote anything into are set aside quietly (plan C3); each one is recorded as an event.
   const emptyDrafts = await expireEmptyDrafts(db, now);
+  // The AI readings and AI run log of candidates deleted at their request keep no words (privacy-requests.ts): repeated
+  // daily for the deletions of the last AI_SCRUB_WINDOW_DAYS (a model run that finished after a deletion lands within
+  // days), and once a week for every deletion ever made (those made before this existed). One short transaction per
+  // candidate, so the sweep never holds a long platform transaction, and its cost stays bounded day to day.
+  const ai = await scrubDeletedCandidatesAi(db, now, opts);
   const health = await checkOperationalHealth(db, now, opts);
-  const report = { ...swept, interruptedSends, emptyDrafts, healthAlerts: health.raised };
+  const report = { ...swept, interruptedSends, emptyDrafts, anonymizedAssessments: ai.assessments, anonymizedAiRuns: ai.aiRuns, healthAlerts: health.raised };
   if (Object.values(report).some((n) => n > 0)) console.log(`[maintenance] ${Object.entries(report).map(([k, v]) => `${k}=${v}`).join(" ")}`);
   return report;
 }
@@ -80,7 +113,7 @@ export function appHealthWatch(db: Db, opts: MaintenanceOptions & { everyMs?: nu
   return async (now) => {
     if (running || Date.now() - lastRun < everyMs) return;
     lastRun = Date.now();
-    running = checkOperationalHealth(db, now, { workerInline: false })
+    running = checkOperationalHealth(db, now, { workerInline: false, emailCritical: opts.emailCritical })
       .then(() => undefined)
       .catch((err) => console.warn(`[healthz] the operational health check failed: ${err instanceof Error ? err.message : String(err)}`))
       .finally(() => { running = null; });
@@ -90,9 +123,10 @@ export function appHealthWatch(db: Db, opts: MaintenanceOptions & { everyMs?: nu
 
 /**
  * The two things that go wrong quietly (audit remediation H3): a worker that stopped polling, and a queue whose
- * oldest due job has waited too long. Each raises one alert, at most once an hour, and never while a person already
- * has one open. Safe to call from anywhere and as often as wanted: the app's /healthz (appHealthWatch), the worker's
- * hourly `ops.health_check` job and the daily sweep all do.
+ * oldest due job has waited too long. Each raises one alert for as long as it lasts (an acknowledged one still stands;
+ * at most one an hour), and its end resolves it, so the next outage is a new alert (Wave S2 F1). A critical alert is
+ * emailed straight after it is committed when `emailCritical` is given. Safe to call from anywhere and as often as
+ * wanted: the app's /healthz (appHealthWatch), the worker's hourly `ops.health_check` job and the daily sweep all do.
  */
 export async function checkOperationalHealth(db: Db, now: Date, opts: MaintenanceOptions = {}): Promise<{ workerStale: boolean; queueStale: boolean; raised: number }> {
   let raised = 0;
@@ -100,6 +134,7 @@ export async function checkOperationalHealth(db: Db, now: Date, opts: Maintenanc
   if (!opts.workerInline) {
     const worker = await readWorkerHealth(db, now, HEARTBEAT_STALE_MS);
     workerStale = !worker?.healthy;
+    if (!workerStale) await withPlatform(db, (tx) => resolveAlertsOfKind(tx, "worker.stale", { now, reason: "the background worker is polling again" }));
     if (workerStale) {
       const minutes = worker ? Math.round(worker.ageSeconds / 60) : null;
       const result = await withPlatform(db, (tx) => raiseAlertOnce(tx, {
@@ -109,12 +144,23 @@ export async function checkOperationalHealth(db: Db, now: Date, opts: Maintenanc
         body: `${worker ? `The last heartbeat was ${minutes} minute${minutes === 1 ? "" : "s"} ago (worker ${worker.workerId}).` : "No worker has ever written a heartbeat."} While the worker is down nothing queued runs: no email or text leaves, no application is processed, no reminder goes out. Check the Railway worker service (docs/runbooks/railway-worker.md, screen 4): its health check, its logs and whether it keeps restarting.`,
         details: { workerId: worker?.workerId ?? null, lastSeenAt: worker?.lastSeenAt ?? null, queueDepth: worker?.queueDepth ?? null, version: worker?.version ?? null },
       }, { withinMs: HEALTH_ALERT_WINDOW_MS, now }));
-      if (result.created) raised += 1;
+      if (result.created) {
+        raised += 1;
+        // the worker that runs the email job is the thing that is down: the email leaves from here, after the commit
+        if (opts.emailCritical) {
+          try {
+            await opts.emailCritical(result.id);
+          } catch (err) {
+            console.warn(`[health] the critical alert could not be emailed now; the queued job will try: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+      }
     }
   }
   const queue = await queueSnapshot(db, now);
   const waitedMs = queue.oldestQueuedAt ? now.getTime() - Date.parse(queue.oldestQueuedAt) : 0;
   const queueStale = queue.queueDepth > 0 && waitedMs > QUEUE_STALE_MS;
+  if (!queueStale) await withPlatform(db, (tx) => resolveAlertsOfKind(tx, "queue.stale", { now, reason: "the queue is being drained again" }));
   if (queueStale) {
     const minutes = Math.round(waitedMs / 60_000);
     const result = await withPlatform(db, (tx) => raiseAlertOnce(tx, {

@@ -24,7 +24,7 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 const { Setup } = await import("@ros/web/src/pages/Setup");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
-const company = { id: "co1", name: "Bright Dental", slug: "bright-dental", vertical: "dental", sizeBand: "20-49", timezone: "America/Los_Angeles", planKey: "pilot", status: "active", locations: [{ city: "Irvine", region: "CA" }], settings: { verifiedAt: "2026-10-01T00:00:00.000Z" }, integrations: [{ kind: "jobboard", provider: "linkedin_basic", status: "not_connected" }], ai: { provider: "fake" }, usage: { active_roles: { used: 1, limit: 3 }, text_screens: { used: 4, limit: 50 } } };
+const company = { id: "co1", name: "Bright Dental", slug: "bright-dental", vertical: "dental", sizeBand: "20-49", timezone: "America/Los_Angeles", planKey: "pilot", status: "active", locations: [{ city: "Irvine", region: "CA" }], settings: { verifiedAt: "2026-10-01T00:00:00.000Z" }, integrations: [{ kind: "jobboard", provider: "linkedin_basic", status: "not_connected" }], ai: { provider: "fake" }, usage: { active_roles: { used: 1, limit: 3 }, text_screens: { used: 4, limit: 50, resetsAt: "2026-10-30T12:00:00.000Z" } } };
 const policy = (actionType: string, group: string, over: Record<string, unknown> = {}) => ({ group, actionType, level: "approval", approverRoles: ["owner"], source: "default", locked: false, available: true, settable: true, does: null, defaultLevel: "approval", minLevel: null, maxLevel: null, ...over });
 const policies = [
   policy("application.invite_screen", "Applicants", { level: "auto_notify", defaultLevel: "auto_notify" }),
@@ -109,6 +109,8 @@ describe("each card says one line, the rest one click away", () => {
     expect(words).toContain("Name Bright Dental ITS check Confirmed Careers page /careers/bright-dental");
     expect(words).toContain("Type, size, hours and notices Business type Dental practice or group");
     expect(words).toContain("active jobs: 1 of 3 · screening chats this month: 4 of 50");
+    // and when the monthly ones start again from zero (Wave S2 F1); roles never reset
+    expect(words).toContain("screening chats this month: 4 of 50 Monthly allowances reset on October 30.");
     // the usage is on the card's first view, not inside the fold
     const card = html.slice(html.indexOf('<div id="setup-company"'), html.indexOf('<div id="setup-profile"'));
     expect(card.indexOf("Usage")).toBeGreaterThan(-1);

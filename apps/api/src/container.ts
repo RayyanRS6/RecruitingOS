@@ -5,7 +5,7 @@ import { createDb, inspectConnectionRole, migrate, migrationStatus, postings, pr
 import { POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, countActiveAdmins, createRateLimitStore, emit, raiseAlert, transitionPosting, type RateLimitStore } from "@ros/core";
 import { createIntegrations, type Integrations } from "@ros/integrations";
 import { createEngine, type WorkflowEngine } from "@ros/workflows";
-import { REVOKE_JOB_KIND, checkPrivacyRequestDeadlines, listSuppressions, onSuppressionChange, revokeAndDeleteCredentials, setEventSink, setNotifyClock } from "@ros/core";
+import { ALERT_EMAIL_JOB_KIND, REVOKE_JOB_KIND, checkPrivacyRequestDeadlines, emailCriticalAlert, listSuppressions, onSuppressionChange, revokeAndDeleteCredentials, setAlertEmails, setEventSink, setNotifyClock } from "@ros/core";
 import { SEND_JOB_KIND, retryCommunication, sendFallbackSms, sendQueuedCommunication } from "@ros/agents";
 import { guardEmailAdapter } from "@ros/integrations";
 import type { Actor } from "@ros/contracts";
@@ -37,6 +37,8 @@ export type Container = {
   rateLimits: RateLimitStore;
   /** Seals the grant a browser hands the apply form after a direct-to-storage upload (decision 2). */
   uploadGrants: UploadGrants;
+  /** Emails one critical alert to the platform administrators now, after the commit that raised it (Wave S2 F1). */
+  emailCritical(alertId: string): Promise<void>;
   /** Kicks the inline worker after a request commits; returns a promise tests can await. */
   kick(): Promise<void>;
   drain(): Promise<void>;
@@ -138,6 +140,12 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     integrations.clock = () => engine.clock();
     // So does the job that writes an email alert for an update (plan B3).
     setNotifyClock(() => engine.clock());
+    const alertEmailDeps = (now: Date) => ({ send: (m: Parameters<typeof integrations.email.send>[0]) => integrations.email.send(m), from: `${env.PRODUCT_NAME} <${integrations.env.fromAddress}>`, consoleUrl: `${env.APP_BASE_URL}/admin`, now });
+    /** Emails one critical alert now (after the commit that raised it); a failure is left to the queued job. */
+    const emailCritical = async (alertId: string): Promise<void> => {
+      const r = await withPlatform(handle.db, (q) => emailCriticalAlert(q, alertEmailDeps(engine.clock()), { alertId }));
+      if (r.retry) throw new Error(r.retry);
+    };
 
     // Correction 10: disconnecting queues revocation and deletion; the worker (the only role that can read the value) runs it.
     engine.registerJob(REVOKE_JOB_KIND, async (payload, ctx) => {
@@ -169,14 +177,26 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     // The daily sweep (docs/14, retention): finished jobs, expired sessions and sign-in links, old receipts and reports, old heartbeats,
     // interrupted sends; then the health checks (a stale worker, a stale queue). Re-armed even when a run fails (H13).
     engine.registerJob(MAINTENANCE_JOB_KIND, recurring(engine, handle.db, MAINTENANCE_JOB_KIND, DAILY_MS, async (ctx) => {
-      await runMaintenance(handle.db, ctx.now, { workerInline: env.WORKER_INLINE });
+      await runMaintenance(handle.db, ctx.now, { workerInline: env.WORKER_INLINE, emailCritical });
     }));
 
     // The stale-queue check every hour, not only with the daily sweep (H3). A worker that stopped is noticed by the app's
     // /healthz instead (maintenance.ts, appHealthWatch): a job cannot report that the process meant to run it is gone.
     engine.registerJob(HEALTH_CHECK_JOB_KIND, recurring(engine, handle.db, HEALTH_CHECK_JOB_KIND, HOURLY_MS, async (ctx) => {
-      await checkOperationalHealth(handle.db, ctx.now, { workerInline: env.WORKER_INLINE });
+      await checkOperationalHealth(handle.db, ctx.now, { workerInline: env.WORKER_INLINE, emailCritical });
     }));
+
+    // Critical alerts go to the platform administrators by email (Wave S2 F1): a job queued with the alert (raiseAlert),
+    // and, from the app's health watch, straight after the commit (the job would wait for a worker that is down). Both
+    // skip an alert already emailed or resolved; each address is recorded as it is reached, so nobody gets two copies.
+    engine.registerJob(ALERT_EMAIL_JOB_KIND, async (payload, ctx) => {
+      const alertId = String(payload.alertId ?? "");
+      if (!alertId) return;
+      const r = await withPlatform(handle.db, (q) => emailCriticalAlert(q, alertEmailDeps(ctx.now), { alertId }));
+      // thrown after the commit, so the addresses already reached stay recorded and the queue retries the rest
+      if (r.retry) throw new Error(r.retry);
+    });
+    if (env.NODE_ENV !== "test") setAlertEmails(() => engine.clock());
 
     // The outbox: every email and text queued inside a transaction is sent here, after that transaction committed, once.
     engine.registerJob(SEND_JOB_KIND, async (payload, ctx) => {
@@ -295,6 +315,7 @@ export async function createContainer(opts: { env?: Record<string, string | unde
       engine,
       rateLimits,
       uploadGrants: new UploadGrants(env.SESSION_SECRET),
+      emailCritical,
       kick,
       drain,
       close: () => { clearInterval(suppressionRefresh); return handle.close(); },

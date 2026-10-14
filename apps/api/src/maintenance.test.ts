@@ -50,7 +50,7 @@ describe("maintenance", () => {
     ]);
 
     const report = await runMaintenance(container.db, now, { workerInline: true });
-    expect(report).toMatchObject({ doneJobs: 1, failedJobs: 1, sessions: 1, magicLinks: 1, webhookReceipts: 1, cspReports: 1, staleHeartbeats: 1, interruptedSends: 0, healthAlerts: 0 });
+    expect(report).toMatchObject({ doneJobs: 1, failedJobs: 1, sessions: 1, magicLinks: 1, webhookReceipts: 1, cspReports: 1, staleHeartbeats: 1, interruptedSends: 0, anonymizedAssessments: 0, anonymizedAiRuns: 0, healthAlerts: 0 });
     expect((await container.db.select().from(workerHeartbeats)).map((h) => h.workerId)).toEqual(["worker-current"]);
     await container.db.delete(workerHeartbeats);
 
@@ -104,6 +104,27 @@ describe("maintenance", () => {
     expect(newest.body).toContain("10 minutes ago");
     // the inline queue has no separate worker to watch
     expect((await checkOperationalHealth(container.db, now, { workerInline: true })).workerStale).toBe(false);
+    await container.db.update(adminAlerts).set({ status: "resolved" }).where(eq(adminAlerts.kind, "worker.stale"));
+    await container.db.delete(workerHeartbeats);
+  });
+
+  it("an acknowledged stale worker raises nothing more while it stays down; once it polls again the alert resolves, and the next outage is a new one", async () => {
+    const now = new Date(Date.now() + 10 * 3600_000);
+    const alerts = () => container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "worker.stale"));
+    await container.db.delete(workerHeartbeats);
+    expect((await checkOperationalHealth(container.db, now, { workerInline: false })).raised).toBe(1);
+    const [first] = (await alerts()).filter((a) => a.status === "open");
+    await container.db.update(adminAlerts).set({ status: "acknowledged", acknowledgedAt: now.toISOString() }).where(eq(adminAlerts.id, first.id));
+    // still down at the next hourly checks: nothing new while the acknowledgement stands
+    for (const hours of [1, 2, 5]) expect((await checkOperationalHealth(container.db, new Date(now.getTime() + hours * 3600_000), { workerInline: false })).raised).toBe(0);
+    // it polls again: the alert is resolved by the check, on the record
+    const back = new Date(now.getTime() + 6 * 3600_000);
+    await writeHeartbeat(container.db, { workerId: "railway-2", now: back, queueDepth: 0, oldestQueuedAt: null, version: "v2" });
+    await checkOperationalHealth(container.db, back, { workerInline: false });
+    expect((await alerts()).find((a) => a.id === first.id)?.status).toBe("resolved");
+    // a new outage later: a new alert
+    const down = new Date(back.getTime() + 2 * 3600_000);
+    expect((await checkOperationalHealth(container.db, down, { workerInline: false })).raised).toBe(1);
     await container.db.update(adminAlerts).set({ status: "resolved" }).where(eq(adminAlerts.kind, "worker.stale"));
     await container.db.delete(workerHeartbeats);
   });

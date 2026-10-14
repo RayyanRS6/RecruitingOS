@@ -49,9 +49,11 @@ export function invitationNoteText(note: InvitationNote | null | undefined): str
  * Which times email this is: the first offer for an interview, or new times for someone under Cancelled (founder
  * decisions 2A and 4A): the ones they asked for when they cancelled, or the ones the team sends (after a no-show, or to
  * someone who said they were no longer interested). The new-times openings never say why and never hint at a decision
- * (founder decision B6).
+ * (founder decision B6). Two more openings for times worked out again: `rescheduled` after the team moved the interview
+ * (offered times, or a booked time they were told is off), and `other_times` after the candidate said none of the
+ * offered times work.
  */
-export type SlotsVariant = "first" | "new_times_asked" | "new_times_team";
+export type SlotsVariant = "first" | "new_times_asked" | "new_times_team" | "rescheduled" | "other_times";
 
 /**
  * The times email, written but not sent: one template and one key per interview and attempt whatever the variant, so it
@@ -67,8 +69,12 @@ export function slotsOfferedMessage(input: InterviewMessageInput & { note?: Invi
     ? `As you asked when you cancelled, here are new times for your ${titleMidSentence(interview.title)} for the ${position} position at ${company.name}. ${interview.durationMinutes} minutes, ${format}${who}.`
     : variant === "new_times_team"
       ? `${company.name} would like to find a new time for your ${titleMidSentence(interview.title)} for the ${position} position. ${interview.durationMinutes} minutes, ${format}${who}.`
-      : `Good news: ${company.name} would like to interview you for the ${position} position. ${interview.title}${who}, ${interview.durationMinutes} minutes, ${format}.`;
-  const subject = variant === "new_times_asked" ? `New times for your interview: ${position} at ${company.name}` : variant === "new_times_team" ? `New interview times: ${position} at ${company.name}` : `Pick a time for your interview: ${position} at ${company.name}`;
+      : variant === "rescheduled"
+        ? `${company.name} has new times for your ${titleMidSentence(interview.title)} for the ${position} position. ${interview.durationMinutes} minutes, ${format}${who}.`
+        : variant === "other_times"
+          ? `As you asked, here are other times for your ${titleMidSentence(interview.title)} for the ${position} position at ${company.name}. ${interview.durationMinutes} minutes, ${format}${who}.`
+          : `Good news: ${company.name} would like to interview you for the ${position} position. ${interview.title}${who}, ${interview.durationMinutes} minutes, ${format}.`;
+  const subject = variant === "new_times_asked" || variant === "rescheduled" ? `New times for your interview: ${position} at ${company.name}` : variant === "new_times_team" ? `New interview times: ${position} at ${company.name}` : variant === "other_times" ? `Other times for your interview: ${position} at ${company.name}` : `Pick a time for your interview: ${position} at ${company.name}`;
   const text = `Hi ${candidate.firstName},
 
 ${opening}${invitationNoteText(input.note)}
@@ -101,13 +107,18 @@ ${footer(packet, company)}`;
   return deliver(q, integrations, { ...input, channel: "email", templateKey: "interview_slots_reminder", subject: `Reminder: pick a time for your interview at ${company.name}`, text, idempotencyKey: `slots_reminder:${interview.id}:${interview.attempt}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
+/**
+ * The interview's calendar file. One UID per interview; the sequence always grows: a booking at attempt n is 2(n-1), its
+ * cancellation 2(n-1)+1, and the next booking (a later attempt) is higher again, so a calendar app takes a time moved after
+ * a cancellation file as the newer one.
+ */
 export function interviewIcs(input: { interview: InterviewRow; company: MessageInput["company"]; packet: RolePacket; candidate: MessageInput["candidate"]; fromAddress: string; method: "REQUEST" | "CANCEL"; appBaseUrl: string }): string {
   const { interview } = input;
   const start = interview.startsAt ?? new Date().toISOString();
   const end = interview.endsAt ?? start;
   return buildIcs({
     uid: `interview-${interview.id}@identifiedtalent.com`,
-    sequence: Math.max(0, interview.attempt - 1) + (input.method === "CANCEL" ? 1 : 0),
+    sequence: 2 * Math.max(0, interview.attempt - 1) + (input.method === "CANCEL" ? 1 : 0),
     method: input.method,
     start, end,
     summary: `${interview.title}: ${input.packet.identity.title} at ${input.company.name}`,
@@ -197,4 +208,30 @@ export async function sendInterviewCancelled(q: Queryable, integrations: Integra
   const message = interviewCancelledMessage(input);
   const ics = interview.startsAt ? interviewIcs({ interview, company, packet, candidate, fromAddress: integrations.env.fromAddress, method: "CANCEL", appBaseUrl: input.appBaseUrl }) : null;
   return deliver(q, integrations, { ...input, channel: "email", templateKey: "interview_cancelled", subject: message.subject, text: message.text, idempotencyKey: `iv_cancel:${interview.id}:${interview.attempt}`, eventOnSent: "message.sent", to: candidate.email, attachments: ics ? [{ filename: "cancel.ics", contentType: "text/calendar; method=CANCEL", contentBase64: Buffer.from(ics).toString("base64") }] : undefined });
+}
+
+/**
+ * The team moved a booked interview ("Offer new times" on it): the candidate is told at once, in one message, that the
+ * booked time is off (with the team's reason when they gave one), with a calendar file that takes it out of their
+ * calendar, and that new times follow by email. `interview` is the booked row as it was (its time and attempt).
+ */
+export function interviewMovedMessage(input: InterviewMessageInput & { reason?: string | null }): { subject: string; text: string } {
+  const { candidate, company, packet, interview } = input;
+  const when = interview.startsAt ? ` on ${formatInZone(interview.startsAt, input.candidateTimezone)}` : "";
+  const why = input.reason?.trim() ? ` ${company.name} said: "${input.reason.trim()}"` : "";
+  const text = `Hi ${candidate.firstName},
+
+${company.name} needs to move your interview (${interview.title}). The booked time${when} is off, so there is no need to attend then. The attached calendar file removes it from your calendar.${why}
+
+We will email you new times to pick from shortly.
+
+${footer(packet, company)}`;
+  return { subject: `Your interview time has changed: ${interview.title} at ${company.name}`, text };
+}
+
+export async function sendInterviewMoved(q: Queryable, integrations: Integrations, input: InterviewMessageInput & { reason?: string | null }): Promise<SendResult> {
+  const { candidate, company, packet, interview } = input;
+  const message = interviewMovedMessage(input);
+  const ics = interview.startsAt ? interviewIcs({ interview, company, packet, candidate, fromAddress: integrations.env.fromAddress, method: "CANCEL", appBaseUrl: input.appBaseUrl }) : null;
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: "interview_moved", subject: message.subject, text: message.text, idempotencyKey: `iv_moved:${interview.id}:${interview.attempt}`, eventOnSent: "message.sent", to: candidate.email, attachments: ics ? [{ filename: "cancel.ics", contentType: "text/calendar; method=CANCEL", contentBase64: Buffer.from(ics).toString("base64") }] : undefined });
 }

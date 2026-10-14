@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { entitlements, recordApplicationOutcome } from "@ros/core";
-import { adminAlerts, applications, auditRecords, candidates, communications, dataRequests, documents, events, hiringOutcomes, recruiterEscalations, screens, users, withTenant } from "@ros/db";
+import { REMOVED_RUN_OUTPUT, entitlements, recordApplicationOutcome, scrubReading } from "@ros/core";
+import { adminAlerts, aiRuns, applications, assessments, auditRecords, candidates, communications, dataRequests, documents, events, hiringOutcomes, recruiterEscalations, screens, unconfirmedScreens, users, withTenant } from "@ros/db";
 import type { FakeEmailAdapter, MemoryStorageAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { runMaintenance } from "./maintenance";
 import { signInAdmin, statusTokenFor, testContainerOptions } from "./test-helpers";
 
 /**
@@ -185,8 +186,54 @@ describe("candidate privacy requests", () => {
     expect(JSON.stringify(await moves())).toContain(moveNote);
     // team mail is kept without a candidate on it; one that ever named her loses the name too
     const [teamMail] = await container.db.insert(communications).values({ companyId, candidateId: null, direction: "outbound", channel: "email", toAddress: "owner@harbor.test", subject: "About Maria Reyes", bodyText: "Maria Reyes (maria.reyes@example.com) is waiting.", templateKey: "intervention", status: "sent", sentBy: { kind: "system", id: "test" } }).returning({ id: communications.id });
-    const ok = await json(admin, "POST", `/api/v1/admin/data-requests/${req.id}/fulfil`, { resolution: "Your information was removed.", confirmAnonymize: true });
+    // the AI's readings of her and the AI run log about her (the résumé reading, the scoring readings) hold her words now
+    const readingsBefore = await container.db.select().from(assessments).where(eq(assessments.applicationId, applicationId));
+    expect(readingsBefore.length).toBeGreaterThanOrEqual(1);
+    const runsAboutHer = async () => (await container.db.select().from(aiRuns).where(eq(aiRuns.companyId, companyId))).filter((r) => {
+      const ref = r.inputRef as { applicationId?: string; documentId?: string };
+      return ref.applicationId === applicationId || ref.documentId === docBefore.id || readingsBefore.some((a) => a.aiRunId === r.id);
+    });
+    const runsBefore = await runsAboutHer();
+    expect(runsBefore.some((r) => r.task === "resume.extract")).toBe(true);
+    expect(runsBefore.some((r) => r.task === "triage.assess")).toBe(true);
+    expect(JSON.stringify(runsBefore)).toContain("Maria Reyes");
+    // the "your data was deleted" email leaves only once the deletion committed: when it is sent, the record is already anonymized
+    // (the adapter sits behind the do-not-send guard, whose `send` calls the adapter's own: the probe calls the class's)
+    const email = container.integrations.email as FakeEmailAdapter;
+    const fakeSend = (Object.getPrototypeOf(email) as FakeEmailAdapter).send;
+    let anonymizedWhenSent: string | null | undefined;
+    email.send = async (msg) => {
+      if (msg.to === "maria.reyes@example.com" && /Your request is complete/.test(msg.subject)) {
+        const [seen] = await container.db.select({ at: candidates.anonymizedAt }).from(candidates).where(eq(candidates.id, candidateId));
+        anonymizedWhenSent = seen?.at ?? null;
+      }
+      return fakeSend.call(email, msg);
+    };
+    const ok = await Promise.resolve(json(admin, "POST", `/api/v1/admin/data-requests/${req.id}/fulfil`, { resolution: "Your information was removed.", confirmAnonymize: true })).finally(() => { Reflect.deleteProperty(email, "send"); });
     expect(ok.status).toBe(200);
+    expect(anonymizedWhenSent).toBeTruthy();
+    expect(((await ok.json()) as { confirmationSentAt: string | null }).confirmationSentAt).toBeTruthy();
+    // her readings keep the band, the confidence and the score, and lose every word
+    const words = /Maria|Reyes|maria\.reyes|Coastal|Dentrix|Tustin|555-01/;
+    for (const a of await container.db.select().from(assessments).where(eq(assessments.applicationId, applicationId))) {
+      const was = readingsBefore.find((b) => b.id === a.id)!;
+      expect(JSON.stringify(a.result)).not.toMatch(words);
+      expect((a.result as { summary: string }).summary).toBe("[removed at the candidate's request]");
+      expect((a.result as { strengths: unknown[] }).strengths).toEqual([]);
+      expect((a.result as { concerns: unknown[] }).concerns).toEqual([]);
+      expect(JSON.stringify(a.result)).not.toContain("\"quote\"");
+      expect({ overall: a.overall, confidence: a.confidence, secondaryScore: a.secondaryScore, aiRunId: a.aiRunId }).toEqual({ overall: was.overall, confidence: was.confidence, secondaryScore: was.secondaryScore, aiRunId: was.aiRunId });
+      expect((a.result as { overall: string }).overall).toBe((was.result as { overall: string }).overall);
+    }
+    // the AI run log about her keeps only its bookkeeping
+    const runsAfter = await runsAboutHer();
+    expect(runsAfter).toHaveLength(runsBefore.length);
+    for (const r of runsAfter) {
+      const was = runsBefore.find((b) => b.id === r.id)!;
+      expect(r.structuredOutput).toEqual(REMOVED_RUN_OUTPUT);
+      expect(JSON.stringify(r)).not.toMatch(words);
+      expect({ task: r.task, model: r.model, costUsd: r.costUsd, latencyMs: r.latencyMs, inputTokens: r.inputTokens, status: r.status, workflowRunId: r.workflowRunId }).toEqual({ task: was.task, model: was.model, costUsd: was.costUsd, latencyMs: was.latencyMs, inputTokens: was.inputTokens, status: was.status, workflowRunId: was.workflowRunId });
+    }
     // those words are gone; the fixed reasons stay, so the history still reads
     const history = JSON.stringify(await moves());
     expect(history).not.toContain(moveNote);
@@ -211,6 +258,37 @@ describe("candidate privacy requests", () => {
     expect((await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "data.anonymized")))).length).toBe(1);
     const confirmation = outbox().find((m) => m.to === "maria.reyes@example.com" && /Your request is complete/.test(m.subject) && /identified you has been removed/.test(m.text));
     expect(confirmation).toBeTruthy();
+    expect((await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "data.anonymized"))))[0].details).toMatchObject({ assessments: expect.any(Number), aiRuns: expect.any(Number) });
+
+    // the daily maintenance finishes the job for anything about her that still holds words: a model run that finished
+    // after the deletion, or a reading written back (as a deletion made before this clean-up existed left them)
+    const [late] = await container.db.insert(aiRuns).values({ companyId, agent: "triage", task: "triage.assess", provider: "fake", model: "fake", promptKey: "triage.assess", promptVersion: 1, promptHash: "h", inputRef: { applicationId, reading: 1, note: "Maria Reyes" }, structuredOutput: { summary: "Maria Reyes, 5 years at Coastal Family Dentistry" }, costUsd: "0.0021", latencyMs: 812, status: "ok" }).returning();
+    await container.db.update(assessments).set({ result: readingsBefore[0].result }).where(eq(assessments.id, readingsBefore[0].id));
+    // the one-visit apply chat logs its turns against the unconfirmed screen, with no workflow run: found by that id too
+    const [app0] = await container.db.select({ roleId: applications.roleId, packetVersion: applications.packetVersion }).from(applications).where(eq(applications.id, applicationId));
+    const [unconfirmed] = await container.db.insert(unconfirmedScreens).values({ companyId, roleId: app0.roleId, applicationId, packetVersion: app0.packetVersion, firstName: "Removed", token: "privacy-test-unconfirmed", expiresAt: new Date(Date.now() + 86_400_000).toISOString() }).returning({ id: unconfirmedScreens.id });
+    const [turn] = await container.db.insert(aiRuns).values({ companyId, agent: "screen", task: "screen.turn", provider: "fake", model: "fake", promptKey: "screen.turn", promptVersion: 1, promptHash: "h", inputRef: { unconfirmedScreenId: unconfirmed.id, turn: 1 }, structuredOutput: { messageToCandidate: "Thanks, Maria! Next question.", answerRecorded: "Four years at Coastal Family Dentistry" }, costUsd: "0.0004", latencyMs: 300, status: "ok" }).returning();
+    const swept = await runMaintenance(container.db, new Date(), { workerInline: true });
+    expect(swept.anonymizedAssessments).toBe(1);
+    expect(swept.anonymizedAiRuns).toBe(2);
+    const [turnAfter] = await container.db.select().from(aiRuns).where(eq(aiRuns.id, turn.id));
+    expect(turnAfter.structuredOutput).toEqual(REMOVED_RUN_OUTPUT);
+    expect(turnAfter.inputRef).toEqual({ unconfirmedScreenId: unconfirmed.id, turn: 1 });
+    const [lateAfter] = await container.db.select().from(aiRuns).where(eq(aiRuns.id, late.id));
+    expect(lateAfter.structuredOutput).toEqual(REMOVED_RUN_OUTPUT);
+    expect(lateAfter.inputRef).toEqual({ applicationId, reading: 1 });
+    expect({ costUsd: lateAfter.costUsd, latencyMs: lateAfter.latencyMs, task: lateAfter.task }).toEqual({ costUsd: late.costUsd, latencyMs: late.latencyMs, task: late.task });
+    const [rewritten] = await container.db.select().from(assessments).where(eq(assessments.id, readingsBefore[0].id));
+    expect(JSON.stringify(rewritten.result)).not.toMatch(words);
+    // and a second run writes nothing
+    expect(await runMaintenance(container.db, new Date(), { workerInline: true })).toMatchObject({ anonymizedAssessments: 0, anonymizedAiRuns: 0 });
+
+    // a confirmation that did not go after the commit can be sent again from the console, once
+    expect((await json(admin, "POST", `/api/v1/admin/data-requests/${req.id}/confirm-again`, {})).status).toBe(409);
+    await container.db.update(dataRequests).set({ confirmationSentAt: null }).where(eq(dataRequests.id, req.id));
+    const again = await json(admin, "POST", `/api/v1/admin/data-requests/${req.id}/confirm-again`, {});
+    expect(again.status).toBe(200);
+    expect(((await again.json()) as { confirmationSentAt: string | null }).confirmationSentAt).toBeTruthy();
   });
 
   it("deadlines raise an alert ten days before and again when overdue, once each", async () => {
@@ -337,5 +415,60 @@ describe("candidate privacy requests", () => {
     const bad = await json(admin, "POST", "/api/v1/admin/data-requests", { companyId: other.id, requesterEmail: "noor.haddad@example.com", kind: "access", candidateId: appRow0.candidateId });
     expect(bad.status).toBe(400);
     expect(((await bad.json()) as { error: { code: string } }).error.code).toBe("mismatched_ids");
+  });
+});
+
+/** What is left of an AI reading after a deletion: codes, numbers and yes/no values, never the person's words. */
+describe("scrubbing an AI reading", () => {
+  const R = "[removed at the candidate's request]";
+  it("keeps the band, the codes and the score; empties the findings; drops quotes and contact fields; and is idempotent", () => {
+    const screenCard = {
+      overall: "strong",
+      confidence: "medium",
+      confidenceReasons: ["Only the written summary, no résumé"],
+      summary: "Maria Reyes has six years as an RDH at Coastal Family Dentistry.",
+      strengths: [{ claim: "Uses Dentrix daily", evidence: { source: "resume", quote: "Skills: Dentrix", context: "Coastal, 2019" } }],
+      concerns: [{ claim: "Lives in Tustin", evidence: { source: "application" } }],
+      unknowns: [{ question: "Licence number?", whyItMatters: "Must-have" }],
+      competencyFindings: [{ competencyKey: "scaling", finding: "evidenced", evidence: { source: "resume", quote: "scaling and root planing", unquoted: false }, note: "Maria said so" }],
+      requirementFindings: [{ requirementKey: "ca_rdh", met: "yes", evidence: { source: "screen", quote: "RDH 12345", ref: "turn 3" } }],
+      questionFindings: [{ questionKey: "start", answered: true, finding: "Can start on 2 November", meetsModelAnswer: "yes" }],
+      compensationExpectation: { stated: "$52 an hour", withinRange: "yes" },
+      availability: { stated: "Weekdays", matchesSchedule: "partially", earliestStart: "2026-11-02" },
+      eligibilityConfirmations: [{ key: "work_auth", confirmed: "yes", quote: "Yes, I am a citizen" }],
+      anomalies: [{ kind: "other", detail: "Maria's dates overlap" }],
+      secondaryScore: 82,
+      recommendation: "interview",
+      rationale: "Maria Reyes fits.",
+    };
+    const out = scrubReading(screenCard) as typeof screenCard;
+    expect(out).toEqual({
+      overall: "strong",
+      confidence: "medium",
+      confidenceReasons: [],
+      summary: R,
+      strengths: [],
+      concerns: [],
+      unknowns: [],
+      competencyFindings: [{ competencyKey: "scaling", finding: "evidenced", evidence: { source: "resume", unquoted: false } }],
+      requirementFindings: [{ requirementKey: "ca_rdh", met: "yes", evidence: { source: "screen" } }],
+      questionFindings: [{ questionKey: "start", answered: true, finding: R, meetsModelAnswer: "yes" }],
+      compensationExpectation: { withinRange: "yes" },
+      availability: { matchesSchedule: "partially" },
+      eligibilityConfirmations: [{ key: "work_auth", confirmed: "yes" }],
+      anomalies: [],
+      secondaryScore: 82,
+      recommendation: "interview",
+      rationale: R,
+    });
+    expect(scrubReading(out)).toEqual(out);
+    // a résumé reading loses the name, the address, the phone and every fact; the estimate and the confidence stay
+    const extraction = { fullName: "Maria Reyes", email: "maria.reyes@example.com", phone: "(949) 555-0100", locationText: "Tustin, CA", headline: "RDH", positions: [{ title: "RDH", employer: "Coastal", current: true }], education: [], licenses: [{ name: "RDH", number: "12345" }], certifications: [], skills: ["Dentrix"], languages: ["Spanish"], yearsOfExperienceEstimate: 6, anomalies: [], confidence: "medium" };
+    expect(scrubReading(extraction)).toEqual({ positions: [], education: [], licenses: [], certifications: [], skills: [], languages: [], yearsOfExperienceEstimate: 6, anomalies: [], confidence: "medium" });
+    // a screening chat turn keeps its codes only
+    expect(scrubReading({ messageToCandidate: "Thanks Maria!", questionKey: "start", answerRecorded: { questionKey: "start", answer: "Next month", complete: true, status: "answered" }, followUpReason: null, candidateAskedAbout: "pay", sentiment: "fine", done: false, humanRequested: false }))
+      .toEqual({ messageToCandidate: R, questionKey: "start", answerRecorded: { questionKey: "start", answer: R, complete: true, status: "answered" }, followUpReason: null, candidateAskedAbout: "pay", sentiment: "fine", done: false, humanRequested: false });
+    // a code field holding words is words
+    expect(scrubReading({ status: "Maria withdrew" })).toEqual({ status: R });
   });
 });

@@ -1,6 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { MembershipRole } from "@ros/contracts";
-import { can, computeSlots, createEscalation, emit, newTimesOffered, notify, openFollowUpOf, roleTakenOver, slotStillFree, transition } from "@ros/core";
+import { can, computeSlots, createEscalation, emit, freshSchedulingWindow, missingAvailability, newTimesOffered, notify, openFollowUpOf, roleTakenOver, slotStillAhead, slotStillFree, transition } from "@ros/core";
 import { applications, candidates, communications, companies, interviewFollowups, interviewParticipants, interviews, memberships, rolePackets, roles } from "@ros/db";
 import { AUTO_TIMES_TAKEN_OVER, HELD_REASON, composeInterviewerBrief, constraintsFor, createInterviewEvents, participantsOf, queueCommunication, redactBriefPay, renderInterviewerBriefText, sendInterviewConfirmation, sendInterviewReminder, sendSlotsOffered, sendSlotsReminder, type InvitationNote } from "@ros/agents";
 import { randomToken } from "@ros/db";
@@ -15,14 +15,28 @@ import type { StepContext, WorkflowDefinition } from "../types";
  * `offerKind`, `followUpId` and `via`: the interview carries new times for someone under Cancelled (founder decisions
  * 2A and 4A), set when the automatic set or a person reopens it, or a person approves a new one for them. The times
  * email then uses the new-times opening, and counts as sent for the follow-up only once it is on its way.
+ *
+ * Recovery (F2, 15 Oct 2026):
+ * - `rescheduled`: the team moved the interview; the times email uses the "new times" opening.
+ * - `freshWindow`: times are worked out again after a wait (availability that arrived late, no common times, "none of
+ *   these work"): over a fresh window from tomorrow, as long as the old one, never the old dates.
+ * - `otherTimes`: the candidate said none of the offered times work; times that differ go out as a new attempt, so the
+ *   candidate gets a new email (`variant` "other_times").
+ * - `collisions`: chosen times that were taken by booking time, in this run; the third brings in a recruiter.
+ * - `bookPick`: a time was picked (by the candidate, or for them) while no run waited for a pick; this run books it.
+ * - `rejected`: the start times the candidate said none of worked; never offered to them again as "other times".
+ * - `availabilityWaits`, `availabilityEscalated`: how many 48-hour waits passed with a required interviewer's hours
+ *   still missing (the owner is reminded at each), and whether a recruiter was brought in (after the second).
+ * - `noNewTimesTold`: the owner was told once that no time other than the rejected ones is free yet.
  */
-type State = { interviewId: string; applicationId: string; roleId: string; roundKey: string; attempt: number; remindedAt?: string; offeredAt?: string; invitationNote?: InvitationNote | null; offerKind?: NewTimesOfferKind; followUpId?: string; via?: NewTimesVia };
+type State = { interviewId: string; applicationId: string; roleId: string; roundKey: string; attempt: number; remindedAt?: string; offeredAt?: string; invitationNote?: InvitationNote | null; offerKind?: NewTimesOfferKind; followUpId?: string; via?: NewTimesVia; rescheduled?: boolean; freshWindow?: boolean; otherTimes?: boolean; variant?: "other_times"; collisions?: number; bookPick?: boolean; rejected?: string[]; availabilityWaits?: number; availabilityEscalated?: boolean; noNewTimesTold?: boolean };
 
 const OFFER_WAIT_HOURS = 48;
 const REMIND_WAIT_HOURS = 48;
 const TOKEN_DAYS = 14;
 const AVAILABILITY_WAIT_HOURS = 48;
-const MAX_BOOKING_ATTEMPTS = 3;
+/** Chosen times taken by booking time before a recruiter is asked to arrange it (real collisions only, never reschedules). */
+const MAX_COLLISIONS = 3;
 
 /**
  * docs/06 `schedule_interview` (slice 5 step 9). A person approved the round (policy `interview.request`); from here the
@@ -61,15 +75,21 @@ function candidateTz(b: Bundle): string {
 function messageInput(b: Bundle, ctx: StepContext<State>) {
   return { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet: b.packet!, actor: ctx.actor, correlationId: ctx.run.id, appBaseUrl: ctx.services.env.appBaseUrl, interview: b.iv, interviewerFirstNames: b.participants.map((p) => p.firstName), candidateTimezone: candidateTz(b), companyTimezone: b.company.timezone };
 }
-function windowOf(b: Bundle): { fromDate: string; toDate: string; businessDaysOnly: boolean } {
+type Window = { fromDate: string; toDate: string; businessDaysOnly: boolean };
+function windowOf(b: Bundle): Window {
   const w = b.iv.schedulingWindow;
   return { fromDate: w.fromDate!, toDate: w.toDate!, businessDaysOnly: w.businessDaysOnly ?? true };
+}
+/** A window of the slot's own days, a day either side: where its busy time is read at booking. */
+function aroundSlot(slot: { startsAt: string; endsAt: string }, businessDaysOnly: boolean): Window {
+  const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+  return { fromDate: day(Date.parse(slot.startsAt) - 86_400_000), toDate: day(Date.parse(slot.endsAt) + 86_400_000), businessDaysOnly };
 }
 function rangeOf(w: { fromDate: string; toDate: string }) {
   return { start: `${w.fromDate}T00:00:00.000Z`, end: new Date(Date.parse(`${w.toDate}T00:00:00.000Z`) + 2 * 86_400_000).toISOString() };
 }
-async function gatherConstraints(b: Bundle, ctx: StepContext<State>) {
-  const range = rangeOf(windowOf(b));
+async function gatherConstraints(b: Bundle, ctx: StepContext<State>, window: Window = windowOf(b)) {
+  const range = rangeOf(window);
   const out = [];
   for (const p of b.participants) out.push(await constraintsFor(ctx.q, ctx.services.integrations, { companyId: ctx.companyId, interviewId: b.iv.id, participant: p, range, companyTimezone: b.company.timezone, actor: ctx.actor }));
   return out;
@@ -137,32 +157,67 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       if (!["proposed", "scheduling"].includes(b.iv.status)) return { kind: "fail", error: `interview is ${b.iv.status}; nothing to schedule`, retryable: false };
       if (!b.packet || !b.round) return { kind: "fail", error: "the interview round is not in the approved packet", retryable: false };
       if (!b.participants.length) return { kind: "fail", error: "no interviewers on the interview", retryable: false };
+      // A time picked while no run waited for a pick (routes/interviews.ts `routePick`): booked straight away, re-checked there.
+      if (ctx.state.bookPick && b.iv.status === "scheduling" && b.iv.selectedSlot) return { kind: "next", step: "book", state: { bookPick: false } };
       const constraints = await gatherConstraints(b, ctx);
-      if (constraints.every((c) => c.source === "none")) {
-        if (!(await ctx.alreadyDone("prepare"))) {
-          await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.no_availability", title: `Nobody's availability is known for ${b.candidate.firstName}'s interview`, body: `${b.participants.map((p) => p.firstName).join(", ")} need to connect a calendar or declare hours before times can be offered.${newTimesSentence(b, ctx)}`, action: { label: "Open Setup", href: "/setup" } });
-          await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.declare_availability", title: "Tell us when you can interview", body: `${b.candidate.firstName} ${b.candidate.lastName} is waiting for interview times for ${b.role.title}. Connect your calendar or declare your hours.`, action: { label: "My availability", href: "/setup" }, userIds: b.participants.map((p) => p.userId) });
+      // Every required interviewer needs availability: nobody is assumed free 9 to 5. Only an optional interviewer with
+      // none is left out of the merge; for anyone else the owner is asked, and the interviewer too.
+      const missing = missingAvailability(constraints);
+      if (missing.length) {
+        // Asked once at first; reminded at each 48-hour wait that passes with the hours still missing (never more often);
+        // after the second, a recruiter is brought in, once, so the interview is never stuck with nobody hearing of it.
+        const timerWake = ctx.wake?.kind === "timer";
+        const waits = (ctx.state.availabilityWaits ?? 0) + (timerWake ? 1 : 0);
+        const who = b.participants.filter((p) => missing.some((m) => m.userId === p.userId));
+        if (!(await ctx.alreadyDone("prepare")) || timerWake) {
+          const all = missing.length === constraints.length;
+          await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.no_availability", title: all ? `Nobody's availability is known for ${b.candidate.firstName}'s interview` : `${who.map((p) => p.firstName).join(" and ")} ${who.length === 1 ? "has" : "have"} no availability for ${b.candidate.firstName}'s interview`, body: `${timerWake ? "Still waiting: " : ""}${who.map((p) => p.firstName).join(", ")} need to connect a calendar or declare hours before times can be offered.${all ? "" : " The other interviewers are ready."}${newTimesSentence(b, ctx)}`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
+          await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.declare_availability", title: "Tell us when you can interview", body: `${b.candidate.firstName} ${b.candidate.lastName} is waiting for interview times for ${b.role.title}. Connect your calendar or declare your hours.`, action: { label: "My availability", href: "/setup" }, userIds: who.map((p) => p.userId) });
         }
-        return { kind: "wait", wait: { kind: "event", eventTypes: ["availability.updated"], until: hoursFromNow(ctx, AVAILABILITY_WAIT_HOURS), reason: "waiting for an interviewer's availability" }, resumeStep: "prepare" };
+        let escalated = !!ctx.state.availabilityEscalated;
+        if (timerWake && waits >= 2 && !escalated) {
+          await createEscalation(ctx.q, { companyId: ctx.companyId, roleId: b.role.id, applicationId: b.app.id, kind: "candidate_issue", question: `${b.candidate.firstName} ${b.candidate.lastName} has been waiting four days for interview times for ${b.role.title}: ${who.map((p) => p.firstName).join(" and ")} ${who.length === 1 ? "has" : "have"} not added any hours or connected a calendar. Please help the team arrange a time.`, requestedBy: ctx.actor, workflowRunId: ctx.run.id, summaryOrigin: "system" });
+          escalated = true;
+        }
+        return { kind: "wait", wait: { kind: "event", eventTypes: ["availability.updated"], until: hoursFromNow(ctx, AVAILABILITY_WAIT_HOURS), reason: "waiting for an interviewer's availability" }, state: { freshWindow: true, availabilityWaits: waits, availabilityEscalated: escalated }, resumeStep: "prepare" };
       }
-      return { kind: "next", step: "propose_slots" };
+      return { kind: "next", step: "propose_slots", ...(ctx.state.availabilityWaits ? { state: { availabilityWaits: 0 } } : {}) };
     },
 
     async propose_slots(ctx) {
       const b = await load(ctx);
       if (!b || stale(b, ctx)) return { kind: "complete" };
-      const constraints = await gatherConstraints(b, ctx);
-      const w = windowOf(b);
-      const { slots } = computeSlots({ participants: constraints, durationMinutes: b.iv.durationMinutes, fromDate: w.fromDate, toDate: w.toDate, companyTimezone: b.company.timezone, businessDaysOnly: w.businessDaysOnly, now: ctx.now });
+      // After a wait the old dates may have passed: a fresh window from tomorrow, as long as the old one, saved on the interview.
+      const fresh = ctx.state.freshWindow ? freshSchedulingWindow(b.iv.schedulingWindow, ctx.now, b.company.timezone) : null;
+      const w = fresh ?? windowOf(b);
+      const constraints = await gatherConstraints(b, ctx, w);
+      if (missingAvailability(constraints).length) return { kind: "next", step: "prepare" };
+      const computed = computeSlots({ participants: constraints, durationMinutes: b.iv.durationMinutes, fromDate: w.fromDate, toDate: w.toDate, companyTimezone: b.company.timezone, businessDaysOnly: w.businessDaysOnly, now: ctx.now }).slots;
+      // After "none of these work", the times the candidate turned down are never offered to them again as "other times".
+      const rejected = new Set([...(ctx.state.rejected ?? []), ...(ctx.state.otherTimes ? b.iv.offeredSlots.map((s) => s.startsAt) : [])]);
+      const offeredIds = new Set(b.iv.offeredSlots.map((s) => s.id));
+      const slots = ctx.state.otherTimes ? computed.filter((s) => !rejected.has(s.startsAt) && !offeredIds.has(s.id)) : computed;
       if (!slots.length) {
-        await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.no_slots", title: `No common times for ${b.candidate.firstName}'s interview`, body: `Between ${w.fromDate} and ${w.toDate} the interviewers have no shared free time of ${b.iv.durationMinutes} minutes. Widen the window, change interviewers, or free some time.${newTimesSentence(b, ctx)}`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
-        return { kind: "wait", wait: { kind: "event", eventTypes: ["availability.updated", "window.updated"], subjectId: b.iv.id, until: hoursFromNow(ctx, AVAILABILITY_WAIT_HOURS), reason: "no common free time; waiting for availability or a wider window" }, resumeStep: "propose_slots" };
+        // After a wait, the times left on the interview are old (some may have passed): taken off, so the pick page says
+        // new times are being got ready instead of offering them.
+        if (fresh) await ctx.q.update(interviews).set({ schedulingWindow: fresh, offeredSlots: [], selectedSlot: null }).where(and(eq(interviews.id, b.iv.id), eq(interviews.attempt, ctx.state.attempt), inArray(interviews.status, ["proposed", "scheduling"])));
+        if (ctx.state.otherTimes && computed.length) {
+          // There are free times, but only the ones the candidate turned down: nothing new is emailed. The owner hears once.
+          if (!ctx.state.noNewTimesTold) await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.no_slots", title: `No new times for ${b.candidate.firstName}'s interview yet`, body: `The only free times are the ones ${b.candidate.firstName} said do not work. Add hours or free some time; other times are emailed to them as soon as there are some.${newTimesSentence(b, ctx)}`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
+          return { kind: "wait", wait: { kind: "event", eventTypes: ["window.updated", "availability.updated"], subjectId: b.iv.id, until: hoursFromNow(ctx, AVAILABILITY_WAIT_HOURS), reason: "the candidate asked for other times; none are free yet" }, state: { freshWindow: true, otherTimes: true, rejected: [...rejected], noNewTimesTold: true }, resumeStep: "propose_slots" };
+        }
+        await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.no_slots", title: `No common times for ${b.candidate.firstName}'s interview`, body: `Between ${w.fromDate} and ${w.toDate} the interviewers have no shared free time of ${b.iv.durationMinutes} minutes. Add hours or free some time; we check again when an interviewer's hours change.${newTimesSentence(b, ctx)}`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
+        return { kind: "wait", wait: { kind: "event", eventTypes: ["availability.updated", "window.updated"], subjectId: b.iv.id, until: hoursFromNow(ctx, AVAILABILITY_WAIT_HOURS), reason: "no common free time; waiting for availability or a wider window" }, state: { freshWindow: true, ...(ctx.state.otherTimes ? { rejected: [...rejected] } : {}) }, resumeStep: "propose_slots" };
       }
+      // After "none of these work", times that differ from the ones turned down are a new offer: a new attempt, so the
+      // candidate gets a new email (the times email is sent once per attempt).
+      const again = !!ctx.state.otherTimes && (rejected.size > 0 || offeredIds.size > 0);
+      const attempt = again ? b.iv.attempt + 1 : ctx.state.attempt;
       // Guarded: an interview cancelled or moved on while the times were worked out (a team cancel, new times stopped by a
       // reply) is never put back to "scheduling" here.
-      const [proposed] = await ctx.q.update(interviews).set({ offeredSlots: slots, selectedSlot: null, status: "scheduling" }).where(and(eq(interviews.id, b.iv.id), eq(interviews.attempt, ctx.state.attempt), inArray(interviews.status, ["proposed", "scheduling"]))).returning({ id: interviews.id });
+      const [proposed] = await ctx.q.update(interviews).set({ offeredSlots: slots, selectedSlot: null, status: "scheduling", ...(fresh ? { schedulingWindow: fresh } : {}), ...(again ? { attempt } : {}) }).where(and(eq(interviews.id, b.iv.id), eq(interviews.attempt, ctx.state.attempt), inArray(interviews.status, ["proposed", "scheduling"]))).returning({ id: interviews.id });
       if (!proposed) return { kind: "complete" };
-      return { kind: "next", step: "offer_slots" };
+      return { kind: "next", step: "offer_slots", state: { freshWindow: false, otherTimes: false, ...(again ? { attempt, variant: "other_times" as const } : {}) } };
     },
 
     async offer_slots(ctx) {
@@ -173,7 +228,9 @@ export const scheduleInterview: WorkflowDefinition<State> = {
         await ctx.q.update(interviews).set({ scheduleToken: randomToken(24), scheduleTokenExpiresAt: new Date(ctx.now.getTime() + TOKEN_DAYS * 86_400_000).toISOString() }).where(eq(interviews.id, b.iv.id));
       }
       const fresh = (await load(ctx))!;
-      const sent = await sendSlotsOffered(ctx.q, ctx.services.integrations, { ...messageInput(fresh, ctx), note: ctx.state.invitationNote ?? null, variant: ctx.state.offerKind ?? "first" });
+      // Other times after "none of these work" say so, whatever the offer was; otherwise the offer's own opening.
+      const variant = ctx.state.variant ?? ctx.state.offerKind ?? (ctx.state.rescheduled ? "rescheduled" : "first");
+      const sent = await sendSlotsOffered(ctx.q, ctx.services.integrations, { ...messageInput(fresh, ctx), note: ctx.state.invitationNote ?? null, variant });
       if (sent.status === "failed" && sent.retryable) return { kind: "fail", error: `slots email failed: ${sent.error}`, retryable: true };
       if (ctx.state.followUpId) {
         // New times for someone under Cancelled count as sent only once their email is on its way (`newTimesOffered`),
@@ -189,9 +246,10 @@ export const scheduleInterview: WorkflowDefinition<State> = {
         await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.unreachable", title: `${b.candidate.firstName} ${b.candidate.lastName} cannot be reached by email`, body: "Offer the times by phone, or pick one on their behalf from the interview page.", action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
       }
       await emit(ctx.q, { type: "interview.slots_offered", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { attempt: ctx.state.attempt, slots: fresh.iv.offeredSlots.length, expiresAt: fresh.iv.scheduleTokenExpiresAt }, correlationId: ctx.run.id });
-      // A time picked while the new times' email waited for the ITS check (a race with the pick page, which says the
-      // times are being got ready then): the pick is not lost; it is booked now.
-      if (ctx.state.followUpId && fresh.iv.selectedSlot) return { kind: "next", step: "book", state: { offeredAt: ctx.now.toISOString(), remindedAt: undefined } };
+      // A time picked while this step ran or waited (the new times' email held for the ITS check, a retry after a failed
+      // send, or a pick committed while the email was being written): the pick is not lost; it is booked now.
+      const [now] = await ctx.q.select({ selectedSlot: interviews.selectedSlot }).from(interviews).where(eq(interviews.id, b.iv.id)).limit(1);
+      if (now?.selectedSlot) return { kind: "next", step: "book", state: { offeredAt: ctx.now.toISOString(), remindedAt: undefined } };
       return { kind: "wait", wait: { kind: "event", eventTypes: ["interview.slot_selected", "interview.none_work"], subjectId: b.iv.id, until: hoursFromNow(ctx, OFFER_WAIT_HOURS), reason: "waiting for the candidate to pick a time" }, state: { offeredAt: ctx.now.toISOString(), remindedAt: undefined }, resumeStep: "after_offer" };
     },
 
@@ -201,10 +259,21 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       if (b.iv.selectedSlot) return { kind: "next", step: "book" };
       if (ctx.wake?.kind === "event" && ctx.wake.key?.endsWith("interview.none_work")) {
         const note = b.iv.candidateAvailability?.note ? ` They wrote: "${b.iv.candidateAvailability.note}"` : "";
-        await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.none_work", title: `${b.candidate.firstName} asked for other interview times`, body: `None of the offered times worked.${note} Widen the window or free some time; new times go out as soon as they exist.`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
-        return { kind: "wait", wait: { kind: "event", eventTypes: ["window.updated", "availability.updated"], subjectId: b.iv.id, until: hoursFromNow(ctx, AVAILABILITY_WAIT_HOURS), reason: "the candidate asked for other times" }, resumeStep: "propose_slots" };
+        await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.none_work", title: `${b.candidate.firstName} asked for other interview times`, body: `None of the offered times worked.${note} Add hours or free some time; other times are emailed to them as soon as there are some.`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
+        // Woken by an interviewer saving their availability, or after two days; either way the times are worked out
+        // again over a fresh window, and times that differ are emailed to the candidate (`otherTimes`).
+        return { kind: "wait", wait: { kind: "event", eventTypes: ["window.updated", "availability.updated"], subjectId: b.iv.id, until: hoursFromNow(ctx, AVAILABILITY_WAIT_HOURS), reason: "the candidate asked for other times" }, state: { freshWindow: true, otherTimes: true, rejected: [...new Set([...(ctx.state.rejected ?? []), ...b.iv.offeredSlots.map((s) => s.startsAt)])] }, resumeStep: "propose_slots" };
       }
-      if (ctx.wake?.kind === "event") return { kind: "next", step: "book" };
+      if (ctx.wake?.kind === "event") {
+        // A pick: book it. Any other event (a stray wake left from an earlier wait) changes nothing: the offer keeps its
+        // own deadline, so the 48-hour clock is never reset and nothing is sent again.
+        if (ctx.wake.key?.endsWith("interview.slot_selected")) return { kind: "next", step: "book" };
+        const since = Date.parse(ctx.state.remindedAt ?? ctx.state.offeredAt ?? "");
+        const until = Number.isFinite(since) ? since + (ctx.state.remindedAt ? REMIND_WAIT_HOURS : OFFER_WAIT_HOURS) * 3600_000 : Number.NaN;
+        if (Number.isFinite(until) && until > ctx.now.getTime()) {
+          return { kind: "wait", wait: { kind: "event", eventTypes: ["interview.slot_selected", "interview.none_work"], subjectId: b.iv.id, until: new Date(until).toISOString(), reason: "waiting for the candidate to pick a time" }, resumeStep: "after_offer" };
+        }
+      }
       if (!ctx.state.remindedAt) return { kind: "next", step: "remind" };
       return { kind: "next", step: "expire_offer" };
     },
@@ -216,6 +285,9 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       const sent = await sendSlotsReminder(ctx.q, ctx.services.integrations, messageInput(b, ctx));
       if (sent.status === "failed" && sent.retryable) return { kind: "fail", error: `reminder failed: ${sent.error}`, retryable: true };
       await emit(ctx.q, { type: "interview.slots_reminded", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { attempt: ctx.state.attempt }, correlationId: ctx.run.id });
+      // a pick committed while the reminder was being written is booked now, not after another two days
+      const [now] = await ctx.q.select({ selectedSlot: interviews.selectedSlot }).from(interviews).where(eq(interviews.id, b.iv.id)).limit(1);
+      if (now?.selectedSlot) return { kind: "next", step: "book", state: { remindedAt: ctx.now.toISOString() } };
       return { kind: "wait", wait: { kind: "event", eventTypes: ["interview.slot_selected", "interview.none_work"], subjectId: b.iv.id, until: hoursFromNow(ctx, REMIND_WAIT_HOURS), reason: "reminded; waiting for the candidate" }, state: { remindedAt: ctx.now.toISOString() }, resumeStep: "after_offer" };
     },
 
@@ -239,17 +311,34 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       if (!slot) return { kind: "next", step: "offer_slots" };
       // Never a booking nobody attends: with no interviewer left there is no constraint to check, so "free" would be meaningless.
       if (!b.participants.length) return { kind: "fail", error: "no interviewers on the interview", retryable: false };
-      const constraints = await gatherConstraints(b, ctx);
+      // A time that has passed (or starts within the hour) is never booked: new times are worked out over a fresh window
+      // and offered again, as for a time that was taken, but it is not counted as a collision.
+      if (!slotStillAhead(slot, ctx.now)) {
+        await emit(ctx.q, { type: "interview.slot_taken", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { slotId: slot.id, attempt: ctx.state.attempt, passed: true }, correlationId: ctx.run.id });
+        const nextAttempt = b.iv.attempt + 1;
+        const [moved] = await ctx.q.update(interviews).set({ selectedSlot: null, attempt: nextAttempt }).where(and(eq(interviews.id, b.iv.id), eq(interviews.attempt, ctx.state.attempt), eq(interviews.status, "scheduling"))).returning({ id: interviews.id });
+        if (!moved) return { kind: "complete" };
+        return { kind: "next", step: "propose_slots", state: { attempt: nextAttempt, freshWindow: true, variant: undefined } };
+      }
+      // Busy time is read around the slot itself (a day either side), not over the offer's window: a pick from an older
+      // set of times may lie outside the window the interview carries now.
+      const constraints = await gatherConstraints(b, ctx, aroundSlot(slot, windowOf(b).businessDaysOnly));
       if (!slotStillFree(slot, constraints)) {
         await emit(ctx.q, { type: "interview.slot_taken", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { slotId: slot.id, attempt: ctx.state.attempt }, correlationId: ctx.run.id });
         const nextAttempt = b.iv.attempt + 1;
-        await ctx.q.update(interviews).set({ selectedSlot: null, attempt: nextAttempt }).where(eq(interviews.id, b.iv.id));
-        if (nextAttempt > MAX_BOOKING_ATTEMPTS) {
+        // Only real collisions count toward bringing in a recruiter; reschedules, cancels and reopens move the attempt too.
+        const collisions = (ctx.state.collisions ?? 0) + 1;
+        // Guarded: a team reschedule committed meanwhile already moved the attempt; this run then ends instead of taking
+        // the same attempt number as the new run.
+        const [moved] = await ctx.q.update(interviews).set({ selectedSlot: null, attempt: nextAttempt }).where(and(eq(interviews.id, b.iv.id), eq(interviews.attempt, ctx.state.attempt), eq(interviews.status, "scheduling"))).returning({ id: interviews.id });
+        if (!moved) return { kind: "complete" };
+        if (collisions >= MAX_COLLISIONS) {
           await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.stuck", title: `Times keep colliding for ${b.candidate.firstName}'s interview`, body: "Three chosen times were taken by the time we booked them. A recruiter has been asked to sort it out with the candidate.", action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
           await createEscalation(ctx.q, { companyId: ctx.companyId, roleId: b.role.id, applicationId: b.app.id, kind: "candidate_issue", question: `${b.candidate.firstName} ${b.candidate.lastName} chose three interview times that were each taken by booking time (${b.role.title}). Please arrange a time directly.`, requestedBy: ctx.actor, workflowRunId: ctx.run.id, summaryOrigin: "system" });
           return { kind: "complete" };
         }
-        return { kind: "next", step: "propose_slots", state: { attempt: nextAttempt } };
+        // a fresh window too: the re-proposal never uses days that have passed
+        return { kind: "next", step: "propose_slots", state: { attempt: nextAttempt, collisions, variant: undefined, freshWindow: true } };
       }
       // The application first, then the interview: the order a team cancel and a send of new times take them, so a
       // booking and a cancel at the same moment take turns. A cancel that got there first ends this run.

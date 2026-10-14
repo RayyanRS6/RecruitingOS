@@ -19,6 +19,8 @@ const DECISION_LABEL: Record<string, string> = { next_round: "Next round", final
 // Red is only for a missing must-have or a critical error (docs/07), so a cancelled interview is plain grey.
 const STATUS_TONE: Record<string, Tone> = { proposed: "accent", scheduling: "caution", scheduled: "good", completed: "neutral", cancelled: "neutral", no_show: "caution", offer_expired: "caution" };
 const when = (iso: string | null, tz: string | null) => (iso ? new Date(iso).toLocaleString("en-US", { timeZone: tz ?? undefined, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "not yet");
+/** The offered times still ahead: one that has passed can no longer be booked (the server refuses it too). */
+const aheadSlots = <S extends { startsAt: string }>(slots: readonly S[], now: number = Date.now()): S[] => slots.filter((s) => Date.parse(s.startsAt) > now);
 const INTERVIEW_SORT: Record<"candidate" | "round" | "when", (i: InterviewSummary) => SortValue> = { candidate: (i) => `${i.candidate.firstName} ${i.candidate.lastName}`, round: (i) => i.title, when: (i) => (i.startsAt ? Date.parse(i.startsAt) : null) };
 
 /** Interviews across roles (docs/04): who, when, who is interviewing, and what needs a person. */
@@ -118,10 +120,12 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
   const [reason, setReason] = useState("");
   const [confirmCancel, setConfirmCancel] = useState(false);
   const refresh = async () => { await qc.invalidateQueries({ queryKey: ["interview", id] }); await qc.invalidateQueries({ queryKey: ["interviews"] }); await qc.invalidateQueries({ queryKey: ["brief"] }); };
-  const reschedule = useMutation({ mutationFn: () => api.post(`/api/v1/interviews/${id}/reschedule`, { reason: reason || undefined }), onSuccess: async () => { toast("New times are going out."); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not reschedule.") });
+  // New times over a fresh window from tomorrow; a candidate whose time was booked is told at once that it is off.
+  const reschedule = useMutation({ mutationFn: () => api.post<{ candidateTold?: boolean | null }>(`/api/v1/interviews/${id}/reschedule`, { reason: reason || undefined }), onSuccess: async (r) => { toast("New times are going out.", r?.candidateTold ? "The candidate was told their booked time is off." : undefined); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not reschedule.") });
   const cancel = useMutation({ mutationFn: () => api.post<{ candidateTold?: boolean; interviewersTold?: boolean }>(`/api/v1/interviews/${id}/cancel`, { reason }), onSuccess: async (r) => { const t = interviewCancelToast(r); toast(t.title, t.detail); setConfirmCancel(false); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not cancel.") });
   const outcome = useMutation({ mutationFn: (o: string) => api.post(`/api/v1/interviews/${id}/outcome`, { outcome: o }), onSuccess: async () => { toast("Recorded."); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record.") });
-  const book = useMutation({ mutationFn: (slotId: string) => api.post(`/api/v1/interviews/${id}/book-on-behalf`, { slotId, note: "chosen with the candidate by phone" }), onSuccess: async () => { toast("Booked on the candidate's behalf."); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not book.") });
+  // A time that clashes with another interview booked since is refused with a plain message (409 slot_taken).
+  const book = useMutation({ mutationFn: (slotId: string) => api.post<{ status?: string }>(`/api/v1/interviews/${id}/book-on-behalf`, { slotId, note: "chosen with the candidate by phone" }), onSuccess: async (r) => { toast(r?.status === "scheduled" ? "Booked on the candidate's behalf." : "Booking that time for them.", r?.status === "scheduled" ? undefined : "It shows here as booked in a moment."); await refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not book.") });
   // Someone under Cancelled (founder decision 2A): the same interview reopened for new times, or a new one for the same round after a no-show.
   const newTimes = useMutation({
     mutationFn: (applicationId: string) => api.post<SendNewTimesResult>(`/api/v1/applications/${applicationId}/new-times`, {}),
@@ -176,9 +180,10 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
             </dl>
           </Card>
           {i.candidateAvailability?.note || i.candidateAvailability?.accessibilityNote ? <Alert tone="info">{i.candidateAvailability.accessibilityNote ? `Accommodation request: ${i.candidateAvailability.accessibilityNote}. ` : ""}{i.candidateAvailability.note ? `The candidate wrote: "${i.candidateAvailability.note}"` : ""}</Alert> : null}
-          {i.status === "scheduling" && i.offeredSlots.length ? (
+          {i.status === "scheduling" && aheadSlots(i.offeredSlots).length ? (
             <Card title="Times offered to the candidate">
-              <ul className="small" style={{ paddingLeft: 18 }}>{i.offeredSlots.map((s) => <li key={s.id}>{when(s.startsAt, i.timezone)}{manage ? <> <Button size="sm" variant="quiet" loading={book.isPending} onClick={() => book.mutate(s.id)}>Book this for them</Button></> : null}</li>)}</ul>
+              {/* times that have passed are not offered, nor booked for them (the server refuses them too) */}
+              <ul className="small" style={{ paddingLeft: 18 }}>{aheadSlots(i.offeredSlots).map((s) => <li key={s.id}>{when(s.startsAt, i.timezone)}{manage ? <> <Button size="sm" variant="quiet" loading={book.isPending} onClick={() => book.mutate(s.id)}>Book this for them</Button></> : null}</li>)}</ul>
               {manage ? <p className="small muted">Booking on their behalf is for when you agreed a time by phone; it is recorded as your action.</p> : null}
             </Card>
           ) : null}
@@ -191,7 +196,7 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
           ) : null}
           {manage && ["proposed", "scheduling", "scheduled"].includes(i.status) ? (
             <Card title="Change it">
-              <Field label="Reason (the candidate sees it if they had a time booked or offered)" htmlFor="iv-reason"><input id="iv-reason" className="input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
+              <Field label="Reason (the candidate sees it if you cancel, or move a booked time)" htmlFor="iv-reason"><input id="iv-reason" className="input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
               <div className="row" style={{ marginTop: 10 }}>
                 <Button size="sm" loading={reschedule.isPending} onClick={() => reschedule.mutate()}>Offer new times</Button>
                 {confirmCancel ? <Button size="sm" variant="destructive" loading={cancel.isPending} disabled={!reason.trim()} onClick={() => cancel.mutate()}>Confirm cancel</Button> : <Button size="sm" variant="destructive" onClick={() => setConfirmCancel(true)}>Cancel interview</Button>}

@@ -299,6 +299,15 @@ describe("the loop after an interview", () => {
     const cand = await apply("Sofia", "Marin");
     const iv = await requestInterview(cand.id, { interviewerUserIds: [ownerId, ivan.id] });
     expect((await told("interview.assigned", ivan.id)).at(-1)).toMatchObject({ title: "You are interviewing Sofia Marin", action: { label: "Open the interview", href: `/interviews/${iv.id}` } });
+    // a mixed panel: Ivan has no hours yet, so nobody assumes him free 9 to 5; the owner is asked, and so is he
+    expect((await interview(iv.id)).status).toBe("proposed");
+    expect((await told("interview.no_availability")).some((x) => / has no availability for Sofia's interview$/.test(x.title) && /The other interviewers are ready\./.test(x.body))).toBe(true);
+    expect((await told("interview.declare_availability", ivan.id)).length).toBeGreaterThanOrEqual(1);
+    expect((await told("interview.declare_availability", ownerId)).filter((x) => x.body.includes("Sofia Marin"))).toHaveLength(0);
+    // his hours arrive: the waiting interview moves ahead and times go out
+    expect((await json(interviewer, "PUT", "/api/v1/me/availability", { timezone: "America/Los_Angeles", windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 6 })).status).toBe(200);
+    await container.drain();
+    expect((await interview(iv.id)).status).toBe("scheduling");
     const othersNames = ["Maria Reyes", "Luis Ortega", "Ana Silva", "Ben Okafor", "Chloe Nguyen", "Priya Raman", "Omar Haddad"];
     let b = await brief(interviewer);
     expect(b.cards.every((c) => c.kind === "interviews" || c.kind === "empty")).toBe(true);
@@ -333,6 +342,8 @@ describe("the loop after an interview", () => {
     const hr = await signInAs(container, app, { companyId, role: "hr", email: "holly.hr@loop.test" });
     const [holly] = await container.db.select({ id: users.id }).from(users).where(eq(users.email, "holly.hr@loop.test"));
     const cand = await apply("Nadia", "Petrov");
+    // every interviewer on the panel declares hours before times can be offered (nobody is assumed free)
+    expect((await json(hr, "PUT", "/api/v1/me/availability", { timezone: "America/Los_Angeles", windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 6 })).status).toBe(200);
     const iv = await requestInterview(cand.id, { interviewerUserIds: [ownerId, holly.id] });
     await book(iv.id);
     expect((await application(cand.id)).stage).toBe("interview_scheduled");
@@ -568,8 +579,8 @@ describe("the loop after an interview", () => {
     expect((await told("interview.cancelled", ownerId)).some((n) => n.body === "The candidate asked for their information to be deleted, so this interview is off.")).toBe(true);
   });
 
-  it("the status page speaks in the candidate's four steps, never the team's stage names", async () => {
-    const cases: Array<[ApplicationStage, string]> = [["applied", "Received"], ["received", "Received"], ["ineligible", "Under review"], ["triaged", "Under review"], ["screen_complete", "Under review"], ["interview_recommended", "Under review"], ["interview_complete", "Interview"], ["finalist", "Under review"], ["offer_sent", "Decision"], ["hired", "Decision"], ["withdrawn", "Decision"]];
+  it("the status page speaks in the candidate's steps (the progress line's names), never the team's stage names", async () => {
+    const cases: Array<[ApplicationStage, string]> = [["applied", "Applied"], ["received", "Applied"], ["ineligible", "Review"], ["triaged", "Review"], ["screen_complete", "Review"], ["interview_recommended", "Review"], ["interview_complete", "Interview"], ["finalist", "Review"], ["offer_sent", "Decision"], ["hired", "Decision"], ["withdrawn", "Decision"]];
     for (const [stage, word] of cases) {
       const html = await statusPage(await seed(stage));
       expect(statusWord(html), stage).toBe(word);
@@ -583,14 +594,15 @@ describe("the loop after an interview", () => {
     const cand = await apply("Lia", "Moreau");
     const token = (await application(cand.id)).statusToken;
     let html = await statusPage(cand.id);
-    expect(statusWord(html)).toBe("Under review");
-    expect(html).toContain("Start the screening conversation");
+    expect(statusWord(html)).toBe("Screening chat");
+    expect(html).toContain("Start the screening chat");
     expect((await act(cand.id, { action: "reject", reason: "not_a_match_experience" })).status).toBe(200);
     await container.drain();
     html = await statusPage(cand.id);
-    expect(statusWord(html)).toBe("Under review");
+    // the chat closed with the decision, so the page says the team is reviewing, never what was decided
+    expect(statusWord(html)).toBe("Review");
     expect(html).not.toMatch(/did not work out|not moving forward/i);
-    expect(html).not.toContain("Start the screening conversation"); // the screen closed with the decision
+    expect(html).not.toContain("Start the screening chat"); // the screen closed with the decision
     expect(html).toContain(`/c/status/${token}/withdraw`);
     // a message still in the outbox is not shown as sent
     const { candidateId } = await application(cand.id);

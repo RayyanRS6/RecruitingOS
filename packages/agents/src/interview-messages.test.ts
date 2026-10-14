@@ -4,7 +4,7 @@ import { eq, sql } from "drizzle-orm";
 import { applications, candidates, communications, companies, createDb, interviews, migrate, roles, withTenant, type DbHandle } from "@ros/db";
 import { createIntegrations } from "@ros/integrations";
 import { samplePacket } from "./fixtures/sample-packet";
-import { interviewCancelledMessage, sendSlotsOffered, slotsOfferedMessage, type InterviewMessageInput } from "./interview-messages";
+import { interviewCancelledMessage, interviewIcs, interviewMovedMessage, sendSlotsOffered, slotsOfferedMessage, type InterviewMessageInput } from "./interview-messages";
 import { HELD_REASON } from "./outbox";
 
 /**
@@ -32,7 +32,7 @@ const footer = `${packet.communication.humanAlternativeText}\n\n${packet.communi
 
 describe("the times email", () => {
   it("keeps one template and one key per interview and attempt in every variant", () => {
-    for (const variant of ["first", "new_times_asked", "new_times_team"] as const) {
+    for (const variant of ["first", "new_times_asked", "new_times_team", "rescheduled", "other_times"] as const) {
       const m = slotsOfferedMessage({ ...base, variant });
       expect(m.templateKey, variant).toBe("interview_slots");
       expect(m.idempotencyKey, variant).toBe("slots:iv-1:3");
@@ -61,6 +61,32 @@ describe("the times email", () => {
     expect(m.subject).toBe("New interview times: Dental Assistant at Harbor Dental");
     expect(m.text).toContain("Harbor Dental would like to find a new time for your conversation with the dentist for the Dental Assistant position. 30 minutes, video with Grace and Ben.");
     expect(m.text).not.toMatch(/Good news|did not|missed|cancel|decid/i);
+  });
+
+  it("opens times worked out again with words that fit: after the team moved it, and after 'none of these work'", () => {
+    const moved = slotsOfferedMessage({ ...base, variant: "rescheduled" });
+    expect(moved.subject).toBe("New times for your interview: Dental Assistant at Harbor Dental");
+    expect(moved.text).toContain("Harbor Dental has new times for your conversation with the dentist for the Dental Assistant position. 30 minutes, video with Grace and Ben.");
+    expect(moved.text).not.toContain("Good news");
+    const other = slotsOfferedMessage({ ...base, variant: "other_times" });
+    expect(other.subject).toBe("Other times for your interview: Dental Assistant at Harbor Dental");
+    expect(other.text).toContain("As you asked, here are other times for your conversation with the dentist for the Dental Assistant position at Harbor Dental.");
+  });
+
+  it("tells the candidate a booked time the team moved is off, with a calendar file that removes it and the team's reason", () => {
+    const booked = { ...base, interview: { ...interview, startsAt: "2026-10-20T17:00:00.000Z", endsAt: "2026-10-20T17:30:00.000Z", meetingUrl: null } } as unknown as InterviewMessageInput;
+    const m = interviewMovedMessage({ ...booked, reason: "The dentist is away that day." });
+    expect(m.subject).toBe("Your interview time has changed: Conversation with the dentist at Harbor Dental");
+    expect(m.text).toContain("Harbor Dental needs to move your interview (Conversation with the dentist). The booked time on ");
+    expect(m.text).toContain("is off, so there is no need to attend then. The attached calendar file removes it from your calendar. Harbor Dental said: \"The dentist is away that day.\"");
+    expect(m.text).toContain("We will email you new times to pick from shortly.");
+    expect(m.text.endsWith(footer)).toBe(true);
+    expect(interviewMovedMessage(booked).text).not.toContain("said:");
+    // the cancellation file outranks the booking it removes, and the next booking outranks the cancellation
+    const ics = (attempt: number, method: "REQUEST" | "CANCEL") => interviewIcs({ interview: { ...(booked.interview as object), attempt } as never, company: base.company, packet, candidate: base.candidate, fromAddress: "x@example.com", method, appBaseUrl: "https://app.example" });
+    const seq = (s: string) => Number(/SEQUENCE:(\d+)/.exec(s)![1]);
+    expect(seq(ics(3, "CANCEL"))).toBeGreaterThan(seq(ics(3, "REQUEST")));
+    expect(seq(ics(4, "REQUEST"))).toBeGreaterThan(seq(ics(3, "CANCEL")));
   });
 
   it("keeps a title that starts with an acronym as written, and the invitation note where the caller gives one", () => {

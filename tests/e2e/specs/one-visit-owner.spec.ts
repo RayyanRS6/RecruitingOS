@@ -67,7 +67,8 @@ test("still applying on the list, the panel and the report; ITS switches the com
   await gotoSettled(admin, "/admin");
   const company = admin.getByRole("row", { name: new RegExp(`One Visit Dental ${run}`) });
   await expect(company.getByText("Apply and talk in one visit")).toBeVisible({ timeout: 30_000 });
-  await company.getByRole("button", { name: "Change" }).click();
+  // exact: the row also has "Change plan" since Wave S2 (F1)
+  await company.getByRole("button", { name: "Change", exact: true }).click();
   const sheet = admin.getByRole("dialog", { name: `How people apply: One Visit Dental ${run}` });
   await sheet.getByRole("button", { name: "Form now, conversation later" }).click();
   const saveDefault = sheet.getByRole("button", { name: "Save the default" });
