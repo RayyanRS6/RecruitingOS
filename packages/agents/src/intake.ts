@@ -303,7 +303,7 @@ export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnI
       await emit(q, { type: "ai.run_failed", companyId: input.companyId, actor: agent, subject: { type: "intake_session", id: session.id }, payload: { reason: out.reason, error: out.error } });
       return { error: out.error, aiRunId: out.runId };
     }
-    if (session.status !== "active") return { error: "This conversation has already produced a role.", aiRunId: out.runId };
+    if (session.status !== "active") return { error: "This draft has already produced a role.", aiRunId: out.runId };
     const state = stateOf(session);
     const before = normalizeFacts(session.facts);
     const merged = mergeFacts(before, withoutServerOwned(out.output.factsExtracted), state.removed);
@@ -653,7 +653,7 @@ export async function requestIntakeApproval(
       .returning();
     const [pv] = await q
       .insert(rolePackets)
-      .values({ companyId: input.companyId, roleId: role.id, version: 1, packet, status: "proposed", source: "intake_agent", changeSummary: "Drafted with the assistant from the conversation", createdBy: agent })
+      .values({ companyId: input.companyId, roleId: role.id, version: 1, packet, status: "proposed", source: "intake_agent", changeSummary: "Drafted with the assistant in the job builder", createdBy: agent })
       .returning();
     await q.update(intakeSessions).set({ roleId: role.id, status: "compiled", draftPacket: packet }).where(eq(intakeSessions.id, session.id));
     await emit(q, { type: "intake.compiled", companyId: input.companyId, actor: agent, subject: { type: "intake_session", id: session.id }, payload: { roleId: role.id } });

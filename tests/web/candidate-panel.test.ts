@@ -235,7 +235,7 @@ describe("History: who did what, why, and what the candidate was told", () => {
     expect(historyItem(ev("interview.new_times_sent", { via: "auto", attempt: 2 }, sys))).toMatchObject({ what: "New times sent automatically, as they asked", who: "The system" });
     expect(historyItem(ev("interview.new_times_sent", { via: "person", attempt: 2 }, sys))?.what).toBe("New times sent");
     expect(historyItem(ev("interview.new_times_not_sent", { reason: "takeover", from: "waiting" }, sys))).toMatchObject({ what: "The automatic new times did not go", why: "An ITS recruiter is running this role, so nothing was sent automatically." });
-    expect(historyItem(ev("interview.new_times_not_sent", { reason: "switched_off", from: "waiting" }))?.why).toBe("Automatic new times were switched off in Setup.");
+    expect(historyItem(ev("interview.new_times_not_sent", { reason: "switched_off", from: "waiting" }))?.why).toBe("Automatic new times were switched off in Settings.");
     // the staff side says "screening chat", as the drawer's tab and menu do
     expect(historyItem(ev("application.stage_changed", { from: "triaged", to: "screen_invited" }))?.what).toBe('Now "Invited to a screening chat"');
     expect(historyItem(ev("application.stage_changed", { from: "screening", to: "screen_complete" }))?.what).toBe('Now "Screening chat done"');

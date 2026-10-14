@@ -103,9 +103,11 @@ describe("the role page's Activity words", () => {
   it("says how long an approval had before it ran out, and why a screen was closed", () => {
     expect(describeRoleEvent(ev("approval.expired", { actionType: "application.invite_screen", windowDays: 7 }))).toBe("The approval ran out of time (7 days)");
     expect(describeRoleEvent(ev("approval.expired", { actionType: "role_packet.approve" }))).toBe("The approval ran out of time (14 days)");
-    expect(describeRoleEvent(ev("screen.cancelled", { reason: "stopped_by_team" }))).toBe("A screening invitation was stopped by the team");
-    expect(describeRoleEvent(ev("screen.cancelled", { reason: "left_process" }))).toBe("A screen was closed: the candidate is no longer in the process");
-    expect(describeRoleEvent(ev("screen.cancelled", { reason: "deletion_request" }))).toBe("A screen was closed: the candidate's information was deleted");
+    expect(describeRoleEvent(ev("screen.cancelled", { reason: "stopped_by_team" }))).toBe("A screening chat invitation was stopped by the team");
+    expect(describeRoleEvent(ev("screen.cancelled", { reason: "left_process" }))).toBe("A screening chat was closed: the candidate is no longer in the process");
+    expect(describeRoleEvent(ev("screen.cancelled", { reason: "deletion_request" }))).toBe("A screening chat was closed: the candidate's information was deleted");
+    expect(describeRoleEvent(ev("screen.invited", {}))).toBe("A candidate was invited to a screening chat");
+    expect(describeRoleEvent(ev("screen.completed", {}))).toBe("A candidate finished the screening chat");
   });
 
   it("says which boards were chosen and when applications close (plan D6, D7)", () => {

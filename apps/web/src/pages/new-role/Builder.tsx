@@ -11,7 +11,7 @@ import { scrollBehavior } from "../../motion";
 import { closingDateRequiredFor, readDraftClosingDate, writeDraftClosingDate } from "../../publishing";
 import { activeCompanyOf } from "../../rail";
 import { canManageRole } from "../../roles";
-import { browserStorage } from "../../start-hire";
+import { browserStorage, QUICK_START_HREF } from "../../start-hire";
 import { toast } from "../../toast";
 import { AskRecruiter } from "../../components/AskRecruiter";
 import { presetOf } from "../../recruiter-access";
@@ -22,6 +22,7 @@ import { DraftPanel } from "./DraftPanel";
 import type { TeamPick } from "./FactsEditor";
 import { ProposalCard } from "./ProposalCard";
 import { QuestionCard } from "./QuestionCard";
+import { quickStartDraftKey } from "./quick-start";
 import { RoomAlert } from "./StartView";
 import {
   NEW_ROLE_FRESH_HREF, TAKEN_OVER_TOAST, answersPayload, approvalHelp, askFromDetails, cardsKey, cardsToShow, changedSections, composerPlaceholder, draftRecruiterAsk, draftSections,
@@ -157,6 +158,17 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
     onError: failed,
     onSettled: () => { setPolling(false); qc.invalidateQueries({ queryKey: key }); },
   });
+  // A draft the quick start just made (Wave S2, K2): the answers are all on it, so the job post is written as soon as the
+  // builder opens, once, with the usual steps shown. A reload never writes it again (the mark lives in this page only).
+  const autoDraft = useRef(false);
+  useEffect(() => {
+    if (autoDraft.current || !view) return;
+    const mark = quickStartDraftKey(sessionId);
+    if (!qc.getQueryData(mark)) return;
+    autoDraft.current = true;
+    qc.removeQueries({ queryKey: mark, exact: true });
+    if (view.status === "active" && view.readiness.mayDraft && !view.readiness.hasDraft && !draftingNow(view.progress)) draft.mutate();
+  }, [view, qc, sessionId, draft]);
   const approve = useMutation({
     mutationFn: () => api.post<IntakeApprovalResponse>(`${base}/request-approval`),
     onMutate: () => { setPolling(true); setBlockers(null); setProblem(null); setRoom(null); },
@@ -401,9 +413,10 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
             label="More"
             ariaLabel="More for this draft"
             align="end"
-            items={[{ id: "new", label: "Start a different role", icon: "plus" }, { id: "preview", label: "See what candidates will see", icon: "eye", disabled: !view.draft, reason: "Once the draft is written." }, { id: "discard", label: "Discard this draft", icon: "x", danger: true }]}
+            items={[{ id: "new", label: "Start a different role", icon: "plus" }, { id: "quick", label: "New role from quick questions", icon: "arrow-right" }, { id: "preview", label: "See what candidates will see", icon: "eye", disabled: !view.draft, reason: "Once the draft is written." }, { id: "discard", label: "Discard this draft", icon: "x", danger: true }]}
             onSelect={(id) => {
               if (id === "new") nav(NEW_ROLE_FRESH_HREF);
+              else if (id === "quick") nav(QUICK_START_HREF);
               else if (id === "preview") setPreviewOpen(true);
               else setConfirmDiscard(true);
             }}

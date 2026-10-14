@@ -4,7 +4,7 @@ import { Hono, type Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { ApplyRequest, CANDIDATE_STEP_LABEL, CandidateSmsPreference, CandidateStep, MAX_RESUME_BYTES, SCREEN_PERSON_ROUTE_STATUSES, TapAnswer, inspectResumeFile, isCompanyVerified, type ApplicationStage, type DecisionWording, type ReviewItem, type RolePacket, type TapFormat } from "@ros/contracts";
+import { ApplyRequest, CandidateSmsPreference, CandidateStep, MAX_RESUME_BYTES, SCREEN_PERSON_ROUTE_STATUSES, TapAnswer, inspectResumeFile, isCompanyVerified, type ApplicationStage, type DecisionWording, type ReviewItem, type RolePacket, type TapFormat } from "@ros/contracts";
 import { MOVED_ON_MESSAGE, SKIPPED_MESSAGE, WITHDRAW_CONFIRM_KEY, newTimesDayWords } from "@ros/agents";
 import { CLOSING_DATE_REASON, DECISION_STAGES, applyByLabel, audit, benefitsDescriptionFor, candidateNewTimesPromise, candidateStep, closingDayWords, createDataRequest, decisionTold, emit, fulfilSmsOptOut, fulfilWithdrawal, jobNoticesFor, mayWithdraw, noticesFor, notify, openFollowUpOf, openHumanReview, openPayload, sealPayload, transition, type NewTimesPromise, type Notice } from "@ros/core";
 import { CandidatePrivacyRequest } from "@ros/contracts";
@@ -30,6 +30,7 @@ import { JobFacts, payShown, publicPay, roleValidThrough } from "./job-facts";
 import { ApplyFormPage, CompanyLine, HelpLine, JobPage, NO_RESUME_QUESTIONS, keptSentence, noResumeAnswersFrom, noticeVersionsFor, type ApplyFormProps, type ApplyFormState, type JobPageCompany, type JobPageRole } from "./job-page";
 import { Layout, currentNonce } from "./layout";
 import { clearApplicationSource, resolveApplicationSource } from "./links";
+import { withPlainQuestionHelp } from "./question-help";
 import { MessageThread, THREAD_CSS, threadOf, toldWording } from "./thread";
 import { PERSON_BY_EMAIL, PERSON_ON_THE_WEB, forTheWeb } from "./web-wording";
 
@@ -284,13 +285,16 @@ function jobFlow(container: Container, job: Job): Promise<ApplyFlowView> {
   return withTenant(container.db, job.company.id, (tx) => applyFlowOf(tx, job.company, job.role));
 }
 
-/** Everything the apply form needs that does not change between showing it and showing it again. */
+/**
+ * Everything the apply form needs that does not change between showing it and showing it again. The line under each
+ * eligibility question is in plain words (Wave S2, question-help.ts); the answers are still read by the questions' keys.
+ */
 function applyFormFor(container: Container, job: Job, flow: ApplyFlowView): Omit<ApplyFormProps, "formOpened"> {
   const base = `/careers/${job.company.slug}/jobs/${job.role.id}`;
   return {
     company: { slug: job.company.slug, name: job.company.name, contact: contactLineFor(job.company.settings, container.env) },
     role: { id: job.role.id },
-    packet: job.packet,
+    packet: withPlainQuestionHelp(job.packet),
     notices: jobNotices(job.packet, job.company),
     smsEnabled: container.env.SMS_ENABLED,
     privacyEmail: container.env.PRIVACY_EMAIL,
@@ -579,15 +583,30 @@ candidatePages.post("/c/link-request", rateLimit(POLICIES.linkRequest), async (c
 });
 
 /**
- * The candidate's four steps (plan A1), drawn as a quiet bar under each word; the current one is announced as such.
- * The messages about the application read as a conversation (plan G7), in the screening conversation's look.
+ * The progress line the status page leads with (Wave S2, slice K4; Kanvis-like): a numbered circle per step joined by a
+ * line, past steps filled with a tick, the current one ringed and in the ink colour (and announced as the current step).
+ * Down the page on a phone, across it from 600 pixels. No motion. The messages about the application read as a
+ * conversation (plan G7), in the screening conversation's look.
  */
 export const STATUS_CSS = `
-.track { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 20px 0 4px; padding: 0; list-style: none; }
-.track li { position: relative; padding-top: 14px; color: var(--ink-3); font-size: 14px; font-weight: 600; line-height: 1.3; }
-.track li::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 6px; border-radius: var(--r-pill); background: var(--surface-2); }
-.track li.done::before, .track li.current::before { background: var(--ink); }
-.track li.current { color: var(--ink); }
+.track { display: grid; margin: 20px 0 8px; padding: 0; list-style: none; counter-reset: track; }
+.track li { position: relative; display: flex; align-items: flex-start; gap: 12px; padding: 6px 0; color: var(--ink-3); font-size: 15px; font-weight: 600; line-height: 1.3; counter-increment: track; }
+.track li > span:nth-child(2) { padding-top: 4px; }
+.track li:not(:last-child)::after { content: ""; position: absolute; top: 34px; bottom: -6px; left: 13px; width: 2px; background: var(--line-2); }
+.track li.done:not(:last-child)::after { background: var(--ink); }
+.track .dot { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border: 2px solid var(--line-2); border-radius: 50%; background: var(--surface); font-size: 13px; font-variant-numeric: tabular-nums; }
+.track .dot::before { content: counter(track); }
+.track li.done .dot { border-color: var(--ink); background: var(--ink); color: var(--ground); }
+.track li.done .dot::before { content: none; }
+.track .dot .icon { width: 14px; height: 14px; stroke-width: 2.5; }
+.track li.current .dot { border-color: var(--ink); box-shadow: 0 0 0 3px var(--surface-2); }
+.track li.done, .track li.current { color: var(--ink); }
+@media (min-width: 600px) {
+  .track { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+  .track li { flex-direction: column; align-items: center; gap: 8px; padding: 0 4px; font-size: 14px; text-align: center; }
+  .track li > span:nth-child(2) { padding-top: 0; }
+  .track li:not(:last-child)::after { top: 13px; bottom: auto; left: calc(50% + 14px); right: calc(-50% + 14px); width: auto; height: 2px; }
+}
 ${THREAD_CSS}`;
 
 /**
@@ -684,9 +703,10 @@ function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOpt
     if (cancelled) return cancelled;
     if (news.gettingReady) return "You asked for new times. We are getting them ready and will email them to you.";
     if (news.lapsed) return "The interview times we sent have passed. The hiring team will be in touch.";
-    if (input.screen?.status === "paused") return "Your screening conversation is paused while we fix a problem on our end. Your answers so far are saved, and we will email you a link to finish.";
-    if (input.screen) return input.screen.status === "in_progress" ? "Finish the short written conversation with the hiring team's AI assistant whenever you are ready. Your answers so far are saved. The link is below." : "A short written conversation with the hiring team's AI assistant is waiting for you, whenever suits you. The link is below.";
-    if (stage === "screen_complete") return "Thanks for completing the screening conversation. The team is reviewing your answers.";
+    // The page calls it the screening chat throughout, as the progress line above does (one name for one step).
+    if (input.screen?.status === "paused") return "Your screening chat is paused while we fix a problem on our end. Your answers so far are saved, and we will email you a link to finish.";
+    if (input.screen) return input.screen.status === "in_progress" ? "Finish the screening chat whenever you are ready. Your answers so far are saved." : "A short written screening chat with the hiring team's AI assistant is waiting for you, whenever suits you.";
+    if (stage === "screen_complete") return "Thanks for completing the screening chat. The team is reviewing your answers.";
     return "The hiring team is reviewing your application. You will hear from them either way.";
   }
   if (step === "interview") {
@@ -706,9 +726,60 @@ function nextLine(input: { step: CandidateStep; stage: ApplicationStage; poolOpt
   return decisionLine({ stage, wording: input.wording, poolOptOut, companyName: input.companyName });
 }
 
+/** The steps of the progress line the status page leads with (Wave S2, slice K4), in the candidate's words. */
+export type ProgressStep = "applied" | "screening" | "review" | "interview" | "decision";
+export const PROGRESS_STEP_LABEL: Record<ProgressStep, string> = { applied: "Applied", screening: "Screening chat", review: "Review", interview: "Interview", decision: "Decision" };
+
 /**
- * The candidate's status page (plan A1). It speaks in four candidate steps (Received, Under review, Interview,
- * Decision), never the team's stage names: the assistant's suggestions, an eligibility hold and "finalist" read as Under
+ * The progress line (Kanvis-like): Applied, Screening chat, Review, Interview, Decision. It is read off the candidate's
+ * step (`candidateStep`, which never shows a private decision): Received is Applied; Under review is the screening chat
+ * while one is open or paused, else Review. The screening chat is a step only for an application that has, or had, one
+ * (so an eligibility answer that did not match is never hinted at, E7); at the decision, the interview is a step only
+ * when there was one. Every step before the current one is done.
+ */
+export function progressLine(input: { step: CandidateStep; hasChat: boolean; chatOpen: boolean; hadInterview: boolean }): { steps: ProgressStep[]; current: ProgressStep } {
+  const current: ProgressStep = input.step === "received" ? "applied" : input.step === "under_review" ? (input.hasChat && input.chatOpen ? "screening" : "review") : input.step;
+  const steps: ProgressStep[] = ["applied", ...(input.hasChat ? (["screening"] as const) : []), "review", ...(current !== "decision" || input.hadInterview ? (["interview"] as const) : []), "decision"];
+  return { steps, current };
+}
+
+/**
+ * Whether the screening chat is a step on the progress line: while one is open or paused, or once one really happened
+ * (finished, or closed after the candidate started it). A chat they skipped ("send without the chat"), one that expired
+ * unanswered, one cancelled before it started, or one handed to a person is never ticked as done (as with interviews:
+ * nobody sees a tick for one that never happened).
+ */
+export function chatCounts(screen: { status: string; startedAt?: Date | string | null } | null | undefined, openOrPaused: boolean): boolean {
+  if (!screen) return false;
+  if (openOrPaused) return true;
+  if (screen.status === "completed") return true;
+  if (["declined_by_candidate", "human_requested"].includes(screen.status)) return false;
+  return !!screen.startedAt;
+}
+
+/** The progress line as the page draws it: a circle per step (a tick once done), the words, and "done" for a screen reader. */
+function ProgressLine(props: { steps: ProgressStep[]; current: ProgressStep }) {
+  const at = props.steps.indexOf(props.current);
+  return (
+    <ol class="track" aria-label="Where your application is">
+      {props.steps.map((s, i) => {
+        const state = i < at ? "done" : i === at ? "current" : undefined;
+        return (
+          <li class={state} aria-current={state === "current" ? "step" : undefined}>
+            <span class="dot" aria-hidden="true">{state === "done" ? <Icon name="check" /> : null}</span>
+            <span>{PROGRESS_STEP_LABEL[s]}</span>
+            {state === "done" ? <span class="sr-only"> (done)</span> : null}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/**
+ * The candidate's status page (plan A1). It leads with the progress line (Wave S2, slice K4) and the one line on what
+ * happens next; its status card speaks in the four candidate steps (Received, Under review, Interview, Decision). Never
+ * the team's stage names: the assistant's suggestions, an eligibility hold and "finalist" read as Under
  * review. A decision shows only once the candidate was told (founder decision B6), in the words of the message that
  * told it (plan G6); until then the page stands where it was and withdrawing stays open. The messages about the
  * application read as a conversation (plan G7): only messages that actually reached them, and their own replies. A line
@@ -731,7 +802,9 @@ candidatePages.get("/c/status/:token", async (c) => {
   }));
   // Nothing about a private decision shows, and nothing it closed is offered (its screens and interviews were cancelled with it).
   // A conversation paused while the assistant is down (plan E5) is mentioned, without a link: an email brings it back.
-  const latestScreen = view.hidden ? undefined : (await db.select().from(screens).where(eq(screens.applicationId, app.id)).orderBy(desc(screens.createdAt)).limit(1))[0];
+  // Whether there ever was one only decides whether the progress line has a screening chat step, the same before and after a private decision.
+  const lastScreen = (await db.select().from(screens).where(eq(screens.applicationId, app.id)).orderBy(desc(screens.createdAt)).limit(1))[0];
+  const latestScreen = view.hidden ? undefined : lastScreen;
   const openScreen_ = latestScreen && ["invited", "reminded", "in_progress"].includes(latestScreen.status) ? latestScreen : undefined;
   const pausedScreen = latestScreen?.status === "paused" ? latestScreen : undefined;
   const iv = view.hidden ? undefined : (await db.select().from(interviews).where(eq(interviews.applicationId, app.id)).orderBy(desc(interviews.createdAt)).limit(1))[0];
@@ -750,7 +823,11 @@ candidatePages.get("/c/status/:token", async (c) => {
   // Times a person approved and offered are an interview to the candidate, whatever the team's own stage says.
   const baseStep = candidateStep(app.stage, app.toldState, view.before);
   const step: CandidateStep = baseStep === "under_review" && (offered || booked) ? "interview" : baseStep;
-  const steps = CandidateStep.options;
+  // An interview counts on the line once times were offered to them or one was booked, never one still waiting for approval.
+  const invitedToInterview = (!!iv && iv.status !== "proposed" && (!!iv.startsAt || iv.offeredSlots.length > 0)) || wording === "after_interview";
+  // A private decision cancels an open chat: the line keeps its step as it was, so nothing hints at the decision.
+  const chatStep = chatCounts(lastScreen, !!(openScreen_ ?? pausedScreen) || (view.hidden && lastScreen?.status === "cancelled"));
+  const progress = progressLine({ step, hasChat: chatStep, chatOpen: !!(openScreen_ ?? pausedScreen), hadInterview: invitedToInterview });
   // "Don't keep me for future roles", from the decision message's link (#future-roles) or the button: it says it was saved.
   const pool = c.req.query("pool");
   const poolSaved = (pool === "out" && poolOptOut) || (pool === "in" && !poolOptOut);
@@ -758,15 +835,13 @@ candidatePages.get("/c/status/:token", async (c) => {
     <Layout title={`Your application at ${company?.name ?? ""}`} extraCss={STATUS_CSS}>
       <p class="eyebrow">{company?.name ? `${company.name} · ` : ""}Your application</p>
       <h1>{role?.title}</h1>
-      <ol class="track" aria-label="Where your application is">
-        {steps.map((s, i) => <li class={s === step ? "current" : i < steps.indexOf(step) ? "done" : undefined} aria-current={s === step ? "step" : undefined}>{CANDIDATE_STEP_LABEL[s]}</li>)}
-      </ol>
+      <ProgressLine steps={progress.steps} current={progress.current} />
       {/* Where things stand, then the one thing to do now (founder brief, 14 October 2026): the line, and the button or card. */}
       <h2>What happens next</h2>
       <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null, news, wording, companyName: company?.name ?? "The company" })}</p>
       {/* The choice the decision message points to (Q30), one click away from the decision itself. */}
       {told && !poolOptOut ? <p>Would you rather we did not keep your details for future roles? <a href="#future-roles">Say so below</a>; it takes one click.</p> : null}
-      {openScreen_ ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue the screening conversation" : "Start the screening conversation"}</a> : null}
+      {openScreen_ ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue the screening chat" : "Start the screening chat"}</a> : null}
       {offered ? <div class="card"><strong>Pick a time for your {iv!.title.toLowerCase()}.</strong><p>{company?.name} would like to interview you.</p><a class="btn" href={`/c/schedule/${iv!.scheduleToken}`}><Icon name="calendar" />Choose a time</a></div> : null}
       {booked ? <div class="card"><strong>Your interview: {iv!.title}</strong><p>{new Intl.DateTimeFormat("en-US", { timeZone: ivTz, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(iv!.startsAt!))}{iv!.meetingUrl ? <span> · <a href={iv!.meetingUrl}>Join link</a></span> : null}</p>{prepare ? <p><strong>What to prepare:</strong> {prepare} Bring examples from your own work, and any questions you have for the team.</p> : null}<p><a href={`/c/schedule/${iv!.scheduleToken}/confirmed`}>Details, calendar file, reschedule or cancel</a></p></div> : null}
       {c.req.query("withdrawn") === "1" ? <div class="card" role="status"><strong>Your application is withdrawn.</strong><p>Thank you for your time. If you have a question, reply to any of our emails.</p></div> : null}
@@ -774,10 +849,11 @@ candidatePages.get("/c/status/:token", async (c) => {
       <p class="meta">People on the hiring team at {company?.name ?? "the company"} make every decision about your application.</p>
       <details class="more">
         <summary>How AI is used</summary>
-        <p class="meta">An AI assistant reads applications and runs the screening conversation for them; who is interviewed, hired or turned down is always a person's decision.</p>
+        <p class="meta">An AI assistant reads applications and runs the screening chat for them; who is interviewed, hired or turned down is always a person's decision.</p>
       </details>
       <div class="card status">
-        <div><span>Status</span><strong>{CANDIDATE_STEP_LABEL[step]}</strong></div>
+        {/* The same name for where they are as the progress line above: one vocabulary on the page. */}
+        <div><span>Status</span><strong>{PROGRESS_STEP_LABEL[progress.current]}</strong></div>
         <div><span>Applied</span><span>{new Date(app.createdAt).toLocaleDateString()}</span></div>
         <div><span>Last update</span><span>{new Date(view.since).toLocaleDateString()}</span></div>
       </div>

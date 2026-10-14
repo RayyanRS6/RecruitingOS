@@ -463,7 +463,7 @@ export function newTimesSettingOf(settings: CompanySettings | null | undefined):
 }
 
 const REASON_TEXT: Partial<Record<AutoNewTimesReason, string>> = {
-  switched_off: "Automatic new times are off in Setup.",
+  switched_off: "Automatic new times are off in Settings.",
   already_used: "They already had their one automatic set of new times.",
   reschedules_used: "They had already moved this interview twice, so a person arranges the next time.",
   takeover: "An ITS recruiter is running this role, so nothing was sent automatically.",
@@ -484,7 +484,7 @@ const REASON_TEXT: Partial<Record<AutoNewTimesReason, string>> = {
  */
 export function autoReasonText(reason: string | null | undefined, ctx: { state?: AutoNewTimesState; resolved?: boolean } = {}): string | null {
   if (!reason) return null;
-  if (reason === "switched_off" && ctx.state === "not_sent") return "Automatic new times were switched off in Setup.";
+  if (reason === "switched_off" && ctx.state === "not_sent") return "Automatic new times were switched off in Settings.";
   if (reason === "left_process") return ctx.resolved ? null : "Nothing went automatically while a decision was in place.";
   return REASON_TEXT[reason as AutoNewTimesReason] ?? null;
 }

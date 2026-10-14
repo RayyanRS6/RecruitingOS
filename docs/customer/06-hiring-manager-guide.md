@@ -2,7 +2,7 @@
 
 **ITS AI Recruiting Department, Founding Partner Program. Release 1.**
 
-Draft of 30 September 2026, brought up to date with the product on 9 October 2026, for review by ITS before it is given to a customer. This guide is for the person who runs a hire: describes the role, approves it, reads the candidates, and decides. Owners and admins can do everything in this guide too.
+Draft of 30 September 2026, brought up to date with the product on 15 October 2026, for review by ITS before it is given to a customer. This guide is for the person who runs a hire: describes the role, approves it, reads the candidates, and decides. Owners and admins can do everything in this guide too.
 
 Screen names and button labels in **bold** are the ones you will see in the product. Two words we use: **ITS** is Identified Talent Solutions. **The assistant** is the software's AI helper. It organizes and drafts. You decide.
 
@@ -12,7 +12,11 @@ You describe who you need in a conversation. The assistant drafts a role packet.
 
 ## 2. The job builder
 
-Press **Start a hire** (in the menu on every page, or on **Home**), or type into the **Who are you hiring?** box on Home and press **Start drafting**. The job builder opens. Describe the role in a sentence or paste a job ad you already have (up to 20,000 characters), for example: "I need a dental hygienist for our Pasadena office, four days a week, $48 to $56 an hour, starting in November." At a desk, Enter sends and Shift+Enter starts a new line; on a phone, press **Send**. If you have a draft in progress, **Start a hire** takes you back to it; **More**, then **Start a different role**, begins another.
+Press **Start a hire** (in the menu on every page, or on **Home**). The first page, **Who are you hiring?**, offers two ways to start.
+
+**Answer a few quick questions** (the main button, **Start the quick questions**) asks ten short questions, one per screen, with "Step N of 10": the job title (or paste a job ad you already have, and the answers are filled in from it), the employment type, where the job is, the minimum experience (and whether someone with less is still considered), the pay (always shown on the job ad), the closing date (or **No closing date**), the must-have skills (suggestions for that job to tick, plus your own; at least one, at most six), the deal-breakers (or **None**; each one is shown openly as a must-have unless you untick it), and the screening questions (suggested yes or no questions, already ticked; untick or add your own). The last screen lists every answer with **Edit**. Enter moves on. Your answers are kept in this browser if you leave and come back; **Start over** clears them. **Write the job post** hands everything to the job builder below, which writes the draft at once. Every must-have, deal-breaker and question gets the same fairness check as in the conversation, and anything refused is listed with the reason. The assistant still asks what the questions did not cover, such as why you are hiring and who interviews and decides.
+
+**Or describe it, or paste a job ad.** Type into the box on that page, or into the **Who are you hiring?** box on Home and press **Start drafting**. The job builder opens. Describe the role in a sentence or paste a job ad you already have (up to 20,000 characters), for example: "I need a dental hygienist for our Pasadena office, four days a week, $48 to $56 an hour, starting in November." At a desk, Enter sends and Shift+Enter starts a new line; on a phone, press **Send**. If you have a draft in progress, **Start a hire** takes you back to it; **More**, then **Start a different role**, begins another.
 
 The conversation is on the left and the draft on the right (on a phone, switch between **Conversation** and **Draft**). The assistant asks with question cards under the conversation: tap an answer (**Pick one** or **Pick any that apply**), or **Add your own…**, and press **Next**, then **Send** on the last card. **Why we ask** says why a question matters. Questions about people offer your team, plus **Someone not on the team yet**. **Or type your own answer…** brings the message box back. Your answers go into the conversation as one short message, and the draft on the right fills in, each part marked **Candidates see this**, **Candidates are asked this**, **Used to review applications; not on the job page** (the must-haves and nice-to-haves) or **Only your team sees this**. The **Pay** card shows the market pay for the job and place with its source and year (or says there is none), the range candidates see, and the most you would pay, which only your team sees.
 
@@ -47,7 +51,7 @@ The job page shows the title, its status and one line of facts (place, type, pay
 
 **Interview plan.** The rounds (one to five), each with its purpose, length and format, and who interviews in it. Next to each person: whether times can be offered to them yet (they have connected a calendar or declared their hours) or not. **Assign interviewers** (or **Change**) picks people from your team for that round; saving is a new packet version called "Interviewers assigned". Assign people before the first interview is approved, so times can go out at once.
 
-**Share.** The job's public link to copy or open, then where the job will appear once approved (section 5).
+**Share.** The job's public link to copy or open, the **Post on LinkedIn** card, then where the job will appear once approved (section 5).
 
 **Activity.** Everything that happened on the job, newest first, in plain words: drafted, approved, opened, posted, applications arriving, decisions; and every version of the job details. Candidates are not named here; the **Candidates** tab has the people.
 
@@ -87,6 +91,8 @@ If something should change first, press **Send back with a note** and say what. 
 Editing after approval creates a new version. If you can approve, your edit takes effect at once; if you can edit but not approve (a recruiter, for instance), the edit waits on the approval card as "Approve packet v3 of ..." while the role keeps running on its current version. Candidates who already applied are assessed against the version they applied to.
 
 ## 5. The Share tab and the manual posting steps
+
+**Post on LinkedIn.** Right under the public link, this card writes a short announcement for your own LinkedIn feed from the job's facts: the title, the place, the work model, the pay when the job page shows it, up to three must-haves, and the job's LinkedIn link, so applicants from it show as coming from LinkedIn. Pick a tone (**Proud**, **Straight** or **Friendly**) and change the words if you like; a preview and a character count (LinkedIn allows 3,000) sit beside the box. **Copy and open LinkedIn** copies the words and opens LinkedIn in a new tab, where you paste them; **Copy text** only copies. Nothing is posted for you. The card works for a live job once ITS has confirmed your company; until then it says so. On the **Jobs** page, **Post on LinkedIn** on a live job's row opens this card.
 
 One card per place the job appears, each with a status and a sentence saying what happens next. Everyone who works on the role can read this tab. The buttons that change a posting, pause the role or stop applications are for owners and admins (and ITS); if you are a hiring manager and something needs changing, ask your owner or your ITS contact.
 
@@ -175,9 +181,13 @@ What the candidate sees, on a phone or a computer, with no app and no password:
 
 If they stop part-way, they get one reminder the next day; two days after that the conversation closes as unfinished and they are told nothing else is needed. If they answered everything but did not press Send, the reminder asks them to check and send, tells them the hiring team sees their answers only once they send them, and gives the day the conversation closes if they do not; two days later it closes the same way. Either way they never sent their answers, so you never see them and nothing is read from them: their page says "Didn't finish the conversation", in the same words however far they got, and their reading and match score come from their application alone. The role's figures count how many didn't finish, never the question anyone stopped at. If they never start it, they get one reminder after two days; three days after that their application comes to you without it, and they are told that is fine. If the assistant stops working, the conversation pauses with their answers kept and they are emailed a link to finish once it works again; after a day without it, a person takes over and they are told so. A person is always one click away.
 
-Each conversation counts against your plan's monthly allowance at the candidate's first answer, never at the invitation. At 80% you and ITS are warned. If the allowance runs out, applications keep coming in, and people who apply meanwhile get the link by email once more conversations are added, so everyone for a role has the same process.
+Each conversation counts against your plan's monthly allowance at the candidate's first answer, never at the invitation. At 80% you and ITS are warned. If the allowance runs out, applications keep coming in, and people who apply meanwhile get the link by email once more conversations are added or the allowance starts again (every 30 days; **Settings**, **Company**, **Usage** says when), so everyone for a role has the same process.
 
 **Later, by email (every role ITS has not switched to the same visit, and any role whose screen invitations are "Ask me first" or "Only a person").** Candidates send the form only. Under the default rule the assistant invites candidates whose applications look like a fit and tells you under **Recent activity**; you can also invite anyone yourself: open the candidate and press **Invite to a screen**. With "Ask me first" you see **The assistant suggests a screen** and press **Yes, invite to a screen**. The candidate gets an email with the link; the page opens on the same introduction, and the conversation works as above. If they have not started after two days they get one reminder. If they have not started three days after that, the invitation lapses, the candidate shows "No response", and you are told. You can then decline with a reason, keep them, or ask a recruiter to call.
+
+**What the candidate sees after applying.** Their status page opens with a progress line: **Applied**, **Screening chat** (only when they have or had one), **Review**, **Interview** (at the decision, only if times were offered or an interview was booked) and **Decision**. Steps passed are ticked and the current one is marked; under it, **What happens next** says the next thing in one line, with the one button they need. A private decision changes nothing on that line until they are told. Messages, withdrawing, privacy requests and every link stay below it.
+
+**What the assistant sees when it scores.** When it reads a résumé and when it writes the screening scorecard, the assistant sees placeholders such as [name], [email] and [phone] instead of who the candidate is, and nothing about their earlier applications to your company. Quotes you see on a reading are still the candidate's own words.
 
 ## 9. Reading a scorecard
 
@@ -209,13 +219,13 @@ Under **Approve an interview**:
 4. **A personal line for the invitation** (optional): one or two sentences that go with the times, under your name. **Suggest a line** asks the assistant for one; change it or leave it out, and if you keep it the invitation says the assistant helped, even after you change a few words (empty the line, or press **Take out the assistant's line**, to leave that out). It is checked like the personal line on a decision message (section 13).
 5. Press **Approve and offer times**.
 
-Times are worked out from each interviewer's connected calendar or declared hours, within a scheduling window, on business days, respecting the buffer and daily maximum. If the interviewers have no common free time, you are told and can widen the window, change interviewers or free some time.
+Times are worked out from each interviewer's connected calendar or declared hours, within a scheduling window, on business days, respecting the buffer and daily maximum. Nobody is assumed free: until every interviewer has a calendar or hours, no times are offered, you are told who is missing, and only they are asked to add their hours. If the interviewers have no common free time, you are told and can change interviewers or free some time. As soon as an interviewer saves new hours, every interview waiting on them looks again at once. Whenever new times are offered (after a reschedule, a "none of these work", or late availability), they come from a fresh window that starts tomorrow and is as long as the first one, never from days that have passed.
 
 ## 11. The candidate picking a time
 
-The candidate gets an email with a link to "Pick a time for your (round)". They see the times in their own time zone (they can change it), pick one, can add a note under "Anything that would make the interview easier for you?", and press **Confirm this time**. If none work they press **Ask for other times** with a note; you are told and new times go out when the window or availability changes.
+The candidate gets an email with a link to "Pick a time for your (round)". They see the times in their own time zone (they can change it), pick one, can add a note under "Anything that would make the interview easier for you?", and press **Confirm this time**. If none work they press **Ask for other times** with a note; you are told, and other times are emailed to them as soon as there are some that differ from the ones already offered.
 
-When they confirm, the product books the time on every connected calendar, sends the candidate a confirmation with a calendar file, tells the interviewers by email and on Home, and moves the candidate to "Interviewing". If a chosen time was taken in the meantime, new times go out on their own; after three collisions an ITS recruiter arranges it directly.
+When they confirm, the product books the time on every connected calendar, sends the candidate a confirmation with a calendar file, tells the interviewers by email and on Home, and moves the candidate to "Interviewing". A pick is never lost: if the times had already moved on, the time is booked straight away when it is still free, and if it was just booked for another interview the candidate is asked to choose another. If a chosen time was taken in the meantime, new times go out on their own; after three real collisions an ITS recruiter arranges it directly.
 
 The candidate can **Ask for a different time** twice on their own and can **Cancel the interview**. Either way you are told.
 
@@ -233,8 +243,8 @@ Reminders go to the candidate and the interviewers one day before and two hours 
 
 **On the Interviews page** you see every interview **In motion** (Preparing times, Waiting on the candidate, Scheduled) and **Past**, with the interviewer load. Open one to see details, the times offered, an accommodation request if any, and to change it:
 
-- **Book this for them**, next to an offered time, if you agreed a time by phone. It is recorded as your action.
-- **Offer new times** to reschedule from your side.
+- **Book this for them**, next to an offered time, if you agreed a time by phone. It is recorded as a booking made by you on their behalf. If that time was just taken by another interview, you are told and nothing is booked.
+- **Offer new times** to reschedule from your side. If a time was already booked, the candidate is told at once in one email that it is off (with a calendar file that removes it, and your reason if you gave one), then gets the new times; the other interviewers are told on Home.
 - **Cancel interview** with a reason the candidate sees, then **Confirm cancel**. The candidate and interviewers are told.
 - **Message the candidate** opens the candidate's page with the message box ready (section 15).
 - After the interview, **After the interview** shows the decision, or **Record the decision**, which takes you to the candidate's page (section 12).

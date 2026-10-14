@@ -7,6 +7,7 @@ import { jobValidThrough, type FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { PUBLIC_FEED_CACHE_MS, resetPublicFeedCache } from "./pages/public-feeds";
+import { ASKED_OF_EVERYONE, questionHelp, withPlainQuestionHelp } from "./pages/question-help";
 import { jobUrls } from "./services/job-urls";
 import { statusTokenFor, useLaterApplyFlow, useOneVisitApplyFlow } from "./test-helpers";
 
@@ -88,6 +89,24 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
   });
   afterAll(async () => {
     await container.close();
+  });
+
+  it("the apply form's line under an eligibility question: the job's own reason when it reads well, else 'Asked of everyone applying for this job.'; the stored packet keeps its words", () => {
+    expect(questionHelp("The owner stated the work model in the packet.")).toBe(ASKED_OF_EVERYONE);
+    expect(ASKED_OF_EVERYONE).toBe("Asked of everyone applying for this job.");
+    expect(questionHelp("The owner stated the work model and travel in the Role Packet.")).toBe(ASKED_OF_EVERYONE);
+    expect(questionHelp("Taken from the dental playbook.")).toBe(ASKED_OF_EVERYONE);
+    expect(questionHelp("  ")).toBe(ASKED_OF_EVERYONE);
+    expect(questionHelp(null)).toBe(ASKED_OF_EVERYONE);
+    expect(questionHelp("Coverage is the reason for the hire.")).toBe("The job needs someone for this schedule.");
+    expect(questionHelp("Required for clinical staff; can be obtained before start if the owner allows.")).toBe("Required for clinical staff; can be obtained before start if the employer allows.");
+    expect(questionHelp("The owner needs coverage by the target date.")).toBe("The employer needs coverage by the target date.");
+    // a reason that reads well is shown as it was written
+    for (const fine of ["Required by law to practice dental hygiene.", "Required for employment; asked of every candidate.", "The desk must be covered during clinic hours."]) expect(questionHelp(fine)).toBe(fine);
+    const packet = { requirements: { mustHaves: [], niceToHaves: [], eligibility: [{ key: "schedule", type: "schedule_availability" as const, question: "Are you available?", expectation: {}, rationale: "The owner stated the work model in the packet.", knockout: true }] } };
+    const shown = withPlainQuestionHelp(packet);
+    expect(shown.requirements.eligibility[0]).toMatchObject({ key: "schedule", question: "Are you available?", rationale: ASKED_OF_EVERYONE, knockout: true });
+    expect(packet.requirements.eligibility[0].rationale).toBe("The owner stated the work model in the packet.");
   });
 
   it("candidateNotices leaves the recording notice and the SMS consent text out of what a page renders and records", () => {
@@ -174,6 +193,15 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
       expect(labelled.has(attrs.match(/ id="([^"]+)"/)?.[1] ?? ""), `${m[1]} ${attrs.slice(0, 60)}`).toBe(true);
     }
     expect(html).toMatch(/<input type="hidden" name="formOpened" value="v1\.[^"]+"/);
+    // the line under each eligibility question is in plain words (Wave S2, K4): the job's own reason when it reads well
+    // to an applicant, never the team's words; each question still points at its line
+    const why = [...html.matchAll(/<small id="elig_([^"]+)-why">([^<]*)<\/small>/g)];
+    expect(why.map((m) => m[1]).sort()).toEqual(eligibility.map((r) => r.key).sort());
+    for (const [, key, line] of why) {
+      expect(line, key).not.toMatch(/packet|owner|intake|playbook|for the hire/i);
+      expect(html).toContain(`aria-describedby="elig_${key}-why"`);
+    }
+    expect(why.map((m) => m[2])).toContain("The job needs someone for this schedule.");
     // the job page
     const job = decodeEntities(await (await app.request(`/careers/${slug}/jobs/${roleId}`)).text());
     expect(job).toMatch(/Apply in about \d+ minutes, including a short written conversation with Ledger Dental's AI assistant\./);

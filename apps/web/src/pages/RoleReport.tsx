@@ -236,7 +236,7 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
 
       <Card title="What the assistant suggested, and what you decided">
         {r.recommendationsVsDecisions.rows.length ? (
-          <Table head={["Suggestion", numHead("Candidates"), numHead("Invited to a screen"), numHead("Moved to interview"), numHead("Longlist or shortlist"), numHead("Not moving forward"), numHead("Put on hold"), numHead("No decision yet")]} label="Suggestions and decisions" pinFirst>
+          <Table head={["Suggestion", numHead("Candidates"), numHead("Invited to a screening chat"), numHead("Moved to interview"), numHead("Longlist or shortlist"), numHead("Not moving forward"), numHead("Put on hold"), numHead("No decision yet")]} label="Suggestions and decisions" pinFirst>
             {r.recommendationsVsDecisions.rows.map((x) => <tr key={x.recommendation}><td>{x.label}</td><td className="num">{x.total}</td><td className="num">{x.invited}</td><td className="num">{x.interviewed}</td><td className="num">{x.shortlisted ?? 0}</td><td className="num">{x.declined}</td><td className="num">{x.held}</td><td className="num">{x.noActionYet}</td></tr>)}
           </Table>
         ) : <p className="small muted">No assessments yet.</p>}

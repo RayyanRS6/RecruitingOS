@@ -18,6 +18,9 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(""),
 }));
 vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactNode } & Record<string, unknown>) => createElement("a", props, props.children) }));
+// The pages as the browser shows them once they are its own: Candidates reads the job's status from the rail's jobs
+// list, which the first draw leaves out on both sides (first-draw.test.ts).
+vi.mock("@ros/web/src/components/use-is-client", () => ({ useIsClient: () => true }));
 
 (globalThis as { React?: typeof React }).React = React;
 const { AfterApproval, StatusPill } = await import("@ros/web/src/pages/AfterApproval");
@@ -240,6 +243,87 @@ describe("the Share tab (once Posting) when ITS posts (D3, D6, D7, D8)", () => {
   });
 });
 
+describe("the LinkedIn post on the Share tab (Wave S2, K3)", () => {
+  const roleDetail = {
+    id: "r1", title: "Dental hygienist", status: "open",
+    currentPacket: {
+      version: 1, status: "approved", payShown: true,
+      packet: {
+        identity: { title: "Dental hygienist", locations: [{ city: "Irvine", region: "CA" }], employmentType: "full_time", remotePolicy: "onsite" },
+        compensation: { basis: "hourly", min: 45, max: 55, ceiling: 58, discloseRange: true, sources: [], ownerStated: true },
+        requirements: { mustHaves: [{ key: "m1", text: "Active CA RDH license", rationale: "Required by the state", evidencedBy: ["resume"] }, { key: "m2", text: "2+ years in a dental office", rationale: "Pace", evidencedBy: ["resume"] }], niceToHaves: [], eligibility: [] },
+      },
+    },
+  };
+  const withRole = () => {
+    const qc = client();
+    qc.setQueryData(["role", "r1"], roleDetail);
+    return qc;
+  };
+  const tab = (qc: QueryClient, over: Record<string, unknown> = {}) => render(qc, createElement(PostingTab, { roleId: "r1", roleStatus: "open", canManage: true, canShare: true, roleTitle: "Dental hygienist", companyName: "Bright Dental", ...over }));
+  const box = (html: string) => text(/<textarea[^>]*id="linkedin-text"[^>]*>([\s\S]*?)<\/textarea>/.exec(html)?.[1] ?? "");
+
+  it("comes right after the public link, at #linkedin, with the three tones, the job's own words, a preview and the count", () => {
+    const html = tab(withRole());
+    const words = text(html);
+    const at = html.indexOf('<section id="linkedin" class="setup-section" tabindex="-1">');
+    expect(at).toBeGreaterThan(html.indexOf('<div class="share-link">'));
+    expect(at).toBeLessThan(html.indexOf("Where it is posted"));
+    expect(words).toContain("Post on LinkedIn");
+    expect(html).toMatch(/<legend class="small">Tone<\/legend>/);
+    // Proud is picked to start with
+    expect(html).toContain('<label class="wording-option" data-checked="true"><input type="radio" name="linkedin-tone-r1" checked="" value="proud"/>');
+    expect(html).toContain('<input type="radio" name="linkedin-tone-r1" value="straight"/>');
+    expect(words).toContain("Proud Upbeat: big news, we're hiring");
+    expect(words).toContain("Straight Just the facts");
+    expect(words).toContain("Friendly Warm: asks people to share it");
+    // the words come from the job itself: company, title, place, kind of job, pay, must-haves and the job's address
+    const post = box(html);
+    expect(post).toContain("Big news: Bright Dental is hiring.");
+    expect(post).toContain("Job: Dental hygienist Where: Irvine, CA · On site Type: Full time Pay: $45–$55 an hour");
+    expect(post).toContain("• Active CA RDH license • 2+ years in a dental office");
+    expect(post).toContain("Apply here: https://jobs.test/c/bright/jobs/r1");
+    expect(html).toMatch(/<label for="linkedin-text">Your post<\/label><textarea id="linkedin-text" class="textarea" rows="14" aria-describedby="linkedin-count linkedin-hint">/);
+    expect(words).toMatch(/\d+ of 3,000 characters/);
+    // the preview shows the same words, for the eye only (the box holds them for everyone)
+    expect(html).toMatch(/<div class="stack" style="[^"]*" aria-hidden="true"><span class="small muted">Preview<\/span>/);
+    expect(words).toContain("Copy and open LinkedIn");
+    expect(words).toContain("Copy text");
+    expect(words).toContain("Nothing is posted for you. LinkedIn opens in a new tab: paste, then post.");
+    // plain words and plain links only: nothing from LinkedIn loads on the page
+    expect(html).not.toMatch(/<script|<iframe/);
+  });
+
+  it("uses the job's own LinkedIn link once it has one, so applicants from the post show LinkedIn as their source", () => {
+    const qc = withRole();
+    qc.setQueryData(["postings", "r1"], { ...postings, share: { ...postings.share, places: postings.share.places.map((p) => (p.place === "linkedin" ? { ...p, link: { id: "li", url: "https://jobs.test/a/li", visits: 0 } } : p)) } });
+    const post = box(tab(qc));
+    expect(post).toContain("Apply here: https://jobs.test/a/li");
+    expect(post).not.toContain("https://jobs.test/c/bright/jobs/r1");
+  });
+
+  it("is there for someone who cannot share (with the job page's address), and says when the job takes no applications", () => {
+    expect(box(tab(withRole(), { canManage: false, canShare: false }))).toContain("https://jobs.test/c/bright/jobs/r1");
+    const qc = withRole();
+    qc.setQueryData(["postings", "r1"], { ...postings, role: { ...postings.role, acceptingApplications: false } });
+    expect(text(tab(qc))).toContain("This job is not taking applications right now. Hold the post until it is.");
+  });
+
+  it("is not offered before ITS confirms the company (the card says why, where Post on LinkedIn lands), nor for a job that is not live", () => {
+    const waitLine = "You can post on LinkedIn once ITS has checked your company.";
+    const waiting = withRole();
+    waiting.setQueryData(["company"], { settings: {} });
+    expect(tab(waiting)).not.toContain('id="linkedin-text"');
+    expect(tab(waiting)).toContain('<section id="linkedin" class="setup-section" tabindex="-1">');
+    expect(text(tab(waiting))).toContain(waitLine);
+    const held = withRole();
+    held.setQueryData(["postings", "r1"], { ...postings, publishing: { ...postings.publishing, state: "waiting_for_company_check" } });
+    expect(tab(held)).not.toContain('id="linkedin-text"');
+    expect(text(tab(held))).toContain(waitLine);
+    for (const roleStatus of ["paused", "closed", "draft"]) expect(tab(withRole(), { roleStatus })).not.toContain('id="linkedin"');
+  });
+});
+
 describe("what keeps a board's card open, and which way the accepting switch goes (Wave S1)", () => {
   it("opens the boards' cards only for a step the team has to take", () => {
     const p = (over: Record<string, unknown>) => posting(over) as never;
@@ -412,5 +496,7 @@ describe("the empty applicant list of a live job (D8)", () => {
     const html = render(qc, createElement(People));
     expect(text(html)).toContain("Nobody has applied yet");
     expect(html).toContain('<fieldset class="share-buttons" aria-label="Share the job">');
+    // and the way to the Share tab's LinkedIn post (Wave S2)
+    expect(html).toContain('<a href="/roles/r1?tab=share#linkedin">Post on LinkedIn</a>');
   });
 });

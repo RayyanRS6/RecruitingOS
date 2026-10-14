@@ -11,7 +11,7 @@ import { NOTIFY_GROUPS, type NotifyCadence, type NotifyGroup } from "@ros/contra
  */
 export const NOTIFY_GROUP_INFO: Record<NotifyGroup, { label: string; description: string; defaultCadence: NotifyCadence }> = {
   approvals: { label: "Waiting for your approval", description: "A role to approve, a message to a candidate that needs your OK, or a role sent back to draft.", defaultCadence: "immediate" },
-  candidates: { label: "Candidates", description: "Someone is ready for review or a screen, finished a screen, wrote back or withdrew.", defaultCadence: "daily" },
+  candidates: { label: "Candidates", description: "Someone is ready for review or a screening chat, finished one, wrote back or withdrew.", defaultCadence: "daily" },
   interviews: { label: "Interviews", description: "Interviews you were given, reminders, changes, the decision after an interview, and your calendar connection.", defaultCadence: "immediate" },
   stuck: { label: "Roles that need attention", description: "People waiting on you, invitations nobody answered, no applicants, a hold that ended, decisions nobody has told candidates about, or a role that stopped or started taking applications.", defaultCadence: "daily" },
   recruiter: { label: "Your ITS recruiter", description: "A recruiter answered your request, wrote to you about it, or picked it up.", defaultCadence: "immediate" },

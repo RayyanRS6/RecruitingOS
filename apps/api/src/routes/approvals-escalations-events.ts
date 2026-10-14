@@ -109,7 +109,7 @@ function accessWords(scope: EscalationScope): string {
   return "all of your hiring: every role and every candidate";
 }
 // Said to whoever asked: hiring managers and HR may ask, but only owners and admins hold staff_access.revoke.
-const ACCESS_LIMITS = `Their access starts when they pick the request up and ends a day after it is resolved, or after ${ESCALATION_ACCESS_DAYS} days at most. An owner or admin can end it sooner in Setup, and every page they open is recorded.`;
+const ACCESS_LIMITS = `Their access starts when they pick the request up and ends a day after it is resolved, or after ${ESCALATION_ACCESS_DAYS} days at most. An owner or admin can end it sooner in Settings, and every page they open is recorded.`;
 
 /**
  * Settles what a request covers before it is created. The ids decide it; a request with neither a role nor a candidate
@@ -317,7 +317,7 @@ escalationRoutes.post("/mine/:id/reopen", requireTenant, async (c) => {
     // Fresh access for someone outside the company is always told at once, to the whole team that hears about recruiters
     // (Q31), not only to the person who reopened it.
     if (r.recruiter && r.grant) {
-      await notify(tx, { companyId: t.companyId, kind: "recruiter.access_granted", title: `${r.recruiter.name} (ITS recruiter) has access again for a reopened request`, body: `${actor.name ?? "Someone on your team"} reopened a request ${r.recruiter.name} answered, so it is theirs again. They can see ${accessWords(scope)} until ${new Date(r.grant.expiresAt).toLocaleDateString("en-US")}, or until a day after the request is resolved if that is sooner. Every page they open is recorded in your activity, and an owner or admin can end their access in Setup.`, action: { label: "Recruiter access", href: "/setup#setup-recruiters" } });
+      await notify(tx, { companyId: t.companyId, kind: "recruiter.access_granted", title: `${r.recruiter.name} (ITS recruiter) has access again for a reopened request`, body: `${actor.name ?? "Someone on your team"} reopened a request ${r.recruiter.name} answered, so it is theirs again. They can see ${accessWords(scope)} until ${new Date(r.grant.expiresAt).toLocaleDateString("en-US")}, or until a day after the request is resolved if that is sooner. Every page they open is recorded in your activity, and an owner or admin can end their access in Settings.`, action: { label: "Recruiter access", href: "/setup#setup-recruiters" } });
     }
     return r;
   });
@@ -470,7 +470,7 @@ escalationRoutes.post("/:id/claim", requireRecruiterOrAdmin, async (c) => {
       : e.requestedBy.kind === "recruiter" ? `${e.requestedBy.name ?? "An ITS recruiter"} (ITS recruiter) asked for this while working on another of your requests, so a recruiter was brought in. `
       : e.requestedBy.kind === "candidate" || e.kind === "candidate_issue" ? "A candidate needed a person, so a recruiter was brought in. "
       : "Something got stuck and needs a person, so a recruiter was brought in. ";
-    await notify(tx, { companyId: e.companyId, kind: "recruiter.claimed", title: byTeam ? `${actor.name} (ITS recruiter) picked up your request` : `${actor.name} (ITS recruiter) was brought in`, body: `${why}They can see ${accessWords(scope)} until ${new Date(grant.expiresAt).toLocaleDateString("en-US")}, or until a day after the request is resolved if that is sooner. Every page they open is recorded in your activity, and an owner or admin can end their access in Setup.`, action: { label: "Recruiter access", href: "/setup" } });
+    await notify(tx, { companyId: e.companyId, kind: "recruiter.claimed", title: byTeam ? `${actor.name} (ITS recruiter) picked up your request` : `${actor.name} (ITS recruiter) was brought in`, body: `${why}They can see ${accessWords(scope)} until ${new Date(grant.expiresAt).toLocaleDateString("en-US")}, or until a day after the request is resolved if that is sooner. Every page they open is recorded in your activity, and an owner or admin can end their access in Settings.`, action: { label: "Recruiter access", href: "/setup" } });
     return { escalation: u, grant: { id: grant.id, purpose: grant.purpose, expiresAt: grant.expiresAt, scope: { roleId: grant.roleId, applicationId: grant.applicationId } } };
   });
   return c.json(row);
@@ -506,9 +506,9 @@ async function postingTaskState(tx: Tx, e: EscalationRow): Promise<{ notDone: bo
 
 /** What the team does when ITS could not do a posting task, after the recruiter's own words. */
 const POSTING_NOT_DONE_NEXT: Record<string, (board: string) => string> = {
-  post_job: (board) => `Nothing is on ${board} yet. Ask ITS again from the Posting tab once that is sorted out, or post it from your company's own account and record the address there.`,
-  update_job: (board) => `${board} still shows the earlier version. Ask ITS again from the Posting tab, or update the listing from your company's own account and confirm it there.`,
-  take_down_job: (board) => `${board} may still show the job. Ask ITS again from the Posting tab, or take it down from your company's own account and tick it off there.`,
+  post_job: (board) => `Nothing is on ${board} yet. Ask ITS again from the Share tab once that is sorted out, or post it from your company's own account and record the address there.`,
+  update_job: (board) => `${board} still shows the earlier version. Ask ITS again from the Share tab, or update the listing from your company's own account and confirm it there.`,
+  take_down_job: (board) => `${board} may still show the job. Ask ITS again from the Share tab, or take it down from your company's own account and tick it off there.`,
 };
 
 /**
@@ -541,7 +541,7 @@ escalationRoutes.post("/:id/resolve", requireRecruiterOrAdmin, async (c) => {
       await notify(tx, { companyId: e.companyId, kind: "recruiter.resolved", title: `${actor.name} (ITS recruiter) answered the request about ${await aboutWords(tx, e)}`, body: body.resolution, action: { label: "Read the answer", href: requestLink(e.id) }, userIds: await requestReaders(tx, e) });
     } else if (task?.notDone) {
       const label = postingTaskLabel(e.kind, task.board);
-      await notify(tx, { companyId: e.companyId, kind: "recruiter.posting_not_done", title: `${task.roleTitle}: ITS could not ${label.charAt(0).toLowerCase()}${label.slice(1)}`, body: `${actor.name} at ITS wrote: "${body.resolution}" ${POSTING_NOT_DONE_NEXT[e.kind](task.board)}`, action: { label: "Open the Posting tab", href: `/roles/${task.roleId}?tab=posting` }, roles: ["owner", "admin"] });
+      await notify(tx, { companyId: e.companyId, kind: "recruiter.posting_not_done", title: `${task.roleTitle}: ITS could not ${label.charAt(0).toLowerCase()}${label.slice(1)}`, body: `${actor.name} at ITS wrote: "${body.resolution}" ${POSTING_NOT_DONE_NEXT[e.kind](task.board)}`, action: { label: "Open the Share tab", href: `/roles/${task.roleId}?tab=posting` }, roles: ["owner", "admin"] });
     }
     await container.engine.signal(tx, { companyId: e.companyId, key: `escalation:${e.id}`, payload: { resolved: true } });
     return u;

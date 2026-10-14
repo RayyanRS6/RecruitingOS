@@ -2,7 +2,7 @@ import * as React from "react";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * The Candidates page and the candidate panel (Wave A; founder decisions B3 and B6; Wave S1) as the server first draws
@@ -18,6 +18,10 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(nav.search),
 }));
 vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactNode } & Record<string, unknown>) => createElement("a", props, props.children) }));
+// The first draw (the server's) for Candidates and the job; the Jobs page is drawn as the browser shows it once the page
+// is its own, since it waits for that before drawing the rail's shared jobs list (first-draw.test.ts checks the wait).
+const drawn = vi.hoisted(() => ({ byBrowser: false }));
+vi.mock("@ros/web/src/components/use-is-client", () => ({ useIsClient: () => drawn.byBrowser }));
 
 (globalThis as { React?: typeof React }).React = React;
 const { People } = await import("@ros/web/src/pages/People");
@@ -266,23 +270,108 @@ describe("the job page: the same header and tab strip as Candidates (Wave S1)", 
   });
 });
 
-describe("the Jobs page (Wave S1)", () => {
-  it("opens a live job on its Candidates and a draft on its details, the other view one small link away", () => {
+describe("the Jobs page (Wave S1; Wave S2: the Kanvis dashboard)", () => {
+  beforeEach(() => { drawn.byBrowser = true; });
+  afterEach(() => { drawn.byBrowser = false; });
+  const jobsClient = () => {
     const qc = client([]);
     qc.setQueryData(["roles"], [
-      { id: "r1", title: "Dental Hygienist", status: "open", openedAt: daysAgo(7), counts: { total: 2, waiting_on_you: 1 }, stageCounts: { ...counts.byOwnerStage, new: 1 }, needsYou: 1, daysOpen: 7 },
-      { id: "r2", title: "Office Manager", status: "pending_approval", openedAt: null, counts: { total: 0 }, needsYou: 0, daysOpen: null },
+      { id: "r1", title: "Dental Hygienist", status: "open", openedAt: daysAgo(7), createdAt: daysAgo(9), lastActivityAt: daysAgo(1), counts: { total: 2, waiting_on_you: 1 }, stageCounts: { ...counts.byOwnerStage, new: 1 }, needsYou: 1, daysOpen: 7 },
+      { id: "r2", title: "Office Manager", status: "pending_approval", openedAt: null, createdAt: daysAgo(2), lastActivityAt: daysAgo(2), counts: { total: 0 }, needsYou: 0, daysOpen: null },
+      { id: "r3", title: "Assistant", status: "draft", openedAt: null, createdAt: daysAgo(3), lastActivityAt: daysAgo(3), counts: { total: 0 }, needsYou: 0, daysOpen: null },
     ]);
-    const html = render(qc, createElement(Roles));
+    return qc;
+  };
+
+  it("opens a live job on its Candidates and a draft on its details, the other view one small link away", () => {
+    nav.search = "";
+    const html = render(jobsClient(), createElement(Roles));
     expect(html).toMatch(/<h1>Jobs<\/h1>/);
     expect(text(html)).toContain("Open a job to see who applied.");
-    expect(html).toContain('<a href="/roles/r1/talent" class="list-item-main"');
-    expect(text(html)).toContain("Dental Hygienist 1 new · 2 applicants · 1 to review · 7 days open");
+    expect(html).toContain('<a href="/roles/r1/talent" style="text-decoration:none;color:inherit"><strong>Dental Hygienist</strong></a>');
+    // one line under the title, with the other view as a small link in it; what calls for action is a badge
+    expect(text(html)).toContain("Dental Hygienist 2 applicants · 7 days open · Job details");
+    expect(text(html)).toContain("1 to review");
+    expect(text(html)).toContain("1 new");
     expect(html).toContain('<a href="/roles/r1" class="small">Job details<span class="sr-only">: Dental Hygienist</span></a>');
-    expect(html).toContain('<a href="/roles/r2" class="list-item-main"');
-    expect(text(html)).toContain("Waiting for approval");
-    expect(text(html)).toContain("1 decision waiting");
+    expect(html).toContain('<a href="/roles/r2" style="text-decoration:none;color:inherit"><strong>Office Manager</strong></a>');
+    // "Not live" says it once: the line says why, and no status pill repeats it
+    expect(text(html)).toContain("Office Manager Waiting for approval");
+    expect(text(html).match(/Waiting for approval/g)).toHaveLength(1);
+    expect(text(html)).toContain("Not live");
+    // a draft says how old it is, in full words for a screen reader
+    expect(html).toContain('<span aria-hidden="true">Draft · 3d old</span><span class="sr-only">Draft, 3 days old</span>');
+    // approval requests are named for what they are, never a second "to review"
+    expect(text(html)).toContain("1 approval waiting");
+    expect(text(html)).not.toContain("decision waiting");
     expect(text(html)).toContain("Start a hire");
+  });
+
+  it("offers Post on LinkedIn only once ITS has checked the company, and waits for the browser before drawing the list", () => {
+    nav.search = "";
+    const waiting = jobsClient();
+    waiting.setQueryData(["company"], { settings: {} });
+    expect(render(waiting, createElement(Roles))).not.toContain("Post on LinkedIn");
+    // the server's first draw: the rail's jobs list may already be in the browser, so it is not drawn yet
+    drawn.byBrowser = false;
+    const first = render(jobsClient(), createElement(Roles));
+    expect(first).not.toContain("Dental Hygienist");
+    expect(first).not.toContain("No jobs yet");
+  });
+
+  it("counts the jobs still being drafted under All as well as Drafts", () => {
+    nav.search = "";
+    const qc = jobsClient();
+    qc.setQueryData(["intake", "mine"], { sessions: [{ id: "s1", title: "Receptionist", hasDraft: false, mine: true, updatedAt: daysAgo(1), startedBy: { name: "Dana" } }] });
+    const html = render(qc, createElement(Roles));
+    expect(text(html)).toMatch(/All 4 Live 1 Drafts 3 Paused 0 Closed 0/);
+    expect(text(html)).toContain("Still being drafted");
+  });
+
+  it("filters by status with counts, searches by title and sorts, all from the address", () => {
+    nav.search = "";
+    const all = render(jobsClient(), createElement(Roles));
+    expect(all).toContain('role="group" aria-label="Show jobs"');
+    expect(text(all)).toMatch(/All 3 Live 1 Drafts 2 Paused 0 Closed 0/);
+    expect(all).toContain('aria-pressed="true">All <span class="count">3</span>');
+    expect(all).toContain('aria-label="Search jobs by title"');
+    expect(text(all)).toContain("Recent activity Newest first Oldest first Title A to Z");
+    // recent activity first: the live job, then the one waiting for approval, then the draft
+    expect(all.indexOf("Dental Hygienist")).toBeLessThan(all.indexOf("Office Manager"));
+    expect(all.indexOf("Office Manager")).toBeLessThan(all.indexOf("Assistant"));
+    // "Post on LinkedIn" only on the live job, to the Share tab's LinkedIn card
+    expect(all).toContain('href="/roles/r1?tab=share#linkedin"');
+    expect(all.match(/Post on LinkedIn/g)).toHaveLength(1);
+
+    nav.search = "status=live";
+    const live = render(jobsClient(), createElement(Roles));
+    expect(live).toContain("Dental Hygienist");
+    expect(live).not.toContain("Office Manager");
+    expect(live).toContain('aria-pressed="true">Live <span class="count">1</span>');
+
+    nav.search = "q=office";
+    const found = render(jobsClient(), createElement(Roles));
+    expect(found).toContain("Office Manager");
+    expect(found).not.toContain("Dental Hygienist");
+    expect(found).toContain('value="office"');
+
+    nav.search = "sort=title";
+    const az = render(jobsClient(), createElement(Roles));
+    expect(az.indexOf("Assistant")).toBeLessThan(az.indexOf("Dental Hygienist"));
+    expect(az).toMatch(/<option value="title" selected="">Title A to Z<\/option>/);
+    nav.search = "";
+  });
+
+  it("an empty filter says so, with one way on", () => {
+    nav.search = "status=paused";
+    const paused = render(jobsClient(), createElement(Roles));
+    expect(text(paused)).toContain("No paused jobs");
+    expect(text(paused)).toContain("Show all jobs");
+    nav.search = "q=zzz";
+    const none = render(jobsClient(), createElement(Roles));
+    expect(text(none)).toContain("No jobs match your search");
+    expect(text(none)).toContain("Clear search");
+    nav.search = "";
   });
 });
 

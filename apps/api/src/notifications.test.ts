@@ -86,14 +86,14 @@ describe("email alerts and the history of updates", () => {
   });
 
   it("emails an update wanted as it happens with the role's name and a link only, once, through the outbox", async () => {
-    await tell({ companyId, kind: "approval.requested", title: "Dental Hygienist: the role packet needs approval", body: "Review the packet, then approve to open the role.", action: { label: "Review", href: `/roles/${roleA}` } });
+    await tell({ companyId, kind: "approval.requested", title: "Dental Hygienist: the job details need approval", body: "Review the job details, then approve to open the job.", action: { label: "Review", href: `/roles/${roleA}` } });
     await container.drain();
     for (const id of [ownerId, managerId]) {
       const [alert] = await alertsTo(id);
       expect(alert.subject).toBe("A role is waiting for your approval: Dental Hygienist");
       expect(alert.text).toContain(`Company: ${COMPANY}`);
       expect(alert.text).toContain(`Open it: ${container.env.APP_BASE_URL}/roles/${roleA}`);
-      expect(alert.text).not.toContain("Review the packet");
+      expect(alert.text).not.toContain("Review the job details");
     }
     // the interviewer was not told about the role, so is not emailed about it
     expect(await alertsTo(interviewerId)).toHaveLength(0);
@@ -130,12 +130,12 @@ describe("email alerts and the history of updates", () => {
     const r = await json(manager, "PUT", "/api/v1/notifications/preferences", { preferences: [{ group: "approvals", cadence: "off" }] });
     expect(r.status).toBe(200);
     expect(((await r.json()) as NotificationPreferencesView).groups.find((g) => g.group === "approvals")?.cadence).toBe("off");
-    await tell({ companyId, kind: "approval.requested", title: "Front Desk Coordinator: the role packet needs approval", body: "Review it.", action: { label: "Review", href: `/roles/${roleB}` } });
+    await tell({ companyId, kind: "approval.requested", title: "Front Desk Coordinator: the job details need approval", body: "Review it.", action: { label: "Review", href: `/roles/${roleB}` } });
     await container.drain();
     expect(await alertsTo(managerId)).toHaveLength(before);
     expect((await alertsTo(ownerId)).at(-1)?.subject).toBe("A role is waiting for your approval: Front Desk Coordinator");
     // the manager still has the update in the app
-    expect((await history(manager, "?limit=1")).items[0].title).toBe("Front Desk Coordinator: the role packet needs approval");
+    expect((await history(manager, "?limit=1")).items[0].title).toBe("Front Desk Coordinator: the job details need approval");
     const audited = await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "notification.preferences_changed")));
     const changes = audited.filter((a) => a.actor.id === managerId).flatMap((a) => (a.details as { changes: unknown[] }).changes);
     expect(changes).toContainEqual({ group: "approvals", from: "immediate", to: "off" });
@@ -336,7 +336,7 @@ describe("email alerts and the history of updates", () => {
 
   it("the ITS queue's email when the ladder reaches a recruiter names the role and links the queue, never a candidate", async () => {
     // a detection whose body names people (a conversation stuck open, the team never acting)
-    const found: Detection[] = [{ detector: "conversations_stuck", roleId: roleB, roleTitle: "Front Desk Coordinator", title: "2 applicants are stuck in the screening conversation (Front Desk Coordinator)", body: "Priya Shah, Maria Reyes. Their conversation should have closed by itself and did not.", action: { label: "See who", href: `/roles/${roleB}/talent` }, days: 6, applicationIds: [] }];
+    const found: Detection[] = [{ detector: "conversations_stuck", roleId: roleB, roleTitle: "Front Desk Coordinator", title: "2 applicants are stuck in the screening chat (Front Desk Coordinator)", body: "Priya Shah, Maria Reyes. Their screening chat should have closed by itself and did not.", action: { label: "See who", href: `/roles/${roleB}/talent` }, days: 6, applicationIds: [] }];
     const deps = (now: Date) => ({ integrations: container.integrations, appBaseUrl: container.env.APP_BASE_URL, itsQueueEmail: container.env.ITS_QUEUE_EMAIL, now, actor: { kind: "system" as const, id: "stuck_role_detector" } });
     const t = new Date();
     const levels: string[] = [];
@@ -351,7 +351,7 @@ describe("email alerts and the history of updates", () => {
     setClock(new Date());
     const toQueue = mail().sent.filter((m) => m.to === container.env.ITS_QUEUE_EMAIL && m.tags?.template === "escalation");
     expect(toQueue).toHaveLength(1);
-    expect(toQueue[0].text).toContain("2 applicants are stuck in the screening conversation (Front Desk Coordinator)");
+    expect(toQueue[0].text).toContain("2 applicants are stuck in the screening chat (Front Desk Coordinator)");
     expect(toQueue[0].text).toContain("/recruiter/queue/");
     expectNoLeaks(toQueue[0]);
     // nor is the name kept in the stored copy of that email

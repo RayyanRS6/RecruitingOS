@@ -64,7 +64,7 @@ function declineFor(row: PoolRow, item: RoleBatchItem): { reason: RejectReason; 
  */
 function escalationAccessWords(people: number): string {
   const what = people > 1 ? `One request covers all ${people}, so it is about the role: once a recruiter picks it up they see this role and all of its candidates` : "Once a recruiter picks it up they see this candidate and the role they applied for";
-  return `${what}, until a day after they answer or ${ESCALATION_ACCESS_DAYS} days at most. An owner or admin can end it sooner in Setup, and every page they open is recorded.`;
+  return `${what}, until a day after they answer or ${ESCALATION_ACCESS_DAYS} days at most. An owner or admin can end it sooner in Settings, and every page they open is recorded.`;
 }
 
 function warningsFor(row: PoolRow, item: RoleBatchItem, escalating: number): string[] {
@@ -72,10 +72,10 @@ function warningsFor(row: PoolRow, item: RoleBatchItem, escalating: number): str
   const suggested = row.placement.suggestedAction;
   if (suggested && suggested !== item.action && (item.action === "shortlist" || item.action === "longlist" || item.action === "not_moving_forward")) out.push(`The board suggested ${BATCH_ACTION_LABEL[suggested]}.`);
   if (row.placement.needsYourEye) out.push(row.placement.needsYourEye);
-  if (row.evidence.lowConfidence && !row.placement.needsYourEye?.includes("confident")) out.push("The assistant was not confident about this reading.");
+  if (row.evidence.lowConfidence && !row.placement.needsYourEye?.includes("confident")) out.push("The assistant was not confident about this AI review.");
   if (row.match?.missingMustHave.length && item.action !== "not_moving_forward") out.push(`Missing must-have: ${row.match.missingMustHave.map((m) => m.label).join(", ")}.`);
-  if (item.action === "not_moving_forward" && row.openScreen) out.push("Their open screening conversation is closed; they are not told why.");
-  if (item.action === "invite_screen") out.push("They get an email with a link to the screening conversation.");
+  if (item.action === "not_moving_forward" && row.openScreen) out.push("Their open screening chat is closed; they are not told why.");
+  if (item.action === "invite_screen") out.push("They get an email with a link to the screening chat.");
   if (item.action === "escalate") out.push(`An ITS recruiter is asked to look at them. ${escalationAccessWords(escalating)}`);
   return out;
 }
@@ -122,7 +122,7 @@ export async function previewBatch(container: Container, input: { roleId: string
     const ready = items.filter((i) => i.allowed).length;
     // Screening conversations are counted when someone starts one, never refused once started (Q17): the preview says where the plan stands.
     const allowance = counts.invite_screen ? await entitlements.check(tx, t.companyId, entitlements.TEXT_SCREENS, counts.invite_screen) : null;
-    const screenWords = allowance && allowance.limit !== null ? `Your plan includes ${allowance.limit} screening conversations this month and ${allowance.used} ${allowance.used === 1 ? "has" : "have"} been used.${allowance.ok ? "" : " Inviting these may go past it; nobody who starts is cut off, and ITS will talk with you about the extra."}` : null;
+    const screenWords = allowance && allowance.limit !== null ? `Your plan includes ${allowance.limit} screening chats this month and ${allowance.used} ${allowance.used === 1 ? "has" : "have"} been used.${allowance.ok ? "" : " Inviting these may go past it; nobody who starts is cut off, and ITS will talk with you about the extra."}` : null;
     return { dryRun: true, items, counts, ready, words: readyWords(counts, ready), screenAllowance: { limit: allowance?.limit ?? null, used: allowance?.used ?? 0, inThisBatch: counts.invite_screen, words: screenWords }, privacy: PRIVACY };
   });
 }
@@ -168,7 +168,7 @@ export async function applyBatch(container: Container, input: { roleId: string; 
         out.ok = true;
         out.ownerStage = r.ownerStage ?? null;
         out.candidateNotice = r.candidateNotice ?? null;
-        out.message = item.action === "invite_screen" ? "Invitation to the screening conversation on its way." : item.action === "not_moving_forward" ? "Filed as not moving forward, privately. They were not told." : `${MARK_LABEL[MARK_OF[item.action]!]}, privately. They were not told.`;
+        out.message = item.action === "invite_screen" ? "Invitation to the screening chat on its way." : item.action === "not_moving_forward" ? "Filed as not moving forward, privately. They were not told." : `${MARK_LABEL[MARK_OF[item.action]!]}, privately. They were not told.`;
       });
     } catch (e) {
       if (e instanceof HttpError) {
@@ -219,7 +219,7 @@ export async function applyBatch(container: Container, input: { roleId: string; 
   const counts = emptyCounts();
   for (const r of applied) counts[r.action] += 1;
   const sorted = columnWords({ shortlist: counts.shortlist, longlist: counts.longlist, not_moving_forward: counts.not_moving_forward });
-  const extra = [counts.on_hold ? `${counts.on_hold} on hold` : "", counts.invite_screen ? `${counts.invite_screen} invited to the screening conversation` : "", counts.escalate ? `${counts.escalate} sent to a recruiter` : ""].filter(Boolean);
+  const extra = [counts.on_hold ? `${counts.on_hold} on hold` : "", counts.invite_screen ? `${counts.invite_screen} invited to the screening chat` : "", counts.escalate ? `${counts.escalate} sent to a recruiter` : ""].filter(Boolean);
   const words = applied.length
     ? `Applied ${applied.length} ${applied.length === 1 ? "decision" : "decisions"}${sorted || extra.length ? `: ${[sorted, ...extra].filter(Boolean).join(", ")}` : ""}.${results.length > applied.length ? ` ${results.length - applied.length} could not be applied; each says why.` : ""}`
     : "Nothing was applied; each person says why.";

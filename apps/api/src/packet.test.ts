@@ -367,7 +367,7 @@ describe("role packets: editor, approval rules, sent back, interview plan, timel
     expect(d.proposedPacket?.version).toBe(2);
     expect(d.packetApproval.pending).toMatchObject({ version: 2, editWhileOpen: true, viewer: { mayDecide: true } });
     const brief = (await (await json(olive, "GET", "/api/v1/brief")).json()) as { cards: Array<{ title: string; actions: Array<{ method: string; path: string }> }> };
-    const card = brief.cards.find((c) => c.title.startsWith("Approve packet v2 of"));
+    const card = brief.cards.find((c) => c.title.startsWith("Approve version 2 of"));
     expect(card).toBeTruthy();
     expect(card!.actions[0]).toMatchObject({ method: "GET", path: `/roles/${opened.roleId}` });
     // approving the edit makes it current without touching the role's status

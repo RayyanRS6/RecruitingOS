@@ -30,7 +30,7 @@ export function Admin() {
 }
 
 /** `applyFlowDefault`: how the company's roles meet the screening conversation unless a role has its own setting (plan E1). */
-type CustomerRow = { id: string; name: string; slug: string; vertical: string; sizeBand: string; planKey: string; status: string; roles: number; applications: number; aiCostUsd: number; lastActivityAt: string | null; escalations: number; createdAt: string; settings: { website?: string }; verifiedAt: string | null; verifiedBy: { id: string; name?: string } | null; heldMessages: number; jobBoardsConfirmedAt: string | null; recruiterAsks?: RecruiterAskStanding; applyFlowDefault?: ApplyMode; screeningConversations?: { used: number; limit: number | null } };
+type CustomerRow = { id: string; name: string; slug: string; vertical: string; sizeBand: string; planKey: string; status: string; roles: number; applications: number; aiCostUsd: number; lastActivityAt: string | null; escalations: number; createdAt: string; settings: { website?: string }; verifiedAt: string | null; verifiedBy: { id: string; name?: string } | null; heldMessages: number; jobBoardsConfirmedAt: string | null; recruiterAsks?: RecruiterAskStanding; applyFlowDefault?: ApplyMode; screeningConversations?: { used: number; limit: number | null; resetsAt?: string | null } };
 export const CUSTOMER_SORT = { company: (c: CustomerRow) => c.name, applicants: (c: CustomerRow) => c.applications, cost: (c: CustomerRow) => c.aiCostUsd, activity: (c: CustomerRow) => (c.lastActivityAt ? Date.parse(c.lastActivityAt) : null) };
 type CheckedRow = { verifiedAt: string | null; createdAt: string };
 
@@ -61,6 +61,7 @@ function Customers() {
   const [reportFor, setReportFor] = useState<{ id: string; name: string } | null>(null);
   const [checking, setChecking] = useState<CustomerRow | null>(null);
   const [flowFor, setFlowFor] = useState<CustomerRow | null>(null);
+  const [planFor, setPlanFor] = useState<CustomerRow | null>(null);
   const s = useTableSort<keyof typeof CUSTOMER_SORT>();
   if (q.isLoading) return <Skeleton lines={4} />;
   if (q.error) return <ErrorState message="Could not load customers." onRetry={() => q.refetch()} />;
@@ -75,11 +76,11 @@ function Customers() {
         </Alert>
       ) : null}
       {lowCompanies.length ? (
-        <Card needsYou title="Screening conversations running low">
+        <Card needsYou title="Screening chats running low">
           <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
             {lowCompanies.map((c) => <li key={c.id}><strong>{c.name}</strong>: {allowanceChip(low.get(c.id)!)}, since {new Date(low.get(c.id)!.since).toLocaleDateString()}</li>)}
           </ul>
-          <p className="small muted" style={{ marginTop: 8 }}>Talk with each about topping up. Nothing is refused: applications are still accepted, anyone part-way through finishes, and once the allowance is used up new applicants get the conversation link by email when more are added. The owners were told too.</p>
+          <p className="small muted" style={{ marginTop: 8 }}>Talk with each about topping up. Nothing is refused: applications are still accepted, anyone part-way through finishes, and once the allowance is used up new applicants get the chat link by email when more are added or the month starts again. The owners were told too.</p>
         </Card>
       ) : null}
       <Table head={[s.col("company", "Company", "text"), "ITS check", "Vertical", "Plan", numHead("Roles"), s.col("applicants", "Applicants", "number", { num: true }), s.col("cost", "AI cost", "number", { num: true }), "Recruiter requests", "How people apply", s.col("activity", "Last activity", "date"), "Churn signal", ""]} scroll pinFirst empty="No customers yet." announce={customerAnnouncement(s.announce, waiting.length)}>
@@ -94,7 +95,10 @@ function Customers() {
                 <div className="small muted">job boards: {c.jobBoardsConfirmedAt ? "ITS can sign in" : "not confirmed"}</div>
               </td>
               <td>{c.vertical}</td>
-              <td>{c.planKey} · {c.status}{c.screeningConversations ? <div className="small muted">{c.screeningConversations.used}{c.screeningConversations.limit !== null ? ` of ${c.screeningConversations.limit}` : ""} screening conversations this month</div> : null}{low.has(c.id) ? <div><Chip tone="caution">{allowanceChip(low.get(c.id)!)}</Chip></div> : null}</td>
+              <td>
+                {c.planKey} · {c.status}{c.screeningConversations ? <div className="small muted">{screeningLine(c.screeningConversations)}</div> : null}{low.has(c.id) ? <div><Chip tone="caution">{allowanceChip(low.get(c.id)!)}</Chip></div> : null}
+                <Button size="sm" variant="quiet" onClick={() => setPlanFor(c)}>Change plan</Button>
+              </td>
               <td className="num">{c.roles}</td><td className="num">{c.applications}</td><td className="num">${c.aiCostUsd.toFixed(4)}</td>
               <td>
                 {/* Past the plan's recruiter requests (Q33): nothing was refused; ITS talks with the customer about billing. */}
@@ -116,7 +120,81 @@ function Customers() {
       {reportFor ? <CustomerReportSheet companyId={reportFor.id} companyName={reportFor.name} onClose={() => setReportFor(null)} /> : null}
       {checking ? <CompanyCheckSheet company={q.data!.find((c) => c.id === checking.id) ?? checking} onClose={() => setChecking(null)} /> : null}
       {flowFor ? <ApplyFlowSheet company={q.data!.find((c) => c.id === flowFor.id) ?? flowFor} onClose={() => setFlowFor(null)} /> : null}
+      {planFor ? <PlanSheet company={q.data!.find((c) => c.id === planFor.id) ?? planFor} onClose={() => setPlanFor(null)} /> : null}
     </div>
+  );
+}
+
+/** "122 of 150 screening chats this month, resets October 30" (the reset date when the API gives one). */
+export function screeningLine(u: { used: number; limit: number | null; resetsAt?: string | null }): string {
+  const resets = u.resetsAt ? `, resets ${new Date(u.resetsAt).toLocaleDateString("en-US", { month: "long", day: "numeric" })}` : "";
+  return `${u.used}${u.limit !== null ? ` of ${u.limit}` : ""} screening chats this month${resets}`;
+}
+
+export type PlanOption = { key: string; name: string; limits: Record<string, number | null> };
+const LIMIT_WORDS: Array<[string, string]> = [["active_roles", "active jobs"], ["text_screens", "screening chats a month"], ["recruiter_asks", "recruiter requests a month"], ["seats", "seats"]];
+
+/** What a plan includes, in one line: "3 active jobs · 300 screening chats a month · 10 recruiter requests a month · unlimited seats". */
+export function planLimitsLine(limits: Record<string, number | null>): string {
+  return LIMIT_WORDS.filter(([k]) => k in limits).map(([k, words]) => `${limits[k] === null ? "unlimited" : limits[k]} ${words}`).join(" · ");
+}
+
+/** The toast after a plan change. */
+export function planChangedToast(company: string, plan: string): { title: string; detail: string } {
+  return { title: `${company} is on ${plan} now.`, detail: "The new limits apply at once. This month's usage stays; the reset date does not move." };
+}
+
+/**
+ * The Plan control (Wave S2 F1; founder decision F8), platform admins only: pick a plan, say why, confirm. The new limits
+ * apply at once (POST /admin/customers/:id/plan); the change is audited with the reason and the customer sees it in
+ * their history. Design Partner starts the 90-day pilot.
+ */
+function PlanSheet({ company, onClose }: { company: CustomerRow; onClose: () => void }) {
+  const qc = useQueryClient();
+  const plans = useQuery({ queryKey: ["admin", "plans"], queryFn: () => api.get<PlanOption[]>("/api/v1/admin/plans", reason) });
+  const [pick, setPick] = useState(company.planKey);
+  const [why, setWhy] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const chosen = (plans.data ?? []).find((p) => p.key === pick) ?? null;
+  const save = useMutation({
+    mutationFn: () => api.post(`/api/v1/admin/customers/${company.id}/plan`, { planKey: pick, reason: why.trim() }, reason),
+    onSuccess: () => {
+      const t = planChangedToast(company.name, chosen?.name ?? pick);
+      toast(t.title, t.detail);
+      setWhy("");
+      setConfirming(false);
+      qc.invalidateQueries({ queryKey: ["admin", "customers"] });
+      qc.invalidateQueries({ queryKey: ["admin", "alerts"] });
+      onClose();
+    },
+    onError: (e) => { setConfirming(false); toast(e instanceof ApiError ? e.message : "Could not change the plan."); },
+  });
+  return (
+    <Sheet open onClose={onClose} title={`Plan: ${company.name}`}>
+      <div className="stack" style={{ gap: 14 }}>
+        <Card title="Pick a plan">
+          <p className="small muted">Now on {company.planKey}.{company.screeningConversations ? ` ${screeningLine(company.screeningConversations)}.` : ""}</p>
+          {plans.isLoading ? <Skeleton lines={3} /> : plans.error ? <ErrorState message="Could not load the plans." onRetry={() => plans.refetch()} /> : (
+            <div className="stack" style={{ gap: 8, marginTop: 8 }}>
+              <Field label="Plan" htmlFor="plan-pick">
+                <select id="plan-pick" className="select" value={pick} onChange={(e) => { setPick(e.target.value); setConfirming(false); }}>
+                  {(plans.data ?? []).map((p) => <option key={p.key} value={p.key}>{p.name}</option>)}
+                </select>
+              </Field>
+              {chosen ? <p className="small" style={{ margin: 0 }}>{planLimitsLine(chosen.limits)}</p> : null}
+              {pick !== company.planKey ? (
+                <>
+                  <Field label="Why (required, kept with the change)" htmlFor="plan-why" hint={`At least ${REASON_MIN} characters. The customer sees it in their activity history.`}><input id="plan-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
+                  {confirming ? (
+                    <Alert tone="caution"><div className="row" style={{ justifyContent: "space-between" }}><span>Put {company.name} on {chosen?.name ?? pick}?</span><span className="row"><Button size="sm" variant="primary" loading={save.isPending} onClick={() => save.mutate()}>Yes, change it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
+                  ) : <div className="row"><Button variant="primary" disabled={!reasonReady(why)} onClick={() => setConfirming(true)}>Change plan</Button><Button variant="quiet" onClick={() => { setPick(company.planKey); setWhy(""); }}>Cancel</Button></div>}
+                </>
+              ) : null}
+            </div>
+          )}
+        </Card>
+      </div>
+    </Sheet>
   );
 }
 
@@ -325,6 +403,8 @@ export function ackIsForAnother(a: Pick<AlertRow, "kind" | "details" | "target">
   return !!myUserId && a.kind.startsWith("platform_role.") && (a.details?.actorId === myUserId || a.target?.id === myUserId);
 }
 export const ACK_FOR_ANOTHER = "Another administrator acknowledges this one, because it is about a platform role you changed or one that concerns you.";
+/** What Resolve says: the alert is closed for good, and the problem raises a new one if it comes back. */
+export const RESOLVED_TOAST = { title: "Resolved.", detail: "If it happens again, a new alert is raised." };
 
 /**
  * What "Retry deletion" says. Only the worker may read a stored credential, so the retry is queued for it and is rarely
@@ -341,6 +421,8 @@ export function Failures() {
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
   const q = useQuery({ queryKey: ["admin", "failures"], queryFn: () => api.get<{ failedRuns: Array<{ id: string; workflowKey: string; lastError: string | null; updatedAt: string }>; failedJobs: Array<{ id: number; kind: string; lastError: string | null }>; failedAi: Array<{ id: string; task: string; status: string; error: string | null; createdAt: string }>; alerts: AlertRow[]; pendingDeletions: Pending[] }>("/api/v1/admin/failures", reason), refetchInterval: 15000 });
   const ack = useMutation({ mutationFn: (id: string) => api.post(`/api/v1/admin/alerts/${id}/acknowledge`, {}, reason), onSuccess: () => { toast("Acknowledged."); qc.invalidateQueries({ queryKey: ["admin", "failures"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not acknowledge the alert. Try again in a moment.") });
+  // Resolve (Wave S2 F1): the problem is dealt with; the alert leaves this list and a new one is raised if it comes back.
+  const resolve = useMutation({ mutationFn: (id: string) => api.post(`/api/v1/admin/alerts/${id}/resolve`, {}, reason), onSuccess: () => { toast(RESOLVED_TOAST.title, RESOLVED_TOAST.detail); qc.invalidateQueries({ queryKey: ["admin", "failures"] }); qc.invalidateQueries({ queryKey: ["admin", "alerts"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not resolve the alert. Try again in a moment.") });
   const retry = useMutation({
     mutationFn: (integrationId: string) => api.post<{ queued?: boolean; deleted?: boolean }>(`/api/v1/admin/integrations/${integrationId}/retry-deletion`, {}, reason),
     onSuccess: (r) => { const t = retryDeletionToast(r); toast(t.title, t.detail); qc.invalidateQueries({ queryKey: ["admin", "failures"] }); },
@@ -374,7 +456,12 @@ export function Failures() {
             <div className="row"><Chip tone={a.severity === "critical" ? "critical" : "caution"}>{a.severity}</Chip><strong>{a.title}</strong><span className="small muted">{new Date(a.createdAt).toLocaleString()}</span>{a.status === "acknowledged" ? <Chip tone="neutral">acknowledged</Chip> : null}</div>
             <p className="small">{a.body}</p>
             <div className="row">
-              {a.status !== "open" ? null : ackIsForAnother(a, me.data?.user.id) ? <span className="small muted">{ACK_FOR_ANOTHER}</span> : <Button size="sm" variant="secondary" loading={ack.isPending && ack.variables === a.id} onClick={() => ack.mutate(a.id)}>Acknowledge</Button>}
+              {ackIsForAnother(a, me.data?.user.id) ? (a.status === "open" ? <span className="small muted">{ACK_FOR_ANOTHER}</span> : null) : (
+                <>
+                  {a.status === "open" ? <Button size="sm" variant="secondary" loading={ack.isPending && ack.variables === a.id} onClick={() => ack.mutate(a.id)}>Acknowledge</Button> : null}
+                  <Button size="sm" variant="quiet" loading={resolve.isPending && resolve.variables === a.id} onClick={() => resolve.mutate(a.id)}>Resolve</Button>
+                </>
+              )}
               {a.kind === "secret.delete_failed" && a.target ? <Button size="sm" variant="primary" loading={retry.isPending && retry.variables === a.target.id} onClick={() => retry.mutate(a.target!.id)}>Retry deletion</Button> : null}
             </div>
           </div>
@@ -645,6 +732,15 @@ function PrivacyRequestSheet({ id, onClose }: { id: string; onClose: () => void 
             </div>
           </Card>
         ) : <Alert tone="info">{r.status === "fulfilled" ? "Fulfilled" : "Declined"} {r.resolvedAt ? new Date(r.resolvedAt).toLocaleString() : ""}: {r.resolution}{r.confirmationSentAt ? " · confirmation sent" : ""}</Alert>}
+        {closedReq && r.kind === "delete" && !r.confirmationSentAt ? (
+          // the email after the commit failed: nothing retries it on its own, so the console offers it
+          <Alert tone="caution">
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <span>The requester has not been told yet: the confirmation email did not go.</span>
+              <Button size="sm" variant="secondary" loading={act.isPending} onClick={() => act.mutate({ path: "confirm-again", body: {} })}>Send the confirmation again</Button>
+            </div>
+          </Alert>
+        ) : null}
       </div>
     </Sheet>
   );

@@ -41,7 +41,7 @@ describe("the approval card's line about the screening conversation", () => {
 
   it("describes the later invitation on the usual flow", async () => {
     const line = await inviteLine();
-    expect(line.text).toMatch(/^When the assistant's reading of an application suggests a good fit/);
+    expect(line.text).toMatch(/^When the AI review of an application suggests a good fit/);
     expect(line.text).not.toBe(ONE_VISIT_LINE);
   });
 

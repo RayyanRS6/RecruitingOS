@@ -16,6 +16,10 @@ import { workModelLabel } from "./RolePlan";
  * The one header and tab strip a job's pages share (Wave S1): /roles/:id (the job, its scoring, interview plan, sharing,
  * report and activity) and /roles/:id/talent (its candidates). The eyebrow names the company, the title the job, a pill
  * its status, one line under it; on the right "Bring in a recruiter" and a More menu with everything else.
+ *
+ * It draws what the page hands it. On the first draw (server and browser alike) a page hands it only what the server
+ * also has: the rail's jobs list waits for useIsClient() (components/use-is-client.ts), so Candidates first says
+ * "Candidates" on both sides and the job's title follows (Wave S2).
  */
 export function JobHeader(props: { title: ReactNode; status: string | null; pulse?: boolean; companyName: string | null; sub?: ReactNode; actions?: ReactNode; noJob?: boolean }) {
   const s = props.status ? roleStatus(props.status) : null;

@@ -214,9 +214,10 @@ test.describe("candidate journey on a phone", () => {
     const statusPath = await statusPathFromEmail(page.request, baseURL!, email);
     await page.goto(statusPath);
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-    // the candidate's own steps (plan A1), the current one marked; the team's stage names and private marks never show
+    // the candidate's own steps (plan A1; the Wave S2 progress line Applied, Screening chat, Review, Interview, Decision),
+    // the current one marked; the team's stage names and private marks never show
     await expect(page.locator('ol.track [aria-current="step"]')).toHaveCount(1);
-    await expect(page.locator('ol.track [aria-current="step"]')).toHaveText(/^(Received|Under review)$/);
+    await expect(page.locator('ol.track [aria-current="step"]')).toHaveText(/^(Applied|Screening chat|Review)$/);
     await page.getByText("How AI is used", { exact: true }).first().click();
     await expect(page.getByText(/who is interviewed, hired or turned down is always a person's decision/)).toBeVisible();
     await expectAccessible(page, "status page");

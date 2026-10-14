@@ -10,6 +10,9 @@ import { describe, expect, it, vi } from "vitest";
  * ones folded; "Needs you" as short rows (one line, the buttons, the rest behind "Why"), five at a time; "Your jobs",
  * each opening on its Candidates once live; the "Who are you hiring?" box; and the assistant's recent activity folded,
  * with "Mark all read" and the way to every earlier update still there.
+ *
+ * Drawn as the browser shows it once the page is its own (useIsClient answers yes): "Your jobs" comes from the rail's
+ * jobs list, which the first draw leaves out on both sides (first-draw.test.ts).
  */
 const nav = vi.hoisted(() => ({ search: "" }));
 vi.mock("next/navigation", () => ({
@@ -19,6 +22,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(nav.search),
 }));
 vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactNode } & Record<string, unknown>) => createElement("a", props, props.children) }));
+vi.mock("@ros/web/src/components/use-is-client", () => ({ useIsClient: () => true }));
 
 (globalThis as { React?: typeof React }).React = React;
 const { Home } = await import("@ros/web/src/pages/Home");
@@ -132,14 +136,14 @@ describe("Needs you", () => {
   it("leads with the plan's screening chats at 80% for an owner, without waiting for the brief, and counts it", () => {
     const usage = { text_screens: { used: 122, limit: 150 } };
     const waiting = text(render({ cards: null, usage }));
-    expect(waiting).toContain("Needs you 122 of this month's 150 screening conversations used 80% used Nothing has stopped.");
+    expect(waiting).toContain("Needs you 122 of this month's 150 screening chats used 80% used Nothing has stopped.");
     expect(waiting).toContain("Ask ITS about adding more");
     expect(waiting).toContain("See usage");
     // the rest of what it says is one click away
     expect(waiting).toContain("ITS has been told and can add more before then.");
     expect(render({ cards: [], usage })).toContain('<p class="page-header-sub">1 thing needs you</p>');
     // only owners and admins, who can talk to ITS about the plan, see it
-    expect(text(render({ role: "hiring_manager", cards: [], usage }))).not.toContain("screening conversations used");
+    expect(text(render({ role: "hiring_manager", cards: [], usage }))).not.toContain("screening chats used");
   });
 
   it("asks before a draft is discarded and keeps Continue on the row", () => {

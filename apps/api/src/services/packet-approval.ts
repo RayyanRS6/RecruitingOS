@@ -93,7 +93,7 @@ export async function packetApprovalView(tx: Tx, input: { tenant: Tenant; role: 
     const pv = packets.find((p) => p.version === version) ?? null;
     const legalCheck = pv ? await legalCheckFor(tx, { role, packet: pv.packet, now: input.now ?? new Date() }) : null;
     const viewer = { mayDecide: false, maySendBack: false, reason: null as string | null };
-    if (!can(t.role, "role.approve")) viewer.reason = "Your role cannot approve role packets; an owner, admin or hiring manager does.";
+    if (!can(t.role, "role.approve")) viewer.reason = "Your role cannot approve jobs; an owner, admin or hiring manager does.";
     else {
       const decide = mayDecideApproval(pendingReq, { userId: t.userId, role: t.role });
       if (!decide.ok) viewer.reason = decide.message;

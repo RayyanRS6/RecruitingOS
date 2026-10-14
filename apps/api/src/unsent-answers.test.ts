@@ -312,8 +312,8 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     if (d.matchScore) expect(d.matchScore.basedOn).toBe("resume");
     // one alert, that it happened; and the history says the same, with no count of what she answered
     const told = seen.alerts.filter((n) => n.kind === "screen.unfinished");
-    expect(told.map((n) => n.title)).toEqual(["Priya Shah didn't finish the screening conversation"]);
-    expect(told[0].body).toContain("their reading and match score come from their application alone");
+    expect(told.map((n) => n.title)).toEqual(["Priya Shah didn't finish the screening chat"]);
+    expect(told[0].body).toContain("their AI review and match score come from their application alone");
     const unfinished = (seen.out.history.body as Array<{ type: string; subjectId: string; payload: Record<string, unknown> }>).find((e) => e.type === "screen.unfinished" && e.subjectId === scr.id)!;
     expect(unfinished.payload).not.toHaveProperty("answered");
     expect(unfinished.payload).not.toHaveProperty("stoppedAt");

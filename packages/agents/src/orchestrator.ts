@@ -183,7 +183,7 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
       const finalists = waiting.filter((a) => a.stage === "finalist").length;
       const body = finalists === waiting.length
         ? `${finalists === 1 ? "A finalist is" : `${finalists} finalists are`} waiting to hear what comes next: record an offer made, the next step, or not moving forward. Finalists who wait more than a week often take another job.`
-        : "They are ready for a decision: invite to a screen, interview, decide after an interview, or decline with a reason. Candidates who wait more than a week usually move on.";
+        : "They are ready for a decision: invite to a screening chat, interview, decide after an interview, or decline with a reason. Candidates who wait more than a week usually move on.";
       // the people, longest waiting first, so Today can name the first and open them (plan G10)
       const longestFirst = [...waiting].sort((a, b) => Date.parse(a.stageChangedAt) - Date.parse(b.stageChangedAt)).map((a) => a.id);
       if (days >= 3) out.push({ detector: "candidates_waiting", roleId: role.id, roleTitle: role.title, days, applicationIds: longestFirst, title: `${waiting.length} ${waiting.length === 1 ? "candidate has" : "candidates have"} been waiting on you for ${days} days (${role.title})`, body, action: { label: "Review them", href: `/roles/${role.id}/talent` } });
@@ -211,7 +211,7 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
     const stale = invites.filter((s) => s.invitedAt && now.getTime() - Date.parse(s.invitedAt) >= 3 * DAYS && !parked({ id: s.applicationId }) && !isStillApplying(s) && !isOneVisitFlow(s.progress));
     if (stale.length && publicNow) {
       const days = Math.floor((now.getTime() - Math.min(...stale.map((s) => Date.parse(s.invitedAt!)))) / DAYS);
-      out.push({ detector: "screens_unanswered", roleId: role.id, roleTitle: role.title, days, title: `${stale.length} screening ${stale.length === 1 ? "invite has" : "invites have"} gone unanswered for ${days} days (${role.title})`, body: "A reminder went out automatically. A recruiter can call them, or you can move on to the next candidates.", action: { label: "See who", href: `/roles/${role.id}/talent?stage=screen_invited` } });
+      out.push({ detector: "screens_unanswered", roleId: role.id, roleTitle: role.title, days, title: `${stale.length} screening chat ${stale.length === 1 ? "invite has" : "invites have"} gone unanswered for ${days} days (${role.title})`, body: "A reminder went out automatically. A recruiter can call them, or you can move on to the next candidates.", action: { label: "See who", href: `/roles/${role.id}/talent?stage=screen_invited` } });
     }
     // The conversation that goes with the application closes by itself (E4, E5). One still open well past that point
     // leaves the person "Still applying", unseen by the team and maybe waiting: they are named, for the team to open.
@@ -222,7 +222,7 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
       const names = await candidateNames(q, stuckApps.map((a) => a.candidateId));
       const who = stuckApps.slice(0, 5).map((a) => names.get(a.candidateId) ?? "A candidate").join(", ");
       const days = Math.floor((now.getTime() - Math.min(...stuckApps.map((a) => Date.parse(a.createdAt)))) / DAYS);
-      out.push({ detector: "conversations_stuck", roleId: role.id, roleTitle: role.title, days, applicationIds: stuckApps.map((a) => a.id), title: `${stuckApps.length === 1 ? "1 applicant is" : `${stuckApps.length} applicants are`} stuck in the screening conversation (${role.title})`, body: `${who}${stuckApps.length > 5 ? ` and ${stuckApps.length - 5} more` : ""}. Their conversation should have closed by itself and did not, so their application has not reached you as ready and they may be waiting. Their answers appear only once they send them; a recruiter can contact them.`, action: { label: "See who", href: `/roles/${role.id}/talent` } });
+      out.push({ detector: "conversations_stuck", roleId: role.id, roleTitle: role.title, days, applicationIds: stuckApps.map((a) => a.id), title: `${stuckApps.length === 1 ? "1 applicant is" : `${stuckApps.length} applicants are`} stuck in the screening chat (${role.title})`, body: `${who}${stuckApps.length > 5 ? ` and ${stuckApps.length - 5} more` : ""}. Their screening chat should have closed by itself and did not, so their application has not reached you as ready and they may be waiting. Their answers appear only once they send them; a recruiter can contact them.`, action: { label: "See who", href: `/roles/${role.id}/talent` } });
     }
     const pending = await q.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.status, "pending")));
     const oldPending = pending.filter((p) => p.actionType !== "role_packet.approve" && now.getTime() - Date.parse(p.createdAt) >= 2 * DAYS && !(p.applicationId && parked({ id: p.applicationId })));
@@ -322,7 +322,7 @@ async function sendIntervention(q: Queryable, deps: LadderDeps, companyId: strin
   if (level === "offer_recruiter") {
     const g = await gate(q, { companyId, roleId: d.roleId, actionType: "intervention.offer_recruiter", subject: { type: "role", id: d.roleId }, proposal: { detector: d.detector }, rationale: d.title, requestedBy: deps.actor });
     if (g.outcome === "human_only") return;
-    const offer = "An ITS recruiter can review the shortlist, reach out to candidates, and get this moving. It is one click from the role page or the brief.";
+    const offer = "An ITS recruiter can review the shortlist, reach out to candidates, and get this moving. It is one click from the job's page or Home.";
     await notify(q, { companyId, kind: "stuck.offer_recruiter", title: `Want a recruiter to take a look at ${d.roleTitle}?`, body: `${d.body}\n\n${offer}`, action: { label: "Ask a recruiter", href: d.action.href }, emailedSeparatelyTo: emailed });
     for (const o of owners) {
       await teamMail(q, deps, companyId, { to: o.email, subject: `Want a recruiter to look at ${d.roleTitle}?`, text: `${d.title}.\n\n${offer}\n\nOpen: ${href}\n\n${ALERT_PRIVACY_LINE}`, idempotencyKey: `intervention:${companyId}:${d.roleId}:${d.detector}:offer:${day}:${o.userId}`, templateKey: "intervention", tags: { detector: d.detector } });

@@ -101,7 +101,7 @@ const MARK_PLACE: Record<MarkKind, { column: BoardColumn; label: string }> = {
 
 export function boardPlacement(input: PlacementInput): BoardPlacement {
   const { match, latest } = input;
-  if (input.stillApplying) return done(null, "Still applying", "They are still in the conversation that follows the form; they join the board when they finish.", "waiting");
+  if (input.stillApplying) return done(null, "Still applying", "They are still in the screening chat that follows the form; they join the board when they finish.", "waiting");
   if (input.base === "hired") return done("shortlist", "Hired", "Hired.");
   if (input.base === "offer") return done("shortlist", "Offer", "An offer is in progress.");
   if (input.base === "interviewing") return done("shortlist", "Interviewing", "Already moving forward to interview.");
@@ -115,7 +115,7 @@ export function boardPlacement(input: PlacementInput): BoardPlacement {
   }
   if (!latest) {
     if (STILL_BEING_READ.includes(input.stage) && !input.evidence.assessmentUnavailable) return done("longlist", "Being read", "Their application is being read; check back soon.", "waiting");
-    return { column: "longlist", state: "suggested", doneLabel: null, confident: false, needsYourEye: ASSESSMENT_UNAVAILABLE_TEXT, reason: "No reading to go on.", nextStep: step("read_yourself", "Open the résumé and answers; nothing was read for you."), suggestedAction: "longlist", declineReason: null };
+    return { column: "longlist", state: "suggested", doneLabel: null, confident: false, needsYourEye: ASSESSMENT_UNAVAILABLE_TEXT, reason: "No AI review to go on.", nextStep: step("read_yourself", "Open the résumé and answers; nothing was read for you."), suggestedAction: "longlist", declineReason: null };
   }
 
   // Where the evidence puts them.
@@ -133,24 +133,24 @@ export function boardPlacement(input: PlacementInput): BoardPlacement {
   const thin = column === "not_moving_forward" && !missing.length && (unknownMust.length > 0 || coverage.known < coverage.total * MIN_COVERAGE_TO_DECLINE);
   const readYourself = (why: string, reasonForStep: string) => ({ why, next: step("read_yourself", reasonForStep) });
   const eye = ((): { why: string; next: NextStep } | null => {
-    if (input.evidence.needsCloserLook) return readYourself(input.evidence.reason ?? CLOSER_LOOK_LABEL, "The reading needs a person to check it before anything else happens.");
+    if (input.evidence.needsCloserLook) return readYourself(input.evidence.reason ?? CLOSER_LOOK_LABEL, "The AI review needs a person to check it before anything else happens.");
     if (insufficientEvidence(latest)) {
       return latest.kind === "screen"
-        ? readYourself("The screening conversation left too much open to go on.", "Read the conversation and decide what to ask next.")
-        : readYourself("The assistant could not say enough from the application to go on.", "Open the résumé and answers; the reading left too much open.");
+        ? readYourself("The screening chat left too much open to go on.", "Read the chat and decide what to ask next.")
+        : readYourself("The assistant could not say enough from the application to go on.", "Open the résumé and answers; the AI review left too much open.");
     }
     if (input.evidence.lowConfidence) return readYourself(LOW_CONFIDENCE_TEXT, "The assistant was not confident; your own read counts most here.");
     if (input.evidence.resumeUnreadable && match?.basedOn !== "screen") return readYourself(`${RESUME_UNREADABLE_TEXT} Open the file yourself before deciding.`, "The file may say more than the written answers did.");
     if (unquotedNo.length) return readYourself(`The assistant says ${listOf(unquotedNo.map((u) => u.label))} ${unquotedNo.length === 1 ? "is" : "are"} not met but quoted nothing from the candidate's own words, so it does not count either way.`, `Check for yourself whether they have ${unquotedNo[0].label}.`);
-    if (score === null) return { why: "Nothing to score yet: the application does not speak to the requirements either way.", next: step("ask_more", input.openScreen ? "The screening conversation is open; their answers will fill this in." : "Ask them about the must-haves in the screening conversation.") };
-    if (column === "not_moving_forward" && input.openScreen && latest.kind !== "screen") return { why: "Their screening conversation is still open, and its answers count most. Wait for it, or read it yourself before deciding.", next: step("ask_more", "The screening conversation is open; their answers will fill this in.") };
+    if (score === null) return { why: "Nothing to score yet: the application does not speak to the requirements either way.", next: step("ask_more", input.openScreen ? "The screening chat is open; their answers will fill this in." : "Ask them about the must-haves in the screening chat.") };
+    if (column === "not_moving_forward" && input.openScreen && latest.kind !== "screen") return { why: "Their screening chat is still open, and its answers count most. Wait for it, or read it yourself before deciding.", next: step("ask_more", "The screening chat is open; their answers will fill this in.") };
     if (column === "not_moving_forward" && input.readingVersion?.mustHavesChanged) return readYourself(`Read against version ${input.readingVersion.readAgainst} of the role, and the must-haves have changed since. Check them against the role as it is now.`, "The role's must-haves changed after they were read.");
-    if (column === "not_moving_forward" && leans === "forward") return readYourself(`The assistant suggested ${latest.kind === "screen" ? "an interview" : "a screening conversation"}, but the score puts them lower. Read before deciding.`, "The reading and the score disagree; your own read decides.");
-    if (column === "shortlist" && leans === "back") return readYourself(`The assistant suggested ${latest.kind === "screen" ? "not moving forward" : "holding back"}, but the score puts them higher. Read before deciding.`, "The reading and the score disagree; your own read decides.");
+    if (column === "not_moving_forward" && leans === "forward") return readYourself(`The assistant suggested ${latest.kind === "screen" ? "an interview" : "a screening chat"}, but the score puts them lower. Read before deciding.`, "The AI review and the score disagree; your own read decides.");
+    if (column === "shortlist" && leans === "back") return readYourself(`The assistant suggested ${latest.kind === "screen" ? "not moving forward" : "holding back"}, but the score puts them higher. Read before deciding.`, "The AI review and the score disagree; your own read decides.");
     if (thin) {
       return unknownMust.length
         ? { why: `${mustHavesNotKnown(unknownMust.map((u) => u.label))} A low score without them is not enough to go on.`, next: step("ask_more", `Their application does not say whether they have ${unknownMust[0].label}.`) }
-        : { why: `Only ${coverage.known} of ${coverage.total} requirements could be judged; a low score from so little is not enough to go on.`, next: step("ask_more", "Ask them about the role's requirements in the screening conversation.") };
+        : { why: `Only ${coverage.known} of ${coverage.total} requirements could be judged; a low score from so little is not enough to go on.`, next: step("ask_more", "Ask them about the role's requirements in the screening chat.") };
     }
     if (column === "shortlist" && unknownMust.length) return { why: mustHavesNotKnown(unknownMust.map((u) => u.label)), next: step("ask_more", `Their application does not say whether they have ${unknownMust[0].label}.`) };
     return null;
@@ -162,7 +162,7 @@ export function boardPlacement(input: PlacementInput): BoardPlacement {
   if (!next) {
     if (column === "shortlist") {
       const screened = latest.kind === "screen";
-      next = screened || (band === "very_high" && match?.confidence === "high") ? step("interview", screened ? "Good evidence on every must-have, and the screening conversation is done." : "Strong evidence on every must-have.") : step("phone_call", "Good evidence on the must-haves; a short call would confirm it.");
+      next = screened || (band === "very_high" && match?.confidence === "high") ? step("interview", screened ? "Good evidence on every must-have, and the screening chat is done." : "Strong evidence on every must-have.") : step("phone_call", "Good evidence on the must-haves; a short call would confirm it.");
     } else if (column === "not_moving_forward") {
       next = step("not_moving_forward", missing.length ? `Their own words show they do not meet ${missing[0].label}.` : reason);
     } else {

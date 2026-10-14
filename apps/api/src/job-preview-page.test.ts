@@ -115,6 +115,12 @@ describe("the job-page preview (plan D1)", () => {
     expect(html).not.toContain('name="uploadGrant"');
     expect(html).toContain("<summary>No resume? Answer four short questions instead</summary>");
     expect(html).toMatch(/<p class="back"><a href="\/api\/v1\/roles\/[^"]+\/preview\?version=1">/);
+    // the line under each yes/no question is the live form's plain one, never the team's words ("... in the packet")
+    expect(html).not.toMatch(/packet|intake|playbook/i);
+    const data = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/preview?version=1`)).json()) as JobPreview;
+    const helps = [...JSON.stringify(data).matchAll(/"help":"([^"]*)"/g)].map((m) => m[1]);
+    expect(helps.length).toBeGreaterThan(0);
+    for (const h of helps) expect(h).not.toMatch(/packet|intake|playbook|knock-?out|triage|the owner/i);
   });
 
   it("needs the role and its pay: an interviewer, someone signed out, an unknown version or role each get a plain page", async () => {

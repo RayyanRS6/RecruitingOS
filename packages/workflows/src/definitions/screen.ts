@@ -123,14 +123,14 @@ export const screen: WorkflowDefinition<State> = {
           if (company.planKey === "design_partner") {
             // Founder decision F8: a billing limit never interrupts an active candidate process for a design partner; the owner and ITS are told.
             await emit(ctx.q, { type: "entitlement.exceeded", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { key: entitlements.TEXT_SCREENS, limit: ent.limit, used: ent.used, plan: company.planKey }, correlationId: ctx.run.id });
-            await notify(ctx.q, { companyId: ctx.companyId, kind: "entitlement.text_screens", title: "Over the pilot's included screens", body: `${candidate.firstName} ${candidate.lastName} is being screened anyway: the Design Partner pilot never interrupts a candidate in progress. ITS has been told so the allowance can be reviewed.`, action: { label: "See usage", href: "/setup" } });
+            await notify(ctx.q, { companyId: ctx.companyId, kind: "entitlement.text_screens", title: "Over the pilot's included screening chats", body: `${candidate.firstName} ${candidate.lastName} gets the screening chat anyway: the Design Partner pilot never interrupts a candidate in progress. ITS has been told so the allowance can be reviewed.`, action: { label: "See usage", href: "/setup" } });
           } else {
             // Q17: the application stays, and the conversation link goes out by email once the allowance is topped up, so
             // everyone for the role has the same process. The owner is told once per person; the run looks again later.
             const since = ctx.state.waitingForAllowance ?? ctx.now.toISOString();
             if (!ctx.state.waitingForAllowance) {
               await emit(ctx.q, { type: "entitlement.exceeded", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { key: entitlements.TEXT_SCREENS, limit: ent.limit, used: ent.used, plan: company.planKey }, correlationId: ctx.run.id });
-              await notify(ctx.q, { companyId: ctx.companyId, kind: "entitlement.text_screens", title: "Screening conversations used up for this month", body: `Your plan includes ${ent.limit} screening conversations this month. ${candidate.firstName} ${candidate.lastName} is waiting for one and gets the link by email as soon as more are added, so everyone for ${role.title} has the same process. ITS has been told. You can also review them yourself.`, action: { label: "See usage", href: "/setup" } });
+              await notify(ctx.q, { companyId: ctx.companyId, kind: "entitlement.text_screens", title: "Screening chats used up for this month", body: `Your plan includes ${ent.limit} screening chats this month. ${candidate.firstName} ${candidate.lastName} is waiting for one and gets the link by email as soon as more are added, so everyone for ${role.title} has the same process. ITS has been told. You can also review them yourself.`, action: { label: "See usage", href: "/setup" } });
             }
             if (ctx.now.getTime() - Date.parse(since) > ALLOWANCE_WAIT_DAYS * 24 * HOUR) {
               // Still used up after the whole wait: no silent lapse (plan G10). Someone whose receipt and acknowledgment
@@ -139,10 +139,10 @@ export const screen: WorkflowDefinition<State> = {
               const promised = ctx.state.flow === "one_visit";
               await emit(ctx.q, { type: "screen.allowance_lapsed", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { waitingSince: since, days: ALLOWANCE_WAIT_DAYS, promised }, correlationId: ctx.run.id });
               if (promised) await sendConversationNotOfferedNote(ctx.q, ctx.services.integrations, { application: app, candidate, role, company, packet, actor: ctx.actor, correlationId: ctx.run.id });
-              await notify(ctx.q, { companyId: ctx.companyId, kind: "entitlement.text_screens", title: `${candidate.firstName} ${candidate.lastName} never got the screening conversation`, body: `Your plan's screening conversations stayed used up for ${ALLOWANCE_WAIT_DAYS} days, so ${candidate.firstName} never got the link.${promised ? " They have been told their application is with you as it is and that nothing else is needed." : ""} Their application is ready for your review; you can also ask a recruiter to call them.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
+              await notify(ctx.q, { companyId: ctx.companyId, kind: "entitlement.text_screens", title: `${candidate.firstName} ${candidate.lastName} never got the screening chat`, body: `Your plan's screening chats stayed used up for ${ALLOWANCE_WAIT_DAYS} days, so ${candidate.firstName} never got the link.${promised ? " They have been told their application is with you as it is and that nothing else is needed." : ""} Their application is ready for your review; you can also ask a recruiter to call them.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
               return { kind: "complete" };
             }
-            return { kind: "wait", wait: { kind: "timer", until: new Date(ctx.now.getTime() + ALLOWANCE_RECHECK_HOURS * HOUR).toISOString(), reason: "the plan's screening conversations are used up; waiting for more" }, state: { waitingForAllowance: since }, resumeStep: "invite" };
+            return { kind: "wait", wait: { kind: "timer", until: new Date(ctx.now.getTime() + ALLOWANCE_RECHECK_HOURS * HOUR).toISOString(), reason: "the plan's screening chats are used up; waiting for more" }, state: { waitingForAllowance: since }, resumeStep: "invite" };
           }
         }
         // The conversation that goes with the application is on the web only, whatever the candidate agreed to (E1, Q17).
@@ -240,15 +240,15 @@ export const screen: WorkflowDefinition<State> = {
       if (oneVisit) {
         // E4: never started, and nothing is lost by it. The application goes to the team ("ready for your review"), the
         // candidate is told nothing else is needed, and the team hears it as an application, not a missed invitation.
-        if (b.app.stage === "screen_invited") await transition(ctx.q, { applicationId: b.app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, reason: "did not start the screening conversation offered with the application", correlationId: ctx.run.id });
+        if (b.app.stage === "screen_invited") await transition(ctx.q, { applicationId: b.app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, reason: "did not start the screening chat offered with the application", correlationId: ctx.run.id });
         await sendConversationNotStartedNote(ctx.q, ctx.services.integrations, { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet: b.packet, actor: ctx.actor, correlationId: ctx.run.id, screen: { id: scr.id } });
-        await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.expired", title: `${name} applied without the screening conversation`, body: "They did not start the short conversation that goes with the application, after one reminder. Their application is ready for your review as it is; you can also ask a recruiter to call them.", action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
+        await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.expired", title: `${name} applied without the screening chat`, body: "They did not start the short screening chat that goes with the application, after one reminder. Their application is ready for your review as it is; you can also ask a recruiter to call them.", action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
         return { kind: "complete" };
       }
       // No silent expiry (plan G10): the candidate is told the link closed, that the application is still with the team,
       // and that a reply brings a new link from a person.
       await sendScreenExpiredNote(ctx.q, ctx.services.integrations, { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet: b.packet, actor: ctx.actor, correlationId: ctx.run.id, screen: { id: scr.id } });
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.expired", title: `${name} did not respond to the screen`, body: `Invited ${scr.invitedAt?.slice(0, 10)} and reminded once. They were told the link has closed and that they can reply for a new one. You can invite them again, decline with a reason, keep them in the talent pool, or ask a recruiter to call.`, action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
+      await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.expired", title: `${name} did not answer the screening chat invitation`, body: `Invited ${scr.invitedAt?.slice(0, 10)} and reminded once. They were told the link has closed and that they can reply for a new one. You can invite them again, decline with a reason, keep them in the talent pool, or ask a recruiter to call.`, action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
       return { kind: "complete" };
     },
 
@@ -289,7 +289,7 @@ export const screen: WorkflowDefinition<State> = {
       const answered = Object.keys(answersOf(scr)).length;
       await ctx.q.update(screens).set({ status: "unfinished", completedAt: ctx.now.toISOString() }).where(eq(screens.id, scr.id));
       await emit(ctx.q, { type: "screen.unfinished", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "screen", id: scr.id }, payload: { applicationId: b.app.id, answered, questions: b.packet.screening.questions.length, stoppedAt: scr.progress.currentQuestionKey ?? null }, correlationId: ctx.run.id });
-      if (["screen_invited", "screening"].includes(b.app.stage)) await transition(ctx.q, { applicationId: b.app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, reason: "did not finish the screening conversation", correlationId: ctx.run.id });
+      if (["screen_invited", "screening"].includes(b.app.stage)) await transition(ctx.q, { applicationId: b.app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, reason: "did not finish the screening chat", correlationId: ctx.run.id });
       await sendConversationUnfinishedNote(ctx.q, ctx.services.integrations, { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet: b.packet, actor: ctx.actor, correlationId: ctx.run.id, screen: { id: scr.id } });
       await notifyUnfinished(ctx, b);
       return { kind: "complete" };
@@ -332,7 +332,7 @@ export const screen: WorkflowDefinition<State> = {
         };
         if (!prepared || prepared.screenId !== scr.id || !prepared.out.ok) {
           if (ctx.now.getTime() - Date.parse(pausedAt) >= PAUSE_GIVE_UP_HOURS * HOUR) {
-            await requestHuman(ctx.q, deps, { screenId: scr.id, reason: "assistant failed for a day after pausing the conversation", actor: ctx.actor, reply: null, replyChannel: "web" });
+            await requestHuman(ctx.q, deps, { screenId: scr.id, reason: "assistant failed for a day after pausing the screening chat", actor: ctx.actor, reply: null, replyChannel: "web" });
             await handedOver();
             return { kind: "complete" };
           }
@@ -418,22 +418,22 @@ export const screen: WorkflowDefinition<State> = {
       const check = readingConsistency(asmt, packet);
       if (!check.consistent) {
         await audit(ctx.q, { companyId: ctx.companyId, actor: ctx.actor, action: "assessment.flagged", target: { type: "application", id: app.id }, reason: check.reason ?? "the scorecard disagrees with its must-have findings", details: { assessmentId: asmt.id, held: "application.recommend_interview" } });
-        await notify(ctx.q, { companyId: ctx.companyId, kind: "application.needs_review", title: `${name} needs a closer look`, body: `${name} completed the screen. ${check.reason}`, action: { label: "Take a closer look", href: `/roles/${role.id}/talent?open=${app.id}` } });
+        await notify(ctx.q, { companyId: ctx.companyId, kind: "application.needs_review", title: `${name} needs a closer look`, body: `${name} finished the screening chat. ${check.reason}`, action: { label: "Take a closer look", href: `/roles/${role.id}/talent?open=${app.id}` } });
         return { kind: "complete" };
       }
       if (rec === "strong_interview" || rec === "interview") {
-        const g = await gate(ctx.q, { companyId: ctx.companyId, roleId: role.id, applicationId: app.id, actionType: "application.recommend_interview", subject: { type: "application", id: app.id }, proposal: { recommendation: rec, assessmentId: asmt.id }, rationale: `${name} completed the screen: ${asmt.result.summary}`, requestedBy: { kind: "agent", id: "screening", runId: asmt.aiRunId ?? undefined }, workflowRunId: ctx.run.id, expiresInHours: SUGGESTION_WINDOW_HOURS });
+        const g = await gate(ctx.q, { companyId: ctx.companyId, roleId: role.id, applicationId: app.id, actionType: "application.recommend_interview", subject: { type: "application", id: app.id }, proposal: { recommendation: rec, assessmentId: asmt.id }, rationale: `${name} finished the screening chat: ${asmt.result.summary}`, requestedBy: { kind: "agent", id: "screening", runId: asmt.aiRunId ?? undefined }, workflowRunId: ctx.run.id, expiresInHours: SUGGESTION_WINDOW_HOURS });
         if (g.outcome === "execute") {
           if (app.stage === "screen_complete") await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "interview_recommended", by: "system", actor: ctx.actor, correlationId: ctx.run.id });
           await emit(ctx.q, { type: "candidate.recommended", companyId: ctx.companyId, actor: { kind: "agent", id: "screening", runId: asmt.aiRunId ?? undefined }, subject: { type: "application", id: app.id }, payload: { recommendation: rec, assessmentId: asmt.id }, correlationId: ctx.run.id });
-          if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, kind: "candidate.recommended", title: `${name} is ready to interview`, body: `${rec === "strong_interview" ? "Strong screen. " : ""}${asmt.result.summary}`, action: { label: "Approve an interview", href: `/roles/${role.id}/talent?open=${app.id}&step=interview` } });
+          if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, kind: "candidate.recommended", title: `${name} is ready to interview`, body: `${rec === "strong_interview" ? "Strong screening chat. " : ""}${asmt.result.summary}`, action: { label: "Approve an interview", href: `/roles/${role.id}/talent?open=${app.id}&step=interview` } });
         } else if (g.outcome === "wait_for_approval") {
           return waitForSuggestion(ctx, g.approvalRequestId, "on_decision");
         }
         return { kind: "complete" };
       }
       // hold / decline_recommended: nothing moves; the owner sees the scorecard and decides.
-      await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.completed", title: `${name} completed the screen`, body: `${rec === "hold" ? "Worth a look before deciding. " : "The screen raised a concern; your call. "}${asmt.result.summary}`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
+      await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.completed", title: `${name} finished the screening chat`, body: `${rec === "hold" ? "Worth a look before deciding. " : "The screening chat raised a concern; your call. "}${asmt.result.summary}`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
       return { kind: "complete" };
     },
 
@@ -452,7 +452,7 @@ export const screen: WorkflowDefinition<State> = {
  */
 async function notifyUnfinished(ctx: { q: Tx; companyId: string }, b: NonNullable<Awaited<ReturnType<typeof load>>>): Promise<void> {
   const name = `${b.candidate.firstName} ${b.candidate.lastName}`;
-  await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.unfinished", title: `${name} didn't finish the screening conversation`, body: "They did not send their answers, even after a reminder, so you won't see them, and their reading and match score come from their application alone. Their application is ready for your review.", action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
+  await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.unfinished", title: `${name} didn't finish the screening chat`, body: "They did not send their answers, even after a reminder, so you won't see them, and their AI review and match score come from their application alone. Their application is ready for your review.", action: { label: "Review", href: `/roles/${b.role.id}/talent?open=${b.app.id}` } });
 }
 
 /** The open questions of the latest résumé assessment, as the first questions of a focused screen. */

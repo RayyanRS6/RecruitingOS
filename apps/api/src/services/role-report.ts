@@ -238,7 +238,7 @@ function decisionOf(payload: Record<string, unknown>): Decision | null {
 
 // The assistant's "hold" reading means thin evidence, not the On hold mark a person sets: it is named so the two never mix (plan A4).
 const RECOMMENDATION_LABEL: Record<string, string> = {
-  screen: "Screen suggested",
+  screen: "Screening chat suggested",
   strong_interview: "Interview strongly suggested",
   interview: "Interview suggested",
   hold: "Thin evidence: your call",
@@ -264,8 +264,8 @@ const REJECT_REASON_LABEL: Record<string, string> = {
 
 /** Plain words for every approval a person may be asked for; the brief's decision cards use the same labels. */
 export const APPROVAL_LABEL: Record<string, string> = {
-  "role_packet.approve": "Approve the role packet",
-  "application.invite_screen": "Invite to a screen?",
+  "role_packet.approve": "Approve the job",
+  "application.invite_screen": "Invite to a screening chat?",
   "application.recommend_interview": "Interview this candidate?",
   "application.hold_ineligible": "Decide on an eligibility hold",
   "disposition.send": "Send the decision message?",
@@ -510,7 +510,7 @@ export type ApplicantRow = Record<(typeof APPLICANT_COLUMNS)[number], string | n
 
 /** The latest thing a person did with the application, in plain words. */
 const ACTION_LABEL: Record<string, string> = {
-  invite_screen: "Invited to a screen",
+  invite_screen: "Invited to a screening chat",
   advance_to_interview: "Moved to interview",
   "interview.request": "Interview requested",
   "interview.decision": "Interview decision recorded",
@@ -518,7 +518,7 @@ const ACTION_LABEL: Record<string, string> = {
   hold: "Put on hold",
   override_eligibility: "Eligibility overridden",
   review_anyway: "Reviewed anyway",
-  flag_assessment: "Assessment flagged",
+  flag_assessment: "AI review flagged",
   outcome: "Outcome recorded",
   outcome_corrected: "Outcome corrected",
   clear_mark: "Mark taken off",
@@ -659,7 +659,7 @@ export function summaryRows(r: RoleReport): Array<[string, string, string | numb
   add("Pending decisions", "Oldest (days)", r.pendingDecisions.oldestDays);
   for (const row of r.recommendationsVsDecisions.rows) {
     add("Suggestions vs decisions", `${row.label}: total`, row.total);
-    add("Suggestions vs decisions", `${row.label}: invited to a screen`, row.invited);
+    add("Suggestions vs decisions", `${row.label}: invited to a screening chat`, row.invited);
     add("Suggestions vs decisions", `${row.label}: moved to interview`, row.interviewed);
     add("Suggestions vs decisions", `${row.label}: put on the longlist or shortlist`, row.shortlisted);
     add("Suggestions vs decisions", `${row.label}: declined`, row.declined);
@@ -669,7 +669,7 @@ export function summaryRows(r: RoleReport): Array<[string, string, string | numb
   add("Overrides", "Eligibility overridden", r.overrides.eligibilityOverrides);
   add("Overrides", "Reviewed anyway", r.overrides.reviewAnyway);
   add("Overrides", "Put on hold", r.overrides.holds);
-  add("Overrides", "Assessments flagged", r.overrides.flaggedAssessments);
+  add("Overrides", "AI reviews flagged", r.overrides.flaggedAssessments);
   add("Recruiter help", "Requests", r.escalations.total);
   add("Recruiter help", "Open", r.escalations.open);
   add("Recruiter help", "Resolved", r.escalations.resolved);

@@ -61,9 +61,9 @@ describe("how the conversation reached them", () => {
     expect(overviewScreenLine(a(screen({ status: "human_requested" })))).toContain("A recruiter contacts them");
     expect(overviewScreenLine(a(screen({ status: "human_requested" })))).toContain("was not sent, so you won't see it");
     // closed unfinished: that it happened, never what they said nor how far they got (founder decision of 9 October 2026)
-    expect(overviewScreenLine(a(screen({ status: "unfinished" })))).toBe("Didn't finish the conversation: they did not send their answers, even after one reminder, so you won't see them. The reading and match score use their application only.");
+    expect(overviewScreenLine(a(screen({ status: "unfinished" })))).toBe("Didn't finish the conversation: they did not send their answers, even after one reminder, so you won't see them. The AI review and match score use their application only.");
     // closed part-way when they withdrew or were declined while still applying
-    expect(overviewScreenLine(a(screen({ status: "cancelled", answersShared: false })))).toBe("The screening conversation closed before they sent their answers, so you won't see them. The reading and match score use their application only.");
+    expect(overviewScreenLine(a(screen({ status: "cancelled", answersShared: false })))).toBe("The screening chat closed before they sent their answers, so you won't see them. The AI review and match score use their application only.");
     expect(overviewScreenLine(a(screen({ status: "cancelled", answersShared: false, startedAt: null })))).toBeNull();
     expect(overviewScreenLine(a(screen({ invitedVia: null })))).toBeNull();
     expect(overviewScreenLine({ screens: [], timeline: [], candidate: { firstName: "Sofia" } })).toBeNull();

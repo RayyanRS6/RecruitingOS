@@ -20,7 +20,8 @@ type State = {
 
 /** Two weeks without a decision and the request expires: the role goes back to draft and the owner is told. */
 export const PACKET_APPROVAL_WINDOW_HOURS = 24 * 14;
-const INTAKE_RATIONALE = "The intake conversation produced a Role Packet. Approve it to open the role and start posting.";
+/** What the approval card says when the job builder wrote the job (the staff glossary: never "packet" or "intake"). */
+const INTAKE_RATIONALE = "The job builder wrote the job details. Approve them to open the job and start posting.";
 
 /**
  * From a proposed Role Packet to an open role (docs/06 `intake_to_packet`, steps after compile).
@@ -70,8 +71,8 @@ export const roleApproval: WorkflowDefinition<State> = {
         await notify(ctx.q, {
           companyId: ctx.companyId,
           kind: "approval.requested",
-          title: wasOpen ? `${title}: version ${ctx.state.packetVersion} needs approval` : `${title}: the role packet needs approval`,
-          body: `${wasOpen ? `${pv.createdBy.name ?? "A team member"} changed the packet: ${pv.changeSummary ?? "edited"}. The role stays on its current version until this is approved.` : "Review the packet, edit anything, then approve to open the role and start posting."} ${who} It waits 14 days, then goes back to a draft.`,
+          title: wasOpen ? `${title}: version ${ctx.state.packetVersion} needs approval` : `${title}: the job details need approval`,
+          body: `${wasOpen ? `${pv.createdBy.name ?? "A team member"} changed the job details: ${pv.changeSummary ?? "edited"}. The job stays on its current version until this is approved.` : "Review the job details, edit anything, then approve to open the job and start posting."} ${who} It waits 14 days, then goes back to a draft.`,
           action: { label: "Review", href: `/roles/${role.id}` },
           ...(decisionMaker ? { userIds: [decisionMaker.userId] } : {}),
         });
@@ -116,9 +117,9 @@ export const roleApproval: WorkflowDefinition<State> = {
         await notify(ctx.q, {
           companyId: ctx.companyId,
           kind: "role.sent_back",
-          title: status === "expired" ? `${role.title}: the approval ran out of time` : `${role.title}: the packet was sent back`,
-          body: `${note ? `Note: ${note} ` : ""}${wasOpen ? "The role keeps running on its approved version." : "Edit the role if needed, then ask for approval again from the role page."}`,
-          action: { label: "Open the role", href: `/roles/${role.id}` },
+          title: status === "expired" ? `${role.title}: the approval ran out of time` : `${role.title}: the job details were sent back`,
+          body: `${note ? `Note: ${note} ` : ""}${wasOpen ? "The job keeps running on its approved version." : "Edit the job if needed, then ask for approval again from the job's page."}`,
+          action: { label: "Open the job", href: `/roles/${role.id}` },
         });
       }
       return { kind: "complete" };
@@ -193,7 +194,7 @@ async function ensureClosingDate(ctx: StepContext<State>, role: typeof roles.$in
       companyId: ctx.companyId,
       kind: "stuck.closing_date_passed",
       title: `${role.title}: the closing date had passed when it opened`,
-      body: `The closing date chosen before approval, ${closingDayWords(passed)}, was over by the time the role opened, so it would have stopped applications at once. ${closesOn ? `Colorado expects a closing date on the job ad, so it is now ${closingDayWords(closesOn)}.` : "The role now takes applications until you stop them."} Choose another date on the Posting tab at any time.`,
+      body: `The closing date chosen before approval, ${closingDayWords(passed)}, was over by the time the job opened, so it would have stopped applications at once. ${closesOn ? `Colorado expects a closing date on the job ad, so it is now ${closingDayWords(closesOn)}.` : "The job now takes applications until you stop them."} Choose another date on the Share tab at any time.`,
       action: { label: "Choose a closing date", href: `/roles/${role.id}?tab=posting#closing-date` },
       roles: ["owner", "admin"],
     });

@@ -14,15 +14,15 @@ const HEADLINES: Record<string, string> = {
   "role.sent_back": "A role was sent back to draft",
   "message.approval_requested": "A message to a candidate is waiting for your approval",
   "candidate.recommended": "A candidate is ready for your decision",
-  "application.ready": "A candidate is ready for a screen",
+  "application.ready": "A candidate is ready for a screening chat",
   "application.needs_review": "A candidate needs a closer look",
   "application.assessment_unavailable": "An application needs your review",
   "application.ineligible_hold": "Someone is waiting for your eligibility decision",
   "application.ineligible_review_due": "Someone is still waiting for your eligibility decision",
   "application.email_held": "An application sent by email is waiting",
-  "screen.completed": "A candidate finished the screening conversation",
-  "screen.expired": "A candidate did not answer a screening invitation",
-  "screen.invited": "A candidate was invited to a screen",
+  "screen.completed": "A candidate finished the screening chat",
+  "screen.expired": "A candidate did not answer a screening chat invitation",
+  "screen.invited": "A candidate was invited to a screening chat",
   "screen.human_requested": "A candidate asked to talk to a person",
   "candidate.withdrawn": "A candidate withdrew",
   "message.received": "A candidate wrote back",
@@ -50,12 +50,12 @@ const HEADLINES: Record<string, string> = {
   "calendar.cancel_failed": "Please remove a cancelled interview from your calendar",
   "member.removed_interviews": "Someone who left your team had interviews coming up",
   "stuck.candidates_waiting": "Candidates have been waiting on you",
-  "stuck.screens_unanswered": "Screening invitations have gone unanswered",
+  "stuck.screens_unanswered": "Screening chat invitations have gone unanswered",
   "stuck.approval_pending": "A decision has been waiting",
   "stuck.no_applicants": "A role has had no applicants",
   "stuck.hold_ended": "A hold you set has ended",
   "stuck.decisions_untold": "Some candidates have not been told your decision",
-  "stuck.conversations_stuck": "Some applicants are stuck in the screening conversation",
+  "stuck.conversations_stuck": "Some applicants are stuck in the screening chat",
   "stuck.offer_recruiter": "An ITS recruiter can help with a role",
   "stuck.closing_date_passed": "A role's closing date had passed when it opened",
   "stuck.closing_date_added": "A role was given a closing date",
@@ -73,7 +73,7 @@ const HEADLINES: Record<string, string> = {
   "candidate.unreachable": "A message to a candidate could not be delivered",
   "company.verified": "ITS confirmed your company",
   "company.unverified": "Your careers page is offline while ITS checks your company again",
-  "entitlement.text_screens": "News about your plan's screening allowance",
+  "entitlement.text_screens": "News about your plan's screening chats",
 };
 
 /** When a kind has no headline of its own, its group's. */
@@ -111,7 +111,7 @@ export function alertLink(appBaseUrl: string, href: string | null | undefined): 
   return `${appBaseUrl.replace(/\/+$/, "")}${path}`;
 }
 
-/** The Setup section where a person changes which emails they get. */
+/** The Settings section where a person changes which emails they get (the old /setup address, which still works). */
 export function notificationSettingsLink(appBaseUrl: string): string {
   return `${appBaseUrl.replace(/\/+$/, "")}/setup#setup-notifications`;
 }

@@ -93,7 +93,7 @@ export const BATCH_MAX = 50;
  */
 export const BatchAction = z.enum(["shortlist", "longlist", "not_moving_forward", "on_hold", "invite_screen", "escalate"]);
 export type BatchAction = z.infer<typeof BatchAction>;
-export const BATCH_ACTION_LABEL: Record<BatchAction, string> = { shortlist: "Shortlist", longlist: "Longlist", not_moving_forward: "Not moving forward", on_hold: "On hold", invite_screen: "Invite to the screening conversation", escalate: "Ask a recruiter to look" };
+export const BATCH_ACTION_LABEL: Record<BatchAction, string> = { shortlist: "Shortlist", longlist: "Longlist", not_moving_forward: "Not moving forward", on_hold: "On hold", invite_screen: "Invite to the screening chat", escalate: "Ask a recruiter to look" };
 
 export const RoleBatchItem = z.object({
   applicationId: z.string().min(1).max(64),

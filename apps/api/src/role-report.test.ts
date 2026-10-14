@@ -395,7 +395,7 @@ describe("role report", () => {
     expect(col("Cara Diaz", "Cancelled")).toBe("");
     expect(col("Ana Lopez", "Interviews")).toBe("2");
     expect(col("Ana Lopez", "Interviews completed")).toBe("1");
-    expect(col("Ana Lopez", "Decision")).toBe("Assessment flagged");
+    expect(col("Ana Lopez", "Decision")).toBe("AI review flagged");
     expect(col("Eve Kim", "Days in stage")).toBe("3");
     expect(col("Eve Kim", "Recommendation")).toBe("Needs a person's look");
     expect(col("Finn Ola", "Recommendation")).toBe("");
@@ -580,10 +580,10 @@ describe("role report arithmetic on hand-made rows", () => {
     // a2 is in process, so the approval about a2 counts; a1 waits on the owner and counts once
     expect(r.pendingDecisions).toMatchObject({ count: 2, approvals: 1, candidates: 1, oldestDays: 6 });
     expect(r.pendingDecisions.list.map((p) => p.kind)).toEqual(["approval", "candidate"]);
-    expect(r.pendingDecisions.list[0]).toMatchObject({ label: "Invite to a screen?", days: 6, approvalRequestId: "p1" });
+    expect(r.pendingDecisions.list[0]).toMatchObject({ label: "Invite to a screening chat?", days: 6, approvalRequestId: "p1" });
     // the assistant's "hold" reading is named apart from the On hold mark a person sets
     expect(r.recommendationsVsDecisions.rows).toEqual([
-      { recommendation: "screen", label: "Screen suggested", total: 1, invited: 0, interviewed: 0, shortlisted: 0, declined: 1, held: 0, noActionYet: 0 },
+      { recommendation: "screen", label: "Screening chat suggested", total: 1, invited: 0, interviewed: 0, shortlisted: 0, declined: 1, held: 0, noActionYet: 0 },
       { recommendation: "hold", label: "Thin evidence: your call", total: 1, invited: 0, interviewed: 0, shortlisted: 0, declined: 0, held: 0, noActionYet: 1 },
     ]);
     expect(r.overrides).toEqual({ eligibilityOverrides: 0, reviewAnyway: 0, holds: 0, flaggedAssessments: 0, byAction: { reject: 1 } });

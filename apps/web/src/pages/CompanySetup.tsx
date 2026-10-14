@@ -6,6 +6,8 @@ import { useNavigate } from "../nav";
 import { Alert, Button, Card, Eyebrow, Field } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 import { VERTICALS, ZONE_CHOICES, browserTimeZone, snapTimeZone, verticalHint } from "../company-setup";
+import { browserStorage } from "../start-hire";
+import { clearAllQuickStarts } from "./new-role/quick-start";
 
 const SIZE_BANDS = ["1-19", "20-49", "50-99", "100-199", "200-499", "500+"];
 
@@ -47,6 +49,7 @@ export function CompanySetup() {
     } catch {
       // signed out already, or the session had ended: the sign-in page is where they are going either way
     }
+    clearAllQuickStarts(browserStorage());
     qc.clear();
     nav("/login", { replace: true });
   };

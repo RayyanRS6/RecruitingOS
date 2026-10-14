@@ -28,10 +28,10 @@ const ADMIN_ONLY_SETTINGS_KEYS: Record<string, string> = { pilot: "the pilot ter
 
 /** Settings with their own routes below (plan D10): named here so a PATCH that sends them gets a plain answer. */
 const PROFILE_SETTINGS_KEYS: Record<string, string> = {
-  about: "The text about your company is drafted and approved under \"How candidates see you\" in Setup.",
-  aboutDraft: "The text about your company is drafted and approved under \"How candidates see you\" in Setup.",
-  logo: "Upload the logo under \"How candidates see you\" in Setup.",
-  hiringContact: "Set the contact for candidates under \"How candidates see you\" in Setup.",
+  about: "The text about your company is drafted and approved under \"How candidates see you\" in Settings.",
+  aboutDraft: "The text about your company is drafted and approved under \"How candidates see you\" in Settings.",
+  logo: "Upload the logo under \"How candidates see you\" in Settings.",
+  hiringContact: "Set the contact for candidates under \"How candidates see you\" in Settings.",
 };
 
 function refuseAdminOnlyKeys(raw: unknown): void {

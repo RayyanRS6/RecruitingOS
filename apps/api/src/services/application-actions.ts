@@ -45,8 +45,8 @@ export type BlockedReasons = Partial<Record<ApplicationCapability, string>>;
 
 /** The permission each choice needs, and how the refusal names it. */
 const CAPABILITY: Record<ApplicationCapability, { permission: Permission; what: string }> = {
-  invite_screen: { permission: "application.act", what: "invite candidates to a screen" },
-  ask_in_screen: { permission: "application.act", what: "invite candidates to a screen" },
+  invite_screen: { permission: "application.act", what: "invite candidates to a screening chat" },
+  ask_in_screen: { permission: "application.act", what: "invite candidates to a screening chat" },
   interview: { permission: "interview.request", what: "approve interviews" },
   advance_to_interview: { permission: "application.act", what: "move candidates forward" },
   hold: { permission: "application.act", what: "hold candidates" },
@@ -63,7 +63,7 @@ const CAPABILITY: Record<ApplicationCapability, { permission: Permission; what: 
   send_decision: { permission: "application.reject", what: "tell candidates about a decision" },
   told_in_person: { permission: "application.reject", what: "tell candidates about a decision" },
   // The candidate is sent a note, so it sits with those who tell candidates decisions: owner, admin, hiring manager, recruiter.
-  cancel_screen: { permission: "application.reject", what: "stop a screening invitation" },
+  cancel_screen: { permission: "application.reject", what: "stop a screening chat invitation" },
   // Taking back a decision sits with those who make it.
   undo_decision: { permission: "application.reject", what: "take back a decision" },
   // New times for someone under Cancelled reopen an interview a person already approved, so they sit with those who manage interviews.
@@ -138,9 +138,9 @@ function stateReason(cap: ApplicationCapability, f: ApplicationFacts): string {
   const step = `Not available at this step (${(STAGE_LABEL as Record<string, string>)[f.stage] ?? f.stage.replace(/_/g, " ")}).`;
   switch (cap) {
     case "invite_screen":
-      return f.hasOpenScreen ? "A screening invitation is already open." : step;
+      return f.hasOpenScreen ? "A screening chat invitation is already open." : step;
     case "ask_in_screen":
-      return f.hasOpenScreen ? "A screening invitation is already open." : !(f.openUnknowns ?? 0) ? "The assessment left no open questions to ask about." : step;
+      return f.hasOpenScreen ? "A screening chat invitation is already open." : !(f.openUnknowns ?? 0) ? "The AI review left no open questions to ask about." : step;
     case "interview":
       return f.hasActiveInterview ? "An interview is already in motion." : step;
     case "hold":
@@ -161,7 +161,7 @@ function stateReason(cap: ApplicationCapability, f: ApplicationFacts): string {
     case "told_in_person":
       return tellingReason(f);
     case "cancel_screen":
-      return TERMINAL_STAGES.includes(f.stage) || f.stage === "talent_pool" ? step : f.hasOpenScreen ? "They have started the screening conversation, so it can't be stopped now." : "No screening invitation is waiting for them.";
+      return TERMINAL_STAGES.includes(f.stage) || f.stage === "talent_pool" ? step : f.hasOpenScreen ? "They have started the screening chat, so it can't be stopped now." : "No screening chat invitation is waiting for them.";
     case "undo_decision":
       return !decided(f) ? "Only for a decision not to move forward."
         : !untold(f) ? "They have been told, or the message is on its way, so the decision can't be taken back here."
@@ -514,8 +514,8 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
   assertCan(t.role, CAPABILITY[body.action].permission);
   const facts = await applicationFacts(tx, app, t.role);
   if (!allowedApplicationActions(facts).includes(body.action)) {
-    if ((body.action === "invite_screen" || body.action === "ask_in_screen") && facts.hasOpenScreen) throw new HttpError(409, "already_invited", "They already have an open screening invitation.");
-    if (body.action === "ask_in_screen" && !(facts.openUnknowns ?? 0)) throw new HttpError(409, "nothing_to_ask", "The assessment left no open questions to ask about; invite them to the usual screen instead.");
+    if ((body.action === "invite_screen" || body.action === "ask_in_screen") && facts.hasOpenScreen) throw new HttpError(409, "already_invited", "They already have an open screening chat invitation.");
+    if (body.action === "ask_in_screen" && !(facts.openUnknowns ?? 0)) throw new HttpError(409, "nothing_to_ask", "The AI review left no open questions to ask about; invite them to the usual screening chat instead.");
     if (body.action === "override_eligibility") throw new HttpError(409, "invalid", "Only ineligible applications can be overridden.");
     if (body.action === "review_anyway") throw new HttpError(409, "invalid", "Only applications declined on an eligibility answer can be reopened here.");
     if (body.action === "clear_mark" && !facts.mark && !TERMINAL_STAGES.includes(app.stage)) throw new HttpError(409, "no_mark", "There is no mark to take off.");
@@ -581,7 +581,7 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       const set = await setMark(tx, { companyId: t.companyId, app, mark, note: body.note, remindAt: body.remindAt, actor, source: input.via ? "board" : "manual", now }).catch(markHttpError);
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "set_mark", mark, note: body.note ?? null, remindAt: set.mark.remindAt, ...provenance } });
       const until = set.mark.remindAt ? new Date(set.mark.remindAt).toLocaleDateString("en-US", { month: "long", day: "numeric" }) : null;
-      return { ok: true, stage: app.stage, ownerStage: ownerStage(app, set.mark), mark: set.mark, toldState: app.toldState, candidateNotice: "not_told", next: until ? `On hold until ${until}; they come back to Today then. The candidate was not told.` : "Private: the candidate was not told." };
+      return { ok: true, stage: app.stage, ownerStage: ownerStage(app, set.mark), mark: set.mark, toldState: app.toldState, candidateNotice: "not_told", next: until ? `On hold until ${until}; they come back to Home then. The candidate was not told.` : "Private: the candidate was not told." };
     }
     case "clear_mark": {
       assertCan(t.role, "application.act");
@@ -612,7 +612,7 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       const focus = body.action === "ask_in_screen" || body.focus === "unknowns" ? ("unknowns" as const) : undefined;
       const { runId } = await container.engine.start(tx, { workflowKey: "screen", companyId: t.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: app.roleId, channel: body.channel, invitedBy: t.userId, ...(focus ? { focus } : {}) }, idempotencyKey: `screen:${app.id}:${Date.now()}`, actor });
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: body.action, channel: body.channel ?? "auto", focus: focus ?? null, note: body.note ?? null, workflowRunId: runId, ...provenance } });
-      return { ok: true, stage: app.stage, workflowRunId: runId, next: focus ? "Invitation on its way. The screen starts with the open questions from the assessment; the answers land on the candidate's page." : undefined };
+      return { ok: true, stage: app.stage, workflowRunId: runId, next: focus ? "Invitation on its way. The screening chat starts with the open questions from the AI review; the answers land on the candidate's page." : undefined };
     }
     case "cancel_screen": {
       // "Stop this screen invitation" (plan A7): before they start, the invitation is taken back with a short, polite note.
@@ -621,7 +621,7 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "cancel_screen", screenId: stopped.screenId, note: body.note ?? null } });
       const [after] = await tx.select({ stage: applications.stage }).from(applications).where(eq(applications.id, app.id)).limit(1);
       const stage = after?.stage ?? app.stage;
-      return { ok: true, stage, ownerStage: ownerStage({ stage }, facts.mark ? { mark: facts.mark, remindAt: facts.markRemindAt } : null), next: stopped.candidateTold ? "Screening invitation stopped. The candidate was sent a short note saying there is nothing to do with that link; they are back with you to review." : "Screening invitation stopped. We had no email address to tell the candidate; they are back with you to review." };
+      return { ok: true, stage, ownerStage: ownerStage({ stage }, facts.mark ? { mark: facts.mark, remindAt: facts.markRemindAt } : null), next: stopped.candidateTold ? "The candidate got a short note saying there is nothing to do with that link. They are back with you to review." : "We had no email address to tell the candidate. They are back with you to review." };
     }
     case "undo_decision": {
       // Quiet undo (plan G1): a decision the candidate was never told goes, and they are back at the step it was made

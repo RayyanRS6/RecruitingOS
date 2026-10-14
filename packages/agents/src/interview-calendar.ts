@@ -9,11 +9,26 @@ import { CalendarError, type CalendarEventRef, type Integrations } from "@ros/in
  * a connection's credential, and every read states its purpose. A revoked credential never stops an interview from
  * being scheduled: the person's declared windows take over and they are told to reconnect.
  */
-export type ParticipantInfo = { userId: string; email: string; name: string | null; firstName: string };
+/** `optional`: the participant's role on the interview is "optional", so scheduling can go ahead without their availability. */
+export type ParticipantInfo = { userId: string; email: string; name: string | null; firstName: string; optional?: boolean };
 
 export async function participantsOf(q: Queryable, interviewId: string): Promise<ParticipantInfo[]> {
-  const rows = await q.select({ userId: interviewParticipants.userId, email: users.email, name: users.name }).from(interviewParticipants).innerJoin(users, eq(users.id, interviewParticipants.userId)).where(eq(interviewParticipants.interviewId, interviewId));
-  return rows.map((r) => ({ ...r, firstName: (r.name ?? r.email).split(/[\s@]/)[0] }));
+  const rows = await q.select({ userId: interviewParticipants.userId, email: users.email, name: users.name, role: interviewParticipants.role }).from(interviewParticipants).innerJoin(users, eq(users.id, interviewParticipants.userId)).where(eq(interviewParticipants.interviewId, interviewId));
+  return rows.map(({ role, ...r }) => ({ ...r, firstName: (r.name ?? r.email).split(/[\s@]/)[0], optional: role === "optional" }));
+}
+
+/**
+ * Whether a time clashes with an interview already booked for any of these people (their other interviews, not this
+ * one). The quick check a pick makes before it is booked straight away (no calendar is read here; the booking step
+ * re-checks calendars too). Two candidates can be offered the same free time by the same interviewer, so this is the
+ * realistic collision.
+ */
+export async function clashesWithBookings(q: Queryable, input: { companyId: string; interviewId: string; userIds: string[]; slot: { startsAt: string; endsAt: string } }): Promise<boolean> {
+  if (!input.userIds.length) return false;
+  const rows = await q.select({ id: interviews.id, startsAt: interviews.startsAt, endsAt: interviews.endsAt }).from(interviews).innerJoin(interviewParticipants, eq(interviewParticipants.interviewId, interviews.id)).where(and(eq(interviews.companyId, input.companyId), inArray(interviewParticipants.userId, input.userIds), eq(interviews.status, "scheduled")));
+  const start = Date.parse(input.slot.startsAt);
+  const end = Date.parse(input.slot.endsAt);
+  return rows.some((r) => r.id !== input.interviewId && !!r.startsAt && !!r.endsAt && Date.parse(r.startsAt) < end && Date.parse(r.endsAt) > start);
 }
 
 /** Interviews already on this person's plate inside the range: busy time and a per-day count for the daily maximum. */
@@ -42,6 +57,7 @@ export async function constraintsFor(
   const booked = await bookedFor(q, input.companyId, input.participant.userId, input.range, input.interviewId);
   const base = {
     userId: input.participant.userId,
+    optional: !!input.participant.optional,
     timezone: availability?.timezone ?? (connection?.config as { timeZone?: string } | undefined)?.timeZone ?? input.companyTimezone,
     windows: availability?.windows ?? [],
     bufferMinutes: availability?.bufferMinutes ?? 15,
@@ -64,7 +80,7 @@ export async function constraintsFor(
       if (err instanceof CalendarError && err.retryable) throw err; // the step retries with backoff
       const message = err instanceof Error ? err.message : String(err);
       await markCalendarNeedsAttention(q, connection, message, input.actor);
-      await notify(q, { companyId: input.companyId, kind: "calendar.needs_attention", title: "Your calendar connection needs attention", body: `${message} Until it is reconnected, interviews use your declared availability.`, action: { label: "Fix it in Setup", href: "/setup" }, userIds: [input.participant.userId] });
+      await notify(q, { companyId: input.companyId, kind: "calendar.needs_attention", title: "Your calendar connection needs attention", body: `${message} Until it is reconnected, interviews use your declared availability.`, action: { label: "Fix it in Settings", href: "/setup" }, userIds: [input.participant.userId] });
       // fall through to declared windows
     }
   }
@@ -105,7 +121,7 @@ export async function createInterviewEvents(
       const message = err instanceof Error ? err.message : String(err);
       failures.push({ userId: p.userId, error: message });
       await markCalendarNeedsAttention(q, connection, message, input.actor);
-      await notify(q, { companyId: input.interview.companyId, kind: "calendar.needs_attention", title: "We could not add the interview to your calendar", body: `${message} The interview is confirmed; add it by hand and reconnect your calendar in Setup.`, action: { label: "Open Setup", href: "/setup" }, userIds: [p.userId] });
+      await notify(q, { companyId: input.interview.companyId, kind: "calendar.needs_attention", title: "We could not add the interview to your calendar", body: `${message} The interview is confirmed; add it by hand and reconnect your calendar in Settings.`, action: { label: "Open Settings", href: "/setup" }, userIds: [p.userId] });
     }
   }
   return { refs, meetingUrl, failures };

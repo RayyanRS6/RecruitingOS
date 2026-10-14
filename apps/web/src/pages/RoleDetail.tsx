@@ -127,6 +127,9 @@ export function RoleDetail() {
   // `?preview=1` (Candidate view in the Candidates page's More menu) opens the job page as candidates see it.
   const wantsPreview = search.get("preview") === "1";
   useEffect(() => { if (wantsPreview) setPreviewOpen(true); }, [wantsPreview]);
+  // The first draw, on the server and in the browser alike, is this skeleton (Wave S2): the rail reads the jobs list,
+  // never the job itself, so the browser holds none of the job before it takes the page over. Anything this page shows
+  // one day from the rail's jobs list must wait for useIsClient() (components/use-is-client.ts), as on Candidates.
   if (role.isLoading) return <Skeleton lines={5} />;
   if (role.error || !role.data) return <ErrorState message="Could not load this job." onRetry={() => role.refetch()} />;
   const r = role.data;

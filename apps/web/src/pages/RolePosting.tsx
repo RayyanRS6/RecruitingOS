@@ -7,12 +7,14 @@ import { api, ApiError, type ApplicationLink, type Posting, type PostingView, ty
 import { POSTING_WAITS_FOR_CHECK } from "../company-check";
 import { BoardTicks } from "../components/BoardTicks";
 import { ClosingDateField } from "../components/ClosingDate";
+import { LinkedInPost } from "../components/LinkedInPost";
 import { ShareJob } from "../components/ShareJob";
 import { useCompanyCheck } from "../components/use-company-check";
 import { scrollBehavior } from "../motion";
 import { toast } from "../toast";
 import { ACCEPTING_LABEL } from "../role-status";
 import { boardNames } from "../role-words";
+import { linkedInPostLink } from "../linkedin-post";
 
 /**
  * The Share tab (once called Posting) and the header pieces of the job page (docs/spec/20 section 2, items 9 to 17;
@@ -20,9 +22,10 @@ import { boardNames } from "../role-words";
  * by hand from the company's own account (an ITS posting task per board, plan D3), records the public address, and the
  * worker checks it before anything is called live. Every state on screen says what happens next.
  *
- * The tab leads with the job's public link (share it, copy it, open it), then where it is posted and the closing date;
- * each board's own card, the tracked links and the counts by source sit underneath, folded away until opened (a board
- * that needs the team starts open). Home's cards link straight to parts of it (`#share`, `#closing-date`).
+ * The tab leads with the job's public link (share it, copy it, open it), then a LinkedIn post to copy (Wave S2), then
+ * where it is posted and the closing date; each board's own card, the tracked links and the counts by source sit
+ * underneath, folded away until opened (a board that needs the team starts open). Home's cards and the jobs list link
+ * straight to parts of it (`#share`, `#linkedin`, `#closing-date`).
  *
  * Every change here needs role.manage (owner, admin, recruiter). Anyone else (a hiring manager, HR, an interviewer)
  * sees the same tab read-only, with one line saying who can change it, instead of buttons the API always refuses.
@@ -250,6 +253,7 @@ export function PostingTab({ roleId, roleStatus, canManage, canShare = false, ro
   // a board that waits on the team keeps its card open, so the step it needs is never hidden
   const boardsNeedYou = canManage && roleStatus !== "draft" && boards.some((p) => postingNeedsTeam(p, live));
   if (startOpen.current === null) startOpen.current = boardsNeedYou;
+  const linkedIn = linkedInPostLink({ roleStatus, check, publishing: d.publishing, share: d.share, jobUrl: d.urls.job });
 
   return (
     <div className="stack">
@@ -270,6 +274,22 @@ export function PostingTab({ roleId, roleStatus, canManage, canShare = false, ro
         <Card title="Your job link">
           <JobLink url={d.urls.job} />
         </Card>
+      ) : null}
+
+      {/* Then the LinkedIn post (Wave S2): ready-made words to copy and post, under the same rule as the public link. */}
+      {linkedIn ? (
+        <section id="linkedin" className="setup-section" tabIndex={-1}>
+          <Card title="Post on LinkedIn">
+            <LinkedInPost roleId={roleId} roleTitle={roleTitle} companyName={companyName} jobUrl={linkedIn.jobUrl} linkedInUrl={linkedIn.linkUrl} canMakeLink={canShare} accepting={d.role.acceptingApplications} />
+          </Card>
+        </section>
+      ) : roleStatus === "open" && (check === "waiting" || d.publishing?.state === "waiting_for_company_check") ? (
+        // "Post on LinkedIn" from the jobs list lands here: while the company check runs, it says why there is nothing yet
+        <section id="linkedin" className="setup-section" tabIndex={-1}>
+          <Card title="Post on LinkedIn">
+            <p className="small muted" style={{ margin: 0 }}>You can post on LinkedIn once ITS has checked your company.</p>
+          </Card>
+        </section>
       ) : null}
 
       <div className="grid-2">

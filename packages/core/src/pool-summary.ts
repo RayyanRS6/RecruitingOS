@@ -158,7 +158,7 @@ export function answerPoolQuestion(kind: Exclude<PoolQuestionKind, "compare">, p
     // Shown before partly shown, a quote before none, then the higher score, then by name.
     scored.sort((a, b) => b.c!.pctMet - a.c!.pctMet || Number(!!b.c!.quote) - Number(!!a.c!.quote) || (b.p.match!.score ?? -1) - (a.p.match!.score ?? -1) || byName(a.p, b.p));
     const top = scored.slice(0, 10);
-    const list = top.map(({ p, c }) => personOf(p, `${c!.finding} ${c!.source === "screen" ? "in the screening conversation" : "in the résumé or application"}.`, c!.quote ? [{ criterion: m.text, quote: c!.quote, source: c!.source }] : [], opts.open));
+    const list = top.map(({ p, c }) => personOf(p, `${c!.finding} ${c!.source === "screen" ? "in the screening chat" : "in the résumé or application"}.`, c!.quote ? [{ criterion: m.text, quote: c!.quote, source: c!.source }] : [], opts.open));
     const shown = scored.filter((x) => x.c!.pctMet === 100).length;
     const answer = scored.length ? `${plural(shown, "person shows", "people show")} "${m.text}"${scored.length > shown ? ` and ${plural(scored.length - shown, "more shows", "more show")} it in part` : ""}.${scored.length > top.length ? ` The first ${top.length} are listed.` : ""}` : `Nobody's evidence shows "${m.text}" yet.`;
     return { kind, question: `Strongest evidence for "${m.text}"`, answer, people: list, applicationIds: list.map((p) => p.applicationId), lookedAt: lookedAt([m.text]) };

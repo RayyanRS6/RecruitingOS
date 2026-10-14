@@ -197,7 +197,7 @@ describe("approvals: sending the held decline, who sees and decides what", () =>
     // HR holds no role.approve
     expect(await cardFor(hr)).toBeUndefined();
     // the owner gets it, and the route agrees
-    expect((await cardFor(owner))?.title).toMatch(/Approve the role/);
+    expect((await cardFor(owner))?.title).toMatch(/Approve the job/);
     expect((await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" })).status).toBe(200);
   });
 });

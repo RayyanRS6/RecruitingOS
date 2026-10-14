@@ -15,6 +15,7 @@ import { jobUrls } from "../services/job-urls";
 import { currentVersionOf } from "../services/packet-versions";
 import { ApplyFormPage, JobPage, type JobPageCompany, type JobPageRole, type PreviewInfo } from "./job-page";
 import { Layout } from "./layout";
+import { withPlainQuestionHelp } from "./question-help";
 
 /**
  * The authenticated preview of a job page (plan D1): the very page and apply form candidates get, drawn by the same
@@ -89,7 +90,7 @@ function render(c: Context<Vars>, input: { packet: DraftRolePacket; company: Com
   c.header("Cache-Control", "no-store");
   c.header("X-Robots-Tag", "noindex, nofollow");
   if (c.req.query("view") === "apply") {
-    return c.html(<ApplyFormPage company={{ slug: company.slug, name: company.name, contact: view.contact }} role={{ id: role.id }} packet={packet} notices={notices} smsEnabled={container.env.SMS_ENABLED} privacyEmail={container.env.PRIVACY_EMAIL} formOpened="" flow={flow} links={{ job: preview.jobHref, uploadIntent: "" }} preview={preview} />);
+    return c.html(<ApplyFormPage company={{ slug: company.slug, name: company.name, contact: view.contact }} role={{ id: role.id }} packet={withPlainQuestionHelp(packet)} notices={notices} smsEnabled={container.env.SMS_ENABLED} privacyEmail={container.env.PRIVACY_EMAIL} formOpened="" flow={flow} links={{ job: preview.jobHref, uploadIntent: "" }} preview={preview} />);
   }
   return c.html(<JobPage packet={packet} company={view} role={role} notices={notices} smsEnabled={container.env.SMS_ENABLED} flow={flow} benefits={benefitsDescriptionFor(packet.compensation, company.settings)} links={{ careers: null, apply: preview.applyHref }} preview={preview} />);
 }

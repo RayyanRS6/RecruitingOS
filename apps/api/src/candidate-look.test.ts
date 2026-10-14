@@ -60,6 +60,10 @@ describe("candidate pages: design tokens and fonts", () => {
     // the status page's messages and the screening conversation are one look: the candidate's own on the right in near-black (plan G7)
     for (const css of [SCREEN_CSS, STATUS_CSS]) expect(css).toContain(".msg.candidate { align-self: flex-end; background: var(--ink); color: var(--ground);");
     expect(STATUS_CSS).toContain(".msg.assistant, .msg.team { align-self: flex-start; background: var(--ground);");
+    // the progress line (Wave S2, K4): down the page on a phone, across it from 600 pixels; the tick on the ink fill; no motion
+    expect(STATUS_CSS).toContain(".track li.done .dot { border-color: var(--ink); background: var(--ink); color: var(--ground); }");
+    expect(STATUS_CSS).toMatch(/@media \(min-width: 600px\) \{[^@]*\.track \{ grid-auto-flow: column;/);
+    expect(stripComments(STATUS_CSS)).not.toMatch(/transition|animation/);
     expect(pageCss).toContain("@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }");
   });
 
@@ -320,10 +324,15 @@ describe("candidate pages: the look, page by page", () => {
     expect(html).toContain('<button class="btn secondary" type="submit">Withdraw my application</button>');
     expect(html).toContain('<button class="btn secondary" type="submit">Don&#39;t keep me for future roles</button>');
     expect(html).toContain('<button class="btn secondary" type="submit">Send request</button>');
-    expect(html).toMatch(/<a class="btn" href="\/c\/screen\/[^"]+">(Start|Continue) the screening conversation<\/a>/);
-    // the page leads with the four steps, then the line and the one thing to do now; withdrawing and the privacy requests
-    // are one click away, closed until opened (founder brief, 14 October 2026)
+    // one name for the chat on this page: the button says what the progress line says
+    expect(html).toMatch(/<a class="btn" href="\/c\/screen\/[^"]+">(Start|Continue) the screening chat<\/a>/);
+    expect(html).toMatch(/<span>Status<\/span><strong>Screening chat<\/strong>/);
+    // the page leads with the progress line (Wave S2, K4), then the line and the one thing to do now; withdrawing and the
+    // privacy requests are one click away, closed until opened (founder brief, 14 October 2026)
     const main = html.slice(html.indexOf("<main>"));
+    expect(main.slice(main.indexOf("</h1>") + "</h1>".length).startsWith('<ol class="track" aria-label="Where your application is">')).toBe(true);
+    // a circle per step joined by a line: Applied is behind her, ticked and said to be done; the screening chat is where she is
+    expect(main).toMatch(/<ol class="track" aria-label="Where your application is"><li class="done"><span class="dot" aria-hidden="true"><svg class="icon"[^>]*>.*?<\/svg><\/span><span>Applied<\/span><span class="sr-only"> \(done\)<\/span><\/li><li class="current" aria-current="step"><span class="dot" aria-hidden="true"><\/span><span>Screening chat<\/span><\/li><li><span class="dot" aria-hidden="true"><\/span><span>Review<\/span><\/li>/);
     expect(main.indexOf('<ol class="track"')).toBeLessThan(main.indexOf("<h2>What happens next</h2>"));
     expect(main.indexOf("<h2>What happens next</h2>")).toBeLessThan(main.indexOf('<a class="btn" href="/c/screen/'));
     expect(main.indexOf('<a class="btn" href="/c/screen/')).toBeLessThan(main.indexOf('<div class="card status">'));

@@ -45,16 +45,16 @@ export function readingConsistency(reading: Pick<Reading, "kind" | "overall" | "
   if ((reading.overall === "strong" || reading.overall === "potential") && misses.length) {
     const miss = misses[0];
     const name = mustHaves?.find((m) => m.key === miss.requirementKey)?.text;
-    return { consistent: false, reason: `The reading says ${words}, but the candidate's own words show a must-have is not met${name ? ` (${name})` : ""}: "${miss.evidence!.quote!.trim()}". Read it yourself before anything else happens.` };
+    return { consistent: false, reason: `The AI review says ${words}, but the candidate's own words show a must-have is not met${name ? ` (${name})` : ""}: "${miss.evidence!.quote!.trim()}". Read it yourself before anything else happens.` };
   }
   if (reading.overall === "strong" && skills?.length) {
     const essential = new Map(skills.filter((s) => s.importance === "essential").map((s) => [s.key, s.name]));
     const against = (reading.result.competencyFindings ?? []).find((f) => f.finding === "contradicted" && essential.has(f.competencyKey) && !!f.evidence?.quote?.trim() && !f.evidence.unquoted);
-    if (against) return { consistent: false, reason: `The reading says ${words}, but the candidate's own words go against an essential skill (${essential.get(against.competencyKey)}): "${against.evidence!.quote!.trim()}". Read it yourself before anything else happens.` };
+    if (against) return { consistent: false, reason: `The AI review says ${words}, but the candidate's own words go against an essential skill (${essential.get(against.competencyKey)}): "${against.evidence!.quote!.trim()}". Read it yourself before anything else happens.` };
   }
   const rec = reading.result.recommendation;
-  const step = reading.kind === "triage" ? (rec === "screen" ? "a screen" : null) : rec === "strong_interview" || rec === "interview" ? "an interview" : null;
-  if (step && (reading.overall === "weak" || reading.overall === "unknown")) return { consistent: false, reason: `The assistant suggested ${step} for a reading of ${words}, which does not add up. Read it yourself before anything else happens.` };
+  const step = reading.kind === "triage" ? (rec === "screen" ? "a screening chat" : null) : rec === "strong_interview" || rec === "interview" ? "an interview" : null;
+  if (step && (reading.overall === "weak" || reading.overall === "unknown")) return { consistent: false, reason: `The assistant suggested ${step}, but its AI review says ${words}. Read it yourself before anything else happens.` };
   return { consistent: true, reason: null };
 }
 
@@ -84,7 +84,7 @@ export function closerLook(a: ApplicationDetail): { needsCloserLook: boolean; as
 }
 
 export const LOW_CONFIDENCE_LABEL = "Read this one yourself";
-export const LOW_CONFIDENCE_TEXT = "The assistant was not confident about this reading. Read the résumé and answers yourself before you decide.";
+export const LOW_CONFIDENCE_TEXT = "The assistant was not confident in its AI review. Read the résumé and answers yourself before you decide.";
 
 /** The latest reading (the screen's scorecard once there is one, else the résumé's) was made with low confidence. */
 export function lowConfidence(reading: { confidence: string } | null | undefined): boolean {

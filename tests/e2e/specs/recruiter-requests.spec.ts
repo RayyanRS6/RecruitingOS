@@ -94,6 +94,6 @@ test("loosening an AI rule asks first; the planned rules fold under Coming later
   // work the product does the same way for everyone says what it does, with no choice that would change nothing
   await expect(rules.getByRole("group", { name: "Run the screening chat" })).toHaveCount(0);
   await rules.getByText(/^What it always does the same way \(\d+\)$/).click();
-  await expect(rules.getByText(/the screening conversation runs with them in their own time/)).toBeVisible();
+  await expect(rules.getByText(/the chat runs with them in their own time/)).toBeVisible();
   await expect(rules.getByText("Book interviews on calendars")).toBeVisible();
 });

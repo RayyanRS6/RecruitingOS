@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { entitlements } from "@ros/core";
 import { applications, candidates, interviewParticipants, interviews, randomToken, withTenant } from "@ros/db";
+import { eq } from "drizzle-orm";
 import { createApp } from "./app";
+import { lastActivityOf } from "./routes/roles";
 import { createContainer, type Container } from "./container";
 import { signInAs } from "./test-helpers";
 
@@ -78,5 +80,26 @@ describe("the roles list", () => {
       expect(r.countsHidden).toBeUndefined();
       expect(r.counts.total).toBe(1);
     }
+  });
+
+  it("says when anything last happened on each role, for the Jobs page's Recent activity order (Wave S2)", async () => {
+    const seen = (await (await json(owner, "GET", "/api/v1/roles")).json()) as Array<Listed & { createdAt: string; lastActivityAt: string }>;
+    for (const r of seen) {
+      expect(r.lastActivityAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+      // never earlier than the role itself, and at least as late as its newest application
+      expect(Date.parse(r.lastActivityAt)).toBeGreaterThanOrEqual(Date.parse(r.createdAt));
+    }
+    const newest = await withTenant(container.db, companyId, (tx) => tx.select({ createdAt: applications.createdAt }).from(applications).where(eq(applications.roleId, other)));
+    const row = seen.find((r) => r.id === other)!;
+    expect(Date.parse(row.lastActivityAt)).toBeGreaterThanOrEqual(Date.parse(newest[0].createdAt));
+    // an interviewer gets the time too, from the role's own dates
+    const theirsSeen = (await (await json(ivan, "GET", "/api/v1/roles")).json()) as Array<{ lastActivityAt: string }>;
+    expect(theirsSeen[0].lastActivityAt).toMatch(/Z$/);
+  });
+
+  it("reads the latest of a role's dates and its newest application", () => {
+    expect(lastActivityOf({ createdAt: "2026-10-01T00:00:00.000Z" })).toBe("2026-10-01T00:00:00.000Z");
+    expect(lastActivityOf({ createdAt: "2026-10-01 00:00:00+00", updatedAt: "2026-10-03 09:30:00+00", openedAt: "2026-10-02T00:00:00Z", pausedAt: null, closedAt: null }, "2026-10-05T08:00:00.000Z")).toBe("2026-10-05T08:00:00.000Z");
+    expect(lastActivityOf({ createdAt: "2026-10-01T00:00:00Z", closedAt: "2026-10-09T00:00:00Z" }, null)).toBe("2026-10-09T00:00:00.000Z");
   });
 });

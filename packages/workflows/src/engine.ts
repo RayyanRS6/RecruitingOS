@@ -22,7 +22,7 @@ export type JobHandler = (payload: Record<string, unknown>, ctx: { attempt: numb
 
 const STOPPED_WORK: Record<string, string> = {
   application_intake: "Processing this application",
-  screen: "The screening conversation",
+  screen: "The screening chat",
   schedule_interview: "Scheduling this interview",
   role_approval: "Approving this role",
   publish_role: "Publishing this role",
@@ -226,6 +226,9 @@ export class WorkflowEngine {
     if (run.status === "waiting") {
       const w = run.wait;
       if (wake?.kind === "timer" && w?.token && wake.key && wake.key !== w.token) return run; // a timer from an earlier wait; ignore
+      // an event for an earlier wait (two signals queued before the run ticked): the run waits on other keys now; ignore
+      const keys = (w as { keys?: unknown } | null)?.keys;
+      if (wake?.kind === "event" && wake.key && Array.isArray(keys) && !keys.includes(wake.key)) return run;
       if (w?.kind === "timer" && Date.parse(w.until) > this.now().getTime()) return run; // not due yet
       if ((w?.kind === "event" || w?.kind === "human") && !wake) return run; // needs a signal (or its timer)
     }

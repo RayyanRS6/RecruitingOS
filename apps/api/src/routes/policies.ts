@@ -41,11 +41,11 @@ export const SETTABLE: ReadonlySet<string> = new Set([
  */
 export const FIXED: Readonly<Record<string, string>> = {
   "application.triage": "The assistant reads every applicant and writes an assessment for you to review. It never decides anything with it.",
-  "screen.conduct": "Once someone is invited to a screen, the screening conversation runs with them in their own time; they can ask for a person at any point. Whether people are invited is the rule above.",
+  "screen.conduct": "Once someone is invited to a screening chat, the chat runs with them in their own time; they can ask for a person at any point. Whether people are invited is the rule above.",
   "message.send_templated": "Confirmations and reminders (that an application arrived, a screening reminder, an interview time) go out by themselves in the approved wording.",
   "interview.request": "An interview always waits for a person on your team to approve it on the candidate's page before any times go to the candidate.",
   "interview.schedule": "Once an interview is approved, times are offered from your team's calendars or declared hours, and the booking goes on the calendars by itself.",
-  "interview.reschedule": "When someone on your team moves or cancels an interview, the candidate is offered new times or told, and the calendars follow by themselves. When a candidate cancels and asks for new times, they get one set automatically after the working days you choose in Setup under \"When a candidate cancels\"; you can switch that off.",
+  "interview.reschedule": "When someone on your team moves or cancels an interview, the candidate is offered new times or told, and the calendars follow by themselves. When a candidate cancels and asks for new times, they get one set automatically after the working days you choose in Settings under \"When a candidate cancels\"; you can switch that off.",
 };
 
 /** The product does it today: a setting to choose, or work it does the same way for everyone. The rest are planned. */
@@ -81,7 +81,7 @@ policyRoutes.put("/", requireTenant, async (c) => {
   const allowed = clampLevel(body.actionType, body.level);
   if (allowed !== body.level) {
     if (levelAtLeast(allowed, body.level)) throw new HttpError(400, "minimum_level", `A person approves this before anything happens, so it cannot be set below "${LEVEL_WORDS[allowed]}".`);
-    throw new HttpError(400, "maximum_level", `This stays at "${LEVEL_WORDS[allowed]}": a person approves it from the card on Today. "${LEVEL_WORDS[body.level]}" would leave it waiting with nobody asked to decide.`);
+    throw new HttpError(400, "maximum_level", `This stays at "${LEVEL_WORDS[allowed]}": a person approves it from the card on Home. "${LEVEL_WORDS[body.level]}" would leave it waiting with nobody asked to decide.`);
   }
   // A level nothing reads would be saved, audited and shown as chosen while changing nothing: refused in plain words.
   if (!SETTABLE.has(body.actionType) && !HARD_HUMAN_ONLY.has(body.actionType)) {

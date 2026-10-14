@@ -15,8 +15,8 @@ export const APPLY_MODE_LABEL: Record<ApplyMode, string> = {
 };
 
 export const APPLY_MODE_HELP: Record<ApplyMode, string> = {
-  one_visit: "Everyone who passes the yes/no questions is offered the screening conversation straight after the form. They can start it, do it later, or ask for a person.",
-  form_then_screen: "People send the form now. The screening conversation reaches them by email later, under the company's rule for screening invitations.",
+  one_visit: "Everyone who passes the yes/no questions is offered the screening chat straight after the form. They can start it, do it later, or ask for a person.",
+  form_then_screen: "People send the form now. The screening chat reaches them by email later, under the company's rule for screening invitations.",
 };
 
 /** Always said beside the control: when the later path applies whatever is chosen, and that people already applying are untouched. */

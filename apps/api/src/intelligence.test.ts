@@ -106,7 +106,7 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     expect(row.evidence.unknowns).toEqual([unknown.question]);
     expect(row.evidence.confidenceReasons).toEqual(asmt.result.confidenceReasons);
     expect(row.evidence.needsCloserLook).toBe(false); // a screen is on its way; nobody is waiting on the owner
-    expect(row.stageLabel).toBe("Invited to a screen");
+    expect(row.stageLabel).toBe("Invited to a screening chat");
     // no must-have shown in full: a low-confidence reading. That alone holds nothing (plan A8); it asks the reader to read it themselves
     expect(asmt.confidence).toBe("low");
     expect(row.evidence).toMatchObject({ lowConfidence: true, inconsistent: false });
@@ -154,7 +154,7 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     // the notification says what is missing, in plain words, and what to do about it
     const note = (await notes()).find((n) => n.kind === "application.needs_review" && /Riley Quinn/.test(n.title))!;
     expect(note.title).toBe("Riley Quinn needs a closer look");
-    expect(note.body).toBe("Open questions: Can you tell me about your active CA RDH license? Can you tell me about your perio experience? Ask about it in a short screen, or review the application yourself.");
+    expect(note.body).toBe("Open questions: Can you tell me about your active CA RDH license? Can you tell me about your perio experience? Ask about it in a short screening chat, or review the application yourself.");
     expect(note.action).toEqual({ label: "Take a closer look", href: `/roles/${roleId}/talent?open=${a.id}` });
     // the capability list gains the one-click follow-up wherever the facts are loaded from the database
     const { applicationFacts, allowedApplicationActions } = await import("./services/application-actions");
@@ -252,7 +252,7 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     expect(note.title).toBe("Sam Okafor needs a closer look");
     expect(note.body).toContain(RESUME_UNREADABLE_TEXT);
     expect(note.body).toMatch(/Not enough to assess automatically/);
-    expect(note.body).toMatch(/Ask about it in a short screen, or review the application yourself\.$/);
+    expect(note.body).toMatch(/Ask about it in a short screening chat, or review the application yourself\.$/);
     // the detail carries what the page derives the same sentence from: a clean résumé document without text
     const d = (await (await json("GET", `/api/v1/applications/${a.id}`)).json()) as { documents: Array<{ kind: string; status: string; hasText: boolean }>; extraction: unknown };
     expect(d.documents.find((x) => x.kind === "resume")).toMatchObject({ status: "clean", hasText: false });

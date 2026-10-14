@@ -10,6 +10,12 @@
  */
 export const START_HIRE_HREF = "/roles/new";
 
+/**
+ * The quick start (Wave S2, K2): ten small questions, one a screen, on the same page. `?way=quick` opens it; without it
+ * the page offers both ways to start (and picks up a draft in progress, as before).
+ */
+export const QUICK_START_HREF = `${START_HIRE_HREF}?way=quick`;
+
 /** The key that opens it, shown as a hint on the button and announced through aria-keyshortcuts. */
 export const START_HIRE_KEY = "N";
 

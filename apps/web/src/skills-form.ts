@@ -22,7 +22,7 @@ export const IMPORTANCE_HINT: Record<Importance, string> = {
 };
 
 export const CHECKED_IN: ReadonlyArray<{ value: SkillRow["evaluatedIn"]; label: string }> = [
-  { value: "screen", label: "The screening conversation" },
+  { value: "screen", label: "The screening chat" },
   { value: "interview", label: "The interviews" },
   { value: "both", label: "Both" },
 ];
@@ -148,5 +148,5 @@ export function importanceLabel(c: { weight: number; importance?: Importance | n
 
 /** Where a skill is checked, in words. */
 export function checkedInLabel(value: string): string {
-  return { screen: "screening conversation", interview: "interviews", both: "screening and interviews" }[value] ?? value.replace(/_/g, " ");
+  return { screen: "screening chat", interview: "interviews", both: "screening chat and interviews" }[value] ?? value.replace(/_/g, " ");
 }

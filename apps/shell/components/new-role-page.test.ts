@@ -71,11 +71,16 @@ describe("the job builder", () => {
     nav.path = "/roles/new";
   });
 
-  it("opens on 'Who are you hiring?' with one big box and the roles our hiring guide knows", () => {
+  it("opens on 'Who are you hiring?' with two ways to start: the quick questions first, then one big box and the roles our hiring guide knows", () => {
     const html = render(createElement(NewRole), [[["me"], me("owner")], [["intake", "mine"], { sessions: [], room }], [["company"], { name: "Bright Dental", vertical: "dental", settings: {} }]]);
-    expect(html).toContain("New role · Bright Dental");
+    expect(html).toContain("New job · Bright Dental");
     expect(html).toContain("<h1>Who are you hiring?</h1>");
-    expect(html).toContain("Describe the role in a sentence or paste a job ad you already have. I&#x27;ll ask a few questions and draft the job for you.");
+    expect(html).toContain("Two ways to start. The assistant drafts the job; you decide.");
+    // the quick questions are the main button, and come first
+    expect(html).toContain(">Answer a few quick questions</h2>");
+    expect(html).toMatch(/class="btn primary"[^>]*>Start the quick questions<svg/);
+    expect(html.indexOf("Start the quick questions")).toBeLessThan(html.indexOf("Or describe it, or paste a job ad"));
+    expect(html).toContain(">Or describe it, or paste a job ad</h2>");
     expect(html).toMatch(/<textarea[^>]*aria-label="Describe the role, or paste a job ad"/);
     expect(html).toContain("Paste a job ad: up to 20,000 characters.");
     expect(html).toContain(">Dental hygienist</button>");
@@ -93,6 +98,27 @@ describe("the job builder", () => {
     expect(html).toMatch(/href="\/roles\/r2"[^>]*>Hygienist<\/a><span class="muted"> \(<!-- -->paused<!-- -->\)<\/span>|href="\/roles\/r2"[^>]*>Hygienist<\/a><span class="muted"> \(paused\)<\/span>/);
     expect(html).not.toMatch(/Front Desk Lead<\/a><span class="muted">/);
     expect(html).not.toContain("Roles our hiring guide knows");
+    // neither way can start a draft while the plan is full
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Start the quick questions/);
+  });
+
+  it("opens the quick questions at ?way=quick: one question a screen, Step 1 of 10, a job ad to fill in the steps, and the other way back", () => {
+    nav.search = "way=quick";
+    const html = render(createElement(NewRole), [[["me"], me("owner")], [["intake", "mine"], { sessions: [{ id: "s9", status: "active", title: "Hygienist", startedBy: { userId: "u-dana", name: "Dana" }, mine: true, createdAt: "", updatedAt: "", ownerMessages: 1, hasDraft: false, missing: [] }], room }], [["company"], { name: "Bright Dental", vertical: "dental", settings: {} }]]);
+    // a draft in progress does not take the person away from the quick questions they asked for
+    expect(html).toContain("New job · Bright Dental");
+    expect(html.replace(/<!-- -->/g, "")).toContain("Step 1 of 10 · Job title");
+    expect(html).toContain('<h1 tabindex="-1">What is the job title?</h1>');
+    expect(html).toContain("Or paste a job ad you already have to fill in the steps.");
+    expect(html).toMatch(/<label for="qs-title">Job title<\/label>/);
+    expect(html).toContain("<summary>Paste a job ad instead</summary>");
+    expect(html).toMatch(/<textarea[^>]*aria-label="Paste a job ad"/);
+    expect(html).toContain('href="/roles/new?new=1"');
+    expect(html).toContain(">Other ways to start</a>");
+    expect(html).toMatch(/<button type="submit" class="btn primary"[^>]*>Next<svg/);
+    expect(html).toContain("Press Enter to go on. Your answers are kept in this browser.");
+    expect(html).not.toContain("Start over");
+    expect(html).not.toContain("Who are you hiring?");
   });
 
   it("tells someone who may not start a hire, plainly", () => {

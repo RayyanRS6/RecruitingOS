@@ -326,12 +326,12 @@ describe("evidence marks", () => {
     const miss = { requirementKey: "rdh_license", met: "no", evidence: { source: "resume", quote: "RDH license expired in 2021" } };
     const look = closerLook(detail("triaged", [reading({}, { requirementFindings: [miss] })]));
     expect(look).toMatchObject({ needsCloserLook: true, inconsistent: true, checkedId: "a1" });
-    expect(look.reason).toBe('The reading says Strong match, but the candidate\'s own words show a must-have is not met (Active CA RDH license): "RDH license expired in 2021". Read it yourself before anything else happens.');
+    expect(look.reason).toBe('The AI review says Strong match, but the candidate\'s own words show a must-have is not met (Active CA RDH license): "RDH license expired in 2021". Read it yourself before anything else happens.');
     // a "no" without a checked quote is not proof, and a weak reading with a missing must-have agrees with itself
     expect(closerLook(detail("triaged", [reading({}, { requirementFindings: [{ ...miss, evidence: { source: "resume", unquoted: true } }] })])).needsCloserLook).toBe(false);
     expect(closerLook(detail("triaged", [reading({ overall: "weak" }, { recommendation: "hold", requirementFindings: [miss] })])).needsCloserLook).toBe(false);
     // a step suggested for a weak reading; the screen's reading is checked once the screen is complete
-    expect(closerLook(detail("triaged", [reading({ overall: "weak" })])).reason).toMatch(/suggested a screen for a reading of Weak match/);
+    expect(closerLook(detail("triaged", [reading({ overall: "weak" })])).reason).toMatch(/suggested a screening chat, but its AI review says Weak match/);
     const screen = reading({ id: "s1", kind: "screen", overall: "unknown" }, { recommendation: "interview" });
     expect(closerLook(detail("screen_complete", [screen, reading({})]))).toMatchObject({ needsCloserLook: true, inconsistent: true, checkedId: "s1" });
     // past the step, nothing is held any more
@@ -343,7 +343,7 @@ describe("evidence marks", () => {
     const detail = (importance: string) => ({ stage: "triaged", assessments: [{ id: "a1", kind: "triage", overall: "strong", confidence: "high", createdAt: "2026-10-01T00:00:00.000Z", result: { summary: "s", strengths: [], concerns: [], unknowns: [], rationale: "r", recommendation: "screen", requirementFindings: [], competencyFindings: [against] } }], documents: [], extraction: null, packetLabels: { mustHaves: [], competencies: [{ key: "chairside", name: "Chairside skill", importance }], questions: [] } }) as unknown as ApplicationDetail;
     const look = closerLook(detail("essential"));
     expect(look).toMatchObject({ needsCloserLook: true, inconsistent: true });
-    expect(look.reason).toBe('The reading says Strong match, but the candidate\'s own words go against an essential skill (Chairside skill): "I avoid chairside work". Read it yourself before anything else happens.');
+    expect(look.reason).toBe('The AI review says Strong match, but the candidate\'s own words go against an essential skill (Chairside skill): "I avoid chairside work". Read it yourself before anything else happens.');
     expect(closerLook(detail("helpful")).needsCloserLook).toBe(false);
   });
 });

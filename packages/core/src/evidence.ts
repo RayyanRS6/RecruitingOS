@@ -14,7 +14,7 @@ export const RESUME_UNREADABLE_TEXT = "The résumé could not be read; the writt
 export const ASSESSMENT_UNAVAILABLE_TEXT = "We could not assess this application automatically; please review it yourself.";
 /** Low confidence alone never holds a step (plan A8); it asks the reader to read the application themselves. */
 export const LOW_CONFIDENCE_LABEL = "Read this one yourself";
-export const LOW_CONFIDENCE_TEXT = "The assistant was not confident about this reading. Read the résumé and answers yourself before you decide.";
+export const LOW_CONFIDENCE_TEXT = "The assistant was not confident in its AI review. Read the résumé and answers yourself before you decide.";
 
 export type AssessmentLike = { kind: string; overall: string; confidence?: string; result: EvidenceAssessment | ScreenAssessment };
 export type EvidenceFinding = { claim: string; evidence: { source: string; quote?: string } };
@@ -61,10 +61,10 @@ export function lowConfidence(latest: AssessmentLike | null | undefined): boolea
 
 const OVERALL_WORDS: Record<string, string> = { strong: "Strong match", potential: "Potential match", weak: "Weak match", unknown: "Insufficient evidence" };
 
-/** The step the assistant suggests with this reading: a screen after the résumé, an interview after the screen. */
-function suggestedStep(latest: AssessmentLike): "a screen" | "an interview" | null {
+/** The step the assistant suggests with this reading: a screening chat after the résumé, an interview after the chat. */
+function suggestedStep(latest: AssessmentLike): "a screening chat" | "an interview" | null {
   const rec = (latest.result as { recommendation?: string }).recommendation;
-  if (latest.kind === "triage") return rec === "screen" ? "a screen" : null;
+  if (latest.kind === "triage") return rec === "screen" ? "a screening chat" : null;
   return rec === "strong_interview" || rec === "interview" ? "an interview" : null;
 }
 
@@ -96,16 +96,16 @@ export function readingConsistency(latest: AssessmentLike, packet?: (Pick<RolePa
   if ((latest.overall === "strong" || latest.overall === "potential") && misses.length) {
     const miss = misses[0];
     const name = mustHaves?.get(miss.requirementKey);
-    return { consistent: false, reason: `The reading says ${words}, but the candidate's own words show a must-have is not met${name ? ` (${name})` : ""}: "${miss.evidence!.quote!.trim()}". Read it yourself before anything else happens.` };
+    return { consistent: false, reason: `The AI review says ${words}, but the candidate's own words show a must-have is not met${name ? ` (${name})` : ""}: "${miss.evidence!.quote!.trim()}". Read it yourself before anything else happens.` };
   }
   if (latest.overall === "strong" && packet?.competencies) {
     const essential = new Map(packet.competencies.filter((c) => importanceOf(c) === "essential").map((c) => [c.key, c.name]));
     const against = (latest.result.competencyFindings ?? []).find((f) => f.finding === "contradicted" && essential.has(f.competencyKey) && !!f.evidence?.quote?.trim() && !f.evidence.unquoted);
-    if (against) return { consistent: false, reason: `The reading says ${words}, but the candidate's own words go against an essential skill (${essential.get(against.competencyKey)}): "${against.evidence!.quote!.trim()}". Read it yourself before anything else happens.` };
+    if (against) return { consistent: false, reason: `The AI review says ${words}, but the candidate's own words go against an essential skill (${essential.get(against.competencyKey)}): "${against.evidence!.quote!.trim()}". Read it yourself before anything else happens.` };
   }
   const step = suggestedStep(latest);
   if (step && (latest.overall === "weak" || latest.overall === "unknown")) {
-    return { consistent: false, reason: `The assistant suggested ${step} for a reading of ${words}, which does not add up. Read it yourself before anything else happens.` };
+    return { consistent: false, reason: `The assistant suggested ${step}, but its AI review says ${words}. Read it yourself before anything else happens.` };
   }
   return { consistent: true, reason: null };
 }

@@ -61,7 +61,7 @@ const STAGE_WORDS: Record<string, string> = {
 function postingWords(type: string, p: Record<string, unknown>): string {
   const what = type.slice("posting.".length);
   switch (what) {
-    case "draft": return "waiting for the role to be approved";
+    case "draft": return "waiting for the job to be approved";
     case "approved": return "approved, being prepared";
     case "ready_to_post": return p.channel === "careers_page" || p.channel === "google_jobs" ? "prepared" : "ready to post";
     case "posted_manually": return p.corrected ? "a different address recorded, being checked" : "address recorded, being checked";
@@ -124,9 +124,9 @@ export function describeRoleEvent(e: RoleEvent): string {
     "application.withdrawn": "A candidate withdrew",
     "application.moved_to_talent_pool": "A candidate was added to the talent pool",
     "candidate.recommended": "A candidate was recommended for interview",
-    "screen.invited": "A candidate was invited to a screen",
-    "screen.completed": "A candidate completed the screen",
-    "screen.cancelled": p.reason === "stopped_by_team" ? "A screening invitation was stopped by the team" : p.reason === "deletion_request" ? "A screen was closed: the candidate's information was deleted" : "A screen was closed: the candidate is no longer in the process",
+    "screen.invited": "A candidate was invited to a screening chat",
+    "screen.completed": "A candidate finished the screening chat",
+    "screen.cancelled": p.reason === "stopped_by_team" ? "A screening chat invitation was stopped by the team" : p.reason === "deletion_request" ? "A screening chat was closed: the candidate's information was deleted" : "A screening chat was closed: the candidate is no longer in the process",
     "interview.requested": "An interview was requested",
     "interview.scheduled": "An interview was booked",
     "interview.completed": "An interview took place",

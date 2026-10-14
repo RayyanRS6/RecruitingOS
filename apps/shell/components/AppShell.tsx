@@ -8,6 +8,7 @@ import { Alert, Avatar, Button, Icon, Kbd } from "@ros/ui";
 import { api, type RoleSummary } from "@ros/web/src/api/client";
 import { NavLink } from "@ros/web/src/nav";
 import { railCompact, railListsRoles, railRoles, teamRoleWord } from "@ros/web/src/rail";
+import { clearAllQuickStarts } from "@ros/web/src/pages/new-role/quick-start";
 import { canSeeTalent, canStartHire } from "@ros/web/src/roles";
 import { browserStorage, isFormControl, isStartHireShortcut, SHORTCUT_CHANGED_EVENT, START_HIRE_HREF, START_HIRE_KEY, startHireShortcutOn } from "@ros/web/src/start-hire";
 import type { Me } from "../lib/session";
@@ -106,6 +107,8 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
 
   const logout = async () => {
     await api.post("/api/v1/auth/logout");
+    // The quick start's answers (pay ceiling, deal-breakers) are never left behind for the next person on this browser.
+    clearAllQuickStarts(browserStorage());
     qc.clear();
     router.push("/login");
     router.refresh();

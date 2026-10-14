@@ -174,9 +174,9 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
     expect(notes.some((n) => n.kind === "candidate.recommended" && /Maria Reyes/.test(n.title))).toBe(true);
     expect(await (await app.request(`/c/screen/${mariaToken}`)).text()).toMatch(/that is everything/i);
-    // the assistant's suggestion is the team's business: the candidate's page says Under review, never "Recommended for interview"
+    // the assistant's suggestion is the team's business: the candidate's page says Review, never "Recommended for interview"
     const status = await (await app.request(`/c/status/${a.statusToken}`)).text();
-    expect(status).toMatch(/<span>Status<\/span><strong>Under review<\/strong>/);
+    expect(status).toMatch(/<span>Status<\/span><strong>Review<\/strong>/);
     expect(status).not.toMatch(/Recommended for interview/);
     const detail = (await (await json("GET", `/api/v1/applications/${mariaId}`)).json()) as { screens: Array<{ status: string; transcript: unknown[] }>; assessments: Array<{ kind: string }> };
     expect(detail.screens[0].status).toBe("completed");
@@ -240,7 +240,7 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     const [req] = await container.db.select().from(approvalRequests).where(and(eq(approvalRequests.applicationId, a.id), eq(approvalRequests.status, "pending")));
     expect(req.actionType).toBe("application.invite_screen");
     const brief = (await (await json("GET", "/api/v1/brief")).json()) as { cards: Array<{ kind: string; title: string; actions: Array<{ path: string; body?: Record<string, unknown> }> }> };
-    const card = brief.cards.find((c) => c.kind === "decision" && /Invite to a screen/.test(c.title))!;
+    const card = brief.cards.find((c) => c.kind === "decision" && /Invite to a screening chat/.test(c.title))!;
     expect(card).toBeTruthy();
     const decide = await json("POST", card.actions[0].path, card.actions[0].body);
     expect(decide.status).toBe(200);
@@ -431,10 +431,11 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     const page = await (await app.request(`/c/screen/${scr.token}`)).text();
     expect(page).toContain("This screening conversation is closed");
     expect(page).not.toContain('name="message"');
-    // the candidate's own page is back to Under review, with no screen to start
+    // the candidate's own page is back to Review, with no screen to start, and no chat ticked that never happened
     const status = await (await app.request(`/c/status/${a.statusToken}`)).text();
-    expect(status).toMatch(/<strong>Under review<\/strong>/);
-    expect(status).not.toContain("Start the screening conversation");
+    expect(status).toMatch(/<span>Status<\/span><strong>Review<\/strong>/);
+    expect(status).not.toContain("Start the screening chat");
+    expect(status).not.toMatch(/<span>Screening chat<\/span><span class="sr-only"> \(done\)<\/span>/);
     // a second press explains instead of sending again, and no reminder ever follows
     const again = await json("POST", `/api/v1/applications/${a.id}/actions`, { action: "cancel_screen" });
     expect(again.status).toBe(409);
@@ -450,7 +451,7 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(started.status).toBe(409);
     expect(((await started.json()) as { error: { code: string } }).error.code).toBe("screen_started");
     const blocked = (await (await json("GET", `/api/v1/applications/${b.id}`)).json()) as { blockedReasons: Record<string, string> };
-    expect(blocked.blockedReasons.cancel_screen).toBe("They have started the screening conversation, so it can't be stopped now.");
+    expect(blocked.blockedReasons.cancel_screen).toBe("They have started the screening chat, so it can't be stopped now.");
   });
 
   it("the assistant's suggestions lapse after a week with nothing sent: 'Invite to a screen?' and 'Interview?' (plan A6)", async () => {
@@ -508,12 +509,12 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(await container.db.select().from(approvalRequests).where(and(eq(approvalRequests.applicationId, a.id), eq(approvalRequests.actionType, "application.recommend_interview")))).toHaveLength(0);
     const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string; body: string }>;
     const held = notes.find((n) => n.kind === "application.needs_review" && n.title === "Wes Lund needs a closer look")!;
-    expect(held.body).toContain("suggested an interview for a reading of Weak match");
+    expect(held.body).toContain("suggested an interview, but its AI review says Weak match");
     const flagged = await container.db.select().from(auditRecords).where(eq(auditRecords.action, "assessment.flagged"));
     expect(flagged.some((r) => (r.target as { id: string } | null)?.id === a.id && (r.details as { held: string }).held === "application.recommend_interview")).toBe(true);
     const row = ((await (await json("GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; stageLabel: string; evidence: { needsCloserLook: boolean; inconsistent: boolean; reason: string | null } }>).find((x) => x.id === a.id)!;
     expect(row.evidence).toMatchObject({ needsCloserLook: true, inconsistent: true });
-    expect(row.evidence.reason).toContain("does not add up");
+    expect(row.evidence.reason).toContain("but its AI review says Weak match");
     expect(row.stageLabel).toBe("Needs a closer look");
   });
 });

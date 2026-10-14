@@ -13,6 +13,7 @@ import { AskRecruiter } from "../components/AskRecruiter";
 import { CloseRoleCard, ClosingMessageCard } from "../components/ClosingMessage";
 import { ShareJob } from "../components/ShareJob";
 import { useCompanyCheck } from "../components/use-company-check";
+import { useIsClient } from "../components/use-is-client";
 import { LOW_CONFIDENCE_LABEL } from "../evidence";
 import { focusLost, rowFocusAfterMove } from "../focus-after";
 import { activeCompanyOf } from "../rail";
@@ -75,11 +76,17 @@ export function People() {
   const [search] = useSearchParams();
   const qc = useQueryClient();
   const roles = useQuery({ queryKey: ["roles"], queryFn: () => api.get<RoleSummary[]>("/api/v1/roles") });
+  // The jobs list is the rail's too (one request, shared), so the browser may hold it before it takes this page over;
+  // the server never does. Until the page is the browser's (use-is-client.ts) the list counts as not read yet, so the
+  // first draw is the server's ("Candidates", no job picker) and the job's own title follows, as it always did.
+  const isClient = useIsClient();
+  const jobList = isClient ? roles.data : undefined;
+  const jobListLoading = !isClient || roles.isLoading;
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
   const company = activeCompanyOf(me.data);
   const myRole = company.role ?? (me.data?.staffAccess ? "recruiter" : null);
-  const roleId = params.id ?? roles.data?.find((r) => r.status === "open")?.id ?? roles.data?.[0]?.id;
-  const role = roles.data?.find((r) => r.id === roleId);
+  const roleId = params.id ?? jobList?.find((r) => r.status === "open")?.id ?? jobList?.[0]?.id;
+  const role = jobList?.find((r) => r.id === roleId);
   // The job itself, for the header's More menu (its accepting switch, its version for Candidate view).
   const detail = useQuery({ queryKey: ["role", roleId], queryFn: () => api.get<RoleDetail>(`/api/v1/roles/${roleId}`), enabled: !!roleId });
   const apps = useQuery({ queryKey: ["applications", roleId], queryFn: () => api.get<ApplicationsWithCounts>(`/api/v1/roles/${roleId}/applications?counts=1`), enabled: !!roleId });
@@ -223,9 +230,9 @@ export function People() {
         sub={sub}
         actions={
           <>
-            {roles.data && roles.data.length > 1 ? (
+            {jobList && jobList.length > 1 ? (
               <select className="select" style={{ width: "auto" }} value={roleId ?? ""} onChange={(e) => nav(`/roles/${e.target.value}/talent`)} aria-label="Job">
-                {roles.data.map((r) => <option key={r.id} value={r.id}>{r.title}</option>)}
+                {jobList.map((r) => <option key={r.id} value={r.id}>{r.title}</option>)}
               </select>
             ) : null}
             {/* On the board, "Have a recruiter check this" sits in the board's own header. */}
@@ -260,7 +267,7 @@ export function People() {
       {closingMessage && !closing && roleId && status === "closed" && mayTell ? <ClosingMessageCard roleId={roleId} onDone={() => setClosingMessage(false)} /> : null}
       {roleId && (total > 0 || mode === "board") ? <SortStrip mode={mode} onMode={setMode} onSort={() => (mode === "board" ? board.refetch() : setMode("board"))} sorting={board.isFetching} generatedAt={board.data?.generatedAt ?? null} /> : null}
       {!roleId ? (
-        roles.isLoading ? <Skeleton lines={4} /> : <EmptyState icon="talent" title="No jobs yet" body="Open a job first; its candidates show here." action={<Link to="/" className="btn primary">Go to Home</Link>} />
+        jobListLoading ? <Skeleton lines={4} /> : <EmptyState icon="talent" title="No jobs yet" body="Open a job first; its candidates show here." action={<Link to="/" className="btn primary">Go to Home</Link>} />
       ) : mode === "board" ? (
         board.isLoading ? <Skeleton lines={6} /> : board.error ? <ErrorState message="Could not sort the pool just now." onRetry={() => board.refetch()} /> : board.data ? (
           <PoolBoard roleId={roleId} board={board.data} only={only} onClearOnly={() => setOnlyFor(null)} onOpen={(id) => openPanel(id)} onReview={() => goTo(boardSearch(search, { review: true }))} onAsk={() => setAsking(true)} mayApply={mayApply} />
@@ -340,7 +347,7 @@ export function People() {
         <CandidatePanel
           id={panel.id}
           roleId={roleId}
-          roleTitle={role?.title ?? null}
+          roleTitle={role?.title ?? job?.title ?? null}
           tab={panel.tab}
           onTab={(tab) => showPanel({ ...panel, tab })}
           step={panel.step}

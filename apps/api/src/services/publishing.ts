@@ -19,7 +19,7 @@ export const AI_RULES_HREF = "/setup#setup-rules";
 const CONFIRMATION_LINE: AutoActionLine = { actionType: "message.send_templated", level: "auto", text: "Every applicant gets an email confirming their application, sent on its own in the approved wording." };
 
 /** The line for a role on the one-visit flow (founder decision B1): the conversation is part of applying, not a later invitation. */
-export const ONE_VISIT_LINE = "Applicants have a short written conversation with the AI assistant as part of applying, right after the form. They can skip a question, finish later or ask for a person instead, and a person still makes every decision.";
+export const ONE_VISIT_LINE = "Applicants have a short screening chat with the AI assistant as part of applying, right after the form. They can skip a question, finish later or ask for a person instead, and a person still makes every decision.";
 
 /**
  * One plain line per action that can start on its own once the job is live (D9): the confirmation email every
@@ -33,12 +33,12 @@ export async function autoActionsOnOpen(tx: Tx, companyId: string, roleId: strin
   const [company] = await tx.select({ id: companies.id, settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1);
   const [role] = await tx.select({ applyMode: roles.applyMode }).from(roles).where(eq(roles.id, roleId)).limit(1);
   const oneVisit = !!company && (await applyFlowOf(tx, company, { id: roleId, applyMode: role?.applyMode ?? null })) === "one_visit";
-  const reading = "When the assistant's reading of an application suggests a good fit,";
+  const reading = "When the AI review of an application suggests a good fit,";
   const inviteText: Record<string, string> = {
-    auto: `${reading} the applicant is invited to a short screening conversation on their own. A person still makes every decision.`,
-    auto_notify: `${reading} the applicant is invited to a short screening conversation on their own, and you are told each time.`,
-    approval: `${reading} the invitation to a short screening conversation waits for your approval.`,
-    human_only: "Only a person invites applicants to the screening conversation.",
+    auto: `${reading} the applicant is invited to a short screening chat on their own. A person still makes every decision.`,
+    auto_notify: `${reading} the applicant is invited to a short screening chat on their own, and you are told each time.`,
+    approval: `${reading} the invitation to a short screening chat waits for your approval.`,
+    human_only: "Only a person invites applicants to the screening chat.",
   };
   const lines: AutoActionLine[] = [
     CONFIRMATION_LINE,
@@ -53,7 +53,7 @@ export function boardChoices(role: Pick<RoleRow, "publishChannels">, packet: Pic
   const named: readonly string[] = packet?.sourcing.channels ?? [];
   return BOARD_CHANNELS.map((b) => {
     const available = b !== "ziprecruiter" || zipRecruiterOffered(settings);
-    return { channel: b as BoardChoice, name: BOARD_NAME[b], chosen: available && chosen.includes(b), available, reason: available ? null : "ZipRecruiter needs your company's own paid ZipRecruiter plan. Say you have one in Setup to offer it.", inRolePlan: named.includes(b) };
+    return { channel: b as BoardChoice, name: BOARD_NAME[b], chosen: available && chosen.includes(b), available, reason: available ? null : "ZipRecruiter needs your company's own paid ZipRecruiter plan. Say you have one in Settings to offer it.", inRolePlan: named.includes(b) };
   });
 }
 

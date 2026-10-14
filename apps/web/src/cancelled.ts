@@ -5,7 +5,7 @@ import type { ApplicationSummary, CancelledCounts, CancelledView, NewTimesProgre
  * The Cancelled column as the team's pages say it (founder decisions 1A to 4A, 9 October 2026), kept free of React so it
  * can be tested (tests/web/cancelled.test.ts). Only a candidate's own cancel of a booked interview, with their choice
  * (new times later, or no longer interested), and a candidate who did not come put someone there. Only people who asked
- * for new times get one set automatically, after the working days the company chose in Setup; everyone else waits for
+ * for new times get one set automatically, after the working days the company chose in Settings; everyone else waits for
  * the team. The words follow the state the API reports, so nothing is promised that will not happen.
  */
 
@@ -122,7 +122,7 @@ export function interviewNewTimesText(firstName: string, reason: CancelledReason
  * deleted (the stage line already says it).
  */
 const NOT_SENT_TEXT: Record<string, string> = {
-  switched_off: "Automatic new times were switched off in Setup.",
+  switched_off: "Automatic new times were switched off in Settings.",
   already_used: "They already had their one automatic set of new times.",
   reschedules_used: "They had already moved this interview twice, so a person arranges the next time.",
   takeover: "An ITS recruiter is running this role, so nothing was sent automatically.",
@@ -198,7 +198,7 @@ export function newTimesResultLine(r: SendNewTimesBatchResult["results"][number]
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */
-/* Setup: "When a candidate cancels".                                                                            */
+/* Settings: "When a candidate cancels".                                                                         */
 /* ------------------------------------------------------------------------------------------------------------ */
 
 /** The company's setting as the card shows it: on after 3 working days when never saved; the days kept within 1 to 10. */

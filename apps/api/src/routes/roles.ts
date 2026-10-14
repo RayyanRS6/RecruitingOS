@@ -37,6 +37,16 @@ export const roleRoutes = new Hono<Vars>();
 roleRoutes.use("/:id", roleScopeGuard);
 roleRoutes.use("/:id/*", roleScopeGuard);
 
+/**
+ * When anything last happened on a role, for the Jobs page's "Recent activity" order (Wave S2, additive): the latest of
+ * its own changes (created, edited, opened, paused, closed) and, for those who may see applicants, its newest application.
+ * An ISO time; the dates the database hands back are read with Date.parse, as `daysOpen` reads `openedAt`.
+ */
+export function lastActivityOf(role: { createdAt: string; updatedAt?: string | null; openedAt?: string | null; pausedAt?: string | null; closedAt?: string | null }, newestApplication?: string | null): string {
+  const times = [role.createdAt, role.updatedAt, role.openedAt, role.pausedAt, role.closedAt, newestApplication].map((x) => (x ? Date.parse(x) : Number.NaN)).filter((n) => Number.isFinite(n));
+  return times.length ? new Date(Math.max(...times)).toISOString() : role.createdAt;
+}
+
 roleRoutes.get("/", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.read");
@@ -50,7 +60,7 @@ roleRoutes.get("/", requireTenant, async (c) => {
     if (t.role === "interviewer") {
       const mine = await tx.select({ roleId: applications.roleId }).from(interviewParticipants).innerJoin(interviews, eq(interviews.id, interviewParticipants.interviewId)).innerJoin(applications, eq(applications.id, interviews.applicationId)).where(eq(interviewParticipants.userId, t.userId));
       const ids = new Set(mine.map((m) => m.roleId));
-      return visible.filter((r) => ids.has(r.id)).map((r) => ({ ...r, counts: { total: 0 }, countsHidden: true, needsYou: 0, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null }));
+      return visible.filter((r) => ids.has(r.id)).map((r) => ({ ...r, counts: { total: 0 }, countsHidden: true, needsYou: 0, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null, lastActivityAt: lastActivityOf(r) }));
     }
     // Three queries for the whole list, whatever its length: the roles, their applicants by stage, private mark and open
     // follow-up (a running hold does not wait on you, nor does someone under Cancelled with new times promised, being
@@ -66,6 +76,8 @@ roleRoutes.get("/", requireTenant, async (c) => {
       .where(inArray(applications.roleId, roleIds))
       .groupBy(applications.roleId, applications.stage, applicationMarks.mark, applicationMarks.remindAt, interviewFollowups.kind, interviewFollowups.choice, interviewFollowups.autoState, interviewOpen);
     const pendingCounts = await tx.select({ roleId: approvalRequests.roleId, n: count() }).from(approvalRequests).where(and(inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending"))).groupBy(approvalRequests.roleId);
+    // The newest application per role, for `lastActivityAt` (the Jobs page's "Recent activity" order).
+    const newest = await tx.select({ roleId: applications.roleId, at: sql<string | null>`max(${applications.createdAt})` }).from(applications).where(inArray(applications.roleId, roleIds)).groupBy(applications.roleId);
     const now = c.get("container").engine.clock();
     return visible.map((r) => {
       const counts: Record<string, number> = {};
@@ -82,7 +94,10 @@ roleRoutes.get("/", requireTenant, async (c) => {
         stageStrip[ownerStage({ stage: row.stage }, mark, followUp)] += n;
       }
       const needsYou = Number(pendingCounts.find((p) => p.roleId === r.id)?.n ?? 0);
-      return { ...r, counts: { total, ...counts }, stageCounts: stageStrip, needsYou, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null };
+      // a raw max() may come back from the driver as a Date or as text
+      const at = newest.find((x) => x.roleId === r.id)?.at as string | Date | null | undefined;
+      const newestApplication = at instanceof Date ? at.toISOString() : at ? String(at) : null;
+      return { ...r, counts: { total, ...counts }, stageCounts: stageStrip, needsYou, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null, lastActivityAt: lastActivityOf(r, newestApplication) };
     });
   });
   return c.json(rows);
@@ -269,7 +284,7 @@ roleRoutes.post("/:id/closing-date", requireTenant, async (c) => {
     if (body.closesOn && !role.acceptingApplications && role.applicationsClosedReason === CLOSING_DATE_REASON && closingMoment(body.closesOn, company?.timezone).getTime() > now.getTime()) {
       [row] = await tx.update(roles).set({ acceptingApplications: true, applicationsClosedAt: null, applicationsClosedReason: null }).where(eq(roles.id, role.id)).returning();
       await emit(tx, { type: "role.applications_reopened", companyId: t.companyId, actor, subject: { type: "role", id: role.id }, payload: { reason: "closing date extended", closesOn: body.closesOn } });
-      await notify(tx, { companyId: t.companyId, kind: "applications.reopened", title: `${role.title} is taking applications again`, body: `${actor.name ?? "A team member"} moved the closing date to ${closingDayWords(body.closesOn)}. The job page shows the apply button again.`, action: { label: "Open the Posting tab", href: `/roles/${role.id}?tab=posting` } });
+      await notify(tx, { companyId: t.companyId, kind: "applications.reopened", title: `${role.title} is taking applications again`, body: `${actor.name ?? "A team member"} moved the closing date to ${closingDayWords(body.closesOn)}. The job page shows the apply button again.`, action: { label: "Open the Share tab", href: `/roles/${role.id}?tab=posting` } });
       reopened = true;
     }
     return { ok: true, reopened, roleId: role.id, closingDate: closingDateFor(row, company ?? null, packet, now) };
@@ -812,7 +827,7 @@ applicationRoutes.post("/:id/assessments/:assessmentId/flag", requireTenant, asy
     // An ITS recruiter flagging a reading is ITS already: recorded, with no request to itself.
     if (t.staff) return { out: { ok: true, assessmentId: asmt.id, kind: body.kind, review: null, message: "Flagged and recorded." }, notice: null, note: null };
     const [app] = await tx.select({ roleId: applications.roleId }).from(applications).where(eq(applications.id, asmt.applicationId)).limit(1);
-    const words = `The team flagged the assistant's ${asmt.kind === "screen" ? "screening scorecard" : "résumé reading"} for this candidate: ${FLAG_WORDS[body.kind]}.${body.note?.trim() ? ` Their note: ${body.note.trim()}` : ""} Please check the reading and tell them what you find.`;
+    const words = `The team flagged the assistant's ${asmt.kind === "screen" ? "screening scorecard" : "AI review of the résumé"} for this candidate: ${FLAG_WORDS[body.kind]}.${body.note?.trim() ? ` Their note: ${body.note.trim()}` : ""} Please check the AI review and tell them what you find.`;
     // The recruiter reads the flag under their grant; the team member's name stays with the company (the audit record and
     // the human.override event keep who it was), as everywhere else the recruiter reads the team's words.
     const entry = { assessmentId: asmt.id, aiRunId: asmt.aiRunId, kind: body.kind, note: body.note ?? null, by: actor.kind, at };
@@ -821,12 +836,12 @@ applicationRoutes.post("/:id/assessments/:assessmentId/flag", requireTenant, asy
       const message = await addEscalationReply(tx, { escalation: open, side: "customer", author: actor, body: words });
       const flags = Array.isArray(open.contextSnapshot.flags) ? open.contextSnapshot.flags : [];
       await tx.update(recruiterEscalations).set({ contextSnapshot: { ...open.contextSnapshot, flags: [...flags, entry] } }).where(eq(recruiterEscalations.id, open.id));
-      return { out: { ok: true, assessmentId: asmt.id, kind: body.kind, review: { escalationId: open.id, created: false }, message: "Thanks. It is added to the ITS recruiter's open check of this candidate's reading." }, notice: null, note: open.assignedToUserId ? { escalationId: open.id, kind: open.kind, holderId: open.assignedToUserId, messageId: message.id } : null };
+      return { out: { ok: true, assessmentId: asmt.id, kind: body.kind, review: { escalationId: open.id, created: false }, message: "Thanks. It is added to the ITS recruiter's open check of this candidate's AI review." }, notice: null, note: open.assignedToUserId ? { escalationId: open.id, kind: open.kind, holderId: open.assignedToUserId, messageId: message.id } : null };
     }
     const created = await createEscalation(tx, { companyId: t.companyId, roleId: app?.roleId ?? null, applicationId: asmt.applicationId, kind: "review", question: words, requestedBy: actor });
     const [row] = await tx.select({ contextSnapshot: recruiterEscalations.contextSnapshot }).from(recruiterEscalations).where(eq(recruiterEscalations.id, created.id)).limit(1);
     await tx.update(recruiterEscalations).set({ contextSnapshot: { ...(row?.contextSnapshot ?? {}), flags: [entry] } }).where(eq(recruiterEscalations.id, created.id));
-    return { out: { ok: true, assessmentId: asmt.id, kind: body.kind, review: { escalationId: created.id, created: true }, message: `Thanks. An ITS recruiter will check this reading; follow it under Your recruiter requests on Today. Once they pick it up they see this candidate and the role they applied for, until a day after they answer or ${ESCALATION_ACCESS_DAYS} days at most.` }, notice: await queueNoticeOf(tx, created.id), note: null };
+    return { out: { ok: true, assessmentId: asmt.id, kind: body.kind, review: { escalationId: created.id, created: true }, message: `Thanks. An ITS recruiter will check this AI review; follow it under Your recruiter requests on Home. Once they pick it up they see this candidate and the role they applied for, until a day after they answer or ${ESCALATION_ACCESS_DAYS} days at most.` }, notice: await queueNoticeOf(tx, created.id), note: null };
   });
   if (notice) await emailItsQueue(container, notice);
   // A flag added to a request someone already holds tells them there is a note, never its words, as a note from the team does.

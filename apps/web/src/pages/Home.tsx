@@ -10,6 +10,7 @@ import { ALLOWANCE_ASK, screeningAllowanceWarning, type AllowanceWarning, type U
 import { toast } from "../toast";
 import { AskRecruiter } from "../components/AskRecruiter";
 import { RecruiterRequests } from "../components/RecruiterRequests";
+import { useIsClient } from "../components/use-is-client";
 import { interviewDraftPath } from "../hiring";
 import { closingDateToast, isClosingDateAction } from "../publishing";
 import { railListsRoles } from "../rail";
@@ -47,7 +48,10 @@ export function Home() {
   // "Your jobs" is the rail's list (the same request, shared): members only, never an ITS recruiter under a grant.
   const listsRoles = railListsRoles(me.data);
   const roles = useQuery({ queryKey: ["roles"], queryFn: () => api.get<RoleSummary[]>("/api/v1/roles"), enabled: listsRoles });
-  const jobs = listsRoles ? homeJobs(roles.data ?? [], { role: myRole }) : [];
+  // The browser may have read that list before it takes this page over; the server never has it. Until the page is the
+  // browser's (use-is-client.ts), "Your jobs" waits, so the first draw matches the server's (Wave S2).
+  const isClient = useIsClient();
+  const jobs = listsRoles && isClient ? homeJobs(roles.data ?? [], { role: myRole }) : [];
 
   // Old links and bookmarks to "/?start=1" (before the job builder had a page of its own) go to the job builder.
   const [params] = useSearchParams();
@@ -69,7 +73,7 @@ export function Home() {
   return (
     <div className="stack" style={{ gap: 20 }}>
       <PageHeader
-        title={`Good ${greeting()}${name ? `, ${name}` : ""}`}
+        title={`Good ${greeting(isClient)}${name ? `, ${name}` : ""}`}
         sub={brief.data && !brief.error ? homeHeadline(needs, { firstRun }) : undefined}
         actions={
           <>
@@ -103,8 +107,14 @@ export function Home() {
   );
 }
 
-function greeting() {
-  const h = new Date().getHours();
+/**
+ * The time of day by the reader's own clock once the page is theirs. Until then (the server's draw and the browser's
+ * first one) both go by the hour in UTC, the hosted server's own clock, so they say the same and the greeting changes
+ * no more often than it did.
+ */
+function greeting(local: boolean): string {
+  const now = new Date();
+  const h = local ? now.getHours() : now.getUTCHours();
   return h < 12 ? "morning" : h < 18 ? "afternoon" : "evening";
 }
 

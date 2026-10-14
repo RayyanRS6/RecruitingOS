@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Icon, Skeleton } from "@ros/ui";
 import { api, ApiError, type PostingsResponse, type SharePlace, type ShareLinkResponse, type ShareTarget } from "../api/client";
+import { linkedInPostHref } from "../linkedin-post";
 import { SHARE_BUTTONS, SHARE_PLACES_TO_COPY, opensOwnApp, shareSubject, shareTargetsFor, shareTextFor, visitsWords } from "../publishing";
 import { toast } from "../toast";
 
@@ -21,6 +22,9 @@ function copy(text: string, what: string) {
  * Nothing from those networks ever loads on our pages. The first tap on a place makes its link and opens the share in
  * the same tap (a new tab is opened at once and pointed at the share page once the link exists, so no pop-up blocker
  * stops it); after that the button is an ordinary link.
+ *
+ * Away from the Share tab (`compact`: the screen after approval, an empty applicant list) it also links to the Share
+ * tab's LinkedIn post (Wave S2), ready-made words to copy and post; on the Share tab that card sits right under this one.
  */
 export function ShareJob(props: { roleId: string; roleTitle: string; companyName: string | null; compact?: boolean }) {
   const qc = useQueryClient();
@@ -89,6 +93,9 @@ export function ShareJob(props: { roleId: string; roleTitle: string; companyName
         })}
       </fieldset>
       <p className="small muted" style={{ margin: 0 }}>Each place gets its own link, so you see where applicants come from.</p>
+      {/* Away from the Share tab (the screen after approval, an empty applicant list): the way to its LinkedIn post. A
+          plain link, so the page it leaves (a dialog included) is left behind and the Share tab opens at the post. */}
+      {props.compact && d.role.status === "open" ? <p className="small" style={{ margin: 0 }}><a href={linkedInPostHref(props.roleId)}>Post on LinkedIn</a></p> : null}
       {props.compact ? null : (
         <details className="more">
           <summary>The message that goes with it</summary>

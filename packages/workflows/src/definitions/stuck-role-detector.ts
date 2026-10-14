@@ -66,8 +66,8 @@ async function checkApplicationVolume(ctx: StepContext<State>): Promise<VolumeAl
       companyId: ctx.companyId,
       kind: "volume.high",
       title: `${received} people applied to ${role.title} yesterday`,
-      body: `That is above your limit of ${threshold} a day. Nobody is turned away automatically. If you have enough applicants, stop accepting applications from the Posting tab; everyone who already applied stays in the process.`,
-      action: { label: "Open the Posting tab", href: `/roles/${role.id}?tab=posting` },
+      body: `That is above your limit of ${threshold} a day. Nobody is turned away automatically. If you have enough applicants, stop accepting applications from the Share tab; everyone who already applied stays in the process.`,
+      action: { label: "Open the Share tab", href: `/roles/${role.id}?tab=posting` },
       roles: ["owner", "admin"],
     });
     await emit(ctx.q, { type: "role.volume_high", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "role", id: role.id }, payload: { day, count: received, threshold } });
