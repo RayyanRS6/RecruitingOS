@@ -17,6 +17,7 @@ export * from "./contact-hours";
 export * from "./business-hours";
 export * from "./business-calendar";
 export * from "./escalation-preview";
+export * from "./stopped-runs";
 export * from "./secrets";
 export * from "./alerts";
 export * from "./connections";

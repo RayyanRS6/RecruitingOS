@@ -4,8 +4,9 @@
  * Until an ITS recruiter accepts an assignment they may see only: the customer name, the role title, the escalation
  * category, its urgency, the expertise it needs, the remaining service-level time, and a generic summary. Nothing
  * here is derived from free text a person typed (the customer's question can name a candidate), and nothing here
- * comes from the candidate's record. The summary is a template chosen by category; the customer's own words open
- * only under a grant.
+ * comes from the candidate's record. The summary is a template chosen by category, worded for who raised the request
+ * (the customer, Recruiting OS on its own, or a candidate), which the server reads from the row and never sends; the
+ * customer's own words open only under a grant.
  */
 
 export const ESCALATION_URGENCIES = ["low", "normal", "high", "critical"] as const;
@@ -75,9 +76,31 @@ export function requiredExpertise(kind: string, vertical?: string | null): strin
   return vertical ? `${base}; ${vertical.replace(/_/g, " ")} hiring` : base;
 }
 
+/** ITS posting tasks (plan D3) carry their own template summary, whoever raised them. */
+const POSTING_KINDS: ReadonlySet<string> = new Set(["post_job", "update_job", "take_down_job"]);
+
+const RAISED_AUTOMATICALLY = "Raised automatically by Recruiting OS:";
+
+/**
+ * A request Recruiting OS raised on its own (a stopped run, a held applicant's reminder, a stalled role) says so, so the
+ * recruiter never reads it as the customer asking (15 October 2026). Template text, like the rest. A candidate's issue and
+ * the posting tasks keep their own sentences.
+ */
+function systemSummary(kind: string, hasApplication: boolean | undefined, role: string): string | null {
+  if (kind === "candidate_issue" || POSTING_KINDS.has(kind)) return null;
+  switch (kind) {
+    case "review": return hasApplication ? `${RAISED_AUTOMATICALLY} one candidate's application needs a recruiter to take over.` : `${RAISED_AUTOMATICALLY} the candidates ${role} need a recruiter's review.`;
+    case "takeover": return `${RAISED_AUTOMATICALLY} this role needs ITS to take over.`;
+    case "stuck_role": return `${RAISED_AUTOMATICALLY} this role has stalled and needs a recruiter.`;
+    default: return `${RAISED_AUTOMATICALLY} this needs a recruiter ${role}.`;
+  }
+}
+
 /** Template text only. Never interpolate a person's words, a candidate's name, or anything from a candidate record. */
 export function genericSummary(kind: string, opts: { hasRole?: boolean; hasApplication?: boolean; origin?: "customer" | "system" | "candidate" } = {}): string {
   const role = opts.hasRole ? "for this role" : "for their hiring";
+  const automatic = opts.origin === "system" ? systemSummary(kind, opts.hasApplication, role) : null;
+  if (automatic) return automatic;
   switch (kind) {
     case "ask": return `The customer wants a recruiter's advice ${role}.`;
     case "review": return opts.hasApplication ? `The customer wants a recruiter to review one candidate ${role}.` : `The customer wants a recruiter to review the candidates ${role}.`;
@@ -96,6 +119,24 @@ export function genericSummary(kind: string, opts: { hasRole?: boolean; hasAppli
     case "take_down_job": return `Take this role's listing down from a job board; the role or the listing was closed.`;
     default: return `The customer needs a recruiter ${role}.`;
   }
+}
+
+/**
+ * The summary as it is served (the queue, the request page, the ITS console and emails). Requests Recruiting OS raised
+ * before 15 October 2026 stored the customer's template ("The customer wants..."); those read in today's words. The
+ * inputs come from the row on the server (who raised it, whether it names a role or a candidate); none of them is ever
+ * put in a preview. A candidate's issue is left as stored: its caller chose the sentence, and a candidate's own request
+ * can arrive through a system actor (an emailed HUMAN reply).
+ */
+export function previewSummary(input: { kind: string; storedSummary: string; requestedByKind: string | null | undefined; hasRole: boolean; hasApplication: boolean }): string {
+  if (input.requestedByKind !== "system" || input.kind === "candidate_issue" || POSTING_KINDS.has(input.kind)) return input.storedSummary;
+  const opts = { hasRole: input.hasRole, hasApplication: input.hasApplication };
+  return input.storedSummary === genericSummary(input.kind, { ...opts, origin: "customer" }) ? genericSummary(input.kind, { ...opts, origin: "system" }) : input.storedSummary;
+}
+
+/** `previewSummary` for a stored escalation row. */
+export function servedSummary(row: { kind: string; summary: string; requestedBy: { kind: string } | null | undefined; roleId: string | null; applicationId: string | null }): string {
+  return previewSummary({ kind: row.kind, storedSummary: row.summary, requestedByKind: row.requestedBy?.kind, hasRole: !!row.roleId, hasApplication: !!row.applicationId });
 }
 
 /** Builds the pre-acceptance row. The caller supplies the remaining-time figures from the business calendar. */

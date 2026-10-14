@@ -8,7 +8,7 @@ import { emit } from "./events";
 import { escalationReplyBy, type CalendarSource } from "./business-hours";
 import { loadBusinessCalendar } from "./business-calendar";
 import { ESCALATION_ACCESS_DAYS, endStaffGrant, grantStaffAccess, type StaffGrant } from "./staff-access";
-import { defaultUrgency, genericSummary, requiredExpertise, type EscalationUrgency } from "./escalation-preview";
+import { defaultUrgency, genericSummary, requiredExpertise, servedSummary, type EscalationUrgency } from "./escalation-preview";
 import { screenAnswersOf, teamScreenView, unsentScreenReadings, withoutUnsentConversation, withoutUnsentScreenEvents } from "./screen-answers";
 
 /**
@@ -130,7 +130,7 @@ export async function reopenEscalation(
     grant = await grantStaffAccess(q, {
       userId: recruiter.id, userName: recruiter.name, companyId: e.companyId, kind: "escalation",
       scope: { escalationId: e.id, roleId: e.roleId, applicationId: e.applicationId },
-      purpose: `${e.kind}: ${e.summary || "customer request"} Reopened by the team.`, grantedBy: input.actor, expiresAt: new Date(now.getTime() + ESCALATION_ACCESS_DAYS * 86_400_000), now,
+      purpose: `${e.kind}: ${servedSummary(e) || "customer request"} Reopened by the team.`, grantedBy: input.actor, expiresAt: new Date(now.getTime() + ESCALATION_ACCESS_DAYS * 86_400_000), now,
     });
     await q.update(recruiterEscalations).set({ status: "claimed", resolvedAt: null, slaDueAt, accessExpiresAt: grant.expiresAt }).where(eq(recruiterEscalations.id, e.id));
   } else {

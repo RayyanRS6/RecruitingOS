@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, isNull, like, notInArray, or } from "drizzle-orm";
 import { ConfirmBoardUpdated, CreateEscalation, DecideApproval, EscalationEstimateQuery, EscalationReply, RecordPostingUrl, ReopenEscalation, ResolveEscalation, VerifyPosting, type Actor, type CandidateNotice, type EscalationScope, type InterviewDraft, type RecruiterRequestView } from "@ros/contracts";
-import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, assertCan, audit, can, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, isBoardChannel, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, unsentScreenReadings, withoutSentimentWords, withoutUnsentInContext, withoutUnsentScreenEvents, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
+import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, assertCan, audit, can, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, isBoardChannel, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, plainRequestText, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, servedSummary, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, unsentScreenReadings, withoutSentimentWords, withoutUnsentInContext, withoutUnsentScreenEvents, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, companies, escalationMessages, events, memberships, postings, recruiterEscalations, rolePackets, roles, screens, staffAccessGrants, users, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
 import { confirmPostingByHand, postingTaskDetail, queuePostingCheck, recordBoardAddress } from "./postings";
 import { actorOf, clientIp, requireRecruiterOrAdmin, requireTenant, type Vars } from "../middleware/session";
@@ -241,8 +241,9 @@ escalationRoutes.get("/mine", requireTenant, async (c) => {
   });
   const names = await recruiterNames(container.db, found.rows.map((r) => r.assignedToUserId));
   return c.json(found.rows.map((row): RecruiterRequestView => {
-    // A hand-over reason from before 9 October 2026 in today's words: never how the candidate sounded.
-    const r = { ...row, question: withoutSentimentWords(row.question) };
+    // A hand-over reason from before 9 October 2026 in today's words: never how the candidate sounded. A stopped run's
+    // request from before 13 October 2026 in plain words, never the technical error; and one Recruiting OS raised says so.
+    const r = { ...row, question: withoutSentimentWords(plainRequestText(row.question)), summary: servedSummary(row) };
     const own = found.messages.filter((m) => m.escalationId === r.id);
     const recruiterName = r.assignedToUserId ? names.get(r.assignedToUserId) ?? null : [...own].reverse().find((m) => m.side === "recruiter")?.author.name ?? null;
     return {
@@ -359,7 +360,7 @@ escalationRoutes.post("/mine/:id/reopen", requireTenant, async (c) => {
     to: container.env.ITS_QUEUE_EMAIL,
     from: `${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`,
     subject: `[${e.kind}] ${e.urgency} urgency, reopened: respond by ${new Date(done.slaDueAt).toLocaleString("en-US", { timeZone: calendar.timeZone })} (${calendar.timeZone})`,
-    text: `A customer reopened a request: the answer did not solve it.\n\nCategory: ${e.kind}\nUrgency: ${e.urgency}\nNeeds: ${e.requiredExpertise}\nSummary: ${e.summary}\n\nAccept it in the queue to open the full request: ${container.env.APP_BASE_URL}/recruiter/queue/${e.id}`,
+    text: `A customer reopened a request: the answer did not solve it.\n\nCategory: ${e.kind}\nUrgency: ${e.urgency}\nNeeds: ${e.requiredExpertise}\nSummary: ${servedSummary(e)}\n\nAccept it in the queue to open the full request: ${container.env.APP_BASE_URL}/recruiter/queue/${e.id}`,
     idempotencyKey: `escalation-reopen:${done.messageId}`,
     tags: { template: "escalation" },
   });
@@ -370,8 +371,22 @@ const PREVIEW_COLUMNS = {
   id: recruiterEscalations.id, companyId: recruiterEscalations.companyId, companyName: companies.name, roleTitle: roles.title, kind: recruiterEscalations.kind, status: recruiterEscalations.status,
   urgency: recruiterEscalations.urgency, requiredExpertise: recruiterEscalations.requiredExpertise, summary: recruiterEscalations.summary, slaDueAt: recruiterEscalations.slaDueAt,
   createdAt: recruiterEscalations.createdAt, assignedToUserId: recruiterEscalations.assignedToUserId,
+  // Inputs for the summary's wording only (`servedSummary`): never put in a preview.
+  requestedBy: recruiterEscalations.requestedBy, roleId: recruiterEscalations.roleId, applicationId: recruiterEscalations.applicationId,
 };
-type PreviewRow = { id: string; companyId: string; companyName: string; roleTitle: string | null; kind: string; status: string; urgency: string; requiredExpertise: string; summary: string; slaDueAt: string | null; createdAt: string; assignedToUserId: string | null };
+type PreviewRow = {
+  id: string; companyId: string; companyName: string; roleTitle: string | null; kind: string; status: string; urgency: string; requiredExpertise: string; summary: string; slaDueAt: string | null; createdAt: string; assignedToUserId: string | null;
+  requestedBy: Actor; roleId: string | null; applicationId: string | null;
+};
+
+/**
+ * One pre-acceptance row. The summary is served in today's words: a request Recruiting OS raised on its own says so,
+ * also when it was stored before 15 October 2026 (`servedSummary`). Who raised it and the ids it names are read here
+ * and never sent: `toEscalationPreview` builds the row from the allowed fields alone.
+ */
+function previewOf(r: PreviewRow, viewerUserId: string, now: Date, calendar: Awaited<ReturnType<typeof loadBusinessCalendar>>): EscalationPreview {
+  return toEscalationPreview({ ...r, summary: servedSummary(r), viewerUserId, now, businessMinutesRemaining: r.slaDueAt ? businessMinutesBetween(now, new Date(r.slaDueAt), calendar) : null });
+}
 
 /**
  * The ITS queue (founder decision F10, D24; correction 11 of 18 September 2026). Before a recruiter accepts an
@@ -390,7 +405,7 @@ async function previewRows(c: Context<Vars>, rows: PreviewRow[], reason: string)
   for (const [companyId, ids] of byCompany) {
     await audit(container.db, { companyId, actor, action: "escalation.preview_viewed", reason, ip: clientIp(c), details: { escalationIds: ids, fields: "preview" } });
   }
-  return rows.map((r) => toEscalationPreview({ ...r, viewerUserId: s.user.id, now, businessMinutesRemaining: r.slaDueAt ? businessMinutesBetween(now, new Date(r.slaDueAt), calendar) : null }));
+  return rows.map((r) => previewOf(r, s.user.id, now, calendar));
 }
 
 /** Urgent requests first, then the soonest reply-by time (founder decision Q32, option A; `queueOrder` in packages/core). */
@@ -414,7 +429,7 @@ escalationRoutes.get("/:id", requireRecruiterOrAdmin, async (c) => {
     if (!e) return null;
     const [co] = await tx.select({ name: companies.name }).from(companies).where(eq(companies.id, e.companyId)).limit(1);
     const role = e.roleId ? (await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, e.roleId)).limit(1))[0] : null;
-    const previewRow: PreviewRow = { id: e.id, companyId: e.companyId, companyName: co?.name ?? "", roleTitle: role?.title ?? null, kind: e.kind, status: e.status, urgency: e.urgency, requiredExpertise: e.requiredExpertise, summary: e.summary, slaDueAt: e.slaDueAt, createdAt: e.createdAt, assignedToUserId: e.assignedToUserId };
+    const previewRow: PreviewRow = { id: e.id, companyId: e.companyId, companyName: co?.name ?? "", roleTitle: role?.title ?? null, kind: e.kind, status: e.status, urgency: e.urgency, requiredExpertise: e.requiredExpertise, summary: e.summary, slaDueAt: e.slaDueAt, createdAt: e.createdAt, assignedToUserId: e.assignedToUserId, requestedBy: e.requestedBy, roleId: e.roleId, applicationId: e.applicationId };
     if (e.assignedToUserId !== s.user.id) return { previewRow, full: null as null | Record<string, unknown>, why: e.assignedToUserId ? "claimed by another recruiter" : "claim it to open the full context" };
     // A posting task (plan D3) opens the job ad and the posting only, read below in the customer's own scope; no grant.
     if (isPostingTask(e.kind)) return { previewRow, full: null as null | Record<string, unknown>, why: null as string | null, task: e };
@@ -425,8 +440,9 @@ escalationRoutes.get("/:id", requireRecruiterOrAdmin, async (c) => {
     await recordStaffAccess(tx, { grant, userName: actor.name, method: "GET", path: `/api/v1/escalations/${e.id}`, ip: clientIp(c) });
     // The thread (plan B5): the team's notes, the recruiter's replies, every answer and why it was reopened.
     const messages = await tx.select().from(escalationMessages).where(eq(escalationMessages.escalationId, e.id));
-    // A hand-over reason from before 9 October 2026 in today's words: never how the candidate sounded.
-    const question = withoutSentimentWords(e.question);
+    // A hand-over reason from before 9 October 2026 in today's words: never how the candidate sounded. A stopped run's
+    // request from before 13 October 2026 in plain words, never the technical error.
+    const question = withoutSentimentWords(plainRequestText(e.question));
     const thread = escalationThread({ ...e, question }, messages, actor.name, { forRecruiter: true });
     const full = { companyId: e.companyId, roleId: e.roleId, applicationId: e.applicationId, firstResponseAt: e.firstResponseAt, accessExpiresAt: e.accessExpiresAt, resolution: e.resolution, resolvedAt: e.resolvedAt, minutesSpent: e.minutesSpent, question, contextSnapshot: withoutUnsentInContext(e.contextSnapshot), thread, reopenedCount: messages.filter((m) => m.kind === "reopen").length, grant: { id: grant.id, purpose: grant.purpose, expiresAt: grant.expiresAt, scope: { roleId: grant.roleId, applicationId: grant.applicationId } } };
     return { previewRow, full, why: null as string | null };
@@ -442,7 +458,7 @@ escalationRoutes.get("/:id", requireRecruiterOrAdmin, async (c) => {
   }
   const now = new Date();
   const calendar = await loadBusinessCalendar(container.db, now);
-  const preview = toEscalationPreview({ ...row.previewRow, viewerUserId: s.user.id, now, businessMinutesRemaining: row.previewRow.slaDueAt ? businessMinutesBetween(now, new Date(row.previewRow.slaDueAt), calendar) : null });
+  const preview = previewOf(row.previewRow, s.user.id, now, calendar);
   return c.json({ ...preview, ...row.full, accessGranted: true });
 });
 
@@ -476,7 +492,7 @@ escalationRoutes.post("/:id/claim", requireRecruiterOrAdmin, async (c) => {
     const grant = existing && existing.escalationId === e.id ? existing : await grantStaffAccess(tx, {
       userId: s.user.id, userName: actor.name, companyId: e.companyId, kind: "escalation",
       scope: { escalationId: e.id, roleId: e.roleId, applicationId: e.applicationId },
-      purpose: `${e.kind}: ${e.summary || "customer request"}`, grantedBy: actor, expiresAt: new Date(now.getTime() + ESCALATION_ACCESS_DAYS * 86_400_000), now,
+      purpose: `${e.kind}: ${servedSummary(e) || "customer request"}`, grantedBy: actor, expiresAt: new Date(now.getTime() + ESCALATION_ACCESS_DAYS * 86_400_000), now,
     });
     const [u] = await tx.update(recruiterEscalations).set({ status: "claimed", assignedToUserId: s.user.id, claimedAt: e.claimedAt ?? now.toISOString(), firstResponseAt: e.firstResponseAt ?? now.toISOString(), accessExpiresAt: grant.expiresAt }).where(eq(recruiterEscalations.id, e.id)).returning();
     await emit(tx, { type: "recruiter.claimed", companyId: e.companyId, actor, subject: { type: "escalation", id: e.id }, payload: { grantId: grant.id, expiresAt: grant.expiresAt } });

@@ -1,6 +1,6 @@
 import { and, eq, isNull, notInArray, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { SYSTEM_ACTOR, createEscalation, emit, raiseAlert } from "@ros/core";
+import { SYSTEM_ACTOR, createEscalation, emit, raiseAlert, stoppedRunQuestion } from "@ros/core";
 import { jobs, randomToken, rowsOf, workflowRuns, workflowSteps, withTenant, type Queryable, type Tx, type WaitCondition } from "@ros/db";
 import type { EngineDeps, EngineOptions, PrepareContext, RunRow, StartInput, StepContext, StepResult, WakePayload, WorkflowDefinition } from "./types";
 
@@ -20,22 +20,11 @@ import type { EngineDeps, EngineOptions, PrepareContext, RunRow, StartInput, Ste
  */
 export type JobHandler = (payload: Record<string, unknown>, ctx: { attempt: number; maxAttempts: number; now: Date }) => Promise<void>;
 
-const STOPPED_WORK: Record<string, string> = {
-  application_intake: "Processing this application",
-  screen: "The screening chat",
-  schedule_interview: "Scheduling this interview",
-  role_approval: "Approving this role",
-  publish_role: "Publishing this role",
-};
-
 /**
- * The request a stopped run raises, in plain words: the customer reads it under their recruiter requests. The error
- * itself stays with the run (`last_error`, the `workflow.failed` event) for ITS, never in front of the customer.
+ * The request a stopped run raises, in plain words (packages/core/src/stopped-runs.ts, where the display sites also turn
+ * requests stored before 13 October 2026 into the same words). Re-exported here, where it was first defined.
  */
-export function stoppedRunQuestion(workflowKey: string, attempts: number): string {
-  const tries = attempts === 1 ? "the first try" : `${attempts} tries`;
-  return `${STOPPED_WORK[workflowKey] ?? "An automatic step"} stopped after ${tries} and needs a person to take over.`;
-}
+export { stoppedRunQuestion };
 
 export class WorkflowEngine {
   private defs = new Map<string, WorkflowDefinition>();
