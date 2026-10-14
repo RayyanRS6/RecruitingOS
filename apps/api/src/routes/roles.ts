@@ -16,8 +16,8 @@ import { autoActionsOnOpen, boardChoices, closingDateFor } from "../services/pub
 import { withEmptyPay, withoutPay } from "../services/pay-redaction";
 import { assertMayApprovePacket, packetApprovalView } from "../services/packet-approval";
 import { createPacketVersion, currentVersionOf } from "../services/packet-versions";
-import { aiRuns, applicationMarks, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviewFollowups, interviewParticipants, interviews, postings, recruiterEscalations, rolePackets, roles, screens, withTenant } from "@ros/db";
-import { actorOf, applicationScopeGuard, clientIp, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
+import { aiRuns, applicationMarks, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviewFollowups, interviews, postings, recruiterEscalations, rolePackets, roles, screens, withTenant } from "@ros/db";
+import { actorOf, applicationScopeGuard, clientIp, requireTenant, roleScopeGuard, rolesInterviewedBy, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { DOWNLOAD_URL_TTL_SECONDS, safeFilename } from "../uploads";
 import { SCREEN_OPEN_STATUSES, applicationActionState, applicationFactsFrom, declineMessagePolicy, decisionMessagePreview, pendingDecisionMessages, performApplicationAction, sendDecisionMessages, stageMoves, undoFacts } from "../services/application-actions";
@@ -29,7 +29,7 @@ import { replayHeldEmails, settleHeldEmailsOnClose } from "../webhooks/postmark"
 import { interviewerApplicationView } from "../services/interviewer-view";
 import { hireFollowUp } from "../services/hire-sheet";
 import { recordOfferMade, settleOutsideOffer, tellRecruiterAboutOutcome } from "../services/offers";
-import { staffScopeOf } from "../services/staff-scope";
+import { staffMayAsk, staffScopeOf } from "../services/staff-scope";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -56,10 +56,10 @@ roleRoutes.get("/", requireTenant, async (c) => {
     const visible = t.staff?.scope.roleId ? list.filter((x) => x.id === t.staff!.scope.roleId) : list;
     if (!visible.length) return [];
     // An interviewer holds role.read but not application.read: the list names only the roles they interview for, the
-    // same rule as their interviews list, and carries no applicant counts or waiting decisions (countsHidden).
+    // same rule as their interviews list and the role page (roleScopeGuard), and carries no applicant counts or waiting
+    // decisions (countsHidden).
     if (t.role === "interviewer") {
-      const mine = await tx.select({ roleId: applications.roleId }).from(interviewParticipants).innerJoin(interviews, eq(interviews.id, interviewParticipants.interviewId)).innerJoin(applications, eq(applications.id, interviews.applicationId)).where(eq(interviewParticipants.userId, t.userId));
-      const ids = new Set(mine.map((m) => m.roleId));
+      const ids = await rolesInterviewedBy(tx, t.userId);
       return visible.filter((r) => ids.has(r.id)).map((r) => ({ ...r, counts: { total: 0 }, countsHidden: true, needsYou: 0, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null, lastActivityAt: lastActivityOf(r) }));
     }
     // Three queries for the whole list, whatever its length: the roles, their applicants by stage, private mark and open
@@ -113,7 +113,10 @@ roleRoutes.get("/:id", requireTenant, async (c) => {
     const packets = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
     const current = currentVersionOf(role, packets);
     const posts = await tx.select().from(postings).where(eq(postings.roleId, role.id));
-    const apps = await tx.select({ stage: applications.stage }).from(applications).where(eq(applications.roleId, role.id));
+    // Applicants by stage, for those who read applications (an interviewer gets none, as on the roles list); a grant about
+    // one candidate counts that candidate alone, as the role's applications list shows them alone.
+    const onlyApplicationId = t.staff?.scope.applicationId ?? null;
+    const apps = !can(t.role, "application.read") ? [] : await tx.select({ stage: applications.stage }).from(applications).where(onlyApplicationId ? and(eq(applications.roleId, role.id), eq(applications.id, onlyApplicationId)) : eq(applications.roleId, role.id));
     const pending = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.status, "pending")));
     const counts: Record<string, number> = {};
     for (const a of apps) counts[a.stage] = (counts[a.stage] ?? 0) + 1;
@@ -128,9 +131,11 @@ roleRoutes.get("/:id", requireTenant, async (c) => {
       return { ...shown, payShown: payShown(p.packet.compensation, notices), payRequiredByLaw: payTransparencyApplies(notices) };
     };
     // Waiting requests can carry a candidate's name and a message written to them (F11): only for those who read
-    // applications, and for ITS staff only the requests their grant covers. The approval card below reads them all.
-    const scope = t.staff ? { roleId: t.staff.scope.roleId, applicationId: t.staff.scope.applicationId } : null;
-    const visiblePending = !can(t.role, "application.read") ? [] : scope ? pending.filter((p) => scopeAllows(scope, { roleId: p.roleId, applicationId: p.applicationId })) : pending;
+    // applications, and for ITS staff only the requests their grant may decide (the same rule as POST /approvals/:id/decide):
+    // a request about the whole role, such as the closing message naming every untold applicant, is not shown to a grant
+    // about one candidate. The approval card below reads them all.
+    const scope = staffScopeOf(t);
+    const visiblePending = !can(t.role, "application.read") ? [] : pending.filter((p) => staffMayAsk(scope, { roleId: p.roleId, applicationId: p.applicationId }));
     // A version proposed while the role runs (an edit waiting for approval): shown beside the current one, never in its place.
     const proposed = current && ["open", "paused"].includes(role.status) ? packets.find((p) => p.status === "proposed" && p.version > current.version) ?? null : null;
     const now = c.get("container").engine.clock();

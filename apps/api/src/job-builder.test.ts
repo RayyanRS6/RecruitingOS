@@ -6,7 +6,7 @@ import type { DraftRolePacket, IntakeQuestion, IntakeSessionSummary, IntakeSessi
 import { aiRuns, events, intakeSessions, notifications, recruiterEscalations, rolePackets, roles } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAs, signInStaff } from "./test-helpers";
+import { putOnInterview, signInAs, signInStaff } from "./test-helpers";
 
 /**
  * The job builder (plan Wave C): a draft starts with its first message, tap-to-answer cards set the facts, the draft is
@@ -373,6 +373,8 @@ describe("the job builder API", () => {
   it("interviewers never see the market pay figures the draft recorded (pay redaction)", async () => {
     const [pv] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, 1)));
     expect(pv.packet.provenance.benchmark).toMatchObject({ p50: 57 });
+    // an interviewer opens the roles they interview for
+    const onIt = await putOnInterview(container, app, { cookie: interviewer, roleId });
     const packets = await json(interviewer, "GET", `/api/v1/roles/${roleId}/packets`);
     expect(packets.status).toBe(200);
     const rows = await read<Array<{ packet: RolePacket }>>(packets);
@@ -383,6 +385,7 @@ describe("the job builder API", () => {
     expect(JSON.stringify(await read<unknown>(page))).not.toMatch(/"p25"|"p50"|"p75"/);
     // a hiring manager, who may see pay, still has the figures
     expect(JSON.stringify(await read<unknown>(await json(manager, "GET", `/api/v1/roles/${roleId}/packets`)))).toMatch(/"p50":57/);
+    await onIt.remove();
   });
 
   it("an empty draft from before is cleared away quietly by the daily sweep (C3)", async () => {

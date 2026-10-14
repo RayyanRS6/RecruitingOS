@@ -34,6 +34,7 @@ import { PoolBoard, SortStrip } from "./board/PoolBoard";
 import { ReviewApply } from "./board/ReviewApply";
 import { boardOrder, boardSearch, modeFrom, type TalentMode } from "./board/board-model";
 import { JobHeader, JobMenu, JobTabs, jobFactsFor } from "./JobHeader";
+import { NotOnThisJob, notOnThisJob } from "./RoleDetail";
 import { CandidatePreview } from "./new-role/CandidatePreview";
 import { RoomAlert } from "./new-role/StartView";
 import { useStartDraft } from "./new-role/use-start-draft";
@@ -88,8 +89,11 @@ export function People() {
   const roleId = params.id ?? jobList?.find((r) => r.status === "open")?.id ?? jobList?.[0]?.id;
   const role = jobList?.find((r) => r.id === roleId);
   // The job itself, for the header's More menu (its accepting switch, its version for Candidate view).
-  const detail = useQuery({ queryKey: ["role", roleId], queryFn: () => api.get<RoleDetail>(`/api/v1/roles/${roleId}`), enabled: !!roleId });
-  const apps = useQuery({ queryKey: ["applications", roleId], queryFn: () => api.get<ApplicationsWithCounts>(`/api/v1/roles/${roleId}/applications?counts=1`), enabled: !!roleId });
+  // A refusal (a job an interviewer is not on) is an answer, not a hiccup: it is not asked again.
+  const detail = useQuery({ queryKey: ["role", roleId], queryFn: () => api.get<RoleDetail>(`/api/v1/roles/${roleId}`), enabled: !!roleId, retry: (count, e) => !(e instanceof ApiError && (e.status === 403 || e.status === 404)) && count < 1 });
+  // An interviewer reads no applicants (they see the people they interview under Interviews), so the list is not asked for.
+  const interviewer = myRole === "interviewer";
+  const apps = useQuery({ queryKey: ["applications", roleId], queryFn: () => api.get<ApplicationsWithCounts>(`/api/v1/roles/${roleId}/applications?counts=1`), enabled: !!roleId && !interviewer });
   const rows = apps.data?.applications ?? [];
   const counts = apps.data?.counts;
   // Nobody still applying waits on you (plan E6), whatever their group says.
@@ -135,7 +139,7 @@ export function People() {
   const mode = modeFrom(search);
   const goTo = (qs: string) => nav(`${window.location.pathname}${qs}`, { replace: true });
   const setMode = (next: TalentMode) => goTo(boardSearch(search, { mode: next }));
-  const board = useQuery({ queryKey: ["applications", roleId, "board"], queryFn: () => api.get<BoardView>(`/api/v1/roles/${roleId}/board`), enabled: !!roleId && mode === "board" });
+  const board = useQuery({ queryKey: ["applications", roleId, "board"], queryFn: () => api.get<BoardView>(`/api/v1/roles/${roleId}/board`), enabled: !!roleId && mode === "board" && !interviewer });
   const reviewing = mode === "board" && search.get("review") === "1";
   const [asking, setAsking] = useState(false);
   // "Show these on the board" from an answer: only those people, until the chip is pressed (or another role is chosen).
@@ -218,6 +222,17 @@ export function People() {
   // in, so the line is never empty and nothing jumps when the details arrive.
   const facts = job ? jobFactsFor(job) : null;
   const sub = !roleId ? undefined : facts ?? (apps.data ? headline : undefined);
+
+  // An interviewer: a job they are not on says so; on their own job, where the people they interview are.
+  if (interviewer && roleId) {
+    if (notOnThisJob(detail.error, myRole)) return <NotOnThisJob />;
+    return (
+      <div className="stack" style={{ gap: 18 }}>
+        <JobHeader title={role?.title ?? job?.title ?? "Candidates"} status={status} pulse={status === "open"} companyName={company.name} noJob={false} sub={facts ?? undefined} />
+        <NotOnThisJob title="Candidates are for the hiring team" body="You see the people you interview under Interviews." />
+      </div>
+    );
+  }
 
   return (
     <div className="stack" style={{ gap: 18 }}>

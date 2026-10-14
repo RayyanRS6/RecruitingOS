@@ -689,18 +689,23 @@ export type VolumeDay = { day: string; total: number; bySource: Record<string, n
 
 /**
  * Applications per day for the last fourteen days, by source. Days are calendar days in the company's time zone, cut
- * the same way the daily volume alert cuts them. Counting only: nothing here touches an application.
+ * the same way the daily volume alert cuts them. Counting only: nothing here touches an application. The counts follow
+ * the role page's (GET /roles/:id): none for those who do not read applications (an interviewer), and a grant about one
+ * candidate counts that candidate alone. The switch's state and the alert threshold are the role's own, for everyone.
  */
 postingRoutes.get("/:id/volume", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.read");
   const container = c.get("container");
+  const readsApplications = can(t.role, "application.read");
+  const onlyApplicationId = t.staff?.scope.applicationId ?? null;
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     const role = await loadRole(tx, c.req.param("id"));
     const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
     const local = localDays(container.engine.clock(), company?.timezone);
     const windowStart = local.start(-(VOLUME_WINDOW_DAYS - 1));
-    const rows = await tx.select({ createdAt: applications.createdAt, source: applications.source }).from(applications).where(and(eq(applications.roleId, role.id), gte(applications.createdAt, windowStart.toISOString())));
+    const inWindow = and(eq(applications.roleId, role.id), gte(applications.createdAt, windowStart.toISOString()));
+    const rows = !readsApplications ? [] : await tx.select({ createdAt: applications.createdAt, source: applications.source }).from(applications).where(onlyApplicationId ? and(inWindow, eq(applications.id, onlyApplicationId)) : inWindow);
     const days: VolumeDay[] = Array.from({ length: VOLUME_WINDOW_DAYS }, (_, i) => ({ day: local.key(local.start(i - (VOLUME_WINDOW_DAYS - 1))), total: 0, bySource: {} }));
     const byDay = new Map(days.map((d) => [d.day, d]));
     const totals: Record<string, number> = {};

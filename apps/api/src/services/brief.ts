@@ -116,7 +116,9 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   const openRoles = (await tx.select().from(roles).where(and(eq(roles.companyId, companyId), inArray(roles.status, ["open", "paused", "pending_approval"])))).filter((r) => inStaffScope(scope, { roleId: r.id }));
 
   const now = new Date();
-  const pending = (await tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, companyId), eq(approvalRequests.status, "pending"))).orderBy(desc(approvalRequests.createdAt))).filter((p) => inStaffScope(scope, { roleId: p.roleId, applicationId: p.applicationId }));
+  // Only the requests the viewer may decide (`staffMayAsk`, the rule POST /approvals/:id/decide applies): an ITS recruiter
+  // given one candidate gets no card for a request about the whole role, such as a closing message naming every applicant.
+  const pending = (await tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, companyId), eq(approvalRequests.status, "pending"))).orderBy(desc(approvalRequests.createdAt))).filter((p) => staffMayAsk(scope, { roleId: p.roleId, applicationId: p.applicationId }));
   // The candidates the waiting requests are about, in one query, so a card can name the person instead of an action key.
   const pendingAppIds = [...new Set(pending.map((p) => p.applicationId).filter((x): x is string => !!x))];
   const pendingNames = pendingAppIds.length ? await tx.select({ id: applications.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(inArray(applications.id, pendingAppIds)) : [];

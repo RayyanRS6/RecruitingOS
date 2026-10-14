@@ -9,7 +9,7 @@ import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { createApplication } from "./services/applications";
 import { APPLICANT_COLUMNS, composeRoleReport, summaryRows, toCsv, type ReportData, type RoleReport } from "./services/role-report";
-import { signInAdmin, signInAs, signInStaff } from "./test-helpers";
+import { putOnInterview, signInAdmin, signInAs, signInStaff } from "./test-helpers";
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -433,10 +433,15 @@ describe("role report", () => {
 
   it("refuses interviewers, lets other members read, and shows nothing of another company's role", async () => {
     const interviewer = await signInAs(container, app, { companyId, role: "interviewer" });
-    for (const path of [`/api/v1/roles/${roleId}/report`, `/api/v1/roles/${roleId}/report.csv`, `/api/v1/roles/${roleId}/report/summary.csv`]) {
+    const paths = [`/api/v1/roles/${roleId}/report`, `/api/v1/roles/${roleId}/report.csv`, `/api/v1/roles/${roleId}/report/summary.csv`];
+    // a role they do not interview for answers as one that does not exist; on one they do, the figures need application.read
+    for (const path of paths) expect((await json(interviewer, "GET", path)).status, path).toBe(404);
+    const onIt = await putOnInterview(container, app, { cookie: interviewer, roleId });
+    for (const path of paths) {
       const r = await json(interviewer, "GET", path);
       expect(r.status, path).toBe(403);
     }
+    await onIt.remove();
     const hm = await signInAs(container, app, { companyId, role: "hiring_manager" });
     expect((await json(hm, "GET", `/api/v1/roles/${roleId}/report`)).status).toBe(200);
     const hr = await signInAs(container, app, { companyId, role: "hr" });
@@ -464,8 +469,18 @@ describe("role report", () => {
     const exported = (await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "report.exported")))).filter((a) => a.actor.kind === "recruiter");
     expect(exported).toHaveLength(1);
     expect(exported[0].details).toMatchObject({ kind: "applicants", rows: 1 });
-    // the figures are counts without names, so the report itself stays readable under the grant
-    expect((await json(recruiterB, "GET", `/api/v1/roles/${roleId}/report`)).status).toBe(200);
+    // the figures stay readable under the grant, but count Ana alone: no other applicant's count or application id
+    const own = await json(recruiterB, "GET", `/api/v1/roles/${roleId}/report`);
+    expect(own.status).toBe(200);
+    const figures = (await own.json()) as RoleReport;
+    expect(figures.applicants.total).toBe(1);
+    expect(figures.stages.total).toBe(1);
+    expect(figures.pendingDecisions.list.every((p) => p.applicationId === ids.ana || p.applicationId === null)).toBe(true);
+    const others = Object.entries(ids).filter(([k]) => k !== "ana").map(([, v]) => v);
+    for (const id of others) expect(JSON.stringify(figures)).not.toContain(id);
+    expect(figures.interviews.total).toBeLessThanOrEqual(report.interviews.total);
+    const summary = (await (await json(recruiterB, "GET", `/api/v1/roles/${roleId}/report/summary.csv`)).text()).replace(/^﻿/, "").split("\r\n");
+    expect(summary).toContain("Applicants,Total,1");
   });
 
   it("gives the administrator the same figures aggregated over every role of the customer, and nobody else", async () => {

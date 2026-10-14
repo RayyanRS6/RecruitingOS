@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, eq, gt, isNull, ne } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, ne, notInArray, or } from "drizzle-orm";
 import { magicLinks, memberships, randomToken, sessions, users, type Queryable } from "@ros/db";
 import { acceptPendingInvitations } from "./invitations";
 import { activeGrantFor } from "./platform-roles";
@@ -182,6 +182,29 @@ export async function revokeAllSessions(q: Queryable, userId: string, opts: { ex
     .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt), ...(opts.exceptSessionId ? [ne(sessions.id, opts.exceptSessionId)] : [])))
     .returning({ id: sessions.id });
   return rows.length;
+}
+
+/**
+ * Ends a person's sessions as far as one company may reach them (audit 01-platform B3). A session belongs to the person,
+ * not to a company: one session can switch to any company they are an active member of, so ending it signs them out of
+ * all of them. One company must never sign a person out of another company's work, so a session working in another
+ * company where they are an active member is left open; every other session (working in this company, in none yet, or
+ * in a company they have since left) is ended. `sessionsLeftOpen` counts the sessions left open: from those the person
+ * could still switch back to this company while they remain a member, which the caller says plainly. With no other
+ * company, this is every session the person has.
+ */
+export async function revokeSessionsForCompany(q: Queryable, userId: string, companyId: string, opts: { now?: Date } = {}): Promise<{ sessionsEnded: number; sessionsLeftOpen: number; otherCompanies: number }> {
+  const now = (opts.now ?? new Date()).toISOString();
+  const others = (await q.select({ companyId: memberships.companyId }).from(memberships).where(and(eq(memberships.userId, userId), eq(memberships.status, "active"), ne(memberships.companyId, companyId)))).map((m) => m.companyId);
+  // A session with no company yet is ended too: on its next request it would land in one of the person's companies,
+  // possibly this one. (NULL never matches IN, so it is named on its own.)
+  const ended = await q
+    .update(sessions)
+    .set({ revokedAt: now })
+    .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt), ...(others.length ? [or(isNull(sessions.activeCompanyId), notInArray(sessions.activeCompanyId, others))] : [])))
+    .returning({ id: sessions.id });
+  const leftOpen = others.length ? await q.select({ id: sessions.id }).from(sessions).where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt), gt(sessions.expiresAt, now), inArray(sessions.activeCompanyId, others))) : [];
+  return { sessionsEnded: ended.length, sessionsLeftOpen: leftOpen.length, otherCompanies: others.length };
 }
 
 /** Raised when a platform-role holder tries the email link: the answer is Microsoft 365 with a second factor. */

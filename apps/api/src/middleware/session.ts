@@ -1,9 +1,9 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { activeStaffGrant, loadSession, recordStaffAccess, scopeAllows, type SessionContext, type StaffGrant } from "@ros/core";
 import type { MembershipRole } from "@ros/contracts";
-import { applications, withTenant } from "@ros/db";
+import { applications, interviewParticipants, interviews, withTenant, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import { HttpError } from "./errors";
 
@@ -93,12 +93,43 @@ function scopeError(): HttpError {
   return new HttpError(403, "staff_scope", "Your access is limited to the role and candidate of the escalation you accepted.");
 }
 
-/** Staff acting under a grant may touch only the role the grant names. Members are unaffected. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The roles an interviewer interviews for: those with an interview they are on (F9: an interviewer sees their own
+ * interviews). The roles list, the role page, its tabs and its interviews all go by this one rule. With `roleId`, only
+ * that role is looked for.
+ */
+export async function rolesInterviewedBy(tx: Tx, userId: string, roleId?: string): Promise<Set<string>> {
+  const rows = await tx
+    .select({ roleId: applications.roleId })
+    .from(interviewParticipants)
+    .innerJoin(interviews, eq(interviews.id, interviewParticipants.interviewId))
+    .innerJoin(applications, eq(applications.id, interviews.applicationId))
+    .where(roleId ? and(eq(interviewParticipants.userId, userId), eq(applications.roleId, roleId)) : eq(interviewParticipants.userId, userId));
+  return new Set(rows.map((r) => r.roleId));
+}
+
+/** One look per request: the role routes are mounted from several groups, and each runs this guard. */
+const interviewerOnRole = new WeakMap<Request, Promise<boolean>>();
+
+/**
+ * Staff acting under a grant may touch only the role the grant names. An interviewer reads only the roles they
+ * interview for (the roles list's rule): any other role's page, tabs and interviews answer "Role not found.", as for a
+ * role that does not exist. Their changes are refused by the permission matrix as before. Other members are unaffected.
+ */
 export const roleScopeGuard: MiddlewareHandler<Vars> = async (c, next) => {
   const t = c.get("tenant");
+  const roleId = c.req.param("id");
   if (t?.staff) {
-    const roleId = c.req.param("id");
     if (roleId && !scopeAllows({ roleId: t.staff.scope.roleId, applicationId: t.staff.scope.applicationId }, { roleId })) throw scopeError();
+  } else if (t?.role === "interviewer" && roleId && UUID.test(roleId) && (c.req.method === "GET" || c.req.method === "HEAD")) {
+    let on = interviewerOnRole.get(c.req.raw);
+    if (!on) {
+      on = withTenant(c.get("container").db, t.companyId, async (tx) => (await rolesInterviewedBy(tx, t.userId, roleId)).has(roleId));
+      interviewerOnRole.set(c.req.raw, on);
+    }
+    if (!(await on)) throw new HttpError(404, "not_found", "Role not found.");
   }
   await next();
 };

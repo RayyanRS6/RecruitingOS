@@ -15,6 +15,7 @@ import { HttpError } from "../middleware/errors";
 import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
 import { applyFlowOf, jobPreview } from "../services/job-preview";
 import { diffPackets } from "../services/packet-diff";
+import { eventTargets, inStaffScope, staffScopeOf } from "../services/staff-scope";
 import { applyFieldEdit } from "../services/packet-fields";
 import { cancelPendingPacketApprovals, createPacketVersion, currentVersionOf, materialChanges, startPacketApproval, type PacketRow, type RoleRow } from "../services/packet-versions";
 import type { Container } from "../container";
@@ -129,16 +130,19 @@ rolePacketRoutes.post("/:id/request-approval", requireTenant, async (c) => {
 
 /**
  * The role's activity: every event about the role itself, its packet versions, or anything that names the role in its
- * payload (applications, approvals, postings), newest first. Described in plain words by the page.
+ * payload (applications, approvals, postings), newest first. Described in plain words by the page. An ITS recruiter under
+ * a grant reads only the events it covers, by the rule of the activity list (GET /events): a grant about one candidate
+ * sees the role's own events and that candidate's, never another applicant's application or outcome.
  */
 rolePacketRoutes.get("/:id/timeline", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "events.read");
   const roleId = c.req.param("id") ?? "";
+  const scope = staffScopeOf(t);
   const rows = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const [role] = await tx.select({ id: roles.id }).from(roles).where(eq(roles.id, roleId)).limit(1);
     if (!role) return null;
-    return tx
+    const found = await tx
       .select({ id: events.id, type: events.type, occurredAt: events.occurredAt, actor: events.actor, subjectType: events.subjectType, subjectId: events.subjectId, payload: events.payload })
       .from(events)
       .where(and(
@@ -150,7 +154,11 @@ rolePacketRoutes.get("/:id/timeline", requireTenant, async (c) => {
         ),
       ))
       .orderBy(desc(events.occurredAt), desc(events.id))
-      .limit(TIMELINE_LIMIT);
+      // Scoped: read further back, keep what the grant covers, and answer with the same number at most.
+      .limit(scope ? TIMELINE_LIMIT * 10 : TIMELINE_LIMIT);
+    if (!scope) return found;
+    const targets = await eventTargets(tx, found);
+    return found.filter((e) => inStaffScope(scope, targets.get(e.id) ?? {})).slice(0, TIMELINE_LIMIT);
   });
   if (!rows) throw new HttpError(404, "not_found", "Role not found.");
   return c.json(rows);

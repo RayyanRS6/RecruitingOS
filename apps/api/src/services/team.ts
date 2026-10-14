@@ -1,8 +1,8 @@
 import { and, asc, count, eq, inArray } from "drizzle-orm";
 import type { Actor, InviteMember, UpdateMember } from "@ros/contracts";
-import { FRESH_SESSION_MS, REAUTH_WINDOW_MS, audit, createInvitation, disconnectCalendar, emit, invitationLink, isRecentlyAuthenticated, listPendingInvitations, membersWithCalendarStatus, normalizeEmail, notify, publicInvitation, resendInvitation, revokeAllSessions, revokeInvitation, roleInWords, type InvitationRow, type SessionContext } from "@ros/core";
+import { FRESH_SESSION_MS, REAUTH_WINDOW_MS, audit, createInvitation, disconnectCalendar, emit, invitationLink, isRecentlyAuthenticated, listPendingInvitations, membersWithCalendarStatus, normalizeEmail, notify, publicInvitation, resendInvitation, revokeInvitation, revokeSessionsForCompany, roleInWords, type InvitationRow, type SessionContext } from "@ros/core";
 import { queueCommunication } from "@ros/agents";
-import { applications, companies, interviewParticipants, interviews, memberships, users, withPlatform, withTenant, type Tx } from "@ros/db";
+import { applications, companies, interviewParticipants, interviews, invitations, memberships, users, withPlatform, withTenant, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
 import type { Tenant } from "../middleware/session";
@@ -87,6 +87,10 @@ export async function inviteMember(team: Team, input: { body: InviteMember; invi
   const result = await withTenant(container.db, tenant.companyId, async (tx) => {
     const [member] = await tx.select({ id: memberships.id }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(memberships.companyId, tenant.companyId), eq(memberships.status, "active"), eq(users.email, email))).limit(1);
     if (member) throw new HttpError(409, "already_member", `${email} is already on your team.`);
+    // A new invitation replaces any open one for the same address (core createInvitation), which withdraws it: the same
+    // ranks as withdrawing it directly apply, so HR cannot quietly replace an admin or owner invitation with a lower one.
+    const open = await tx.select({ role: invitations.role }).from(invitations).where(and(eq(invitations.companyId, tenant.companyId), eq(invitations.email, email), eq(invitations.status, "pending")));
+    for (const o of open) assertMayWithdraw(tenant, o.role);
     const companyName = await companyNameOf(tx, tenant.companyId);
     const created = await createInvitation(tx, { companyId: tenant.companyId, email, role: input.body.role, name: input.body.name ?? null, invitedBy: actor, now });
     const link = await queueInvitationEmail(tx, team, { invitation: created.row, token: created.token, companyName, inviterName: input.inviterName, again: false });
@@ -135,12 +139,27 @@ export async function resendMemberInvitation(team: Team, input: { invitationId: 
   return { ok: true as const, invitation: publicInvitation(result.row, now), ...devLinkOf(container, result.link) };
 }
 
+/**
+ * Withdraws an open invitation. An invitation that would make someone an owner or an admin is withdrawn only by those who
+ * may grant that role (audit 01-platform B12): an owner's by an owner, an admin's by an owner or an admin, the same ranks
+ * as sending it again; withdrawing needs no recent sign-in, as taking a role away does not. The refusal rolls the
+ * withdrawal and its audit record back, so the invitation stays open.
+ */
 export async function revokeMemberInvitation(team: Team, input: { invitationId: string }) {
   const { container, tenant, actor } = team;
   const now = container.engine.clock();
-  const row = await withTenant(container.db, tenant.companyId, (tx) => revokeInvitation(tx, { invitationId: input.invitationId, companyId: tenant.companyId, actor, now }));
+  const row = await withTenant(container.db, tenant.companyId, async (tx) => {
+    const revoked = await revokeInvitation(tx, { invitationId: input.invitationId, companyId: tenant.companyId, actor, now });
+    if (revoked) assertMayWithdraw(tenant, revoked.role);
+    return revoked;
+  });
   if (!row) throw new HttpError(404, "not_found", "No open invitation with that id.");
   return { ok: true as const, invitation: publicInvitation(row, now) };
+}
+
+function assertMayWithdraw(tenant: Tenant, role: string): void {
+  if (role === "owner" && tenant.role !== "owner") throw new HttpError(403, "owner_only", "Only an owner can withdraw an invitation to become an owner.");
+  if (role === "admin" && !mayGrantAdmin(tenant)) throw new HttpError(403, "admin_only", "Only an owner or an admin can withdraw an invitation to become an admin.");
 }
 
 const OPEN_INTERVIEW_STATUSES = ["proposed", "scheduling", "scheduled"];
@@ -233,11 +252,15 @@ export async function updateMember(team: Team, input: { userId: string; body: Up
   });
   let sessionsEnded = 0;
   if (outcome.changed) {
-    // Sessions are a platform table: ended after the membership change has committed, so the new role (or none) applies at once.
+    // Sessions are a platform table: ended after the membership change has committed, so the new role (or none) applies
+    // at once. Only the sessions working in this company (core `revokeSessionsForCompany`, audit 01-platform B3): a person
+    // who also works for another company is not signed out of it. Every request reads the memberships again, so a session
+    // left open there gets the new role, or no way back in after a removal, the moment it switches here.
     sessionsEnded = await withPlatform(container.db, async (tx) => {
-      const n = await revokeAllSessions(tx, userId, { now });
-      if (n > 0) await audit(tx, { companyId: tenant.companyId, actor, action: "session.revoked", target: { type: "user", id: userId }, reason: outcome.removed ? "removed from the team" : "role changed", details: { sessionsEnded: n } });
-      return n;
+      const r = await revokeSessionsForCompany(tx, userId, tenant.companyId, { now });
+      // Nothing about the person's other companies goes into this company's audit log.
+      if (r.sessionsEnded > 0) await audit(tx, { companyId: tenant.companyId, actor, action: "session.revoked", target: { type: "user", id: userId }, reason: outcome.removed ? "removed from the team" : "role changed", details: { sessionsEnded: r.sessionsEnded, scope: "company" } });
+      return r.sessionsEnded;
     });
     if (outcome.removed) await container.kick();
   }

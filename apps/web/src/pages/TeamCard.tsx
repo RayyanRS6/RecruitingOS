@@ -24,6 +24,13 @@ const CAN_MANAGE_MEMBERS = ["owner", "admin", "hr"];
 const CAN_GRANT_ADMIN = ["owner", "admin"];
 /** The roles a person may give: an owner gives any; an admin any but owner; HR neither owner nor admin. */
 const grantable = (myRole: string) => ROLES.filter((r) => (r.value !== "owner" || myRole === "owner") && (r.value !== "admin" || CAN_GRANT_ADMIN.includes(myRole)));
+/**
+ * Who may send again or withdraw an invitation to a role: the same ranks as giving it (services/team.ts): an owner's
+ * invitation is an owner's to handle, an admin's an owner's or an admin's.
+ */
+const mayHandleInvitation = (myRole: string, role: string) => grantable(myRole).some((r) => r.value === role);
+/** Signing a teammate out (POST /members/:userId/sign-out): owners and admins; only an owner signs an owner out. */
+const maySignOut = (myRole: string, theirRole: string) => CAN_GRANT_ADMIN.includes(myRole) && (theirRole !== "owner" || myRole === "owner");
 
 /** The API's codes, in plain words. */
 function explain(e: unknown, fallback: string): string {
@@ -55,7 +62,8 @@ export function TeamCard({ myRole, myUserId, onReauthRequired }: { myRole: strin
   // A refusal for an old sign-in brings up "Confirm it's you" at the top of Setup, as a rule change does.
   const failed = (e: unknown, fallback: string) => { if (e instanceof ApiError && e.code === "reauth_required") onReauthRequired?.(); setError(explain(e, fallback)); };
   const members = useQuery({ queryKey: ["members"], queryFn: () => api.get<Member[]>("/api/v1/companies/current/members") });
-  const invitations = useQuery({ queryKey: ["invitations"], queryFn: () => api.get<Invitation[]>("/api/v1/companies/current/invitations") });
+  // Pending invitations are for those who manage the team (the API refuses everyone else): never asked for otherwise.
+  const invitations = useQuery({ queryKey: ["invitations"], queryFn: () => api.get<Invitation[]>("/api/v1/companies/current/invitations"), enabled: canManage });
   const refresh = async () => { await qc.invalidateQueries({ queryKey: ["members"] }); await qc.invalidateQueries({ queryKey: ["invitations"] }); };
 
   const [invite, setInvite] = useState({ email: "", role: "hiring_manager", name: "" });
@@ -63,6 +71,9 @@ export function TeamCard({ myRole, myUserId, onReauthRequired }: { myRole: strin
   const [error, setError] = useState<string | null>(null);
   const [roleChange, setRoleChange] = useState<{ userId: string; role: string } | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
+  const [signingOut, setSigningOut] = useState<string | null>(null);
+  /** A refusal over rank says what it is about (signing out, withdrawing); the API's own words fit better than the role-change ones. */
+  const rankAware = (e: unknown, fallback: string) => (e instanceof ApiError && (e.code === "owner_only" || e.code === "admin_only") ? e.message : explain(e, fallback));
 
   const sendInvite = useMutation({
     mutationFn: () => api.post<{ ok: boolean; devLink?: string; replaced: number }>("/api/v1/companies/current/members/invite", { email: invite.email, role: invite.role, ...(invite.name.trim() ? { name: invite.name.trim() } : {}) }),
@@ -77,14 +88,19 @@ export function TeamCard({ myRole, myUserId, onReauthRequired }: { myRole: strin
   const revoke = useMutation({
     mutationFn: (id: string) => api.post(`/api/v1/companies/current/invitations/${id}/revoke`),
     onSuccess: async () => { toast("Invitation withdrawn. The link no longer works."); setError(null); await refresh(); },
-    onError: (e) => setError(explain(e, "Could not withdraw the invitation.")),
+    onError: (e) => setError(rankAware(e, "Could not withdraw the invitation.")),
+  });
+  const signOut = useMutation({
+    mutationFn: (userId: string) => api.post<{ sessionsEnded: number; message?: string }>(`/api/v1/companies/current/members/${userId}/sign-out`),
+    onSuccess: (r) => { toast(r.message ?? (r.sessionsEnded ? "Signed out. They must sign in again to work here." : "They had no session open here.")); setSigningOut(null); setError(null); },
+    onError: (e) => { setError(rankAware(e, "Could not sign them out.")); setSigningOut(null); },
   });
   const update = useMutation({
     mutationFn: (input: { userId: string; body: { role?: string; status?: "removed" } }) => api.patch<{ sessionsEnded: number; calendarDeletionQueued: boolean; interviewsFlagged: number; interviewsCancelled?: number }>(`/api/v1/companies/current/members/${input.userId}`, input.body),
     onSuccess: async (r, input) => {
       // Interviews nobody else was on are cancelled by the removal (there is no way to add an interviewer to one); the others go ahead.
       const cancelled = r.interviewsCancelled ?? 0;
-      if (input.body.status === "removed") toast(`Removed. They are signed out everywhere${r.calendarDeletionQueued ? ", their calendar is disconnected" : ""}${cancelled ? `, and ${cancelled === 1 ? "one interview they alone were running was" : `${cancelled} interviews they alone were running were`} cancelled: approve a new one from the candidate's page` : ""}.`);
+      if (input.body.status === "removed") toast(`Removed. They are signed out of this company${r.calendarDeletionQueued ? ", their calendar is disconnected" : ""}${cancelled ? `, and ${cancelled === 1 ? "one interview they alone were running was" : `${cancelled} interviews they alone were running were`} cancelled: approve a new one from the candidate's page` : ""}.`);
       else toast("Role changed. They are signed out and get the new role when they sign in again.");
       setRoleChange(null); setRemoving(null); setError(null); await refresh();
     },
@@ -118,9 +134,22 @@ export function TeamCard({ myRole, myUserId, onReauthRequired }: { myRole: strin
                         {grantable(myRole).map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
                       </select>
                     ) : <Chip>{roleLabel(m.role)}</Chip>}
-                    {canTouch && removing !== m.userId ? <Button size="sm" variant="quiet" onClick={() => { setRemoving(m.userId); setRoleChange(null); }}>Remove</Button> : null}
+                    {canTouch && removing !== m.userId ? <Button size="sm" variant="quiet" onClick={() => { setRemoving(m.userId); setRoleChange(null); setSigningOut(null); }}>Remove</Button> : null}
+                    {!self && maySignOut(myRole, m.role) && signingOut !== m.userId ? <Button size="sm" variant="quiet" ariaLabel={`Sign out everywhere: ${nameOf(m)}`} onClick={() => { setSigningOut(m.userId); setRemoving(null); setRoleChange(null); }}>Sign out everywhere</Button> : null}
                   </span>
                 </div>
+                {signingOut === m.userId ? (
+                  <Alert tone="caution">
+                    <div className="stack" style={{ gap: 6 }}>
+                      <span>Sign {nameOf(m)} out on every device? Each session they have open in this company ends, and they must sign in again. They stay on the team with the same role.</span>
+                      <details className="more">
+                        <summary>If they also work for another company</summary>
+                        <span>Sessions working in another company stay open. From those they could come back here, so to keep them out, remove them from the team.</span>
+                      </details>
+                      <div className="row"><Button size="sm" variant="primary" loading={signOut.isPending} onClick={() => signOut.mutate(m.userId)}>Sign {nameOf(m)} out</Button><Button size="sm" variant="quiet" onClick={() => setSigningOut(null)}>Cancel</Button></div>
+                    </div>
+                  </Alert>
+                ) : null}
                 {roleChange?.userId === m.userId && roleChange.role !== m.role ? (
                   <Alert tone="caution">
                     <div className="stack" style={{ gap: 6 }}>
@@ -132,7 +161,7 @@ export function TeamCard({ myRole, myUserId, onReauthRequired }: { myRole: strin
                 {removing === m.userId ? (
                   <Alert tone="critical">
                     <div className="stack" style={{ gap: 6 }}>
-                      <span>Remove {nameOf(m)} from the team? They lose access right away and are signed out everywhere.</span>
+                      <span>Remove {nameOf(m)} from the team? They lose access right away and are signed out of this company.</span>
                       <details className="more">
                         <summary>What else happens</summary>
                         <span>Their calendar connection is disconnected and its credential deleted. An interview they were going to run alone is cancelled (a candidate with a booked time is told) and you approve a new one with someone else; an interview others also run goes ahead with them. You will be told which ones. What they did stays in the record.</span>
@@ -149,14 +178,14 @@ export function TeamCard({ myRole, myUserId, onReauthRequired }: { myRole: strin
 
       {/* Only those who manage the team may list invitations; for anyone else the refusal is expected and says nothing. */}
       {canManage && invitations.error ? <p className="small" style={{ marginTop: 12, color: "var(--ink-2)" }}>Could not load the pending invitations. <Button size="sm" variant="quiet" onClick={() => invitations.refetch()}>Try again</Button></p> : null}
-      {pending.length ? (
+      {canManage && pending.length ? (
         <div style={{ marginTop: 12 }}>
           <h3 style={{ marginBottom: 6 }}>Invited, not yet in</h3>
           <div className="stack" style={{ gap: 6 }}>
             {pending.map((inv) => (
               <div key={inv.id} className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 8, padding: "6px 0", borderTop: "1px solid var(--line)" }}>
                 <span>{inv.name ? <>{inv.name} <span className="muted small">{inv.email}</span></> : inv.email} <span className="muted small">· {roleLabel(inv.role)} · invited by {inv.invitedBy.name ?? "a teammate"} · link works until {new Date(inv.expiresAt).toLocaleDateString()}</span></span>
-                {canManage ? <span className="row" style={{ gap: 6 }}><Button size="sm" variant="secondary" loading={resend.isPending && resend.variables === inv.id} onClick={() => resend.mutate(inv.id)}>Send again</Button><Button size="sm" variant="quiet" loading={revoke.isPending && revoke.variables === inv.id} onClick={() => revoke.mutate(inv.id)}>Withdraw</Button></span> : null}
+                {mayHandleInvitation(myRole, inv.role) ? <span className="row" style={{ gap: 6 }}><Button size="sm" variant="secondary" loading={resend.isPending && resend.variables === inv.id} onClick={() => resend.mutate(inv.id)}>Send again</Button><Button size="sm" variant="quiet" loading={revoke.isPending && revoke.variables === inv.id} onClick={() => revoke.mutate(inv.id)}>Withdraw</Button></span> : null}
               </div>
             ))}
           </div>
@@ -185,7 +214,7 @@ export function TeamCard({ myRole, myUserId, onReauthRequired }: { myRole: strin
             {ROLES.map((r) => <li key={r.value}><strong>{r.label}:</strong> {r.help}</li>)}
           </ul>
           <p style={{ margin: 0 }}>An invited person gets one email with a link that works for seven days, and signs in with Google or Microsoft using that address.</p>
-          <p style={{ margin: 0 }}>Interviewers never see pay. Hiring managers can approve jobs and decide on candidates. Only owners and admins can make someone an admin, and only an owner can make another owner; either needs a recent sign-in. The last owner cannot be removed.</p>
+          <p style={{ margin: 0 }}>Interviewers never see pay. Hiring managers can approve jobs and decide on candidates. Only owners and admins can make someone an admin, and only an owner can make another owner; either needs a recent sign-in. The last owner cannot be removed. Owners and admins can sign a teammate out of this company; only an owner signs out an owner.</p>
         </div>
       </details>
     </Card>

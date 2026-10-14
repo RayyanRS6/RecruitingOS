@@ -546,16 +546,25 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
   return c.json(result.out);
 });
 
-/** Interviews of one role. */
+/**
+ * Interviews of one role, by the same limits as GET /interviews: an interviewer sees the interviews they are on (the
+ * guard has already refused a role they do not interview for), and ITS staff under a grant about one candidate see that
+ * candidate's interviews only (a grant for another role is refused by the guard).
+ */
 export const roleInterviewRoutes = new Hono<Vars>();
 roleInterviewRoutes.use("/:id/*", roleScopeGuard);
 roleInterviewRoutes.get("/:id/interviews", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.read");
+  const only = t.staff?.scope.applicationId ?? null;
   const rows = await withTenant(c.get("container").db, t.companyId, async (tx) => {
-    const appIds = (await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.roleId, c.req.param("id")), eq(applications.companyId, t.companyId)))).map((a) => a.id);
+    const appIds = (await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.roleId, c.req.param("id")), eq(applications.companyId, t.companyId), ...(only ? [eq(applications.id, only)] : [])))).map((a) => a.id);
     if (!appIds.length) return [];
-    const list = await tx.select().from(interviews).where(inArray(interviews.applicationId, appIds)).orderBy(desc(interviews.createdAt));
+    let list = await tx.select().from(interviews).where(inArray(interviews.applicationId, appIds)).orderBy(desc(interviews.createdAt));
+    if (t.role === "interviewer") {
+      const mine = new Set((await tx.select({ id: interviewParticipants.interviewId }).from(interviewParticipants).where(eq(interviewParticipants.userId, t.userId))).map((r) => r.id));
+      list = list.filter((r) => mine.has(r.id));
+    }
     const followUps = await followUpsOf(tx, list);
     const out = [];
     for (const r of list) out.push(await summary(tx, r, followUps));

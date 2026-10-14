@@ -6,6 +6,7 @@ import type { FakeUrlVerifier } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { jobUrls } from "./services/job-urls";
+import { putOnInterview } from "./test-helpers";
 
 /**
  * The owner's posting routes and the Posting tab's data (docs/spec/20 section 2, items 9 to 17): what each channel
@@ -118,7 +119,9 @@ describe("posting routes: the owner's Posting tab API", () => {
     expect(careers.fields.applyUrl).toBe(urls.apply);
     expect((await get(owner, P("email_in", "package"))).status).toBe(409);
     expect((await get(owner, P("facebook", "package"))).status).toBe(404);
-    // an interviewer reads, and is refused every change
+    // an interviewer reads the Posting tab of a role they interview for, none other, and is refused every change
+    for (const path of [`/api/v1/roles/${roleId}/postings`, `/api/v1/roles/${roleId}/links`, `/api/v1/roles/${roleId}/volume`, P("indeed", "package")]) expect((await get(interviewer, path)).status, path).toBe(404);
+    const onIt = await putOnInterview(container, app, { cookie: interviewer, roleId });
     expect((await get(interviewer, `/api/v1/roles/${roleId}/postings`)).status).toBe(200);
     expect((await get(interviewer, `/api/v1/roles/${roleId}/links`)).status).toBe(200);
     expect((await get(interviewer, `/api/v1/roles/${roleId}/volume`)).status).toBe(200);
@@ -130,6 +133,8 @@ describe("posting routes: the owner's Posting tab API", () => {
     expect((await post(interviewer, `/api/v1/roles/${roleId}/links`, { source: "referral", label: "x" })).status).toBe(403);
     expect((await post(interviewer, `/api/v1/roles/${roleId}/links/${d.links[0].id}/disable`)).status).toBe(403);
     expect((await post(interviewer, `/api/v1/roles/${roleId}/applications/accepting`, { accepting: false })).status).toBe(403);
+    // the counts below are the role's own: the interview set up for this check goes again
+    await onIt.remove();
     // a signed-out call is not a reader either
     expect((await app.request(`/api/v1/roles/${roleId}/postings`)).status).toBe(401);
   });

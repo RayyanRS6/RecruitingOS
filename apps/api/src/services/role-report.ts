@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 import { ApplicationStage as ApplicationStageEnum, CANCELLED_REASON_LABEL, MARK_LABEL, OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum, type ApplicationStage, type MarkKind, type OwnerGroup, type OwnerStage, type PoolMustHaveCount, type PoolSummary, type ToldState } from "@ros/contracts";
 import { DECISION_STAGES, OUTCOME_STATEMENT, POSTING_TASK_KINDS, SOURCES, SOURCE_LABEL, STAGE_LABEL, activeFollowUpsFor, groupFor, holdEnded, inCancelled, isSource, ownerGroup, ownerStage, type FollowUpStrip } from "@ros/core";
 import { applicationMarks, applications, approvalRequests, candidates, communications, companies, events, hiringOutcomes, interviews, recruiterEscalations, roles, type Tx } from "@ros/db";
@@ -95,9 +95,14 @@ export type ReportData = {
 
 const NO_MESSAGES: RoleReport["messages"] = { total: 0, sent: 0, failed: 0, bounced: 0, unknown: 0, pending: 0, candidatesAffected: 0 };
 
-/** One query per figure. `roleIds` null means every role of the company (the administrator's view). */
-export async function loadReportData(tx: Tx, input: { companyId: string; roleIds: string[] | null }): Promise<ReportData> {
+/**
+ * One query per figure. `roleIds` null means every role of the company (the administrator's view). `onlyApplicationId`
+ * (an ITS grant about one candidate) keeps that candidate's rows alone, and the role's own outcome: no other applicant is
+ * counted or named, as the role's applications list and the applicant CSV show that candidate alone.
+ */
+export async function loadReportData(tx: Tx, input: { companyId: string; roleIds: string[] | null; onlyApplicationId?: string | null }): Promise<ReportData> {
   const { companyId } = input;
+  const only = input.onlyApplicationId ?? null;
   const empty: ReportData = { roles: [], timeZone: null, apps: [], stageEvents: [], overrides: [], assessments: [], interviews: [], approvals: [], escalations: [], messages: NO_MESSAGES, outcomes: [], marks: [], followUps: [] };
   if (input.roleIds && input.roleIds.length === 0) return empty;
   const roleRows = await tx
@@ -112,7 +117,7 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
     .select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId, source: applications.source, sourceDetail: applications.sourceDetail, stage: applications.stage, stageChangedAt: applications.stageChangedAt, createdAt: applications.createdAt, latestAssessmentId: applications.latestAssessmentId, rejectReason: applications.rejectReason, talentPoolOptOut: sql<boolean>`coalesce((${candidates.preferences}->>'talentPoolOptOut')::boolean, false)`, toldState: applications.toldState, dataDeleted: sql<boolean>`${candidates.anonymizedAt} is not null` })
     .from(applications)
     .leftJoin(candidates, eq(candidates.id, applications.candidateId))
-    .where(and(eq(applications.companyId, companyId), inArray(applications.roleId, roleIds)))
+    .where(and(eq(applications.companyId, companyId), inArray(applications.roleId, roleIds), ...(only ? [eq(applications.id, only)] : [])))
     .orderBy(asc(applications.createdAt))) as AppRow[];
   const ids = apps.map((a) => a.id);
   const eventsOf = (type: string) => ids.length
@@ -122,19 +127,19 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
   const overrides = await eventsOf("human.override");
   // Never a reading of a conversation the candidate did not send (founder decision of 9 October 2026): someone whose
   // latest reading is one counts with the newest reading left (their résumé's), as the Talent list and the board show them.
-  const asmts: AssessmentRow[] = ids.length ? [...(await shownLatestReadings(tx, { companyId, roleIds })).values()].map((r) => ({ id: r.id, applicationId: r.applicationId, createdAt: r.createdAt, recommendation: r.recommendation })) : [];
+  const asmts: AssessmentRow[] = ids.length ? [...(await shownLatestReadings(tx, { companyId, roleIds })).values()].filter((r) => !only || r.applicationId === only).map((r) => ({ id: r.id, applicationId: r.applicationId, createdAt: r.createdAt, recommendation: r.recommendation })) : [];
   const ivs = ids.length
     ? await tx.select({ applicationId: interviews.applicationId, status: interviews.status, outcome: interviews.outcome, roundKey: interviews.roundKey, title: interviews.title, rescheduleCountCandidate: interviews.rescheduleCountCandidate, decision: interviews.decision }).from(interviews).where(and(eq(interviews.companyId, companyId), inArray(interviews.applicationId, ids))).orderBy(asc(interviews.createdAt), asc(interviews.id))
     : [];
   const approvals = await tx
     .select({ id: approvalRequests.id, actionType: approvalRequests.actionType, applicationId: approvalRequests.applicationId, createdAt: approvalRequests.createdAt })
     .from(approvalRequests)
-    .where(and(eq(approvalRequests.companyId, companyId), inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending")));
+    .where(and(eq(approvalRequests.companyId, companyId), inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending"), ...(only ? [eq(approvalRequests.applicationId, only)] : [])));
   // The team's recruiter requests; ITS's own job-board posting tasks (plan D3) are not requests and are left out.
   const escalations = await tx
     .select({ status: recruiterEscalations.status, createdAt: recruiterEscalations.createdAt, firstResponseAt: recruiterEscalations.firstResponseAt, slaDueAt: recruiterEscalations.slaDueAt, resolvedAt: recruiterEscalations.resolvedAt })
     .from(recruiterEscalations)
-    .where(and(eq(recruiterEscalations.companyId, companyId), notInArray(recruiterEscalations.kind, [...POSTING_TASK_KINDS]), ids.length ? or(inArray(recruiterEscalations.roleId, roleIds), inArray(recruiterEscalations.applicationId, ids)) : inArray(recruiterEscalations.roleId, roleIds)));
+    .where(and(eq(recruiterEscalations.companyId, companyId), notInArray(recruiterEscalations.kind, [...POSTING_TASK_KINDS]), only ? eq(recruiterEscalations.applicationId, only) : ids.length ? or(inArray(recruiterEscalations.roleId, roleIds), inArray(recruiterEscalations.applicationId, ids)) : inArray(recruiterEscalations.roleId, roleIds)));
   const [m] = ids.length
     ? await tx
         .select({
@@ -156,7 +161,7 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
   const outcomes = await tx
     .select({ applicationId: hiringOutcomes.applicationId, roleId: hiringOutcomes.roleId, outcome: hiringOutcomes.outcome, milestone: hiringOutcomes.milestone, recordedAt: hiringOutcomes.recordedAt, correctionOf: hiringOutcomes.correctionOf, correctedAt: hiringOutcomes.correctedAt })
     .from(hiringOutcomes)
-    .where(and(eq(hiringOutcomes.companyId, companyId), inArray(hiringOutcomes.roleId, roleIds)));
+    .where(and(eq(hiringOutcomes.companyId, companyId), inArray(hiringOutcomes.roleId, roleIds), ...(only ? [or(eq(hiringOutcomes.applicationId, only), isNull(hiringOutcomes.applicationId))!] : [])));
   const marks = ids.length
     ? await tx.select({ applicationId: applicationMarks.applicationId, mark: applicationMarks.mark, remindAt: applicationMarks.remindAt, createdAt: applicationMarks.createdAt, clearedAt: applicationMarks.clearedAt }).from(applicationMarks).where(and(eq(applicationMarks.companyId, companyId), inArray(applicationMarks.applicationId, ids))).orderBy(asc(applicationMarks.createdAt))
     : [];
@@ -177,13 +182,16 @@ function activeFollowUpOf(data: ReportData): Map<string, FollowUpStrip> {
   return new Map((data.followUps ?? []).map((f) => [f.applicationId, f]));
 }
 
-/** The report for one role, or null when the role is not visible in this transaction. */
-export async function roleReport(tx: Tx, input: { companyId: string; roleId: string; now: Date }): Promise<RoleReport | null> {
-  const data = await loadReportData(tx, { companyId: input.companyId, roleIds: [input.roleId] });
+/**
+ * The report for one role, or null when the role is not visible in this transaction. `onlyApplicationId` (an ITS grant
+ * about one candidate): every figure, the must-haves included, counts that candidate alone.
+ */
+export async function roleReport(tx: Tx, input: { companyId: string; roleId: string; now: Date; onlyApplicationId?: string | null }): Promise<RoleReport | null> {
+  const data = await loadReportData(tx, { companyId: input.companyId, roleIds: [input.roleId], onlyApplicationId: input.onlyApplicationId });
   if (!data.roles.length) return null;
   const report = composeRoleReport(data, input.now);
   // How the pool meets each must-have (plan F7), from the same findings as the board, with its gentle "stricter than needed?" note.
-  const pool = await loadPool(tx, { roleId: input.roleId });
+  const pool = await loadPool(tx, { roleId: input.roleId, scopeApplicationId: input.onlyApplicationId ?? null });
   const summary = boardView(pool, input.now).summary;
   // Everyone on the board with a reading; each must-have's own total counts only those read against a version that had it.
   const people = pool.rows.filter((r) => !r.stillApplying && r.placement.column && r.match).length;

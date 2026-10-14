@@ -2,10 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useParams, useSearchParams } from "../nav";
-import { Alert, Button, Card, Chip, ErrorState, Skeleton } from "@ros/ui";
+import { Link, useNavigate, useParams, useSearchParams } from "../nav";
+import { Alert, Button, Card, Chip, EmptyState, ErrorState, Skeleton } from "@ros/ui";
 import { formatPayRange } from "@ros/contracts";
-import { api, type Me, type RoleDetail as RoleDetailT, type RolePacket } from "../api/client";
+import { api, ApiError, type Me, type RoleDetail as RoleDetailT, type RolePacket } from "../api/client";
 import { ROLE_WAITS_FOR_CHECK } from "../company-check";
 import { isItsStaff } from "../apply-flow";
 import { AskRecruiter } from "../components/AskRecruiter";
@@ -30,6 +30,26 @@ import { RoleRefine } from "./new-role/RoleRefine";
 import { RoomAlert } from "./new-role/StartView";
 import { useStartDraft } from "./new-role/use-start-draft";
 
+/**
+ * An interviewer opens only the jobs they interview for; any other job answers "not found" (as if it did not exist).
+ * The page says so plainly instead of a failure to retry.
+ */
+export function notOnThisJob(error: unknown, myRole: string | null | undefined): boolean {
+  return myRole === "interviewer" && error instanceof ApiError && (error.status === 404 || error.status === 403);
+}
+
+/** What an interviewer sees on a job they are not on, or on its candidates: where their own interviews are. */
+export function NotOnThisJob(props: { title?: string; body?: string }) {
+  return (
+    <EmptyState
+      icon="calendar"
+      title={props.title ?? "You are not on this job"}
+      body={props.body ?? "You see the jobs you interview for. Your interviews are under Interviews."}
+      action={<Link to="/interviews" className="btn primary">Go to Interviews</Link>}
+    />
+  );
+}
+
 /** Statuses in which the packet is still worked on, so a change can be asked for by chat (plan C10). */
 const REFINABLE = ["draft", "pending_approval", "open", "paused"];
 
@@ -50,6 +70,8 @@ export function RoleDetail() {
   const role = useQuery({
     queryKey: ["role", id],
     queryFn: () => api.get<RoleDetailT>(`/api/v1/roles/${id}`),
+    // A refusal (a job this person is not on) is an answer, not a hiccup: it is not asked again.
+    retry: (count, e) => !(e instanceof ApiError && (e.status === 403 || e.status === 404)) && count < 1,
     refetchInterval: (query) => {
       const data = query.state.data;
       if (!data || !waitingOnWorker(data, approvedVersion)) {
@@ -131,6 +153,7 @@ export function RoleDetail() {
   // never the job itself, so the browser holds none of the job before it takes the page over. Anything this page shows
   // one day from the rail's jobs list must wait for useIsClient() (components/use-is-client.ts), as on Candidates.
   if (role.isLoading) return <Skeleton lines={5} />;
+  if (notOnThisJob(role.error, myRole)) return <NotOnThisJob />;
   if (role.error || !role.data) return <ErrorState message="Could not load this job." onRetry={() => role.refetch()} />;
   const r = role.data;
   const manage = canManageRole(myRole);

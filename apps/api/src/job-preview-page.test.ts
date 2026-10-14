@@ -6,7 +6,7 @@ import { companies } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { jobUrls } from "./services/job-urls";
-import { signInAs } from "./test-helpers";
+import { putOnInterview, signInAs } from "./test-helpers";
 
 /**
  * The authenticated preview of the job page (plan D1): the page and the apply form candidates get, drawn by the same
@@ -124,10 +124,14 @@ describe("the job-page preview (plan D1)", () => {
   });
 
   it("needs the role and its pay: an interviewer, someone signed out, an unknown version or role each get a plain page", async () => {
+    // a role they do not interview for answers as one that does not exist; one they do needs the pay as well
+    expect((await json(interviewer, "GET", `/api/v1/roles/${roleId}/preview`)).status).toBe(404);
+    const onIt = await putOnInterview(container, app, { cookie: interviewer, roleId });
     const asInterviewer = await tab(interviewer, `/api/v1/roles/${roleId}/preview`);
     expect(asInterviewer.status).toBe(403);
     expect(decode(await asInterviewer.text())).toContain("Seeing the job page before it is public needs access to the role and its pay.");
     expect((await json(interviewer, "GET", `/api/v1/roles/${roleId}/preview/page`)).status).toBe(403);
+    await onIt.remove();
     const signedOut = await tab(null, `/api/v1/roles/${roleId}/preview`);
     expect(signedOut.status).toBe(401);
     expect(await signedOut.text()).toContain("Sign in to see this preview, then open it again.");

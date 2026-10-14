@@ -55,7 +55,7 @@ Your name, your email address and **Sign out** are at the bottom. On a job's own
 
 In **Settings**, on the **Team** tab, enter a work email under **Invite by email**, add their name if you like, choose a **Role**, and press **Invite**. The person gets one email. The link works for seven days. They open it and sign in with Google or Microsoft using the same work address; opening the link alone signs nobody in, and it does not work for a different address.
 
-People who have not signed in yet are listed under **Invited, not yet in**, with who invited them and until when the link works. **Send again** sends a new link for another seven days (the old one stops working). **Withdraw** stops the link at once.
+People who have not signed in yet are listed under **Invited, not yet in**, with who invited them and until when the link works. Only owners, admins and HR see this list. **Send again** sends a new link for another seven days (the old one stops working). **Withdraw** stops the link at once. An invitation to become an owner is sent again or withdrawn only by an owner, and one to become an admin only by an owner or an admin; HR sees no buttons on those. Inviting the same address again replaces the open invitation, so the same rule applies to that.
 
 | Role | Best for | Can | Cannot |
 |---|---|---|---|
@@ -65,16 +65,18 @@ People who have not signed in yet are listed under **Invited, not yet in**, with
 | **Interviewer** | Anyone who meets candidates but does not decide | See the roles they interview for and their own interviews, with a short brief on each candidate they interview; say whether an interview took place; set their own availability | See pay, the candidate list or other candidates; act on candidates; see the report |
 | **HR** | Someone who keeps records and manages the team | See roles, candidates and pay; invite to a screen, hold; write to candidates; record an offer made, a hire and other outcomes, and close a role; keep team notes; say whether an interview they sat on took place; bring in a recruiter; invite, change and remove team members | Approve a role; edit a packet; decline a candidate or send a decision or closing message; approve an interview or decide after one |
 
-**Changing a role.** Pick the new role from the list next to the person and press **Change role**. They are signed out everywhere and get the new role when they sign in again.
+**Changing a role.** Pick the new role from the list next to the person and press **Change role**. They are signed out of this company and get the new role when they sign in again.
 
-**Removing someone.** Press **Remove** next to the person, then **Remove (name)**. They lose access at once and are signed out everywhere. Their calendar connection is disconnected and deleted. They are taken off every interview still ahead. An interview where they were the only interviewer is cancelled, and a candidate who had already booked a time is told. To go on with that candidate, approve a new interview with another interviewer from the candidate's page. You get one message listing which interviews were cancelled and which go ahead. What they did stays in the record.
+**Signing someone out.** Owners and admins see **Sign out everywhere** next to each teammate (an admin does not see it next to an owner, and nobody sees it next to themselves). Press it, then **Sign (name) out**. Every session they have open in this company ends, on every device, and they must sign in again to work here. They stay on the team with the same role. Use it after a lost or shared device. If they use the same account for another company, their sessions there stay open, and from those they could come back here: to keep them out, remove them from the team. HR cannot sign a teammate out. To end your own other sessions, use **Sign out everywhere else** under **Your sessions** (section 5).
+
+**Removing someone.** Press **Remove** next to the person, then **Remove (name)**. They lose access at once and are signed out of this company. Their calendar connection is disconnected and deleted. They are taken off every interview still ahead. An interview where they were the only interviewer is cancelled, and a candidate who had already booked a time is told. To go on with that candidate, approve a new interview with another interviewer from the candidate's page. You get one message listing which interviews were cancelled and which go ahead. What they did stays in the record.
 
 Notes:
 
-- Owners, admins and HR can invite, change and remove people. Only an owner can make someone an owner or change an owner's role. Nobody can change their own role or remove themselves.
+- Owners, admins and HR can invite, change and remove people. Only an owner can make someone an owner or change an owner's role, and only an owner or an admin can make someone an admin or change an admin's role. Only owners and admins can sign a teammate out. Nobody can change their own role or remove themselves.
 - ITS recruiters do not need an invitation, and an ITS address cannot be invited. They get access only through **Bring in a recruiter** (section 8).
 - Interviewers never see pay. Hiring managers can approve roles and decide on candidates.
-- Every invitation, change of role and removal is recorded in the audit history.
+- Every invitation, change of role, sign-out and removal is recorded in the audit history.
 
 ## 5. The Settings screen
 
@@ -86,7 +88,7 @@ Settings has five tabs, and each card sits on one of them: **Company** (Company,
 
 Owners and admins press **Edit** on the card to change the company name, website, logo address, time zone, size, locations, the careers-page introduction, the benefits summary, the contact hours and the wording of the candidate notices, then **Save changes**. The website and logo appear on your job pages and in search results. Contact hours can only narrow the legal window for texting candidates, never widen it. A reworded notice gets a new version, shows on the job page and the application form from then on, and is recorded; clear the box to go back to the standard wording. The plan, the program dates and the allowances are set by ITS and cannot be changed here. Every change is recorded in the audit history.
 
-**Team.** The people in your workspace, each with their role and an availability chip: "google calendar", "hours declared" or "no availability". Someone with "no availability" cannot be offered as an interviewer until they set it. The invitation form, **Invited, not yet in**, and the role and removal controls are here (section 4).
+**Team.** The people in your workspace, each with their role and an availability chip: "google calendar", "hours declared" or "no availability". Someone with "no availability" cannot be offered as an interviewer until they set it. The invitation form, **Invited, not yet in**, the role and removal controls and **Sign out everywhere** are here (section 4).
 
 **ITS recruiter access.** Who from ITS has access right now, to what, and until when. This is empty most of the time. See section 8 for how to end access.
 

@@ -502,6 +502,38 @@ describe("interview scheduling", () => {
     await container.drain();
   });
 
+  it("'No common times' is told once per interview, not at every 48-hour re-check; again only when an interviewer's hours change (audit 06-interviews, bug 105)", async () => {
+    await wesIn();
+    expect((await hoursFor(wes, [{ day: 6, start: "09:00", end: "17:00" }])).status).toBe(200);
+    await container.drain();
+    const cand = await apply("Noor", "Haddad");
+    const iv = await requestInterview(cand.id, { interviewerUserIds: [ownerId, wesId] });
+    const told = async () => (await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.no_slots"), eq(notifications.userId, ownerId)))).filter((x) => x.action?.href === `/interviews/${iv.id}`).length;
+    expect((await interview(iv.id)).offeredSlots).toHaveLength(0);
+    expect(await told()).toBe(1);
+    // two re-checks two days apart find the same answer: nothing new is said
+    setClock(49 * H);
+    await container.drain();
+    setClock(98 * H);
+    await container.drain();
+    expect((await interview(iv.id)).offeredSlots).toHaveLength(0);
+    expect(await told()).toBe(1);
+    // Wes saves the same hours again: nothing changed, nothing said
+    expect((await hoursFor(wes, [{ day: 6, start: "09:00", end: "17:00" }])).status).toBe(200);
+    await container.drain();
+    expect(await told()).toBe(1);
+    // Wes changes his hours, still with no weekday in common: the team hears once more
+    expect((await hoursFor(wes, [{ day: 6, start: "10:00", end: "16:00" }])).status).toBe(200);
+    await container.drain();
+    expect(await told()).toBe(2);
+    setClock(147 * H);
+    await container.drain();
+    expect(await told()).toBe(2);
+    await json(owner, "POST", `/api/v1/interviews/${iv.id}/cancel`, { reason: "test cleanup" });
+    await container.drain();
+    setClock(0);
+  });
+
   it("a pick while no run waits for one is booked straight away; a time booked for another interview since is refused plainly; booking for them is audited as a booking", async () => {
     // Wes is back to full weekdays; these interviews are Dana's alone
     await wesIn();

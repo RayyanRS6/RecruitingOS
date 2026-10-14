@@ -6,7 +6,7 @@ import { applications, auditRecords, candidates, entitlements, events, integrati
 import type { FakeEmailAdapter, FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAs, signInWithIdentity } from "./test-helpers";
+import { putOnInterview, signInAs, signInWithIdentity } from "./test-helpers";
 
 /**
  * Team invitations, members and per-role permissions (docs/spec/21, area A, and section 7 P0): an invitation is a row
@@ -241,10 +241,26 @@ describe("team invitations, members and roles", () => {
     expect(sent[2].subject).toMatch(/^Reminder: /);
     expect(sent[2].text).toContain(body.devLink);
     expect(await container.db.select().from(auditRecords).where(eq(auditRecords.action, "invitation.resent"))).toHaveLength(2);
-    // HR can withdraw it (members.manage); an interviewer cannot
-    const ivy = await session(idp().mint({ email: "ivy.interviewer@teamtest.test", provider: "azure" }));
-    expect((await json(cookieNamed(ivy, "ros_session")!, "POST", `/api/v1/companies/current/invitations/${ann.id}/revoke`)).status).toBe(403);
-    const revoked = await json(hr, "POST", `/api/v1/companies/current/invitations/${ann.id}/revoke`);
+    // an interviewer can neither withdraw it nor see the pending list; HR, below admin, cannot withdraw an invitation to
+    // become an admin (audit 01-platform B12): refused, and the invitation stays open; the owner withdraws it
+    const ivy = cookieNamed(await session(idp().mint({ email: "ivy.interviewer@teamtest.test", provider: "azure" })), "ros_session")!;
+    expect((await json(ivy, "POST", `/api/v1/companies/current/invitations/${ann.id}/revoke`)).status).toBe(403);
+    expect((await json(ivy, "GET", "/api/v1/companies/current/invitations")).status).toBe(403);
+    const byHr = await json(hr, "POST", `/api/v1/companies/current/invitations/${ann.id}/revoke`);
+    expect(byHr.status).toBe(403);
+    expect(await errorCode(byHr)).toBe("admin_only");
+    expect((await container.db.select().from(invitations).where(eq(invitations.id, ann.id)))[0].status).toBe("pending");
+    expect(await (await app.request(pathOf(body.devLink))).text()).toContain("Join Teamtest Dental");
+    // nor replace it by inviting the same address at a lower rank, which would withdraw it: refused the same way, the
+    // admin invitation stays open and no email goes out
+    const replaceByHr = await invite(hr, { email: "ann.admin@teamtest.test", role: "interviewer" });
+    expect(replaceByHr.status).toBe(403);
+    expect(await errorCode(replaceByHr)).toBe("admin_only");
+    expect((await container.db.select().from(invitations).where(eq(invitations.id, ann.id)))[0].status).toBe("pending");
+    expect((await container.db.select().from(invitations).where(eq(invitations.email, "ann.admin@teamtest.test"))).filter((i) => i.status === "pending")).toHaveLength(1);
+    expect(mail().sent.filter((m) => m.to === "ann.admin@teamtest.test")).toHaveLength(3);
+    expect(await (await app.request(pathOf(body.devLink))).text()).toContain("Join Teamtest Dental");
+    const revoked = await json(owner, "POST", `/api/v1/companies/current/invitations/${ann.id}/revoke`);
     expect(revoked.status).toBe(200);
     expect(((await revoked.json()) as InviteResponse).invitation.status).toBe("revoked");
     expect(await (await app.request(pathOf(body.devLink))).text()).toContain("withdrawn");
@@ -336,6 +352,21 @@ describe("team invitations, members and roles", () => {
       expect(await errorCode(r)).toBe("owner_only");
     }
     expect(await (await app.request(pathOf(created.devLink))).text()).toContain("Join Teamtest Dental");
+    expect(mail().sent.filter((m) => m.to === "second.owner@teamtest.test")).toHaveLength(1);
+    // nor withdraw it: an owner's invitation to a new owner is an owner's to withdraw (audit 01-platform B12)
+    for (const cookie of [hr, abby]) {
+      const r = await json(cookie, "POST", `/api/v1/companies/current/invitations/${created.invitation.id}/revoke`);
+      expect(r.status).toBe(403);
+      expect(await errorCode(r)).toBe("owner_only");
+    }
+    expect((await container.db.select().from(invitations).where(eq(invitations.id, created.invitation.id)))[0].status).toBe("pending");
+    // nor replace it with an invitation of a lower rank to the same address, which would withdraw it
+    for (const cookie of [hr, abby]) {
+      const r = await invite(cookie, { email: "second.owner@teamtest.test", role: "interviewer" });
+      expect(r.status).toBe(403);
+      expect(await errorCode(r)).toBe("owner_only");
+    }
+    expect((await container.db.select().from(invitations).where(eq(invitations.id, created.invitation.id)))[0].status).toBe("pending");
     expect(mail().sent.filter((m) => m.to === "second.owner@teamtest.test")).toHaveLength(1);
     expect((await json(owner, "POST", `/api/v1/companies/current/invitations/${created.invitation.id}/revoke`)).status).toBe(200);
   });
@@ -466,6 +497,8 @@ describe("team invitations, members and roles", () => {
       "GET /roles/:id/packets": { hiring_manager: true, interviewer: true, hr: true, admin: true },
       "POST /applications/:id/actions reject": { hiring_manager: true, interviewer: false, hr: false, admin: true },
       "GET /companies/current/audit": { hiring_manager: true, interviewer: false, hr: true, admin: true },
+      // pending invitations only for those who manage the team (audit 01-platform B11)
+      "GET /companies/current/invitations": { hiring_manager: false, interviewer: false, hr: true, admin: true },
     };
     const cookies: Partial<Record<Role, string>> = {};
     /** Approving and declining change state, so a role that may do either gets its own drafted role, and every role its own application. */
@@ -478,6 +511,8 @@ describe("team invitations, members and roles", () => {
         cookies[role] = await signInAs(container, app, { companyId, role });
         roleFor[role] = TABLE["POST /roles/:id/approve"][role] ? await compileRole() : roleId;
         applicationFor[role] = await seedApplication(`pat.${role.replace(/_/g, "-")}@candidate.test`, roleFor[role]);
+        // an interviewer opens only the roles they interview for (roleScopeGuard)
+        if (role === "interviewer") await putOnInterview(container, app, { cookie: cookies[role]!, roleId: roleFor[role]! });
       }
     });
 
@@ -492,6 +527,7 @@ describe("team invitations, members and roles", () => {
         "GET /roles/:id/packets": () => json(cookie, "GET", `/api/v1/roles/${rid}/packets`),
         "POST /applications/:id/actions reject": () => json(cookie, "POST", `/api/v1/applications/${applicationFor[role]}/actions`, { action: "reject", reason: "not_a_match_experience", note: "role coverage" }),
         "GET /companies/current/audit": () => json(cookie, "GET", "/api/v1/companies/current/audit"),
+        "GET /companies/current/invitations": () => json(cookie, "GET", "/api/v1/companies/current/invitations"),
       };
       for (const [name, allowed] of Object.entries(TABLE).map(([k, v]) => [k, v[role]] as const)) {
         const r = await calls[name]!();

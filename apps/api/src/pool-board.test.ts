@@ -138,7 +138,8 @@ describe("the match score, the pool board, Review and apply and the one-click qu
 
     it("is open to those who read applications only, and to an interviewer not at all", async () => {
       const interviewer = await signInAs(container, app, { companyId, role: "interviewer" });
-      expect((await json(interviewer, "GET", `/api/v1/roles/${roleId}/board`)).status).toBe(403);
+      // not one of their roles: it answers as a role that does not exist (on one of theirs, application.read refuses it)
+      expect((await json(interviewer, "GET", `/api/v1/roles/${roleId}/board`)).status).toBe(404);
       expect((await json(owner, "GET", "/api/v1/roles/not-a-role/board")).status).toBe(404);
     });
 

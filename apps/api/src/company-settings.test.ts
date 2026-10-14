@@ -311,7 +311,7 @@ describe("company preferences, audit history, sessions, re-authentication and th
       expect((await json(hm, "GET", "/api/v1/auth/me")).status).toBe(200);
       const r = await json(owner, "POST", `/api/v1/companies/current/members/${hmId}/sign-out`);
       expect(r.status).toBe(200);
-      expect((await r.json()) as { sessionsEnded: number }).toMatchObject({ ok: true, userId: hmId, sessionsEnded: 1 });
+      expect((await r.json()) as { sessionsEnded: number }).toEqual({ ok: true, userId: hmId, sessionsEnded: 1, message: "Signed out of one session here; they must sign in again to work here. If they use the same account for another company, their sessions there stay open. To keep them out of this company, remove them from the team." });
       expect((await json(hm, "GET", "/api/v1/auth/me")).status).toBe(401);
       const self = await json(owner, "POST", `/api/v1/companies/current/members/${ownerId}/sign-out`);
       expect(self.status).toBe(400);
@@ -321,8 +321,71 @@ describe("company preferences, audit history, sessions, re-authentication and th
       const interviewer = await signInAs(container, app, { companyId, role: "interviewer" });
       expect((await json(interviewer, "POST", `/api/v1/companies/current/members/${hmId}/sign-out`)).status).toBe(403);
       const audited = await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "session.revoked"), eq(auditRecords.companyId, companyId))).orderBy(desc(auditRecords.createdAt));
-      expect(audited[0].details).toMatchObject({ sessionsEnded: 1, scope: "all" });
+      expect(audited[0].details).toEqual({ sessionsEnded: 1, scope: "company" });
       expect(audited[0].target).toEqual({ type: "user", id: hmId });
+    });
+
+    it("signing out is ranked: HR never, an admin never an owner, an owner anyone; HR keeps the rest of team management (audit 01-platform B3)", async () => {
+      const meId = async (cookie: string) => ((await (await json(cookie, "GET", "/api/v1/auth/me")).json()) as { user: { id: string } }).user.id;
+      const hr = await signInAs(container, app, { companyId, role: "hr", email: "hope.hr@settings.test" });
+      const admin = await signInAs(container, app, { companyId, role: "admin", email: "abe.admin@settings.test" });
+      const coOwner = await signInAs(container, app, { companyId, role: "owner", email: "olive.owner@settings.test" });
+      const ivy = await signInAs(container, app, { companyId, role: "interviewer", email: "ivy.interviewer@settings.test" });
+      const [adminId, coOwnerId, ivyId] = [await meId(admin), await meId(coOwner), await meId(ivy)];
+      const before = (await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "session.revoked"), eq(auditRecords.companyId, companyId)))).length;
+      // HR: refused for everyone, an owner, an admin or an interviewer alike, and nothing ends
+      for (const target of [ownerId, adminId, ivyId]) {
+        const r = await json(hr, "POST", `/api/v1/companies/current/members/${target}/sign-out`);
+        expect(r.status).toBe(403);
+        expect(await errorCode(r)).toBe("admin_only");
+      }
+      // an admin cannot sign an owner out
+      for (const target of [ownerId, coOwnerId]) {
+        const r = await json(admin, "POST", `/api/v1/companies/current/members/${target}/sign-out`);
+        expect(r.status).toBe(403);
+        expect(await errorCode(r)).toBe("owner_only");
+      }
+      for (const cookie of [owner, coOwner, admin, ivy]) expect((await json(cookie, "GET", "/api/v1/auth/me")).status).toBe(200);
+      expect((await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "session.revoked"), eq(auditRecords.companyId, companyId)))).length).toBe(before);
+      // an admin signs an interviewer out; an owner signs another owner out
+      expect((await json(admin, "POST", `/api/v1/companies/current/members/${ivyId}/sign-out`)).status).toBe(200);
+      expect((await json(ivy, "GET", "/api/v1/auth/me")).status).toBe(401);
+      expect((await json(owner, "POST", `/api/v1/companies/current/members/${coOwnerId}/sign-out`)).status).toBe(200);
+      expect((await json(coOwner, "GET", "/api/v1/auth/me")).status).toBe(401);
+      // HR still invites
+      expect((await json(hr, "POST", "/api/v1/companies/current/members/invite", { email: "new.interviewer@settings.test", role: "interviewer" })).status).toBe(201);
+    });
+
+    it("a sign-out from one company ends only the sessions working there; the person's work in another company goes on, and nothing here tells of it", async () => {
+      // Pat is an interviewer here and an owner of another company, signed in twice: once working here, once there
+      const other = await signInWithIdentity(app, container, { email: "olga@elsewhere.test", name: "Olga Other", provider: "google", aal2: false });
+      const otherCo = ((await (await json(other, "POST", "/api/v1/companies", { name: "Elsewhere Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Tustin", region: "CA", country: "US" }] })).json()) as { id: string }).id;
+      const here = await signInAs(container, app, { companyId, role: "interviewer", email: "pat.two@settings.test", name: "Pat Two" });
+      const there = await signInAs(container, app, { companyId: otherCo, role: "owner", email: "pat.two@settings.test", name: "Pat Two" });
+      const patId = ((await (await json(here, "GET", "/api/v1/auth/me")).json()) as { user: { id: string } }).user.id;
+      const r = await json(owner, "POST", `/api/v1/companies/current/members/${patId}/sign-out`);
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as Record<string, unknown>;
+      // the same answer as for someone who works only here: nothing about the other company, or how active they are there
+      expect(body).toEqual({ ok: true, userId: patId, sessionsEnded: 1, message: "Signed out of one session here; they must sign in again to work here. If they use the same account for another company, their sessions there stay open. To keep them out of this company, remove them from the team." });
+      expect(body).not.toHaveProperty("otherCompanies");
+      expect(body).not.toHaveProperty("sessionsLeftOpen");
+      // the session here is over; the one in the other company still works, in that company
+      expect((await json(here, "GET", "/api/v1/auth/me")).status).toBe(401);
+      const still = (await (await json(there, "GET", "/api/v1/auth/me")).json()) as { activeCompanyId: string };
+      expect(still.activeCompanyId).toBe(otherCo);
+      expect((await json(there, "GET", "/api/v1/companies/current")).status).toBe(200);
+      // recorded in this company's history, with nothing about the other company
+      const [audited] = await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "session.revoked"), eq(auditRecords.companyId, companyId))).orderBy(desc(auditRecords.createdAt)).limit(1);
+      expect(audited.details).toEqual({ sessionsEnded: 1, scope: "company" });
+      // removed from this team, their session in the other company keeps working and cannot switch back here
+      const there2 = await signInAs(container, app, { companyId, role: "interviewer", email: "pat.two@settings.test", name: "Pat Two" });
+      expect((await json(owner, "PATCH", `/api/v1/companies/current/members/${patId}`, { status: "removed" })).status).toBe(200);
+      const [removalAudit] = await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "session.revoked"), eq(auditRecords.companyId, companyId))).orderBy(desc(auditRecords.createdAt)).limit(1);
+      expect(removalAudit.details).toEqual({ sessionsEnded: 1, scope: "company" });
+      expect((await json(there2, "GET", "/api/v1/auth/me")).status).toBe(401);
+      expect((await json(there, "GET", "/api/v1/companies/current")).status).toBe(200);
+      expect((await json(there, "POST", "/api/v1/auth/switch", { companyId })).status).toBe(403);
     });
   });
 

@@ -6,7 +6,7 @@ import type { DraftRolePacket, IntakeSessionView, JobPreview, PacketDiff, Packet
 import { aiRuns, companies, events, rolePackets } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAs, useLaterApplyFlow, useOneVisitApplyFlow } from "./test-helpers";
+import { putOnInterview, signInAs, useLaterApplyFlow, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
  * The job builder's packet tools (plan Wave C): change by chat with a confirmation before anything is saved (C10), the
@@ -216,6 +216,9 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       expect(v3.packet.provenance).toMatchObject({ payOrigin: "edited", payConfirmedBy: { via: "edited", by: { id: ownerId } } });
       const full = await read<PacketDiff>(await json(owner, "GET", `/api/v1/roles/${roleId}/packets/diff?from=1&to=3`));
       expect(full.sections.map((s) => s.section)).toEqual(["compensation", "requirements"]);
+      // an interviewer reads the versions of a role they interview for, and no other's
+      expect((await json(interviewer, "GET", `/api/v1/roles/${roleId}/packets/diff?from=2&to=3`)).status).toBe(404);
+      const onIt = await putOnInterview(container, app, { cookie: interviewer, roleId });
       const forInterviewer = await json(interviewer, "GET", `/api/v1/roles/${roleId}/packets/diff?from=2&to=3`);
       expect(forInterviewer.status).toBe(200);
       expect(await read<PacketDiff>(forInterviewer)).toMatchObject({ sections: [], total: 0 });
@@ -223,6 +226,7 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       // an interviewer cannot change the packet or see the candidate view with pay
       expect((await json(interviewer, "POST", `/api/v1/roles/${roleId}/revisions`, { message: "Add a must-have: Dentrix experience" })).status).toBe(403);
       expect((await json(interviewer, "GET", `/api/v1/roles/${roleId}/preview`)).status).toBe(403);
+      await onIt.remove();
     });
 
     it("the plain-field editor changes only what was sent, within the packet's limits, from the newest version (C11)", async () => {

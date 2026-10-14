@@ -1,6 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { MembershipRole } from "@ros/contracts";
-import { can, computeSlots, createEscalation, emit, freshSchedulingWindow, missingAvailability, newTimesOffered, notify, openFollowUpOf, roleTakenOver, slotStillAhead, slotStillFree, transition } from "@ros/core";
+import { can, computeSlots, createEscalation, emit, freshSchedulingWindow, missingAvailability, newTimesOffered, noCommonTimesNoticeKey, notify, openFollowUpOf, roleTakenOver, slotStillAhead, slotStillFree, transition } from "@ros/core";
 import { applications, candidates, communications, companies, interviewFollowups, interviewParticipants, interviews, memberships, rolePackets, roles } from "@ros/db";
 import { AUTO_TIMES_TAKEN_OVER, HELD_REASON, composeInterviewerBrief, constraintsFor, createInterviewEvents, participantsOf, queueCommunication, redactBriefPay, renderInterviewerBriefText, sendInterviewConfirmation, sendInterviewReminder, sendSlotsOffered, sendSlotsReminder, type InvitationNote } from "@ros/agents";
 import { randomToken } from "@ros/db";
@@ -28,8 +28,10 @@ import type { StepContext, WorkflowDefinition } from "../types";
  * - `availabilityWaits`, `availabilityEscalated`: how many 48-hour waits passed with a required interviewer's hours
  *   still missing (the owner is reminded at each), and whether a recruiter was brought in (after the second).
  * - `noNewTimesTold`: the owner was told once that no time other than the rejected ones is free yet.
+ * - `noCommonTimesKey`: the key (core `noCommonTimesNoticeKey`) the last "No common times" notice went out under; the
+ *   notice goes again only when the key changes (audit 06-interviews, bug 105).
  */
-type State = { interviewId: string; applicationId: string; roleId: string; roundKey: string; attempt: number; remindedAt?: string; offeredAt?: string; invitationNote?: InvitationNote | null; offerKind?: NewTimesOfferKind; followUpId?: string; via?: NewTimesVia; rescheduled?: boolean; freshWindow?: boolean; otherTimes?: boolean; variant?: "other_times"; collisions?: number; bookPick?: boolean; rejected?: string[]; availabilityWaits?: number; availabilityEscalated?: boolean; noNewTimesTold?: boolean };
+type State = { interviewId: string; applicationId: string; roleId: string; roundKey: string; attempt: number; remindedAt?: string; offeredAt?: string; invitationNote?: InvitationNote | null; offerKind?: NewTimesOfferKind; followUpId?: string; via?: NewTimesVia; rescheduled?: boolean; freshWindow?: boolean; otherTimes?: boolean; variant?: "other_times"; collisions?: number; bookPick?: boolean; rejected?: string[]; availabilityWaits?: number; availabilityEscalated?: boolean; noNewTimesTold?: boolean; noCommonTimesKey?: string };
 
 const OFFER_WAIT_HOURS = 48;
 const REMIND_WAIT_HOURS = 48;
@@ -206,8 +208,11 @@ export const scheduleInterview: WorkflowDefinition<State> = {
           if (!ctx.state.noNewTimesTold) await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.no_slots", title: `No new times for ${b.candidate.firstName}'s interview yet`, body: `The only free times are the ones ${b.candidate.firstName} said do not work. Add hours or free some time; other times are emailed to them as soon as there are some.${newTimesSentence(b, ctx)}`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
           return { kind: "wait", wait: { kind: "event", eventTypes: ["window.updated", "availability.updated"], subjectId: b.iv.id, until: hoursFromNow(ctx, AVAILABILITY_WAIT_HOURS), reason: "the candidate asked for other times; none are free yet" }, state: { freshWindow: true, otherTimes: true, rejected: [...rejected], noNewTimesTold: true }, resumeStep: "propose_slots" };
         }
-        await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.no_slots", title: `No common times for ${b.candidate.firstName}'s interview`, body: `Between ${w.fromDate} and ${w.toDate} the interviewers have no shared free time of ${b.iv.durationMinutes} minutes. Add hours or free some time; we check again when an interviewer's hours change.${newTimesSentence(b, ctx)}`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
-        return { kind: "wait", wait: { kind: "event", eventTypes: ["availability.updated", "window.updated"], subjectId: b.iv.id, until: hoursFromNow(ctx, AVAILABILITY_WAIT_HOURS), reason: "no common free time; waiting for availability or a wider window" }, state: { freshWindow: true, ...(ctx.state.otherTimes ? { rejected: [...rejected] } : {}) }, resumeStep: "propose_slots" };
+        // Told once per interview and window, then again only when something changes (an interviewer's hours, the
+        // window's length, a new attempt): the 48-hour re-check alone finds the same answer and says nothing.
+        const noticeKey = noCommonTimesNoticeKey({ interviewId: b.iv.id, attempt: ctx.state.attempt, durationMinutes: b.iv.durationMinutes, window: w, participants: constraints });
+        if (ctx.state.noCommonTimesKey !== noticeKey) await notify(ctx.q, { companyId: ctx.companyId, kind: "interview.no_slots", title: `No common times for ${b.candidate.firstName}'s interview`, body: `Between ${w.fromDate} and ${w.toDate} the interviewers have no shared free time of ${b.iv.durationMinutes} minutes. Add hours or free some time; we check again when an interviewer's hours change.${newTimesSentence(b, ctx)}`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
+        return { kind: "wait", wait: { kind: "event", eventTypes: ["availability.updated", "window.updated"], subjectId: b.iv.id, until: hoursFromNow(ctx, AVAILABILITY_WAIT_HOURS), reason: "no common free time; waiting for availability or a wider window" }, state: { freshWindow: true, noCommonTimesKey: noticeKey, ...(ctx.state.otherTimes ? { rejected: [...rejected] } : {}) }, resumeStep: "propose_slots" };
       }
       // After "none of these work", times that differ from the ones turned down are a new offer: a new attempt, so the
       // candidate gets a new email (the times email is sent once per attempt).
