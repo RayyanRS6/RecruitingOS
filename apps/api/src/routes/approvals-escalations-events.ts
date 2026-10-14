@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, isNull, like, notInArray, or } from "drizzle-orm";
 import { ConfirmBoardUpdated, CreateEscalation, DecideApproval, EscalationEstimateQuery, EscalationReply, RecordPostingUrl, ReopenEscalation, ResolveEscalation, VerifyPosting, type Actor, type CandidateNotice, type EscalationScope, type InterviewDraft, type RecruiterRequestView } from "@ros/contracts";
-import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, assertCan, audit, can, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, isBoardChannel, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, plainRequestText, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, servedSummary, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, unsentScreenReadings, withoutSentimentWords, withoutUnsentInContext, withoutUnsentScreenEvents, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
+import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, assertCan, audit, can, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, isBoardChannel, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, plainRequestText, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, requestOrigin, servedSummary, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, unsentScreenReadings, withoutSentimentWords, withoutUnsentInContext, withoutUnsentScreenEvents, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, companies, escalationMessages, events, memberships, postings, recruiterEscalations, rolePackets, roles, screens, staffAccessGrants, users, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
 import { confirmPostingByHand, postingTaskDetail, queuePostingCheck, recordBoardAddress } from "./postings";
 import { actorOf, clientIp, requireRecruiterOrAdmin, requireTenant, type Vars } from "../middleware/session";
@@ -243,7 +243,7 @@ escalationRoutes.get("/mine", requireTenant, async (c) => {
   return c.json(found.rows.map((row): RecruiterRequestView => {
     // A hand-over reason from before 9 October 2026 in today's words: never how the candidate sounded. A stopped run's
     // request from before 13 October 2026 in plain words, never the technical error; and one Recruiting OS raised says so.
-    const r = { ...row, question: withoutSentimentWords(plainRequestText(row.question)), summary: servedSummary(row) };
+    const r = { ...row, question: withoutSentimentWords(plainRequestText(row.question, row.requestedBy.kind)), summary: servedSummary(row) };
     const own = found.messages.filter((m) => m.escalationId === r.id);
     const recruiterName = r.assignedToUserId ? names.get(r.assignedToUserId) ?? null : [...own].reverse().find((m) => m.side === "recruiter")?.author.name ?? null;
     return {
@@ -441,8 +441,9 @@ escalationRoutes.get("/:id", requireRecruiterOrAdmin, async (c) => {
     // The thread (plan B5): the team's notes, the recruiter's replies, every answer and why it was reopened.
     const messages = await tx.select().from(escalationMessages).where(eq(escalationMessages.escalationId, e.id));
     // A hand-over reason from before 9 October 2026 in today's words: never how the candidate sounded. A stopped run's
-    // request from before 13 October 2026 in plain words, never the technical error.
-    const question = withoutSentimentWords(plainRequestText(e.question));
+    // request from before 13 October 2026 in plain words, never the technical error. The thread says when Recruiting OS
+    // or a candidate raised it, never a name.
+    const question = withoutSentimentWords(plainRequestText(e.question, e.requestedBy.kind));
     const thread = escalationThread({ ...e, question }, messages, actor.name, { forRecruiter: true });
     const full = { companyId: e.companyId, roleId: e.roleId, applicationId: e.applicationId, firstResponseAt: e.firstResponseAt, accessExpiresAt: e.accessExpiresAt, resolution: e.resolution, resolvedAt: e.resolvedAt, minutesSpent: e.minutesSpent, question, contextSnapshot: withoutUnsentInContext(e.contextSnapshot), thread, reopenedCount: messages.filter((m) => m.kind === "reopen").length, grant: { id: grant.id, purpose: grant.purpose, expiresAt: grant.expiresAt, scope: { roleId: grant.roleId, applicationId: grant.applicationId } } };
     return { previewRow, full, why: null as string | null };
@@ -500,10 +501,12 @@ escalationRoutes.post("/:id/claim", requireRecruiterOrAdmin, async (c) => {
     // (an ITS recruiter asked while working on another request, a candidate asked for a person, or something got stuck)
     // says how it came about.
     const scope: EscalationScope = e.applicationId ? "application" : e.roleId ? "role" : "company";
+    // A candidate's issue Recruiting OS raised on its own (an interview it could not arrange, the screening assistant
+    // stopping) is something stuck, not a candidate asking (15 October 2026).
     const byTeam = e.requestedBy.kind === "user";
     const why = byTeam ? ""
       : e.requestedBy.kind === "recruiter" ? `${e.requestedBy.name ?? "An ITS recruiter"} (ITS recruiter) asked for this while working on another of your requests, so a recruiter was brought in. `
-      : e.requestedBy.kind === "candidate" || e.kind === "candidate_issue" ? "A candidate needed a person, so a recruiter was brought in. "
+      : requestOrigin(e) === "candidate" ? "A candidate needed a person, so a recruiter was brought in. "
       : "Something got stuck and needs a person, so a recruiter was brought in. ";
     await notify(tx, { companyId: e.companyId, kind: "recruiter.claimed", title: byTeam ? `${actor.name} (ITS recruiter) picked up your request` : `${actor.name} (ITS recruiter) was brought in`, body: `${why}They can see ${accessWords(scope)} until ${new Date(grant.expiresAt).toLocaleDateString("en-US")}, or until a day after the request is resolved if that is sooner. Every page they open is recorded in your activity, and an owner or admin can end their access in Settings.`, action: { label: "Recruiter access", href: "/setup" } });
     return { escalation: u, grant: { id: grant.id, purpose: grant.purpose, expiresAt: grant.expiresAt, scope: { roleId: grant.roleId, applicationId: grant.applicationId } } };

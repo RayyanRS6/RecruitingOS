@@ -25,10 +25,12 @@ const LEGACY_STOPPED_RUN = /^Workflow (\S+) failed at step "[^"]*" after (\d+) a
 
 /**
  * A request's text as it is shown: an old stopped-run request reads in today's plain words (what stopped and how many
- * tries), never the technical error. Anything else, the customer's own words included, is returned unchanged. The stored
+ * tries), never the technical error. Only Recruiting OS ever wrote those words (`requestedByKind` "system"), so a
+ * request a person raised is always shown as they wrote it, even when they pasted the old error into it. The stored
  * text is never rewritten.
  */
-export function plainRequestText(text: string): string {
+export function plainRequestText(text: string, requestedByKind: string | null | undefined): string {
+  if (requestedByKind !== "system") return text;
   const m = LEGACY_STOPPED_RUN.exec(text);
   return m ? stoppedRunQuestion(m[1], Number(m[2])) : text;
 }

@@ -383,7 +383,7 @@ describe("an ITS posting task in the recruiter queue (D3)", () => {
 });
 
 describe("a request in the recruiter queue: who raised it, and who it is about once accepted (I11, 15 October 2026)", () => {
-  const summary = "Raised automatically by Recruiting OS: one candidate's application needs a recruiter to take over.";
+  const summary = "Raised automatically by Recruiting OS: one candidate's application needs a recruiter's review.";
   const preview = { id: "r1", status: "open", kind: "review", urgency: "normal", requiredExpertise: "candidate evaluation; dental hiring", summary, companyName: "Salman Family Dental", roleTitle: "Dental assistant", slaDueAt: null, slaRemainingMinutes: null, businessMinutesRemaining: null, overdue: false, createdAt: "2026-10-15T10:00:00.000Z", claimedByMe: false, claimed: false };
 
   it("before Accept: says Recruiting OS raised it, and that Accept shows who it is about; no name", () => {
@@ -394,7 +394,7 @@ describe("a request in the recruiter queue: who raised it, and who it is about o
     // the queue list: the role, then who raised it and why
     expect(words).toContain(`Dental assistant · ${summary}`);
     expect(words).toContain(summary);
-    expect(words).toContain("Accept to see who this is about and the full request.");
+    expect(words).toContain("Accept to open the full request and see who or what it is about.");
     expect(words).toContain("Your access covers only what the request is about, ends a day after it is resolved, and every page you open is recorded for the customer.");
     expect(words).toContain("Accept this request");
     expect(words).not.toContain("About:");
@@ -407,7 +407,7 @@ describe("a request in the recruiter queue: who raised it, and who it is about o
     qc.setQueryData(["escalation", "r1"], {
       ...held, accessGranted: true, why: null, companyId: "co1", roleId: "role1", applicationId: "app1", question: "Processing this application stopped after 4 tries and needs a person to take over.",
       contextSnapshot: { company: { name: "Salman Family Dental", vertical: "dental", sizeBand: "1-19" }, role: { title: "Dental assistant", status: "open" }, candidate: { name: "Lena Ortiz", email: "lena.ortiz@example.com", phone: null }, application: { stage: "triaged" } },
-      thread: [{ id: "r1:question", side: "customer", kind: "question", body: "Processing this application stopped after 4 tries and needs a person to take over.", by: null, at: "2026-10-15T10:00:00.000Z" }],
+      thread: [{ id: "r1:question", side: "customer", kind: "question", body: "Processing this application stopped after 4 tries and needs a person to take over.", by: null, at: "2026-10-15T10:00:00.000Z", raisedBy: "system" }],
       reopenedCount: 0, grant: { id: "g1", purpose: `review: ${summary}`, expiresAt: "2026-10-29T10:00:00.000Z", scope: { roleId: "role1", applicationId: "app1" } },
     });
     const words = text(render(qc, createElement(RecruiterQueue)));
@@ -418,7 +418,21 @@ describe("a request in the recruiter queue: who raised it, and who it is about o
     expect(about).toBeGreaterThan(words.indexOf("review · Salman Family Dental · Dental assistant"));
     expect(about).toBeLessThan(words.lastIndexOf(summary));
     expect(about).toBeLessThan(words.indexOf("Processing this application stopped"));
-    expect(words).not.toContain("Accept to see who this is about");
+    expect(words).not.toContain("Accept to open the full request");
+    // the conversation says who raised it, as the summary above it does: never "The customer asked"
+    expect(words).toContain("Raised automatically by Recruiting OS · ");
+    expect(words.indexOf("Raised automatically by Recruiting OS · ")).toBeLessThan(words.indexOf("Processing this application stopped"));
+    expect(words).not.toContain("The customer asked");
+    expect(words).not.toContain("The customer's request");
+  });
+
+  it("the page header and the empty queue do not say every request comes from a customer", () => {
+    const qc = client();
+    qc.setQueryData(["escalations"], []);
+    const words = text(render(qc, createElement(RecruiterQueue)));
+    expect(words).toContain("Requests from customers, and ones Recruiting OS raised automatically: urgent ones first");
+    expect(words).toContain("Requests appear here.");
+    expect(words).not.toContain("Customer requests appear here.");
   });
 
   it("after Accept with no candidate (a role request): no About line", () => {

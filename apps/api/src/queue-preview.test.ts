@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { ESCALATION_PREVIEW_FIELDS, ESCALATION_PREVIEW_FORBIDDEN_KEYS, anonymizeCandidate, createEscalation, defaultUrgency, entitlements, genericSummary, notify, stoppedRunQuestion } from "@ros/core";
-import { applications, auditRecords, candidates, notifications, randomToken, recruiterEscalations, staffAccessGrants, withPlatform, withTenant } from "@ros/db";
+import { applications, auditRecords, candidates, notifications, randomToken, recruiterEscalations, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -190,7 +190,7 @@ describe("recruiter queue preview carries no candidate-sensitive data before acc
     expect(defaultUrgency("candidate_issue")).toBe("high");
     expect(defaultUrgency("platform_blocking")).toBe("critical");
     expect(defaultUrgency("review")).toBe("normal");
-    expect(genericSummary("candidate_issue", { hasRole: true, origin: "system" })).toMatch(/screening assistant could not continue/);
+    expect(genericSummary("candidate_issue", { hasRole: true, origin: "system" })).toMatch(/^Raised automatically by Recruiting OS: /);
     expect(genericSummary("candidate_issue", { hasRole: true, origin: "candidate" })).toMatch(/asked for a person/);
     expect(genericSummary("stuck_role")).toMatch(/stalled/);
   });
@@ -214,9 +214,19 @@ describe("a request Recruiting OS raised says so, and an old stopped run's reque
   let applicationId = "";
   let freshId = "";
   let legacyId = "";
-  const LEGACY = 'Workflow application_intake failed at step "extract" after 4 attempts: provider error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.0.content: Input should be a valid list"}}. Please take over.';
+  // a candidate's issue Recruiting OS raised (an interview nobody could arrange), one stored before 15 October 2026 with
+  // the sentence that blamed the screening assistant, a candidate's HUMAN reply by email (a system actor), and a
+  // customer who pasted the old error into their own request
+  let noHoursId = "";
+  let oldScreeningId = "";
+  let humanReplyId = "";
+  let pastedId = "";
+  const LEGACY ='Workflow application_intake failed at step "extract" after 4 attempts: provider error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.0.content: Input should be a valid list"}}. Please take over.';
   const PLAIN = "Processing this application stopped after 4 tries and needs a person to take over.";
-  const RAISED = "Raised automatically by Recruiting OS: one candidate's application needs a recruiter to take over.";
+  const RAISED = "Raised automatically by Recruiting OS: one candidate's application needs a recruiter's review.";
+  const RAISED_FOLLOW_UP = "Raised automatically by Recruiting OS: a candidate for this role needs a person to follow up.";
+  const ASKED = "A candidate for this role asked for a person; the hiring team needs a recruiter to follow up.";
+  const OLD_SCREENING = "The screening assistant could not continue with a candidate for this role; a person needs to follow up.";
   // What must never reach anyone before Accept, nor the customer: the candidate, and the technical error.
   const HIDDEN = ["Lena", "Ortiz", "lena.ortiz", "failed at step", "provider error", "invalid_request_error", "Please take over"];
   const json = (cookie: string, method: string, path: string, body?: unknown, extra: Record<string, string> = {}) =>
@@ -250,6 +260,15 @@ describe("a request Recruiting OS raised says so, and an old stopped run's reque
     // As one stored before 13 October 2026: the technical error as the request, and the customer's template as its summary.
     legacyId = (await withTenant(container.db, companyId, (tx) => createEscalation(tx, { companyId, roleId, applicationId, kind: "review", question: LEGACY, requestedBy: system }))).id;
     await container.db.update(recruiterEscalations).set({ summary: genericSummary("review", { hasRole: true, hasApplication: true }) }).where(eq(recruiterEscalations.id, legacyId));
+    // As schedule-interview raises it when no interviewer added hours, and as one stored before 15 October 2026.
+    const scheduling = { kind: "system" as const, id: "workflow:schedule_interview" };
+    noHoursId = (await withTenant(container.db, companyId, (tx) => createEscalation(tx, { companyId, roleId, applicationId, kind: "candidate_issue", summaryOrigin: "system", question: "Lena Ortiz has been waiting four days for interview times.", requestedBy: scheduling }))).id;
+    oldScreeningId = (await withTenant(container.db, companyId, (tx) => createEscalation(tx, { companyId, roleId, applicationId, kind: "candidate_issue", summaryOrigin: "system", question: "Lena Ortiz chose three interview times that were each taken.", requestedBy: scheduling }))).id;
+    await container.db.update(recruiterEscalations).set({ summary: OLD_SCREENING }).where(eq(recruiterEscalations.id, oldScreeningId));
+    // As replies.ts raises it when the candidate answers HUMAN by email: a system actor, the candidate's sentence.
+    humanReplyId = (await withTenant(container.db, companyId, (tx) => createEscalation(tx, { companyId, roleId, applicationId, kind: "candidate_issue", summaryOrigin: "candidate", question: "Lena Ortiz replied HUMAN to an email and needs a person.", requestedBy: { kind: "system", id: "email_reply" } }))).id;
+    const [ownerUser] = await container.db.select().from(users).where(eq(users.email, "owner@salman.test"));
+    pastedId = (await withTenant(container.db, companyId, (tx) => createEscalation(tx, { companyId, roleId, applicationId, kind: "review", question: LEGACY, requestedBy: { kind: "user", id: ownerUser.id, name: "Rayyan Salman" } }))).id;
   });
   afterAll(async () => {
     await container.close();
@@ -276,6 +295,22 @@ describe("a request Recruiting OS raised says so, and an old stopped run's reque
     }
   });
 
+  it("a candidate's issue Recruiting OS raised says so without blaming the screening assistant; a candidate's own request keeps its words", async () => {
+    const list = (await (await json(recruiter, "GET", "/api/v1/escalations")).json()) as Array<Record<string, unknown>>;
+    const summaries = new Map(list.map((e) => [e.id, e.summary]));
+    expect(summaries.get(noHoursId)).toBe(RAISED_FOLLOW_UP);
+    expect(summaries.get(oldScreeningId)).toBe(RAISED_FOLLOW_UP);
+    expect(summaries.get(humanReplyId)).toBe(ASKED);
+    // the customer's own request: their category's template, never their words (the old error they pasted)
+    expect(summaries.get(pastedId)).toBe("The customer wants a recruiter to review one candidate for this role.");
+    for (const id of [noHoursId, oldScreeningId, humanReplyId, pastedId]) {
+      expectExactPreview(list.find((e) => e.id === id)!);
+      const detail = (await (await json(recruiter, "GET", `/api/v1/escalations/${id}`)).json()) as Record<string, unknown>;
+      expectExactPreview(detail, ["accessGranted", "why"]);
+      expect(detail.summary).toBe(summaries.get(id));
+    }
+  });
+
   it("the request page before Accept is the same preview, and says the full request opens on Accept", async () => {
     for (const id of [freshId, legacyId]) {
       const detail = (await (await json(recruiter, "GET", `/api/v1/escalations/${id}`)).json()) as Record<string, unknown>;
@@ -298,32 +333,67 @@ describe("a request Recruiting OS raised says so, and an old stopped run's reque
   });
 
   it("the customer reads the old request in plain words, on their requests and on Today", async () => {
-    const mine = (await (await json(owner, "GET", "/api/v1/escalations/mine")).json()) as Array<{ id: string; question: string; summary: string; askedBy: { kind: string }; thread: Array<{ kind: string; body: string }> }>;
+    const mine = (await (await json(owner, "GET", "/api/v1/escalations/mine")).json()) as Array<{ id: string; question: string; summary: string; askedBy: { kind: string }; thread: Array<{ kind: string; body: string; raisedBy?: string }> }>;
     for (const id of [freshId, legacyId]) {
       const own = mine.find((e) => e.id === id)!;
       expect(own.question).toBe(PLAIN);
-      expect(own.thread[0]).toMatchObject({ kind: "question", body: PLAIN });
+      expect(own.thread[0]).toMatchObject({ kind: "question", body: PLAIN, raisedBy: "system" });
       expect(own.summary).toBe(RAISED);
       expect(own.askedBy.kind).toBe("system");
       for (const s of ["failed at step", "provider error", "invalid_request_error", "Please take over"]) expect(JSON.stringify(own)).not.toContain(s);
     }
     const brief = (await (await json(owner, "GET", "/api/v1/brief")).json()) as { cards: Array<{ kind: string; body: string; actions: Array<{ path: string }> }> };
+    const cardOf = (id: string) => brief.cards.find((c) => c.kind === "escalation" && c.actions.some((a) => a.path === `/?request=${id}`));
     for (const id of [freshId, legacyId]) {
-      const card = brief.cards.find((c) => c.kind === "escalation" && c.actions.some((a) => a.path === `/?request=${id}`));
-      expect(card, id).toBeTruthy();
-      expect(card!.body).toBe(PLAIN);
+      expect(cardOf(id), id).toBeTruthy();
+      expect(cardOf(id)!.body).toBe(PLAIN);
     }
+    // a customer who pasted the old error into their own request reads it as they wrote it: only Recruiting OS wrote it
+    const pasted = mine.find((e) => e.id === pastedId)!;
+    expect(pasted.question).toBe(LEGACY);
+    expect(pasted.thread[0]).toMatchObject({ kind: "question", body: LEGACY });
+    expect(pasted.thread[0]).not.toHaveProperty("raisedBy");
+    expect(cardOf(pastedId)!.body).toBe(LEGACY.slice(0, 200));
+    // a candidate's HUMAN reply came through a system actor: the thread says a candidate raised it
+    expect(mine.find((e) => e.id === humanReplyId)!.thread[0].raisedBy).toBe("candidate");
+    expect(mine.find((e) => e.id === noHoursId)!.thread[0].raisedBy).toBe("system");
   });
 
   it("after Accept the recruiter reads who it is about, and the old request in plain words", async () => {
     expect((await json(recruiter, "POST", `/api/v1/escalations/${legacyId}/claim`)).status).toBe(200);
-    const detail = (await (await json(recruiter, "GET", `/api/v1/escalations/${legacyId}`)).json()) as { accessGranted: boolean; summary: string; question: string; thread: Array<{ kind: string; body: string }>; contextSnapshot: { candidate: { name: string } }; grant: { purpose: string } };
+    const detail = (await (await json(recruiter, "GET", `/api/v1/escalations/${legacyId}`)).json()) as { accessGranted: boolean; summary: string; question: string; thread: Array<{ kind: string; side: string; body: string; by: string | null; raisedBy?: string }>; contextSnapshot: { candidate: { name: string } }; grant: { purpose: string } };
     expect(detail.accessGranted).toBe(true);
     expect(detail.summary).toBe(RAISED);
     expect(detail.question).toBe(PLAIN);
-    expect(detail.thread[0]).toMatchObject({ kind: "question", body: PLAIN });
+    // the conversation says Recruiting OS raised it (the queue heads it "Raised automatically by Recruiting OS", never
+    // "The customer asked"), and names nobody
+    expect(detail.thread[0]).toMatchObject({ kind: "question", body: PLAIN, side: "customer", by: null, raisedBy: "system" });
     expect(detail.contextSnapshot.candidate.name).toBe("Lena Ortiz");
     expect(detail.grant.purpose).toBe(`review: ${RAISED}`);
     for (const s of ["failed at step", "provider error", "invalid_request_error"]) expect(JSON.stringify(detail)).not.toContain(s);
+  });
+
+  it("after Accept: a customer's pasted words stay as written, a candidate's request says so, and the team is told the real cause", async () => {
+    const [ownerUser] = await container.db.select().from(users).where(eq(users.email, "owner@salman.test"));
+    const claimAndRead = async (id: string) => {
+      const before = new Set((await container.db.select({ id: notifications.id }).from(notifications).where(and(eq(notifications.userId, ownerUser.id), eq(notifications.kind, "recruiter.claimed")))).map((n) => n.id));
+      expect((await json(recruiter, "POST", `/api/v1/escalations/${id}/claim`)).status).toBe(200);
+      const told = (await container.db.select().from(notifications).where(and(eq(notifications.userId, ownerUser.id), eq(notifications.kind, "recruiter.claimed")))).filter((n) => !before.has(n.id));
+      expect(told.length, id).toBeGreaterThan(0);
+      const detail = (await (await json(recruiter, "GET", `/api/v1/escalations/${id}`)).json()) as { accessGranted: boolean; question: string; thread: Array<{ kind: string; body: string; by: string | null; raisedBy?: string }> };
+      expect(detail.accessGranted).toBe(true);
+      return { detail, told: told[0] };
+    };
+    const pasted = await claimAndRead(pastedId);
+    expect(pasted.detail.question).toBe(LEGACY);
+    expect(pasted.detail.thread[0]).toMatchObject({ kind: "question", body: LEGACY, by: null });
+    expect(pasted.detail.thread[0]).not.toHaveProperty("raisedBy");
+    const human = await claimAndRead(humanReplyId);
+    expect(human.detail.thread[0]).toMatchObject({ kind: "question", by: null, raisedBy: "candidate" });
+    expect(human.told.body).toMatch(/^A candidate needed a person, so a recruiter was brought in\./);
+    // an interview nobody could arrange is not a candidate asking: something got stuck
+    const noHours = await claimAndRead(noHoursId);
+    expect(noHours.detail.thread[0]).toMatchObject({ kind: "question", by: null, raisedBy: "system" });
+    expect(noHours.told.body).toMatch(/^Something got stuck and needs a person, so a recruiter was brought in\./);
   });
 });

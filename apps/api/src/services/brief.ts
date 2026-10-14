@@ -324,7 +324,7 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   for (const e of escalations) {
     // A hand-over reason from before 9 October 2026 in today's words: never how the candidate sounded. A stopped run's
     // request from before 13 October 2026 in plain words, never the technical error (before it is cut to length).
-    cards.push({ kind: "escalation", title: e.status === "open" ? "A recruiter will pick this up" : "A recruiter is on it", body: withoutSentimentWords(plainRequestText(e.question)).slice(0, 200), roleId: e.roleId ?? undefined, applicationId: e.applicationId ?? undefined, actions: readsRequests ? [{ label: "See the request", method: "GET", path: `/?request=${e.id}` }] : [] });
+    cards.push({ kind: "escalation", title: e.status === "open" ? "A recruiter will pick this up" : "A recruiter is on it", body: withoutSentimentWords(plainRequestText(e.question, e.requestedBy.kind)).slice(0, 200), roleId: e.roleId ?? undefined, applicationId: e.applicationId ?? undefined, actions: readsRequests ? [{ label: "See the request", method: "GET", path: `/?request=${e.id}` }] : [] });
   }
   // Getting started leads Today until the company is set up; its steps step aside once real decisions are waiting. Its
   // "Start your first role" makes the empty card's "Start a hire" redundant, so that card is left out while it shows.
