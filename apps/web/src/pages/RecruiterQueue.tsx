@@ -19,6 +19,13 @@ type Detail = Preview & { accessGranted: boolean; why?: string | null; companyId
 
 const URGENCY_TONE: Record<Preview["urgency"], Tone> = { low: "neutral", normal: "accent", high: "caution", critical: "critical" };
 
+/**
+ * Before accepting (founder decision I11): what Accept shows, then the access it gives. The preview never names the
+ * candidate or carries the customer's words, so the recruiter learns who or what it is about (one candidate, one role,
+ * or all of the customer's hiring) only after accepting.
+ */
+const BEFORE_ACCEPT = "Accept to open the full request and see who or what it is about. Your access covers only what the request is about, ends a day after it is resolved, and every page you open is recorded for the customer.";
+
 function remainingText(e: Preview): string {
   if (e.businessMinutesRemaining == null) return "no deadline";
   const m = Math.abs(e.businessMinutesRemaining);
@@ -42,13 +49,13 @@ export function RecruiterQueue() {
   const list = useQuery({ queryKey: ["escalations"], queryFn: () => api.get<Preview[]>("/api/v1/escalations") });
   return (
     <div className="stack" style={{ gap: 18 }}>
-      <PageHeader eyebrow="ITS recruiters" title="Recruiter queue" sub="Requests from customers: urgent ones first, then the soonest deadline. Urgency changes the order, never the reply-by time. Accept one to open the request itself; your access is limited to that request and ends a day after it is resolved." />
+      <PageHeader eyebrow="ITS recruiters" title="Recruiter queue" sub="Requests from customers, and ones Recruiting OS raised automatically: urgent ones first, then the soonest deadline. Urgency changes the order, never the reply-by time. Accept one to open the request itself; your access is limited to that request and ends a day after it is resolved." />
       <div className="grid-2" style={{ gridTemplateColumns: id ? "minmax(260px, 1fr) 2fr" : undefined }}>
         <div className="stack">
-          {list.isLoading ? <Skeleton lines={4} /> : list.error ? <ErrorState message="Could not load the queue." onRetry={() => list.refetch()} /> : list.data!.length === 0 ? <EmptyState icon="grid" title="Queue is empty" body="Customer requests appear here." /> : list.data!.map((e) => (
+          {list.isLoading ? <Skeleton lines={4} /> : list.error ? <ErrorState message="Could not load the queue." onRetry={() => list.refetch()} /> : list.data!.length === 0 ? <EmptyState icon="grid" title="Queue is empty" body="Requests appear here." /> : list.data!.map((e) => (
             <Card key={e.id} needsYou={e.status === "open"}>
               <div className="card-title"><h2 style={{ fontSize: 15 }}><Link to={`/recruiter/queue/${e.id}`} style={{ textDecoration: "none", color: "inherit" }}>{queueKindLabel(e.kind)} · {e.companyName}</Link></h2><div className="row"><Pill size="sm" tone={URGENCY_TONE[e.urgency]}>{e.urgency}</Pill><Pill size="sm" tone={e.status === "open" ? "caution" : "accent"}>{e.claimedByMe ? "yours" : e.status}</Pill></div></div>
-              <p className="small" style={{ color: "var(--ink-2)" }}>{e.roleTitle ? `${e.roleTitle}: ` : ""}{e.summary}</p>
+              <p className="small" style={{ color: "var(--ink-2)" }}>{e.roleTitle ? `${e.roleTitle} · ` : ""}{e.summary}</p>
               <p className="small muted" style={{ marginTop: 6 }}>Needs {e.requiredExpertise} · {remainingText(e)}{e.slaDueAt ? ` · respond by ${new Date(e.slaDueAt).toLocaleString()}` : ""}</p>
             </Card>
           ))}
@@ -200,9 +207,12 @@ function EscalationDetail({ id }: { id: string }) {
   if (q.isLoading || !q.data) return <Skeleton lines={8} />;
   const e = q.data;
   const ctx = (e.contextSnapshot ?? {}) as { company?: { name: string; vertical: string; sizeBand: string }; role?: { title: string; status: string }; packet?: { version: number; packet: { compensation: { basis: string; min: number; max: number; ceiling: number }; requirements: { mustHaves: Array<{ text: string }>; eligibility: Array<{ question: string }> }; description: { publicJobDescription: string } } }; candidate?: { name: string; email: string | null; phone: string | null }; application?: { stage: string }; resumeText?: string | null; assessments?: Array<{ kind: string; overall: string; result: { summary: string } }>; communications?: Array<{ direction: string; subject: string | null; at: string }>; timeline?: Array<{ type: string; at: string }>; intakeSession?: HandedOverDraft | null };
+  // Who the request is about, once accepted: the candidate's name opens only under the grant (founder decision I11).
+  const aboutRole = ctx.role?.title ?? e.roleTitle;
   return (
     <div className="stack">
       <Card title={`${queueKindLabel(e.kind)} · ${e.companyName}${e.roleTitle ? ` · ${e.roleTitle}` : ""}`} aside={<div className="row"><Pill size="sm" tone={URGENCY_TONE[e.urgency]}>{e.urgency}</Pill>{e.status === "open" ? <Button size="sm" variant="primary" loading={claim.isPending} onClick={() => claim.mutate()}>{isPostingTaskKind(e.kind) ? "Accept this task" : "Accept this request"}</Button> : null}</div>}>
+        {e.accessGranted && ctx.candidate?.name ? <p style={{ margin: "0 0 6px" }}><strong>About:</strong> {ctx.candidate.name}{aboutRole ? ` · ${aboutRole}` : ""}</p> : null}
         <p>{e.summary}</p>
         <p className="small muted">Needs {e.requiredExpertise} · {remainingText(e)}{e.slaDueAt ? ` · respond by ${new Date(e.slaDueAt).toLocaleString()}` : ""}{e.firstResponseAt ? ` · first response ${new Date(e.firstResponseAt).toLocaleString()}` : ""}</p>
         {e.reopenedCount ? <p className="small" style={{ marginTop: 6 }}><Chip tone="caution">Reopened{e.reopenedCount > 1 ? ` ${e.reopenedCount} times` : ""}</Chip> The customer said an earlier answer did not solve it; their reason is in the conversation below.</p> : null}
@@ -213,7 +223,7 @@ function EscalationDetail({ id }: { id: string }) {
               {e.thread.map((m) => <li key={m.id} style={{ padding: "4px 0" }}><p className="small muted" style={{ margin: 0 }}>{queueThreadHeading(m)} · {new Date(m.at).toLocaleString()}</p><p style={{ whiteSpace: "pre-wrap", margin: "2px 0 0" }}>{m.body}</p></li>)}
             </ol>
           </div>
-        ) : e.accessGranted && e.question ? <div style={{ marginTop: 10 }}><p className="small muted">The customer's request</p><p style={{ whiteSpace: "pre-wrap" }}>{e.question}</p></div> : null}
+        ) : e.accessGranted && e.question ? <div style={{ marginTop: 10 }}><p className="small muted">The request</p><p style={{ whiteSpace: "pre-wrap" }}>{e.question}</p></div> : null}
         {e.resolution ? <Alert tone="info">Resolved: {e.resolution}{e.minutesSpent != null ? ` (${e.minutesSpent} min)` : ""}</Alert> : null}
       </Card>
       {e.postingTask ? (
@@ -230,7 +240,7 @@ function EscalationDetail({ id }: { id: string }) {
           ) : null}
         </>
       ) : !e.accessGranted ? (
-        <Alert tone="neutral">{isPostingTaskKind(e.kind) ? POSTING_TASK_BEFORE_ACCEPT : e.why === "claim it to open the full context" ? "Accept the request to open the customer's own words and context. Access is limited to what the request covers (one candidate, one role, or all of their hiring when they chose that), ends a day after the request is resolved, and every page you open is recorded for the customer." : e.why}</Alert>
+        <Alert tone="neutral">{isPostingTaskKind(e.kind) ? POSTING_TASK_BEFORE_ACCEPT : e.why === "claim it to open the full context" ? BEFORE_ACCEPT : e.why}</Alert>
       ) : (
         <>
           {e.grant ? <Alert tone="info">Your access covers {e.grant.scope.applicationId ? "this candidate" : e.grant.scope.roleId ? "this role" : "this customer"} and ends {new Date(e.grant.expiresAt).toLocaleString()}. <Button size="sm" variant="secondary" loading={enter.isPending} onClick={() => enter.mutate(e)}>Open in the customer's workspace</Button> <Button size="sm" variant="quiet" loading={release.isPending} onClick={() => release.mutate()}>Release</Button></Alert> : null}

@@ -80,4 +80,23 @@ describe("a request's thread as the team reads it", () => {
     expect(escalationThread({ ...request, requestedBy: { kind: "candidate", id: "a1" } }, [], null)[0].by).toBeNull();
     expect(escalationThread({ ...request, requestedBy: { kind: "recruiter", id: "r1", name: "Kai" } }, [], null)[0]).toMatchObject({ by: "Kai", side: "recruiter" });
   });
+
+  // 15 October 2026: once accepted, a stopped run's request read "The customer asked" under "Raised automatically by
+  // Recruiting OS". The question now says who raised it, never a name, for the recruiter and for the team alike.
+  it("says on the question when Recruiting OS or a candidate raised it, and nothing for a person on either side", () => {
+    const stopped = { ...request, kind: "review", summary: "The customer wants a recruiter to review one candidate for this role.", roleId: "r1", applicationId: "a1", requestedBy: { kind: "system" as const, id: "workflow:application_intake" } };
+    for (const forRecruiter of [true, false]) {
+      expect(escalationThread(stopped, [], null, { forRecruiter })[0]).toMatchObject({ kind: "question", side: "customer", by: null, raisedBy: "system" });
+    }
+    // a candidate's HUMAN reply by email comes through a system actor; its summary was chosen for the candidate
+    const human = { ...stopped, kind: "candidate_issue", summary: "A candidate for this role asked for a person; the hiring team needs a recruiter to follow up.", requestedBy: { kind: "system" as const, id: "email_reply" } };
+    expect(escalationThread(human, [], null, { forRecruiter: true })[0]).toMatchObject({ by: null, raisedBy: "candidate" });
+    expect(escalationThread({ ...request, requestedBy: { kind: "candidate", id: "a1" } }, [], null)[0].raisedBy).toBe("candidate");
+    // an interview Recruiting OS could not arrange is its own, not a candidate asking
+    const noHours = { ...human, summary: "Raised automatically by Recruiting OS: a candidate for this role needs a person to follow up.", requestedBy: { kind: "system" as const, id: "workflow:schedule_interview" } };
+    expect(escalationThread(noHours, [], null, { forRecruiter: true })[0].raisedBy).toBe("system");
+    // a person on the team or at ITS: no raisedBy
+    expect(escalationThread(request, [], null, { forRecruiter: true })[0]).not.toHaveProperty("raisedBy");
+    expect(escalationThread({ ...request, requestedBy: { kind: "recruiter", id: "r1", name: "Kai" } }, [], null)[0]).not.toHaveProperty("raisedBy");
+  });
 });

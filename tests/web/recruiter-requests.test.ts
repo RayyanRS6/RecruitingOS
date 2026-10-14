@@ -76,6 +76,18 @@ describe("the words on each request", () => {
     expect(latestAnswer(thread)?.body).toBe("Second.");
     expect(latestAnswer(thread.slice(0, 1))).toBeNull();
   });
+
+  it("a request Recruiting OS or a candidate raised says so over its question, never \"The customer asked\" (15 October 2026)", () => {
+    const question = { id: "q", side: "customer" as const, kind: "question" as const, body: "Processing this application stopped after 4 tries and needs a person to take over.", by: null, at: "2026-10-15T10:00:00.000Z" };
+    expect(queueThreadHeading({ ...question, raisedBy: "system" })).toBe("Raised automatically by Recruiting OS");
+    expect(threadHeading({ ...question, raisedBy: "system" })).toBe("Raised automatically by Recruiting OS");
+    expect(queueThreadHeading({ ...question, raisedBy: "candidate" })).toBe("A candidate asked for a person");
+    expect(threadHeading({ ...question, raisedBy: "candidate" })).toBe("A candidate asked for a person");
+    // the customer's own request, and the notes after any question, read as before
+    expect(queueThreadHeading(question)).toBe("The customer asked");
+    expect(threadHeading(question)).toBe("The request");
+    expect(queueThreadHeading({ ...question, id: "n", kind: "reply", body: "Any news?" })).toBe("The customer added a note");
+  });
 });
 
 describe("what a person may do, and who may ask", () => {

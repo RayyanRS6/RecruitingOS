@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { loadBusinessCalendar } from "@ros/core";
+import { loadBusinessCalendar, servedSummary } from "@ros/core";
 import { recruiterEscalations, users, withPlatform, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import type { Tenant } from "../middleware/session";
@@ -8,11 +8,14 @@ import { boardView, loadPool } from "./pool";
 /** What the ITS queue is told about a new request. */
 export type QueueNotice = { id: string; kind: string; slaDueAt: string; urgency: string; requiredExpertise: string; summary: string; timeZone: string };
 
-/** The queue notice of a request just created, read back in the caller's tenant transaction. */
+/**
+ * The queue notice of a request just created, read back in the caller's tenant transaction. The summary is served as the
+ * queue shows it (`servedSummary`: one Recruiting OS raised says so); who raised it is read for that and never sent.
+ */
 export async function queueNoticeOf(tx: Tx, escalationId: string): Promise<QueueNotice | null> {
-  const [row] = await tx.select({ kind: recruiterEscalations.kind, slaDueAt: recruiterEscalations.slaDueAt, urgency: recruiterEscalations.urgency, requiredExpertise: recruiterEscalations.requiredExpertise, summary: recruiterEscalations.summary }).from(recruiterEscalations).where(eq(recruiterEscalations.id, escalationId)).limit(1);
+  const [row] = await tx.select({ kind: recruiterEscalations.kind, slaDueAt: recruiterEscalations.slaDueAt, urgency: recruiterEscalations.urgency, requiredExpertise: recruiterEscalations.requiredExpertise, summary: recruiterEscalations.summary, requestedBy: recruiterEscalations.requestedBy, roleId: recruiterEscalations.roleId, applicationId: recruiterEscalations.applicationId }).from(recruiterEscalations).where(eq(recruiterEscalations.id, escalationId)).limit(1);
   if (!row?.slaDueAt) return null;
-  return { id: escalationId, kind: row.kind, slaDueAt: row.slaDueAt, urgency: row.urgency, requiredExpertise: row.requiredExpertise, summary: row.summary, timeZone: (await loadBusinessCalendar(tx)).timeZone };
+  return { id: escalationId, kind: row.kind, slaDueAt: row.slaDueAt, urgency: row.urgency, requiredExpertise: row.requiredExpertise, summary: servedSummary(row), timeZone: (await loadBusinessCalendar(tx)).timeZone };
 }
 
 /**

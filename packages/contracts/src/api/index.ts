@@ -420,8 +420,12 @@ export const ReopenEscalation = z.object({ note: z.string().trim().min(5).max(40
 /** The reply-by time a request would get if it were sent now (plan B6): the form shows it before anything is sent. */
 export const EscalationEstimateQuery = z.object({ kind: CreateEscalation.shape.kind.default("ask"), topic: CreateEscalation.shape.topic });
 
-/** One entry in a request's thread as the team reads it: what they asked, every note, every answer, every reopening. */
-export type EscalationThreadEntry = { id: string; side: "customer" | "recruiter"; kind: "question" | "reply" | "answer" | "reopen"; body: string; by: string | null; at: string };
+/**
+ * One entry in a request's thread as the team reads it: what they asked, every note, every answer, every reopening.
+ * `raisedBy` is on the opening question only when nobody on the team or at ITS raised the request: Recruiting OS on its
+ * own ("system"), or a candidate (15 October 2026). It names nobody.
+ */
+export type EscalationThreadEntry = { id: string; side: "customer" | "recruiter"; kind: "question" | "reply" | "answer" | "reopen"; body: string; by: string | null; at: string; raisedBy?: "system" | "candidate" };
 /**
  * A request as "Your recruiter requests" on Today shows it (plan B4): its state, the reply-by time, who picked it up and
  * the full answer. `askedBy.kind` is "you" for the reader's own requests; `recruiterName` is null until someone picks it up.
