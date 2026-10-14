@@ -6,8 +6,10 @@ import { Alert, Avatar, Button, Card, Chip, ErrorState, Icon, Skeleton } from "@
 import type { NoteStarter } from "@ros/contracts";
 import { api, ApiError, type NoteView, type NotesView } from "../../api/client";
 import { toast } from "../../toast";
-import { NOTE_AUTOSAVE_MS, NOTE_BODY_MAX, NOTES_REMINDER, applyStarter, earlierVersions, noteExcerpt, noteMeta, noteSaveState, othersNotes, saveStatusWords, shouldAutosave, starterChoices, timeWords, whoReadsLine, type NoteWithVersions } from "../../notes";
+import { NOTE_AUTOSAVE_MS, NOTE_BODY_MAX, NOTES_REMINDER, NOTES_REMINDER_SHORT, applyStarter, earlierVersions, noteExcerpt, noteMeta, noteSaveState, othersNotes, saveStatusWords, shouldAutosave, starterChoices, timeWords, whoReadsLine, type NoteWithVersions } from "../../notes";
+import { firstSentence } from "./helpers";
 import { useDraft } from "./hooks";
+import { Why } from "./why";
 
 /**
  * Private team notes on a candidate (founder decision Q24; plan H3): each person's own note, saved as they type, with
@@ -38,7 +40,11 @@ export function NotesTab({ applicationId, firstName }: { applicationId: string; 
   return (
     <div className="stack" style={{ gap: 14 }}>
       <Alert tone="info">
-        <span className="row" style={{ gap: 6, alignItems: "flex-start", flexWrap: "nowrap" }}><Icon name="lock" size={16} /><span><strong>{view.privacy}</strong> {NOTES_REMINDER}</span></span>
+        <span className="row" style={{ gap: 6, alignItems: "flex-start", flexWrap: "nowrap" }}><Icon name="lock" size={16} /><span><strong>{firstSentence(view.privacy).line}</strong> {NOTES_REMINDER_SHORT}</span></span>
+        <Why label="What to write, and who sees it">
+          <span>{view.privacy}</span>
+          <span>{NOTES_REMINDER}</span>
+        </Why>
       </Alert>
       <MyNote applicationId={applicationId} view={view} firstName={firstName} />
       {view.canRead === "all" ? (
@@ -125,7 +131,12 @@ export function MyNote({ applicationId, view, firstName, compact = false }: { ap
   };
   return (
     <Card title="Your note" aside={mine?.edited || versions.length ? <Chip>Changed</Chip> : null}>
-      {compact ? <p className="small muted" style={{ margin: "0 0 8px" }}>{NOTES_REMINDER}</p> : null}
+      {compact ? (
+        <div style={{ margin: "0 0 8px" }}>
+          <p className="small muted" style={{ margin: 0 }}>{NOTES_REMINDER_SHORT}</p>
+          <Why label="What to write">{NOTES_REMINDER}</Why>
+        </div>
+      ) : null}
       <fieldset className="row" style={{ gap: 6, margin: "0 0 8px", padding: 0, border: 0, minWidth: 0 }} aria-label="Start from">
         {/* the chosen starter is heard as pressed, not only seen by its fill */}
         {starterChoices(view).map((s) => <Button key={s.id} size="sm" variant={starter === s.id ? "primary" : "secondary"} ariaPressed={starter === s.id} onClick={() => pick(s.id)} title={s.prompt}>{s.label}</Button>)}

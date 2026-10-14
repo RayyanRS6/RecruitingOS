@@ -34,7 +34,7 @@ async function loadBundle(tx: Tx, app: App) {
   const [role] = await tx.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
   const [company] = await tx.select().from(companies).where(eq(companies.id, app.companyId)).limit(1);
   const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
-  if (!candidate || !role || !company || !pv) throw new HttpError(409, "incomplete", "This application is missing its candidate record or role packet, so a message cannot be sent.");
+  if (!candidate || !role || !company || !pv) throw new HttpError(409, "incomplete", "This application is missing its candidate record or job details, so a message cannot be sent.");
   return { candidate, role, company, packet: pv.packet };
 }
 type Bundle = Awaited<ReturnType<typeof loadBundle>>;
@@ -102,7 +102,7 @@ async function queueMessage(tx: Tx, container: Container, input: { app: App; bun
 /** The message waits for an approver: the approver roles are told, the request is audited, and the writer gets a 202. */
 async function holdForApprover(tx: Tx, input: { app: App; roleTitle: string; tenant: Tenant; actor: Actor; proposal: MessageProposal; approvalRequestId: string; approverRoles: string[] }): Promise<Extract<SendMessageResult, { status: "pending_approval" }>> {
   const { proposal } = input;
-  await notify(tx, { companyId: input.tenant.companyId, kind: "message.approval_requested", title: `Send this message to ${proposal.candidateName}?`, body: `${proposal.senderName} wrote to ${proposal.candidateName} about ${input.roleTitle}. Read it on Today or the candidate's page and decide; nothing goes out until you do.`, action: { label: "Read the message", href: `/roles/${input.app.roleId}/talent?open=${input.app.id}` }, roles: input.approverRoles });
+  await notify(tx, { companyId: input.tenant.companyId, kind: "message.approval_requested", title: `Send this message to ${proposal.candidateName}?`, body: `${proposal.senderName} wrote to ${proposal.candidateName} about ${input.roleTitle}. Read it on Home or the candidate's page and decide; nothing goes out until you do.`, action: { label: "Read the message", href: `/roles/${input.app.roleId}/talent?open=${input.app.id}` }, roles: input.approverRoles });
   await audit(tx, { companyId: input.tenant.companyId, actor: input.actor, action: "message.approval_requested", target: { type: "application", id: input.app.id }, details: { approvalRequestId: input.approvalRequestId, subject: proposal.subject, requiredRoles: input.approverRoles } });
   return { ok: true, status: "pending_approval", approvalRequestId: input.approvalRequestId };
 }

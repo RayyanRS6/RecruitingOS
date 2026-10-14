@@ -111,7 +111,7 @@ describe("the screen right after approval (D2)", () => {
     expect(destinationsOf(view({ postings: [] })).find((d) => d.key === "indeed")?.status.label).toBe("Getting it ready");
     expect(destinationsOf(view({ postings: [posting({ status: "closed" })] })).some((d) => d.key === "indeed")).toBe(false);
     expect(noBoardsLine(view().boards)).toBeNull();
-    expect(noBoardsLine(view().boards.map((b) => ({ ...b, chosen: false })))).toMatch(/No job boards were chosen/);
+    expect(noBoardsLine(view().boards.map((b) => ({ ...b, chosen: false })))).toBe("No job boards were chosen for this job. You can add LinkedIn or Indeed from the Share tab at any time.");
   });
 
   it("says when no interviewers are set, and which boards still show the earlier version after an approved change", () => {
@@ -119,7 +119,7 @@ describe("the screen right after approval (D2)", () => {
     expect(interviewersNote({ rounds: 3, roundsWithoutInterviewers: 1 })).toMatch(/^1 of the 3 interview rounds have nobody/);
     expect(interviewersNote({ rounds: 2, roundsWithoutInterviewers: 0 })).toBeNull();
     expect(outdatedBoardsLine(["indeed"], "its")).toBe("Indeed still shows the earlier version. ITS has a task to update it from your company's account.");
-    expect(outdatedBoardsLine(["linkedin_basic", "indeed"], "self")).toMatch(/^LinkedIn, Indeed still show the earlier version\. Update them from your own account/);
+    expect(outdatedBoardsLine(["linkedin_basic", "indeed"], "self")).toBe("LinkedIn, Indeed still show the earlier version. Update them from your own account, then confirm on the Share tab.");
     expect(outdatedBoardsLine([], "its")).toBeNull();
   });
 
@@ -328,8 +328,8 @@ describe("sharing (D8)", () => {
 describe("board ticks and ITS posting tasks (D6, D3)", () => {
   it("says what saving the ticks does", () => {
     expect(boardTicksToast({ before: ["indeed"], after: ["indeed", "linkedin_basic"], roleStatus: "open", whoPosts: "its" })).toEqual({ title: "Boards saved: Indeed, LinkedIn.", detail: "ITS posts the job on LinkedIn from your company's account." });
-    expect(boardTicksToast({ before: ["indeed"], after: [], roleStatus: "open", whoPosts: "self" })).toEqual({ title: "No job boards for this role.", detail: "Indeed closed; take the listing down from your own account if it was up." });
-    expect(boardTicksToast({ before: [], after: ["indeed"], roleStatus: "pending_approval", whoPosts: "its" }).detail).toMatch(/^Nothing is posted until the role is approved/);
+    expect(boardTicksToast({ before: ["indeed"], after: [], roleStatus: "open", whoPosts: "self" })).toEqual({ title: "No job boards for this job.", detail: "Indeed closed; take the listing down from your own account if it was up." });
+    expect(boardTicksToast({ before: [], after: ["indeed"], roleStatus: "pending_approval", whoPosts: "its" }).detail).toMatch(/^Nothing is posted until the job is approved/);
   });
 
   it("names the posting tasks in the queue in words", () => {

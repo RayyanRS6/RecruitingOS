@@ -1,6 +1,9 @@
 import type { Confidence, EligibilityResult, Evidence, EvidenceAssessment, EvidenceSource, ResumeExtraction, RolePacket } from "@ros/contracts";
-import { resumeExtractPrompt, runPromptDetached, triageAssessPrompt, type AiRuntime, type RunOutcome } from "@ros/ai";
+import { resumeExtractPrompt, runPromptDetached, triageAssessPrompt, type AiRuntime, type RunOutcome, type TriageInput } from "@ros/ai";
 import type { Db } from "@ros/db";
+import { SCORING_VIEW_VERSION, restoreQuotes, scoringView, withoutPlaceholders, type ScoringIdentity, type ScoringView } from "./scoring-view";
+
+export { PLACEHOLDER as SCORING_PLACEHOLDER, SCORING_VIEW_VERSION, hasPlaceholder, restoreQuotes, scoringView, withoutPlaceholders, type HiddenKind, type ScoringIdentity, type ScoringView } from "./scoring-view";
 
 /**
  * Resume extraction (Triage agent, Slice 1). Quotes are verified against the source text in code:
@@ -27,7 +30,12 @@ export function verifyQuotes(ex: ResumeExtraction, source: string): ResumeExtrac
   };
 }
 
-/** Inputs to the evidence-based assessment; the workflow assembles them from the system of record. */
+/**
+ * Inputs to the evidence-based assessment; the workflow assembles them from the system of record. `identity` is who the
+ * application is from (the candidate's record), used only to hide those details from the reading (`scoringInput`).
+ * Earlier applications to the company are not an input (founder decision D-04 = C): the team sees them on the
+ * candidate's page; the reading never does.
+ */
 export type AssessInput = {
   companyId: string;
   workflowRunId?: string | null;
@@ -37,8 +45,43 @@ export type AssessInput = {
   resumeText: string | null;
   applicationAnswers: { eligibility: Record<string, unknown>; noResumeSummary?: string };
   eligibility: EligibilityResult | null;
-  priorApplications: Array<{ roleTitle: string; stage: string; at: string }>;
+  identity: ScoringIdentity;
 };
+
+/**
+ * The words the job is judged on, never hidden as a single name (scoring-view.ts `ScoringIdentity.keep`): the job's
+ * title, must-haves, competencies and places, and the résumé's own job titles, employers and skills. Every part is read
+ * with care: an older or partial packet may leave one out.
+ */
+export function jobWords(packet: Partial<Pick<RolePacket, "identity" | "requirements" | "competencies">> | null | undefined, extraction?: Pick<ResumeExtraction, "positions" | "skills"> | null): string[] {
+  const p = packet ?? {};
+  const out: string[] = [];
+  if (p.identity?.title) out.push(p.identity.title);
+  for (const l of p.identity?.locations ?? []) out.push([l.city, l.region].filter(Boolean).join(" "));
+  for (const m of p.requirements?.mustHaves ?? []) out.push(m.text);
+  for (const c of p.competencies ?? []) out.push(c.name ?? "");
+  for (const pos of extraction?.positions ?? []) out.push(pos.title ?? "", pos.employer ?? "");
+  for (const s of extraction?.skills ?? []) out.push(s);
+  return out.filter(Boolean);
+}
+
+/**
+ * What the résumé reading is given (D-04 = C): the résumé, the written answer, the eligibility answers and the extraction
+ * as the scoring view shows them (name, email, phone, street address and links replaced by placeholders), with the
+ * scoring view itself, which maps a quote back to the original words and counts what was hidden.
+ */
+export function scoringInput(input: Pick<AssessInput, "packet" | "extraction" | "resumeText" | "applicationAnswers" | "eligibility" | "identity">): { promptInput: TriageInput; view: ScoringView } {
+  const view = scoringView({ ...input.identity, fullName: input.identity.fullName ?? input.extraction?.fullName ?? null, keep: [...(input.identity.keep ?? []), ...jobWords(input.packet, input.extraction)] });
+  const { noResumeSummary } = input.applicationAnswers;
+  const promptInput: TriageInput = {
+    packet: input.packet,
+    extraction: input.extraction ? view.deep(input.extraction) : null,
+    resumeText: input.resumeText === null ? null : view.text(input.resumeText),
+    applicationAnswers: { eligibility: view.deep(input.applicationAnswers.eligibility), ...(noResumeSummary === undefined ? {} : { noResumeSummary: view.text(noResumeSummary) }) },
+    eligibility: input.eligibility,
+  };
+  return { promptInput, view };
+}
 
 /**
  * How many times an application is read. The fairness run on Haiku 5.5 (14 Oct 2026) showed one reading of the same
@@ -62,8 +105,9 @@ export function assessmentSources(input: Pick<AssessInput, "resumeText" | "appli
  * reaches the owner, then keeps the middle answer of the readings for each finding.
  */
 export async function assessApplication(db: Db, ai: AiRuntime, input: AssessInput): Promise<RunOutcome<EvidenceAssessment>> {
-  const promptInput = { packet: input.packet, extraction: input.extraction, resumeText: input.resumeText, applicationAnswers: input.applicationAnswers, eligibility: input.eligibility, priorApplications: input.priorApplications };
-  const inputRef = { applicationId: input.applicationId, resumeChars: input.resumeText?.length ?? 0, hasExtraction: !!input.extraction };
+  const { promptInput, view } = scoringInput(input);
+  // The record says which view the reading used and how many details it hid: counts only, never the values.
+  const inputRef = { applicationId: input.applicationId, resumeChars: input.resumeText?.length ?? 0, hasExtraction: !!input.extraction, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() };
   const read = (reading: number) => runPromptDetached(db, ai, triageAssessPrompt, promptInput, { companyId: input.companyId, workflowRunId: input.workflowRunId ?? null, inputRef: { ...inputRef, reading } });
   const runs = await Promise.all(Array.from({ length: TRIAGE_READINGS }, (_, i) => read(i + 1)));
   // A reading lost to an outage is asked once more; one still lost fails the step, which the engine retries, rather than
@@ -71,7 +115,31 @@ export async function assessApplication(db: Db, ai: AiRuntime, input: AssessInpu
   const settled = await Promise.all(runs.map((r, i) => (!r.ok && r.reason === "error" ? read(i + 1) : r)));
   const outage = settled.find((r) => !r.ok && r.reason === "error");
   if (outage) return outage;
-  return combineOutcomes(settled, assessmentSources(input), credentialMustHaves(input.packet));
+  return readingsOutcome(settled, view, input);
+}
+
+/**
+ * The readings as the team sees them, combined into the middle answer. Quotes are checked against the ORIGINAL words,
+ * and shown as the candidate wrote them: one the model wrote around a placeholder is mapped back first
+ * (`restoreReadingQuotes`); one that cannot be fails the check. The model's own words (summary, claims, unknowns) keep no
+ * placeholder either: "[name]" reads "the candidate". Shared with the fairness evals (packages/evals), so they check
+ * exactly what the app does after the model has answered.
+ */
+export function readingsOutcome(readings: ReadonlyArray<RunOutcome<Reading>>, view: Pick<ScoringView, "restore">, input: Pick<AssessInput, "resumeText" | "applicationAnswers" | "packet">): RunOutcome<Reading> {
+  const sources = assessmentSources(input);
+  return combineOutcomes(readings.map((r) => (r.ok ? { ...r, output: withoutPlaceholders(restoreReadingQuotes(r.output, view, sources)) } : r)), sources, credentialMustHaves(input.packet));
+}
+
+/**
+ * A reading's quotes as the candidate wrote them (D-04 = C): each quote with a placeholder mapped back to the original
+ * text of the source it cites, else of any source. Exported for the tests.
+ */
+export function restoreReadingQuotes<T>(reading: T, view: Pick<ScoringView, "restore">, sources: Partial<Record<EvidenceSource, string>>): T {
+  const all = Object.values(sources).filter((s): s is string => !!s);
+  return restoreQuotes(reading, view, (source) => {
+    const own = source ? sources[source as EvidenceSource] : undefined;
+    return own ? [own, ...all.filter((s) => s !== own)] : all;
+  });
 }
 
 /**

@@ -14,8 +14,8 @@ const PAGE = 25;
 type Filter = "all" | "unread";
 
 /**
- * Every update this person ever had at this company, newest first (plan B3): Today's "What the assistant did" card
- * shows only the newest unread ones, and "See earlier updates" leads here. Each can be marked read or unread again;
+ * Every update this person ever had at this company, newest first (plan B3): Home's "Recent activity" shows only the
+ * newest unread ones, and "See earlier updates" leads here. Each can be marked read or unread again;
  * "Mark all read" marks exactly the unread updates loaded on the list, never one on a page not loaded yet or one that
  * arrived since (while some are further back, the button says how many it marks).
  */
@@ -51,9 +51,9 @@ export function Updates() {
   return (
     <div className="stack" style={{ gap: 18 }}>
       <PageHeader
-        eyebrow="Today"
+        eyebrow={<Link to="/">Home</Link>}
         title="Updates"
-        sub="Everything you were told about here, newest first. The unread ones also show on Today."
+        sub="Everything the assistant told you, newest first."
         actions={<Link to="/setup#setup-notifications" className="btn secondary">Email alerts</Link>}
       />
       <Card>

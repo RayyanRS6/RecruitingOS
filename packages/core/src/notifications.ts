@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { NOTIFY_GROUPS, NotifyCadence, NotifyGroup, type Actor } from "@ros/contracts";
 import { applications, interviews, jobs, memberships, notificationPreferences, notifications, roles, users, type Queryable } from "@ros/db";
@@ -48,6 +49,32 @@ export async function notify(
   const now = rest.filter((r) => resolveNotifyCadence(input.kind, prefs.get(r.userId) ?? {}).emailNow);
   if (now.length) await q.insert(jobs).values({ kind: NOTIFICATION_EMAIL_JOB_KIND, payload: { companyId: input.companyId, notificationIds: now.map((r) => r.id) }, runAt: clock().toISOString(), maxAttempts: 5 });
   return members.length;
+}
+
+/**
+ * The de-duplication key of the "No common times" notice for one interview (audit 06-interviews, bug 105): the notice
+ * goes out when the key differs from the one it last went out under, so once, then only when something changes. The key
+ * covers the interview, its attempt and length, the shape of the scheduling window (how many days it spans, counted as
+ * the fresh window counts them, and whether weekends count; not its dates, which move forward by themselves at every
+ * re-check) and what each interviewer has said about their time (where it comes from, zone, hours, buffer, daily limit;
+ * not a calendar's busy times, which change all the time). It is a short hash, kept in the workflow's state.
+ */
+export function noCommonTimesNoticeKey(input: {
+  interviewId: string;
+  attempt: number;
+  durationMinutes: number;
+  window: { fromDate: string; toDate: string; businessDaysOnly: boolean };
+  participants: ReadonlyArray<{ userId: string; source: string; optional?: boolean; timezone: string; windows: unknown; bufferMinutes: number; maxPerDay: number }>;
+}): string {
+  let span = 0;
+  for (let t = Date.parse(`${input.window.fromDate}T12:00:00Z`), end = Date.parse(`${input.window.toDate}T12:00:00Z`); t <= end && span < 400; t += 86_400_000) {
+    if (!input.window.businessDaysOnly || ![0, 6].includes(new Date(t).getUTCDay())) span++;
+  }
+  const people = [...input.participants]
+    .sort((a, b) => a.userId.localeCompare(b.userId))
+    .map((p) => [p.userId, p.source, !!p.optional, p.timezone, p.windows, p.bufferMinutes, p.maxPerDay]);
+  const shape = JSON.stringify([input.attempt, input.durationMinutes, span, input.window.businessDaysOnly, people]);
+  return `${input.interviewId}:${createHash("sha256").update(shape).digest("hex").slice(0, 16)}`;
 }
 
 /** Each person's saved email settings in one company, by group (a group with no row is left out: its default applies). */

@@ -1,14 +1,22 @@
 import { OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum } from "@ros/contracts";
 import type { Tone } from "@ros/ui";
-import type { ApplicationSummary, CancelledReason, OwnerStage, StageStripCounts, ToldState } from "./api/client";
+import type { ApplicationSummary, CancelledReason, OwnerStage, RoleSummary, StageStripCounts, ToldState } from "./api/client";
 import { cancelledReasonFrom } from "./cancelled";
+import { SAFETY_NET_WORKING_DAYS } from "./telling";
 
 /**
- * The Talent page's list (plan A3; founder decisions B2, B3 and B6), kept free of React so it can be tested: the stage
- * strip, the reading chip, the filters, search and the four orders. The AI reading's words only filter; the list can be
- * ordered by the match score, the number worked out by code from the checked findings (B2), as well as newest first,
- * waiting longest and by name.
+ * The Candidates list (plan A3; founder decisions B2, B3 and B6; Wave S1), kept free of React so it can be tested: the
+ * stage strip, the chips on a row, the filters, search and the four orders. The AI review's words only filter; the list
+ * can be ordered by the match score, the number worked out by code from the checked findings (B2), as well as newest
+ * first, waiting longest and by name. Also the one line on each job in the Jobs list.
  */
+
+/**
+ * The day-5 safety net in one short line (founder decision D-03), for the places that say a decision is private but know
+ * neither each person's day nor the company's message setting: the "Not told yet" list, the pool board's Review and
+ * apply. The candidate's own page says the day (telling.ts safetyNetLine).
+ */
+export const SAFETY_NET_NOTE = `If nobody tells them within ${SAFETY_NET_WORKING_DAYS} working days, the standard message goes by itself (or an ITS recruiter is brought in, if your settings say so).`;
 
 /** The latest reading in a word: the chip on each row and the reading filter. */
 export type Reading = "strong" | "potential" | "weak" | "missing_must_have" | "closer_look" | "insufficient" | "none";
@@ -45,7 +53,7 @@ export function readingOf(a: Pick<ApplicationSummary, "assessment" | "evidence">
 
 export type ReadingFilter = "any" | "strong" | "potential" | "missing_must_have" | "closer_look";
 export const READING_FILTERS: ReadonlyArray<{ id: ReadingFilter; label: string }> = [
-  { id: "any", label: "Any reading" },
+  { id: "any", label: "All matches" },
   { id: "strong", label: "Strong match" },
   { id: "potential", label: "Potential match" },
   { id: "missing_must_have", label: "Missing a must-have" },
@@ -75,10 +83,10 @@ export type TalentView = { stage: OwnerStage | "all"; waiting: boolean; applying
 
 export const STILL_APPLYING_LABEL = "Still applying";
 /** Said above the list while it shows the people still applying. */
-export const STILL_APPLYING_TEXT = "These people sent the form and are answering the screening questions in the same visit, or said they would finish later. Nothing about them waits on you until they send their answers, ask for a person or stop; you are told then.";
+export const STILL_APPLYING_TEXT = "They sent the form and are still on the screening questions. Nothing about them waits on you until they send their answers; you are told then.";
 
 /**
- * Someone still in the visit that sent their application: offered the screening conversation with it and not finished,
+ * Someone still in the visit that sent their application: offered the screening chat with it and not finished,
  * sent without it, handed to a person or closed. They sit in their stage like anyone else, are counted apart beside the
  * strip, and are never shown as waiting on you.
  */
@@ -168,6 +176,58 @@ export function stripItems(counts: Pick<StageStripCounts, "total" | "byOwnerStag
   return [{ id: "all" as const, label: "All", count: counts?.total ?? 0 }, ...OWNER_STAGES.map((s) => ({ id: s, label: OWNER_STAGE_LABEL[s], count: counts?.byOwnerStage[s] ?? 0 }))];
 }
 
+/** The columns the strip always shows, whatever their counts (Wave S1). */
+const ALWAYS_ON_STRIP: ReadonlyArray<OwnerStage | "all"> = ["all", "new", "shortlist", "interviewing", "hired", "not_moving_forward"];
+
+/**
+ * The strip split in two (Wave S1): `shown` are All, New, Shortlist, Interviewing, Hired, Not moving forward, every other
+ * stage someone is at, and the column being shown; `more` are the other stages nobody is at, in strip order, kept one
+ * click away under "More stages" with their counts.
+ */
+export function stripParts(counts: Pick<StageStripCounts, "total" | "byOwnerStage"> | null | undefined, current: OwnerStage | "all"): { shown: ReturnType<typeof stripItems>; more: ReturnType<typeof stripItems> } {
+  const all = stripItems(counts);
+  const keep = (i: (typeof all)[number]) => ALWAYS_ON_STRIP.includes(i.id) || i.count > 0 || i.id === current;
+  return { shown: all.filter(keep), more: all.filter((i) => !keep(i)) };
+}
+
+/** A chip on a candidate's row: a word, its colour, and (for a short one) the full words it stands for. */
+export type RowChip = { key: string; label: string; tone: Tone; title?: string; kind: "pill" | "chip" };
+/** At most this many chips on a row, besides the score and the stage button (Wave S1); the rest are counted in "+N". */
+export const ROW_CHIP_LIMIT = 2;
+
+/**
+ * Everything a row could say in a chip, most pressing first: still applying, where new times stand under Cancelled, a
+ * tag ("Check eligibility", "Hold ended"), whether the decision was told, the AI review's word for the match, and a
+ * low-confidence review ("Check", its full words as the title). The page shows the first ROW_CHIP_LIMIT. "Not told yet"
+ * carries the day-5 safety net as its title (founder decision D-03).
+ */
+export function rowChips(a: Pick<ApplicationSummary, "stillApplying" | "ownerStage" | "cancelled" | "tags" | "toldState" | "decisionMessageWaiting" | "assessment" | "evidence">, words: { stillApplying: string; onItsWay: string; lowConfidence: string; notToldTitle?: string }): RowChip[] {
+  const out: RowChip[] = [];
+  const reading = readingOf(a);
+  if (isStillApplying(a)) out.push({ key: "applying", label: STILL_APPLYING_LABEL, tone: "neutral", title: words.stillApplying, kind: "pill" });
+  if (a.ownerStage === "cancelled" && a.cancelled) out.push({ key: "cancelled", label: a.cancelled.status, tone: "neutral", kind: "chip" });
+  for (const t of a.tags) out.push({ key: `tag-${t}`, label: t, tone: "caution", kind: "chip" });
+  if (a.toldState === "not_told") out.push({ key: "told", label: a.decisionMessageWaiting ? "Message waiting for approval" : "Not told yet", tone: "neutral", title: a.decisionMessageWaiting ? undefined : words.notToldTitle ?? SAFETY_NET_NOTE, kind: "chip" });
+  if (a.toldState === "queued") out.push({ key: "told", label: words.onItsWay, tone: "neutral", kind: "chip" });
+  if (reading !== "none") out.push({ key: "reading", label: READING[reading].label, tone: READING[reading].tone, kind: "pill" });
+  if (a.evidence?.lowConfidence && reading !== "closer_look") out.push({ key: "low", label: "Check", tone: "caution", title: words.lowConfidence, kind: "chip" });
+  return out;
+}
+
+/**
+ * The one line under each job on the Jobs page: how many are new, how many applied, how many wait on you, how long it has
+ * been open. A count of nothing is left out (no "0 new"), as on Home's rows (today.ts homeJobFacts), in the same words.
+ */
+export function jobCardFacts(r: Pick<RoleSummary, "counts" | "stageCounts" | "countsHidden" | "daysOpen">): string {
+  const open = r.daysOpen === null ? "Not posted yet" : `${r.daysOpen} day${r.daysOpen === 1 ? "" : "s"} open`;
+  if (r.countsHidden) return open;
+  const total = r.counts.total ?? 0;
+  if (!total && r.daysOpen === null) return open;
+  const fresh = r.stageCounts?.new ?? 0;
+  const waiting = r.counts.waiting_on_you ?? 0;
+  return [fresh ? `${fresh} new` : "", `${total} applicant${total === 1 ? "" : "s"}`, waiting ? `${waiting} to review` : "", open].filter(Boolean).join(" · ");
+}
+
 /** The stages anyone is at, in strip order, for a one-line summary ("3 New · 1 Shortlist"); empty stages are left out. */
 export function stageSummary(counts: Partial<Record<OwnerStage, number>> | null | undefined): Array<{ id: OwnerStage; label: string; count: number }> {
   return OWNER_STAGES.map((s) => ({ id: s, label: OWNER_STAGE_LABEL[s], count: counts?.[s] ?? 0 })).filter((s) => s.count > 0);
@@ -214,9 +274,9 @@ export function waitingText(a: Pick<ApplicationSummary, "group" | "daysInStage">
 
 /** The empty list's sentence for the view the person chose. */
 export function emptyText(view: TalentView, total: number): { title: string; body: string } {
-  if (total === 0) return { title: "Nobody has applied yet", body: "Applicants appear here as soon as they apply. The role's Posting tab has the links to share once it is live." };
+  if (total === 0) return { title: "Nobody has applied yet", body: "Applicants appear here as soon as they apply. The Share tab has the job's links once it is live." };
   if (view.query.trim()) return { title: "Nobody matches", body: `Nobody here matches "${view.query.trim()}". Search looks at names, email addresses and where people came from.` };
-  if (view.applying) return { title: "Nobody is still applying", body: "Everyone who was offered the screening conversation with their application has sent their answers, asked for a person or stopped. Turn off \"Still applying\" to see everyone." };
+  if (view.applying) return { title: "Nobody is still applying", body: "Everyone has sent their answers, asked for a person or stopped. Turn off \"Still applying\" to see everyone." };
   if (view.stage === "cancelled" && !view.cancelledReason && !view.waiting && view.reading === "any") return { title: "Nobody is under Cancelled", body: "Candidates who cancel an interview, or do not come to one, show here with what they chose." };
   if (view.waiting && view.stage === "all" && view.reading === "any") return { title: "Nobody is waiting on you", body: "Everyone has a next step under way. Choose All to see them." };
   return { title: "Nobody here", body: "Nobody fits these filters right now. Clear one to see more people." };

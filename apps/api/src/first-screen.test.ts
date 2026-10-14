@@ -48,7 +48,7 @@ describe("sign-up and the first Today", () => {
     // HR's only step is inviting the team, done now that HR is on it, so HR's Today is the honest empty card alone
     const theirs = ((await (await json(hr, "GET", "/api/v1/brief")).json()) as { cards: Card[] }).cards;
     expect(theirs.map((c) => c.kind)).toEqual(["empty"]);
-    expect(theirs[0].title).toBe("No roles are open yet");
+    expect(theirs[0].title).toBe("No jobs are open yet");
     expect(theirs[0].actions).toEqual([]);
   });
 });

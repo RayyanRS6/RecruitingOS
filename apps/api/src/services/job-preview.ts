@@ -1,6 +1,7 @@
 import { APPLY_FORM_MINUTES, formatPayRange, isCompanyVerified, oneVisitMinutes, type DraftRolePacket, type JobPreview, type JobPreviewFact } from "@ros/contracts";
 import { benefitsDescriptionFor, candidateNotices, jobNoticesFor, oneVisitPolicyAllows, payShown, payTransparencyApplies, resolveApplyMode, resolvePolicy } from "@ros/core";
 import type { Queryable, companies } from "@ros/db";
+import { questionHelp } from "../pages/question-help";
 import { approvedAbout, logoMemberPath, profileOf } from "./company-settings-profile";
 
 /**
@@ -125,7 +126,8 @@ export function jobPreview(input: { packet: DraftRolePacket; company: Company; s
     apply: {
       questions: packet.requirements.eligibility.map((rule) => {
         const days = (rule.expectation as { days?: unknown }).days;
-        return { key: rule.key, question: rule.question, help: rule.rationale, answer: rule.type === "schedule_availability" && Array.isArray(days) && days.length > 0 ? ("days" as const) : ("yes_no" as const) };
+        // the same plain line the live form shows under the question (pages/question-help.ts), never the team's words
+        return { key: rule.key, question: rule.question, help: questionHelp(rule.rationale), answer: rule.type === "schedule_availability" && Array.isArray(days) && days.length > 0 ? ("days" as const) : ("yes_no" as const) };
       }),
       notices: shown.map((n) => ({ key: n.key, text: n.text })),
       disclosure: packet.communication.disclosureText,

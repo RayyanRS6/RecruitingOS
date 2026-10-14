@@ -27,10 +27,10 @@ export const GUIDED_VERTICALS: ReadonlySet<string> = new Set(["consumer", "ecomm
 
 /** What the chosen business type means for drafting, said honestly. */
 export function verticalHint(vertical: string): string {
-  if (!vertical) return "This shapes how your roles are drafted.";
+  if (!vertical) return "This shapes how your jobs are drafted.";
   return GUIDED_VERTICALS.has(vertical)
-    ? "Your roles are drafted from our hiring guide for this kind of business: typical roles, screening questions and pay ranges."
-    : "We do not have a hiring guide for this kind of business yet. Your roles are drafted from what you tell the assistant and public pay data.";
+    ? "Your jobs are drafted from our hiring guide for this kind of business: typical jobs, screening questions and pay ranges."
+    : "We do not have a hiring guide for this kind of business yet. Your jobs are drafted from what you tell the assistant and public pay data.";
 }
 
 /** The time zones we offer. Interview times and the hours candidates may be texted are worked out in the one chosen. */

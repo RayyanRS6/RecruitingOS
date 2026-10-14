@@ -116,7 +116,9 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   const openRoles = (await tx.select().from(roles).where(and(eq(roles.companyId, companyId), inArray(roles.status, ["open", "paused", "pending_approval"])))).filter((r) => inStaffScope(scope, { roleId: r.id }));
 
   const now = new Date();
-  const pending = (await tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, companyId), eq(approvalRequests.status, "pending"))).orderBy(desc(approvalRequests.createdAt))).filter((p) => inStaffScope(scope, { roleId: p.roleId, applicationId: p.applicationId }));
+  // Only the requests the viewer may decide (`staffMayAsk`, the rule POST /approvals/:id/decide applies): an ITS recruiter
+  // given one candidate gets no card for a request about the whole role, such as a closing message naming every applicant.
+  const pending = (await tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, companyId), eq(approvalRequests.status, "pending"))).orderBy(desc(approvalRequests.createdAt))).filter((p) => staffMayAsk(scope, { roleId: p.roleId, applicationId: p.applicationId }));
   // The candidates the waiting requests are about, in one query, so a card can name the person instead of an action key.
   const pendingAppIds = [...new Set(pending.map((p) => p.applicationId).filter((x): x is string => !!x))];
   const pendingNames = pendingAppIds.length ? await tx.select({ id: applications.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(inArray(applications.id, pendingAppIds)) : [];
@@ -135,14 +137,14 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
       const [legalRole] = pv && p.roleId ? await tx.select().from(roles).where(eq(roles.id, p.roleId)).limit(1) : [];
       const legal = pv && legalRole ? await legalCheckFor(tx, { role: legalRole, packet: pv.packet, now }) : null;
       // Open wording flags come first (the approve route refuses until each is changed or kept with a reason): the card says so instead of offering approval.
-      const body = may.openFlags ? `${openFlagsMessage(may.openFlags)} It can be approved after that.` : legal?.missing.length ? `${legalCheckMessage(legal.missing)} It can be approved after that.` : p.rationale ?? (editWhileOpen ? "The role keeps running on its approved version until you decide." : "Review the role packet and approve it to start posting.");
+      const body = may.openFlags ? `${openFlagsMessage(may.openFlags)} It can be approved after that.` : legal?.missing.length ? `${legalCheckMessage(legal.missing)} It can be approved after that.` : p.rationale ?? (editWhileOpen ? "The job keeps running on its approved version until you decide." : "Review the job details and approve them to start posting.");
       const label = may.openFlags ? "Review the wording" : legal?.missing.length ? "See what is missing" : editWhileOpen ? "Review the change" : "Review and approve";
-      cards.push({ kind: "decision", title: editWhileOpen ? `Approve packet v${proposal.version ?? "?"} of ${role?.title ?? "the role"}` : `Approve the role: ${role?.title ?? "new role"}`, body, roleId: p.roleId ?? undefined, approvalRequestId: p.id, actions: [{ label, method: "GET", path: `/roles/${p.roleId}` }] });
+      cards.push({ kind: "decision", title: editWhileOpen ? `Approve version ${proposal.version ?? "?"} of ${role?.title ?? "the job"}` : `Approve the job: ${role?.title ?? "new job"}`, body, roleId: p.roleId ?? undefined, approvalRequestId: p.id, actions: [{ label, method: "GET", path: `/roles/${p.roleId}` }] });
     } else if (p.actionType === "application.invite_screen" || p.actionType === "application.recommend_interview") {
       // The card's "Yes" posts to the decide route, which refuses anyone outside the request's approver roles (during a recruiter takeover, everyone but the recruiter).
       if (viewer && !mayDecideByRole(p.requiredRoles, viewer.role)) continue;
       // "Not now" turns the suggestion down (plan A6); the candidate stays where they are and nothing is sent.
-      const verb = p.actionType === "application.invite_screen" ? "Invite to a screen" : "Interview";
+      const verb = p.actionType === "application.invite_screen" ? "Invite to a screening chat" : "Interview";
       cards.push({ kind: "decision", title: `${verb}? ${role?.title ?? ""}`.trim(), body: p.rationale ?? "", roleId: p.roleId ?? undefined, applicationId: p.applicationId ?? undefined, approvalRequestId: p.id, actions: [{ label: `Yes, ${verb.toLowerCase()}`, method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "approve" } }, { label: "Not now", method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "reject", note: "Not now" } }, { label: "Review first", method: "GET", path: p.applicationId ? `/roles/${p.roleId}/talent?open=${p.applicationId}` : `/roles/${p.roleId}/talent` }] });
     } else if (p.actionType === "message.send_freeform") {
       // A message a team member wrote to a candidate, waiting for an approver (F11): the text is on the card, so the decision can be made from here.
@@ -225,7 +227,7 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     // nothing is on the board yet. Only for a company that posts itself; otherwise ITS has a task per board (plan D3).
     const manualPostings = managesPostings && teamPosts ? (await tx.select().from(postings).where(and(eq(postings.roleId, role.id), eq(postings.status, "ready_to_post")))).filter((p) => isBoardChannel(p.channel)) : [];
     if (manualPostings.length) {
-      cards.push({ kind: "posting_action", title: `${role.title}: post it on ${manualPostings.map((p) => CHANNEL_NAME[p.channel] ?? p.channel).join(", ")} from your own account`, body: "These boards are not connected to the product. The role's Posting tab has the posting package, each board's own apply link and the steps; record the public URL there once it is up.", roleId: role.id, actions: [{ label: "See instructions", method: "GET", path: `/roles/${role.id}?tab=posting` }] });
+      cards.push({ kind: "posting_action", title: `${role.title}: post it on ${manualPostings.map((p) => CHANNEL_NAME[p.channel] ?? p.channel).join(", ")} from your own account`, body: "These boards are not connected to the product. The job's Share tab has the posting package, each board's own apply link and the steps; record the public URL there once it is up.", roleId: role.id, actions: [{ label: "See instructions", method: "GET", path: `/roles/${role.id}?tab=posting` }] });
     }
     const pool = sortsPools && apps.length >= POOL_READY_MIN ? await poolReadyCard(tx, role, scope) : null;
     if (pool) cards.push(pool);
@@ -237,7 +239,7 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     const doneToday = scr.filter((s) => s.status === "completed" && (s.completedAt ?? "") >= since).length;
     if (invited + talking + doneToday > 0) {
       const parts = [invited ? `${invited} invited` : "", talking ? `${talking} answering now` : "", doneToday ? `${doneToday} completed since yesterday` : ""].filter(Boolean);
-      cards.push({ kind: "screening", title: `Screening for ${role.title}: ${parts.join(", ")}`, body: doneToday ? "Completed screens are in \"Waiting on you\" with the scorecard." : "Candidates answer in their own time; you will see the scorecard when they finish.", roleId: role.id, actions: [{ label: "See people", method: "GET", path: `/roles/${role.id}/talent` }] });
+      cards.push({ kind: "screening", title: `Screening chats for ${role.title}: ${parts.join(", ")}`, body: doneToday ? "Finished screening chats are in \"Waiting on you\" with the scorecard." : "Candidates answer in their own time; you will see the scorecard when they finish.", roleId: role.id, actions: [{ label: "See people", method: "GET", path: `/roles/${role.id}/talent` }] });
     }
   }
   // Closing a role moves its people to the talent pool privately: a closed role keeps its card until they are told,
@@ -263,9 +265,9 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
       const boards = stillUp.filter((p) => p.roleId === role.id).map((p) => CHANNEL_NAME[p.channel] ?? p.channel);
       const one = boards.length === 1;
       const body = role.status === "closed"
-        ? `${role.title} is closed, but ${one ? "this board still shows" : "these boards still show"} it. Take the posting down from your own account, then tick it off on the Posting tab so nobody keeps applying to a closed role.`
-        : `The ${role.title} posting on ${boards.join(", ")} was closed here, but ${one ? "the board still shows" : "the boards still show"} the job. Take it down from your own account, then tick it off on the Posting tab.`;
-      cards.push({ kind: "posting_action", title: `Still posted on ${boards.join(", ")}`, body, roleId: role.id, actions: [{ label: "Open the Posting tab", method: "GET", path: `/roles/${role.id}?tab=posting` }] });
+        ? `${role.title} is closed, but ${one ? "this board still shows" : "these boards still show"} it. Take the posting down from your own account, then tick it off on the Share tab so nobody keeps applying to a closed job.`
+        : `The ${role.title} posting on ${boards.join(", ")} was closed here, but ${one ? "the board still shows" : "the boards still show"} the job. Take it down from your own account, then tick it off on the Share tab.`;
+      cards.push({ kind: "posting_action", title: `Still posted on ${boards.join(", ")}`, body, roleId: role.id, actions: [{ label: "Open the Share tab", method: "GET", path: `/roles/${role.id}?tab=posting` }] });
     }
   }
   // A board task ITS could not do (plan D3) comes back to the team, with the recruiter's words, until it is done or asked again.
@@ -274,7 +276,7 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     const titles = await tx.select({ id: roles.id, title: roles.title }).from(roles).where(inArray(roles.id, [...new Set(unfinished.map((u) => u.roleId))]));
     for (const u of unfinished) {
       const label = postingTaskLabel(u.kind, CHANNEL_NAME[u.channel] ?? u.channel);
-      cards.push({ kind: "posting_action", title: `${titles.find((r) => r.id === u.roleId)?.title ?? "A role"}: ITS could not ${label.charAt(0).toLowerCase()}${label.slice(1)}`, body: `${u.note ? `ITS wrote: "${u.note}" ` : ""}Ask ITS again from the Posting tab once that is sorted out, or do it from your company's own account and record it there.`, roleId: u.roleId, actions: [{ label: "Open the Posting tab", method: "GET", path: `/roles/${u.roleId}?tab=posting` }] });
+      cards.push({ kind: "posting_action", title: `${titles.find((r) => r.id === u.roleId)?.title ?? "A role"}: ITS could not ${label.charAt(0).toLowerCase()}${label.slice(1)}`, body: `${u.note ? `ITS wrote: "${u.note}" ` : ""}Ask ITS again from the Share tab once that is sorted out, or do it from your company's own account and record it there.`, roleId: u.roleId, actions: [{ label: "Open the Share tab", method: "GET", path: `/roles/${u.roleId}?tab=posting` }] });
     }
   }
   for (const d of await detectStuckRoles(tx, companyId, now)) {
@@ -330,8 +332,8 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   if (cards.length === 0 && !offersFirstRole) {
     // A brand-new company's first screen always offers the way forward; so does a quiet day.
     const startsHires = !viewer || (can(viewer.role, "role.create") && can(viewer.role, "compensation.read") && !scope);
-    const actions: BriefCard["actions"] = openRoles.length ? [{ label: "See your roles", method: "GET", path: "/roles" }] : startsHires ? [{ label: "Start a hire", method: "GET", path: START_HIRE_PATH }] : [];
-    cards.push({ kind: "empty", title: openRoles.length ? "Nothing needs you right now" : startsHires ? "Tell me who you need to hire" : "No roles are open yet", body: openRoles.length ? "Applicants are being acknowledged and screened. I will tell you when someone is worth your time." : startsHires ? "Describe the role in a sentence or two and I will ask what I need to know." : "When someone on your team opens a role, its applicants and decisions show up here.", actions });
+    const actions: BriefCard["actions"] = openRoles.length ? [{ label: "See your jobs", method: "GET", path: "/roles" }] : startsHires ? [{ label: "Start a hire", method: "GET", path: START_HIRE_PATH }] : [];
+    cards.push({ kind: "empty", title: openRoles.length ? "Nothing needs you right now" : startsHires ? "Tell me who you need to hire" : "No jobs are open yet", body: openRoles.length ? "Applicants are being acknowledged and reviewed. I will tell you when someone is worth your time." : startsHires ? "Describe the job in a sentence or two and I will ask what I need to know." : "When someone on your team opens a job, its applicants and decisions show up here.", actions });
   }
   // Today answers four questions (docs/FOUNDER-CONTEXT.md §08): what needs me, who is worth a look, what is at risk, what was done for me.
   const needsMe = cards.filter((c) => c.kind === "decision" || c.kind === "needs_review").length;
@@ -596,7 +598,7 @@ async function longWaitCard(tx: Tx, d: { roleId: string; roleTitle: string; titl
   return {
     kind: "stuck",
     title: narrowed ? `${name} has been waiting on you for ${days} days (${d.roleTitle})` : d.title,
-    body: `${narrowed ? "" : `${d.body} `}${name} has waited longest, ${days} ${days === 1 ? "day" : "days"}${!narrowed && others ? `; ${others} more ${others === 1 ? "is" : "are"} waiting too` : ""}. Decide what comes next, put them on hold until a date (they come back to Today then), or send them a note in your own words. Nothing is sent until you do.`,
+    body: `${narrowed ? "" : `${d.body} `}${name} has waited longest, ${days} ${days === 1 ? "day" : "days"}${!narrowed && others ? `; ${others} more ${others === 1 ? "is" : "are"} waiting too` : ""}. Decide what comes next, put them on hold until a date (they come back to Home then), or send them a note in your own words. Nothing is sent until you do.`,
     roleId: d.roleId,
     applicationId: first.id,
     actions: [
@@ -698,7 +700,7 @@ async function interviewerBrief(tx: Tx, companyId: string, viewer: BriefViewer):
   for (const r of toRecord) {
     cards.push({ kind: "interviews", title: `Did the interview with ${nameOf(r.candidateId)} take place?`, body: `${r.title} for ${roleOf(r.roleId)}${r.startsAt ? `, ${whenIn(r.startsAt, tz)}` : ""}. Tell us if it happened or someone did not show; it keeps the record straight.`, roleId: r.roleId, actions: [{ label: "Record what happened", method: "GET", path: `/interviews/${r.id}` }] });
   }
-  if (!cards.length) cards.push({ kind: "empty", title: "Nothing needs you right now", body: "Your interviews appear here as soon as you are put on one. Keep your calendar or declared hours up to date in Setup so times can be offered.", actions: [{ label: "My availability", method: "GET", path: "/setup" }] });
+  if (!cards.length) cards.push({ kind: "empty", title: "Nothing needs you right now", body: "Your interviews appear here as soon as you are put on one. Keep your calendar or declared hours up to date in Settings so times can be offered.", actions: [{ label: "My availability", method: "GET", path: "/setup" }] });
   const summary = `${upcoming.length} ${upcoming.length === 1 ? "interview" : "interviews"} coming up · ${offering.length} being scheduled · ${toRecord.length} to record.`;
   return { generatedAt: new Date().toISOString(), cards, summary };
 }

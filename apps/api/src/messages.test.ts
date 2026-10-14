@@ -406,7 +406,7 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     for (const n of [packet.compensation.min, packet.compensation.max]) expect(mail!.text).not.toContain(`$${n.toLocaleString("en-US")}`);
     expect(mail!.text).not.toMatch(/rationale/i);
     // what she said in the screen is there, except what she said about pay: not the answer, not the question, not the concern quoting it
-    expect(mail!.text).toContain("What they said in the screen:");
+    expect(mail!.text).toContain("What they said in the screening chat:");
     expect(mail!.text).toContain(workAnswer);
     expect(mail!.text).not.toContain("$61");
     expect(mail!.text).not.toContain(payQuestion.question);

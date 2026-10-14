@@ -1,13 +1,14 @@
 import { BATCH_MAX, BOARD_COLUMN_LABEL, BoardColumn, DECLINE_REASON_LABEL, RejectReason } from "@ros/contracts";
 import { scoreBand, type Tone } from "@ros/ui";
 import type { BatchPreview, BatchResult, BoardCard, BoardView, PoolAnswer, PoolQuestion, PoolSummary, RoleBatchItem } from "../../api/client";
-import { safetyNetPromise } from "../../telling";
+import { SAFETY_NET_NOTE } from "../../talent-list";
 
 /**
- * The pool board on the Talent page (plan F6-F10; founder decisions B2, B4, B5, B6), kept free of React so it can be
+ * The pool board on the Candidates page (plan F6-F10; founder decisions B2, B4, B5, B6), kept free of React so it can be
  * tested: the words on the board, its cards and chips, Review and apply's groups, ticks and counter, the one-click
- * questions' addresses and the "Looked at" line, and Today's pool card. The board only suggests: nothing moves until a
- * person applies it, every move is private, and nobody is emailed.
+ * questions' addresses and the "Looked at" line, and Home's pool card. The board only suggests: nothing moves until a
+ * person applies it, every move is private, and nobody is emailed now (a decision nobody tells meets the day-5 safety
+ * net, founder decision D-03).
  */
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -37,15 +38,15 @@ export function boardSearch(current: URLSearchParams | string, change: { mode?: 
   return qs ? `?${qs}` : "";
 }
 
-/** The strip above the list and the board: what sorting does, and that nothing is sent. */
+/** The strip above the list and the board, in one line: what sorting does, and that nothing moves or is sent. */
 export const SORT_TITLE = "Sort the pool";
-export const SORT_TEXT = "Sorts everyone who has finished applying into Shortlist, Longlist and Not moving forward, and explains every call. Nothing moves until you apply it, and nothing is sent to anyone.";
+export const SORT_TEXT = "Groups everyone who finished applying, with a reason for each. Nothing moves until you apply it, and nothing is sent to anyone.";
 
 /** The strip once the board is showing: when it was sorted, and the same promise. */
 export function sortedText(generatedAt: string | null | undefined): string {
   const at = generatedAt ? new Date(generatedAt) : null;
   const when = at && !Number.isNaN(at.getTime()) ? ` at ${at.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}` : "";
-  return `Sorted${when} by fixed rules from the checked evidence, with the reason for every call. Nothing moves until you apply it, and nothing is sent to anyone.`;
+  return `Sorted${when} by fixed rules from the checked evidence. Nothing moves until you apply it, and nothing is sent to anyone.`;
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */
@@ -110,10 +111,10 @@ const CONFIDENCE_WORDS: Record<string, string> = { high: "High confidence", medi
 export function confidenceChip(card: Pick<BoardCard, "confidence">): CardChip | null {
   const c = card.confidence;
   if (!c || !CONFIDENCE_WORDS[c]) return null;
-  return { label: CONFIDENCE_WORDS[c], tone: c === "low" ? "caution" : "neutral", title: "How sure the assistant was about its reading. It is not part of the score." };
+  return { label: CONFIDENCE_WORDS[c], tone: c === "low" ? "caution" : "neutral", title: "How sure the AI was about its review. It is not part of the score." };
 }
 
-const BASED_ON_WORDS: Record<string, string> = { resume: "From the résumé reading", screen: "From the screening conversation", resume_and_screen: "From the résumé and the screening conversation" };
+const BASED_ON_WORDS: Record<string, string> = { resume: "From the AI review of the résumé", screen: "From the screening chat", resume_and_screen: "From the résumé and the screening chat" };
 
 /**
  * The small facts under a card (plan F1, F4, F6): the must-have line, what the score rests on, a reading made against
@@ -124,8 +125,8 @@ export function cardFacts(card: Pick<BoardCard, "mustHaves" | "score" | "reading
   if (card.mustHaves?.total) out.push(card.mustHaves.words);
   if (card.score && BASED_ON_WORDS[card.score.basedOn]) out.push(BASED_ON_WORDS[card.score.basedOn]);
   if (card.readingVersion) out.push(card.readingVersion.label);
-  if (card.facts.invitedAutomatically) out.push("Invited to the screening conversation automatically");
-  else if (card.facts.openScreen) out.push("Screening conversation open");
+  if (card.facts.invitedAutomatically) out.push("Invited to the screening chat automatically");
+  else if (card.facts.openScreen) out.push("Screening chat open");
   if (card.facts.suggestionWaiting) out.push("A suggestion is waiting for you");
   return out;
 }
@@ -136,7 +137,7 @@ export function reasonLine(card: Pick<BoardCard, "placement">): string {
   return p.state === "suggested" && p.needsYourEye ? p.needsYourEye : p.reason;
 }
 
-const SOURCE_WORDS: Record<string, string> = { resume: "résumé", application: "application", screen: "screening conversation", interview: "interview", recruiter_note: "recruiter's call notes", eligibility: "eligibility answers" };
+const SOURCE_WORDS: Record<string, string> = { resume: "résumé", application: "application", screen: "screening chat", interview: "interview", recruiter_note: "recruiter's call notes", eligibility: "eligibility answers" };
 
 /** Where a finding came from, in plain words. */
 export function sourceWords(source: string): string {
@@ -314,20 +315,29 @@ export function groupCount(rows: readonly ReviewRow[], column: BoardColumn, stat
 
 /**
  * Where each group goes, and that it is private. A decision nobody tells is not left forever: the safety net (Q27) acts
- * after five working days, and the board does not know the company's setting, so the line says both what it may do.
+ * after five working days, and the board does not know the company's setting, so the line says both what it may do
+ * (founder decision D-03: every screen that says a decision is private says so too).
  */
 export const GROUP_WORDS: Record<BoardColumn, string> = {
   shortlist: "Added to your Shortlist. Private, the candidate is not told.",
   longlist: "Kept warm on your Longlist. Private, no email.",
-  not_moving_forward: `Filed privately. Nobody is emailed now; you will be reminded to send the decision message from the Talent page. ${safetyNetPromise()}`,
+  not_moving_forward: `Filed privately; nobody is emailed now. ${SAFETY_NET_NOTE}`,
 };
 
 /** The line under Review and apply's title: what can change here, and what happens to the rest. */
-export const REVIEW_SUB = "Untick anyone you want to decide yourself, change a reason if needed, then apply. Unticked people stay where they are.";
+export const REVIEW_SUB = "Untick anyone you want to decide yourself. Unticked people stay where they are.";
 
 /** The footer of Review and apply. */
-export const REVIEW_FOOT = "This files people into your pipeline privately. Nobody is emailed.";
+export const REVIEW_FOOT = "Private: nobody is emailed now.";
 export const NEEDS_EYE_WARNING = "Needs your eye: read before applying";
+
+/**
+ * The footer's second line while anyone ticked is filed as not moving forward: the day-5 safety net (Q27; founder
+ * decision D-03), so "nobody is emailed" is never read as "nobody is ever told".
+ */
+export function reviewFootNote(c: Pick<ReadyCounts, "not_moving_forward">): string | null {
+  return c.not_moving_forward ? `Not moving forward: ${SAFETY_NET_NOTE.charAt(0).toLowerCase()}${SAFETY_NET_NOTE.slice(1)}` : null;
+}
 
 /** A row's warnings: a missing must-have in red, "Needs your eye" in amber. */
 export function rowWarnings(row: ReviewRow): Array<{ text: string; tone: "caution" | "critical" }> {
@@ -345,10 +355,19 @@ export function extraWarnings(row: ReviewRow, server: readonly string[] | undefi
 /** The fixed reasons a not-moving-forward can be filed with here, in the team's words (closing the role has its own step). */
 export const DECLINE_CHOICES: ReadonlyArray<{ id: RejectReason; label: string }> = RejectReason.options.filter((r) => r !== "role_closed").map((r) => ({ id: r, label: DECLINE_REASON_LABEL[r] }));
 
-/** The toast after Apply: how many were applied, and that it was private. */
-export function appliedToast(r: Pick<BatchResult, "applied" | "refused">): { title: string; detail: string } {
+/**
+ * The toast after Apply: how many were applied, and that it was private; when anyone was filed as not moving forward,
+ * the day-5 safety net too (founder decision D-03).
+ */
+export function appliedToast(r: Pick<BatchResult, "applied" | "refused"> & { results?: ReadonlyArray<Pick<BatchResult["results"][number], "ok" | "action">> }): { title: string; detail: string } {
   if (!r.applied) return { title: "Nothing was applied", detail: "Each person says why. Nobody was emailed." };
-  return { title: `Applied ${plural(r.applied, "decision", "decisions")}`, detail: `Filed privately. Nobody was emailed.${r.refused ? ` ${plural(r.refused, "person", "people")} could not be applied; each says why.` : ""}` };
+  return { title: `Applied ${plural(r.applied, "decision", "decisions")}`, detail: `Filed privately. ${appliedNote(r)}${r.refused ? ` ${plural(r.refused, "person", "people")} could not be applied; each says why.` : ""}` };
+}
+
+/** "Nobody was emailed.", and the day-5 safety net when anyone was filed as not moving forward (founder decision D-03). */
+export function appliedNote(r: { results?: ReadonlyArray<Pick<BatchResult["results"][number], "ok" | "action">> }): string {
+  const declined = (r.results ?? []).some((x) => x.ok && x.action === "not_moving_forward");
+  return `Nobody was emailed.${declined ? ` ${SAFETY_NET_NOTE}` : ""}`;
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */
@@ -356,8 +375,8 @@ export function appliedToast(r: Pick<BatchResult, "applied" | "refused">): { tit
 /* ------------------------------------------------------------------------------------------------------------ */
 
 export const ASK_TITLE = "Ask about this pool";
-export const ASK_INTRO = "Answers come from the checked findings already on file for everyone who finished applying. Pick a question; each answer says what it looked at.";
-export const ASK_SOON = "Typing your own question is not available yet. Pick a question above, or bring in a recruiter.";
+export const ASK_INTRO = "Pick a question. Each answer says what it looked at.";
+export const ASK_SOON = "Typing your own question is not available yet. Pick one above, or bring in a recruiter.";
 /** "Compare these" takes up to this many people (COMPARE_MAX in apps/api/src/routes/compare.ts). */
 export const COMPARE_MAX = 5;
 
@@ -370,9 +389,9 @@ export function answerPath(roleId: string, q: Pick<PoolQuestion, "kind" | "mustH
   return `/api/v1/roles/${roleId}/questions/${q.kind}${s ? `?${s}` : ""}`;
 }
 
-/** "Looked at: 6 people (6 résumé readings and 2 screening conversations), against 2 must-haves. Nothing new was asked of the AI." */
+/** "Looked at: 6 people (6 résumé reviews and 2 screening chats), against 2 must-haves. Nothing new was asked of the AI." */
 export function lookedAtLine(l: PoolAnswer["lookedAt"]): string {
-  const reads = [l.resumeReadings ? plural(l.resumeReadings, "résumé reading", "résumé readings") : "", l.screenReadings ? plural(l.screenReadings, "screening conversation", "screening conversations") : ""].filter(Boolean);
+  const reads = [l.resumeReadings ? plural(l.resumeReadings, "résumé review", "résumé reviews") : "", l.screenReadings ? plural(l.screenReadings, "screening chat", "screening chats") : ""].filter(Boolean);
   const against = l.requirements.length ? `, against ${l.requirements.length === 1 ? `"${l.requirements[0]}"` : `${l.requirements.length} must-haves`}` : "";
   return `Looked at: ${plural(l.people, "person", "people")}${reads.length ? ` (${reads.join(" and ")})` : ""}${against}. Nothing new was asked of the AI.`;
 }

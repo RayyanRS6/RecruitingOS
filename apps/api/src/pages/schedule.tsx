@@ -3,11 +3,12 @@
 import { Hono } from "hono";
 import { and, eq, isNull } from "drizzle-orm";
 import { CandidateAvailability, CandidateCancel, SelectSlot, type CancelNext } from "@ros/contracts";
-import { CANCEL_STAGES, candidateNewTimesPromise, emit, formatInZone, groupSlotsByDay, notify, openFollowUp, transition, type FollowUpRow, type NewTimesPromise } from "@ros/core";
+import { CANCEL_STAGES, candidateNewTimesPromise, emit, formatInZone, freshSchedulingWindow, groupSlotsByDay, notify, openFollowUp, slotStillAhead, transition, type FollowUpRow, type NewTimesPromise } from "@ros/core";
 import { MAX_CANDIDATE_RESCHEDULES, autoNewTimesPlan, interviewIcs, newTimesDayWords, participantsOf, sendInterviewCancelled, type AutoPlan } from "@ros/agents";
 import { applications, candidates, communications, companies, interviewFollowups, interviews, jobs, rolePackets, roles, withTenant, type Db, type Tx } from "@ros/db";
 import { armNewTimes } from "@ros/workflows";
 import type { Vars } from "../middleware/session";
+import { bookPickNow, routePick } from "../routes/interviews";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { Icon } from "./icons";
 import { Layout } from "./layout";
@@ -73,6 +74,9 @@ const isOff = (b: Bundle) => b.iv.status === "cancelled" || b.closed;
  * The application's row lock, taken before the interview is changed: the order a team cancel, a booking and a send of
  * new times take them (the Cancelled column), so two changes at the same moment take turns instead of deadlocking.
  */
+/** A pick that found the interview moved on while it was being written: the transaction is undone and the page shown again. */
+class PickChanged extends Error {}
+
 async function lockApplication(tx: Tx, applicationId: string): Promise<void> {
   await tx.select({ id: applications.id }).from(applications).where(eq(applications.id, applicationId)).limit(1).for("update");
 }
@@ -160,20 +164,28 @@ schedulePages.get("/c/schedule/:token", async (c) => {
   // New times being prepared (reopened, nothing offered yet), or in an email still waiting to leave: not an expired link.
   if (b.iv.status === "scheduling" && !b.expired && (!b.iv.offeredSlots.length || (await newTimesNotOut(container.db, b)))) return c.html(<TimesBeingReady b={b} />);
   if (b.expired || !["scheduling"].includes(b.iv.status) || !b.iv.offeredSlots.length) return c.html(<Expired b={b} />, 410);
+  // Times that have passed (or start within the hour) are never offered: an old set left on the interview shows only
+  // what can still be booked; with none left the times are as good as expired.
+  const ahead = b.iv.offeredSlots.filter((s) => slotStillAhead(s, container.engine.clock()));
+  if (!ahead.length) return c.html(<Expired b={b} />, 410);
   const tz = tzOf(b, c.req.query("tz"));
-  const groups = groupSlotsByDay(b.iv.offeredSlots, tz);
+  const groups = groupSlotsByDay(ahead, tz);
   const error = c.req.query("error");
   return c.html(
     <Layout title={`Pick a time: ${b.iv.title} at ${b.company.name}`}>
       <p class="eyebrow">{b.company.name} · {b.packet?.identity.title ?? b.role.title}</p>
       <h1>Pick a time for your {b.iv.title.toLowerCase()}</h1>
       <p class="lead">{b.iv.durationMinutes} minutes, {b.iv.format.replace("_", " ")}{b.participants.length ? ` with ${b.participants.map((p) => p.firstName).join(" and ")}` : ""}. Times are shown in <strong>{tz.replace(/_/g, " ")}</strong>.</p>
-      <form method="get" action={`/c/schedule/${b.iv.scheduleToken}`} class="card">
-        <label for="tz" class="flush">Show times in</label>
-        <select id="tz" name="tz">{[...new Set([tz, ...ZONES])].map((z) => <option value={z} selected={z === tz}>{z.replace(/_/g, " ")}</option>)}</select>
-        <button class="btn secondary" type="submit">Show times</button>
-      </form>
-      {error === "slot_unknown" ? <div class="err">That time is no longer available. Choose another.</div> : null}
+      {/* Another time zone, one click away (founder brief, 14 October 2026): the line above already names the one shown. */}
+      <details class="more">
+        <summary>Change the time zone</summary>
+        <form method="get" action={`/c/schedule/${b.iv.scheduleToken}`} class="card">
+          <label for="tz" class="flush">Show times in</label>
+          <select id="tz" name="tz">{[...new Set([tz, ...ZONES])].map((z) => <option value={z} selected={z === tz}>{z.replace(/_/g, " ")}</option>)}</select>
+          <button class="btn secondary" type="submit">Show times</button>
+        </form>
+      </details>
+      {error === "slot_unknown" ? <div class="err">That time is no longer available. Choose another.</div> : error === "slot_taken" ? <div class="err" role="alert">That time was just booked for another interview. Choose another.</div> : null}
       <form method="post" action={`/c/schedule/${b.iv.scheduleToken}`}>
         <input type="hidden" name="timezone" value={tz} />
         <fieldset>
@@ -191,13 +203,16 @@ schedulePages.get("/c/schedule/:token", async (c) => {
         <input type="text" id="access" name="accessibilityNote" maxlength={500} placeholder="For example: captions on, or a phone call instead of video" />
         <button class="btn" type="submit">Confirm this time</button>
       </form>
-      <h2>None of these work?</h2>
-      <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/none-work`} class="card">
-        <input type="hidden" name="timezone" value={tz} />
-        <label for="note" class="flush">Tell us what does</label>
-        <textarea id="note" name="note" rows={3} maxlength={1000} placeholder="For example: mornings before 10, any day but Wednesday"></textarea>
-        <button class="btn secondary" type="submit">Ask for other times</button>
-      </form>
+      {/* Asking for other times, one click away (founder brief, 14 October 2026): picking a time is the page's one job. */}
+      <details class="more">
+        <summary>None of these work?</summary>
+        <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/none-work`} class="card">
+          <input type="hidden" name="timezone" value={tz} />
+          <label for="note" class="flush">Tell us what does</label>
+          <textarea id="note" name="note" rows={3} maxlength={1000} placeholder="For example: mornings before 10, any day but Wednesday"></textarea>
+          <button class="btn secondary" type="submit">Ask for other times</button>
+        </form>
+      </details>
       <p class="notice">Reply to any of our emails with HUMAN to reach a person. Nothing here is decided by software.</p>
     </Layout>,
   );
@@ -214,14 +229,36 @@ schedulePages.post("/c/schedule/:token", rateLimit(POLICIES.schedule), async (c)
   const form = await c.req.parseBody();
   const parsed = SelectSlot.safeParse({ slotId: form.slotId, timezone: form.timezone || undefined, accessibilityNote: form.accessibilityNote || undefined });
   if (!parsed.success) return c.redirect(`/c/schedule/${b.iv.scheduleToken}?error=slot_unknown`);
-  const slot = b.iv.offeredSlots.find((s) => s.id === parsed.data.slotId);
-  if (!slot) return c.redirect(`/c/schedule/${b.iv.scheduleToken}?error=slot_unknown`);
-  await withTenant(container.db, b.company.id, async (tx) => {
-    await tx.update(interviews).set({ selectedSlot: slot, schedulingWindow: { ...b.iv.schedulingWindow, candidateTimezone: tzOf(b, parsed.data.timezone) }, candidateAvailability: parsed.data.accessibilityNote ? { ...(b.iv.candidateAvailability ?? {}), note: b.iv.candidateAvailability?.note, timezone: tzOf(b, parsed.data.timezone), preferred: b.iv.candidateAvailability?.preferred ?? [], at: new Date().toISOString(), accessibilityNote: parsed.data.accessibilityNote } as never : b.iv.candidateAvailability }).where(eq(interviews.id, b.iv.id));
-    await emit(tx, { type: "interview.slot_selected", companyId: b.company.id, actor: { kind: "candidate", id: b.candidate.id }, subject: { type: "interview", id: b.iv.id }, payload: { slotId: slot.id, timezone: tzOf(b, parsed.data.timezone), accessibilityNote: !!parsed.data.accessibilityNote } });
+  // Booked by the run waiting for a pick, or straight away when none waits (after "none of these work", during "no
+  // common times", after the collisions escalation): never silently lost. A time booked for an interviewer since is
+  // refused with a plain line, and they choose another; so is a time that has passed, or one no longer on offer.
+  const actor = { kind: "candidate" as const, id: b.candidate.id };
+  const route = await withTenant(container.db, b.company.id, async (tx) => {
+    await lockApplication(tx, b.app.id);
+    // the interview as it is now, locked: the times on offer may have changed since the page was drawn
+    const [current] = await tx.select().from(interviews).where(eq(interviews.id, b.iv.id)).limit(1).for("update");
+    if (!current || current.status !== "scheduling") return { where: "changed" as const };
+    const slot = current.offeredSlots.find((s) => s.id === parsed.data.slotId);
+    if (!slot) return { where: "unknown" as const };
+    const woken = await container.engine.signal(tx, { companyId: b.company.id, key: `${b.iv.id}:interview.slot_selected`, payload: { slotId: slot.id } });
+    const where = await routePick(tx, { iv: current, slot, woken, now: container.engine.clock() });
+    if (where === "taken" || where === "stale") return { where };
+    const [picked] = await tx.update(interviews).set({ selectedSlot: slot, schedulingWindow: { ...current.schedulingWindow, candidateTimezone: tzOf(b, parsed.data.timezone) }, candidateAvailability: parsed.data.accessibilityNote ? { ...(current.candidateAvailability ?? {}), note: current.candidateAvailability?.note, timezone: tzOf(b, parsed.data.timezone), preferred: current.candidateAvailability?.preferred ?? [], at: new Date().toISOString(), accessibilityNote: parsed.data.accessibilityNote } as never : current.candidateAvailability }).where(and(eq(interviews.id, b.iv.id), eq(interviews.attempt, current.attempt), eq(interviews.status, "scheduling"))).returning({ id: interviews.id });
+    if (!picked) return { where: "changed" as const };
+    await emit(tx, { type: "interview.slot_selected", companyId: b.company.id, actor, subject: { type: "interview", id: b.iv.id }, payload: { slotId: slot.id, timezone: tzOf(b, parsed.data.timezone), accessibilityNote: !!parsed.data.accessibilityNote, booking: where } });
     if (parsed.data.accessibilityNote) await notify(tx, { companyId: b.company.id, kind: "interview.accessibility", title: `${b.candidate.firstName} asked for an accommodation`, body: parsed.data.accessibilityNote, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
-    await container.engine.signal(tx, { companyId: b.company.id, key: `${b.iv.id}:interview.slot_selected`, payload: { slotId: slot.id } });
+    // a direct booking that finds the interview moved on undoes the pick: the page is shown again with what is on offer now
+    if (where === "direct" && !(await bookPickNow(tx, container, { iv: current, roleId: b.app.roleId, actor }))) throw new PickChanged();
+    return { where, resignal: where === "workflow" && woken === 0, slotId: slot.id };
+  }).catch((err: unknown) => {
+    if (err instanceof PickChanged) return { where: "changed" as const };
+    throw err;
   });
+  if (route.where === "taken") return c.redirect(`/c/schedule/${b.iv.scheduleToken}?error=slot_taken`);
+  if (route.where === "stale" || route.where === "unknown") return c.redirect(`/c/schedule/${b.iv.scheduleToken}?error=slot_unknown`);
+  if (route.where === "changed") return c.redirect(`/c/schedule/${b.iv.scheduleToken}`);
+  // A run that was mid-step when the pick was written (it read no pick, and now waits): told again after the commit.
+  if ("resignal" in route && route.resignal) await withTenant(container.db, b.company.id, (tx) => container.engine.signal(tx, { companyId: b.company.id, key: `${b.iv.id}:interview.slot_selected`, payload: { slotId: route.slotId } }));
   await container.kick();
   return c.redirect(`/c/schedule/${b.iv.scheduleToken}/confirmed`);
 });
@@ -302,22 +339,26 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
       ) : (
         <div class="card"><p>You have rescheduled twice. Reply to any of our emails and a person will arrange a time with you.</p></div>
       )}
-      {/* Cancelling, with what they would like next (founder decision 2A), only while the interview is still ahead. */}
+      {/* Cancelling, with what they would like next (founder decision 2A), only while the interview is still ahead. One
+          click away (founder brief, 14 October 2026), and open when a send came back incomplete (?error=cancel#cancel). */}
       {plan ? (
-        <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/cancel`} class="card" id="cancel">
-          {missing ? <div class="err" role="alert" id="cancel-error">Choose what you would like next, and tick the box to confirm.</div> : null}
-          <fieldset aria-describedby={missing ? "cancel-error" : undefined}>
-            <legend class="question-legend">If you cancel, what would you like next?</legend>
-            <label class="check slot" for="next-new-times"><input type="radio" id="next-new-times" name="next" value="new_times" required aria-describedby="next-new-times-hint" /> Send me new times later</label>
-            <small id="next-new-times-hint">{newTimesHint(plan, b)}</small>
-            <label class="check slot" for="next-not-interested"><input type="radio" id="next-not-interested" name="next" value="not_interested" aria-describedby="next-not-interested-hint" /> I'm no longer interested</label>
-            <small id="next-not-interested-hint">We will let the team know. Your application stays open unless you withdraw it.</small>
-          </fieldset>
-          <label for="cancel-reason">Tell us why, if you like (optional)</label>
-          <input type="text" id="cancel-reason" name="reason" maxlength={500} placeholder="For example: I accepted another offer" />
-          <label class="check"><input type="checkbox" name="confirm" value="yes" required aria-invalid={missing ? "true" : undefined} aria-describedby={missing ? "cancel-error" : undefined} /> Yes, cancel this interview.</label>
-          <button class="btn secondary" type="submit">Cancel the interview</button>
-        </form>
+        <details class="more" open={missing}>
+          <summary>I need to cancel</summary>
+          <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/cancel`} class="card" id="cancel">
+            {missing ? <div class="err" role="alert" id="cancel-error">Choose what you would like next, and tick the box to confirm.</div> : null}
+            <fieldset aria-describedby={missing ? "cancel-error" : undefined}>
+              <legend class="question-legend">If you cancel, what would you like next?</legend>
+              <label class="check slot" for="next-new-times"><input type="radio" id="next-new-times" name="next" value="new_times" required aria-describedby="next-new-times-hint" /> Send me new times later</label>
+              <small id="next-new-times-hint">{newTimesHint(plan, b)}</small>
+              <label class="check slot" for="next-not-interested"><input type="radio" id="next-not-interested" name="next" value="not_interested" aria-describedby="next-not-interested-hint" /> I'm no longer interested</label>
+              <small id="next-not-interested-hint">We will let the team know. Your application stays open unless you withdraw it.</small>
+            </fieldset>
+            <label for="cancel-reason">Tell us why, if you like (optional)</label>
+            <input type="text" id="cancel-reason" name="reason" maxlength={500} placeholder="For example: I accepted another offer" />
+            <label class="check"><input type="checkbox" name="confirm" value="yes" required aria-invalid={missing ? "true" : undefined} aria-describedby={missing ? "cancel-error" : undefined} /> Yes, cancel this interview.</label>
+            <button class="btn secondary" type="submit">Cancel the interview</button>
+          </form>
+        </details>
       ) : null}
     </Layout>,
   );
@@ -347,12 +388,13 @@ schedulePages.post("/c/schedule/:token/reschedule", rateLimit(POLICIES.reschedul
   const hadEvents = Object.keys((b.iv.calendarRefs ?? {}) as Record<string, unknown>).length > 0;
   await withTenant(container.db, b.company.id, async (tx) => {
     await lockApplication(tx, b.app.id);
-    await tx.update(interviews).set({ status: "scheduling", attempt: b.iv.attempt + 1, selectedSlot: null, offeredSlots: [], startsAt: null, endsAt: null, reminders: {}, rescheduleCountCandidate: b.iv.rescheduleCountCandidate + 1, meetingUrl: b.iv.linkSource === "pasted" ? b.iv.meetingUrl : null, scheduleTokenExpiresAt: new Date(now.getTime() + 14 * 86_400_000).toISOString() }).where(eq(interviews.id, b.iv.id));
+    // New times over a fresh window from tomorrow, as long as the old one: never the old dates, which may have passed.
+    await tx.update(interviews).set({ status: "scheduling", attempt: b.iv.attempt + 1, selectedSlot: null, offeredSlots: [], startsAt: null, endsAt: null, reminders: {}, schedulingWindow: freshSchedulingWindow(b.iv.schedulingWindow, now, b.company.timezone), rescheduleCountCandidate: b.iv.rescheduleCountCandidate + 1, meetingUrl: b.iv.linkSource === "pasted" ? b.iv.meetingUrl : null, scheduleTokenExpiresAt: new Date(now.getTime() + 14 * 86_400_000).toISOString() }).where(eq(interviews.id, b.iv.id));
     await emit(tx, { type: "interview.rescheduled", companyId: b.company.id, actor, subject: { type: "interview", id: b.iv.id }, payload: { byCandidate: true, attempt: b.iv.attempt + 1, hadEvents } });
     if (b.app.stage === "interview_scheduled") await transition(tx, { applicationId: b.app.id, companyId: b.company.id, to: "interview_recommended", by: "system", actor, reason: "candidate asked to reschedule" });
     await notify(tx, { companyId: b.company.id, kind: "interview.rescheduled", title: `${b.candidate.firstName} ${b.candidate.lastName} asked to reschedule`, body: "New times are being offered automatically.", action: { label: "Open the interview", href: `/interviews/${b.iv.id}` }, userIds: b.participants.map((p) => p.userId) });
     if (hadEvents) await tx.insert(jobs).values({ kind: "interview.cancel_events", payload: { interviewId: b.iv.id, companyId: b.company.id, actor }, runAt: now.toISOString(), maxAttempts: 5 });
-    await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: b.company.id, subject: { type: "interview", id: b.iv.id }, state: { interviewId: b.iv.id, applicationId: b.app.id, roleId: b.app.roleId, roundKey: b.iv.roundKey, attempt: b.iv.attempt + 1 }, idempotencyKey: `schedule:${b.iv.id}:${b.iv.attempt + 1}`, actor });
+    await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: b.company.id, subject: { type: "interview", id: b.iv.id }, state: { interviewId: b.iv.id, applicationId: b.app.id, roleId: b.app.roleId, roundKey: b.iv.roundKey, attempt: b.iv.attempt + 1, rescheduled: true }, idempotencyKey: `schedule:${b.iv.id}:${b.iv.attempt + 1}`, actor });
   });
   await container.kick();
   return c.redirect(`/c/schedule/${b.iv.scheduleToken}`);
@@ -364,7 +406,7 @@ function teamCancelNote(next: CancelNext, plan: AutoPlan | { arm: false; reason:
   if (plan.arm) return `They asked for new times. New times go to them automatically on ${newTimesDayWords(plan.dueAt, b.company.timezone)}, once, as your settings say. To send them sooner, or to stop them, open them under Cancelled.`;
   switch (plan.reason) {
     case "switched_off":
-      return "They asked for new times. Automatic new times are off in Setup, so nothing goes to them until you send times or decide.";
+      return "They asked for new times. Automatic new times are off in Settings, so nothing goes to them until you send times or decide.";
     case "already_used":
       return "They asked for new times. They already had their one automatic set, so nothing more goes automatically: send new times or decide.";
     case "reschedules_used":

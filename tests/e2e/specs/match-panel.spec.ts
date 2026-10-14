@@ -33,6 +33,8 @@ test.describe("the match score and the skills editor", () => {
     await page.goto(`/roles/${seeded.roleId}/talent?open=${id}`);
     const maria = page.getByRole("dialog", { name: "Maria Reyes" });
     await expect(maria.getByRole("heading", { name: "Against your must-haves" })).toBeVisible({ timeout: 30_000 });
+    // how the score was worked out sits one click away, under "Full breakdown" (Wave S1)
+    await maria.getByText("Full breakdown", { exact: true }).click();
     await expect(maria.getByText("A match score worked out from checked evidence, with the breakdown shown. A person always decides.")).toBeVisible();
     if (score !== null) {
       // in the card and in the panel's header, which keeps it in sight on every section
@@ -50,7 +52,7 @@ test.describe("the match score and the skills editor", () => {
         await expect(maria.locator(".sbar-detail details[open] blockquote").first()).toBeVisible();
       }
     } else {
-      await expect(maria.getByText(/^Nothing to score yet/)).toBeVisible();
+      await expect(maria.getByText(/^Nothing to score yet/).first()).toBeVisible();
     }
     await expectAccessible(page, "the candidate panel with the match card");
     // "Something wrong?" asks first, saying what an ITS recruiter would see and for how long; Cancel sends nothing
@@ -58,7 +60,7 @@ test.describe("the match score and the skills editor", () => {
     if (await flag.count()) {
       await flag.click();
       await page.getByRole("menuitem", { name: "Overrated this candidate" }).click();
-      const confirm = page.getByRole("dialog", { name: "Ask an ITS recruiter to check this reading?" });
+      const confirm = page.getByRole("dialog", { name: "Ask an ITS recruiter to check this AI review?" });
       await expect(confirm.getByText(/Once they pick it up they see this candidate and the role they applied for/)).toBeVisible();
       await expectAccessible(page, "the flag's confirmation");
       await confirm.getByRole("button", { name: "Cancel" }).click();

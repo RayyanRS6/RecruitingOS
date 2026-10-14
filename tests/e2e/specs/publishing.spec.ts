@@ -22,7 +22,7 @@ test("approve a role, see where it is going, share it and give it a closing date
 
   // the approval card: the preview opens in a new tab, where the job goes, and what starts on its own once it is live
   await page.goto(`/roles/${roleId}`);
-  const card = page.locator(".card", { has: page.getByRole("heading", { name: "Approve this role packet" }) });
+  const card = page.locator(".card", { has: page.getByRole("heading", { name: "Approve this job" }) });
   await expect(card).toBeVisible({ timeout: 30_000 });
   const preview = card.getByRole("link", { name: /Preview the job page/ });
   await expect(preview).toHaveAttribute("target", "_blank");
@@ -55,7 +55,8 @@ test("approve a role, see where it is going, share it and give it a closing date
   // the Posting tab: the share block, the boards, and the closing date
   await page.goto(`/roles/${roleId}?tab=posting#share`);
   await expect(page.locator("#share").getByRole("heading", { name: "Share it" })).toBeVisible({ timeout: 30_000 });
-  // a ready-made place gets its own link to copy
+  // a ready-made place gets its own link to copy (under "Links for a referral, a school or a group" since Wave S1)
+  await page.locator("#share").getByText("Links for a referral, a school or a group").click();
   await page.locator("#share").getByRole("button", { name: "Make a link to copy" }).first().click();
   await expect(page.locator("#share").getByText(/visits?$/).first()).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole("heading", { name: "Where it is posted" })).toBeVisible();
@@ -102,6 +103,8 @@ test("Setup: the logo and the 'about the company' text, and who posts on the job
   await profile.getByRole("button", { name: "Save the contact" }).click();
   await expect(profile.getByText(`Candidates see: jobs+${run}@brightline.test. Your own address, set here.`)).toBeVisible({ timeout: 30_000 });
   await expectAccessible(page, "company profile");
+  // the job boards card sits on the Settings page's Hiring rules tab (Wave S1)
+  await page.getByRole("tab", { name: "Hiring rules" }).click();
   const boards = page.locator("#setup-boards");
   await expect(boards.getByRole("button", { name: "ITS posts them for us" })).toHaveAttribute("aria-pressed", "true");
   await expect(boards.getByLabel("We have our own paid ZipRecruiter plan")).not.toBeChecked();

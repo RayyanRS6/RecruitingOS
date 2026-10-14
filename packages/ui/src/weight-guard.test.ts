@@ -121,7 +121,7 @@ describe("nothing heavier on old devices", () => {
   it("finds the hover fills it guards, so the check above cannot pass by finding none", () => {
     const [[, app], [, cand]] = SHEETS;
     const found = (css: string) => hoverFills(css).map((f) => f.selector);
-    for (const sel of [".table tbody tr:hover > :is(td, th):not(.table-empty)", ".btn.primary:hover", ".menu-item:hover", ".talent-row:hover", ".section-menu a:hover", ".person-chip:hover"]) expect(found(app)).toContain(sel);
+    for (const sel of [".table tbody tr:hover > :is(td, th):not(.table-empty)", ".btn.primary:hover", ".menu-item:hover", ".talent-row:hover", ".person-chip:hover"]) expect(found(app)).toContain(sel);
     for (const sel of [".btn:hover", ".btn.secondary:hover", "input[type=file]::file-selector-button:hover"]) expect(found(cand)).toContain(sel);
     expect(cand).toContain(".btn.go:hover .go-fill");
   });

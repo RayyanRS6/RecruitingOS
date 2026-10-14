@@ -365,15 +365,16 @@ export function mayWithdraw(stage: ApplicationStage, toldState: ToldState | stri
   return ACTIVE.includes(stage) || (DECISION_STAGES.includes(stage) && !decisionTold(toldState));
 }
 
+/** In the staff glossary's words (screening chat); apps/web mirrors it (candidate-panel/helpers.ts, role-words.ts). */
 export const STAGE_LABEL: Record<ApplicationStage, string> = {
   applied: "Just applied",
   received: "Received",
   ineligible: "Doesn't meet eligibility",
   eligible: "Eligible",
   triaged: "Ready for your review",
-  screen_invited: "Invited to a screen",
-  screening: "Being screened",
-  screen_complete: "Screen complete",
+  screen_invited: "Invited to a screening chat",
+  screening: "In the screening chat",
+  screen_complete: "Screening chat done",
   interview_recommended: "Recommended for interview",
   interview_scheduled: "Interviewing",
   interview_complete: "Interview done: decision needed",

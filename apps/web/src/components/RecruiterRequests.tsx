@@ -16,7 +16,7 @@ const STATE_TONE: Record<RequestState, Tone> = { waiting: "caution", working: "a
 const MINE = ["escalations", "mine"] as const;
 
 /**
- * "Your recruiter requests" on Today (plan B4): every request the team made, or the system made for them, with its
+ * "Your recruiter requests" on Home (plan B4): every request the team made, or the system made for them, with its
  * state, the reply-by time, who picked it up and the recruiter's answer in full; the whole conversation one click away.
  * While a request is open anyone who may ask can add a note for the recruiter; once answered, "This didn't solve it"
  * reopens it (plan B5). A notice about an answer links here with ?request=<id>, which opens that request. Nothing shows
@@ -43,7 +43,7 @@ export function RecruiterRequests() {
   return (
     <div id="recruiter-requests">
       <Card title="Your recruiter requests" aside={open ? <Pill size="sm" tone="accent">{open} open</Pill> : null}>
-        <p className="small muted" style={{ marginBottom: 8 }}>What your team asked ITS recruiters, and what they answered. Answers stay here for {RECENT_DAYS} days after they come in.</p>
+        <p className="small muted" style={{ marginBottom: 8 }}>What your team asked ITS recruiters. Answers stay here {RECENT_DAYS} days.</p>
         <ul aria-label="Your recruiter requests" style={{ listStyle: "none", margin: 0, padding: 0 }}>
           {current.map((r) => <RequestItem key={r.id} r={r} linked={r.id === linked} staff={who.staff} />)}
         </ul>
@@ -103,7 +103,7 @@ function RequestItem({ r, linked, staff }: { r: RecruiterRequestView; linked: bo
       ) : <p className="small" style={{ whiteSpace: "pre-wrap", margin: "6px 0 0", color: "var(--ink-2)" }}>{r.question}</p>}
       {said ? <div style={{ marginTop: 8 }}><Alert tone="info">{said}</Alert></div> : null}
       <div className="row" style={{ marginTop: 8, gap: 6, flexWrap: "wrap" }}>
-        <Button size="sm" variant="quiet" onClick={() => setExpanded(!expanded)}>{expanded ? "Hide the conversation" : `Show the whole conversation (${r.thread.length})`}</Button>
+        <Button size="sm" variant="quiet" onClick={() => setExpanded(!expanded)}>{expanded ? "Hide the conversation" : `Show the conversation (${r.thread.length})`}</Button>
         {may.note && mode !== "note" ? <Button size="sm" variant="secondary" onClick={() => { setMode("note"); setText(""); setSaid(null); }}>Add a note for the recruiter</Button> : null}
         {may.reopen && mode !== "reopen" ? <Button size="sm" variant="secondary" onClick={() => { setMode("reopen"); setText(""); setSaid(null); }}>This didn't solve it</Button> : null}
       </div>

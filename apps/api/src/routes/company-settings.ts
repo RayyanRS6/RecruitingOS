@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, gte, inArray, lt, lte, or } from "drizzle-orm";
 import { GettingStartedRequest, UpdateCompany, isCompanyVerified, type Actor, type NewTimesSettingView } from "@ros/contracts";
-import { DEFAULT_NOTICES, applyNoticeOverrides, assertCan, audit, boardPostingOf, emit, newTimesSettingOf, pendingNewTimesRows, revokeAllSessions, setAutoState, withdrawPostingTasks, zipRecruiterOffered } from "@ros/core";
+import { DEFAULT_NOTICES, applyNoticeOverrides, assertCan, audit, boardPostingOf, emit, newTimesSettingOf, pendingNewTimesRows, revokeSessionsForCompany, setAutoState, withdrawPostingTasks, zipRecruiterOffered } from "@ros/core";
 import { auditRecords, companies, memberships, uuidv7, withPlatform, withTenant, type Tx } from "@ros/db";
 import { LOGO_MAX_BYTES, inspectLogo, logoFileName, logoKey } from "@ros/integrations";
 import { cancelNewTimesRuns } from "@ros/workflows";
@@ -28,10 +28,10 @@ const ADMIN_ONLY_SETTINGS_KEYS: Record<string, string> = { pilot: "the pilot ter
 
 /** Settings with their own routes below (plan D10): named here so a PATCH that sends them gets a plain answer. */
 const PROFILE_SETTINGS_KEYS: Record<string, string> = {
-  about: "The text about your company is drafted and approved under \"How candidates see you\" in Setup.",
-  aboutDraft: "The text about your company is drafted and approved under \"How candidates see you\" in Setup.",
-  logo: "Upload the logo under \"How candidates see you\" in Setup.",
-  hiringContact: "Set the contact for candidates under \"How candidates see you\" in Setup.",
+  about: "The text about your company is drafted and approved under \"How candidates see you\" in Settings.",
+  aboutDraft: "The text about your company is drafted and approved under \"How candidates see you\" in Settings.",
+  logo: "Upload the logo under \"How candidates see you\" in Settings.",
+  hiringContact: "Set the contact for candidates under \"How candidates see you\" in Settings.",
 };
 
 function refuseAdminOnlyKeys(raw: unknown): void {
@@ -492,25 +492,45 @@ companySettingsRoutes.get("/current/audit.csv", requireTenant, async (c) => {
 });
 
 /* ---------------------------------------------------------------------------------------------------------- */
-/* Sign a member out everywhere (A11): owners and admins, audited.                                            */
+/* Sign a member out (A11; audit 01-platform B3): owners and admins only, ranked, this company only, audited.  */
 /* ---------------------------------------------------------------------------------------------------------- */
 
+/**
+ * Owners and admins sign a teammate out; HR, who otherwise manages the team, does not (the same ranks as a role change
+ * in services/team.ts: only an owner touches an owner). Sessions belong to the person, not to a company, so only the
+ * sessions working in this company (or in none) are ended (core `revokeSessionsForCompany`): a person who also works in
+ * another company keeps their sessions there. The answer says, without telling whether that is the case, that sessions in
+ * another company stay open and that removing them from the team is what keeps them out.
+ */
 companySettingsRoutes.post("/current/members/:userId/sign-out", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "members.manage");
   if (t.staff) throw new HttpError(403, "forbidden", "Recruiters cannot sign a customer's team out.");
+  if (t.role !== "owner" && t.role !== "admin") throw new HttpError(403, "admin_only", "Only an owner or an admin can sign a teammate out.");
   const userId = c.req.param("userId") ?? "";
   if (!UUID.test(userId)) throw new HttpError(404, "not_found", "That person is not an active member of your team.");
   if (userId === t.userId) throw new HttpError(400, "self_sign_out", "To sign yourself out everywhere, use \"Sign out everywhere else\" under Your sessions.");
   const container = c.get("container");
-  const [member] = await withTenant(container.db, t.companyId, (tx) => tx.select({ id: memberships.id }).from(memberships).where(and(eq(memberships.companyId, t.companyId), eq(memberships.userId, userId), eq(memberships.status, "active"))).limit(1));
+  const [member] = await withTenant(container.db, t.companyId, (tx) => tx.select({ id: memberships.id, role: memberships.role }).from(memberships).where(and(eq(memberships.companyId, t.companyId), eq(memberships.userId, userId), eq(memberships.status, "active"))).limit(1));
   if (!member) throw new HttpError(404, "not_found", "That person is not an active member of your team.");
+  if (member.role === "owner" && t.role !== "owner") throw new HttpError(403, "owner_only", "Only an owner can sign an owner out.");
   const now = container.engine.clock();
   // sessions are a platform table: the tenant role cannot write them
-  const ended = await withPlatform(container.db, async (tx) => {
-    const n = await revokeAllSessions(tx, userId, { now });
-    await audit(tx, { companyId: t.companyId, actor: actorOf(c), action: "session.revoked", target: { type: "user", id: userId }, reason: "signed out everywhere by an owner or admin", ip: clientIp(c), details: { sessionsEnded: n, scope: "all" } });
-    return n;
+  const result = await withPlatform(container.db, async (tx) => {
+    const r = await revokeSessionsForCompany(tx, userId, t.companyId, { now });
+    // Whether the person works for other companies, and how active they are there, is not this company's business: the
+    // audit record and the answer say only what happened here.
+    await audit(tx, { companyId: t.companyId, actor: actorOf(c), action: "session.revoked", target: { type: "user", id: userId }, reason: "signed out of this company by an owner or admin", ip: clientIp(c), details: { sessionsEnded: r.sessionsEnded, scope: "company" } });
+    return r;
   });
-  return c.json({ ok: true, userId, sessionsEnded: ended });
+  return c.json({ ok: true, userId, sessionsEnded: result.sessionsEnded, message: signOutMessage(result.sessionsEnded) });
 });
+
+/**
+ * What a sign-out did, in the words the Team card shows. The same words whether or not the person also works for another
+ * company, so the answer gives nothing away about other customers.
+ */
+function signOutMessage(sessionsEnded: number): string {
+  const ended = sessionsEnded === 0 ? "They had no session open here." : `Signed out of ${sessionsEnded === 1 ? "one session" : `${sessionsEnded} sessions`} here; they must sign in again to work here.`;
+  return `${ended} If they use the same account for another company, their sessions there stay open. To keep them out of this company, remove them from the team.`;
+}

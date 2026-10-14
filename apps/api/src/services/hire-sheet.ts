@@ -50,10 +50,13 @@ export async function hireFollowUp(tx: Tx, input: { roleId: string; hiredApplica
   let closeRole: HireFollowUp["closeRole"] = null;
   if (role && role.status !== "closed" && can(input.role, "outcome.record")) {
     const others = (await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.roleId, input.roleId), inArray(applications.stage, [...STILL_IN_PROCESS])))).filter((a) => a.id !== input.hiredApplicationId).length;
-    // Someone who may close the role but not tell candidates a decision (HR) is told who sends the closing message.
-    const then = can(input.role, "application.reject") ? "and you see the closing message before it goes." : "and an owner, admin, hiring manager or recruiter sends them the closing message from their Today.";
+    // Someone who may close the role but not tell candidates a decision (HR) is told who sends the closing message. The
+    // safety net is said too (founder decision D-03 A): if nobody tells them, the closing message goes by itself after
+    // five working days, or, under settings that keep these messages with a person, an ITS recruiter is brought in.
+    const then = can(input.role, "application.reject") ? "and you see the closing message before it goes." : "and an owner, admin, hiring manager or recruiter sends them the closing message from their Home page.";
+    const net = "If nobody tells them within 5 working days of closing, the closing message goes by itself (or an ITS recruiter is brought in, if your settings say so).";
     const words = others
-      ? `Close the role as filled. The ${others === 1 ? "1 person" : `${others} people`} still in process ${others === 1 ? "moves" : "move"} to your talent pool, privately: nobody is told at once, ${then}`
+      ? `Close the role as filled. The ${others === 1 ? "1 person" : `${others} people`} still in process ${others === 1 ? "moves" : "move"} to your talent pool, privately: nobody is told at once, ${then} ${net}`
       : "Close the role as filled. Nobody else is still in process.";
     closeRole = { path: `/api/v1/roles/${input.roleId}/outcome`, outcome: "filled", stillInProcess: others, words };
   }

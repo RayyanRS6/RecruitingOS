@@ -74,9 +74,9 @@ test("ask, read the full answer on Today, and reopen it when it did not solve th
 test("loosening an AI rule asks first; the planned rules fold under Coming later", async ({ page }) => {
   await signIn(page, { email: `rules+${run}@loop.test`, name: "Rae Owner", provider: "google" });
   await createCompanyThroughTheForm(page, `Rules Dental ${run}`);
-  await page.goto("/setup");
+  await page.goto("/setup?tab=rules"); // the Settings page's Hiring rules tab
   const rules = page.locator(".card", { has: page.getByRole("heading", { name: "What the AI may do on its own" }) });
-  const invite = rules.getByRole("group", { name: "Invite an applicant to a screen" });
+  const invite = rules.getByRole("group", { name: "Invite an applicant to the screening chat" });
   await expect(invite).toBeVisible({ timeout: 30_000 });
   await invite.getByRole("button", { name: "Do it", exact: true }).click();
   await expect(rules.getByText(/From now on it goes ahead without waiting for a person to approve it, and you are not told each time/)).toBeVisible();
@@ -92,7 +92,8 @@ test("loosening an AI rule asks first; the planned rules fold under Coming later
   await expect(rules.getByRole("group", { name: "Send an offer" })).toHaveCount(0);
   await expect(rules.getByText("Negotiate an offer")).toBeVisible();
   // work the product does the same way for everyone says what it does, with no choice that would change nothing
-  await expect(rules.getByRole("group", { name: "Run a screening conversation" })).toHaveCount(0);
-  await expect(rules.getByText(/the screening conversation runs with them in their own time/)).toBeVisible();
+  await expect(rules.getByRole("group", { name: "Run the screening chat" })).toHaveCount(0);
+  await rules.getByText(/^What it always does the same way \(\d+\)$/).click();
+  await expect(rules.getByText(/the chat runs with them in their own time/)).toBeVisible();
   await expect(rules.getByText("Book interviews on calendars")).toBeVisible();
 });

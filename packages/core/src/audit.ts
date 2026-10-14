@@ -32,6 +32,10 @@ export type AuditAction =
   | "secret.delete_failed"
   | "credentials.deleted"
   | "alert.acknowledged"
+  /** An alert marked dealt with: by a person in the console, or by the system once its condition ended (Wave S2 F1). */
+  | "alert.resolved"
+  /** A person booked an interview time for the candidate ("Book this for them", Wave S2 F2). */
+  | "interview.booked_on_behalf"
   | "session.opened"
   | "signin.refused"
   | "platform_role.changed"

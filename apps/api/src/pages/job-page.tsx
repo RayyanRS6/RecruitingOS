@@ -91,6 +91,45 @@ export function FourPoints(props: { company: Pick<JobPageCompany, "name" | "cont
   );
 }
 
+/** The one plain line a page shows for the AI notice; the notice itself stays one click away, word for word. */
+export const AI_NOTICE_LINE = "This employer uses AI to help organize applications; people make every hiring decision.";
+
+/**
+ * The AI notice, kept short on the first view (founder brief, 14 October 2026): a notice box with one plain sentence and
+ * "How AI is used" under it. The full text is always in the page, as written, so nothing the notice must say is lost.
+ */
+export function AiNotice(props: { text: string; line: string }) {
+  return (
+    <div class="notice">
+      <p>{props.line}</p>
+      <details class="more">
+        <summary>How AI is used</summary>
+        <p>{props.text}</p>
+      </details>
+    </div>
+  );
+}
+
+/** The first sentence of a step, never cut inside the company's name ("Dr. Lee Dental"). */
+function firstSentence(text: string, companyName: string): string {
+  const mask = "\u0000";
+  const masked = companyName ? text.split(companyName).join(mask) : text;
+  const first = masked.match(/^[\s\S]*?[.!?](?=\s+[A-Z]|\s*$)/)?.[0] ?? masked;
+  return companyName ? first.split(mask).join(companyName) : first;
+}
+
+/**
+ * "What to expect" at a glance (founder brief, 14 October 2026): at most four short lines, from the same steps every
+ * page lists (services/job-preview.ts `applySteps`: applying, the conversation, each interview, the decision). Applying
+ * and the conversation keep their first sentence; the interviews share one line. The full steps stay one click away.
+ */
+export function expectAtAGlance(steps: string[], companyName: string): string[] {
+  if (steps.length < 3) return steps.map((s) => firstSentence(s, companyName));
+  const rounds = steps.slice(2, -1);
+  const interviews = rounds.length === 0 ? null : rounds.length === 1 ? rounds[0] : `Interviews: ${rounds.join(", ")}`;
+  return [firstSentence(steps[0], companyName), firstSentence(steps[1], companyName), interviews, steps[steps.length - 1]].filter((s): s is string => !!s);
+}
+
 /** The "not public yet" note at the top of a preview, with what the page is still missing. */
 export function PreviewNote(props: { preview: PreviewInfo }) {
   const p = props.preview;
@@ -126,7 +165,8 @@ export type JobPageProps = {
  * description in headed sections, what the team is looking for, what would be nice, the benefits, the steps and the
  * notices, and what the company says about itself; beside it, an apply card that stays in view with four true points
  * and how to reach a person. On a phone the card becomes a bar held at the bottom of the screen (CSS only) and the
- * points move into the page.
+ * points move into the page. The steps show at a glance and the AI notice as one line (founder brief, 14 October
+ * 2026); the full steps and the notice's full text are one click away, in the page.
  */
 export function JobPage(props: JobPageProps) {
   const { packet, company, role, preview } = props;
@@ -136,6 +176,7 @@ export function JobPage(props: JobPageProps) {
   const mustHaves = packet.requirements.mustHaves.map((m) => m.text.trim()).filter(Boolean);
   const niceToHaves = packet.requirements.niceToHaves.map((m) => m.text.trim()).filter(Boolean);
   const careers = props.links.careers;
+  const steps = applySteps(packet, { companyName: company.name, smsEnabled: props.smsEnabled, flow: props.flow });
   return (
     <Layout title={preview ? `Preview: ${title} at ${company.name}` : `${title} at ${company.name}`} jsonLd={preview ? undefined : props.jsonLd} wide description={preview ? undefined : props.description} share={preview ? undefined : props.share} noindex={!!preview}>
       {preview ? <PreviewNote preview={preview} /> : null}
@@ -171,9 +212,13 @@ export function JobPage(props: JobPageProps) {
             {props.benefits ? <p class="pre">{props.benefits}</p> : null}
             <h2>What to expect</h2>
             <ol class="steps">
-              {applySteps(packet, { companyName: company.name, smsEnabled: props.smsEnabled, flow: props.flow }).map((s) => <li>{s}</li>)}
+              {expectAtAGlance(steps, company.name).map((s) => <li>{s}</li>)}
             </ol>
-            {notices.map((n) => <p class="notice">{n.text}</p>)}
+            <details class="more">
+              <summary>More about each step</summary>
+              <ol class="steps">{steps.map((s) => <li>{s}</li>)}</ol>
+            </details>
+            {notices.map((n) => (n.key === "ai_use" ? <AiNotice text={n.text} line={AI_NOTICE_LINE} /> : <p class="notice">{n.text}</p>))}
           </div>
           {company.about ? (
             <section class="card about" aria-labelledby="about-company">
@@ -282,21 +327,34 @@ export type ApplyFormProps = {
  * The transparency block (docs/readiness/20 section D, items 1 to 10) sits above the submit button: who runs the
  * process, what is collected and why, who may see it, how to exercise the candidate's rights, the privacy address, the
  * link to the notice, and the affirmative acknowledgment. Plain words, short sentences, nothing pre-checked.
+ *
+ * First view (founder brief, 14 October 2026): three short lines and the privacy link; the full notice, every word of it
+ * as before (its own privacy link and the notices included), sits under "Read the full notice", above the box that says
+ * the full notice was read (its words name the fold). A form sent back without that box ticked opens the notice.
  */
 function TransparencyBlock(props: { company: { name: string }; notices: Notice[]; privacyEmail: string; acknowledged: boolean; missing: boolean; resumeLost: boolean }) {
   return (
     <section class="card" aria-labelledby="before-you-send">
       <h2 id="before-you-send">Before you send</h2>
-      <p><strong>{props.company.name}</strong> runs this hiring process and is the employer. People at {props.company.name} make every hiring decision. Software helps organize and summarize applications, and works out a match score from what you send, checked against the job's requirements; the team sees what the score is based on, and a person always decides.</p>
-      <p><strong>What we collect:</strong> your name, your email, your phone number if you give one, where you are based, your resume or your answers about your work, and your answers to the questions above.</p>
-      <p><strong>Why:</strong> to consider you for this position and to contact you about it. Nothing else.</p>
-      <p><strong>Who can see it:</strong> the hiring team at {props.company.name}; an Identified Talent Solutions recruiter only if {props.company.name} brings one in to help; and the companies that run this service for us: hosting, file storage, email delivery, and the AI service that helps organize applications. Each does only its own job; the privacy page linked below says what each one does.</p>
-      <p><strong>Your choices:</strong> after you apply, we email you a link to your own status page, where you can ask for a copy of your information, correct it, withdraw your application, or delete your information. You can also email <a href={`mailto:${props.privacyEmail}`}>{props.privacyEmail}</a> at any time. A person handles every request.</p>
+      <ul class="steps">
+        <li>People at {props.company.name} make every hiring decision.</li>
+        <li>Software helps organize applications and works out a match score.</li>
+        <li>You can ask for a person at any time.</li>
+      </ul>
       <p><a href="/privacy">Read how we handle your information</a></p>
-      {props.notices.map((n) => <p class="notice">{n.text}</p>)}
+      <details class="more" open={props.missing || undefined}>
+        <summary>Read the full notice</summary>
+        <p><strong>{props.company.name}</strong> runs this hiring process and is the employer. People at {props.company.name} make every hiring decision. Software helps organize and summarize applications, and works out a match score from what you send, checked against the job's requirements; the team sees what the score is based on, and a person always decides.</p>
+        <p><strong>What we collect:</strong> your name, your email, your phone number if you give one, where you are based, your resume or your answers about your work, and your answers to the questions above.</p>
+        <p><strong>Why:</strong> to consider you for this position and to contact you about it. Nothing else.</p>
+        <p><strong>Who can see it:</strong> the hiring team at {props.company.name}; an Identified Talent Solutions recruiter only if {props.company.name} brings one in to help; and the companies that run this service for us: hosting, file storage, email delivery, and the AI service that helps organize applications. Each does only its own job; the privacy page linked below says what each one does.</p>
+        <p><strong>Your choices:</strong> after you apply, we email you a link to your own status page, where you can ask for a copy of your information, correct it, withdraw your application, or delete your information. You can also email <a href={`mailto:${props.privacyEmail}`}>{props.privacyEmail}</a> at any time. A person handles every request.</p>
+        <p><a href="/privacy">Read how we handle your information</a></p>
+        {props.notices.map((n) => <p class="notice">{n.text}</p>)}
+      </details>
       <label class="check" for="acknowledged">
         <input id="acknowledged" type="checkbox" name="acknowledged" value="yes" required checked={props.acknowledged} aria-invalid={props.missing ? "true" : undefined} aria-describedby={props.missing ? "acknowledged-error" : undefined} />
-        <span>I have read the notice above and I understand that people, not software, make the hiring decisions.</span>
+        <span>I have read the full notice above and I understand that people, not software, make the hiring decisions.</span>
       </label>
       {props.missing ? <p class="err" id="acknowledged-error">Please tick this box to send your application. {keptSentence(props.resumeLost)}</p> : null}
     </section>
@@ -391,7 +449,8 @@ export function ApplyFormPage(props: ApplyFormProps) {
       <p class="eyebrow">{props.company.name}</p>
       <h1>Apply: {props.packet.identity.title}</h1>
       <JobFacts packet={props.packet} pay={publicPay(props.packet, props.notices)} />
-      <p class="lead">{props.flow === "one_visit" ? `${applyTimeLine(props.packet, { companyName: props.company.name, flow: props.flow })} First this form: upload a resume, or answer four short questions about your work instead. No cover letter needed.` : `${applyTimeLine(props.packet, { companyName: props.company.name, flow: props.flow })} Upload a resume, or answer four short questions about your work instead. No cover letter needed.`}</p>
+      {/* One line on how long it takes (plan E8); the resume field and "No resume?" right below say what to send. */}
+      <p class="lead">{`${applyTimeLine(props.packet, { companyName: props.company.name, flow: props.flow })} ${props.flow === "one_visit" ? "First, this form; no" : "No"} cover letter needed.`}</p>
       <HelpLine contact={props.company.contact} class="notice" />
       {props.error ? <div class="err" role="alert">{props.error}</div> : null}
       {preview ? (

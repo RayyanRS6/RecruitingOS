@@ -1,23 +1,42 @@
 import { describe, expect, it } from "vitest";
-import { activeCompanyOf, RAIL_ROLE_LIMIT, railCompact, railListsRoles, railRoles, teamRoleWord } from "../../apps/web/src/rail";
+import { activeCompanyOf, jobHref, RAIL_ROLE_LIMIT, railCompact, railListsRoles, railRoles, rolesInProgress, teamRoleWord } from "../../apps/web/src/rail";
 import { ROLE_STATUS, roleStatus } from "../../apps/web/src/role-status";
 
 /**
- * The left rail (Wave DS): which roles are listed under Roles and how they read to a screen reader, when the rail folds
- * to icons, and the words for the signed-in person's role in the company chip.
+ * The left rail (Wave DS; plain words of 14 October 2026): which jobs are listed under Jobs and how they read to a
+ * screen reader, where a job opens (its Candidates once live, the Kanvis way), when the rail folds to icons, and the
+ * words for the signed-in person's role in the company chip.
  */
 const role = (id: string, status: string, total = 0, createdAt = "2026-10-01T00:00:00Z") => ({ id, title: `Role ${id}`, status, createdAt, counts: { total } });
 
-describe("the roles under Roles", () => {
-  it("lists open roles first with their applicants, then paused, waiting and drafts; never filled or closed ones", () => {
+describe("where a job opens", () => {
+  it("opens a job that has gone live on its Candidates, and a draft or one waiting for approval on the job itself", () => {
+    for (const status of ["open", "paused", "filled"]) expect(jobHref({ id: "r1", status }), status).toBe("/roles/r1/talent");
+    for (const status of ["draft", "pending_approval"]) expect(jobHref({ id: "r1", status }), status).toBe("/roles/r1");
+    // a closed job that was once open still has its candidates; one closed before it ever opened does not
+    expect(jobHref({ id: "r1", status: "closed", openedAt: "2026-09-01T00:00:00Z" })).toBe("/roles/r1/talent");
+    expect(jobHref({ id: "r1", status: "closed", openedAt: null })).toBe("/roles/r1");
+  });
+
+  it("always opens the job itself for someone who cannot see candidates (an interviewer)", () => {
+    expect(jobHref({ id: "r1", status: "open" }, { talent: false })).toBe("/roles/r1");
+  });
+});
+
+describe("the jobs under Jobs", () => {
+  it("lists open jobs first with their applicants, then paused, waiting and drafts; never filled or closed ones", () => {
     const list = railRoles([role("d", "draft"), role("c", "closed", 9), role("p", "paused", 4), role("o", "open", 6), role("f", "filled", 3), role("w", "pending_approval")], { role: "owner" });
     expect(list.map((r) => r.id)).toEqual(["o", "p", "w", "d"]);
-    expect(list[0]).toEqual({ id: "o", title: "Role o", live: true, applicants: 6, statusWord: "open, 6 applicants", tag: null });
+    expect(list[0]).toEqual({ id: "o", title: "Role o", href: "/roles/o/talent", live: true, applicants: 6, statusWord: "live, 6 applicants", tag: null });
+    // a live job (open or paused) opens on its Candidates, the others on the job
+    expect(list.map((r) => r.href)).toEqual(["/roles/o/talent", "/roles/p/talent", "/roles/w", "/roles/d"]);
+    // the same jobs, in the same order, as Home's "Your jobs" reads them
+    expect(rolesInProgress([role("d", "draft"), role("c", "closed", 9), role("p", "paused", 4), role("o", "open", 6), role("f", "filled", 3), role("w", "pending_approval")]).map((r) => r.id)).toEqual(["o", "p", "w", "d"]);
     // a paused or draft role gets the grey dot and no count, and a word in its place, so the colour never says it alone
     expect(list.slice(1).every((r) => !r.live && r.applicants === null)).toBe(true);
     expect(list.map((r) => r.tag)).toEqual([null, "Paused", "Waiting", "Draft"]);
-    expect(list.map((r) => r.statusWord)).toEqual(["open, 6 applicants", "paused", "waiting for approval", "draft"]);
-    expect(railRoles([role("o", "open", 1)], { role: "owner" })[0].statusWord).toBe("open, 1 applicant");
+    expect(list.map((r) => r.statusWord)).toEqual(["live, 6 applicants", "paused", "waiting for approval", "draft"]);
+    expect(railRoles([role("o", "open", 1)], { role: "owner" })[0].statusWord).toBe("live, 1 applicant");
   });
 
   it("puts the newest first within a status and stops at eight", () => {
@@ -30,8 +49,8 @@ describe("the roles under Roles", () => {
 
   it("never counts applicants for an interviewer, whose list the API already limits to the roles they interview for", () => {
     const fromApi = [{ ...role("b", "open"), countsHidden: true }];
-    // with no count, the open role says "Open" beside its green dot: an interviewer's paused role reads "Paused"
-    expect(railRoles(fromApi, { role: "interviewer" })).toEqual([{ id: "b", title: "Role b", live: true, applicants: null, statusWord: "open", tag: "Open" }]);
+    // with no count, the open role says "Live" beside its green dot: an interviewer's paused role reads "Paused"
+    expect(railRoles(fromApi, { role: "interviewer" })).toEqual([{ id: "b", title: "Role b", href: "/roles/b", live: true, applicants: null, statusWord: "live", tag: "Live" }]);
     expect(railRoles([{ ...role("p", "paused"), countsHidden: true }], { role: "interviewer" })[0].tag).toBe("Paused");
     // a count is never shown to an interviewer, and never from a list that says its counts were left out
     expect(railRoles([role("a", "open", 5)], { role: "interviewer" })[0].applicants).toBeNull();

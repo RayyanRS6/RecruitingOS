@@ -138,7 +138,8 @@ describe("the match score, the pool board, Review and apply and the one-click qu
 
     it("is open to those who read applications only, and to an interviewer not at all", async () => {
       const interviewer = await signInAs(container, app, { companyId, role: "interviewer" });
-      expect((await json(interviewer, "GET", `/api/v1/roles/${roleId}/board`)).status).toBe(403);
+      // not one of their roles: it answers as a role that does not exist (on one of theirs, application.read refuses it)
+      expect((await json(interviewer, "GET", `/api/v1/roles/${roleId}/board`)).status).toBe(404);
       expect((await json(owner, "GET", "/api/v1/roles/not-a-role/board")).status).toBe(404);
     });
 
@@ -307,7 +308,7 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       const before = sent().filter((m) => m.subject.startsWith("[review]")).length;
       const first = (await (await json(owner, "POST", `/api/v1/applications/${id}/assessments/${asmt.id}/flag`, { kind: "false_negative", note: "She has years of perio work." })).json()) as { ok: boolean; review: { escalationId: string; created: boolean }; message: string };
       expect(first).toMatchObject({ ok: true, review: { created: true } });
-      expect(first.message).toMatch(/ITS recruiter will check/);
+      expect(first.message).toMatch(/ITS recruiter will check this AI review; follow it under Your recruiter requests on Home\./);
       const [e] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, first.review.escalationId));
       expect(e).toMatchObject({ kind: "review", applicationId: id, roleId });
       expect(e.question).toContain("it rates the candidate too low");

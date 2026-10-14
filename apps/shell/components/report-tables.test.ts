@@ -370,7 +370,7 @@ describe("the Interviews tables", () => {
     candidate: { firstName, lastName: "Test", timezone: null, stage: "interview_scheduled", stageLabel: "Interview scheduled" }, participants: [{ userId: "u1", name: who, email: "dana@bright.test", status: "accepted" }],
   });
 
-  it("opens In motion soonest first (unscheduled last) and Past latest first, whatever order the answer came in", () => {
+  it("opens Coming up soonest first (unscheduled last) and Past latest first, whatever order the answer came in", () => {
     nav.params = {};
     try {
       const list = [
@@ -381,7 +381,7 @@ describe("the Interviews tables", () => {
         interview("iv4", "Sam", "2026-10-06T17:00:00.000Z", "completed"),
       ];
       const html = render(client([[["interviews"], list]]), createElement(Interviews));
-      const inMotion = from(html, "In motion (3)");
+      const inMotion = from(html, "Coming up (3)");
       const past = from(html, "Past (2)");
       expect(inMotion).toContain('<th scope="col" aria-sort="ascending"><button type="button" class="th-sort">When');
       expect(inMotion).toContain('<th scope="col"><button type="button" class="th-sort">Candidate');
@@ -394,7 +394,7 @@ describe("the Interviews tables", () => {
       expect(past.indexOf("Sam Test")).toBeLessThan(past.indexOf("Rosa Test"));
       expect(html.match(/aria-sort=/g)).toHaveLength(2);
       expect(html.match(/<span class="sr-only" role="status"><\/span>/g)).toHaveLength(2);
-      // the interviewer line under In motion names people soonest interview first, as it did before the table sorted,
+      // the interviewer line under Coming up names people soonest interview first, as it did before the table sorted,
       // not in the answer's order (Pat Lee, Zoe Adams, Dana Whitfield)
       expect(html).toMatch(/Interviewer load: (<!-- -->)?Dana Whitfield 1 · Zoe Adams 1 · Pat Lee 1</);
     } finally {

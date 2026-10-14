@@ -14,10 +14,14 @@ import { addRecruiterCallNotes, roleScreeningFunnel } from "../services/screens"
 export const screenRoleRoutes = new Hono<Vars>();
 screenRoleRoutes.use("/:id/*", roleScopeGuard);
 
-/** GET /api/v1/roles/:id/screening: offered, started, finished, median minutes, the drop-off question, who chose a person, skips. */
+/**
+ * GET /api/v1/roles/:id/screening: offered, started, finished, median minutes, the drop-off question, who chose a person,
+ * skips. Counted over the role's whole group, so an ITS grant about one candidate is refused, as for the closing message.
+ */
 screenRoleRoutes.get("/:id/screening", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "application.read");
+  if (t.staff?.scope.applicationId) throw new HttpError(403, "staff_scope", "Your access covers one candidate, so you can't see how the screening chat goes for the role's whole group.");
   const funnel = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const [role] = await tx.select({ id: roles.id }).from(roles).where(eq(roles.id, c.req.param("id") ?? "")).limit(1);
     return role ? roleScreeningFunnel(tx, role.id) : null;

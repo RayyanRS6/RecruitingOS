@@ -6,6 +6,7 @@ import type { FakeUrlVerifier } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { jobUrls } from "./services/job-urls";
+import { putOnInterview } from "./test-helpers";
 
 /**
  * The owner's posting routes and the Posting tab's data (docs/spec/20 section 2, items 9 to 17): what each channel
@@ -118,7 +119,9 @@ describe("posting routes: the owner's Posting tab API", () => {
     expect(careers.fields.applyUrl).toBe(urls.apply);
     expect((await get(owner, P("email_in", "package"))).status).toBe(409);
     expect((await get(owner, P("facebook", "package"))).status).toBe(404);
-    // an interviewer reads, and is refused every change
+    // an interviewer reads the Posting tab of a role they interview for, none other, and is refused every change
+    for (const path of [`/api/v1/roles/${roleId}/postings`, `/api/v1/roles/${roleId}/links`, `/api/v1/roles/${roleId}/volume`, P("indeed", "package")]) expect((await get(interviewer, path)).status, path).toBe(404);
+    const onIt = await putOnInterview(container, app, { cookie: interviewer, roleId });
     expect((await get(interviewer, `/api/v1/roles/${roleId}/postings`)).status).toBe(200);
     expect((await get(interviewer, `/api/v1/roles/${roleId}/links`)).status).toBe(200);
     expect((await get(interviewer, `/api/v1/roles/${roleId}/volume`)).status).toBe(200);
@@ -130,6 +133,8 @@ describe("posting routes: the owner's Posting tab API", () => {
     expect((await post(interviewer, `/api/v1/roles/${roleId}/links`, { source: "referral", label: "x" })).status).toBe(403);
     expect((await post(interviewer, `/api/v1/roles/${roleId}/links/${d.links[0].id}/disable`)).status).toBe(403);
     expect((await post(interviewer, `/api/v1/roles/${roleId}/applications/accepting`, { accepting: false })).status).toBe(403);
+    // the counts below are the role's own: the interview set up for this check goes again
+    await onIt.remove();
     // a signed-out call is not a reader either
     expect((await app.request(`/api/v1/roles/${roleId}/postings`)).status).toBe(401);
   });
@@ -426,7 +431,7 @@ describe("posting routes: the owner's Posting tab API", () => {
     expect((await eventsOf("role.applications_closed")).at(-1)?.payload).toMatchObject({ reason: "Enough for now" });
     const told = (await container.db.select().from(notifications).where(eq(notifications.kind, "applications.closed")));
     expect(told).toHaveLength(1);
-    expect(told[0]).toMatchObject({ userId: ownerId, action: { label: "Open the Posting tab", href: `/roles/${roleId}?tab=posting` } });
+    expect(told[0]).toMatchObject({ userId: ownerId, action: { label: "Open the Share tab", href: `/roles/${roleId}?tab=posting` } });
     expect(told[0].body).toContain("Everyone who already applied stays exactly where they are");
     // nobody was touched
     const after = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
@@ -486,7 +491,7 @@ describe("posting routes: the owner's Posting tab API", () => {
     expect(alerts[0].payload).toEqual({ day: new Date(BASE).toISOString().slice(0, 10), count: 106, threshold: 100 });
     const told = await container.db.select().from(notifications).where(eq(notifications.kind, "volume.high"));
     expect(told).toHaveLength(1); // the owner; the interviewer is not told
-    expect(told[0]).toMatchObject({ userId: ownerId, title: `106 people applied to ${roleTitle} yesterday`, action: { label: "Open the Posting tab", href: `/roles/${roleId}?tab=posting` } });
+    expect(told[0]).toMatchObject({ userId: ownerId, title: `106 people applied to ${roleTitle} yesterday`, action: { label: "Open the Share tab", href: `/roles/${roleId}?tab=posting` } });
     expect(told[0].body).toContain("Nobody is turned away automatically");
     // the next day is quiet: no second alert, and the first is not repeated
     await advance(25 * HOUR);
@@ -509,7 +514,7 @@ describe("posting routes: the owner's Posting tab API", () => {
     type Brief = { cards: Array<{ kind: string; title: string; body: string; roleId?: string; actions: Array<{ label: string; method: string; path: string }> }> };
     const card = (await body<Brief>(await get(owner, "/api/v1/brief"))).cards.find((c) => c.title.startsWith("Still posted on"));
     expect(card).toBeTruthy();
-    expect(card).toMatchObject({ kind: "posting_action", title: "Still posted on LinkedIn, ZipRecruiter", roleId, actions: [{ label: "Open the Posting tab", method: "GET", path: `/roles/${roleId}?tab=posting` }] });
+    expect(card).toMatchObject({ kind: "posting_action", title: "Still posted on LinkedIn, ZipRecruiter", roleId, actions: [{ label: "Open the Share tab", method: "GET", path: `/roles/${roleId}?tab=posting` }] });
     expect(card!.body).toContain(roleTitle);
     // a closed role takes no new address, no new link, and the switch is moot
     const late = await post(owner, P("ziprecruiter", "url"), { url: "https://www.ziprecruiter.com/jobs/x" });

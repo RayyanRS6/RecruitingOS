@@ -78,12 +78,15 @@ function client() {
   return qc;
 }
 
-describe("the pool board on the Talent page", () => {
-  it("offers to sort the pool from the list, with the Board / List switch, and says nothing is sent", () => {
+describe("the pool board on the Candidates page", () => {
+  it("offers to sort the pool from the list in one line and its button, with the Board / List switch, and says nothing is sent", () => {
     nav.search = "";
-    const words = text(render(client(), createElement(People)));
-    expect(words).toContain("Sort the pool Sorts everyone who has finished applying into Shortlist, Longlist and Not moving forward, and explains every call.");
-    expect(words).toContain("nothing is sent to anyone");
+    const html = render(client(), createElement(People));
+    const words = text(html);
+    // one line, then the switch and the button (Wave S1)
+    expect(html).toContain('<section class="sort-strip" aria-label="Sort the pool">');
+    expect(words).toContain("Groups everyone who finished applying, with a reason for each. Nothing moves until you apply it, and nothing is sent to anyone. Board List Sort the pool");
+    expect(html).toMatch(/<button type="button" class="btn primary"[^>]*>.*Sort the pool<\/button>/);
   });
 
   it("draws the board: header, counts, the summary with next steps naming people, three columns and the cards", () => {
@@ -92,7 +95,7 @@ describe("the pool board on the Talent page", () => {
     const words = text(html);
     // the switch shows the board; the strip says when it was sorted, and that nothing moves until applied
     expect(html).toMatch(/<button type="button" class="on" aria-pressed="true">Board<\/button>/);
-    expect(words).toMatch(/The pool, sorted Sorted at \d{1,2}:\d{2}/);
+    expect(words).toMatch(/Sorted at \d{1,2}:\d{2}\s?(AM|PM) by fixed rules from the checked evidence\. Nothing moves until you apply it/);
     expect(words).toContain("Sort again");
     // the header: eyebrow, role, counts, the ways in
     expect(html).toContain('<p class="eyebrow">Board</p>');
@@ -118,9 +121,9 @@ describe("the pool board on the Talent page", () => {
     expect(html).toContain('<span class="chip neutral">Ready to apply</span>');
     expect(html).toContain('<span class="chip neutral">High confidence</span>');
     expect(html).not.toContain('<span class="chip good">');
-    expect(html).toContain('<ul class="board-card-facts"><li>Must-haves: 2 of 2 shown</li><li>From the résumé reading</li><li>Invited to the screening conversation automatically</li></ul>');
+    expect(html).toContain('<ul class="board-card-facts"><li>Must-haves: 2 of 2 shown</li><li>From the AI review of the résumé</li><li>Invited to the screening chat automatically</li></ul>');
     expect(words).toContain("Strength: Active CA RDH license · résumé");
-    expect(words).toContain("Gap: Patient communication: partly shown · screening conversation, no quote");
+    expect(words).toContain("Gap: Patient communication: partly shown · screening chat, no quote");
     expect(words).toContain("Interview Strong evidence on every must-have.");
     // Ben needs your eye, Luis is missing a must-have (the only red), Eve is done
     expect(html).toContain('<span class="chip caution">Needs your eye</span>');
@@ -138,8 +141,9 @@ describe("the pool board on the Talent page", () => {
     // groups with n/m and where they go, privately
     expect(words).toContain("Shortlist 1/1 1 of 1 ticked Added to your Shortlist. Private, the candidate is not told.");
     expect(words).toContain("Longlist 0/1 0 of 1 ticked Kept warm on your Longlist. Private, no email.");
-    expect(words).toContain("Not moving forward 1/1 1 of 1 ticked Filed privately. Nobody is emailed now; you will be reminded to send the decision message from the Talent page. If nobody tells them within 5 working days, the standard message goes by itself");
-    expect(words).toContain("Untick anyone you want to decide yourself, change a reason if needed, then apply. Unticked people stay where they are.");
+    // filed privately, with the day-5 safety net in one short line (founder decision D-03)
+    expect(words).toContain("Not moving forward 1/1 1 of 1 ticked Filed privately; nobody is emailed now. If nobody tells them within 5 working days, the standard message goes by itself (or an ITS recruiter is brought in, if your settings say so).");
+    expect(words).toContain("Untick anyone you want to decide yourself. Unticked people stay where they are.");
     // Maria and Luis start ticked; Ben, who needs your eye, does not
     expect(html).toContain('<input id="review-a1" type="checkbox" aria-describedby="review-a1-why" checked=""/>');
     expect(html).toContain('<input id="review-a4" type="checkbox" aria-describedby="review-a4-why" checked=""/>');
@@ -151,9 +155,8 @@ describe("the pool board on the Talent page", () => {
     expect(words).toContain("From their evidence: Missing must-have: Active CA RDH license.");
     // Eve is done: not in the window
     expect(html).not.toContain('id="review-a3"');
-    // the footer: private, the live counter, Cancel and Apply
-    expect(words).toContain("This files people into your pipeline privately. Nobody is emailed.");
-    expect(words).toContain("2 decisions ready (1 shortlist · 0 longlist · 1 not moving forward)");
+    // the footer: private, the safety net while someone ticked is not moving forward, the live counter, Cancel and Apply
+    expect(words).toContain("Private: nobody is emailed now. Not moving forward: if nobody tells them within 5 working days, the standard message goes by itself (or an ITS recruiter is brought in, if your settings say so). 2 decisions ready (1 shortlist · 0 longlist · 1 not moving forward)");
     expect(words).toContain("Cancel");
     expect(words).toContain("Apply 2 decisions");
   });
@@ -165,7 +168,7 @@ describe("Ask about this pool", () => {
     const words = text(html);
     expect(html).toMatch(/role="dialog" aria-modal="true" aria-label="Ask about this pool"/);
     expect(html).toContain('<span class="ask-mark" aria-hidden="true">');
-    expect(words).toContain("Answers come from the checked findings already on file for everyone who finished applying. Pick a question; each answer says what it looked at.");
+    expect(words).toContain("Ask about this pool Answers come from the checked findings already on file. Pick a question. Each answer says what it looked at.");
     expect(html).toContain('<fieldset class="ask-questions" aria-label="Questions you can ask">');
     expect(words).toContain("Who is missing a must-have, and why?");
     expect(words).toContain("Strongest evidence for \"Active CA RDH license\"");
@@ -173,7 +176,7 @@ describe("Ask about this pool", () => {
     expect(words).toContain("Compare these");
     // no box that does nothing: one line says typing a question is not available yet
     expect(html).not.toContain("<textarea");
-    expect(words).toContain("Typing your own question is not available yet. Pick a question above, or bring in a recruiter.");
+    expect(words).toContain("Typing your own question is not available yet. Pick one above, or bring in a recruiter.");
   });
 
   it("answers with the people as chips that open their panel, why, the quotes, and what it looked at", () => {
@@ -188,7 +191,7 @@ describe("Ask about this pool", () => {
     expect(html).toContain('<button type="button" class="person-chip"><span class="avatar sm" aria-hidden="true">LO</span><span>Luis Ortega</span>');
     expect(words).toContain("Missing must-have: Active CA RDH license.");
     expect(words).toContain("“RDH license CA expired in 2021” Active CA RDH license · résumé");
-    expect(words).toContain("Looked at: 4 people (4 résumé readings and 1 screening conversation), against 2 must-haves. Nothing new was asked of the AI.");
+    expect(words).toContain("Looked at: 4 people (4 résumé reviews and 1 screening chat), against 2 must-haves. Nothing new was asked of the AI.");
     expect(words).toContain("Show this person on the board");
   });
 });
@@ -204,8 +207,9 @@ describe("Today's pool card", () => {
     expect(words).toContain("2 of 4 show every must-have.");
     expect(words).toContain("Suggested next steps");
     expect(html).toContain('<a href="/roles/r1/talent?view=board&amp;open=a1">Maria Reyes</a>');
-    expect(html).toContain('<a href="/roles/r1/talent?view=board" class="btn secondary sm">Open the board</a>');
-    expect(html).toContain('<a href="/roles/r1/talent?view=board&amp;review=1" class="btn primary sm">Review and apply</a>');
+    // Review and apply is the row's strong button; Start a hire stays Home's only primary one
+    expect(html).toContain('<a href="/roles/r1/talent?view=board" class="btn quiet sm">Open the board</a>');
+    expect(html).toContain('<a href="/roles/r1/talent?view=board&amp;review=1" class="btn secondary sm">Review and apply</a>');
     expect(words).toContain("Nothing moves until you apply it, and nobody is emailed.");
   });
 });

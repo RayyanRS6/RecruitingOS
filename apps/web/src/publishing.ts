@@ -91,7 +91,7 @@ export function boardStatus(p: Pick<PostingView, "status" | "postedBy" | "task" 
   }
   // ready to post: nothing is on the board yet
   if (p.postedBy !== "its") return { label: "Waiting for you to post it", tone: "caution", done: false, working: false };
-  // ITS closed its task as not possible: never "done", and the Posting tab has its words and "Ask ITS again".
+  // ITS closed its task as not possible: never "done", and the Share tab has its words and "Ask ITS again".
   if (p.task && p.task.status === "resolved" && p.task.notDone) return { label: "ITS could not post it", tone: "caution", done: false, working: false };
   if (p.task && (p.task.status === "claimed" || p.task.status === "in_progress")) return { label: p.task.recruiterName ? `${p.task.recruiterName} at ITS is posting it` : "ITS is posting it", tone: "neutral", done: false, working: true };
   return { label: "Waiting for ITS", tone: "neutral", done: false, working: false };
@@ -99,7 +99,7 @@ export function boardStatus(p: Pick<PostingView, "status" | "postedBy" | "task" 
 
 /** Who posts a board, in one line. */
 export function whoPostsLine(postedBy: PostingView["postedBy"] | WhoPosts, board: string): string {
-  return postedBy === "its" ? `ITS is posting this on ${board} from your company's own account.` : `You post this on ${board} from your own account. The Posting tab has the words to paste and the steps.`;
+  return postedBy === "its" ? `ITS is posting this on ${board} from your company's own account.` : `You post this on ${board} from your own account. The Share tab has the words to paste and the steps.`;
 }
 
 /** One place the job is going, as the screen right after approval lists it. */
@@ -133,19 +133,19 @@ export function destinationsOf(d: Pick<PostingsResponse, "postings" | "publishin
 export function boardTicksToast(input: { before: readonly string[]; after: readonly string[]; roleStatus: string; whoPosts: WhoPosts }): { title: string; detail?: string } {
   const added = input.after.filter((c) => !input.before.includes(c));
   const removed = input.before.filter((c) => !input.after.includes(c));
-  const title = input.after.length ? `Boards saved: ${boardNames([...input.after])}.` : "No job boards for this role.";
-  if (input.roleStatus !== "open" && input.roleStatus !== "paused") return { title, detail: "Nothing is posted until the role is approved; the ticked boards are prepared then." };
+  const title = input.after.length ? `Boards saved: ${boardNames([...input.after])}.` : "No job boards for this job.";
+  if (input.roleStatus !== "open" && input.roleStatus !== "paused") return { title, detail: "Nothing is posted until the job is approved; the ticked boards are prepared then." };
   const its = input.whoPosts === "its";
   const parts: string[] = [];
-  if (added.length) parts.push(input.roleStatus === "paused" ? `${boardNames(added)} ${added.length === 1 ? "is" : "are"} prepared when you resume the role.` : its ? `ITS posts the job on ${boardNames(added)} from your company's account.` : `${boardNames(added)} ${added.length === 1 ? "is" : "are"} being prepared for you to post.`);
+  if (added.length) parts.push(input.roleStatus === "paused" ? `${boardNames(added)} ${added.length === 1 ? "is" : "are"} prepared when you resume the job.` : its ? `ITS posts the job on ${boardNames(added)} from your company's account.` : `${boardNames(added)} ${added.length === 1 ? "is" : "are"} being prepared for you to post.`);
   if (removed.length) parts.push(`${boardNames(removed)} closed${its ? "; ITS takes the listing down if it was up." : "; take the listing down from your own account if it was up."}`);
   return { title, detail: parts.join(" ") || undefined };
 }
 
-/** The line under the list when no board was ticked for the role, or null. */
+/** The line under the list when no board was ticked for the job, or null. */
 export function noBoardsLine(boards: readonly BoardChoiceView[]): string | null {
   if (boards.some((b) => b.chosen)) return null;
-  return "No job boards were chosen for this role. You can add LinkedIn or Indeed from the Posting tab at any time.";
+  return "No job boards were chosen for this job. You can add LinkedIn or Indeed from the Share tab at any time.";
 }
 
 /** The note when interview rounds have nobody on them yet, or null. */
@@ -163,7 +163,7 @@ export function outdatedBoardsLine(channels: readonly string[], whoPosts: WhoPos
   const names = boardNames([...channels]);
   return whoPosts === "its"
     ? `${names} still ${one ? "shows" : "show"} the earlier version. ITS has a task to update ${one ? "it" : "them"} from your company's account.`
-    : `${names} still ${one ? "shows" : "show"} the earlier version. Update ${one ? "it" : "them"} from your own account, then confirm on the Posting tab.`;
+    : `${names} still ${one ? "shows" : "show"} the earlier version. Update ${one ? "it" : "them"} from your own account, then confirm on the Share tab.`;
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */

@@ -44,7 +44,7 @@ describe("readingConsistency", () => {
   it("fails a Strong or Potential reading when a must-have is shown not met by a verified quote, and names it", () => {
     const r = readingConsistency(triage({ requirementFindings: [provenMiss] }), packet);
     expect(r.consistent).toBe(false);
-    expect(r.reason).toBe('The reading says Potential match, but the candidate\'s own words show a must-have is not met (Active CA RDH license): "RDH license expired in 2021". Read it yourself before anything else happens.');
+    expect(r.reason).toBe('The AI review says Potential match, but the candidate\'s own words show a must-have is not met (Active CA RDH license): "RDH license expired in 2021". Read it yourself before anything else happens.');
     expect(readingConsistency(triage({ overall: "strong", requirementFindings: [provenMiss] })).reason).toContain('a must-have is not met: "RDH license expired in 2021"');
   });
 
@@ -56,9 +56,9 @@ describe("readingConsistency", () => {
   });
 
   it("fails a step suggested for a Weak or Insufficient reading, after the résumé and after the screen", () => {
-    expect(readingConsistency(triage({ overall: "weak", recommendation: "screen" }), packet).reason).toBe("The assistant suggested a screen for a reading of Weak match, which does not add up. Read it yourself before anything else happens.");
-    expect(readingConsistency(triage({ overall: "unknown", recommendation: "screen" }), packet).reason).toContain("for a reading of Insufficient evidence");
-    expect(readingConsistency(scorecard({ overall: "weak", recommendation: "strong_interview" }), packet).reason).toContain("suggested an interview for a reading of Weak match");
+    expect(readingConsistency(triage({ overall: "weak", recommendation: "screen" }), packet).reason).toBe("The assistant suggested a screening chat, but its AI review says Weak match. Read it yourself before anything else happens.");
+    expect(readingConsistency(triage({ overall: "unknown", recommendation: "screen" }), packet).reason).toContain("its AI review says Insufficient evidence");
+    expect(readingConsistency(scorecard({ overall: "weak", recommendation: "strong_interview" }), packet).reason).toContain("suggested an interview, but its AI review says Weak match");
     expect(readingConsistency(scorecard({ overall: "potential", recommendation: "interview" }), packet).consistent).toBe(true);
     expect(readingConsistency(scorecard({ overall: "weak", recommendation: "hold" }), packet).consistent).toBe(true);
   });
@@ -67,7 +67,7 @@ describe("readingConsistency", () => {
     const skills = { ...packet, competencies: [{ key: "chairside", name: "Chairside skill", definition: "d", weight: 5, evaluatedIn: "both", indicators: ["x"] }, { key: "software", name: "Dental software", definition: "d", weight: 2, evaluatedIn: "both", indicators: ["x"] }] } as unknown as Pick<RolePacket, "requirements" | "competencies">;
     const against = (key: string, quote?: string) => triage({ overall: "strong", competencyFindings: [{ competencyKey: key, finding: "contradicted", ...(quote ? { evidence: { source: "resume" as const, quote } } : {}) }] });
     const r = readingConsistency(against("chairside", "I avoid chairside work"), skills);
-    expect(r).toEqual({ consistent: false, reason: 'The reading says Strong match, but the candidate\'s own words go against an essential skill (Chairside skill): "I avoid chairside work". Read it yourself before anything else happens.' });
+    expect(r).toEqual({ consistent: false, reason: 'The AI review says Strong match, but the candidate\'s own words go against an essential skill (Chairside skill): "I avoid chairside work". Read it yourself before anything else happens.' });
     // a Helpful skill, nothing quoted, a Potential reading, or no skills given: consistent
     expect(readingConsistency(against("software", "I never used Dentrix"), skills).consistent).toBe(true);
     expect(readingConsistency(against("chairside"), skills).consistent).toBe(true);

@@ -20,6 +20,9 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(nav.search),
 }));
 vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactNode } & Record<string, unknown>) => createElement("a", props, props.children) }));
+// The pages as the browser shows them once they are its own: Candidates reads the job's status (its Live pill) from the
+// rail's jobs list, which the first draw leaves out on both sides (first-draw.test.ts).
+vi.mock("@ros/web/src/components/use-is-client", () => ({ useIsClient: () => true }));
 
 (globalThis as { React?: typeof React }).React = React;
 const { People } = await import("@ros/web/src/pages/People");
@@ -166,7 +169,7 @@ describe("the role report and the ITS controls", () => {
     const qc = client();
     qc.setQueryData(["role", "r1", "screening"], { offered: 10, started: 8, finished: 6, unfinished: 1, stillApplying: 2, medianMinutes: 6.4, personChosen: { contactMe: 1, sendWithout: 1 }, skipped: [{ key: "q_pay", question: "What pay are you looking for?", count: 3 }] });
     const words = text(render(qc, createElement(ScreeningCard, { roleId: "r1" })));
-    expect(words).toContain("The screening conversation");
+    expect(words).toContain("The screening chat");
     expect(words).toContain("Started it 8 of 10 (80%)");
     expect(words).toContain("Typical time to finish about 6 minutes");
     // never where anyone stopped: a conversation that stopped was never sent (founder decision of 9 October 2026)
@@ -190,13 +193,13 @@ describe("the role report and the ITS controls", () => {
   it("warns an owner on Today at 80% of the month's screening conversations, with a way to ask ITS", () => {
     nav.search = "";
     const words = text(render(client(), createElement(Home)));
-    expect(words).toContain("122 of this month's 150 screening conversations used");
+    expect(words).toContain("122 of this month's 150 screening chats used");
     expect(words).toContain("80% used");
     expect(words).toContain("Nothing has stopped.");
     expect(words).toContain("Ask ITS about adding more");
     // nobody else sees it
     const hm = { ...owner, memberships: [{ ...owner.memberships[0], role: "hiring_manager" }] };
-    expect(text(render(client(hm), createElement(Home)))).not.toContain("screening conversations used");
+    expect(text(render(client(hm), createElement(Home)))).not.toContain("screening chats used");
   });
 
   it("shows ITS who is running low, and how each company's people apply", () => {
@@ -204,10 +207,12 @@ describe("the role report and the ITS controls", () => {
     qc.setQueryData(["admin", "customers"], [{ id: "co1", name: "Bright Dental", slug: "bright", vertical: "dental", sizeBand: "20-49", planKey: "starter", status: "active", roles: 1, applications: 3, aiCostUsd: 0, lastActivityAt: daysAgo(0), escalations: 0, createdAt: daysAgo(30), settings: {}, verifiedAt: daysAgo(29), verifiedBy: null, heldMessages: 0, jobBoardsConfirmedAt: null, applyFlowDefault: "form_then_screen" }]);
     qc.setQueryData(["admin", "alerts"], [{ id: "al1", kind: "billing.screens_warning", severity: "info", title: "", body: "", status: "open", companyId: "co1", target: null, details: { used: 122, limit: 150 }, createdAt: daysAgo(1) }]);
     const words = text(render(qc, createElement(Admin)));
-    expect(words).toContain("Screening conversations running low");
-    expect(words).toContain("Bright Dental : 80% of screening conversations used (122 of 150), since");
+    expect(words).toContain("Screening chats running low");
+    expect(words).toContain("Bright Dental : 80% of screening chats used (122 of 150), since");
     // and on the company's row, beside its plan
-    expect(words).toContain("starter · active 80% of screening conversations used (122 of 150)");
+    expect(words).toContain("starter · active 80% of screening chats used (122 of 150)");
+    // the Plan control sits with the plan (Wave S2 F1)
+    expect(words).toContain("(122 of 150) Change plan");
     expect(words).toContain("How people apply");
     expect(words).toContain("Form now, conversation later Change");
   });

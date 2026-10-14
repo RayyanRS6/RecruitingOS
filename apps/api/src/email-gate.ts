@@ -1,4 +1,4 @@
-import { raiseAlertOnce } from "@ros/core";
+import { raiseAlertOnce, resolveAlertsOfKind } from "@ros/core";
 import type { Db } from "@ros/db";
 
 /**
@@ -11,7 +11,12 @@ import type { Db } from "@ros/db";
  * logged.
  */
 export async function checkEmailForProduction(db: Db, input: { nodeEnv: string; role: string; emailStatus: string; emailId: string }): Promise<{ raised: boolean }> {
-  if (input.nodeEnv !== "production" || input.emailStatus !== "fake") return { raised: false };
+  if (input.nodeEnv !== "production") return { raised: false };
+  if (input.emailStatus !== "fake") {
+    // the real provider is in use: an alert from before it was set up is over, so a later lapse is a new one
+    await resolveAlertsOfKind(db, "email.fake", { reason: `the real email provider (${input.emailId}) is in use` }).catch((err) => console.warn(`[email] could not resolve the earlier alert: ${err instanceof Error ? err.message : String(err)}`));
+    return { raised: false };
+  }
   console.warn(`[email] production is running with the fake email adapter on the ${input.role}: no email is really sent. Set EMAIL_PROVIDER=postmark with POSTMARK_SERVER_TOKEN (to-do item 14, docs/spec/17-staging-handoff.md)`);
   try {
     const alert = await raiseAlertOnce(db, {

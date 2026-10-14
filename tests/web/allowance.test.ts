@@ -30,21 +30,21 @@ describe("Today's card for owners", () => {
 
   it("at 80% says nothing has stopped, and that ITS knows", () => {
     const w = screeningAllowanceWarning({ text_screens: { used: 120, limit: 150 } });
-    expect(w).toMatchObject({ level: "warning", used: 120, limit: 150, title: "120 of this month's 150 screening conversations used" });
+    expect(w).toMatchObject({ level: "warning", used: 120, limit: 150, title: "120 of this month's 150 screening chats used" });
     expect(w?.body).toMatch(/^Nothing has stopped\./);
     expect(w?.body).toMatch(/ITS has been told/);
   });
 
   it("used up, says applications are still accepted and the link follows by email, so everyone gets the same steps", () => {
     const w = screeningAllowanceWarning({ text_screens: { used: 150, limit: 150 } }, "starter");
-    expect(w?.title).toBe("This month's screening conversations are used up");
+    expect(w?.title).toBe("This month's screening chats are used up");
     expect(w?.body).toMatch(/Applications are still accepted/);
-    expect(w?.body).toMatch(/conversation link by email as soon as more are added/);
+    expect(w?.body).toMatch(/chat link by email as soon as more are added/);
     expect(w?.body).toMatch(/same steps/);
   });
 
   it("for a Design Partner pilot, says the conversation keeps being offered", () => {
-    expect(screeningAllowanceWarning({ text_screens: { used: 25, limit: 25 } }, "design_partner")?.body).toMatch(/Your pilot keeps offering the conversation to everyone/);
+    expect(screeningAllowanceWarning({ text_screens: { used: 25, limit: 25 } }, "design_partner")?.body).toMatch(/Your pilot keeps offering the chat to everyone/);
   });
 
   it("asks ITS about the plan, never a counted recruiter request", () => {
@@ -66,8 +66,8 @@ describe("the ITS console", () => {
     ]);
     expect([...map.keys()].sort()).toEqual(["co1", "co2"]);
     expect(map.get("co1")).toEqual({ companyId: "co1", level: "used_up", used: 50, limit: 50, since: "2026-10-05T10:00:00.000Z" });
-    expect(allowanceChip(map.get("co1")!)).toBe("Screening conversations used up (50 of 50)");
-    expect(allowanceChip(map.get("co2")!)).toBe("80% of screening conversations used (120 of 150)");
-    expect(allowanceChip({ level: "warning", used: null, limit: null })).toBe("80% of screening conversations used");
+    expect(allowanceChip(map.get("co1")!)).toBe("Screening chats used up (50 of 50)");
+    expect(allowanceChip(map.get("co2")!)).toBe("80% of screening chats used (120 of 150)");
+    expect(allowanceChip({ level: "warning", used: null, limit: null })).toBe("80% of screening chats used");
   });
 });

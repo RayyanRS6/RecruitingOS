@@ -52,10 +52,14 @@ companyRoutes.get("/current/members", requireTenant, async (c) => {
   return c.json(await listTeam({ tenant: t, container: c.get("container") }));
 });
 
-/** Open invitations: who was asked, as what, by whom, and until when. Everyone on the team may see them. */
+/**
+ * Open invitations: who was asked, as what, by whom, and until when. Only those who manage the team (members.manage:
+ * owners, admins and HR) see them (audit 01-platform B11): an interviewer or a hiring manager has no use for invitees'
+ * addresses and intended roles, and gets the same 403 as for any other team change.
+ */
 companyRoutes.get("/current/invitations", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  assertCan(t.role, "company.read");
+  assertCan(t.role, "members.manage");
   return c.json(await listInvitations({ tenant: t, container: c.get("container") }));
 });
 

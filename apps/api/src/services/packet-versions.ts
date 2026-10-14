@@ -172,8 +172,8 @@ export async function createPacketVersion(
     const rationale = role.status === "open"
       ? material.length && editorMayApprove
         ? `${editorName} changed ${changed} of the live job: ${input.changeSummary}. A change to the pay, the title, the place or the eligibility questions needs the same approval as a new role. Until it is approved the job keeps running on version ${role.currentPacketVersion ?? "the approved one"}.`
-        : `${editorName} changed the packet of an open role: ${input.changeSummary}. Approve to make version ${next} current; until then the role keeps running on version ${role.currentPacketVersion ?? "the approved one"}.`
-      : `${editorName} edited the packet: ${input.changeSummary}. Approve version ${next} to open the role and start posting.`;
+        : `${editorName} changed the details of the live job: ${input.changeSummary}. Approve to make version ${next} current; until then the job keeps running on version ${role.currentPacketVersion ?? "the approved one"}.`
+      : `${editorName} edited the job details: ${input.changeSummary}. Approve version ${next} to open the job and start posting.`;
     const { runId } = await startPacketApproval(tx, container, { companyId: t.companyId, role, version: next, actor, rationale, wasOpen: role.status === "open" });
     // The company's only owner approves their own change: the page offers "Confirm this change" at once (Q10).
     const needsApproval: NeedsApproval | null = material.length && editorMayApprove ? { changes: material, words: `This changes ${changed}, so it needs the same approval as a new role before it goes live.`, youMayConfirm: await isSoleOwner(tx, t.companyId, t.userId) } : null;

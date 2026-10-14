@@ -1,5 +1,5 @@
 import { ScreenAssessment, ScreenTurn, type RolePacket, type ScreenChannel, type ScreenProgress, type ScreenTranscriptEntry } from "@ros/contracts";
-import { FAIRNESS_RULES, FINDING_RULES, type PromptDef } from "./registry";
+import { FAIRNESS_RULES, FINDING_RULES, withoutTag, type PromptDef } from "./registry";
 
 export type ScreenContext = {
   company: { name: string };
@@ -110,6 +110,9 @@ ${FINDING_RULES}
 
 ${FAIRNESS_RULES}`;
 
+/** Said with the conversation the scorecard reads (D-04 = C): the placeholders stand for details hidden on purpose. */
+const SCORING_VIEW_NOTE = "Details in square brackets ([name], [email], [phone], [street address], [zip code], [link]) were replaced on purpose. They are not evidence: never guess what they were.";
+
 /** What the model is asked for: the scorecard without `secondaryScore` (plan 0.9); the model never writes a number. */
 export const ScreenAssessModelOutput = ScreenAssessment.omit({ secondaryScore: true });
 
@@ -118,9 +121,15 @@ export const ScreenAssessModelOutput = ScreenAssessment.omit({ secondaryScore: t
 // conversation that did not finish read for what it has.
 // Version 4 (fairness run on Haiku 5.5, 14 Oct 2026): the shared definitions of each finding (FINDING_RULES), and the
 // candidate called "the candidate" in the scorecard's own words.
+// Version 5 (founder decision D-04 = C, Wave S2): the conversation arrives through the scoring view (`assessScreen` in
+// packages/agents: name, email, phone, street address and links replaced by placeholders), with a line saying so, and
+// no line of it can close the transcript block.
+// Version 6 (Wave S2 review): the recorded answers and the progress (which carries the answers to the focus questions)
+// sit in their own <answers> block, which no candidate text can close or open, nor the transcript block.
+const dataOnly = (text: string) => withoutTag(withoutTag(text, "transcript"), "answers");
 export const screenAssessPrompt: PromptDef<ScreenContext, ScreenAssessment> = {
   key: "screen.assess",
-  version: 4,
+  version: 6,
   task: "screen.assess",
   agent: "screening",
   schema: ScreenAssessModelOutput,
@@ -131,7 +140,7 @@ export const screenAssessPrompt: PromptDef<ScreenContext, ScreenAssessment> = {
   messages: (ctx) => [
     {
       role: "user",
-      content: `<transcript>\n${ctx.transcript.map(transcriptLine).join("\n")}\n</transcript>\n\nRecorded answers (JSON): ${JSON.stringify(ctx.answers)}\nProgress (JSON): ${JSON.stringify(ctx.progress)}\n${
+      content: `<transcript>\n${withoutTag(ctx.transcript.map(transcriptLine).join("\n"), "transcript")}\n</transcript>\n\n${SCORING_VIEW_NOTE}\n\n<answers>\nRecorded answers (JSON): ${dataOnly(JSON.stringify(ctx.answers))}\nProgress (JSON): ${dataOnly(JSON.stringify(ctx.progress))}\n</answers>\n${
         ctx.incomplete ? `\nThis conversation was not finished (${ctx.incomplete.reason === "declined_by_candidate" ? "the candidate chose to send their application without finishing it" : "the candidate stopped part-way and did not come back"}): ${ctx.incomplete.answered} of ${ctx.incomplete.total} questions answered. Write the scorecard from what is there, mark everything else unknown, never recommend strong_interview, and say in the summary that it was not finished.\n` : ""
       }\nWrite the scorecard.`,
     },

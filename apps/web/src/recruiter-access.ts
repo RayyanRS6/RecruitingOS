@@ -14,7 +14,7 @@ export function accessWords(scope: AccessScope): string {
 /** ESCALATION_ACCESS_DAYS and ACCESS_AFTER_RESOLUTION_HOURS in packages/core/src/staff-access.ts. */
 export const ACCESS_DAYS = 14;
 /** Shown to everyone who may ask; only owners and admins may end a recruiter's access (staff_access.revoke). */
-export const ACCESS_LIMITS = `Their access starts when they pick the request up and ends a day after it is resolved, or after ${ACCESS_DAYS} days at most. An owner or admin can end it sooner in Setup, and every page they open is recorded.`;
+export const ACCESS_LIMITS = `Their access starts when they pick the request up and ends a day after it is resolved, or after ${ACCESS_DAYS} days at most. An owner or admin can end it sooner in Settings, and every page they open is recorded.`;
 
 /**
  * What the page says once a request is sent: the API's own reply, which names what the recruiter will see and until

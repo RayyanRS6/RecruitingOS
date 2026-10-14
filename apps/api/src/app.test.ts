@@ -121,7 +121,7 @@ describe("Slice 1 API", () => {
     expect(role.status).toBe("pending_approval");
     expect(role.pendingApprovals).toHaveLength(1);
     const brief = (await (await json("GET", "/api/v1/brief")).json()) as { cards: Array<{ kind: string; title: string }> };
-    expect(brief.cards.some((c) => c.kind === "decision" && /Approve the role/.test(c.title))).toBe(true);
+    expect(brief.cards.some((c) => c.kind === "decision" && /Approve the job/.test(c.title))).toBe(true);
   });
 
   it("resumes an open conversation after a reload and lets the owner start over", async () => {

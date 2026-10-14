@@ -57,7 +57,7 @@ test.describe("route inventory", () => {
     const seeded = await seedRoleAndApplicant(page.request, baseURL!, "Luis", "Ortega");
     const routes: Array<[string, RegExp | string]> = [
       ["/", /Good (morning|afternoon|evening)/],
-      ["/roles", "Roles"],
+      ["/roles", "Jobs"],
       // the job builder's own page (plan C4): opening it saves nothing
       ["/roles/new", "Who are you hiring?"],
       [`/roles/${seeded.roleId}`, /Hygienist/i],
@@ -65,8 +65,8 @@ test.describe("route inventory", () => {
       [`/roles/${seeded.roleId}/talent`, /Hygienist/i],
       ["/talent", /Hygienist/i],
       ["/interviews", "Interviews"],
-      ["/setup", "Setup"],
-      // every earlier update, read and unread (plan B3), reached from Today
+      ["/setup", "Settings"],
+      // every earlier update, read and unread (plan B3), reached from Home
       ["/updates", "Updates"],
     ];
     for (const [path, heading] of routes) {
@@ -101,12 +101,13 @@ test.describe("route inventory", () => {
     await page.goto("/?start=1");
     await expect(page).toHaveURL(/\/roles\/new$/, { timeout: 30_000 });
     // and on a page where something was typed but not saved, N is left alone so the typing is not thrown away
-    await page.goto("/setup");
+    // (the availability card sits on the Settings page's Notifications tab)
+    await page.goto("/setup?tab=notifications");
     await page.getByLabel("Buffer between interviews (minutes)").fill("25");
     await page.getByRole("heading", { level: 1 }).click();
     await page.keyboard.press("n");
     await page.waitForTimeout(1_000);
-    await expect(page).toHaveURL(/\/setup$/);
+    await expect(page).toHaveURL(/\/setup\?tab=notifications$/);
     await expect(page.getByLabel("Buffer between interviews (minutes)")).toHaveValue("25");
     await page.goto(`/roles/${seeded.roleId}/people`);
     await expect(page).toHaveURL(new RegExp(`/roles/${seeded.roleId}/talent`));

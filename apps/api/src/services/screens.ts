@@ -38,11 +38,11 @@ type App = typeof applications.$inferSelect;
 export async function stopScreenInvitation(tx: Tx, container: Container, input: { app: App; actor: Actor; by: Parameters<typeof transition>[1]["by"]; note?: string }): Promise<{ screenId: string; candidateTold: boolean }> {
   const { app, actor } = input;
   const [scr] = await tx.select().from(screens).where(and(eq(screens.applicationId, app.id), inArray(screens.status, [...UNSTARTED_SCREEN_STATUSES]))).orderBy(desc(screens.createdAt)).limit(1);
-  if (!scr) throw new HttpError(409, "no_screen_invitation", "There is no screening invitation waiting for them; once they start, the conversation cannot be stopped here.");
+  if (!scr) throw new HttpError(409, "no_screen_invitation", "There is no screening chat invitation waiting for them; once they start, the chat cannot be stopped here.");
   await tx.update(screens).set({ status: "cancelled" }).where(eq(screens.id, scr.id));
   await emit(tx, { type: "screen.cancelled", companyId: app.companyId, actor, subject: { type: "screen", id: scr.id }, payload: { applicationId: app.id, reason: "stopped_by_team", note: input.note ?? null } });
   if (scr.workflowRunId) await container.engine.cancel(tx, scr.workflowRunId, actor, "a person stopped the screening invitation");
-  if (app.stage === "screen_invited") await transition(tx, { applicationId: app.id, companyId: app.companyId, to: "triaged", by: input.by, actor, reason: input.note ?? "screening invitation stopped" });
+  if (app.stage === "screen_invited") await transition(tx, { applicationId: app.id, companyId: app.companyId, to: "triaged", by: input.by, actor, reason: input.note ?? "screening chat invitation stopped" });
   const candidateTold = await sendScreenStopped(tx, container, { app, actor, screenId: scr.id });
   return { screenId: scr.id, candidateTold };
 }
@@ -61,11 +61,11 @@ const NOTES_ALLOWED: readonly string[] = ["invited", "reminded", "in_progress", 
 export async function addRecruiterCallNotes(tx: Tx, container: Container, input: { app: App; notes: RecruiterCallNotes["notes"]; complete: boolean; actor: Actor }): Promise<{ screenId: string; completed: boolean }> {
   const { app, actor } = input;
   const [latest] = await tx.select().from(screens).where(eq(screens.applicationId, app.id)).orderBy(desc(screens.createdAt)).limit(1);
-  if (latest && !NOTES_ALLOWED.includes(latest.status)) throw new HttpError(409, "screen_closed", latest.status === "completed" ? "This conversation is already complete. Add what you learned as a note on the candidate instead." : "This conversation is closed.");
+  if (latest && !NOTES_ALLOWED.includes(latest.status)) throw new HttpError(409, "screen_closed", latest.status === "completed" ? "This screening chat is already complete. Add what you learned as a note on the candidate instead." : "This screening chat is closed.");
   if (!["received", "eligible", "triaged", "screen_invited", "screening", "screen_complete"].includes(app.stage)) throw new HttpError(409, "not_screening", "This candidate is past the screening step.");
   // With no conversation yet, the notes are the screening: they finish it, or there would be an invitation nobody sent,
   // waiting for good, that no scorecard ever follows.
-  if (!latest && !input.complete) throw new HttpError(409, "no_conversation", "This candidate has no screening conversation to keep open. Tick \"Finish the screening with these notes\" to record the call as their screening.");
+  if (!latest && !input.complete) throw new HttpError(409, "no_conversation", "This candidate has no screening chat to keep open. Tick \"Finish the screening with these notes\" to record the call as their screening chat.");
   const now = container.engine.clock();
   const scr = latest ?? (await createScreen(tx, { companyId: app.companyId, applicationId: app.id, channel: "web", expiresAt: new Date(now.getTime() + 120 * 3600_000).toISOString(), now }));
   const b = await loadScreenBundle(tx, scr.id);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { can, type Permission } from "../../packages/core/src/permissions";
 import { againChoice, defaultInterviewers } from "../../apps/web/src/interview-defaults";
+import { jobActions, jobTabFrom, jobTabHref, jobTabs, roleStatus } from "../../apps/web/src/role-status";
 import { actorWords, describeRoleEvent, payShownLabel, roleWords } from "../../apps/web/src/role-words";
 import { canApproveRole, canChangeCompany, canDecideInterviews, canDecline, canEditPacket, canManageInterviews, canManageRole, canRecordOutcome, canRequestInterviews, canSeeActivity, canSeePay, canSeeTalent, canShareJob, canStartHire } from "../../apps/web/src/roles";
 
@@ -102,9 +103,11 @@ describe("the role page's Activity words", () => {
   it("says how long an approval had before it ran out, and why a screen was closed", () => {
     expect(describeRoleEvent(ev("approval.expired", { actionType: "application.invite_screen", windowDays: 7 }))).toBe("The approval ran out of time (7 days)");
     expect(describeRoleEvent(ev("approval.expired", { actionType: "role_packet.approve" }))).toBe("The approval ran out of time (14 days)");
-    expect(describeRoleEvent(ev("screen.cancelled", { reason: "stopped_by_team" }))).toBe("A screening invitation was stopped by the team");
-    expect(describeRoleEvent(ev("screen.cancelled", { reason: "left_process" }))).toBe("A screen was closed: the candidate is no longer in the process");
-    expect(describeRoleEvent(ev("screen.cancelled", { reason: "deletion_request" }))).toBe("A screen was closed: the candidate's information was deleted");
+    expect(describeRoleEvent(ev("screen.cancelled", { reason: "stopped_by_team" }))).toBe("A screening chat invitation was stopped by the team");
+    expect(describeRoleEvent(ev("screen.cancelled", { reason: "left_process" }))).toBe("A screening chat was closed: the candidate is no longer in the process");
+    expect(describeRoleEvent(ev("screen.cancelled", { reason: "deletion_request" }))).toBe("A screening chat was closed: the candidate's information was deleted");
+    expect(describeRoleEvent(ev("screen.invited", {}))).toBe("A candidate was invited to a screening chat");
+    expect(describeRoleEvent(ev("screen.completed", {}))).toBe("A candidate finished the screening chat");
   });
 
   it("says which boards were chosen and when applications close (plan D6, D7)", () => {
@@ -199,5 +202,89 @@ describe("the role's activity: new times for several people under Cancelled", ()
     expect(ev({ roleId: "r1", requested: 4, sent: 3, notSent: 1 })).toBe("New times for 4 people under Cancelled: 3 going ahead, 1 not sent");
     expect(ev({ roleId: "r1", requested: 1, sent: 1, notSent: 0 })).toBe("New times for 1 person under Cancelled: 1 going ahead");
     expect(ev({ roleId: "r1", requested: 2, sent: 0, notSent: 2 })).not.toMatch(/asked/);
+  });
+});
+
+describe("the job's words in its activity (Wave S1 glossary)", () => {
+  const ev = (type: string, payload: Record<string, unknown> = {}) => describeRoleEvent({ id: 1, type, occurredAt: "2026-10-10T10:00:00.000Z", actor: { kind: "user", id: "u1", name: "Dana" }, subjectType: "role", subjectId: "r1", payload });
+
+  it("says 'version 3' and 'the job', never 'packet v3' or 'the intake conversation'", () => {
+    expect(ev("role.created")).toBe("Job drafted in the job builder");
+    expect(ev("role_packet.approved", { version: 3 })).toBe("Version 3 approved");
+    expect(ev("role_packet.approved", { version: 3, via: "edit_while_open" })).toBe("Version 3 approved and made current");
+    expect(ev("role_packet.proposed", { version: 2, again: true })).toBe("Version 2 sent for approval again");
+    expect(ev("role_packet.edited", { version: 4, changeSummary: "Pay raised" })).toBe("Version 4 edited: Pay raised");
+    expect(ev("role_packet.edited", {})).toBe("The job edited");
+    expect(ev("packet.revision_applied", { version: 5 })).toBe("A change asked for in the chat was saved as version 5");
+    expect(ev("packet.revision_applied", {})).toBe("A change asked for in the chat was saved");
+    expect(ev("packet.check_applied", { version: 6 })).toBe("Fixes from the requirements check were saved as version 6");
+    expect(ev("role.sent_back", { wasOpen: true, version: 2 })).toBe("Proposed version 2 retired");
+    for (const [type, words] of [["role.approved", "Job approved"], ["role.opened", "Job opened"], ["role.paused", "Job paused"], ["role.resumed", "Job resumed"], ["role.closed", "Job closed"], ["role.filled", "Job filled"]] as const) expect(ev(type)).toBe(words);
+    for (const type of ["role.created", "role_packet.approved", "packet.revision_proposed", "packet.revision_applied"]) expect(ev(type, { version: 1 })).not.toMatch(/packet|intake/i);
+  });
+});
+
+describe("the job's one header, tab strip and More menu (Wave S1)", () => {
+  it("reads an open job as Live, the word both of its pages use", () => {
+    expect(roleStatus("open")).toEqual({ label: "Live", tone: "good" });
+  });
+
+  it("lists Candidates first, then Job, Scoring, Interview plan, Share, Report and Activity", () => {
+    expect(jobTabs({ seesCandidates: true, candidates: 12 }).map((t) => t.label)).toEqual(["Candidates", "Job", "Scoring", "Interview plan", "Share", "Report", "Activity"]);
+    expect(jobTabs({ seesCandidates: true, candidates: 12 })[0]).toEqual({ id: "candidates", label: "Candidates", count: 12 });
+    // the count waits until it is known
+    expect(jobTabs({ seesCandidates: true, candidates: null })[0]).toEqual({ id: "candidates", label: "Candidates" });
+    // an interviewer sees no candidates and no report; the versions under Activity are for everyone
+    expect(jobTabs({ seesCandidates: false }).map((t) => t.id)).toEqual(["job", "scoring", "plan", "share", "activity"]);
+  });
+
+  it("links each tab: Candidates is its own page, the rest are ?tab= on the job page", () => {
+    expect(jobTabHref("r1", "candidates")).toBe("/roles/r1/talent");
+    expect(jobTabHref("r1", "job")).toBe("/roles/r1");
+    expect(jobTabHref("r1", "scoring")).toBe("/roles/r1?tab=scoring");
+    expect(jobTabHref("r1", "share")).toBe("/roles/r1?tab=share");
+  });
+
+  it("opens the tab that now holds what an older link asked for, so every notification and email still lands", () => {
+    expect(jobTabFrom(null)).toBe("job");
+    expect(jobTabFrom("")).toBe("job");
+    expect(jobTabFrom("overview")).toBe("job");
+    expect(jobTabFrom("requirements")).toBe("scoring");
+    expect(jobTabFrom("evaluation")).toBe("scoring");
+    expect(jobTabFrom("posting")).toBe("share");
+    expect(jobTabFrom("history")).toBe("activity");
+    expect(jobTabFrom("plan")).toBe("plan");
+    expect(jobTabFrom("report")).toBe("report");
+    expect(jobTabFrom("something-else")).toBe("job");
+  });
+
+  const all = { manage: true, edit: true, preview: true, close: true, tell: true, hireAgain: true };
+  const none = { manage: false, edit: false, preview: false, close: false, tell: false, hireAgain: false };
+  const ids = (input: Parameters<typeof jobActions>[0]) => jobActions(input).map((a) => a.id);
+
+  it("puts what the header once showed as buttons in one More menu, everyday ones first and closing last", () => {
+    expect(jobActions({ status: "open", accepting: true, can: all, comparing: false }).map((a) => a.label)).toEqual(["Edit", "Candidate view", "Compare", "Pause", "Stop accepting applications", "Close the job"]);
+    expect(jobActions({ status: "open", accepting: true, can: all }).at(-1)).toEqual({ id: "close", label: "Close the job", danger: true });
+    expect(ids({ status: "paused", accepting: true, can: all })).toEqual(["edit", "preview", "resume", "stop-accepting", "close"]);
+    // the accepting switch: take them again, or (after the closing date) a later date; left out until the job is read
+    expect(ids({ status: "open", accepting: false, can: all })).toContain("accept-again");
+    expect(ids({ status: "open", accepting: false, closedByDate: true, can: all })).toContain("extend-date");
+    expect(ids({ status: "open", accepting: null, can: all })).not.toContain("stop-accepting");
+    // Compare only where it is offered, and its label says when it is on
+    expect(jobActions({ status: "open", can: none, comparing: true })).toEqual([{ id: "compare", label: "Done comparing" }]);
+    expect(ids({ status: "open", can: none, comparing: null })).toEqual([]);
+  });
+
+  it("offers a closed job's own steps: hire again, and the closing message unless it is already open", () => {
+    expect(ids({ status: "closed", can: all })).toEqual(["edit", "preview", "hire-again", "closing-message"]);
+    expect(ids({ status: "closed", can: all, closingMessageOpen: true })).not.toContain("closing-message");
+    expect(ids({ status: "filled", can: all })).toContain("hire-again");
+    expect(ids({ status: "draft", can: all })).toEqual(["edit", "preview"]);
+  });
+
+  it("offers nothing the person's team role cannot do (apps/web/src/roles.ts)", () => {
+    expect(ids({ status: "open", accepting: true, can: none })).toEqual([]);
+    expect(ids({ status: "open", accepting: true, can: { ...none, close: true } })).toEqual(["close"]);
+    expect(ids({ status: "closed", can: { ...none, tell: true } })).toEqual(["closing-message"]);
   });
 });

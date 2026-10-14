@@ -338,8 +338,8 @@ export async function markBoardsOutdated(q: Queryable, input: { companyId: strin
       companyId: input.companyId,
       kind: "stuck.boards_outdated",
       title: `${role?.title ?? "A role"}: ${boards.join(", ")} still ${boards.length === 1 ? "shows" : "show"} the earlier version`,
-      body: `Version ${input.newVersion} is live on your careers page. Update the listing on ${boards.join(" and ")} from your own account with the new posting package, then confirm it on the Posting tab.`,
-      action: { label: "Open the Posting tab", href: `/roles/${input.roleId}?tab=posting` },
+      body: `Version ${input.newVersion} is live on your careers page. Update the listing on ${boards.join(" and ")} from your own account with the new posting package, then confirm it on the Share tab.`,
+      action: { label: "Open the Share tab", href: `/roles/${input.roleId}?tab=posting` },
       roles: ["owner", "admin"],
     });
   }

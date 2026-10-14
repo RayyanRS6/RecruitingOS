@@ -69,7 +69,7 @@ async function backfillClosingDates(q: Queryable, deps: Pick<Deps, "engine">, co
       companyId,
       kind: "stuck.closing_date_added",
       title: `${role.title} now has a closing date`,
-      body: `Colorado expects a job ad to say when applications close, so ${role.title} now shows "Apply by ${closingDayWords(closesOn)}". New applications stop at the end of that day; anyone part-way through can still finish. Choose another date on the Posting tab at any time.`,
+      body: `Colorado expects a job ad to say when applications close, so ${role.title} now shows "Apply by ${closingDayWords(closesOn)}". New applications stop at the end of that day; anyone part-way through can still finish. Choose another date on the Share tab at any time.`,
       action: { label: "Choose a closing date", href: `/roles/${role.id}?tab=posting#closing-date` },
       roles: ["owner", "admin"],
     });

@@ -119,7 +119,9 @@ describe("the recruiter loop", () => {
     expect(alerts[0].body).toContain("Nothing was held up");
     // the Setup counter moves
     const co = (await (await json(owner, "GET", "/api/v1/companies/current")).json()) as { usage: Record<string, { used: number; limit: number | null }> };
-    expect(co.usage.recruiter_asks).toEqual({ used: 3, limit: 1 });
+    expect(co.usage.recruiter_asks).toMatchObject({ used: 3, limit: 1 });
+    // a monthly allowance says when it starts again from zero (Wave S2 F1)
+    expect(Date.parse((co.usage.recruiter_asks as { resetsAt?: string }).resetsAt ?? "")).toBeGreaterThan(Date.now());
   });
 
   it("the ITS queue lists urgent requests first, whatever their reply-by time", async () => {

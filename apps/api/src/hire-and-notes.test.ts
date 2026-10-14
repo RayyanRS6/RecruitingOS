@@ -484,6 +484,9 @@ describe("interviews to hire: offer made, hire sheet, team notes, one-step inter
       expect(forHr.closeRole!.words).not.toMatch(/you see the closing message/);
       const forOwner = await withTenant(container.db, companyId, (tx) => hireFollowUp(tx, { roleId, hiredApplicationId: cara.id, startDate: null, role: "owner" }));
       expect(forOwner.closeRole!.words).toMatch(/you see the closing message before it goes/);
+      // private, so the safety net is said too (founder decision D-03 A), to whoever closes the role
+      for (const words of [forHr.closeRole!.words, forOwner.closeRole!.words]) expect(words).toMatch(/If nobody tells them within 5 working days of closing, the closing message goes by itself/);
+      expect(forHr.closeRole!.words).toMatch(/from their Home page\./);
     });
 
     it("closes the role as filled; the people still in process move to the talent pool privately, and the sheet no longer offers the close", async () => {

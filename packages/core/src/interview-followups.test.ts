@@ -431,8 +431,8 @@ describe("interview follow-ups (the Cancelled column)", () => {
       expect(interviewFollowUpRef({ ...base, times: "expired" })).toEqual({ id: "f1", reason: "asked_new_times", times: "expired" });
     });
     it("explains why no automatic set went, and says nothing where nothing needs saying", () => {
-      expect(autoReasonText("switched_off", { state: "none" })).toBe("Automatic new times are off in Setup.");
-      expect(autoReasonText("switched_off", { state: "not_sent" })).toBe("Automatic new times were switched off in Setup.");
+      expect(autoReasonText("switched_off", { state: "none" })).toBe("Automatic new times are off in Settings.");
+      expect(autoReasonText("switched_off", { state: "not_sent" })).toBe("Automatic new times were switched off in Settings.");
       expect(autoReasonText("was_on_hold")).toBe("You had put them on hold, so nothing goes automatically.");
       expect(autoReasonText("candidate_replied")).toBe("They replied to us, so nothing went automatically: read their reply first.");
       expect(autoReasonText("left_process")).toBe("Nothing went automatically while a decision was in place.");

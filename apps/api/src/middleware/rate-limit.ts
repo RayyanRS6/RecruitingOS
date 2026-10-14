@@ -59,6 +59,11 @@ export const POLICIES = {
   cspReport: { name: "csp.report", rules: [{ by: "ip", windowMs: MIN, limit: 60 }] },
   /** Every candidate-facing page and feed, read or written, per address: generous, but not unbounded. */
   candidatePages: { name: "candidate.pages", rules: [{ by: "ip", windowMs: MIN, limit: 240 }] },
+  /**
+   * The quick start's AI suggestions (Wave S3): each request is a paid model call that makes no draft and uses no plan
+   * room. The page asks once per set of answers; this caps a script or a stuck page.
+   */
+  intakeSuggest: { name: "intake.suggest", rules: [{ by: "user", windowMs: HOUR, limit: 30 }, { by: "tenant", windowMs: HOUR, limit: 200 }] },
 } satisfies Record<string, Policy>;
 
 /** A field of a posted form (the invitation page's token, for instance). Hono caches the parsed body, so the handler reads it again for free. */

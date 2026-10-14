@@ -56,7 +56,7 @@ describe("what a recruiter request covers, and saying so", () => {
     expect(body.message).toContain("They will see all of your hiring");
     expect(body.message).toContain("ends a day after it is resolved, or after 14 days at most");
     // said to whoever asked, so it names who can end it: hiring managers and HR may ask but not end it
-    expect(body.message).toContain("An owner or admin can end it sooner in Setup");
+    expect(body.message).toContain("An owner or admin can end it sooner in Settings");
     expect(body.message).not.toMatch(/everything about this role and candidate/);
     // mismatches are refused in plain words
     expect((await ask({ scope: "company", roleId })).status).toBe(400);
@@ -88,7 +88,7 @@ describe("what a recruiter request covers, and saying so", () => {
     expect(told.body).not.toMatch(/this role and candidate/);
     expect(told.action).toEqual({ label: "Recruiter access", href: "/setup" });
     // only owners and admins can end it, and the notice reaches everyone who is told
-    expect(told.body).toContain("an owner or admin can end their access in Setup");
+    expect(told.body).toContain("an owner or admin can end their access in Settings");
     const [grant] = await container.db.select().from(staffAccessGrants).where(eq(staffAccessGrants.escalationId, esc.id));
     expect(grant).toMatchObject({ roleId, applicationId });
   });

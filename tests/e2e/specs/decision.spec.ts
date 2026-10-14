@@ -22,7 +22,7 @@ test.describe("decision after an interview", () => {
     const seeded = await seedRoleAndApplicant(page.request, baseURL!, "Maria", "Reyes");
 
     // the owner declares availability so times can be offered from her hours
-    await page.goto("/setup");
+    await page.goto("/setup?tab=notifications");
     await expect(page.getByRole("heading", { name: "My availability for interviews" })).toBeVisible();
     await page.getByRole("button", { name: "Save availability" }).click();
     await expect(page.getByRole("status").filter({ hasText: /Availability saved/ })).toBeVisible();
@@ -39,6 +39,7 @@ test.describe("decision after an interview", () => {
     await expect(sheet.getByRole("heading", { name: "Approve an interview" })).toBeVisible();
     await sheet.getByRole("checkbox").first().check();
     // an optional personal line for the invitation (Q28), checked like any other
+    await sheet.getByText("Add a personal line (optional)", { exact: true }).click();
     await sheet.getByLabel("A personal line for the invitation (optional)").fill("We enjoyed reading about your work.");
     await expectAccessible(page, "interview approval with a personal line");
     await sheet.getByRole("button", { name: "Approve and offer times" }).click();
@@ -88,16 +89,16 @@ test.describe("decision after an interview", () => {
     await expect(page.getByRole("status").filter({ hasText: /Marked as a finalist/ })).toBeVisible();
     await expect(candidate.getByText(/Finalist/).first()).toBeVisible();
     await expect(candidate.getByRole("heading", { name: "How did the interview go?" })).toHaveCount(0);
-    await expect(candidate.getByText(/Decision after the interview: finalist/).first()).toBeVisible();
-    // the whole story is on the History tab, with who did each thing
+    // the whole story is on the History tab, with who did each thing (Wave S1: the Overview links there)
     await candidate.getByRole("tab", { name: "History" }).click();
     await expect(page).toHaveURL(/tab=history/);
+    await expect(candidate.getByText(/Decision after the interview: finalist/).first()).toBeVisible();
     await expect(candidate.getByText("Dana Whitfield").first()).toBeVisible();
     await expectAccessible(page, "candidate panel history");
 
     // a private team note (founder decision Q24): the reminder, a starter, saved as it is typed; never the candidate's
     await candidate.getByRole("tab", { name: "Notes" }).click();
-    await expect(candidate.getByText(/Stick to job-related facts/)).toBeVisible({ timeout: 30_000 });
+    await expect(candidate.getByText(/Stick to job-related facts/).first()).toBeVisible({ timeout: 30_000 });
     await candidate.getByRole("group", { name: "Start from" }).getByRole("button", { name: "After the interview" }).click();
     const noteBox = candidate.getByLabel("Your note on Maria");
     await expect(noteBox).toHaveValue(/^After the interview: How did it go\?/);
@@ -112,6 +113,7 @@ test.describe("decision after an interview", () => {
     await candidate.getByRole("button", { name: /^Stage: / }).click();
     await candidate.getByRole("menuitemradio", { name: /^Offer/ }).click();
     await expect(candidate.getByRole("heading", { name: "Offer made" })).toBeVisible();
+    await candidate.locator("section.card", { has: page.getByRole("heading", { name: "Offer made" }) }).getByText("Why", { exact: true }).click();
     await expect(candidate.getByText(/The app never writes, sends or changes an offer/)).toBeVisible();
     await candidate.getByLabel(/^Private note/).fill("Start after her notice period.");
     await expectAccessible(page, "candidate panel offer made");

@@ -1,12 +1,12 @@
 import { and, eq, inArray, ne } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { createEscalation, defaultSchedulingWindow, emit, notify, notifyNewTimesNotSent, setAutoState, setCurrentInterview, type FollowUpRow } from "@ros/core";
+import { createEscalation, emit, freshSchedulingWindow, notify, notifyNewTimesNotSent, setAutoState, setCurrentInterview, type FollowUpRow } from "@ros/core";
 import { applications, candidates, communications, companies, interviewParticipants, interviews, memberships, roles, workflowRuns, type Queryable } from "@ros/db";
 import type { SlotsVariant } from "@ros/agents";
 import type { WorkflowEngine } from "./engine";
 
 /** Which new-times opening the reopened interview's times email uses (packages/agents interview-messages.ts). */
-export type NewTimesOfferKind = Exclude<SlotsVariant, "first">;
+export type NewTimesOfferKind = Extract<SlotsVariant, "new_times_asked" | "new_times_team">;
 export type NewTimesVia = "auto" | "person" | "batch";
 /** Why an interview could not be reopened for new times. `not_reopenable`: a no-show's missed interview; the caller creates a new one. */
 export type ReopenRefusal = "not_reopenable" | "times_out" | "interview_changed" | "team_acted" | "no_interviewers";
@@ -60,7 +60,8 @@ export async function reopenForNewTimes(q: Queryable, engine: WorkflowEngine, in
   const refs = Object.fromEntries(Object.entries(iv.calendarRefs ?? {}).filter(([userId]) => !gone.some((p) => p.userId === userId)));
 
   const [company] = await q.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, iv.companyId)).limit(1);
-  const window = { ...defaultSchedulingWindow(input.now, company?.timezone ?? "UTC"), ...(iv.schedulingWindow.candidateTimezone ? { candidateTimezone: iv.schedulingWindow.candidateTimezone } : {}) };
+  // A fresh window from tomorrow, as long as the one the interview had (the default when it had none); the candidate's zone is kept.
+  const window = freshSchedulingWindow(iv.schedulingWindow, input.now, company?.timezone ?? "UTC");
   // Guarded: a person and the automatic set reopening at the same moment cannot both pass. The reason it was cancelled stays as history.
   const [fresh] = await q
     .update(interviews)

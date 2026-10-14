@@ -9,7 +9,7 @@ import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { createApplication } from "./services/applications";
 import { APPLICANT_COLUMNS, composeRoleReport, summaryRows, toCsv, type ReportData, type RoleReport } from "./services/role-report";
-import { signInAdmin, signInAs, signInStaff } from "./test-helpers";
+import { putOnInterview, signInAdmin, signInAs, signInStaff } from "./test-helpers";
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -395,7 +395,7 @@ describe("role report", () => {
     expect(col("Cara Diaz", "Cancelled")).toBe("");
     expect(col("Ana Lopez", "Interviews")).toBe("2");
     expect(col("Ana Lopez", "Interviews completed")).toBe("1");
-    expect(col("Ana Lopez", "Decision")).toBe("Assessment flagged");
+    expect(col("Ana Lopez", "Decision")).toBe("AI review flagged");
     expect(col("Eve Kim", "Days in stage")).toBe("3");
     expect(col("Eve Kim", "Recommendation")).toBe("Needs a person's look");
     expect(col("Finn Ola", "Recommendation")).toBe("");
@@ -433,10 +433,15 @@ describe("role report", () => {
 
   it("refuses interviewers, lets other members read, and shows nothing of another company's role", async () => {
     const interviewer = await signInAs(container, app, { companyId, role: "interviewer" });
-    for (const path of [`/api/v1/roles/${roleId}/report`, `/api/v1/roles/${roleId}/report.csv`, `/api/v1/roles/${roleId}/report/summary.csv`]) {
+    const paths = [`/api/v1/roles/${roleId}/report`, `/api/v1/roles/${roleId}/report.csv`, `/api/v1/roles/${roleId}/report/summary.csv`];
+    // a role they do not interview for answers as one that does not exist; on one they do, the figures need application.read
+    for (const path of paths) expect((await json(interviewer, "GET", path)).status, path).toBe(404);
+    const onIt = await putOnInterview(container, app, { cookie: interviewer, roleId });
+    for (const path of paths) {
       const r = await json(interviewer, "GET", path);
       expect(r.status, path).toBe(403);
     }
+    await onIt.remove();
     const hm = await signInAs(container, app, { companyId, role: "hiring_manager" });
     expect((await json(hm, "GET", `/api/v1/roles/${roleId}/report`)).status).toBe(200);
     const hr = await signInAs(container, app, { companyId, role: "hr" });
@@ -464,8 +469,18 @@ describe("role report", () => {
     const exported = (await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "report.exported")))).filter((a) => a.actor.kind === "recruiter");
     expect(exported).toHaveLength(1);
     expect(exported[0].details).toMatchObject({ kind: "applicants", rows: 1 });
-    // the figures are counts without names, so the report itself stays readable under the grant
-    expect((await json(recruiterB, "GET", `/api/v1/roles/${roleId}/report`)).status).toBe(200);
+    // the figures stay readable under the grant, but count Ana alone: no other applicant's count or application id
+    const own = await json(recruiterB, "GET", `/api/v1/roles/${roleId}/report`);
+    expect(own.status).toBe(200);
+    const figures = (await own.json()) as RoleReport;
+    expect(figures.applicants.total).toBe(1);
+    expect(figures.stages.total).toBe(1);
+    expect(figures.pendingDecisions.list.every((p) => p.applicationId === ids.ana || p.applicationId === null)).toBe(true);
+    const others = Object.entries(ids).filter(([k]) => k !== "ana").map(([, v]) => v);
+    for (const id of others) expect(JSON.stringify(figures)).not.toContain(id);
+    expect(figures.interviews.total).toBeLessThanOrEqual(report.interviews.total);
+    const summary = (await (await json(recruiterB, "GET", `/api/v1/roles/${roleId}/report/summary.csv`)).text()).replace(/^﻿/, "").split("\r\n");
+    expect(summary).toContain("Applicants,Total,1");
   });
 
   it("gives the administrator the same figures aggregated over every role of the customer, and nobody else", async () => {
@@ -580,10 +595,10 @@ describe("role report arithmetic on hand-made rows", () => {
     // a2 is in process, so the approval about a2 counts; a1 waits on the owner and counts once
     expect(r.pendingDecisions).toMatchObject({ count: 2, approvals: 1, candidates: 1, oldestDays: 6 });
     expect(r.pendingDecisions.list.map((p) => p.kind)).toEqual(["approval", "candidate"]);
-    expect(r.pendingDecisions.list[0]).toMatchObject({ label: "Invite to a screen?", days: 6, approvalRequestId: "p1" });
+    expect(r.pendingDecisions.list[0]).toMatchObject({ label: "Invite to a screening chat?", days: 6, approvalRequestId: "p1" });
     // the assistant's "hold" reading is named apart from the On hold mark a person sets
     expect(r.recommendationsVsDecisions.rows).toEqual([
-      { recommendation: "screen", label: "Screen suggested", total: 1, invited: 0, interviewed: 0, shortlisted: 0, declined: 1, held: 0, noActionYet: 0 },
+      { recommendation: "screen", label: "Screening chat suggested", total: 1, invited: 0, interviewed: 0, shortlisted: 0, declined: 1, held: 0, noActionYet: 0 },
       { recommendation: "hold", label: "Thin evidence: your call", total: 1, invited: 0, interviewed: 0, shortlisted: 0, declined: 0, held: 0, noActionYet: 1 },
     ]);
     expect(r.overrides).toEqual({ eligibilityOverrides: 0, reviewAnyway: 0, holds: 0, flaggedAssessments: 0, byAction: { reject: 1 } });

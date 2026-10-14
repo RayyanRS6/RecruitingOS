@@ -20,20 +20,20 @@ export function companyCheckOf(company: { settings?: unknown } | null | undefine
  * posted before its address has been checked (plan D2), so the toast never says "posting now".
  */
 export function approvedToast(input: { editWhileOpen: boolean; check: CompanyCheck }): string {
-  if (input.editWhileOpen) return "Approved. The role now runs on the new version.";
+  if (input.editWhileOpen) return "Approved. The job now runs on the new version.";
   return input.check === "waiting" ? "Approved. It goes public as soon as ITS confirms your company." : "Approved. Getting it ready on its channels.";
 }
 
 /** On the approval card, before anyone approves while the company waits. */
-export const APPROVE_WAITS_FOR_CHECK = "ITS has not confirmed your company yet. Approving opens the role now; it goes public on its own as soon as ITS confirms.";
+export const APPROVE_WAITS_FOR_CHECK = "ITS has not confirmed your company yet. Approving opens the job now; it goes public on its own as soon as ITS confirms.";
 
-/** At the top of an open role's page while the company waits. */
-export const ROLE_WAITS_FOR_CHECK = "Not public yet: ITS is confirming your company. The role is open here, and its job page, careers page listing and Google listing go public on their own as soon as ITS confirms. The Posting tab says more.";
+/** At the top of an open job's page while the company waits. */
+export const ROLE_WAITS_FOR_CHECK = "Not public yet: ITS is confirming your company. The job is open here, and its job page, careers page listing and Google listing go public on their own as soon as ITS confirms. The Share tab says more.";
 
-/** The Posting tab's notice while the company waits: why it is empty, and why the job page's address answers "not found". */
-export const POSTING_WAITS_FOR_CHECK = "Nothing of this role is public until ITS confirms your company: the careers page, the job page and its address, the Google listing and the apply links show \"not found\" for now. The moment ITS confirms, the channels are prepared and the role goes public on its own; you do not need to do anything. Today shows how the check is going.";
+/** The Share tab's notice while the company waits: why it is empty, and why the job page's address answers "not found". */
+export const POSTING_WAITS_FOR_CHECK = "Nothing of this job is public until ITS confirms your company: the careers page, the job page and its address, the Google listing and the apply links show \"not found\" for now. The moment ITS confirms, the channels are prepared and the job goes public on its own; you do not need to do anything. Home shows how the check is going.";
 
-/** Beside the careers page's address in Setup. */
+/** Beside the careers page's address in Settings. */
 export const CAREERS_PAGE_WAITS = "Offline until ITS confirms your company.";
 
 /** The chip for a decision message that is in the outbox: on its way, or waiting for the ITS check. */

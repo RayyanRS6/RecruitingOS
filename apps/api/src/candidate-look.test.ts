@@ -8,6 +8,7 @@ import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { SCREEN_CSS, STATUS_CSS } from "./pages/candidate";
 import { CANDIDATE_FONTS, FONT_DIR, FONT_LOCK_FILE, type FontLock, fontLicenceFile } from "./pages/fonts";
+import { AI_NOTICE_LINE } from "./pages/job-page";
 import { CSS } from "./pages/layout";
 import { statusTokenFor, useOneVisitApplyFlow } from "./test-helpers";
 
@@ -59,6 +60,10 @@ describe("candidate pages: design tokens and fonts", () => {
     // the status page's messages and the screening conversation are one look: the candidate's own on the right in near-black (plan G7)
     for (const css of [SCREEN_CSS, STATUS_CSS]) expect(css).toContain(".msg.candidate { align-self: flex-end; background: var(--ink); color: var(--ground);");
     expect(STATUS_CSS).toContain(".msg.assistant, .msg.team { align-self: flex-start; background: var(--ground);");
+    // the progress line (Wave S2, K4): down the page on a phone, across it from 600 pixels; the tick on the ink fill; no motion
+    expect(STATUS_CSS).toContain(".track li.done .dot { border-color: var(--ink); background: var(--ink); color: var(--ground); }");
+    expect(STATUS_CSS).toMatch(/@media \(min-width: 600px\) \{[^@]*\.track \{ grid-auto-flow: column;/);
+    expect(stripComments(STATUS_CSS)).not.toMatch(/transition|animation/);
     expect(pageCss).toContain("@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }");
   });
 
@@ -175,6 +180,17 @@ describe("candidate pages: the look, page by page", () => {
     for (const path of [`/careers/${slug}`, `/careers/${slug}/jobs/${roleId}`, `/careers/${slug}/jobs/${roleId}/apply`, `/careers/${slug}/jobs/${roleId}/applied`, `/c/status/${statusToken}`, `/c/screen/${screenToken}`, "/c/link-request", "/c/link-request?sent=1", "/privacy", "/c/privacy-request"]) await looksRight(path);
   });
 
+  it("the privacy request form: the fields and the one button on the first view, the notice word for word one click away above the button", async () => {
+    const html = await page("/c/privacy-request");
+    const form = html.slice(html.indexOf('<form method="post" action="/c/privacy-request"'), html.indexOf("</form>"));
+    const notice = form.slice(form.indexOf('<details class="more"><summary>Read the full notice</summary>'));
+    expect(notice).toMatch(/^<details class="more"><summary>Read the full notice<\/summary><p class="notice"><strong>What we collect and why:<\/strong>/);
+    expect(notice).toContain("a person handles every request; nothing is decided by software.");
+    expect(notice.indexOf("</details>")).toBeLessThan(notice.indexOf("Send me the confirmation link"));
+    expect(form.indexOf('<label for="email" class="flush">Your email address</label>')).toBeLessThan(form.indexOf("<details"));
+    expect(form).toContain('<p class="meta">We email that address a link to confirm it is you; nothing happens until you open it and press the button.</p>');
+  });
+
   it("the scheduling pages too: picking a time, the confirmed page with its cancel choice, and the page after cancelling", async () => {
     expect((await json(owner, "PUT", "/api/v1/me/availability", { timezone: "America/Los_Angeles", windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 3 })).status).toBe(200);
     const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> }; interviews: { plan: Array<{ key: string }> } } } };
@@ -193,11 +209,18 @@ describe("candidate pages: the look, page by page", () => {
     expect(iv.scheduleToken).toBeTruthy();
     const pick = await looksRight(`/c/schedule/${iv.scheduleToken}`);
     const slotId = pick.match(/name="slotId" value="([^"]+)"/)![1];
-    const form = (fields: Record<string, string>) => ({ method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields).toString() });
+    // picking a time is the page's one job; asking for other times is one click away (founder brief, 14 October 2026)
+    expect(pick).toMatch(/<details class="more"><summary>None of these work\?<\/summary><form method="post" action="\/c\/schedule\/[^"]+\/none-work" class="card">/);
+    // the zone shown is named in the line under the heading; another zone is one click away, still a plain GET form
+    expect(pick).toMatch(/Times are shown in <strong>[^<]+<\/strong>\.<\/p><details class="more"><summary>Change the time zone<\/summary>/);
+    expect(pick).toMatch(/<details class="more"><summary>Change the time zone<\/summary><form method="get" action="\/c\/schedule\/[^"]+" class="card"><label for="tz" class="flush">Show times in<\/label><select id="tz" name="tz">/);
+    expect(pick.indexOf("<summary>Change the time zone</summary>")).toBeLessThan(pick.indexOf("<legend>Available times</legend>"));
+    const form =(fields: Record<string, string>) => ({ method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields).toString() });
     expect((await app.request(`/c/schedule/${iv.scheduleToken}`, form({ slotId, timezone: "America/Los_Angeles" }))).status).toBe(302);
     await container.drain();
     const confirmed = await looksRight(`/c/schedule/${iv.scheduleToken}/confirmed`);
-    // the choice is a group of real radio buttons with a legend, in the page's own styles
+    // the choice is a group of real radio buttons with a legend, in the page's own styles, one click away under "I need to cancel"
+    expect(confirmed).toMatch(/<details class="more"><summary>I need to cancel<\/summary><form method="post" action="\/c\/schedule\/[^"]+\/cancel" class="card" id="cancel">/);
     expect(confirmed).toContain('<legend class="question-legend">If you cancel, what would you like next?</legend>');
     expect(confirmed.match(/<label class="check slot" for="next-[a-z-]+"><input type="radio"/g)).toHaveLength(2);
     expect(confirmed).not.toMatch(/ style="/);
@@ -252,9 +275,15 @@ describe("candidate pages: the look, page by page", () => {
     expect(CSS).not.toMatch(/backdrop-filter|filter:\s*blur|transition:[^;]*width/);
     expect(html.lastIndexOf(">Apply now<")).toBeGreaterThan(panel);
     // the AI and pay notices come first in reading order, in readable notice boxes
-    const notices = [...html.matchAll(/<p class="notice">([^<]*)<\/p>/g)].map((m) => ({ at: m.index ?? 0, text: m[1] }));
+    const notices = [...html.matchAll(/<(p|div) class="notice">/g)].map((m) => m.index ?? 0);
     expect(notices.length).toBeGreaterThanOrEqual(2);
-    for (const n of notices) expect(n.at).toBeLessThan(panel);
+    for (const at of notices) expect(at).toBeLessThan(panel);
+    // the AI notice is one plain line on the first view, with its full text, word for word, under "How AI is used" (founder brief, 14 October 2026)
+    expect(html).toContain(`<div class="notice"><p>${AI_NOTICE_LINE}</p><details class="more"><summary>How AI is used</summary><p>This employer uses software that includes artificial intelligence`);
+    // "What to expect" at a glance: at most four lines, every step in full one click away
+    const glance = html.slice(html.indexOf("<h2>What to expect</h2>"), html.indexOf('<details class="more"><summary>More about each step</summary>'));
+    expect(glance.match(/<li>/g)?.length).toBeLessThanOrEqual(4);
+    expect(html).toMatch(/<details class="more"><summary>More about each step<\/summary><ol class="steps"><li>Apply in about \d+ minutes/);
     // the stylesheet holds the panel beside the description on a wide screen and at the bottom of a phone's screen
     expect(CSS).toMatch(/\.apply-panel \{ position: sticky; top: 24px;/);
     expect(CSS).toMatch(/@media \(max-width: 899px\) \{[^@]*\.apply-panel \{ top: auto; bottom: 12px; \}/);
@@ -295,7 +324,24 @@ describe("candidate pages: the look, page by page", () => {
     expect(html).toContain('<button class="btn secondary" type="submit">Withdraw my application</button>');
     expect(html).toContain('<button class="btn secondary" type="submit">Don&#39;t keep me for future roles</button>');
     expect(html).toContain('<button class="btn secondary" type="submit">Send request</button>');
-    expect(html).toMatch(/<a class="btn" href="\/c\/screen\/[^"]+">(Start|Continue) the screening conversation<\/a>/);
+    // one name for the chat on this page: the button says what the progress line says
+    expect(html).toMatch(/<a class="btn" href="\/c\/screen\/[^"]+">(Start|Continue) the screening chat<\/a>/);
+    expect(html).toMatch(/<span>Status<\/span><strong>Screening chat<\/strong>/);
+    // the page leads with the progress line (Wave S2, K4), then the line and the one thing to do now; withdrawing and the
+    // privacy requests are one click away, closed until opened (founder brief, 14 October 2026)
+    const main = html.slice(html.indexOf("<main>"));
+    expect(main.slice(main.indexOf("</h1>") + "</h1>".length).startsWith('<ol class="track" aria-label="Where your application is">')).toBe(true);
+    // a circle per step joined by a line: Applied is behind her, ticked and said to be done; the screening chat is where she is
+    expect(main).toMatch(/<ol class="track" aria-label="Where your application is"><li class="done"><span class="dot" aria-hidden="true"><svg class="icon"[^>]*>.*?<\/svg><\/span><span>Applied<\/span><span class="sr-only"> \(done\)<\/span><\/li><li class="current" aria-current="step"><span class="dot" aria-hidden="true"><\/span><span>Screening chat<\/span><\/li><li><span class="dot" aria-hidden="true"><\/span><span>Review<\/span><\/li>/);
+    expect(main.indexOf('<ol class="track"')).toBeLessThan(main.indexOf("<h2>What happens next</h2>"));
+    expect(main.indexOf("<h2>What happens next</h2>")).toBeLessThan(main.indexOf('<a class="btn" href="/c/screen/'));
+    expect(main.indexOf('<a class="btn" href="/c/screen/')).toBeLessThan(main.indexOf('<div class="card status">'));
+    expect(html).toMatch(/<details class="more"><summary>No longer interested\?<\/summary><form method="post" action="\/c\/status\/[^"]+\/withdraw" class="card">/);
+    expect(html).toMatch(/<details class="more"><summary>Ask for a copy, a fix, deletion, or a person&#39;s review<\/summary>/);
+    expect(html).toContain('<option value="human_review">Have a person review my application</option>');
+    expect(html).toContain('<details class="more"><summary>How AI is used</summary><p class="meta">An AI assistant reads applications');
+    // a send without the confirmation box comes back with the withdraw choice open
+    expect(await page(`/c/status/${statusToken}?confirm=withdraw`)).toContain('<details class="more" open=""><summary>No longer interested?</summary>');
     // the messages read as a conversation in the page's own styles, with no style attribute and no script (plan G7)
     expect(html).toContain('<h2 id="messages">Messages about your application</h2>');
     expect(html).toMatch(/<li class="msg team"><p class="msg-head">Look Dental<span aria-hidden="true"> · <\/span>/);

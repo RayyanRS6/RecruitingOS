@@ -93,7 +93,8 @@ export function createApp(container: Container) {
     return c.body(null, 204);
   });
 
-  const workerWatch = appHealthWatch(container.db, { workerInline: container.env.WORKER_INLINE });
+  // A stale worker's critical alert is emailed from here, after its commit: the queued email job waits for that worker.
+  const workerWatch = appHealthWatch(container.db, { workerInline: container.env.WORKER_INLINE, emailCritical: (id) => container.emailCritical(id) });
   app.get("/healthz", async (c) => {
     try {
       await container.db.select({ id: companies.id }).from(companies).limit(1);

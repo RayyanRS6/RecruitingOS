@@ -84,8 +84,8 @@ test.describe("candidate journey on a phone", () => {
     await expect(page.getByRole("heading", { level: 1, name: /^Apply: / })).toBeVisible();
     await expect(page.getByText("$45–$55 an hour").first()).toBeVisible();
     await expect(page.getByRole("heading", { name: "Before you send" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Read how we handle your information" })).toHaveAttribute("href", "/privacy");
-    const acknowledgment = page.getByRole("checkbox", { name: /I have read the notice above/ });
+    await expect(page.getByRole("link", { name: "Read how we handle your information" }).first()).toHaveAttribute("href", "/privacy");
+    const acknowledgment = page.getByRole("checkbox", { name: /I have read the full notice above/ });
     await expect(acknowledgment).not.toBeChecked();
     await expectAccessible(page, "apply form");
     await noHorizontalOverflow(page, "apply form");
@@ -109,7 +109,7 @@ test.describe("candidate journey on a phone", () => {
     await expect(page.getByRole("alert")).toContainText(/confirm you have read the notice/);
     await expect(page.getByLabel("First name")).toHaveValue("Maria");
     await expect(page.getByLabel("Email")).toHaveValue(email);
-    await expect(page.getByRole("checkbox", { name: /I have read the notice above/ })).toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByRole("checkbox", { name: /I have read the full notice above/ })).toHaveAttribute("aria-invalid", "true");
     for (const rule of seeded.eligibility) {
       const field = page.locator(`[name="elig_${rule.key}"]`).first();
       if ((await field.evaluate((el) => el.tagName)) === "SELECT") await expect(field).toHaveValue("yes");
@@ -118,7 +118,7 @@ test.describe("candidate journey on a phone", () => {
 
     // ticking the box sends it; in one visit (plan E1) the form leads straight to the conversation's introduction, which
     // says the application went through and where its link went (masked), and never shows the status link
-    await page.getByRole("checkbox", { name: /I have read the notice above/ }).check();
+    await page.getByRole("checkbox", { name: /I have read the full notice above/ }).check();
     await page.getByRole("button", { name: "Send my application" }).click();
     await page.waitForURL(/\/c\/screen\/[A-Za-z0-9_-]+$/);
     await expect(page.getByText(/This conversation is with .+'s AI assistant, a software program, not a person\./)).toBeVisible();
@@ -131,6 +131,7 @@ test.describe("candidate journey on a phone", () => {
     await expect(page.getByText(/About \d+ questions and \d+ minutes, one question at a time\./)).toBeVisible();
     await expect(page.getByRole("button", { name: "Do this later" })).toBeVisible();
     // on the web a person is one press away: the page says so, never the email wording "Reply HUMAN" (polish list)
+    await page.getByText("More about this conversation", { exact: true }).click();
     await expect(page.getByText("Would you rather talk to a person? Press \"I'd rather talk to a person\" at any time.")).toBeVisible();
     await expect(page.getByText(/Reply HUMAN at any time|This message was sent by/)).toHaveCount(0);
     await expectAccessible(page, "conversation introduction");
@@ -213,17 +214,21 @@ test.describe("candidate journey on a phone", () => {
     const statusPath = await statusPathFromEmail(page.request, baseURL!, email);
     await page.goto(statusPath);
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-    // the candidate's own steps (plan A1), the current one marked; the team's stage names and private marks never show
+    // the candidate's own steps (plan A1; the Wave S2 progress line Applied, Screening chat, Review, Interview, Decision),
+    // the current one marked; the team's stage names and private marks never show
     await expect(page.locator('ol.track [aria-current="step"]')).toHaveCount(1);
-    await expect(page.locator('ol.track [aria-current="step"]')).toHaveText(/^(Received|Under review)$/);
+    await expect(page.locator('ol.track [aria-current="step"]')).toHaveText(/^(Applied|Screening chat|Review)$/);
+    await page.getByText("How AI is used", { exact: true }).first().click();
     await expect(page.getByText(/who is interviewed, hired or turned down is always a person's decision/)).toBeVisible();
     await expectAccessible(page, "status page");
     await noHorizontalOverflow(page, "status page");
-    // withdrawing is an outlined secondary button here too, not the near-black main action
+    // withdrawing is an outlined secondary button here too, not the near-black main action (under "No longer interested?")
+    await page.getByText("No longer interested?", { exact: true }).click();
     await expect(page.getByRole("button", { name: "Withdraw my application" })).toHaveCSS("background-color", "rgb(255, 255, 255)");
     // the messages read as a conversation (plan G7): what we sent, oldest first, and no reply box (replies go by email)
     await expect(page.getByRole("heading", { level: 2, name: "Messages about your application" })).toBeVisible();
     await expect(page.locator("ol.thread li.msg.team").first()).toContainText(/We received your application/);
+    await page.getByText("Ask for a copy, a fix, deletion, or a person's review", { exact: true }).click();
     await expect(page.getByRole("textbox")).toHaveCount(1); // the privacy request's details, nothing else
     // "Future roles" is one click either way, lands back at the choice (where the decision messages link) and says it was saved (Wave 0 item 0.11, Q30)
     await page.getByRole("button", { name: "Don't keep me for future roles" }).click();
@@ -270,6 +275,7 @@ test.describe("candidate journey on a phone", () => {
     // says what happens next, and a refresh never cancels twice (it is a page of its own)
     await page.getByRole("link", { name: "Details, calendar file, reschedule or cancel" }).click();
     await expect(page.getByRole("heading", { name: /You.re confirmed/ })).toBeVisible();
+    await page.getByText("I need to cancel", { exact: true }).click();
     await expect(page.getByRole("group", { name: "If you cancel, what would you like next?" })).toBeVisible();
     const newTimes = page.getByRole("radio", { name: "Send me new times later" });
     await newTimes.focus();

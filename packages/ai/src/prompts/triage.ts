@@ -1,14 +1,25 @@
 import { EvidenceAssessment, type EligibilityResult, type ResumeExtraction, type RolePacket } from "@ros/contracts";
-import { FAIRNESS_RULES, FINDING_RULES, type PromptDef } from "./registry";
+import { FAIRNESS_RULES, FINDING_RULES, withoutTag, type PromptDef } from "./registry";
 
+/**
+ * What the résumé reading is given (founder decision D-04 = C): the candidate's texts as the scoring view shows them
+ * (`scoringView` in packages/agents: name, email, phone, street address and links already replaced by placeholders),
+ * and never their earlier applications to the company or how those ended (the team still sees them on the candidate's page).
+ */
 export type TriageInput = {
   packet: RolePacket;
   extraction: ResumeExtraction | null;
   resumeText: string | null;
   applicationAnswers: { eligibility: Record<string, unknown>; noResumeSummary?: string };
   eligibility: EligibilityResult | null;
-  priorApplications: Array<{ roleTitle: string; stage: string; at: string }>;
 };
+
+/** The data tags of the reading's message: candidate text never carries one, so it cannot end its block early. */
+const DATA_TAGS = ["resume", "extraction", "application"] as const;
+/** Candidate-provided text as it goes between the data tags (`withoutTag`, for every tag of the message). */
+export function triageDataText(text: string): string {
+  return DATA_TAGS.reduce((t, tag) => withoutTag(t, tag), text);
+}
 
 const TRIAGE_SYSTEM = `You are the triage specialist of a recruiting department. For one application you produce an evidence-based assessment against the Role Packet so the owner can decide who to talk to. You inform; you never decide.
 
@@ -23,6 +34,7 @@ How to assess:
 - summary: two or three plain sentences an owner can read in ten seconds. rationale: why the recommendation, citing the findings.
 - confidenceReasons: one to four short plain phrases saying what drives the confidence level, written for an owner who is not a recruiter ("no resume, only the written summary", "two must-haves have no evidence", "the dates in the resume contradict each other", "the resume could not be read"). Leave the list empty only when confidence is high and nothing is missing.
 - Give no number or score of any kind; the findings are the assessment.
+- Details in square brackets ([name], [email], [phone], [street address], [zip code], [link]) were replaced on purpose. They are not evidence: never guess what they were.
 
 ${FINDING_RULES}
 
@@ -50,9 +62,12 @@ function packetBlock(p: RolePacket): string {
 // Version 3 (fairness run on Haiku 5.5, 14 Oct 2026): written definitions of yes / partially / no / unknown, so the same
 // application reads the same each time (one résumé had scored 83, 71 and 67); a written description is evidence when
 // there is no resume; the candidate is "the candidate", never named, in the reading's own words.
+// Version 4 (founder decision D-04 = C, Wave S2): the reading sees the candidate's texts with the name, email, phone,
+// street address and links replaced by placeholders, no earlier applications or their outcomes, and candidate text that
+// can never close a data tag.
 export const triageAssessPrompt: PromptDef<TriageInput, EvidenceAssessment> = {
   key: "triage.assess",
-  version: 3,
+  version: 4,
   task: "triage.assess",
   agent: "triage",
   schema: TriageModelOutput,
@@ -64,10 +79,9 @@ export const triageAssessPrompt: PromptDef<TriageInput, EvidenceAssessment> = {
     {
       role: "user",
       content: [
-        input.resumeText ? `<resume>\n${input.resumeText.slice(0, 40_000)}\n</resume>` : "<resume>(no resume text available)</resume>",
-        input.extraction ? `<extraction>\n${JSON.stringify({ positions: input.extraction.positions, licenses: input.extraction.licenses, certifications: input.extraction.certifications, skills: input.extraction.skills, yearsOfExperienceEstimate: input.extraction.yearsOfExperienceEstimate, anomalies: input.extraction.anomalies })}\n</extraction>` : "",
-        `<application>\n${input.applicationAnswers.noResumeSummary ? `About their recent work (in their words): ${input.applicationAnswers.noResumeSummary}\n` : ""}Eligibility answers: ${JSON.stringify(input.applicationAnswers.eligibility)}\nEligibility result: ${input.eligibility ? (input.eligibility.passed ? "passed" : `failed ${input.eligibility.failedRules.map((f) => f.key).join(", ")}`) : "not evaluated"}\n</application>`,
-        input.priorApplications.length ? `<prior_applications>${input.priorApplications.map((p) => `${p.roleTitle}: ${p.stage} (${p.at.slice(0, 10)})`).join("; ")}</prior_applications>` : "",
+        input.resumeText ? `<resume>\n${triageDataText(input.resumeText.slice(0, 40_000))}\n</resume>` : "<resume>(no resume text available)</resume>",
+        input.extraction ? `<extraction>\n${triageDataText(JSON.stringify({ positions: input.extraction.positions, licenses: input.extraction.licenses, certifications: input.extraction.certifications, skills: input.extraction.skills, yearsOfExperienceEstimate: input.extraction.yearsOfExperienceEstimate, anomalies: input.extraction.anomalies }))}\n</extraction>` : "",
+        `<application>\n${input.applicationAnswers.noResumeSummary ? `About their recent work (in their words): ${triageDataText(input.applicationAnswers.noResumeSummary)}\n` : ""}Eligibility answers: ${triageDataText(JSON.stringify(input.applicationAnswers.eligibility))}\nEligibility result: ${input.eligibility ? (input.eligibility.passed ? "passed" : `failed ${input.eligibility.failedRules.map((f) => f.key).join(", ")}`) : "not evaluated"}\n</application>`,
         "Assess this application against the Role Packet.",
       ].filter(Boolean).join("\n\n"),
     },

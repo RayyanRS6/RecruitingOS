@@ -6,7 +6,7 @@ import { Alert, Button, Chip, Dialog, Icon } from "@ros/ui";
 import type { RejectReason } from "@ros/contracts";
 import { api, ApiError, type BatchPreview, type BatchResult, type BoardView } from "../../api/client";
 import { toast } from "../../toast";
-import { BOARD_COLUMNS, DECLINE_CHOICES, GROUP_WORDS, REVIEW_FOOT, REVIEW_SUB, applyLabel, appliedToast, batchItems, extraWarnings, groupCount, initialReview, isTicked, needsReason, previewByPerson, previewItems, readyCounts, readyLine, reasonOf, reviewRows, rowWarnings, tickable, type ReviewRow, type ReviewState } from "./board-model";
+import { BOARD_COLUMNS, DECLINE_CHOICES, GROUP_WORDS, REVIEW_FOOT, REVIEW_SUB, applyLabel, appliedNote, appliedToast, batchItems, extraWarnings, groupCount, initialReview, isTicked, needsReason, previewByPerson, previewItems, readyCounts, readyLine, reasonOf, reviewFootNote, reviewRows, rowWarnings, tickable, type ReviewRow, type ReviewState } from "./board-model";
 
 /**
  * Review and apply (plan F8; plan-adjustments section 3; founder decisions B4 and B6): the board's suggestions in three
@@ -14,8 +14,9 @@ import { BOARD_COLUMNS, DECLINE_CHOICES, GROUP_WORDS, REVIEW_FOOT, REVIEW_SUB, a
  * first. People the board placed with confidence start ticked; anyone who needs your eye starts unticked with the
  * reason. Each not-moving-forward row carries a reason from the fixed list, pre-filled from their own evidence and
  * changeable here. A preview from the API (nothing changes) says who cannot be included and why, before anything is
- * applied. Apply files everyone ticked privately, each in their own step: nobody is emailed, and the decision message is
- * sent later by a person, from the Talent page.
+ * applied. Apply files everyone ticked privately, each in their own step: nobody is emailed now, and the decision
+ * message is sent later by a person, from Candidates; a decision nobody tells meets the day-5 safety net (the group's
+ * line, the footer and the toast say so; founder decision D-03).
  *
  * The rows are taken when the window opens, so the list does not shift under the person while the board refreshes.
  */
@@ -51,12 +52,14 @@ export function ReviewApply(props: { roleId: string; board: BoardView; mayDeclin
   const tick = (id: string, on: boolean) => setOwn((s) => ({ ...s, ticks: { ...s.ticks, [id]: on } }));
   const choose = (id: string, reason: RejectReason) => setOwn((s) => ({ ...s, reasons: { ...s.reasons, [id]: reason } }));
 
+  const footNote = reviewFootNote(counts);
   const footer = results ? (
     <Button variant="primary" onClick={props.onClose}>Close</Button>
   ) : (
     <div className="review-foot">
       <p className="review-foot-text">
         <span>{REVIEW_FOOT}</span>
+        {footNote ? <span>{footNote}</span> : null}
         <strong role="status">{readyLine(counts)}</strong>
       </p>
       <div className="review-foot-buttons">
@@ -70,7 +73,7 @@ export function ReviewApply(props: { roleId: string; board: BoardView; mayDeclin
     <Dialog open onClose={props.onClose} size="lg" title="Review and apply" sub={REVIEW_SUB} footer={footer}>
       {results ? (
         <div className="stack">
-          <Alert tone="info">{results.words} Nobody was emailed.</Alert>
+          <Alert tone="info">{results.words} {appliedNote(results)}</Alert>
           <ul className="review-rows">
             {results.results.map((r) => (
               <li key={r.applicationId} className="review-result">

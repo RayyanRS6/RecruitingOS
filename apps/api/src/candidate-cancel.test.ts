@@ -305,7 +305,7 @@ describe("candidate cancels an interview", () => {
       await cancelAsking(booked.token);
       expect((await followUps(booked.cand.id))[0]).toMatchObject({ choice: "new_times", autoState: "none", autoReason: "switched_off", autoDueAt: null });
       expect(await newTimesRuns(booked.cand.id)).toHaveLength(0);
-      expect((await teamNote("Omar Haddad"))[0].body).toBe("They asked for new times. Automatic new times are off in Setup, so nothing goes to them until you send times or decide.");
+      expect((await teamNote("Omar Haddad"))[0].body).toBe("They asked for new times. Automatic new times are off in Settings, so nothing goes to them until you send times or decide.");
       expect(await (await app.request(`/c/schedule/${booked.token}/cancelled`)).text()).toMatch(/We let Cancel Dental(&#39;|')s team know you would like new times\. Someone from the team will be in touch about them\./);
       const mail = outbox().slice(mailsBefore).find((m) => m.to === booked.cand.email && /^Cancelled:/.test(m.subject))!;
       expect(mail.text).toContain("You asked for new times, so someone from the team will be in touch about them.");

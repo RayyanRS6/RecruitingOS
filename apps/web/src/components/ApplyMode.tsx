@@ -63,7 +63,7 @@ function ApplyModeForm(props: { view: RoleApplyModeView; roleId: string; choice:
       {changing ? (
         <>
           <Field label="Why (required, kept with the change)" htmlFor={`apply-mode-why-${props.roleId}`} hint={`At least ${REASON_MIN} characters.`}>
-            <input id={`apply-mode-why-${props.roleId}`} className="input" value={props.reason} onChange={(e) => props.onReason(e.target.value)} placeholder="For example: the owner asked to review everyone before the conversation" />
+            <input id={`apply-mode-why-${props.roleId}`} className="input" value={props.reason} onChange={(e) => props.onReason(e.target.value)} placeholder="For example: the owner asked to review everyone before the screening chat" />
           </Field>
           <div className="row">
             <Button size="sm" variant="primary" disabled={!change} loading={props.saving} onClick={() => change && props.onSave(change)}>Save</Button>

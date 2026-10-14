@@ -6,8 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Me } from "../lib/session";
 
 /**
- * The signed-in frame's rail (Wave DS), rendered as the server first sends it: the company chip, "Start a hire" only for
- * the roles that may start one, the roles under Roles, the fold to icons on a role's pages, and Sign out always there.
+ * The signed-in frame's rail (Wave DS; plain words of 14 October 2026), rendered as the server first sends it: the
+ * company chip, "Start a hire" only for the roles that may start one, Home, Jobs (with the jobs in progress underneath,
+ * a live one opening on its Candidates), Candidates, Interviews and Settings, the fold to icons on a job's pages, and
+ * Sign out always there.
  */
 const nav = vi.hoisted(() => ({ path: "/" }));
 vi.mock("next/navigation", () => ({
@@ -59,24 +61,33 @@ describe("the rail", () => {
     nav.path = "/";
   });
 
-  it("shows an owner the company chip, Start a hire with its N hint, the roles in progress and Sign out", () => {
+  it("shows an owner the company chip, Start a hire with its N hint, the jobs in progress and Sign out", () => {
     const html = render(meAs("owner"), { roles });
     expect(html).toContain('aria-label="Main"');
     expect(html).toContain("Bright Dental");
     expect(html).toContain("Owner");
-    expect(html).toContain('aria-label="Company setup"');
+    expect(html).toContain('aria-label="Company settings"');
     expect(html).toMatch(/<a href="\/roles\/new"[^>]*aria-label="Start a hire"[^>]*aria-keyshortcuts="N"/);
     expect(html).toContain('<kbd class="kbd" aria-hidden="true">N</kbd>');
-    // the open role with a green dot and its count, the draft with a grey dot, never the closed one
-    expect(html).toContain('href="/roles/r-open"');
+    // the open job with a green dot and its count, opening on its Candidates; the draft with a grey dot, opening on the
+    // job itself; never the closed one
+    expect(html).toContain('<ul class="rail-sub" aria-label="Jobs in progress">');
+    expect(html).toContain('href="/roles/r-open/talent"');
+    expect(html).toContain('href="/roles/r-draft"');
+    expect(html).not.toContain('href="/roles/r-draft/talent"');
     expect(html).toContain('<span class="dot good" aria-hidden="true"></span><span class="rail-sub-title">Dental Hygienist</span>');
-    expect(html).toContain(", open, 6 applicants");
+    expect(html).toContain(", live, 6 applicants");
     expect(html).toContain('<span class="dot" aria-hidden="true"></span><span class="rail-sub-title">Front Desk Lead</span>');
     // the draft says so in a word too: the dot's colour never carries the status alone
     expect(html).toContain('<span class="rail-sub-title">Front Desk Lead</span><span class="rail-count rail-tag" aria-hidden="true">Draft</span>');
     expect(html).not.toContain("Office Manager");
-    expect(html).toContain("All roles");
-    for (const link of ["Today", "Roles", "Talent", "Interviews", "Setup"]) expect(html, link).toContain(`</svg>${link}</a>`);
+    expect(html).toContain("All jobs");
+    // the plain words, in this order; the routes keep their names
+    const order = [["Home", "/"], ["Jobs", "/roles"], ["Candidates", "/talent"], ["Interviews", "/interviews"], ["Settings", "/setup"]];
+    for (const [link, href] of order) expect(html, link).toMatch(new RegExp(`<a href="${href}"[^>]*>(<svg[^]*?</svg>)${link}</a>`));
+    const at = order.map(([link]) => html.indexOf(`</svg>${link}</a>`));
+    expect(at).toEqual([...at].sort((a, b) => a - b));
+    for (const old of ["Today", "Talent", "Setup", "All roles"]) expect(html, old).not.toContain(`>${old}<`);
     expect(html).toContain("dana@bright.test");
     expect(html).toContain(">Sign out</button>");
     expect(html).toContain('aria-expanded="false" aria-controls="rail-links"');
@@ -89,17 +100,37 @@ describe("the rail", () => {
     for (const role of ["hr", "interviewer"]) expect(render(meAs(role)), role).not.toContain('aria-label="Start a hire"');
   });
 
-  it("shows an interviewer the roles the API gives them (only the ones they interview for), without counts and without Talent", () => {
+  it("shows an interviewer the jobs the API gives them (only the ones they interview for), without counts and without Candidates", () => {
     const theirs = [{ ...roles[0], counts: { total: 0 }, countsHidden: true, needsYou: 0 }];
     const html = render(meAs("interviewer"), { roles: theirs });
     expect(html).toContain("Dental Hygienist");
-    expect(html).toContain(", open</span>");
-    // no count: the word "Open" stands beside the green dot instead
-    expect(html).toContain('<span class="rail-count rail-tag" aria-hidden="true">Open</span>');
+    expect(html).toContain(", live</span>");
+    // no count: the word "Live" (the status pills' word) stands beside the green dot instead
+    expect(html).toContain('<span class="rail-count rail-tag" aria-hidden="true">Live</span>');
     expect(html).not.toMatch(/<span class="rail-count" aria-hidden="true">\d/);
     expect(html).not.toContain("applicant");
-    expect(html).not.toContain(">Talent</a>");
+    expect(html).not.toContain(">Candidates</a>");
+    // an interviewer has no Candidates page, so even a live job opens on the job itself
+    expect(html).toContain('href="/roles/r-open"');
+    expect(html).not.toContain('href="/roles/r-open/talent"');
     expect(html).toContain("Interviewer");
+  });
+
+  it("marks a live job in the rail as the current page on every page of that job, though it opens on Candidates", () => {
+    nav.path = "/roles/r-open";
+    expect(render(meAs("owner"), { roles })).toMatch(/<a href="\/roles\/r-open\/talent" class="active" aria-current="page">/);
+    nav.path = "/roles/r-open/talent";
+    expect(render(meAs("owner"), { roles })).toMatch(/<a href="\/roles\/r-open\/talent" class="active" aria-current="page">/);
+    nav.path = "/roles/r-draft";
+    const html = render(meAs("owner"), { roles });
+    expect(html).toMatch(/<a href="\/roles\/r-draft" class="active" aria-current="page">/);
+    expect(html).not.toMatch(/<a href="\/roles\/r-open\/talent" class="active"/);
+  });
+
+  it("keeps the development notice to one short line", () => {
+    const html = render(meAs("owner", { ai: { provider: "fake" } }));
+    expect(html).toContain("Development mode: the AI provider is a deterministic stand-in, so its drafts are rough.");
+    expect(html).not.toContain("Role packets");
   });
 
   it("reads the company's roles for a member, and never for an ITS recruiter inside a customer under a grant", () => {

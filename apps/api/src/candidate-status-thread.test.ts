@@ -4,6 +4,7 @@ import type { ApplicationStage, ToldState } from "@ros/contracts";
 import { applications, candidates, communications, withTenant } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { PROGRESS_STEP_LABEL, chatCounts, progressLine } from "./pages/candidate";
 import { THREAD_LIMIT, ownWords, wordingOfTemplate } from "./pages/thread";
 import { PERSON_BY_EMAIL, PERSON_ON_THE_WEB, forTheWeb } from "./pages/web-wording";
 import { statusTokenFor } from "./test-helpers";
@@ -35,6 +36,38 @@ describe("the words a page uses: email lines on the web, quoted replies, the wor
     expect(ownWords("Yes please.\n\n-----Original Message-----\nFrom: Look Dental")).toBe("Yes please.");
     expect(ownWords("Thanks!\n\nFrom: Look Dental <hello@look.test>\nSent: Monday, October 5, 2026 9:00 AM\nSubject: Times")).toBe("Thanks!");
     expect(ownWords("> only quoted")).toBe("> only quoted");
+  });
+
+  it("the progress line (Wave S2, K4): Applied, the screening chat only where there is one, Review, Interview, Decision; the current step read off the candidate's step", () => {
+    const line = (input: Parameters<typeof progressLine>[0]) => { const p = progressLine(input); return `${p.steps.map((s) => (s === p.current ? `[${PROGRESS_STEP_LABEL[s]}]` : PROGRESS_STEP_LABEL[s])).join(" > ")}`; };
+    const base = { hasChat: false, chatOpen: false, hadInterview: false };
+    expect(line({ ...base, step: "received" })).toBe("[Applied] > Review > Interview > Decision");
+    expect(line({ ...base, step: "under_review" })).toBe("Applied > [Review] > Interview > Decision");
+    // a chat they have, open or paused, is where they are; once it closed the team reviews
+    expect(line({ ...base, step: "under_review", hasChat: true, chatOpen: true })).toBe("Applied > [Screening chat] > Review > Interview > Decision");
+    expect(line({ ...base, step: "under_review", hasChat: true })).toBe("Applied > Screening chat > [Review] > Interview > Decision");
+    expect(line({ ...base, step: "received", hasChat: true, chatOpen: true })).toBe("[Applied] > Screening chat > Review > Interview > Decision");
+    expect(line({ ...base, step: "interview", hasChat: true })).toBe("Applied > Screening chat > Review > [Interview] > Decision");
+    // at the decision the interview is on the line only when there was one
+    expect(line({ ...base, step: "decision" })).toBe("Applied > Review > [Decision]");
+    expect(line({ ...base, step: "decision", hasChat: true, hadInterview: true })).toBe("Applied > Screening chat > Review > Interview > [Decision]");
+    expect(line({ ...base, step: "interview" })).toBe("Applied > Review > [Interview] > Decision");
+  });
+
+  it("ticks the screening chat only when it really happened: never for one skipped, expired unanswered, cancelled before it started, or handed to a person", () => {
+    expect(chatCounts(null, false)).toBe(false);
+    expect(chatCounts({ status: "invited", startedAt: null }, true)).toBe(true);
+    expect(chatCounts({ status: "paused", startedAt: new Date() }, true)).toBe(true);
+    expect(chatCounts({ status: "completed", startedAt: new Date() }, false)).toBe(true);
+    expect(chatCounts({ status: "unfinished", startedAt: new Date() }, false)).toBe(true);
+    expect(chatCounts({ status: "declined_by_candidate", startedAt: null }, false)).toBe(false);
+    expect(chatCounts({ status: "declined_by_candidate", startedAt: new Date() }, false)).toBe(false);
+    expect(chatCounts({ status: "expired", startedAt: null }, false)).toBe(false);
+    expect(chatCounts({ status: "cancelled", startedAt: null }, false)).toBe(false);
+    expect(chatCounts({ status: "human_requested", startedAt: new Date() }, false)).toBe(false);
+    // a skipped chat leaves the step off the line, so nothing is ticked as done
+    const p = progressLine({ step: "under_review", hasChat: chatCounts({ status: "declined_by_candidate", startedAt: null }, false), chatOpen: false, hadInterview: false });
+    expect(p.steps).toEqual(["applied", "review", "interview", "decision"]);
   });
 
   it("reads which approved wording told a decision from the message's template", () => {
@@ -179,7 +212,13 @@ describe("the candidate's status page: the conversation, the decision in its own
     const a = await applyAs("Quinn", "quinn.tester@example.com");
     await container.db.update(applications).set({ stage: "offer_sent", stageChangedAt: at(-60) }).where(eq(applications.id, a.id));
     const html = await page(`/c/status/${a.statusToken}`);
-    expect(html).toContain('<li class="current" aria-current="step">Decision</li>');
+    // the progress line: what is behind them ticked, the decision current; no interview was booked, so none is on the line
+    const track = html.slice(html.indexOf('<ol class="track"'), html.indexOf("</ol>", html.indexOf('<ol class="track"')));
+    expect(track).toContain('<li class="current" aria-current="step"><span class="dot" aria-hidden="true"></span><span>Decision</span></li>');
+    expect(track).toMatch(/<li class="done"><span class="dot" aria-hidden="true"><svg class="icon"[^>]*>.*?<\/svg><\/span><span>Applied<\/span><span class="sr-only"> \(done\)<\/span><\/li>/);
+    expect(track).toContain("<span>Review</span><span class=\"sr-only\"> (done)</span>");
+    expect(track).not.toContain("Interview");
+    expect(track.match(/aria-current="step"/g)).toHaveLength(1);
     expect(html).toContain("The team has made you an offer. They will go through it with you directly. If you have a question, reply to any of our emails.");
     expect(html).not.toContain("Check your messages for the offer");
     // an offer is not a decline: nothing about future roles is pressed on them

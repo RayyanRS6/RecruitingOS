@@ -82,10 +82,10 @@ export function overviewScreenLine(a: Pick<ApplicationDetail, "screens" | "timel
   const origin = screenOrigin(s, a.timeline);
   if (origin === APPLIED_IN_ONE_VISIT) return `${APPLIED_IN_ONE_VISIT}: the screening questions were answered right after the form.`;
   if (origin === "Still applying") return `${STILL_APPLYING_LINE}${s.status === "paused" ? " The conversation is paused while the assistant is not working." : ""} Nothing about ${a.candidate.firstName} waits on you until then.`;
-  if (s.status === "declined_by_candidate") return "Sent the application without the screening conversation, by their own choice. It is never held against them.";
+  if (s.status === "declined_by_candidate") return "Sent the application without the screening chat, by their own choice. It is never held against them.";
   if (s.status === "human_requested") return "Asked to talk to a person instead of the assistant. A recruiter contacts them and adds notes from the call. Anything they typed before asking was not sent, so you won't see it.";
-  if (s.status === "unfinished") return `${DIDNT_FINISH_LINE} The reading and match score use their application only.`;
-  if (s.status === "cancelled" && s.startedAt && s.answersShared === false) return "The screening conversation closed before they sent their answers, so you won't see them. The reading and match score use their application only.";
+  if (s.status === "unfinished") return `${DIDNT_FINISH_LINE} The AI review and match score use their application only.`;
+  if (s.status === "cancelled" && s.startedAt && s.answersShared === false) return "The screening chat closed before they sent their answers, so you won't see them. The AI review and match score use their application only.";
   return null;
 }
 

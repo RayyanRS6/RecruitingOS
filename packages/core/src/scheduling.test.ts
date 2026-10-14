@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildIcs } from "./ics";
-import { computeSlots, defaultSchedulingWindow, freeRangesForDay, groupSlotsByDay, slotStillFree, subtractRanges, type ParticipantConstraints } from "./scheduling";
+import { computeSlots, defaultSchedulingWindow, freeRangesForDay, freshSchedulingWindow, groupSlotsByDay, missingAvailability, slotStillFree, subtractRanges, type ParticipantConstraints } from "./scheduling";
 
 const declared = (userId: string, over: Partial<ParticipantConstraints> = {}): ParticipantConstraints => ({ userId, source: "declared", timezone: "America/Los_Angeles", windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 3, busy: [], ...over });
 const now = new Date("2026-09-18T20:00:00Z"); // Friday 13:00 Pacific
@@ -46,13 +46,42 @@ describe("slot computation (docs/06 propose_slots)", () => {
     expect(subtractRanges([{ start: "a", end: "z" }], [{ start: "m", end: "n" }])).toEqual([{ start: "a", end: "m" }, { start: "n", end: "z" }]);
   });
 
-  it("returns nothing when there is no common free time, and treats an unknown person as unconstrained but reports them", () => {
+  it("returns nothing when there is no common free time; an unknown person is never assumed free, unless optional, and is reported", () => {
     const morning = declared("a", { windows: [{ day: 1, start: "09:00", end: "11:00" }] });
     const afternoon = declared("b", { windows: [{ day: 1, start: "13:00", end: "17:00" }] });
-    expect(computeSlots({ participants: [morning, afternoon], durationMinutes: 30, fromDate: "2026-09-21", toDate: "2026-09-21", companyTimezone: "America/Los_Angeles", businessDaysOnly: true, now }).slots).toEqual([]);
-    const r = computeSlots({ participants: [morning, declared("c", { source: "none", windows: [] })], durationMinutes: 30, fromDate: "2026-09-21", toDate: "2026-09-21", companyTimezone: "America/Los_Angeles", businessDaysOnly: true, now });
-    expect(r.slots.length).toBeGreaterThan(0);
-    expect(r.unconstrained).toEqual(["c"]);
+    const input = { durationMinutes: 30, fromDate: "2026-09-21", toDate: "2026-09-21", companyTimezone: "America/Los_Angeles", businessDaysOnly: true, now };
+    expect(computeSlots({ participants: [morning, afternoon], ...input }).slots).toEqual([]);
+    // a required interviewer with no availability: no free time, so no slots (the owner is asked instead of a 9 to 5 guess)
+    const unknown = declared("c", { source: "none", windows: [] });
+    const required = computeSlots({ participants: [morning, unknown], ...input });
+    expect(required.slots).toEqual([]);
+    expect(required.unconstrained).toEqual(["c"]);
+    expect(freeRangesForDay(unknown, "2026-09-21")).toEqual([]);
+    expect(missingAvailability([morning, unknown, declared("d", { source: "none", windows: [], optional: true })]).map((p) => p.userId)).toEqual(["c"]);
+    // an optional one is left out of the merge: the others' times go out, and still name everyone on the interview
+    const optional = computeSlots({ participants: [morning, { ...unknown, optional: true }], ...input });
+    expect(optional.slots.length).toBeGreaterThan(0);
+    expect(optional.slots[0].interviewerUserIds).toEqual(["a", "c"]);
+    for (const s of optional.slots) expect(s.startsAt < "2026-09-21T18:00:00.000Z").toBe(true); // inside a's 9 to 11 Pacific
+    expect(optional.unconstrained).toEqual(["c"]);
+    expect(slotStillFree(optional.slots[0], [morning, { ...unknown, optional: true, busy: [{ start: optional.slots[0].startsAt, end: optional.slots[0].endsAt }] }])).toBe(true);
+    expect(computeSlots({ participants: [{ ...unknown, optional: true }], ...input }).slots).toEqual([]);
+  });
+
+  it("a fresh window starts tomorrow and is as long as the old one, never the old dates", () => {
+    const later = new Date("2026-10-20T20:00:00Z"); // Tuesday 13:00 Pacific, long after the old window
+    const old = { fromDate: "2026-09-21", toDate: "2026-10-02", businessDaysOnly: true, candidateTimezone: "America/New_York" }; // ten business days
+    const w = freshSchedulingWindow(old, later, "America/Los_Angeles");
+    expect(w).toEqual({ fromDate: "2026-10-21", toDate: "2026-11-03", businessDaysOnly: true, candidateTimezone: "America/New_York" });
+    // weekends counted when the old window counted them: the same number of days
+    expect(freshSchedulingWindow({ fromDate: "2026-09-21", toDate: "2026-09-27", businessDaysOnly: false }, later, "America/Los_Angeles")).toEqual({ fromDate: "2026-10-21", toDate: "2026-10-27", businessDaysOnly: false });
+    // no old dates: the default window
+    expect(freshSchedulingWindow({}, later, "America/Los_Angeles")).toEqual({ ...defaultSchedulingWindow(later, "America/Los_Angeles") });
+    expect(freshSchedulingWindow(null, later, "America/Los_Angeles").fromDate).toBe("2026-10-21");
+    // slots come only from the fresh dates
+    const { slots } = computeSlots({ participants: [declared("a")], durationMinutes: 45, fromDate: w.fromDate, toDate: w.toDate, companyTimezone: "America/Los_Angeles", businessDaysOnly: true, now: later });
+    expect(slots.length).toBeGreaterThan(0);
+    for (const s of slots) expect(s.startsAt >= "2026-10-21").toBe(true);
   });
 
   it("re-checks a chosen slot against fresh busy time", () => {

@@ -100,7 +100,7 @@ describe("the candidate panel's card", () => {
     const waiting = view({ auto: { state: "waiting", dueAt: "2026-10-15T16:00:00.000Z", dueDay: "2026-10-15" } });
     expect(body(waiting)).toBe("New times go to them automatically on Thursday, October 15, as your settings say. Send them now instead, or stop the automatic set.");
     expect(body(view({ auto: { state: "waiting_check", dueAt: "2026-10-15T16:00:00.000Z", dueDay: "2026-10-15" } }))).toBe("New times were due on Thursday, October 15. They wait until ITS confirms your company again.");
-    expect(body(view({ auto: { state: "none", reason: "switched_off", reasonText: "Automatic new times are off in Setup." } }))).toBe("Automatic new times are off in Setup. Send new times when you are ready, or decide.");
+    expect(body(view({ auto: { state: "none", reason: "switched_off", reasonText: "Automatic new times are off in Settings." } }))).toBe("Automatic new times are off in Settings. Send new times when you are ready, or decide.");
     expect(body(view({ auto: { state: "not_sent", reason: "takeover", reasonText: "An ITS recruiter is running this role, so nothing was sent automatically." } }))).toBe("An ITS recruiter is running this role, so nothing was sent automatically. Send new times when you are ready, or decide.");
     // back under Cancelled after a decision was taken back, the set not pending
     expect(body(view({ auto: { state: "not_sent", reason: "left_process", reasonText: "Nothing went automatically while a decision was in place." } }))).toBe("Nothing went automatically while a decision was in place. Send new times when you are ready, or decide.");

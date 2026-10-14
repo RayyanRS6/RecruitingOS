@@ -4,9 +4,9 @@ import { desc, eq, inArray, sql } from "drizzle-orm";
 import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, suppressAddress, describeHours, unsentScreenReadings, withoutUnsentRunOutput, withoutUnsentScreenEvents, APPLY_FLOW_FALLBACK } from "@ros/core";
 import { ApplyFlowDefaultChange, BreakGlass, BusinessCalendarInput, CompanyVerificationChange, JobBoardAccessChange, PlanChange, RecalculateDeadlines, companyOnboarding, companyVerifiedAt, type Actor } from "@ros/contracts";
 import { HELD_STATUS } from "@ros/agents";
-import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, integrations, jobs, recruiterEscalations, roles, screens, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
+import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, integrations, jobs, plans, recruiterEscalations, roles, screens, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
 import { requirePlatformAdmin, type Vars } from "../middleware/session";
-import { OUTCOME_STATEMENT, OutcomeError, PlatformRoleError, raiseAlert, correctOutcome, countActiveAdmins, grantPlatformRole, listPlatformRoleGrants, revokeAllSessions, revokePlatformRole, type PlatformRole } from "@ros/core";
+import { OUTCOME_STATEMENT, OutcomeError, PlatformRoleError, raiseAlert, resolveAlert, correctOutcome, countActiveAdmins, grantPlatformRole, listPlatformRoleGrants, revokeAllSessions, revokePlatformRole, type PlatformRole } from "@ros/core";
 import { CorrectOutcome } from "@ros/contracts";
 import { listCspReports, reviewCspReport } from "@ros/core";
 import { hiringOutcomes } from "@ros/db";
@@ -40,10 +40,14 @@ adminRoutes.get("/customers", async (c) => {
   const escalationCounts = byCompany(await db.select({ companyId: recruiterEscalations.companyId, n: sql<number>`count(*)` }).from(recruiterEscalations).groupBy(recruiterEscalations.companyId));
   // Messages to candidates waiting for the ITS company check (founder decision B7): how long a company has been waiting matters.
   const heldCounts = byCompany(await db.select({ companyId: communications.companyId, n: sql<number>`count(*)` }).from(communications).where(eq(communications.status, HELD_STATUS)).groupBy(communications.companyId));
+  // Allowance alerts whose period ended or whose limit was raised leave the list first (Wave S2 F1).
+  await entitlements.settleAllowanceAlerts(db);
+  // Each monthly allowance counts only its current period: a period that ended reads as a new one, nothing used yet.
+  const allowanceOf = async (key: string) => byCompany((await db.select().from(entitlementRows).where(eq(entitlementRows.key, key))).map((r) => { const p = entitlements.currentPeriod(r); return { companyId: r.companyId, used: p.used, limit: r.limit, resetsAt: p.periodEnd }; }));
   // Where each company stands against its recruiter requests (Q33): going over never refuses one; ITS talks about billing.
-  const asks = byCompany(await db.select({ companyId: entitlementRows.companyId, used: entitlementRows.used, limit: entitlementRows.limit }).from(entitlementRows).where(eq(entitlementRows.key, entitlements.RECRUITER_ASKS)));
+  const asks = await allowanceOf(entitlements.RECRUITER_ASKS);
   // This month's screening conversations (plan E9, Q17): counted at a candidate's first answer, so ITS can see a company nearing its allowance.
-  const conversations = byCompany(await db.select({ companyId: entitlementRows.companyId, used: entitlementRows.used, limit: entitlementRows.limit }).from(entitlementRows).where(eq(entitlementRows.key, entitlements.TEXT_SCREENS)));
+  const conversations = await allowanceOf(entitlements.TEXT_SCREENS);
   return c.json(rows.map((co) => ({
     ...co,
     roles: Number(roleCounts.get(co.id)?.n ?? 0),
@@ -56,7 +60,7 @@ adminRoutes.get("/customers", async (c) => {
     heldMessages: Number(heldCounts.get(co.id)?.n ?? 0),
     jobBoardsConfirmedAt: companyOnboarding(co.settings).jobBoardsConfirmedAt ?? null,
     recruiterAsks: recruiterAsksOf(asks.get(co.id)),
-    screeningConversations: { used: conversations.get(co.id)?.used ?? 0, limit: conversations.get(co.id)?.limit ?? null },
+    screeningConversations: { used: conversations.get(co.id)?.used ?? 0, limit: conversations.get(co.id)?.limit ?? null, resetsAt: conversations.get(co.id)?.resetsAt ?? null },
     // How new roles meet the screening conversation (plan E1): "form now, conversation later" until ITS switches the
     // one-visit flow on for the company (pilot roles first, founder decision B1) with POST /customers/:id/apply-flow.
     applyFlowDefault: co.settings.applyFlowDefault ?? APPLY_FLOW_FALLBACK,
@@ -217,6 +221,7 @@ adminRoutes.get("/failures", async (c) => {
   const failedRuns = await db.select().from(workflowRuns).where(eq(workflowRuns.status, "failed")).orderBy(desc(workflowRuns.updatedAt)).limit(100);
   const failedJobs = await db.select().from(jobs).where(eq(jobs.status, "failed")).orderBy(desc(jobs.createdAt)).limit(100);
   const failedAi = (await withoutUnsentAnswers(db, { runs: await db.select().from(aiRuns).where(sql`${aiRuns.status} <> 'ok'`).orderBy(desc(aiRuns.createdAt)).limit(100), events: [] })).runs;
+  await entitlements.settleAllowanceAlerts(db);
   const alerts = await openAlerts(db);
   const pendingDeletions = await pendingCredentialDeletions(db);
   return c.json({ failedRuns, failedJobs, failedAi, alerts, pendingDeletions });
@@ -240,16 +245,41 @@ adminRoutes.post("/email-suppressions/:id/release", async (c) => {
   return c.json({ ok: true, address: row.address });
 });
 
-/** Operator alerts (correction 10): a failed credential deletion is never silent. */
-adminRoutes.get("/alerts", async (c) => c.json(await openAlerts(c.get("container").db)));
+/** Operator alerts (correction 10): a failed credential deletion is never silent. Allowance alerts that no longer stand are resolved first. */
+adminRoutes.get("/alerts", async (c) => {
+  const db = c.get("container").db;
+  await entitlements.settleAllowanceAlerts(db);
+  return c.json(await openAlerts(db));
+});
+
+/** Two-person visibility (21 Sep, item 2): the administrator who changed a platform role cannot be the one who closes the alert about it. */
+async function refuseOwnPlatformRoleAlert(db: Container["db"], alertId: string, userId: string, verb: "acknowledge" | "resolve"): Promise<void> {
+  if (!UUID.test(alertId)) throw new HttpError(404, "not_found", "Alert not found.");
+  const [alert] = await db.select({ kind: adminAlerts.kind, details: adminAlerts.details, target: adminAlerts.target }).from(adminAlerts).where(eq(adminAlerts.id, alertId)).limit(1);
+  if (alert?.kind.startsWith("platform_role.") && (alert.details?.actorId === userId || alert.target?.id === userId)) throw new HttpError(403, "second_person_required", `Another administrator must ${verb} a change to platform roles that you made or that concerns you.`);
+}
 
 adminRoutes.post("/alerts/:id/acknowledge", async (c) => {
   const s = c.get("session")!;
-  // Two-person visibility (21 Sep, item 2): the administrator who changed a platform role cannot be the one who closes the alert about it.
-  const [alert] = await c.get("container").db.select({ kind: adminAlerts.kind, details: adminAlerts.details, target: adminAlerts.target }).from(adminAlerts).where(eq(adminAlerts.id, c.req.param("id") ?? "")).limit(1);
-  if (alert?.kind.startsWith("platform_role.") && (alert.details?.actorId === s.user.id || alert.target?.id === s.user.id)) throw new HttpError(403, "second_person_required", "Another administrator must acknowledge a change to platform roles that you made or that concerns you.");
+  await refuseOwnPlatformRoleAlert(c.get("container").db, c.req.param("id") ?? "", s.user.id, "acknowledge");
   const ok = await acknowledgeAlert(c.get("container").db, { id: c.req.param("id"), actor: { kind: "user", id: s.user.id, name: s.user.name ?? s.user.email } });
   if (!ok) throw new HttpError(404, "not_found", "Alert not found or already acknowledged.");
+  return c.json({ ok: true });
+});
+
+/**
+ * Resolve (Wave S2 F1): the problem is dealt with. The alert leaves the console's list and stays on record, audited
+ * with the administrator's note; the next time the problem shows up a new alert is raised.
+ */
+adminRoutes.post("/alerts/:id/resolve", async (c) => {
+  const s = c.get("session")!;
+  const id = c.req.param("id") ?? "";
+  await refuseOwnPlatformRoleAlert(c.get("container").db, id, s.user.id, "resolve");
+  const body = (await c.req.json().catch(() => ({}))) as { note?: unknown };
+  const note = typeof body.note === "string" ? body.note.trim().slice(0, 500) : null;
+  const result = await resolveAlert(c.get("container").db, { id, actor: { kind: "user", id: s.user.id, name: s.user.name ?? s.user.email }, note });
+  if (result === "not_found") throw new HttpError(404, "not_found", "Alert not found.");
+  if (result === "already_resolved") throw new HttpError(409, "already_resolved", "This alert was already resolved.");
   return c.json({ ok: true });
 });
 
@@ -386,24 +416,44 @@ adminRoutes.get("/staff-access", async (c) => {
   return c.json(rows);
 });
 
-/** Founder decision F8: a platform admin puts a customer on the Design Partner plan (or another plan). Pilot term 90 days, extendable. */
+/** The plans a customer can be put on (the console's Plan control): key, name and what each includes. */
+adminRoutes.get("/plans", async (c) => {
+  const rows = await c.get("container").db.select({ key: plans.key, name: plans.name, limits: plans.limits, active: plans.active }).from(plans).orderBy(plans.createdAt);
+  return c.json(rows.filter((p) => p.active).map((p) => ({ key: p.key, name: p.name, limits: p.limits })));
+});
+
+/**
+ * Founder decision F8: a platform admin puts a customer on the Design Partner plan (or another plan). Pilot term 90 days,
+ * extendable. The new limits apply at once; what was used this month stays used and the reset date does not move.
+ * Allowance alerts the new limits clear are resolved.
+ */
 adminRoutes.post("/customers/:id/plan", async (c) => {
   const s = c.get("session")!;
   const body = PlanChange.parse(await c.req.json());
-  const companyId = c.req.param("id");
+  const companyId = c.req.param("id") ?? "";
+  if (!UUID.test(companyId)) throw new HttpError(404, "not_found", "Company not found.");
+  // A person's own reason, always: the console asks for one (REASON_MIN in apps/web/src/apply-flow.ts, five characters,
+  // as for every other reason here), and so does the API, so a direct call cannot skip it.
+  const reason = body.reason?.trim() ?? "";
+  if (reason.length < 5) throw new HttpError(400, "reason_required", "Say why the plan is changing (at least five characters).");
   const now = new Date();
   const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
   const result = await withPlatform(c.get("container").db, async (tx) => {
     // Locked: the settings are written back whole, so the ITS check or a customer's change made meanwhile is kept.
     const [co] = await tx.select().from(companies).where(eq(companies.id, companyId)).limit(1).for("update");
     if (!co) throw new HttpError(404, "not_found", "Company not found.");
+    const [plan] = await tx.select({ key: plans.key, active: plans.active }).from(plans).where(eq(plans.key, body.planKey)).limit(1);
+    if (!plan) throw new HttpError(400, "unknown_plan", `There is no plan called ${body.planKey}.`);
+    // a retired plan (hidden from GET /admin/plans) is not offered by the API either
+    if (plan.active === false) throw new HttpError(400, "inactive_plan", `The ${body.planKey} plan is retired and can no longer be given to a customer.`);
     await entitlements.applyPlan(tx, companyId, body.planKey, "plan");
+    await entitlements.settleAllowanceAlerts(tx, { companyId });
     const pilot = body.planKey === "design_partner"
       ? { startedAt: co.settings.pilot?.startedAt ?? now.toISOString(), endsAt: co.settings.pilot?.endsAt ?? new Date(now.getTime() + (body.pilotDays ?? 90) * 86_400_000).toISOString(), ...(body.extendUntil ? { extendedUntil: body.extendUntil } : {}) }
       : co.settings.pilot;
     const [updated] = await tx.update(companies).set({ status: body.planKey === "design_partner" ? "design_partner" : co.status === "trial" ? "active" : co.status, settings: { ...co.settings, pilot } }).where(eq(companies.id, companyId)).returning();
     await emit(tx, { type: "plan.changed", companyId, actor, subject: { type: "company", id: companyId }, payload: { from: co.planKey, to: body.planKey, pilot } });
-    await audit(tx, { companyId, actor, action: "plan.changed", target: { type: "company", id: companyId }, reason: body.reason ?? `plan ${co.planKey} → ${body.planKey}`, details: { pilot } });
+    await audit(tx, { companyId, actor, action: "plan.changed", target: { type: "company", id: companyId }, reason, details: { pilot, from: co.planKey, to: body.planKey } });
     return updated;
   });
   return c.json(result);

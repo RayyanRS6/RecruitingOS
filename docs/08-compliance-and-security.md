@@ -37,12 +37,15 @@ Legal obligations change by jurisdiction and by year. The product therefore has:
 - **Every assessment stores its factors and evidence**, the packet version, the prompt version, and the model. Any decision can be reconstructed.
 - **Selection-rate monitoring**: a quarterly job computes pass rates by stage for self-reported categories (voluntary, separate from the application, never visible to reviewers) where counts allow; the four-fifths rule is a screen, with results to the compliance queue.
 - **Prompt-level controls**: protected characteristics and proxies are excluded by instruction and tested by the eval suite (doc 11) on every prompt change.
+- **What the scoring reads** (founder decision D-04 C, built in Wave S2): the résumé reading (`triage.assess`) and the screening scorecard (`screen.assess`) get a redacted view of the candidate's words, with the name, email, phone, street address, zip code and web links replaced by placeholders (`packages/agents/src/scoring-view.ts`, unit tested). City, state, employers, dates, schools, licences and skills stay, since the job is judged on them. Earlier applications to the company and how they ended are no longer sent (the team still sees them). Résumé extraction still reads the original, to fill in the candidate's record, and quotes shown to the team are mapped back to the original words.
 - **Model card**: a public document describing what the system does and does not do, which decisions are human, and how to request an explanation.
 - **Explainability to candidates**: on request, the evidence-based reasons recorded with the human decision (never the raw assessment text without review).
 
 ### Candidate rights
 
 Access, correction, deletion, opt-out (SMS, email, talent pool), human alternative to any AI interaction, explanation of adverse decisions where required, withdrawal at any time, complaint intake. All routed through the tenant's compliance queue with SLAs, logged.
+
+Deletion is fulfilled by anonymization after a counsel decision. Since Wave S2 it also scrubs the AI's readings of the person and the AI run log about them, found by application, screen, document and workflow run: only ids, task, model, prompt, tokens, cost, timings and status stay (`scrubCandidateAiData` in `packages/core/src/privacy-requests.ts`). Since Wave S3 it also clears the workflow engine's copies: runs still going are cancelled, and run state, step records and the copies of a step's error in the run's events and queued job keep only ids, status, step names, codes and timings (`scrubCandidateWorkflowData`); a step still running when its run is cancelled writes nothing back. A new-times set still waiting for its day is cancelled at deletion. A daily, idempotent clean-up repeats both for every anonymized candidate, so a run that finished after the deletion is caught. The "your data was deleted" email is sent only after the transaction commits, and stored files are removed after the commit too.
 
 ## Security architecture
 
@@ -84,7 +87,7 @@ Access, correction, deletion, opt-out (SMS, email, talent pool), human alternati
 | Cross-tenant data access via a bug | RLS at the database; tests |
 | Stolen session cookie | httpOnly, secure, short idle expiry, revocation, IP change re-verification for admin |
 | Malicious resume upload | Type and size checks, no execution, scanning hook, text extraction in a sandboxed step |
-| Prompt injection via resume or candidate message | Untrusted content is delimited and labeled as data in prompts; structured outputs; no tool that takes free-text instructions from candidate content; evals include injection cases |
+| Prompt injection via resume or candidate message | Untrusted content is delimited and labeled as data in prompts; candidate text in the scoring reads is stripped of any tag that could close its data block (`withoutTag`, Wave S2); structured outputs; no tool that takes free-text instructions from candidate content; evals include injection cases |
 | Spam applications and bots | Rate limits, honeypot, duplicate detection, anomaly flags |
 | Integration credential leak | Encrypted at rest, never logged, scoped tokens, rotation |
 | Insider misuse (platform admin) | Explicit bypass, audit records, least privilege, quarterly access review |

@@ -204,10 +204,11 @@ export const applicationIntake: WorkflowDefinition<State> = {
         const inputs = await ctx.read(async (q) => {
           const loaded = await load(q, ctx.state.applicationId);
           if (!loaded || !(await readyToAssess(q, loaded.app))) return null;
-          const { app, packet } = loaded;
+          const { app, candidate, packet } = loaded;
           const doc = app.resumeDocumentId ? (await q.select().from(documents).where(eq(documents.id, app.resumeDocumentId)).limit(1))[0] : undefined;
-          const prior = await q.select({ stage: applications.stage, roleId: applications.roleId, at: applications.createdAt }).from(applications).where(eq(applications.candidateId, app.candidateId));
-          const priorRoles = prior.length > 1 ? await q.select({ id: roles.id, title: roles.title }).from(roles).where(eq(roles.companyId, ctx.companyId)) : [];
+          // What the reading sees (founder decision D-04 = C): no earlier applications to the company or how they ended
+          // (the team still sees them on the candidate's page), and the candidate's own details only so that
+          // `assessApplication` can hide them (name, email, phone, street address, links) before the model reads anything.
           return {
             applicationId: app.id,
             packet,
@@ -215,7 +216,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
             resumeText: doc?.textExtracted ?? null,
             applicationAnswers: { eligibility: (app.answers.eligibility ?? {}) as Record<string, unknown>, noResumeSummary: app.answers.noResume?.summary },
             eligibility: app.eligibility,
-            priorApplications: prior.filter((p) => p.roleId !== app.roleId).map((p) => ({ roleTitle: priorRoles.find((r) => r.id === p.roleId)?.title ?? "another role", stage: p.stage, at: p.at })),
+            identity: { firstName: candidate.firstName, lastName: candidate.lastName, email: candidate.email, phone: candidate.phone, fullName: app.extraction?.fullName ?? null },
           };
         });
         if (!inputs) return null;
@@ -292,7 +293,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
         const body = [
           unreadable ? RESUME_UNREADABLE_TEXT : "",
           unknowns.length ? `Open questions: ${unknowns.join(" ")}` : `Not enough to assess automatically: ${asmt?.result.summary ?? "no résumé text"}`,
-          "Ask about it in a short screen, or review the application yourself.",
+          "Ask about it in a short screening chat, or review the application yourself.",
         ].filter(Boolean).join(" ");
         await notify(ctx.q, { companyId: ctx.companyId, kind: "application.needs_review", title: `${name} needs a closer look`, body, action: { label: "Take a closer look", href: `/roles/${role.id}/talent?open=${app.id}` } });
         return { kind: "complete" };
@@ -305,13 +306,13 @@ export const applicationIntake: WorkflowDefinition<State> = {
       }
       const g = await gate(ctx.q, { companyId: ctx.companyId, roleId: role.id, applicationId: app.id, actionType: "application.invite_screen", subject: { type: "application", id: app.id }, proposal: { assessmentId: asmt.id, recommendation: rec }, rationale: `${name} looks like a fit for ${role.title}: ${asmt.result.summary}`, requestedBy: { kind: "agent", id: "triage", runId: asmt.aiRunId ?? undefined }, workflowRunId: ctx.run.id, expiresInHours: SUGGESTION_WINDOW_HOURS });
       if (g.outcome === "human_only") {
-        await notify(ctx.q, { companyId: ctx.companyId, kind: "application.ready", title: `${name} is ready for a screen`, body: asmt.result.summary, action: { label: "Invite to a screen", href: `/roles/${role.id}/talent?open=${app.id}` } });
+        await notify(ctx.q, { companyId: ctx.companyId, kind: "application.ready", title: `${name} is ready for a screening chat`, body: asmt.result.summary, action: { label: "Invite to a screening chat", href: `/roles/${role.id}/talent?open=${app.id}` } });
         return { kind: "complete" };
       }
       if (g.outcome === "wait_for_approval") return waitForSuggestion(ctx, g.approvalRequestId, "after_triage_decision");
       await ctx.services.engine.start(ctx.q, { workflowKey: "screen", companyId: ctx.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: role.id, invitedBy: "triage" }, idempotencyKey: `screen:${app.id}`, actor: ctx.actor });
       // "Stop this screen invitation" on the candidate's page takes it back until they start (plan A7).
-      if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.invited", title: `Inviting ${name} to a screen`, body: `${asmt.result.summary} Until ${candidate.firstName} starts, you can stop the invitation from their page; they get a short, polite note.`, action: { label: "See candidate", href: `/roles/${role.id}/talent?open=${app.id}` } });
+      if (g.notify) await notify(ctx.q, { companyId: ctx.companyId, kind: "screen.invited", title: `Inviting ${name} to a screening chat`, body: `${asmt.result.summary} Until ${candidate.firstName} starts, you can stop the invitation from their page; they get a short, polite note.`, action: { label: "See candidate", href: `/roles/${role.id}/talent?open=${app.id}` } });
       return { kind: "complete" };
     },
 

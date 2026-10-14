@@ -8,6 +8,7 @@ import { CalendarError, FakeGoogleCalendarProvider, base64url } from "@ros/integ
 import { integrations, withTenant } from "@ros/db";
 import { actorOf, requireTenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
+import { signalAvailabilityChanged } from "./interviews";
 
 /**
  * A company's external connections. Nothing here ever returns a credential or its reference. Disconnecting disables
@@ -95,7 +96,12 @@ integrationRoutes.get("/calendar/:provider/callback", async (c) => {
   try {
     const redirectTo = `${container.env.APP_BASE_URL}/api/v1/integrations/calendar/${provider.provider}/callback`;
     const { refreshToken, account, scopes } = await provider.exchangeCode({ code, redirectTo, codeVerifier: consent.verifier });
-    await withTenant(container.db, t.companyId, (tx) => connectCalendar(tx, container.integrations.secrets, { companyId: t.companyId, userId: t.userId, provider: provider.provider, refreshToken, account, scopes, actor: { kind: "user", id: t.userId, name: s.user.name ?? s.user.email } }));
+    await withTenant(container.db, t.companyId, async (tx) => {
+      await connectCalendar(tx, container.integrations.secrets, { companyId: t.companyId, userId: t.userId, provider: provider.provider, refreshToken, account, scopes, actor: { kind: "user", id: t.userId, name: s.user.name ?? s.user.email } });
+      // a connected calendar is availability: interviews waiting for this person's hours are worked out again now
+      await signalAvailabilityChanged(tx, container, { companyId: t.companyId, userId: t.userId });
+    });
+    await container.kick();
     return back("connected");
   } catch (err) {
     if (err instanceof CalendarError) return back(err.code);

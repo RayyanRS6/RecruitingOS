@@ -461,7 +461,7 @@ postingRoutes.post("/:id/postings/:channel/prepare", requireTenant, async (c) =>
     const role = await loadRole(tx, c.req.param("id"));
     if (role.status !== "open") throw new HttpError(409, "not_open", "Boards are prepared for an open role. Approve the role first; the ticked boards are prepared then.");
     const [company] = await tx.select({ settings: companies.settings }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
-    if (channel === "ziprecruiter" && !zipRecruiterOffered(company?.settings)) throw new HttpError(409, "ziprecruiter_needs_plan", "ZipRecruiter needs your company's own paid ZipRecruiter plan. Say you have one in Setup first.");
+    if (channel === "ziprecruiter" && !zipRecruiterOffered(company?.settings)) throw new HttpError(409, "ziprecruiter_needs_plan", "ZipRecruiter needs your company's own paid ZipRecruiter plan. Say you have one in Settings first.");
     const [existing] = await tx.select().from(postings).where(and(eq(postings.roleId, role.id), eq(postings.channel, channel))).limit(1);
     if (existing && existing.status !== "closed") throw new HttpError(409, "already_prepared", `${CHANNEL_NAME[channel]} is already prepared for this role ("${stateLabel(existing.status)}").`);
     if (existing?.closureRequired && !existing.closureConfirmedAt) throw new HttpError(409, "still_up", `The earlier ${CHANNEL_NAME[channel]} listing still has to be taken down. Confirm it was removed, then prepare the board again.`);
@@ -495,7 +495,7 @@ postingRoutes.post("/:id/postings/:channel/ask-its", requireTenant, async (c) =>
     const role = await loadRole(tx, c.req.param("id"));
     const posting = await loadPosting(tx, role.id, channel);
     const [company] = await tx.select({ name: companies.name, vertical: companies.vertical, settings: companies.settings }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
-    if (boardPostingOf(company?.settings) !== "its") throw new HttpError(409, "team_posts", "Your team posts on the job boards itself (Setup, Job boards), so there is no ITS task to ask for.");
+    if (boardPostingOf(company?.settings) !== "its") throw new HttpError(409, "team_posts", "Your team posts on the job boards itself (Settings, Job boards), so there is no ITS task to ask for.");
     const kind = postingTaskNeeded(posting, role);
     if (!kind) throw new HttpError(409, "nothing_to_do", `${CHANNEL_NAME[channel]} needs nothing from ITS right now (it is "${stateLabel(posting.status)}").`);
     const now = container.engine.clock();
@@ -527,7 +527,7 @@ postingRoutes.post("/:id/channels", requireTenant, async (c) => {
     if (role.status === "closed") throw new HttpError(409, "role_closed", "The role is closed; its boards no longer change.");
     const [company] = await tx.select({ settings: companies.settings }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
     const wanted = BOARD_CHANNELS.filter((b) => body.channels.includes(b));
-    if (wanted.includes("ziprecruiter") && !zipRecruiterOffered(company?.settings)) throw new HttpError(409, "ziprecruiter_needs_plan", "ZipRecruiter needs your company's own paid ZipRecruiter plan. Say you have one in Setup first.");
+    if (wanted.includes("ziprecruiter") && !zipRecruiterOffered(company?.settings)) throw new HttpError(409, "ziprecruiter_needs_plan", "ZipRecruiter needs your company's own paid ZipRecruiter plan. Say you have one in Settings first.");
     const packets = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id));
     const packet = currentVersionOf(role, packets)?.packet ?? null;
     const before: string[] = packet ? chosenBoards(role, packet, company?.settings) : (role.publishChannels ?? []);
@@ -689,18 +689,23 @@ export type VolumeDay = { day: string; total: number; bySource: Record<string, n
 
 /**
  * Applications per day for the last fourteen days, by source. Days are calendar days in the company's time zone, cut
- * the same way the daily volume alert cuts them. Counting only: nothing here touches an application.
+ * the same way the daily volume alert cuts them. Counting only: nothing here touches an application. The counts follow
+ * the role page's (GET /roles/:id): none for those who do not read applications (an interviewer), and a grant about one
+ * candidate counts that candidate alone. The switch's state and the alert threshold are the role's own, for everyone.
  */
 postingRoutes.get("/:id/volume", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.read");
   const container = c.get("container");
+  const readsApplications = can(t.role, "application.read");
+  const onlyApplicationId = t.staff?.scope.applicationId ?? null;
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     const role = await loadRole(tx, c.req.param("id"));
     const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
     const local = localDays(container.engine.clock(), company?.timezone);
     const windowStart = local.start(-(VOLUME_WINDOW_DAYS - 1));
-    const rows = await tx.select({ createdAt: applications.createdAt, source: applications.source }).from(applications).where(and(eq(applications.roleId, role.id), gte(applications.createdAt, windowStart.toISOString())));
+    const inWindow = and(eq(applications.roleId, role.id), gte(applications.createdAt, windowStart.toISOString()));
+    const rows = !readsApplications ? [] : await tx.select({ createdAt: applications.createdAt, source: applications.source }).from(applications).where(onlyApplicationId ? and(inWindow, eq(applications.id, onlyApplicationId)) : inWindow);
     const days: VolumeDay[] = Array.from({ length: VOLUME_WINDOW_DAYS }, (_, i) => ({ day: local.key(local.start(i - (VOLUME_WINDOW_DAYS - 1))), total: 0, bySource: {} }));
     const byDay = new Map(days.map((d) => [d.day, d]));
     const totals: Record<string, number> = {};
@@ -732,7 +737,7 @@ postingRoutes.post("/:id/applications/accepting", requireTenant, async (c) => {
   const body = SetAcceptingApplications.parse(await c.req.json());
   // The reason "closing date" marks a stop the closing date made (plan D7): only that stop lets a form opened earlier
   // finish and is undone by a later date. A person's own stop never carries it, so it takes nothing new.
-  if (!body.accepting && body.reason?.trim().toLowerCase() === CLOSING_DATE_REASON) throw new HttpError(400, "reserved_reason", "That reason is kept for stops made by the closing date. Say it another way, for example \"We have enough applicants\", or set a closing date on the Posting tab instead.");
+  if (!body.accepting && body.reason?.trim().toLowerCase() === CLOSING_DATE_REASON) throw new HttpError(400, "reserved_reason", "That reason is kept for stops made by the closing date. Say it another way, for example \"We have enough applicants\", or set a closing date on the Share tab instead.");
   const container = c.get("container");
   const actor = actorOf(c);
   const result = await withTenant(container.db, t.companyId, async (tx) => {
@@ -754,7 +759,7 @@ postingRoutes.post("/:id/applications/accepting", requireTenant, async (c) => {
       kind: body.accepting ? "applications.reopened" : "applications.closed",
       title: body.accepting ? `${role.title} is taking applications again` : `${role.title} stopped taking new applications`,
       body: body.accepting ? `${who} reopened applications. The job page shows the apply button again.` : `${who} closed applications${body.reason ? ` (${body.reason})` : ""}. The job page stays up and says applications are closed. Everyone who already applied stays exactly where they are.`,
-      action: { label: "Open the Posting tab", href: `/roles/${role.id}?tab=posting` },
+      action: { label: "Open the Share tab", href: `/roles/${role.id}?tab=posting` },
     });
     await audit(tx, { companyId: t.companyId, actor, action: "role.applications_toggled", target: { type: "role", id: role.id }, reason: body.reason ?? (body.accepting ? "reopened" : "closed"), details: { accepting: body.accepting } });
     return { ok: true, changed: true, role: pick(updated) };

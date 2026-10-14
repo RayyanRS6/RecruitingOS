@@ -3,26 +3,28 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "../nav";
-import { Alert, Avatar, Button, Card, Chip, EmptyState, ErrorState, Field, Icon, PageHeader, Pill, ScoreBadge, Sheet, Skeleton, StageButton, TabPanel, Tabs, type OwnerStage } from "@ros/ui";
+import { Alert, Avatar, Button, Card, EmptyState, ErrorState, Field, Icon, Menu, Pill, ScoreBadge, Sheet, Skeleton, StageButton, TabPanel, Tabs, type OwnerStage } from "@ros/ui";
 import { CHOOSABLE_WORDINGS, DECISION_WORDING_LABEL, type DecisionWording } from "@ros/contracts";
-import { api, ApiError, type ActionResult, type ApplicationSummary, type ApplicationsWithCounts, type BoardView, type DecisionMessagePreview, type DecisionMessagesResponse, type Me, type NewTimesSettingView, type RoleSummary, type SendNewTimesBatchResult } from "../api/client";
+import { api, ApiError, type ActionResult, type ApplicationSummary, type ApplicationsWithCounts, type BoardView, type DecisionMessagePreview, type DecisionMessagesResponse, type Me, type NewTimesSettingView, type RoleDetail, type RoleSummary, type SendNewTimesBatchResult } from "../api/client";
 import { toast } from "../toast";
 import { NEW_TIMES_SHEET_TEXT, cancelledAlertText, cancelledChips, mergeNewTimesResults, newTimesResultLine, newTimesSendLabel, newTimesSheetRows } from "../cancelled";
 import { messageOnItsWayChip } from "../company-check";
 import { AskRecruiter } from "../components/AskRecruiter";
+import { CloseRoleCard, ClosingMessageCard } from "../components/ClosingMessage";
 import { ShareJob } from "../components/ShareJob";
 import { useCompanyCheck } from "../components/use-company-check";
+import { useIsClient } from "../components/use-is-client";
 import { LOW_CONFIDENCE_LABEL } from "../evidence";
 import { focusLost, rowFocusAfterMove } from "../focus-after";
 import { activeCompanyOf } from "../rail";
 import { canDecline, canManageInterviews, canSeeTalent, canShareJob } from "../roles";
-import { roleStatus } from "../role-status";
+import { jobTabs } from "../role-status";
 import { actionToast, batches, bulkSendToast, holdDay, mergeDecisionResults, newTimesToast, noticeText, panelStepFrom, stageBlocked, stageIntent, type PanelStep } from "../talent-actions";
 import { InlineUndo } from "../components/InlineUndo";
 import { useBulkTakeBack, useBulkUndoToast } from "../components/use-undo";
 import { waitingOnCandidateRow } from "../hiring";
 import { WORDING_HINT, bulkUndoMillis, undoable } from "../telling";
-import { ORDERS, READING, READING_FILTERS, STILL_APPLYING_LABEL, STILL_APPLYING_TEXT, appliedWhen, applyView, defaultView, emptyText, isStillApplying, readingCounts, readingOf, stillApplyingCount, stripItems, waitingOnYouCount, waitingText, type Order, type ReadingFilter, type TalentView } from "../talent-list";
+import { ORDERS, READING_FILTERS, ROW_CHIP_LIMIT, SAFETY_NET_NOTE, STILL_APPLYING_LABEL, STILL_APPLYING_TEXT, appliedWhen, applyView, defaultView, emptyText, readingCounts, rowChips, stillApplyingCount, stripParts, waitingOnYouCount, waitingText, type Order, type ReadingFilter, type RowChip, type TalentView } from "../talent-list";
 import { CandidatePanel } from "./candidate-panel/CandidatePanel";
 import { STAGE_LABEL, panelSearch, panelTabFrom, type PanelTab } from "./candidate-panel/helpers";
 import type { ActionBody } from "./candidate-panel/hooks";
@@ -31,6 +33,11 @@ import { AskPool } from "./board/AskPool";
 import { PoolBoard, SortStrip } from "./board/PoolBoard";
 import { ReviewApply } from "./board/ReviewApply";
 import { boardOrder, boardSearch, modeFrom, type TalentMode } from "./board/board-model";
+import { JobHeader, JobMenu, JobTabs, jobFactsFor } from "./JobHeader";
+import { NotOnThisJob, notOnThisJob } from "./RoleDetail";
+import { CandidatePreview } from "./new-role/CandidatePreview";
+import { RoomAlert } from "./new-role/StartView";
+import { useStartDraft } from "./new-role/use-start-draft";
 
 /** Where the candidate panel stands: who, which section, a step a stage choice opened, and the list it was opened from. */
 type PanelState = { id: string; tab: PanelTab; step: PanelStep | null; roundKey?: string; ids: string[] | null; compose: boolean };
@@ -38,16 +45,19 @@ type PanelState = { id: string; tab: PanelTab; step: PanelStep | null; roundKey?
 /** The link filters (`?ownerStage=`, `?stage=`, `?told=`, `?applying=`, `?cancelled=`) as one key: when a link changes them, the view starts again from it. */
 const linkKey = (p: URLSearchParams) => ["ownerStage", "stage", "told", "applying", "cancelled"].map((k) => p.get(k) ?? "").join("|");
 
+/** What a row's "Still applying" chip and toggle say on hover. */
+const STILL_APPLYING_TITLE = "Sent the form and answering the screening questions now";
+
 /**
- * Talent (plan A3; founder decisions B3 and B6): one role's applicants as a calm list. The stage strip counts everyone
- * at each stage and filters by a click; each row has the person's initials, name, when they applied, how long they have
- * waited on you, the latest reading, the match score and the stage button. Readings only filter; the list can be sorted
- * by the match score (B2), newest, waiting longest or name. A row opens the candidate panel, whose place is kept in the
- * address (`?open=<id>&tab=…`).
+ * Candidates (plan A3; founder decisions B3 and B6; Wave S1): one job's applicants as a calm list, under the job's own
+ * header and tab strip (shared with the job page). The stage strip counts everyone at each stage and filters by a
+ * click; the stages nobody is at wait under "More stages". Each row has the person's initials, name, when they
+ * applied, how long they have waited on you, at most two chips, the match score and the stage button. A row opens the
+ * candidate panel, whose place is kept in the address (`?open=<id>&tab=…`).
  *
  * Beside the strip, "Still applying" (plan E6) counts the people still in the visit that sent their application (the
- * screening conversation offered with it, not finished yet) and shows only them on a click. They are never counted or
- * shown as waiting on you.
+ * screening chat offered with it, not finished yet) and shows only them on a click. They are never counted or shown as
+ * waiting on you.
  *
  * Cancelled (founder decisions 1A to 4A) holds the candidates who cancelled a booked interview and the ones who did not
  * come to one. Its chips split it by what each person chose ("Asked for new times", "No longer interested", "No-show"),
@@ -55,8 +65,11 @@ const linkKey = (p: URLSearchParams) => ["ownerStage", "stage", "told", "applyin
  *
  * The pool board (plan F6-F10; founder decisions B2, B4, B5): "Sort the pool" switches to the board (`?view=board`),
  * where the people who finished applying sit in Shortlist, Longlist and Not moving forward with the reason for each,
- * under a summary in plain words. "Review and apply" (`&review=1`, also Today's link) files the ticked people privately;
+ * under a summary in plain words. "Review and apply" (`&review=1`, also Home's link) files the ticked people privately;
  * "Ask about this pool" opens the one-click questions. Nothing moves until a person applies it, and nobody is emailed.
+ *
+ * The header's More menu: Compare, and what the job page offers (pause, the accepting switch, close, the closing
+ * message, hire again, Candidate view) right here; Edit opens the job page's editor.
  */
 export function People() {
   const params = useParams();
@@ -64,12 +77,23 @@ export function People() {
   const [search] = useSearchParams();
   const qc = useQueryClient();
   const roles = useQuery({ queryKey: ["roles"], queryFn: () => api.get<RoleSummary[]>("/api/v1/roles") });
+  // The jobs list is the rail's too (one request, shared), so the browser may hold it before it takes this page over;
+  // the server never does. Until the page is the browser's (use-is-client.ts) the list counts as not read yet, so the
+  // first draw is the server's ("Candidates", no job picker) and the job's own title follows, as it always did.
+  const isClient = useIsClient();
+  const jobList = isClient ? roles.data : undefined;
+  const jobListLoading = !isClient || roles.isLoading;
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
   const company = activeCompanyOf(me.data);
   const myRole = company.role ?? (me.data?.staffAccess ? "recruiter" : null);
-  const roleId = params.id ?? roles.data?.find((r) => r.status === "open")?.id ?? roles.data?.[0]?.id;
-  const role = roles.data?.find((r) => r.id === roleId);
-  const apps = useQuery({ queryKey: ["applications", roleId], queryFn: () => api.get<ApplicationsWithCounts>(`/api/v1/roles/${roleId}/applications?counts=1`), enabled: !!roleId });
+  const roleId = params.id ?? jobList?.find((r) => r.status === "open")?.id ?? jobList?.[0]?.id;
+  const role = jobList?.find((r) => r.id === roleId);
+  // The job itself, for the header's More menu (its accepting switch, its version for Candidate view).
+  // A refusal (a job an interviewer is not on) is an answer, not a hiccup: it is not asked again.
+  const detail = useQuery({ queryKey: ["role", roleId], queryFn: () => api.get<RoleDetail>(`/api/v1/roles/${roleId}`), enabled: !!roleId, retry: (count, e) => !(e instanceof ApiError && (e.status === 403 || e.status === 404)) && count < 1 });
+  // An interviewer reads no applicants (they see the people they interview under Interviews), so the list is not asked for.
+  const interviewer = myRole === "interviewer";
+  const apps = useQuery({ queryKey: ["applications", roleId], queryFn: () => api.get<ApplicationsWithCounts>(`/api/v1/roles/${roleId}/applications?counts=1`), enabled: !!roleId && !interviewer });
   const rows = apps.data?.applications ?? [];
   const counts = apps.data?.counts;
   // Nobody still applying waits on you (plan E6), whatever their group says.
@@ -104,13 +128,18 @@ export function People() {
   const mayManageInterviews = canManageInterviews(myRole);
   const newTimesSetting = useQuery({ queryKey: ["new-times-setting"], queryFn: () => api.get<NewTimesSettingView>("/api/v1/companies/current/new-times"), enabled: mayManageInterviews && view.stage === "cancelled" });
   const [sendingNewTimes, setSendingNewTimes] = useState(false);
+  // What the header's More menu opens on this page: the close card, the closing message, the job page as candidates see it.
+  const [closing, setClosing] = useState(false);
+  const [closingMessage, setClosingMessage] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const again = useStartDraft();
 
-  // The pool board (plan F6): its view and Review and apply live in the address, so Today's links open them. The board
+  // The pool board (plan F6): its view and Review and apply live in the address, so Home's links open them. The board
   // sits under the applications' key, so every change that refreshes the list refreshes the board too.
   const mode = modeFrom(search);
   const goTo = (qs: string) => nav(`${window.location.pathname}${qs}`, { replace: true });
   const setMode = (next: TalentMode) => goTo(boardSearch(search, { mode: next }));
-  const board = useQuery({ queryKey: ["applications", roleId, "board"], queryFn: () => api.get<BoardView>(`/api/v1/roles/${roleId}/board`), enabled: !!roleId && mode === "board" });
+  const board = useQuery({ queryKey: ["applications", roleId, "board"], queryFn: () => api.get<BoardView>(`/api/v1/roles/${roleId}/board`), enabled: !!roleId && mode === "board" && !interviewer });
   const reviewing = mode === "board" && search.get("review") === "1";
   const [asking, setAsking] = useState(false);
   // "Show these on the board" from an answer: only those people, until the chip is pressed (or another role is chosen).
@@ -123,10 +152,10 @@ export function People() {
 
   // The candidate panel, mirrored in the address with replace, so Back leaves the page as before.
   const openParam = search.get("open");
-  // `step` and `round` open a step once (Today's "Yes, interview" opens the interview approval, filled in; plan H4).
+  // `step` and `round` open a step once (Home's "Yes, interview" opens the interview approval, filled in; plan H4).
   const fromLink = (): PanelState | null => (openParam ? { id: openParam, tab: search.get("message") === "1" ? "messages" : panelTabFrom(search.get("tab")), step: panelStepFrom(search.get("step")), roundKey: search.get("round") ?? undefined, ids: null, compose: search.get("message") === "1" } : null);
   const [panel, setPanel] = useState<PanelState | null>(fromLink);
-  // A notification or a Today card followed while this page is open changes only the address: follow it.
+  // A notification or a Home card followed while this page is open changes only the address: follow it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: only a new `?open=` in the address re-reads it
   useEffect(() => { if (openParam && openParam !== panel?.id) setPanel(fromLink()); }, [openParam]);
   const showPanel = (next: PanelState | null) => {
@@ -180,35 +209,80 @@ export function People() {
     requestAnimationFrame(() => { if (focusLost(document.activeElement, document.body)) document.getElementById("board-title")?.focus(); });
   };
 
-  const status = role ? (role.status === "open" ? { label: "Live", tone: "good" as const } : roleStatus(role.status)) : null;
   const total = counts?.total ?? rows.length;
   const empty = emptyText(view, total);
   const filtersOn = view.reading !== "any" || view.query.trim() !== "" || view.waiting || view.applying || view.stage !== "all" || !!view.internalStage || !!view.told || !!view.cancelledReason;
   const headline = [`${total} ${total === 1 ? "applicant" : "applicants"}`, waitingCount ? `${waitingCount} waiting on you` : "", applyingCount ? `${applyingCount} still applying` : ""].filter(Boolean).join(" · ");
+  const strip = stripParts(counts, view.stage);
+  const pickStage = (stage: TalentView["stage"]) => setView({ stage, waiting: false, cancelledReason: null });
+  const job = detail.data ?? null;
+  const status = job?.status ?? role?.status ?? null;
+  // The shared header's one line (place · type · pay), as on the job's other tabs; the counts are also on the Candidates
+  // tab, "Waiting on you" and "Still applying". Until the job's details are read (or when it has none), the counts stand
+  // in, so the line is never empty and nothing jumps when the details arrive.
+  const facts = job ? jobFactsFor(job) : null;
+  const sub = !roleId ? undefined : facts ?? (apps.data ? headline : undefined);
+
+  // An interviewer: a job they are not on says so; on their own job, where the people they interview are.
+  if (interviewer && roleId) {
+    if (notOnThisJob(detail.error, myRole)) return <NotOnThisJob />;
+    return (
+      <div className="stack" style={{ gap: 18 }}>
+        <JobHeader title={role?.title ?? job?.title ?? "Candidates"} status={status} pulse={status === "open"} companyName={company.name} noJob={false} sub={facts ?? undefined} />
+        <NotOnThisJob title="Candidates are for the hiring team" body="You see the people you interview under Interviews." />
+      </div>
+    );
+  }
 
   return (
     <div className="stack" style={{ gap: 18 }}>
-      <PageHeader
-        eyebrow={company.name ? `Job · ${company.name}` : "Job"}
-        title={role?.title ?? "Talent"}
-        status={status ? <Pill tone={status.tone} pulse={role?.status === "open"}>{status.label}</Pill> : undefined}
-        sub={roleId && apps.data ? headline : undefined}
+      <JobHeader
+        title={role?.title ?? job?.title ?? "Candidates"}
+        status={status}
+        pulse={status === "open"}
+        companyName={company.name}
+        noJob={!roleId}
+        sub={sub}
         actions={
           <>
-            {roles.data && roles.data.length > 1 ? (
-              <select className="select" style={{ width: "auto" }} value={roleId ?? ""} onChange={(e) => nav(`/roles/${e.target.value}/talent`)} aria-label="Role">
-                {roles.data.map((r) => <option key={r.id} value={r.id}>{r.title}</option>)}
+            {jobList && jobList.length > 1 ? (
+              <select className="select" style={{ width: "auto" }} value={roleId ?? ""} onChange={(e) => nav(`/roles/${e.target.value}/talent`)} aria-label="Job">
+                {jobList.map((r) => <option key={r.id} value={r.id}>{r.title}</option>)}
               </select>
             ) : null}
-            {/* On the board, "Compare these" and "Have a recruiter check this" sit in the board's own header. */}
-            {roleId && mode === "list" && rows.length > 1 ? <Button variant={compareOpen ? "primary" : "secondary"} onClick={() => setCompareOpen((v) => !v)}>{compareOpen ? "Done comparing" : "Compare"}</Button> : null}
+            {/* On the board, "Have a recruiter check this" sits in the board's own header. */}
             {roleId && mode === "list" ? <AskRecruiter roleId={roleId} /> : null}
+            {roleId && status ? (
+              <JobMenu
+                roleId={roleId}
+                role={job}
+                status={status}
+                myRole={myRole}
+                // On the board, "Compare these" is one of the pool's questions.
+                comparing={mode === "list" && rows.length > 1 ? compareOpen : null}
+                closingMessageOpen={closingMessage || closing}
+                on={{
+                  compare: () => setCompareOpen((v) => !v),
+                  edit: () => nav(`/roles/${roleId}?edit=1`),
+                  preview: () => setPreviewOpen(true),
+                  close: () => setClosing(true),
+                  "closing-message": () => setClosingMessage(true),
+                  "hire-again": () => again.hireAgain(roleId),
+                }}
+              />
+            ) : null}
           </>
         }
       />
+      {roleId ? <JobTabs roleId={roleId} current="candidates" items={jobTabs({ seesCandidates: true, candidates: apps.data ? total : null })} /> : null}
+      {again.limit?.room && !again.limit.room.ok ? <RoomAlert room={again.limit.room} ask={again.limit.ask} /> : null}
+      {again.problem ? <Alert tone="critical">{again.problem}</Alert> : null}
+      {/* Closing lists who is still in process, then shows the one closing message for them all (founder decision Q30). */}
+      {closing && roleId ? <CloseRoleCard roleId={roleId} initialOutcome="filled_outside_platform" mayTell={mayTell} onClose={() => setClosing(false)} /> : null}
+      {closingMessage && !closing && roleId && status === "closed" && mayTell ? <ClosingMessageCard roleId={roleId} onDone={() => setClosingMessage(false)} /> : null}
       {roleId && (total > 0 || mode === "board") ? <SortStrip mode={mode} onMode={setMode} onSort={() => (mode === "board" ? board.refetch() : setMode("board"))} sorting={board.isFetching} generatedAt={board.data?.generatedAt ?? null} /> : null}
       {!roleId ? (
-        roles.isLoading ? <Skeleton lines={4} /> : <EmptyState icon="talent" title="No roles yet" body="Open a role first; its applicants show here." action={<Link to="/" className="btn primary">Go to Today</Link>} />
+        jobListLoading ? <Skeleton lines={4} /> : <EmptyState icon="talent" title="No jobs yet" body="Open a job first; its candidates show here." action={<Link to="/" className="btn primary">Go to Home</Link>} />
       ) : mode === "board" ? (
         board.isLoading ? <Skeleton lines={6} /> : board.error ? <ErrorState message="Could not sort the pool just now." onRetry={() => board.refetch()} /> : board.data ? (
           <PoolBoard roleId={roleId} board={board.data} only={only} onClearOnly={() => setOnlyFor(null)} onOpen={(id) => openPanel(id)} onReview={() => goTo(boardSearch(search, { review: true }))} onAsk={() => setAsking(true)} mayApply={mayApply} />
@@ -216,9 +290,12 @@ export function People() {
       ) : (
         <>
           <div className="talent-strip">
-            <Tabs idBase="talent-strip" label="Stages" variant="counts" value={view.stage} onChange={(v) => setView({ stage: v as TalentView["stage"], waiting: false, cancelledReason: null })} items={stripItems(counts)} />
+            <Tabs idBase="talent-strip" label="Stages" variant="counts" value={view.stage} onChange={(v) => pickStage(v as TalentView["stage"])} items={strip.shown} />
+            {/* The stages nobody is at, one click away with their counts (Wave S1). */}
+            {/* A stage picked here moves onto the strip (and "More stages" may go): focus follows it to its tab. */}
+            {strip.more.length ? <Menu label="More stages" ariaLabel="More stages" heading="Stages with nobody in them" items={strip.more.map((s) => ({ id: s.id, label: s.label, hint: String(s.count) }))} onSelect={(id) => { pickStage(id as TalentView["stage"]); requestAnimationFrame(() => document.getElementById(`talent-strip-tab-${id}`)?.focus()); }} /> : null}
             {/* Beside the strip, not in it (plan E6): the people still in the visit that sent their application. */}
-            {applyingCount || view.applying ? <button type="button" className="toggle-chip" aria-pressed={view.applying} title="Sent the form and answering the screening questions now" onClick={() => setView({ applying: !view.applying, waiting: false })}>{STILL_APPLYING_LABEL} <span className="count">{applyingCount}</span></button> : null}
+            {applyingCount || view.applying ? <button type="button" className="toggle-chip" aria-pressed={view.applying} title={STILL_APPLYING_TITLE} onClick={() => setView({ applying: !view.applying, waiting: false })}>{STILL_APPLYING_LABEL} <span className="count">{applyingCount}</span></button> : null}
           </div>
           <div className="talent-toolbar">
             {waitingCount ? <button type="button" className="toggle-chip" aria-pressed={view.waiting} onClick={() => setView({ waiting: !view.waiting, applying: false, order: view.waiting ? view.order : "waiting" })}>Waiting on you <span className="count">{waitingCount}</span></button> : null}
@@ -226,10 +303,10 @@ export function People() {
             {/* under Cancelled: what each person chose, or that they did not come (founder decision 2A) */}
             {view.stage === "cancelled" ? cancelledChips(counts?.cancelled, rows).map((c) => <button key={c.id} type="button" className="toggle-chip" aria-pressed={view.cancelledReason === c.id} onClick={() => setView({ cancelledReason: view.cancelledReason === c.id ? null : c.id })}>{c.label} <span className="count">{c.count}</span></button>) : null}
             {view.internalStage ? <button type="button" className="toggle-chip" aria-pressed="true" aria-label={`Showing only: ${STAGE_LABEL[view.internalStage] ?? view.internalStage}. Remove this filter`} onClick={clearStageLink}>{STAGE_LABEL[view.internalStage] ?? view.internalStage.replace(/_/g, " ")} <Icon name="x" size={14} /></button> : null}
-            <select className="select" aria-label="Reading" value={view.reading} onChange={(e) => setView({ reading: e.target.value as ReadingFilter })}>
+            <input className="input talent-search" type="search" value={view.query} onChange={(e) => setView({ query: e.target.value })} placeholder="Search name, email or source" aria-label="Search candidates" />
+            <select className="select" aria-label="Match" value={view.reading} onChange={(e) => setView({ reading: e.target.value as ReadingFilter })}>
               {READING_FILTERS.filter((f) => f.id !== "missing_must_have" || provenMissKnown).map((f) => <option key={f.id} value={f.id}>{f.label}{f.id === "any" ? "" : ` (${byReading[f.id]})`}</option>)}
             </select>
-            <input className="input talent-search" type="search" value={view.query} onChange={(e) => setView({ query: e.target.value })} placeholder="Search name, email or source" aria-label="Search applicants" />
             <select className="select" aria-label="Sort by" value={view.order} onChange={(e) => setView({ order: e.target.value as Order })}>
               {ORDERS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
             </select>
@@ -238,7 +315,7 @@ export function People() {
           {mayTell && notTold.length && (view.told === "not_told" || view.stage === "not_moving_forward") ? (
             <Alert tone="info">
               <div className="row" style={{ justifyContent: "space-between" }}>
-                <span>{notTold.length === 1 ? "1 person has" : `${notTold.length} people have`} not been told your decision. Decisions stay private until someone sends the decision message or records telling them.</span>
+                <span>{notTold.length === 1 ? "1 person has" : `${notTold.length} people have`} not been told your decision. {SAFETY_NET_NOTE}</span>
                 <Button size="sm" variant="primary" icon="send" onClick={() => setTelling(true)}>Review and send</Button>
               </div>
             </Alert>
@@ -252,15 +329,20 @@ export function People() {
               </div>
             </Alert>
           ) : null}
-          {compareOpen ? <ComparePanel roleId={roleId} candidates={shown.map((a) => ({ id: a.id, name: a.candidate?.name ?? "Unknown", stageLabel: a.ownerStageLabel, score: a.score }))} /> : null}
+          {compareOpen ? (
+            <div className="stack" style={{ gap: 8 }}>
+              <div className="row"><Button size="sm" onClick={() => setCompareOpen(false)}>Done comparing</Button></div>
+              <ComparePanel roleId={roleId} candidates={shown.map((a) => ({ id: a.id, name: a.candidate?.name ?? "Unknown", stageLabel: a.ownerStageLabel, score: a.score }))} />
+            </div>
+          ) : null}
           <div ref={listArea}>
           <TabPanel idBase="talent-strip" value={view.stage}>
-            {apps.isLoading ? <Skeleton lines={5} /> : apps.error ? <ErrorState message="Could not load the applicants." onRetry={() => apps.refetch()} /> : shown.length === 0 && total === 0 && role?.status === "open" && canShareJob(myRole) ? (
+            {apps.isLoading ? <Skeleton lines={5} /> : apps.error ? <ErrorState message="Could not load the candidates." onRetry={() => apps.refetch()} /> : shown.length === 0 && total === 0 && status === "open" && canShareJob(myRole) ? (
               // Nobody yet on a live job (plan D8): the empty list is the place to share it from.
               <div className="empty" style={{ justifyItems: "stretch", textAlign: "left" }}>
                 <h2 style={{ textAlign: "center" }}>Nobody has applied yet</h2>
-                <p style={{ textAlign: "center", justifySelf: "center" }}>Share the job to bring in the first applicants. Each place gets its own link, so you can see here where people came from.</p>
-                <ShareJob roleId={roleId} roleTitle={role.title} companyName={company.name} compact />
+                <p style={{ textAlign: "center", justifySelf: "center" }}>Share the job to bring in your first applicants.</p>
+                <ShareJob roleId={roleId} roleTitle={role?.title ?? job?.title ?? ""} companyName={company.name} compact />
               </div>
             ) : shown.length === 0 ? (
               <EmptyState icon="talent" title={empty.title} body={empty.body} action={filtersOn && total > 0 ? <Button size="sm" onClick={() => setViewState({ key, view: { ...defaultView(new URLSearchParams(), null), waiting: false } })}>Show everyone</Button> : undefined} />
@@ -280,7 +362,7 @@ export function People() {
         <CandidatePanel
           id={panel.id}
           roleId={roleId}
-          roleTitle={role?.title ?? null}
+          roleTitle={role?.title ?? job?.title ?? null}
           tab={panel.tab}
           onTab={(tab) => showPanel({ ...panel, tab })}
           step={panel.step}
@@ -294,18 +376,35 @@ export function People() {
       ) : null}
       {telling && roleId ? <TellSheet roleId={roleId} people={notTold} onClose={() => setTelling(false)} /> : null}
       {sendingNewTimes && roleId ? <NewTimesSheet roleId={roleId} people={underCancelled} onClose={() => setSendingNewTimes(false)} /> : null}
+      {/* The job page as candidates see it, from the More menu (the version the job runs on). */}
+      {roleId && job?.currentPacket ? <CandidatePreview open={previewOpen} onClose={() => setPreviewOpen(false)} path={`/api/v1/roles/${roleId}/preview?version=${job.currentPacket.version}`} /> : null}
     </div>
   );
 }
 
-/** One applicant: initials, name, when they applied, the wait, the reading, the match score (B2), the stage button. */
+/** One chip on a row; a short one ("Check") carries its full words for a screen reader and on hover. */
+function RowChipView({ c }: { c: RowChip }) {
+  if (c.kind === "pill") return <Pill size="sm" tone={c.tone} title={c.title}>{c.label}</Pill>;
+  const short = c.title && c.label.length < c.title.length && c.key === "low";
+  return (
+    <span className={`chip ${c.tone}`} title={c.title}>
+      {short ? <><span aria-hidden="true">{c.label}</span><span className="sr-only">{c.title}</span></> : c.label}
+    </span>
+  );
+}
+
+/** One applicant: initials, name, when they applied, the wait, at most two chips, the match score (B2), the stage button. */
 function TalentRow({ a, busy, onOpen, onMove }: { a: ApplicationSummary; busy: boolean; onOpen: () => void; onMove: (to: OwnerStage) => void }) {
   const name = a.candidate?.name ?? "Unknown";
-  const reading = readingOf(a);
   // waiting on you, or (an offer made outside the app, plan H2) waiting on the candidate's answer
   const waiting = waitingText(a) ?? waitingOnCandidateRow(a);
   // A decision message in the outbox of a company ITS has not confirmed yet waits for the check (founder decision B7).
   const check = useCompanyCheck();
+  // Most pressing first; past two, the rest are counted in "+N" and said in full to a screen reader and on hover.
+  const chips = rowChips(a, { stillApplying: STILL_APPLYING_TITLE, onItsWay: messageOnItsWayChip(check), lowConfidence: LOW_CONFIDENCE_LABEL });
+  const seen = chips.slice(0, ROW_CHIP_LIMIT);
+  const rest = chips.slice(ROW_CHIP_LIMIT);
+  const restWords = rest.map((c) => c.title ?? c.label).join("; ");
   return (
     <div className="talent-row" data-application={a.id}>
       <Avatar name={name} />
@@ -316,20 +415,13 @@ function TalentRow({ a, busy, onOpen, onMove }: { a: ApplicationSummary; busy: b
           <span>{a.source.replace(/_/g, " ")}</span>
           {waiting ? <span className="waiting">{waiting}</span> : null}
           {a.mark?.mark === "on_hold" && a.mark.remindAt && !a.tags.includes("Hold ended") ? <span>On hold until {holdDay(a.mark.remindAt)}</span> : null}
-          {/* a reading made against an earlier version of the role (plan F4): its score uses the requirements as they were then */}
+          {/* a review made against an earlier version of the job (plan F4): its score uses the requirements as they were then */}
           {a.readingVersion ? <span title={a.readingVersion.label}>Read against version {a.readingVersion.readAgainst}</span> : null}
         </span>
       </div>
       <div className="talent-row-chips">
-        {/* answering the screening questions in the visit that sent the application (plan E6): nothing waits on you yet; the dot stays still, the word says it (only the page's Live pill pulses) */}
-        {isStillApplying(a) ? <Pill size="sm" tone="neutral" title="Sent the form and answering the screening questions now">{STILL_APPLYING_LABEL}</Pill> : null}
-        {reading !== "none" ? <Pill size="sm" tone={READING[reading].tone}>{READING[reading].label}</Pill> : null}
-        {a.evidence?.lowConfidence && reading !== "closer_look" ? <Chip tone="caution">{LOW_CONFIDENCE_LABEL}</Chip> : null}
-        {a.tags.map((t) => <Chip key={t} tone="caution">{t}</Chip>)}
-        {a.toldState === "not_told" ? <Chip>{a.decisionMessageWaiting ? "Message waiting for approval" : "Not told yet"}</Chip> : null}
-        {a.toldState === "queued" ? <Chip>{messageOnItsWayChip(check)}</Chip> : null}
-        {/* under Cancelled: where their new times stand ("New times go out automatically Thu, Oct 15", "Waiting for you") */}
-        {a.ownerStage === "cancelled" && a.cancelled ? <Chip>{a.cancelled.status}</Chip> : null}
+        {seen.map((c) => <RowChipView key={c.key} c={c} />)}
+        {rest.length ? <span className="chip neutral" title={restWords}><span aria-hidden="true">+{rest.length}</span><span className="sr-only">Also: {restWords}</span></span> : null}
       </div>
       {/* the match score, worked out by code from the checked findings (founder decision B2); an older answer has none */}
       <span className="score-slot" title={a.coverage?.words}>{a.score !== undefined ? <ScoreBadge score={a.score} size="sm" /> : null}</span>
@@ -398,7 +490,7 @@ function TellSheet({ roleId, people, onClose }: { roleId: string; people: Applic
         </div>
       ) : (
         <div className="stack">
-          <p className="small" style={{ margin: 0 }}>Each person gets the decision message on its own, with their own name. Untick anyone you would rather tell yourself. To add a personal line, send from that person's own page.</p>
+          <p className="small" style={{ margin: 0 }}>Each person gets their own message, with their name. Untick anyone you will tell yourself.</p>
           <Field label="Wording" htmlFor="bulk-wording" hint={wording === "each" ? "Each person gets the wording that fits their decision: after an interview, position filled, or the standard one." : WORDING_HINT[wording]}>
             <select id="bulk-wording" className="select" value={wording} onChange={(e) => setWording(e.target.value as DecisionWording | "each")}>
               <option value="each">The suggested wording for each person</option>
@@ -428,6 +520,7 @@ function TellSheet({ roleId, people, onClose }: { roleId: string; people: Applic
           {policy === "not_sent" ? <Alert tone="caution">Under your settings no decision messages are sent. Tell each person yourself, then record it on their page.</Alert> : null}
           {policy === "needs_approval" ? <p className="small muted" style={{ margin: 0 }}>Under your settings each message waits for approval before it goes out.</p> : null}
           {policy === "sends" && preview.data?.undoSeconds ? <p className="small muted" style={{ margin: 0 }}>Each message waits {preview.data.undoSeconds} seconds before it goes, so you can undo the Send.</p> : null}
+          <p className="small muted" style={{ margin: 0 }}>To add a personal line, send from that person's own page.</p>
           <Button variant="primary" icon="send" disabled={!picked.length || policy === "not_sent"} loading={send.isPending} onClick={() => send.mutate()}>{policy === "needs_approval" ? `Send ${picked.length} for approval` : `Send to ${picked.length} ${picked.length === 1 ? "person" : "people"}`}</Button>
         </div>
       )}

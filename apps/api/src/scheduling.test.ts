@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
-import { entitlements } from "@ros/core";
-import { applications, auditRecords, integrations, interviewFollowups, interviews, notifications, users, workflowRuns } from "@ros/db";
+import { defaultSchedulingWindow, entitlements } from "@ros/core";
+import { applications, auditRecords, companies, integrations, interviewFollowups, interviews, notifications, recruiterEscalations, users, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter, FakeGoogleCalendarProvider, MemorySecretStore } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { signInAs } from "./test-helpers";
 
 /**
  * Slice 5 steps 7 to 9 end to end with synthetic data: a person approves an interview; times come from declared hours
@@ -71,7 +72,7 @@ describe("interview scheduling", () => {
   };
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake" } });
     app = createApp(container);
     setClock(0);
     owner = await signIn("owner@smile.test");
@@ -397,5 +398,297 @@ describe("interview scheduling", () => {
     expect((await json(owner, "POST", `/api/v1/interviews/${iv2.id}/outcome`, { outcome: "no_show_interviewer" })).status).toBe(200);
     expect(await container.db.select().from(interviewFollowups).where(eq(interviewFollowups.applicationId, other.id))).toHaveLength(0);
     expect(await decide("Lena Vogel")).toHaveLength(1);
+  });
+
+  // ---- Interview scheduling that recovers (F2, 15 Oct 2026: docs/audit/06-interviews.md bugs 1 to 5, 7 and 23) ----
+  const DAY = 24 * H;
+  const businessDays = (w: { fromDate?: string; toDate?: string }) => {
+    let count = 0;
+    for (let t = Date.parse(`${w.fromDate}T12:00:00Z`); t <= Date.parse(`${w.toDate}T12:00:00Z`); t += DAY) if (![0, 6].includes(new Date(t).getUTCDay())) count++;
+    return count;
+  };
+  const hoursFor = (cookie: string, windows: Array<{ day: number; start: string; end: string }>) => json(cookie, "PUT", "/api/v1/me/availability", { timezone: "America/Los_Angeles", windows, bufferMinutes: 15, maxPerDay: 6 });
+  const weekdays = (start: string, end: string) => [1, 2, 3, 4, 5].map((day) => ({ day, start, end }));
+  const noneWork = async (token: string, note: string) => {
+    const r = await app.request(`/c/schedule/${token}/none-work`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ note, timezone: "America/Los_Angeles" }).toString() });
+    expect(r.status).toBe(200);
+    await container.drain();
+  };
+  let wes = "";
+  let wesId = "";
+  const wesIn = async () => {
+    if (wes) return;
+    wes = await signInAs(container, app, { companyId, role: "hiring_manager", email: "wes@smile.test", name: "Wes Park" });
+    wesId = (await container.db.select({ id: users.id }).from(users).where(eq(users.email, "wes@smile.test")))[0].id;
+  };
+
+  it("times worked out again never use dates that have passed: 'Offer times again' and the candidate's own reschedule get a fresh window as long as the first", async () => {
+    const [co] = await container.db.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId));
+    const cand = await apply("Ivy", "Lam");
+    const iv = await requestInterview(cand.id);
+    const first = (await interview(iv.id)).schedulingWindow;
+    // nobody picks; the offer is reminded and lapses three weeks on, long after the first window ended
+    const later = 20 * DAY;
+    setClock(later);
+    await container.drain();
+    setClock(later + 49 * H);
+    await container.drain();
+    let row = await interview(iv.id);
+    expect(row.status).toBe("offer_expired");
+    const now = new Date(BASE + later + 49 * H);
+    expect(first.toDate! < now.toISOString().slice(0, 10)).toBe(true);
+    // "Offer times again": a fresh window from tomorrow, as many business days as the first, and real times in it
+    const before = outbox().length;
+    expect((await json(owner, "POST", `/api/v1/interviews/${iv.id}/reschedule`, {})).status).toBe(200);
+    await container.drain();
+    row = await interview(iv.id);
+    expect(row.status).toBe("scheduling");
+    expect(row.schedulingWindow.fromDate).toBe(defaultSchedulingWindow(now, co.timezone).fromDate);
+    expect(businessDays(row.schedulingWindow)).toBe(businessDays(first));
+    expect(row.offeredSlots.length).toBeGreaterThan(0);
+    for (const s of row.offeredSlots) expect(Date.parse(s.startsAt)).toBeGreaterThan(now.getTime());
+    expect(outbox().slice(before).filter((m) => m.to === cand.email && /^New times for your interview:/.test(m.subject))).toHaveLength(1);
+    // they book the latest time; two days on they ask for a different one: again a fresh window from that day
+    await pick(row.scheduleToken!, row.offeredSlots.at(-1)!.id);
+    expect((await interview(iv.id)).status).toBe("scheduled");
+    const moved = later + 49 * H + 2 * DAY;
+    setClock(moved);
+    const r = await app.request(`/c/schedule/${row.scheduleToken}/reschedule`, { method: "POST" });
+    expect(r.status).toBe(302);
+    await container.drain();
+    row = await interview(iv.id);
+    expect(row.status).toBe("scheduling");
+    expect(row.schedulingWindow.fromDate).toBe(defaultSchedulingWindow(new Date(BASE + moved), co.timezone).fromDate);
+    expect(businessDays(row.schedulingWindow)).toBe(businessDays(first));
+    expect(row.offeredSlots.length).toBeGreaterThan(0);
+    await json(owner, "POST", `/api/v1/interviews/${iv.id}/cancel`, { reason: "test cleanup" });
+    await container.drain();
+    setClock(0);
+  });
+
+  it("saving availability wakes an interview stuck on 'no common times' at once; after 'none of these work' other times are emailed to the candidate", async () => {
+    await wesIn();
+    // Wes only interviews on Saturdays: no weekday time in common with Dana
+    expect((await hoursFor(wes, [{ day: 6, start: "09:00", end: "17:00" }])).status).toBe(200);
+    const cand = await apply("Kai", "Moreno");
+    const iv = await requestInterview(cand.id, { interviewerUserIds: [ownerId, wesId] });
+    let row = await interview(iv.id);
+    expect(row.status).toBe("proposed");
+    expect(row.offeredSlots).toHaveLength(0);
+    expect((await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.no_slots")))).some((x) => x.action?.href === `/interviews/${iv.id}`)).toBe(true);
+    // Wes adds weekday hours: the waiting interview wakes now, not two days later, and the times go out
+    expect((await hoursFor(wes, weekdays("09:00", "17:00"))).status).toBe(200);
+    await container.drain();
+    row = await interview(iv.id);
+    expect(row.status).toBe("scheduling");
+    expect(row.offeredSlots.length).toBeGreaterThan(0);
+    expect(outbox().filter((m) => m.to === cand.email && /^Pick a time/.test(m.subject))).toHaveLength(1);
+    const offered = row.offeredSlots.map((s) => s.id);
+    // none of these work; Wes then keeps only afternoons: other times are worked out and emailed, as a new attempt
+    await noneWork(row.scheduleToken!, "Afternoons are better for me");
+    const before = outbox().length;
+    expect((await hoursFor(wes, weekdays("13:00", "17:00"))).status).toBe(200);
+    await container.drain();
+    const again = await interview(iv.id);
+    expect(again.status).toBe("scheduling");
+    expect(again.attempt).toBe(row.attempt + 1);
+    expect(again.offeredSlots.some((s) => !offered.includes(s.id))).toBe(true);
+    const mail = outbox().slice(before).filter((m) => m.to === cand.email);
+    expect(mail).toHaveLength(1);
+    expect(mail[0].subject).toMatch(/^Other times for your interview:/);
+    expect(mail[0].text).toContain("As you asked, here are other times");
+    expect(mail[0].text).toContain(`/c/schedule/${again.scheduleToken}`);
+    await json(owner, "POST", `/api/v1/interviews/${iv.id}/cancel`, { reason: "test cleanup" });
+    await container.drain();
+  });
+
+  it("'No common times' is told once per interview, not at every 48-hour re-check; again only when an interviewer's hours change (audit 06-interviews, bug 105)", async () => {
+    await wesIn();
+    expect((await hoursFor(wes, [{ day: 6, start: "09:00", end: "17:00" }])).status).toBe(200);
+    await container.drain();
+    const cand = await apply("Noor", "Haddad");
+    const iv = await requestInterview(cand.id, { interviewerUserIds: [ownerId, wesId] });
+    const told = async () => (await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.no_slots"), eq(notifications.userId, ownerId)))).filter((x) => x.action?.href === `/interviews/${iv.id}`).length;
+    expect((await interview(iv.id)).offeredSlots).toHaveLength(0);
+    expect(await told()).toBe(1);
+    // two re-checks two days apart find the same answer: nothing new is said
+    setClock(49 * H);
+    await container.drain();
+    setClock(98 * H);
+    await container.drain();
+    expect((await interview(iv.id)).offeredSlots).toHaveLength(0);
+    expect(await told()).toBe(1);
+    // Wes saves the same hours again: nothing changed, nothing said
+    expect((await hoursFor(wes, [{ day: 6, start: "09:00", end: "17:00" }])).status).toBe(200);
+    await container.drain();
+    expect(await told()).toBe(1);
+    // Wes changes his hours, still with no weekday in common: the team hears once more
+    expect((await hoursFor(wes, [{ day: 6, start: "10:00", end: "16:00" }])).status).toBe(200);
+    await container.drain();
+    expect(await told()).toBe(2);
+    setClock(147 * H);
+    await container.drain();
+    expect(await told()).toBe(2);
+    await json(owner, "POST", `/api/v1/interviews/${iv.id}/cancel`, { reason: "test cleanup" });
+    await container.drain();
+    setClock(0);
+  });
+
+  it("a pick while no run waits for one is booked straight away; a time booked for another interview since is refused plainly; booking for them is audited as a booking", async () => {
+    // Wes is back to full weekdays; these interviews are Dana's alone
+    await wesIn();
+    expect((await hoursFor(wes, weekdays("09:00", "17:00"))).status).toBe(200);
+    const rui = await apply("Rui", "Costa");
+    const uma = await apply("Uma", "Shah");
+    const ivR = await requestInterview(rui.id);
+    const ivU = await requestInterview(uma.id);
+    const rowR = await interview(ivR.id);
+    const rowU = await interview(ivU.id);
+    // both said none of these work, so no run waits for a pick on either
+    await noneWork(rowR.scheduleToken!, "Not sure yet");
+    await noneWork(rowU.scheduleToken!, "Not sure yet");
+    // Rui changes their mind and picks one of the times on the page: booked, never lost
+    const slot = rowR.offeredSlots[1];
+    await pick(rowR.scheduleToken!, slot.id);
+    const bookedR = await interview(ivR.id);
+    expect(bookedR).toMatchObject({ status: "scheduled", attempt: rowR.attempt + 1 });
+    expect(Date.parse(bookedR.startsAt!)).toBe(Date.parse(slot.startsAt));
+    expect(outbox().some((m) => m.to === rui.email && /^Confirmed:/.test(m.subject))).toBe(true);
+    // Uma was offered the same time; it is Rui's now. Her pick and a booking for her are both refused, with a plain line
+    const same = rowU.offeredSlots.find((s) => s.startsAt === slot.startsAt)!;
+    expect(same).toBeTruthy();
+    const page = await app.request(`/c/schedule/${rowU.scheduleToken}`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ slotId: same.id, timezone: "America/Los_Angeles" }).toString() });
+    expect(page.headers.get("location")).toBe(`/c/schedule/${rowU.scheduleToken}?error=slot_taken`);
+    expect(await (await app.request(page.headers.get("location")!)).text()).toContain("That time was just booked for another interview. Choose another.");
+    const refused = await json(owner, "POST", `/api/v1/interviews/${ivU.id}/book-on-behalf`, { slotId: same.id, note: "agreed by phone" });
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("slot_taken");
+    expect(await interview(ivU.id)).toMatchObject({ status: "scheduling", selectedSlot: null, attempt: rowU.attempt });
+    // another time, agreed by phone: booked straight away and audited as a booking
+    const other = rowU.offeredSlots.find((s) => s.startsAt !== slot.startsAt && Math.abs(Date.parse(s.startsAt) - Date.parse(slot.startsAt)) > 3 * H)!;
+    const ok = await json(owner, "POST", `/api/v1/interviews/${ivU.id}/book-on-behalf`, { slotId: other.id, note: "agreed by phone" });
+    expect(ok.status, await ok.clone().text()).toBe(200);
+    await container.drain();
+    expect(await interview(ivU.id)).toMatchObject({ status: "scheduled", attempt: rowU.attempt + 1 });
+    const audits = await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "interview.booked_on_behalf")));
+    expect(audits.some((a) => a.target?.id === ivU.id)).toBe(true);
+    expect((await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "candidate.viewed")))).some((a) => a.target?.id === ivU.id)).toBe(false);
+    for (const id of [ivR.id, ivU.id]) await json(owner, "POST", `/api/v1/interviews/${id}/cancel`, { reason: "test cleanup" });
+    await container.drain();
+  });
+
+  it("the team moving a booked interview tells the candidate the time is off, with a calendar file that removes it, and tells the other interviewers", async () => {
+    await wesIn();
+    expect((await hoursFor(wes, weekdays("09:00", "17:00"))).status).toBe(200);
+    const cand = await apply("Zoe", "Hart");
+    const iv = await requestInterview(cand.id, { interviewerUserIds: [ownerId, wesId] });
+    let row = await interview(iv.id);
+    await pick(row.scheduleToken!, row.offeredSlots[0].id);
+    row = await interview(iv.id);
+    expect(row.status).toBe("scheduled");
+    const before = outbox().length;
+    const re = await json(owner, "POST", `/api/v1/interviews/${iv.id}/reschedule`, { reason: "Wes is travelling that day." });
+    expect(re.status).toBe(200);
+    expect(await re.json()).toMatchObject({ candidateTold: true, status: "scheduling" });
+    await container.drain();
+    const sent = outbox().slice(before).filter((m) => m.to === cand.email);
+    const moved = sent.find((m) => /^Your interview time has changed:/.test(m.subject))!;
+    expect(moved).toBeTruthy();
+    expect(moved.text).toContain("is off, so there is no need to attend then");
+    expect(moved.text).toContain('"Wes is travelling that day."');
+    expect(moved.text).toContain("We will email you new times");
+    const ics = Buffer.from(moved.attachments![0].contentBase64, "base64").toString("utf8");
+    expect(ics).toContain("METHOD:CANCEL");
+    expect(ics).toContain(`DTSTART:${new Date(row.startsAt!).toISOString().replace(/[-:]/g, "").replace(".000Z", "Z")}`);
+    expect(sent.some((m) => /^New times for your interview:/.test(m.subject))).toBe(true);
+    expect(sent.some((m) => /^Pick a time/.test(m.subject))).toBe(false);
+    // Wes hears it moved; Dana, who moved it, is not told her own news
+    const heard = (userId: string) => container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.rescheduled"), eq(notifications.userId, userId))).then((rows) => rows.filter((x) => x.title.startsWith("Interview moved: Zoe Hart")));
+    const wesNote = await heard(wesId);
+    expect(wesNote).toHaveLength(1);
+    expect(wesNote[0].body).toMatch(/^The time on .+ is off\. New times are being offered; you will be told when one is booked\.$/);
+    expect(await heard(ownerId)).toHaveLength(0);
+    await json(owner, "POST", `/api/v1/interviews/${iv.id}/cancel`, { reason: "test cleanup" });
+    await container.drain();
+  });
+
+  it("only real collisions count toward bringing in a recruiter: after two moves, a taken time is simply offered again", async () => {
+    const lia = await apply("Lia", "Fox");
+    const ivA = await requestInterview(lia.id);
+    // the team moves it twice: attempt 3, and nothing has collided yet
+    for (let i = 0; i < 2; i++) {
+      expect((await json(owner, "POST", `/api/v1/interviews/${ivA.id}/reschedule`, {})).status).toBe(200);
+      await container.drain();
+    }
+    let rowA = await interview(ivA.id);
+    expect(rowA).toMatchObject({ status: "scheduling", attempt: 3 });
+    // Max is offered the same times and books one first; Lia then picks that very time
+    const max = await apply("Max", "Gray");
+    const ivB = await requestInterview(max.id);
+    const rowB = await interview(ivB.id);
+    const shared = rowA.offeredSlots.find((s) => rowB.offeredSlots.some((x) => x.startsAt === s.startsAt))!;
+    await pick(rowB.scheduleToken!, rowB.offeredSlots.find((x) => x.startsAt === shared.startsAt)!.id);
+    expect((await interview(ivB.id)).status).toBe("scheduled");
+    await pick(rowA.scheduleToken!, shared.id);
+    rowA = await interview(ivA.id);
+    expect(rowA).toMatchObject({ status: "scheduling", attempt: 4, selectedSlot: null });
+    expect(rowA.offeredSlots.some((s) => s.startsAt === shared.startsAt)).toBe(false);
+    const stuck = await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.stuck")));
+    expect(stuck.filter((x) => x.title.includes("Lia"))).toHaveLength(0);
+    for (const id of [ivA.id, ivB.id]) await json(owner, "POST", `/api/v1/interviews/${id}/cancel`, { reason: "test cleanup" });
+    await container.drain();
+  });
+
+  it("a time that has passed is never booked: the page leaves it out, and a pick or a booking for them is refused plainly", async () => {
+    await wesIn();
+    expect((await hoursFor(wes, weekdays("09:00", "17:00"))).status).toBe(200);
+    const cand = await apply("Ora", "Diaz");
+    const iv = await requestInterview(cand.id);
+    const row = await interview(iv.id);
+    // they say none of these work, so no run waits for a pick; the first offered time then passes
+    await noneWork(row.scheduleToken!, "Not sure yet");
+    const first = row.offeredSlots[0];
+    setClock(Date.parse(first.startsAt) + 30 * 60_000 - BASE);
+    const page = await (await app.request(`/c/schedule/${row.scheduleToken}`)).text();
+    expect(page).not.toContain(`value="${first.id}"`);
+    const r = await app.request(`/c/schedule/${row.scheduleToken}`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ slotId: first.id, timezone: "America/Los_Angeles" }).toString() });
+    expect(r.headers.get("location")).toBe(`/c/schedule/${row.scheduleToken}?error=slot_unknown`);
+    const refused = await json(owner, "POST", `/api/v1/interviews/${iv.id}/book-on-behalf`, { slotId: first.id, note: "agreed by phone" });
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("slot_unknown");
+    expect(await interview(iv.id)).toMatchObject({ status: "scheduling", selectedSlot: null, startsAt: null });
+    await json(owner, "POST", `/api/v1/interviews/${iv.id}/cancel`, { reason: "test cleanup" });
+    await container.drain();
+    setClock(0);
+  });
+
+  it("a required interviewer who never adds hours: the owner is reminded at each two-day wait, and after the second a recruiter is brought in", async () => {
+    const pat = await signInAs(container, app, { companyId, role: "hiring_manager", email: "pat@smile.test", name: "Pat Lee" });
+    expect(pat).toBeTruthy();
+    const patId = (await container.db.select({ id: users.id }).from(users).where(eq(users.email, "pat@smile.test")))[0].id;
+    const cand = await apply("Noa", "Kim");
+    const iv = await requestInterview(cand.id, { interviewerUserIds: [ownerId, patId] });
+    expect((await interview(iv.id)).status).toBe("proposed");
+    // the notices the owner herself gets (each one goes to every owner and admin)
+    const asked = () => container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.no_availability"), eq(notifications.userId, ownerId))).then((rows) => rows.filter((x) => x.title.includes("Noa")));
+    expect(await asked()).toHaveLength(1);
+    expect((await asked())[0].action?.href).toBe(`/interviews/${iv.id}`);
+    const escalations = () => container.db.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), eq(recruiterEscalations.kind, "candidate_issue"))).then((rows) => rows.filter((e) => (e.question ?? "").includes("Noa Kim")));
+    // two days on, still no hours: the owner hears again, nobody else is brought in yet
+    setClock(49 * H);
+    await container.drain();
+    expect(await asked()).toHaveLength(2);
+    expect((await asked()).some((x) => /^Still waiting: .*Pat/.test(x.body))).toBe(true);
+    expect(await escalations()).toHaveLength(0);
+    // two more days: a recruiter is brought in, once
+    setClock(98 * H);
+    await container.drain();
+    expect(await escalations()).toHaveLength(1);
+    setClock(147 * H);
+    await container.drain();
+    expect(await escalations()).toHaveLength(1);
+    await json(owner, "POST", `/api/v1/interviews/${iv.id}/cancel`, { reason: "test cleanup" });
+    await container.drain();
+    setClock(0);
   });
 });

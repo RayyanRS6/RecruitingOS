@@ -2,6 +2,8 @@
 # models the app uses (Claude Haiku 5.5; Claude Sonnet 5.5 writes the test job), with synthetic CVs only. Twin CVs that
 # differ only in a name, a graduation year or a zip code must read and score the same; the same CV read three times
 # must read and score the same; quotes must be real; a gap, a career change or no degree is never marked down alone.
+# Since Wave S3 (14 October 2026) also: the same CV with an earlier rejection at the company sends the very same input,
+# and the scoring never sees a name, email, phone, street, zip code or link (triage.redaction).
 # Started by hand from the Actions tab ("Run workflow"). It never runs on a pull request, so the key is never offered
 # to a fork's code. About ten cents a run. How to use it: docs/runbooks/fairness-tests.md.
 name: fairness

@@ -5,7 +5,7 @@ import type { RolePacket } from "@ros/contracts";
 import { approvalRequests, entitlements, events, notifications, rolePackets, roles, withTenant, workflowRuns } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAs, signInWithIdentity } from "./test-helpers";
+import { putOnInterview, signInAs, signInWithIdentity } from "./test-helpers";
 
 /**
  * Role packets over HTTP (docs/spec/21 section 7: B1 to B13, J7, J14): the simple editor's shape saves as a valid
@@ -367,7 +367,7 @@ describe("role packets: editor, approval rules, sent back, interview plan, timel
     expect(d.proposedPacket?.version).toBe(2);
     expect(d.packetApproval.pending).toMatchObject({ version: 2, editWhileOpen: true, viewer: { mayDecide: true } });
     const brief = (await (await json(olive, "GET", "/api/v1/brief")).json()) as { cards: Array<{ title: string; actions: Array<{ method: string; path: string }> }> };
-    const card = brief.cards.find((c) => c.title.startsWith("Approve packet v2 of"));
+    const card = brief.cards.find((c) => c.title.startsWith("Approve version 2 of"));
     expect(card).toBeTruthy();
     expect(card!.actions[0]).toMatchObject({ method: "GET", path: `/roles/${opened.roleId}` });
     // approving the edit makes it current without touching the role's status
@@ -456,6 +456,9 @@ describe("role packets: editor, approval rules, sent back, interview plan, timel
     }
     expect(rows.find((r) => r.type === "approval.granted")?.payload).toMatchObject({ roleId: one.roleId, note: "Yes" });
     const interviewer = await signInAs(container, app, { companyId, role: "interviewer", email: "wes@packet.test" });
+    // a role they do not interview for answers as one that does not exist; on one they do, the timeline needs events.read
+    expect((await json(interviewer, "GET", `/api/v1/roles/${one.roleId}/timeline`)).status).toBe(404);
+    await putOnInterview(container, app, { cookie: interviewer, roleId: one.roleId });
     expect((await json(interviewer, "GET", `/api/v1/roles/${one.roleId}/timeline`)).status).toBe(403);
     expect((await json(olive, "GET", "/api/v1/roles/00000000-0000-0000-0000-000000000000/timeline")).status).toBe(404);
   });

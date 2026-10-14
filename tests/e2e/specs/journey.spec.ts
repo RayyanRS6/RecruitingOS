@@ -60,12 +60,15 @@ test.describe("owner and candidate journey", () => {
     await page.goto(`/careers/${seeded.slug}/jobs/${seeded.roleId}/apply`);
     await expectAccessible(page, "apply form");
 
-    // the owner declares availability in Setup; the recruiter-access card is there with nothing to end
-    await page.goto("/setup");
-    await expect(page.getByRole("heading", { name: "My availability for interviews" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "ITS recruiter access" })).toBeVisible();
+    // the owner declares availability in Settings (its Notifications tab); the recruiter-access card is on its Security
+    // tab with nothing to end
+    await page.goto("/setup?tab=security");
+    await expect(page.getByRole("heading", { name: "ITS recruiter access" })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText("No recruiter has access right now.")).toBeVisible();
-    await expectAccessible(page, "setup");
+    await expectAccessible(page, "settings, security");
+    await page.getByRole("tab", { name: "Notifications" }).click();
+    await expect(page.getByRole("heading", { name: "My availability for interviews" })).toBeVisible();
+    await expectAccessible(page, "settings, notifications");
     await page.getByRole("button", { name: "Save availability" }).click();
     await expect(page.getByRole("status").filter({ hasText: /Availability saved/ })).toBeVisible();
 
@@ -91,6 +94,7 @@ test.describe("owner and candidate journey", () => {
     await expectAccessible(page, "candidate status");
     await page.getByRole("link", { name: "Choose a time" }).click();
     await expect(page.getByRole("heading", { name: /Pick a time/ })).toBeVisible();
+    await page.getByText("Change the time zone", { exact: true }).click();
     await page.getByLabel("Show times in").selectOption("America/New_York");
     await page.getByRole("button", { name: "Show times" }).click(); // no inline script under the content-security policy: a real button
     await expect(page.getByText(/EDT|EST/).first()).toBeVisible();

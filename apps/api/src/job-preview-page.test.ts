@@ -6,7 +6,7 @@ import { companies } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { jobUrls } from "./services/job-urls";
-import { signInAs } from "./test-helpers";
+import { putOnInterview, signInAs } from "./test-helpers";
 
 /**
  * The authenticated preview of the job page (plan D1): the page and the apply form candidates get, drawn by the same
@@ -83,8 +83,9 @@ describe("the job-page preview (plan D1)", () => {
     expectPreview(r, html);
     expect(html).toContain("<strong>Not public yet.</strong> Preview of version 1: not public.");
     // what the page could still show about the company (plan D10)
-    expect(html).toContain("<li>There is no text about your company yet. Draft and approve it in Setup, and it shows on every job page.</li>");
-    expect(html).toContain("<li>There is no logo yet. Upload one in Setup; until then the page shows your initials.</li>");
+    // the staff glossary (14 October 2026): Setup is called Settings on screen
+    expect(html).toContain("<li>There is no text about your company yet. Draft and approve it in Settings, and it shows on every job page.</li>");
+    expect(html).toContain("<li>There is no logo yet. Upload one in Settings; until then the page shows your initials.</li>");
     expect(html).toContain("<title>Preview: ");
     expect(html).toContain("Careers at Preview Dental");
     expect(html).toMatch(/<a class="btn go head-apply" href="\/api\/v1\/roles\/[^"]+\/preview\?version=1&view=apply"><span class="go-fill" aria-hidden="true"><\/span><span class="go-icon"><svg class="icon"[^>]*>.*?<\/svg><\/span><span class="go-text">Apply now<\/span><\/a>/);
@@ -114,13 +115,23 @@ describe("the job-page preview (plan D1)", () => {
     expect(html).not.toContain('name="uploadGrant"');
     expect(html).toContain("<summary>No resume? Answer four short questions instead</summary>");
     expect(html).toMatch(/<p class="back"><a href="\/api\/v1\/roles\/[^"]+\/preview\?version=1">/);
+    // the line under each yes/no question is the live form's plain one, never the team's words ("... in the packet")
+    expect(html).not.toMatch(/packet|intake|playbook/i);
+    const data = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/preview?version=1`)).json()) as JobPreview;
+    const helps = [...JSON.stringify(data).matchAll(/"help":"([^"]*)"/g)].map((m) => m[1]);
+    expect(helps.length).toBeGreaterThan(0);
+    for (const h of helps) expect(h).not.toMatch(/packet|intake|playbook|knock-?out|triage|the owner/i);
   });
 
   it("needs the role and its pay: an interviewer, someone signed out, an unknown version or role each get a plain page", async () => {
+    // a role they do not interview for answers as one that does not exist; one they do needs the pay as well
+    expect((await json(interviewer, "GET", `/api/v1/roles/${roleId}/preview`)).status).toBe(404);
+    const onIt = await putOnInterview(container, app, { cookie: interviewer, roleId });
     const asInterviewer = await tab(interviewer, `/api/v1/roles/${roleId}/preview`);
     expect(asInterviewer.status).toBe(403);
     expect(decode(await asInterviewer.text())).toContain("Seeing the job page before it is public needs access to the role and its pay.");
     expect((await json(interviewer, "GET", `/api/v1/roles/${roleId}/preview/page`)).status).toBe(403);
+    await onIt.remove();
     const signedOut = await tab(null, `/api/v1/roles/${roleId}/preview`);
     expect(signedOut.status).toBe(401);
     expect(await signedOut.text()).toContain("Sign in to see this preview, then open it again.");

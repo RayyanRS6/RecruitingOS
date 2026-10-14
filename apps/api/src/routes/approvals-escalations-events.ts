@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, isNull, like, notInArray, or } from "drizzle-orm";
 import { ConfirmBoardUpdated, CreateEscalation, DecideApproval, EscalationEstimateQuery, EscalationReply, RecordPostingUrl, ReopenEscalation, ResolveEscalation, VerifyPosting, type Actor, type CandidateNotice, type EscalationScope, type InterviewDraft, type RecruiterRequestView } from "@ros/contracts";
-import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, assertCan, audit, can, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, isBoardChannel, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, scopeAllows, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, unsentScreenReadings, withoutSentimentWords, withoutUnsentInContext, withoutUnsentScreenEvents, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
+import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, assertCan, audit, can, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, isBoardChannel, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, unsentScreenReadings, withoutSentimentWords, withoutUnsentInContext, withoutUnsentScreenEvents, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, companies, escalationMessages, events, memberships, postings, recruiterEscalations, rolePackets, roles, screens, staffAccessGrants, users, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
 import { confirmPostingByHand, postingTaskDetail, queuePostingCheck, recordBoardAddress } from "./postings";
 import { actorOf, clientIp, requireRecruiterOrAdmin, requireTenant, type Vars } from "../middleware/session";
@@ -22,15 +22,25 @@ export const approvalRoutes = new Hono<Vars>();
 /**
  * The approval requests themselves. A request's proposal can carry a candidate's name and a message written to them
  * (F11), so the list needs application.read (an interviewer sees only their own interviews, F9), and ITS staff under a
- * scoped grant see only the requests of the role or candidate the grant names.
+ * scoped grant see only the requests they may decide (`staffMayAsk`, the rule POST /:id/decide applies): a role grant
+ * those about its role or one of its candidates, a grant about one candidate only that candidate's. A request about a
+ * whole role (the closing message lists every untold applicant) or about the whole company is left out for them.
  */
 approvalRoutes.get("/", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "application.read");
   const status = c.req.query("status") ?? "pending";
-  const rows = await withTenant(c.get("container").db, t.companyId, (tx) => tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, t.companyId), eq(approvalRequests.status, status))).orderBy(desc(approvalRequests.createdAt)));
-  const scope = t.staff ? { roleId: t.staff.scope.roleId, applicationId: t.staff.scope.applicationId } : null;
-  return c.json(scope ? rows.filter((r) => scopeAllows(scope, { roleId: r.roleId, applicationId: r.applicationId })) : rows);
+  const scope = staffScopeOf(t);
+  const rows = await withTenant(c.get("container").db, t.companyId, async (tx) => {
+    const all = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, t.companyId), eq(approvalRequests.status, status))).orderBy(desc(approvalRequests.createdAt));
+    if (!scope) return all;
+    // A request about a candidate may carry only the application: its role comes from the application, as on decide.
+    const appIds = [...new Set(all.filter((r) => r.applicationId && !r.roleId).map((r) => r.applicationId as string))];
+    const apps = appIds.length ? await tx.select({ id: applications.id, roleId: applications.roleId }).from(applications).where(inArray(applications.id, appIds)) : [];
+    const roleOfApp = new Map(apps.map((a) => [a.id, a.roleId]));
+    return all.filter((r) => staffMayAsk(scope, { roleId: r.roleId ?? (r.applicationId ? roleOfApp.get(r.applicationId) ?? null : null), applicationId: r.applicationId ?? null }));
+  });
+  return c.json(rows);
 });
 
 approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
@@ -42,6 +52,15 @@ approvalRoutes.post("/:id/decide", requireTenant, async (c) => {
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     const [req] = await tx.select().from(approvalRequests).where(eq(approvalRequests.id, c.req.param("id"))).limit(1);
     if (!req) throw new HttpError(404, "not_found", "Approval request not found.");
+    // ITS staff under a grant decide only what the grant covers, as on every route that takes an id: a request about
+    // their role or one of its candidates (a grant about one candidate: that candidate). Deciding acts for the whole of
+    // what a request is about, so a request about the role's whole group, or the company's, is not theirs to decide under
+    // a narrower grant, even where the list shows it. The same refusal as the role and application guards.
+    const scope = staffScopeOf(t);
+    if (scope) {
+      const [app] = req.applicationId && !req.roleId ? await tx.select({ roleId: applications.roleId }).from(applications).where(eq(applications.id, req.applicationId)).limit(1) : [];
+      if (!staffMayAsk(scope, { roleId: req.roleId ?? app?.roleId ?? null, applicationId: req.applicationId ?? null })) throw new HttpError(403, "staff_scope", "Your access is limited to the role and candidate of the escalation you accepted.");
+    }
     if (req.status !== "pending") throw new HttpError(409, "decided", `This request is already ${req.status}.`);
     const status = body.decision === "approve" ? "approved" : "rejected";
     const proposedVersion = Number((req.proposal as { version?: number }).version);
@@ -109,7 +128,7 @@ function accessWords(scope: EscalationScope): string {
   return "all of your hiring: every role and every candidate";
 }
 // Said to whoever asked: hiring managers and HR may ask, but only owners and admins hold staff_access.revoke.
-const ACCESS_LIMITS = `Their access starts when they pick the request up and ends a day after it is resolved, or after ${ESCALATION_ACCESS_DAYS} days at most. An owner or admin can end it sooner in Setup, and every page they open is recorded.`;
+const ACCESS_LIMITS = `Their access starts when they pick the request up and ends a day after it is resolved, or after ${ESCALATION_ACCESS_DAYS} days at most. An owner or admin can end it sooner in Settings, and every page they open is recorded.`;
 
 /**
  * Settles what a request covers before it is created. The ids decide it; a request with neither a role nor a candidate
@@ -317,7 +336,7 @@ escalationRoutes.post("/mine/:id/reopen", requireTenant, async (c) => {
     // Fresh access for someone outside the company is always told at once, to the whole team that hears about recruiters
     // (Q31), not only to the person who reopened it.
     if (r.recruiter && r.grant) {
-      await notify(tx, { companyId: t.companyId, kind: "recruiter.access_granted", title: `${r.recruiter.name} (ITS recruiter) has access again for a reopened request`, body: `${actor.name ?? "Someone on your team"} reopened a request ${r.recruiter.name} answered, so it is theirs again. They can see ${accessWords(scope)} until ${new Date(r.grant.expiresAt).toLocaleDateString("en-US")}, or until a day after the request is resolved if that is sooner. Every page they open is recorded in your activity, and an owner or admin can end their access in Setup.`, action: { label: "Recruiter access", href: "/setup#setup-recruiters" } });
+      await notify(tx, { companyId: t.companyId, kind: "recruiter.access_granted", title: `${r.recruiter.name} (ITS recruiter) has access again for a reopened request`, body: `${actor.name ?? "Someone on your team"} reopened a request ${r.recruiter.name} answered, so it is theirs again. They can see ${accessWords(scope)} until ${new Date(r.grant.expiresAt).toLocaleDateString("en-US")}, or until a day after the request is resolved if that is sooner. Every page they open is recorded in your activity, and an owner or admin can end their access in Settings.`, action: { label: "Recruiter access", href: "/setup#setup-recruiters" } });
     }
     return r;
   });
@@ -470,7 +489,7 @@ escalationRoutes.post("/:id/claim", requireRecruiterOrAdmin, async (c) => {
       : e.requestedBy.kind === "recruiter" ? `${e.requestedBy.name ?? "An ITS recruiter"} (ITS recruiter) asked for this while working on another of your requests, so a recruiter was brought in. `
       : e.requestedBy.kind === "candidate" || e.kind === "candidate_issue" ? "A candidate needed a person, so a recruiter was brought in. "
       : "Something got stuck and needs a person, so a recruiter was brought in. ";
-    await notify(tx, { companyId: e.companyId, kind: "recruiter.claimed", title: byTeam ? `${actor.name} (ITS recruiter) picked up your request` : `${actor.name} (ITS recruiter) was brought in`, body: `${why}They can see ${accessWords(scope)} until ${new Date(grant.expiresAt).toLocaleDateString("en-US")}, or until a day after the request is resolved if that is sooner. Every page they open is recorded in your activity, and an owner or admin can end their access in Setup.`, action: { label: "Recruiter access", href: "/setup" } });
+    await notify(tx, { companyId: e.companyId, kind: "recruiter.claimed", title: byTeam ? `${actor.name} (ITS recruiter) picked up your request` : `${actor.name} (ITS recruiter) was brought in`, body: `${why}They can see ${accessWords(scope)} until ${new Date(grant.expiresAt).toLocaleDateString("en-US")}, or until a day after the request is resolved if that is sooner. Every page they open is recorded in your activity, and an owner or admin can end their access in Settings.`, action: { label: "Recruiter access", href: "/setup" } });
     return { escalation: u, grant: { id: grant.id, purpose: grant.purpose, expiresAt: grant.expiresAt, scope: { roleId: grant.roleId, applicationId: grant.applicationId } } };
   });
   return c.json(row);
@@ -506,9 +525,9 @@ async function postingTaskState(tx: Tx, e: EscalationRow): Promise<{ notDone: bo
 
 /** What the team does when ITS could not do a posting task, after the recruiter's own words. */
 const POSTING_NOT_DONE_NEXT: Record<string, (board: string) => string> = {
-  post_job: (board) => `Nothing is on ${board} yet. Ask ITS again from the Posting tab once that is sorted out, or post it from your company's own account and record the address there.`,
-  update_job: (board) => `${board} still shows the earlier version. Ask ITS again from the Posting tab, or update the listing from your company's own account and confirm it there.`,
-  take_down_job: (board) => `${board} may still show the job. Ask ITS again from the Posting tab, or take it down from your company's own account and tick it off there.`,
+  post_job: (board) => `Nothing is on ${board} yet. Ask ITS again from the Share tab once that is sorted out, or post it from your company's own account and record the address there.`,
+  update_job: (board) => `${board} still shows the earlier version. Ask ITS again from the Share tab, or update the listing from your company's own account and confirm it there.`,
+  take_down_job: (board) => `${board} may still show the job. Ask ITS again from the Share tab, or take it down from your company's own account and tick it off there.`,
 };
 
 /**
@@ -541,7 +560,7 @@ escalationRoutes.post("/:id/resolve", requireRecruiterOrAdmin, async (c) => {
       await notify(tx, { companyId: e.companyId, kind: "recruiter.resolved", title: `${actor.name} (ITS recruiter) answered the request about ${await aboutWords(tx, e)}`, body: body.resolution, action: { label: "Read the answer", href: requestLink(e.id) }, userIds: await requestReaders(tx, e) });
     } else if (task?.notDone) {
       const label = postingTaskLabel(e.kind, task.board);
-      await notify(tx, { companyId: e.companyId, kind: "recruiter.posting_not_done", title: `${task.roleTitle}: ITS could not ${label.charAt(0).toLowerCase()}${label.slice(1)}`, body: `${actor.name} at ITS wrote: "${body.resolution}" ${POSTING_NOT_DONE_NEXT[e.kind](task.board)}`, action: { label: "Open the Posting tab", href: `/roles/${task.roleId}?tab=posting` }, roles: ["owner", "admin"] });
+      await notify(tx, { companyId: e.companyId, kind: "recruiter.posting_not_done", title: `${task.roleTitle}: ITS could not ${label.charAt(0).toLowerCase()}${label.slice(1)}`, body: `${actor.name} at ITS wrote: "${body.resolution}" ${POSTING_NOT_DONE_NEXT[e.kind](task.board)}`, action: { label: "Open the Share tab", href: `/roles/${task.roleId}?tab=posting` }, roles: ["owner", "admin"] });
     }
     await container.engine.signal(tx, { companyId: e.companyId, key: `escalation:${e.id}`, payload: { resolved: true } });
     return u;

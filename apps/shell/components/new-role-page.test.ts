@@ -25,6 +25,10 @@ const { NewRole } = await import("@ros/web/src/pages/NewRole");
 const { Home } = await import("@ros/web/src/pages/Home");
 const { checkSignature } = await import("@ros/web/src/pages/new-role/refine-api");
 const { samplePacket } = await import("../../../packages/agents/src/fixtures/sample-packet");
+const { StepBody } = await import("@ros/web/src/pages/new-role/QuickStart");
+const { emptyQuickAnswers } = await import("@ros/web/src/pages/new-role/quick-start");
+const { suggestKey } = await import("@ros/web/src/pages/new-role/quick-suggest");
+type QuickAnswersT = import("@ros/web/src/pages/new-role/quick-start").QuickAnswers;
 
 const me = (role: string) => ({ user: { id: "u-dana", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } });
 const room = { ok: true, limit: 5, used: 1, holding: [], message: null };
@@ -71,11 +75,16 @@ describe("the job builder", () => {
     nav.path = "/roles/new";
   });
 
-  it("opens on 'Who are you hiring?' with one big box and the roles our hiring guide knows", () => {
+  it("opens on 'Who are you hiring?' with two ways to start: the quick questions first, then one big box and the roles our hiring guide knows", () => {
     const html = render(createElement(NewRole), [[["me"], me("owner")], [["intake", "mine"], { sessions: [], room }], [["company"], { name: "Bright Dental", vertical: "dental", settings: {} }]]);
-    expect(html).toContain("New role · Bright Dental");
+    expect(html).toContain("New job · Bright Dental");
     expect(html).toContain("<h1>Who are you hiring?</h1>");
-    expect(html).toContain("Describe the role in a sentence or paste a job ad you already have. I&#x27;ll ask a few questions and draft the job for you.");
+    expect(html).toContain("Two ways to start. The assistant drafts the job; you decide.");
+    // the quick questions are the main button, and come first
+    expect(html).toContain(">Answer a few quick questions</h2>");
+    expect(html).toMatch(/class="btn primary"[^>]*>Start the quick questions<svg/);
+    expect(html.indexOf("Start the quick questions")).toBeLessThan(html.indexOf("Or describe it, or paste a job ad"));
+    expect(html).toContain(">Or describe it, or paste a job ad</h2>");
     expect(html).toMatch(/<textarea[^>]*aria-label="Describe the role, or paste a job ad"/);
     expect(html).toContain("Paste a job ad: up to 20,000 characters.");
     expect(html).toContain(">Dental hygienist</button>");
@@ -93,6 +102,27 @@ describe("the job builder", () => {
     expect(html).toMatch(/href="\/roles\/r2"[^>]*>Hygienist<\/a><span class="muted"> \(<!-- -->paused<!-- -->\)<\/span>|href="\/roles\/r2"[^>]*>Hygienist<\/a><span class="muted"> \(paused\)<\/span>/);
     expect(html).not.toMatch(/Front Desk Lead<\/a><span class="muted">/);
     expect(html).not.toContain("Roles our hiring guide knows");
+    // neither way can start a draft while the plan is full
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Start the quick questions/);
+  });
+
+  it("opens the quick questions at ?way=quick: one question a screen, Step 1 of 10, a job ad to fill in the steps, and the other way back", () => {
+    nav.search = "way=quick";
+    const html = render(createElement(NewRole), [[["me"], me("owner")], [["intake", "mine"], { sessions: [{ id: "s9", status: "active", title: "Hygienist", startedBy: { userId: "u-dana", name: "Dana" }, mine: true, createdAt: "", updatedAt: "", ownerMessages: 1, hasDraft: false, missing: [] }], room }], [["company"], { name: "Bright Dental", vertical: "dental", settings: {} }]]);
+    // a draft in progress does not take the person away from the quick questions they asked for
+    expect(html).toContain("New job · Bright Dental");
+    expect(html.replace(/<!-- -->/g, "")).toContain("Step 1 of 10 · Job title");
+    expect(html).toContain('<h1 tabindex="-1">What is the job title?</h1>');
+    expect(html).toContain("Or paste a job ad you already have to fill in the steps.");
+    expect(html).toMatch(/<label for="qs-title">Job title<\/label>/);
+    expect(html).toContain("<summary>Paste a job ad instead</summary>");
+    expect(html).toMatch(/<textarea[^>]*aria-label="Paste a job ad"/);
+    expect(html).toContain('href="/roles/new?new=1"');
+    expect(html).toContain(">Other ways to start</a>");
+    expect(html).toMatch(/<button type="submit" class="btn primary"[^>]*>Next<svg/);
+    expect(html).toContain("Press Enter to go on. Your answers are kept in this browser.");
+    expect(html).not.toContain("Start over");
+    expect(html).not.toContain("Who are you hiring?");
   });
 
   it("tells someone who may not start a hire, plainly", () => {
@@ -153,6 +183,57 @@ describe("the job builder", () => {
     expect(html).toContain("Hard to check before someone starts:");
     expect(html).toContain(">Ask about it in the interview</button>");
     expect(html).toContain(">Leave it</button>");
+  });
+});
+
+describe("the quick start's suggestions for any job (Wave S3, G3)", () => {
+  type Suggest = { kind: "guide" } | { kind: "waiting" } | { kind: "ai"; mustHaves: string[]; questions: string[] } | { kind: "none" };
+  const driver = { ...emptyQuickAnswers(), title: "Delivery driver", employmentType: "part_time", remotePolicy: "onsite", place: "Austin, TX", experience: "2", below: "consider" as const };
+  const draw = (suggest: Suggest, step: "musts" | "questions" = "musts", a: QuickAnswersT = driver, vertical = "logistics") =>
+    renderToStaticMarkup(createElement(StepBody, { step, a, set: () => undefined, vertical, suggest, onEdit: () => undefined }));
+
+  it("shows our hiring guide's must-haves at once when it knows the job, and never waits on the assistant", () => {
+    const html = draw({ kind: "guide" }, "musts", { ...emptyQuickAnswers(), title: "Dental hygienist" }, "dental");
+    expect(html).toContain("Digital radiography and intraoral scanning");
+    expect(html).toContain("Our hiring guide");
+    expect(html).not.toContain("AI suggestion");
+    expect(html).not.toContain("Suggesting skills from your answers…");
+  });
+
+  it("says it is suggesting while the assistant works, with add your own still there", () => {
+    const html = draw({ kind: "waiting" });
+    expect(html).toContain('<p class="small muted" role="status">Suggesting skills from your answers…</p>');
+    expect(html).toMatch(/<input id="qs-must-own"/);
+    expect(html).not.toContain('name="qs-musts"');
+  });
+
+  it("offers the assistant's must-haves as tick boxes, none ticked, so the person chooses", () => {
+    const html = draw({ kind: "ai", mustHaves: ["Valid driver's licence", "Route planning"], questions: [] });
+    expect(html).toMatch(/<input type="checkbox" aria-label="Valid driver&#x27;s licence" name="qs-musts" value="Valid driver&#x27;s licence"\/>/);
+    expect(html).toMatch(/<input type="checkbox" aria-label="Route planning" name="qs-musts" value="Route planning"\/>/);
+    expect(html).not.toMatch(/name="qs-musts"[^>]*checked/);
+    expect(html).toContain("AI suggestion");
+    expect(html).not.toContain("Suggesting skills");
+    // ticked ones stay ticked
+    expect(draw({ kind: "ai", mustHaves: ["Route planning"], questions: [] }, "musts", { ...driver, mustHaves: ["Route planning"] })).toMatch(/aria-label="Route planning" name="qs-musts" checked=""/);
+  });
+
+  it("shows nothing beyond add your own when the assistant failed or was slow", () => {
+    const html = draw({ kind: "none" });
+    expect(html).not.toContain('name="qs-musts"');
+    expect(html).not.toContain("Suggesting");
+    expect(html).toMatch(/<input id="qs-must-own"[^>]*placeholder="e.g. Two years in a busy dental office"/);
+  });
+
+  it("offers the assistant's questions ticked, after the general ones, and says while it works", () => {
+    const aiSuggest = { key: suggestKey(driver), mustHaves: [], questions: ["Do you hold a valid driver's licence?"] };
+    const html = draw({ kind: "ai", mustHaves: [], questions: aiSuggest.questions }, "questions", { ...driver, aiSuggest });
+    expect(html).toMatch(/<input type="checkbox" aria-label="Do you hold a valid driver&#x27;s licence\?" name="qs-questions" checked=""/);
+    expect(html).toContain("AI suggestion");
+    expect(html).toContain("Are you legally authorized to work in the United States for any employer?");
+    const waiting = draw({ kind: "waiting" }, "questions");
+    expect(waiting).toContain('role="status">Suggesting questions from your answers…</p>');
+    expect(waiting).toContain("Are you legally authorized to work in the United States for any employer?");
   });
 });
 

@@ -7,6 +7,7 @@ import { jobValidThrough, type FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { PUBLIC_FEED_CACHE_MS, resetPublicFeedCache } from "./pages/public-feeds";
+import { ASKED_OF_EVERYONE, questionHelp, withPlainQuestionHelp } from "./pages/question-help";
 import { jobUrls } from "./services/job-urls";
 import { statusTokenFor, useLaterApplyFlow, useOneVisitApplyFlow } from "./test-helpers";
 
@@ -90,6 +91,24 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     await container.close();
   });
 
+  it("the apply form's line under an eligibility question: the job's own reason when it reads well, else 'Asked of everyone applying for this job.'; the stored packet keeps its words", () => {
+    expect(questionHelp("The owner stated the work model in the packet.")).toBe(ASKED_OF_EVERYONE);
+    expect(ASKED_OF_EVERYONE).toBe("Asked of everyone applying for this job.");
+    expect(questionHelp("The owner stated the work model and travel in the Role Packet.")).toBe(ASKED_OF_EVERYONE);
+    expect(questionHelp("Taken from the dental playbook.")).toBe(ASKED_OF_EVERYONE);
+    expect(questionHelp("  ")).toBe(ASKED_OF_EVERYONE);
+    expect(questionHelp(null)).toBe(ASKED_OF_EVERYONE);
+    expect(questionHelp("Coverage is the reason for the hire.")).toBe("The job needs someone for this schedule.");
+    expect(questionHelp("Required for clinical staff; can be obtained before start if the owner allows.")).toBe("Required for clinical staff; can be obtained before start if the employer allows.");
+    expect(questionHelp("The owner needs coverage by the target date.")).toBe("The employer needs coverage by the target date.");
+    // a reason that reads well is shown as it was written
+    for (const fine of ["Required by law to practice dental hygiene.", "Required for employment; asked of every candidate.", "The desk must be covered during clinic hours."]) expect(questionHelp(fine)).toBe(fine);
+    const packet = { requirements: { mustHaves: [], niceToHaves: [], eligibility: [{ key: "schedule", type: "schedule_availability" as const, question: "Are you available?", expectation: {}, rationale: "The owner stated the work model in the packet.", knockout: true }] } };
+    const shown = withPlainQuestionHelp(packet);
+    expect(shown.requirements.eligibility[0]).toMatchObject({ key: "schedule", question: "Are you available?", rationale: ASKED_OF_EVERYONE, knockout: true });
+    expect(packet.requirements.eligibility[0].rationale).toBe("The owner stated the work model in the packet.");
+  });
+
   it("candidateNotices leaves the recording notice and the SMS consent text out of what a page renders and records", () => {
     const all = noticesFor(["US-CA"]);
     expect(all.map((n) => n.key)).toEqual(expect.arrayContaining(["recording", "sms_consent", "ai_use", "privacy", "pay_transparency"]));
@@ -121,7 +140,14 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(box).toContain('name="acknowledged"');
     expect(box).toContain("required");
     expect(box).not.toContain("checked");
-    expect(html).toContain("I have read the notice above and I understand that people, not software, make the hiring decisions.");
+    expect(html).toContain("I have read the full notice above and I understand that people, not software, make the hiring decisions.");
+    // the first view is three short lines and the privacy link; every word of the notice, the notices included, sits under
+    // "Read the full notice", above the box that says it was read (founder brief, 14 October 2026)
+    const block = html.slice(html.indexOf('<h2 id="before-you-send">'), html.indexOf('<label class="check" for="acknowledged">'));
+    expect(block).toContain("<ul class=\"steps\"><li>People at Ledger Dental make every hiring decision.</li><li>Software helps organize applications and works out a match score.</li><li>You can ask for a person at any time.</li></ul><p><a href=\"/privacy\">Read how we handle your information</a></p><details class=\"more\"><summary>Read the full notice</summary><p><strong>Ledger Dental</strong> runs this hiring process");
+    const full = block.slice(block.indexOf("<summary>Read the full notice</summary>"));
+    for (const words of ["What we collect:", "Why:", "Who can see it:", "Your choices:", "People make the hiring decisions", "The pay range for this position is shown above as required by law", '<a href="/privacy">Read how we handle your information</a>']) expect(full).toContain(words);
+    expect(full.endsWith("</details>")).toBe(true);
     // never the recording notice, and with texting off no consent box and no promise of texts
     expect(html).not.toContain("may be recorded");
     expect(html).not.toContain('name="smsConsent"');
@@ -143,7 +169,7 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(header).toContain('<span class="fact-text">Full time</span>');
     expect(header).toMatch(/<span class="fact-text">\$45–\$55 an hour<\/span>/);
     // how long it really takes (plan E8): the form and the written conversation that follows it in the same visit
-    expect(header).toMatch(/About \d+ minutes, including a short written conversation with Ledger Dental's AI assistant\. First this form: upload a resume, or answer four short questions about your work instead\. No cover letter needed\./);
+    expect(header).toMatch(/About \d+ minutes, including a short written conversation with Ledger Dental's AI assistant\. First, this form; no cover letter needed\./);
     // the pre-apply line: help, or a change to how to apply because of a disability, from a person (here the ITS inbox)
     expect(header).toContain(`Need help applying, or a change to how you apply because of a disability? Email <a href="mailto:${container.env.EMAIL_REPLY_TO}">`);
     // the four short questions instead of one box, behind a disclosure that works without script; closed until used
@@ -167,6 +193,15 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
       expect(labelled.has(attrs.match(/ id="([^"]+)"/)?.[1] ?? ""), `${m[1]} ${attrs.slice(0, 60)}`).toBe(true);
     }
     expect(html).toMatch(/<input type="hidden" name="formOpened" value="v1\.[^"]+"/);
+    // the line under each eligibility question is in plain words (Wave S2, K4): the job's own reason when it reads well
+    // to an applicant, never the team's words; each question still points at its line
+    const why = [...html.matchAll(/<small id="elig_([^"]+)-why">([^<]*)<\/small>/g)];
+    expect(why.map((m) => m[1]).sort()).toEqual(eligibility.map((r) => r.key).sort());
+    for (const [, key, line] of why) {
+      expect(line, key).not.toMatch(/packet|owner|intake|playbook|for the hire/i);
+      expect(html).toContain(`aria-describedby="elig_${key}-why"`);
+    }
+    expect(why.map((m) => m[2])).toContain("The job needs someone for this schedule.");
     // the job page
     const job = decodeEntities(await (await app.request(`/careers/${slug}/jobs/${roleId}`)).text());
     expect(job).toMatch(/Apply in about \d+ minutes, including a short written conversation with Ledger Dental's AI assistant\./);
@@ -199,6 +234,8 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(box).toContain('aria-describedby="acknowledged-error"');
     expect(box).not.toContain("checked");
     expect(html).toContain('id="acknowledged-error"');
+    // sent back for the box: the full notice it confirms is open, not folded away
+    expect(html).toMatch(/<details class="more" open[^>]*><summary>Read the full notice<\/summary>/);
     expect(await container.db.select().from(applications).where(eq(applications.roleId, roleId))).toHaveLength(0);
 
     // with the box ticked: the application is in, the acknowledgment recorded, and the notice versions are the server's, not the browser's claim

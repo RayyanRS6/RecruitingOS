@@ -48,11 +48,11 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
     });
 
     it("explains the state when the role is not the reason", () => {
-      expect(applicationActionState(facts({ hasOpenScreen: true })).blockedReasons.invite_screen).toBe("A screening invitation is already open.");
+      expect(applicationActionState(facts({ hasOpenScreen: true })).blockedReasons.invite_screen).toBe("A screening chat invitation is already open.");
       expect(applicationActionState(facts({ hasActiveInterview: true })).blockedReasons.interview).toBe("An interview is already in motion.");
       expect(applicationActionState(facts({ stage: "rejected" })).blockedReasons.reject).toBe("Not available at this step (Not moving forward).");
       expect(applicationActionState(facts({ stage: "talent_pool" })).blockedReasons.hold).toBe("They are already in your talent pool.");
-      expect(applicationActionState(facts()).blockedReasons.ask_in_screen).toBe("The assessment left no open questions to ask about.");
+      expect(applicationActionState(facts()).blockedReasons.ask_in_screen).toBe("The AI review left no open questions to ask about.");
       expect(applicationActionState(facts()).blockedReasons.record_decision).toBe("No finished interview is waiting for a decision.");
       expect(applicationActionState(facts()).blockedReasons.review_anyway).toBe("Only for someone declined on an eligibility answer.");
       // someone held on an eligibility answer is decided first: no hold, no mark (plan A4)
@@ -77,9 +77,9 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect(applicationActionState(facts({ role: "hr", stage: "rejected" })).blockedReasons.reject).toMatch(/^Your role can't decline candidates/);
       // "Stop this screen invitation" (plan A7): only before they start, and only for those who may write to candidates about decisions
       expect(applicationActionState(facts({ stage: "screen_invited", hasOpenScreen: true, hasUnstartedScreen: true })).allowed).toContain("cancel_screen");
-      expect(applicationActionState(facts({ stage: "screening", hasOpenScreen: true })).blockedReasons.cancel_screen).toBe("They have started the screening conversation, so it can't be stopped now.");
-      expect(applicationActionState(facts()).blockedReasons.cancel_screen).toBe("No screening invitation is waiting for them.");
-      expect(applicationActionState(facts({ role: "hr", stage: "screen_invited", hasOpenScreen: true, hasUnstartedScreen: true })).blockedReasons.cancel_screen).toBe("Your role can't stop a screening invitation; ask an owner, an admin, a hiring manager or a recruiter.");
+      expect(applicationActionState(facts({ stage: "screening", hasOpenScreen: true })).blockedReasons.cancel_screen).toBe("They have started the screening chat, so it can't be stopped now.");
+      expect(applicationActionState(facts()).blockedReasons.cancel_screen).toBe("No screening chat invitation is waiting for them.");
+      expect(applicationActionState(facts({ role: "hr", stage: "screen_invited", hasOpenScreen: true, hasUnstartedScreen: true })).blockedReasons.cancel_screen).toBe("Your role can't stop a screening chat invitation; ask an owner, an admin, a hiring manager or a recruiter.");
     });
 
     it("builds the stage button from the same rule: every stage, how it is reached, and why not", () => {

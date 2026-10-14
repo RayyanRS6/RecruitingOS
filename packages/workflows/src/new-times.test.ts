@@ -201,7 +201,7 @@ describe("interview_new_times", () => {
     await declareHours(p, { start: "09:00", end: "09:10" });
     await engine.runUntilIdle();
     const [notice] = await notices(p.companyId, "interview.no_slots");
-    expect(notice.body).toMatch(/no shared free time of 30 minutes\. Widen the window, change interviewers, or free some time\. Ana cancelled and asked for new times; they go out as soon as there are times to offer\.$/);
+    expect(notice.body).toMatch(/no shared free time of 30 minutes\. Add hours or free some time; we check again when an interviewer's hours change\. Ana cancelled and asked for new times; they go out as soon as there are times to offer\.$/);
     expect(await followUp(p.applicationId)).toMatchObject({ auto_state: "preparing", times_sent_count: 0 });
   });
 

@@ -289,7 +289,7 @@ export function postingLegalCheck(input: {
     items.push({
       key: "benefits", label: "A short description of the benefits", met, blocking: true, jurisdictions: benefitPlaces, pendingCounsel: [],
       detail: met ? "The job ad describes the benefits." : `The law in ${placeNames(benefitPlaces)} asks for a short description of the benefits on the job ad${remote ? ", and this remote job could be done there" : ""}.`,
-      fix: met ? null : "Describe the benefits in Setup (used for every job), or in this role's pay section.",
+      fix: met ? null : "Describe the benefits in Settings (used for every job), or in this job's pay section.",
     });
   }
 

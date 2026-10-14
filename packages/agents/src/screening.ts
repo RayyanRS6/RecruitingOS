@@ -6,7 +6,8 @@ import { applications, assessments, candidates, companies, randomToken, rolePack
 import type { Integrations } from "@ros/integrations";
 import { deliverSms, recordInbound, sendPersonRequestedNote } from "./coordinator";
 import { FOCUS_INTRO, answersOf, focusedPacket, isFocusKey, withFocusAnswer, type FocusQuestion } from "./screen-focus";
-import { applyEvidenceRules } from "./triage";
+import { PLACEHOLDER, SCORING_VIEW_VERSION, restoreQuotes, scoringView, withoutPlaceholders, type ScoringIdentity, type ScoringView } from "./scoring-view";
+import { applyEvidenceRules, jobWords } from "./triage";
 
 /**
  * The Screening agent (docs/05). Conversation turns run when the candidate writes (web chat or SMS); the durable
@@ -331,9 +332,9 @@ export async function countConversation(q: Queryable, input: { companyId: string
     await notify(q, {
       companyId: input.companyId,
       kind: "entitlement.text_screens",
-      title: usedUp ? "This month's screening conversations are used up" : "80% of this month's screening conversations used",
+      title: usedUp ? "This month's screening chats are used up" : "80% of this month's screening chats used",
       body: usedUp
-        ? `${crossing.used} of ${crossing.limit} used. Applications are still accepted and anyone part-way through finishes. New applicants get the conversation link by email once more are added, so everyone for a role has the same process. ITS has been told.`
+        ? `${crossing.used} of ${crossing.limit} used. Applications are still accepted and anyone part-way through finishes. New applicants get the chat link by email once more are added, so everyone for a role has the same process. ITS has been told.`
         : `${crossing.used} of ${crossing.limit} used. Nothing has stopped. ITS has been told and can add more before they run out.`,
       action: { label: "See usage", href: "/setup" },
     });
@@ -577,7 +578,7 @@ export async function answerWithdrawPrompt(q: Queryable, deps: ScreenDeps, input
   await transition(q, { applicationId: app.id, companyId: company.id, to: "withdrawn", by: "candidate", actor: candidateActor, reason: "candidate withdrew during screening", correlationId: screen.workflowRunId });
   await emit(q, { type: "application.withdrawn", companyId: company.id, actor: candidateActor, subject: { type: "application", id: app.id }, payload: { during: "screen", channel: input.channel }, correlationId: screen.workflowRunId });
   await deps.onWithdrawn?.(q, { companyId: company.id, applicationId: app.id, actor: candidateActor });
-  await notify(q, { companyId: company.id, kind: "candidate.withdrawn", title: `${candidate.firstName} ${candidate.lastName} withdrew`, body: `They withdrew from ${packet.identity.title} during the screening conversation, and confirmed it.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
+  await notify(q, { companyId: company.id, kind: "candidate.withdrawn", title: `${candidate.firstName} ${candidate.lastName} withdrew`, body: `They withdrew from ${packet.identity.title} during the screening chat, and confirmed it.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
   if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: msg, idempotencyKey: `screen_withdrawn:${screen.id}`, templateKey: "screen_withdrawn", disclosureIncluded: false });
   await deps.signal?.(q, { companyId: company.id, key: `screen:${screen.id}:completed`, payload: { withdrawn: true } });
   return msg;
@@ -724,7 +725,7 @@ export async function declineConversation(q: Queryable, deps: ScreenDeps, input:
   await emit(q, { type: "screen.declined_by_candidate", companyId: company.id, actor: { kind: "candidate", id: candidate.id }, subject: { type: "screen", id: screen.id }, payload: { applicationId: app.id, answered, questions: packet.screening.questions.length }, correlationId: screen.workflowRunId });
   await entitlements.record(q, company.id, entitlements.PERSON_REQUESTS, 1, "request", { screenId: screen.id, choice: "send_without" });
   const [cur] = await q.select({ stage: applications.stage }).from(applications).where(eq(applications.id, app.id)).limit(1);
-  if (cur && ["screen_invited", "screening"].includes(cur.stage)) await transition(q, { applicationId: app.id, companyId: company.id, to: "triaged", by: "system", actor: input.actor, reason: "sent without the screening conversation", correlationId: screen.workflowRunId });
+  if (cur && ["screen_invited", "screening"].includes(cur.stage)) await transition(q, { applicationId: app.id, companyId: company.id, to: "triaged", by: "system", actor: input.actor, reason: "sent without the screening chat", correlationId: screen.workflowRunId });
   await notify(q, { companyId: company.id, kind: "screen.declined_by_candidate", title: `${candidate.firstName} ${candidate.lastName} sent their application without the conversation`, body: `They chose not to go through the screening questions for ${packet.identity.title}, which is never held against them. Their application is ready for your review.`, action: { label: "Review", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
   await deps.signal?.(q, { companyId: company.id, key: `screen:${screen.id}:completed`, payload: { declined: true } });
   return { message: msg };
@@ -870,6 +871,24 @@ export function recruiterNotesOf(screen: Pick<ScreenRow, "transcript">): string 
 }
 
 /**
+ * What the scorecard is given (founder decision D-04 = C): the conversation and the recorded answers as the scoring view
+ * shows them (the candidate's name, email, phone, street address and links replaced by placeholders, in every line,
+ * a recruiter's call notes included), and no first name. The conversation itself (`screen.turn`) still greets the
+ * candidate by name: it talks to them. Returns the scoring view too, to map quotes back and count what was hidden.
+ */
+export function scorecardInput(ctx: ScreenContext, identity: ScoringIdentity): { ctx: ScreenContext; view: ScoringView } {
+  // the job's own words are never hidden as a single name (a candidate called Austin keeps "Austin, TX")
+  const view = scoringView({ ...identity, keep: [...(identity.keep ?? []), ...jobWords(ctx.packet)] });
+  const transcript = ctx.transcript.map((t) => ({ ...t, content: view.text(t.content) }));
+  const answers = Object.fromEntries(Object.entries(ctx.answers).map(([k, v]) => [k, view.text(v)]));
+  const latestCandidateMessage = ctx.latestCandidateMessage === null ? null : view.text(ctx.latestCandidateMessage);
+  // The progress carries the candidate's own answers to the focus questions (screen-focus.ts withFocusAnswer): the same
+  // view, so no name, email, phone, street or link reaches the model through it either.
+  const progress = ctx.progress.focusQuestions ? { ...ctx.progress, focusQuestions: ctx.progress.focusQuestions.map((f) => (typeof f.answer === "string" ? { ...f, answer: view.text(f.answer) } : f)) } : ctx.progress;
+  return { ctx: { ...ctx, candidate: { firstName: PLACEHOLDER.name }, transcript, answers, latestCandidateMessage, progress }, view };
+}
+
+/**
  * The scorecard for a screen, called with no transaction open. Quotes are verified against the transcript in code.
  * Only a complete conversation is read ("hide them until they send", founder decision of 9 October 2026): one the
  * candidate did not send (stopped part-way, never pressed Send, sent the application without it) is never read, and its
@@ -882,13 +901,26 @@ export async function assessScreen(db: Db, ai: AiRuntime, input: { companyId: st
   if (!b) throw new Error("screen not found");
   if (b.screen.status !== "completed") throw new Error(`a conversation the candidate did not send is never read (it is ${b.screen.status})`);
   const screen = teamScreenView(b.screen);
-  const ctx: ScreenContext = { ...contextOf(b, screen, null), incomplete: null };
-  const out = await runPromptDetached(db, ai, screenAssessPrompt, ctx, { companyId: b.company.id, workflowRunId: input.workflowRunId ?? b.screen.workflowRunId, inputRef: { screenId: b.screen.id, turns: screen.transcript.length } });
+  const { ctx, view } = scorecardInput({ ...contextOf(b, screen, null), incomplete: null }, { firstName: b.candidate.firstName, lastName: b.candidate.lastName, email: b.candidate.email, phone: b.candidate.phone, fullName: b.app.extraction?.fullName ?? null, keep: jobWords(null, b.app.extraction) });
+  const out = await runPromptDetached(db, ai, screenAssessPrompt, ctx, { companyId: b.company.id, workflowRunId: input.workflowRunId ?? b.screen.workflowRunId, inputRef: { screenId: b.screen.id, turns: screen.transcript.length, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() } });
   if (!out.ok) return out;
-  const checked = verifyScreenQuotes(out.output, candidateWordsOf(screen), { recruiterNotes: recruiterNotesOf(screen), declined: screen.progress.declined ?? [], answered: Object.keys(answersOf(screen)) });
+  return { ...out, output: scorecardOutcome(out.output, view, screen) };
+}
+
+/**
+ * The scorecard as the team sees it, from the model's answer. Quotes are checked against the candidate's ORIGINAL words:
+ * one written around a placeholder is mapped back first; and the model's own words (summary, claims) keep no
+ * placeholder: "[name]" reads "the candidate". Shared with the fairness evals (packages/evals), so they check exactly
+ * what the app does after the model has answered.
+ */
+export function scorecardOutcome(output: ScreenAssessment, view: Pick<ScoringView, "restore">, screen: Pick<ScreenRow, "transcript" | "answers" | "progress">): ScreenAssessment {
+  const candidateText = candidateWordsOf(screen);
+  const recruiterNotes = recruiterNotesOf(screen);
+  const restored = withoutPlaceholders(restoreQuotes(output, view, (source) => (source === "recruiter_note" ? [recruiterNotes, candidateText] : [candidateText, recruiterNotes])));
+  const checked = verifyScreenQuotes(restored, candidateText, { recruiterNotes, declined: screen.progress.declined ?? [], answered: Object.keys(answersOf(screen)) });
   // "incomplete_screen" marks a reading of a conversation nobody sent, written before 9 October 2026, which stays hidden
   // (`isUnsentConversationReading` in @ros/core): never on a reading of a sent one, whatever the model wrote.
-  return { ...out, output: { ...checked, anomalies: checked.anomalies.filter((a) => a.kind !== "incomplete_screen") } };
+  return { ...checked, anomalies: checked.anomalies.filter((a) => a.kind !== "incomplete_screen") };
 }
 
 /**

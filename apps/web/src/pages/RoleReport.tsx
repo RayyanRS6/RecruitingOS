@@ -73,7 +73,7 @@ export function ReportTab({ roleId }: { roleId: string }) {
 export function MustHavesCard({ mustHaves: m, links }: { mustHaves: NonNullable<RoleReport["mustHaves"]>; links?: boolean }) {
   return (
     <Card title="How the pool meets the must-haves">
-      {!m.people || !m.byMustHave.length ? <p className="small muted">{m.byMustHave.length ? "Nobody has been read against the must-haves yet." : "This role lists no must-haves."}</p> : (
+      {!m.people || !m.byMustHave.length ? <p className="small muted">{m.byMustHave.length ? "Nobody has been read against the must-haves yet." : "This job lists no must-haves."}</p> : (
         <>
           <p className="small" style={{ color: "var(--ink-2)" }}><strong>{m.showEveryMustHave} of {plural(m.people, "person", "people")}</strong> {m.people === 1 ? "shows" : "show"} every must-have.</p>
           <div style={{ marginTop: 8 }}>
@@ -90,20 +90,20 @@ export function MustHavesCard({ mustHaves: m, links }: { mustHaves: NonNullable<
 }
 
 /**
- * How the screening conversation goes for this role (plan E13): how many were offered it, started and finished, the
+ * How the screening chat goes for this role (plan E13): how many were offered it, started and finished, the
  * typical time to finish, how many chose a person instead, and the questions people chose not to answer in the answers
  * they sent. From each person's latest conversation; counts only, never a name or an answer, and nothing from a
  * conversation nobody sent, so not where anyone stopped (founder decision of 9 October 2026).
  */
 export function ScreeningCard({ roleId }: { roleId: string }) {
   const q = useQuery({ queryKey: ["role", roleId, "screening"], queryFn: () => api.get<ScreeningFunnel>(`/api/v1/roles/${roleId}/screening`) });
-  if (q.isLoading) return <Card title="The screening conversation"><Skeleton lines={3} /></Card>;
-  if (q.error || !q.data) return <Card title="The screening conversation"><ErrorState message="Could not load how the screening conversation is going." onRetry={() => q.refetch()} /></Card>;
+  if (q.isLoading) return <Card title="The screening chat"><Skeleton lines={3} /></Card>;
+  if (q.error || !q.data) return <Card title="The screening chat"><ErrorState message="Could not load how the screening chat is going." onRetry={() => q.refetch()} /></Card>;
   const f = q.data;
   const lines = funnelLines(f);
   return (
-    <Card title="The screening conversation">
-      {!lines.length ? <p className="small muted">Nobody has been offered the screening conversation for this role yet.</p> : (
+    <Card title="The screening chat">
+      {!lines.length ? <p className="small muted">Nobody has been offered the screening chat for this job yet.</p> : (
         <>
           <div className="stat-row">
             <Stat n={f.offered} label={f.offered === 1 ? "person offered it" : "people offered it"} />
@@ -236,7 +236,7 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
 
       <Card title="What the assistant suggested, and what you decided">
         {r.recommendationsVsDecisions.rows.length ? (
-          <Table head={["Suggestion", numHead("Candidates"), numHead("Invited to a screen"), numHead("Moved to interview"), numHead("Longlist or shortlist"), numHead("Not moving forward"), numHead("Put on hold"), numHead("No decision yet")]} label="Suggestions and decisions" pinFirst>
+          <Table head={["Suggestion", numHead("Candidates"), numHead("Invited to a screening chat"), numHead("Moved to interview"), numHead("Longlist or shortlist"), numHead("Not moving forward"), numHead("Put on hold"), numHead("No decision yet")]} label="Suggestions and decisions" pinFirst>
             {r.recommendationsVsDecisions.rows.map((x) => <tr key={x.recommendation}><td>{x.label}</td><td className="num">{x.total}</td><td className="num">{x.invited}</td><td className="num">{x.interviewed}</td><td className="num">{x.shortlisted ?? 0}</td><td className="num">{x.declined}</td><td className="num">{x.held}</td><td className="num">{x.noActionYet}</td></tr>)}
           </Table>
         ) : <p className="small muted">No assessments yet.</p>}
@@ -286,8 +286,8 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
           <dt>Closed without a hire</dt><dd>{r.outcomes.noHire}</dd>
           <dt>In your talent pool</dt><dd>{r.outcomes.talentPool}</dd>
           <dt>Records corrected</dt><dd>{r.outcomes.corrections}</dd>
-          {r.outcomes.role ? <><dt>This role</dt><dd>{ROLE_OUTCOME_LABEL[r.outcomes.role.outcome] ?? r.outcomes.role.outcome.replace(/_/g, " ")} · {new Date(r.outcomes.role.recordedAt).toLocaleDateString()}</dd></> : null}
-          {!r.outcomes.role && Object.keys(r.outcomes.rolesByOutcome).length ? <><dt>Roles closed</dt><dd>{Object.entries(r.outcomes.rolesByOutcome).map(([k, n]) => `${ROLE_OUTCOME_LABEL[k] ?? k}: ${n}`).join(" · ")}</dd></> : null}
+          {r.outcomes.role ? <><dt>This job</dt><dd>{ROLE_OUTCOME_LABEL[r.outcomes.role.outcome] ?? r.outcomes.role.outcome.replace(/_/g, " ")} · {new Date(r.outcomes.role.recordedAt).toLocaleDateString()}</dd></> : null}
+          {!r.outcomes.role && Object.keys(r.outcomes.rolesByOutcome).length ? <><dt>Jobs closed</dt><dd>{Object.entries(r.outcomes.rolesByOutcome).map(([k, n]) => `${ROLE_OUTCOME_LABEL[k] ?? k}: ${n}`).join(" · ")}</dd></> : null}
         </dl>
         {r.outcomes.declineReasons.length ? (
           <div style={{ marginTop: 10 }}>

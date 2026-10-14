@@ -85,7 +85,7 @@ describe("boardPlacement", () => {
 
   it("asks a person to look when the reading and the score disagree, either way", () => {
     const forward = place({ latest: triage, match: score(40) });
-    expect(forward).toMatchObject({ column: "longlist", confident: false, needsYourEye: "The assistant suggested a screening conversation, but the score puts them lower. Read before deciding.", nextStep: { kind: "read_yourself" } });
+    expect(forward).toMatchObject({ column: "longlist", confident: false, needsYourEye: "The assistant suggested a screening chat, but the score puts them lower. Read before deciding.", nextStep: { kind: "read_yourself", reason: "The AI review and the score disagree; your own read decides." } });
     expect(place({ latest: { ...screen, overall: "potential" }, match: score(40) }).needsYourEye).toContain("suggested an interview");
     const back = place({ latest: holding, match: score(90) });
     expect(back).toMatchObject({ column: "longlist", confident: false, needsYourEye: "The assistant suggested holding back, but the score puts them higher. Read before deciding." });
@@ -97,7 +97,7 @@ describe("boardPlacement", () => {
 
   it("never starts a decline ticked while the screening conversation is still open, whose answers count most", () => {
     const open = place({ latest: holding, match: score(40), openScreen: true });
-    expect(open).toMatchObject({ column: "longlist", confident: false, needsYourEye: "Their screening conversation is still open, and its answers count most. Wait for it, or read it yourself before deciding.", nextStep: { kind: "ask_more" } });
+    expect(open).toMatchObject({ column: "longlist", confident: false, needsYourEye: "Their screening chat is still open, and its answers count most. Wait for it, or read it yourself before deciding.", nextStep: { kind: "ask_more" } });
     // once the scorecard is the reading, the open-screen rule no longer applies
     const card = { ...screen, overall: "weak", result: { ...result, recommendation: "decline_recommended" } as unknown as EvidenceAssessment };
     expect(place({ latest: card, match: score(40), openScreen: true }).column).toBe("not_moving_forward");

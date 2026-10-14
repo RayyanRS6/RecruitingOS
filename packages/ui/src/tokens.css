@@ -938,6 +938,9 @@ pre { background: var(--surface-2); border-radius: var(--r-control); padding: 12
 .sbar-detail blockquote { margin: 6px 0 0; padding: 2px 0 2px 10px; border-left: 2px solid var(--line-2); color: var(--ink-2); }
 .sbars-more > summary { width: fit-content; color: var(--ink-2); font-size: 13px; cursor: pointer; }
 .sbars-more[open] > summary { margin-bottom: 12px; }
+/* The one "show more" pattern for the simple screens: details stay one click away instead of crowding the page. */
+details.more > summary { width: fit-content; color: var(--ink-2); font-size: 13.5px; cursor: pointer; }
+details.more[open] > summary { margin-bottom: 10px; }
 /* The comparison view's cells: the finding, a small bar, and the numbers under it. */
 .cmp-cell { display: grid; gap: 4px; min-width: 120px; }
 .cmp-cell .cmp-figures { color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }

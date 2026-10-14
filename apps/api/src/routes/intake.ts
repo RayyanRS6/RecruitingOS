@@ -6,7 +6,9 @@ import { IntakeEditError, assertCan, can, emit, entitlements, looksLikePastedAd,
 import { entitlements as entitlementRows, events, intakeSessions, recruiterEscalations, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { actorOf, requireTenant, type Tenant, type Vars } from "../middleware/session";
 import { HttpError, messageTooLong } from "../middleware/errors";
+import { POLICIES, checkRateLimits } from "../middleware/rate-limit";
 import { briefViewerOf, composeBrief } from "../services/brief";
+import { IntakeSuggestRequest, suggestForQuickStart } from "../services/intake-suggest";
 import type { Container } from "../container";
 
 /**
@@ -216,6 +218,21 @@ intakeRoutes.get("/sessions", requireTenant, async (c) => {
     return { sessions: rows.map((r) => summaryOf(r, t.userId)), room: await planRoom(tx, t.companyId) };
   });
   return c.json(out);
+});
+
+/**
+ * Suggestions for the quick start (Wave S3, G3): must-have skills and yes/no questions from the answers so far, for a
+ * job our hiring guides do not know. Only the job's facts go in, never anything about a candidate; every line passed the
+ * fairness word check, and refused ones are left out. Same people as starting a draft; no draft is made and the plan's
+ * room is not used. A failed or slow run answers with no suggestions (`unavailable: true`), never an error the page must show;
+ * so does a person or a company over the hourly allowance of model calls for this (POLICIES.intakeSuggest).
+ */
+intakeRoutes.post("/suggestions", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  assertMayDraft(t);
+  const body = IntakeSuggestRequest.parse(await c.req.json().catch(() => ({})));
+  if (await checkRateLimits(c, [POLICIES.intakeSuggest])) return c.json({ mustHaves: [], questions: [], unavailable: true as const });
+  return c.json(await suggestForQuickStart(c.get("container"), { companyId: t.companyId, userId: t.userId, body }));
 });
 
 /** Room on the plan for another role, when the new-role page opens (C13). */

@@ -12,9 +12,14 @@ export function Link(props: { to: string; children: ReactNode; className?: strin
   return <NextLink href={props.to} className={props.className} style={props.style} replace={props.replace} title={props.title} aria-label={props["aria-label"]}>{props.children}</NextLink>;
 }
 
-export function NavLink(props: { to: string; end?: boolean; children: ReactNode }) {
+/**
+ * A link that marks itself as the current page. `activeFor`: the path it stands for when that differs from where it
+ * goes (a job in the rail opens on its Candidates, and is the current one on every page of that job).
+ */
+export function NavLink(props: { to: string; end?: boolean; activeFor?: string; children: ReactNode }) {
   const pathname = usePathname() ?? "";
-  const active = props.end ? pathname === props.to : pathname === props.to || pathname.startsWith(`${props.to}/`);
+  const at = props.activeFor ?? props.to;
+  const active = props.end ? pathname === at : pathname === at || pathname.startsWith(`${at}/`);
   return <NextLink href={props.to} className={active ? "active" : undefined} aria-current={active ? "page" : undefined}>{props.children}</NextLink>;
 }
 

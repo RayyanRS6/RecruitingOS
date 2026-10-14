@@ -24,7 +24,7 @@ const { Interviews, noLinkText } = await import("@ros/web/src/pages/Interviews")
 const { CALENDAR_OFF_LINE, Setup } = await import("@ros/web/src/pages/Setup");
 const { CandidatePanel } = await import("@ros/web/src/pages/candidate-panel/CandidatePanel");
 const { dayKey } = await import("@ros/web/src/pages/candidate-panel/helpers");
-const { ACK_FOR_ANOTHER, CalendarAdmin, Failures, Queue } = await import("@ros/web/src/pages/Admin");
+const { ACK_FOR_ANOTHER, CalendarAdmin, Failures, Queue, RESOLVED_TOAST, planChangedToast, planLimitsLine, screeningLine } = await import("@ros/web/src/pages/Admin");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
@@ -151,7 +151,7 @@ describe("the interview approval's meeting link", () => {
     expect(words).toContain("Approve an interview");
     expect(words).not.toContain("Create it with the calendar event");
     expect(words).toContain("Meeting link (optional)");
-    expect(words).toContain("A link is made with the calendar event only for an interviewer who connected their calendar in Setup.");
+    expect(words).toContain("A link is made with the calendar event only for an interviewer who connected their calendar in Settings.");
     expect(words).toContain("This round is a video call. Without a link here, the invitation names the format only, so send Maria the link yourself.");
     // a calendar that needs attention makes no link either
     expect(step({ status: "manual_action_required" })).not.toContain("Create it with the calendar event");
@@ -181,6 +181,26 @@ describe("the admin console", () => {
     expect(own).not.toContain(">Acknowledge</button>");
     // another alert keeps its button
     expect(html.slice(html.indexOf("A credential could not be deleted"))).toContain("Acknowledge");
+    // nor a Resolve on one's own platform-role alert
+    expect(own).not.toContain(">Resolve</button>");
+  });
+
+  it("offers Resolve on every alert, open or acknowledged; Acknowledge only while it is open (Wave S2 F1)", () => {
+    const html = failures([alert("al3", "worker.stale", "The background worker has stopped polling"), { ...alert("al4", "queue.stale", "Queued work is not being picked up"), status: "acknowledged" }]);
+    const open = html.slice(html.indexOf("The background worker has stopped polling"), html.indexOf("Queued work is not being picked up"));
+    const seen = html.slice(html.indexOf("Queued work is not being picked up"));
+    expect(open).toContain(">Acknowledge</button>");
+    expect(open).toContain(">Resolve</button>");
+    expect(seen).not.toContain(">Acknowledge</button>");
+    expect(seen).toContain(">Resolve</button>");
+    expect(RESOLVED_TOAST).toEqual({ title: "Resolved.", detail: "If it happens again, a new alert is raised." });
+  });
+
+  it("says what a plan includes and when the screening chats start again", () => {
+    expect(planLimitsLine({ active_roles: 3, text_screens: 300, voice_minutes: 0, sourcing_contacts: 0, recruiter_asks: 10, seats: null })).toBe("3 active jobs · 300 screening chats a month · 10 recruiter requests a month · unlimited seats");
+    expect(screeningLine({ used: 25, limit: 25, resetsAt: "2026-10-30T12:00:00.000Z" })).toBe("25 of 25 screening chats this month, resets October 30");
+    expect(screeningLine({ used: 4, limit: null })).toBe("4 screening chats this month");
+    expect(planChangedToast("Bright Dental", "Design Partner")).toEqual({ title: "Bright Dental is on Design Partner now.", detail: "The new limits apply at once. This month's usage stays; the reset date does not move." });
   });
 
   it("shows an error with a way to try again when the Queue or the Business calendar cannot load", () => {

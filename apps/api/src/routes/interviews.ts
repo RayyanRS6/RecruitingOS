@@ -1,9 +1,10 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
-import { and, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
-import { BookOnBehalf, CancelInterview, InterviewOutcome, InterviewerAvailabilityInput, RecordInterviewDecision, RequestInterviewWithLine, RescheduleInterview, type CandidateNotice, type HireFollowUp, type InterviewDraft, type InterviewFollowUpRef } from "@ros/contracts";
-import { checkPersonalLine, type InvitationNote } from "@ros/agents";
-import { CANCEL_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, assertCan, audit, availabilityFor, calendarConnectionFor, can, defaultSchedulingWindow, emit, inCancelled, interviewFollowUpRef, notify, openFollowUp, openFollowUpOf, publicConnection, recordApplicationOutcome, resolveOpenFollowUp, scopeAllows, transition, upsertAvailability, type FollowUpView } from "@ros/core";
-import { applications, candidates, companies, events, interviewParticipants, interviews, jobs, memberships, rolePackets, roles, users, withTenant, type Tx } from "@ros/db";
+import { and, desc, eq, gte, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
+import { BookOnBehalf, CancelInterview, InterviewOutcome, InterviewerAvailabilityInput, RecordInterviewDecision, RequestInterviewWithLine, RescheduleInterview, type Actor, type CandidateNotice, type HireFollowUp, type InterviewDraft, type InterviewFollowUpRef, type OfferedSlot } from "@ros/contracts";
+import { HELD_REASON, checkPersonalLine, clashesWithBookings, participantsOf, sendInterviewMoved, type InvitationNote } from "@ros/agents";
+import { CANCEL_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, assertCan, audit, availabilityFor, calendarConnectionFor, can, defaultSchedulingWindow, emit, formatInZone, freshSchedulingWindow, inCancelled, interviewFollowUpRef, notify, openFollowUp, openFollowUpOf, publicConnection, recordApplicationOutcome, resolveOpenFollowUp, scopeAllows, slotStillAhead, transition, upsertAvailability, type FollowUpView } from "@ros/core";
+import { applications, candidates, companies, events, interviewParticipants, interviews, jobs, memberships, rolePackets, roles, users, withTenant, workflowRuns, type Tx } from "@ros/db";
+import type { Container } from "../container";
 import { cancelNewTimesRuns } from "@ros/workflows";
 import { actorOf, applicationScopeGuard, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
@@ -61,7 +62,8 @@ async function lockedInterview(tx: Tx, input: { companyId: string; interviewId: 
   const [found] = await tx.select({ applicationId: interviews.applicationId }).from(interviews).where(and(eq(interviews.id, input.interviewId), eq(interviews.companyId, input.companyId))).limit(1);
   if (!found) throw new HttpError(404, "not_found", "Interview not found.");
   const [app] = await tx.select().from(applications).where(eq(applications.id, found.applicationId)).limit(1).for("update");
-  const [iv] = await tx.select().from(interviews).where(eq(interviews.id, input.interviewId)).limit(1);
+  // the interview row too, after the application (the order every path takes): what it holds now is what this request acts on
+  const [iv] = await tx.select().from(interviews).where(eq(interviews.id, input.interviewId)).limit(1).for("update");
   if (!app || !iv) throw new HttpError(404, "not_found", "Interview not found.");
   return { iv, app };
 }
@@ -87,19 +89,52 @@ async function supersede(c: Context<Vars>, input: { interviewId: string; mode: "
       const done = await cancelInterviewInTx(tx, container, { companyId: t.companyId, interview: iv, actor, by: t.role, reason: input.reason, byCandidate: input.byCandidate, now });
       return { id: iv.id, candidateTold: done.candidateTold };
     }
-    const window = { ...iv.schedulingWindow, ...(input.window ?? {}) };
-    if (!window.fromDate || !window.toDate) Object.assign(window, defaultSchedulingWindow(now, (await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, t.companyId)).limit(1))[0].timezone));
+    // A fresh window from tomorrow, as long as the old one, never the old dates (which may have passed); dates the
+    // person sent win. "Offer times again" after an offer lapsed comes here too.
+    const [company] = await tx.select().from(companies).where(eq(companies.id, t.companyId)).limit(1);
+    const sent = Object.fromEntries(Object.entries(input.window ?? {}).filter(([k, v]) => v !== undefined && (k !== "businessDaysOnly" || !!(input.window?.fromDate || input.window?.toDate))));
+    const fresh = freshSchedulingWindow(iv.schedulingWindow, now, company.timezone);
+    // Only one end sent: the other is worked out from it, keeping the fresh window's length, so the window never ends
+    // before it starts (which would leave no times at all).
+    const lengthMs = Date.parse(`${fresh.toDate}T00:00:00Z`) - Date.parse(`${fresh.fromDate}T00:00:00Z`);
+    const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+    if (sent.fromDate && !sent.toDate) sent.toDate = day(Date.parse(`${sent.fromDate}T00:00:00Z`) + lengthMs);
+    if (sent.toDate && !sent.fromDate) sent.fromDate = Date.parse(`${sent.toDate}T00:00:00Z`) < Date.parse(`${fresh.fromDate}T00:00:00Z`) ? sent.toDate : fresh.fromDate;
+    const window = { ...fresh, ...sent };
+    const booked = iv.status === "scheduled" && !!iv.startsAt;
     await tx.update(interviews).set({ status: "scheduling", attempt: iv.attempt + 1, selectedSlot: null, offeredSlots: [], startsAt: null, endsAt: null, scheduleToken: null, scheduleTokenExpiresAt: null, schedulingWindow: window, rescheduleCountCandidate: input.byCandidate ? iv.rescheduleCountCandidate + 1 : iv.rescheduleCountCandidate, reminders: {}, meetingUrl: iv.linkSource === "pasted" ? iv.meetingUrl : null }).where(eq(interviews.id, iv.id));
     // The booked time is gone, so the interviewers are back to invited until the workflow books the next one.
     await tx.update(interviewParticipants).set({ status: "invited" }).where(eq(interviewParticipants.interviewId, iv.id));
     // The interview carrying new times for someone under Cancelled: the new times are a person's, as with "Send new times".
     const followUp = await openFollowUpOf(tx, app.id, { lock: true });
     const carried = followUp?.currentInterviewId === iv.id ? { offerKind: followUp.choice === "new_times" ? ("new_times_asked" as const) : ("new_times_team" as const), followUpId: followUp.id, via: "person" as const } : null;
-    await emit(tx, { type: "interview.rescheduled", companyId: t.companyId, actor, subject: { type: "interview", id: iv.id }, payload: { reason: input.reason, byCandidate: !!input.byCandidate, attempt: iv.attempt + 1, hadEvents, ...(carried ? { newTimes: true, via: carried.via, followUpId: carried.followUpId } : {}) } });
+    // Times the candidate already knew about (booked, or offered to pick from): the next email says these are new times.
+    const knew = booked || (iv.status === "scheduling" && iv.offeredSlots.length > 0) || iv.status === "offer_expired";
+    // A booked time the team moved: the candidate is told at once that it is off, with a calendar file that removes it.
+    let candidateTold = false;
+    if (booked) {
+      const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
+      const [role] = await tx.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
+      const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
+      if (cand && role && pv) {
+        const parts = await participantsOf(tx, iv.id);
+        const sentMoved = await sendInterviewMoved(tx, container.integrations, { application: app, candidate: cand, role, company, packet: pv.packet, actor, appBaseUrl: container.env.APP_BASE_URL, interview: iv, interviewerFirstNames: parts.map((p) => p.firstName), candidateTimezone: iv.schedulingWindow.candidateTimezone ?? cand.location?.timezone ?? company.timezone, companyTimezone: company.timezone, reason: input.reason });
+        // told only when the message is on its way: not when it failed (no address), nor while it waits for the ITS check
+        candidateTold = sentMoved.status !== "failed" && !(sentMoved.status === "pending" && (sentMoved as { reason?: string }).reason === HELD_REASON);
+      }
+    }
+    await emit(tx, { type: "interview.rescheduled", companyId: t.companyId, actor, subject: { type: "interview", id: iv.id }, payload: { reason: input.reason, byCandidate: !!input.byCandidate, attempt: iv.attempt + 1, hadEvents, wasBooked: booked, candidateTold, ...(carried ? { newTimes: true, via: carried.via, followUpId: carried.followUpId } : {}) } });
     if (app.stage === "interview_scheduled") await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "interview_recommended", by: t.role, actor, reason: "interview being rescheduled" });
-    await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: t.companyId, subject: { type: "interview", id: iv.id }, state: { interviewId: iv.id, applicationId: iv.applicationId, roleId: app.roleId, roundKey: iv.roundKey, attempt: iv.attempt + 1, ...(carried ?? {}) }, idempotencyKey: `schedule:${iv.id}:${iv.attempt + 1}`, actor });
+    // The other interviewers on it hear that it moved (the person who moved it knows).
+    const others = (await tx.select({ userId: interviewParticipants.userId }).from(interviewParticipants).where(eq(interviewParticipants.interviewId, iv.id))).map((p) => p.userId).filter((id) => id !== t.userId);
+    if (others.length) {
+      const [who] = await tx.select({ firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
+      const name = `${who?.firstName ?? ""} ${who?.lastName ?? ""}`.trim() || "the candidate";
+      await notify(tx, { companyId: t.companyId, kind: "interview.rescheduled", title: `Interview moved: ${name}, ${iv.title}`, body: booked ? `The time on ${formatInZone(iv.startsAt!, company.timezone)} is off.${hadEvents ? " The calendar event is being removed." : ""} New times are being offered; you will be told when one is booked.` : "New times are being offered; you will be told when one is booked.", action: { label: "Open the interview", href: `/interviews/${iv.id}` }, userIds: others });
+    }
+    await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: t.companyId, subject: { type: "interview", id: iv.id }, state: { interviewId: iv.id, applicationId: iv.applicationId, roleId: app.roleId, roundKey: iv.roundKey, attempt: iv.attempt + 1, ...(knew ? { rescheduled: true } : {}), ...(carried ?? {}) }, idempotencyKey: `schedule:${iv.id}:${iv.attempt + 1}`, actor });
     if (hadEvents) await tx.insert(jobs).values({ kind: "interview.cancel_events", payload: { interviewId: iv.id, companyId: t.companyId, actor }, runAt: now.toISOString(), maxAttempts: 5 });
-    return { id: iv.id, candidateTold: null };
+    return { id: iv.id, candidateTold: booked ? candidateTold : null };
   });
   await container.kick();
   return result;
@@ -183,9 +218,10 @@ interviewRoutes.post("/:id/reschedule", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "interview.manage");
   const body = RescheduleInterview.parse(await c.req.json().catch(() => ({})));
-  const { id } = await supersede(c, { interviewId: c.req.param("id"), mode: "reschedule", reason: body.reason ?? null, window: body.window ?? null });
+  const { id, candidateTold } = await supersede(c, { interviewId: c.req.param("id"), mode: "reschedule", reason: body.reason ?? null, window: body.window ?? null });
   const row = await withTenant(c.get("container").db, t.companyId, async (tx) => summary(tx, (await tx.select().from(interviews).where(eq(interviews.id, id)))[0]));
-  return c.json(row);
+  // `candidateTold`: a booked time moved, and the candidate was told it is off (null when nothing was booked).
+  return c.json({ ...row, candidateTold });
 });
 
 /** `candidateTold` says whether the candidate was sent the cancellation, so the page's confirmation says exactly that. */
@@ -248,27 +284,106 @@ interviewRoutes.post("/:id/outcome", requireTenant, async (c) => {
   return c.json(row);
 });
 
-/** The owner picks a time for the candidate after a phone call; recorded as a human action. */
+/** Steps of a scheduling run that book a picked time when they run next (each looks for a pick first). */
+const BOOKS_A_PICK = ["offer_slots", "after_offer", "remind", "expire_offer", "book"];
+
+/**
+ * Where a picked time goes: "workflow" (a run books it), "direct" (booked straight away by a new run), "taken" (it
+ * clashes with another interview booked meanwhile), "stale" (it has passed, or starts within the hour). For the last
+ * two nothing is written and the caller says so plainly.
+ */
+export type PickRoute = "workflow" | "direct" | "taken" | "stale";
+
+/**
+ * The scheduling run working on this interview's current attempt, found by what it is about and the attempt in its
+ * state, not by its idempotency key: a run moves the attempt itself (a collision, other times after "none of these
+ * work") and keeps its original key. Newest first; null when none is still going.
+ */
+export async function currentScheduleRun(tx: Tx, iv: Pick<typeof interviews.$inferSelect, "id" | "attempt">) {
+  const [run] = await tx
+    .select({ id: workflowRuns.id, status: workflowRuns.status, currentStep: workflowRuns.currentStep, state: workflowRuns.state, wait: workflowRuns.wait })
+    .from(workflowRuns)
+    .where(and(eq(workflowRuns.workflowKey, "schedule_interview"), sql`${workflowRuns.subject}->>'id' = ${iv.id}`, sql`(${workflowRuns.state}->>'attempt')::int = ${iv.attempt}`, notInArray(workflowRuns.status, ["completed", "failed", "cancelled"])))
+    .orderBy(desc(workflowRuns.startedAt))
+    .limit(1);
+  return run ?? null;
+}
+
+/**
+ * Decides where a picked time goes (the candidate's pick, or "Book this for them"), inside the transaction that records
+ * it, after the run was signalled. A time that has passed, or starts within the hour, is refused ("stale"). The current
+ * attempt's run books it when it waits for the pick (the signal woke it) or is about to (its next step looks for a pick,
+ * or it waits for the ITS check on new times); a wake of an older attempt's run counts for nothing. Otherwise nothing
+ * would book it (after "none of these work", during "no common times", after the collisions escalation), so it is booked
+ * straight away (`bookPickNow`), unless the time clashes with another interview booked for one of the interviewers
+ * since. A pick is never silently lost.
+ */
+export async function routePick(tx: Tx, input: { iv: typeof interviews.$inferSelect; slot: OfferedSlot; woken: number; now?: Date }): Promise<PickRoute> {
+  if (!slotStillAhead(input.slot, input.now ?? new Date())) return "stale";
+  const run = await currentScheduleRun(tx, input.iv);
+  const key = `${input.iv.id}:interview.slot_selected`;
+  const keys = (run?.wait as { keys?: unknown } | null)?.keys;
+  const wokenNow = input.woken > 0 && run?.status === "waiting" && Array.isArray(keys) && keys.includes(key);
+  if (wokenNow) return "workflow";
+  if (run && ((run.status === "waiting" && run.currentStep === "offer_slots") || (run.status === "running" && BOOKS_A_PICK.includes(run.currentStep ?? "")))) return "workflow";
+  const userIds = (await tx.select({ userId: interviewParticipants.userId }).from(interviewParticipants).where(eq(interviewParticipants.interviewId, input.iv.id))).map((p) => p.userId);
+  if (await clashesWithBookings(tx, { companyId: input.iv.companyId, interviewId: input.iv.id, userIds, slot: input.slot })) return "taken";
+  return "direct";
+}
+
+/**
+ * Books a picked time straight away (`routePick` said "direct"): a new attempt, so a run still waiting on this interview
+ * ends at its next step, and a new run that starts at the booking (`bookPick`). The booking step re-checks every
+ * calendar, then books, confirms and reminds as usual; a time taken there is re-offered as any collision is. The new run
+ * carries what the old one carried (new times for someone under Cancelled, the personal line, the "new times" opening,
+ * the collisions counted so far). Call after the pick is written, holding the interview's lock. False when the
+ * interview moved on meanwhile: the caller rolls back and asks again.
+ */
+export async function bookPickNow(tx: Tx, container: Container, input: { iv: typeof interviews.$inferSelect; roleId: string; actor: Actor }): Promise<boolean> {
+  const { iv } = input;
+  const run = await currentScheduleRun(tx, iv);
+  const [moved] = await tx.update(interviews).set({ attempt: iv.attempt + 1 }).where(and(eq(interviews.id, iv.id), eq(interviews.attempt, iv.attempt), eq(interviews.status, "scheduling"))).returning({ id: interviews.id });
+  if (!moved) return false;
+  const before = (run?.state ?? {}) as Record<string, unknown>;
+  const keep = Object.fromEntries(["invitationNote", "offerKind", "followUpId", "via", "rescheduled", "offeredAt", "collisions", "variant"].filter((k) => before[k] !== undefined && before[k] !== null).map((k) => [k, before[k]]));
+  await container.engine.start(tx, { workflowKey: "schedule_interview", companyId: iv.companyId, subject: { type: "interview", id: iv.id }, state: { ...keep, interviewId: iv.id, applicationId: iv.applicationId, roleId: input.roleId, roundKey: iv.roundKey, attempt: iv.attempt + 1, bookPick: true }, idempotencyKey: `schedule:${iv.id}:${iv.attempt + 1}`, actor: input.actor });
+  return true;
+}
+
+/**
+ * The owner picks a time for the candidate after a phone call; recorded as a human action and audited as a booking.
+ * Booked by the run that waits for a pick, or straight away when none does (`routePick`); a time that clashes with
+ * another interview booked since is refused with a plain message. `booking` says which ("workflow" or "direct").
+ */
 interviewRoutes.post("/:id/book-on-behalf", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "interview.manage");
   const body = BookOnBehalf.parse(await c.req.json());
   const container = c.get("container");
-  const id = await withTenant(container.db, t.companyId, async (tx) => {
-    const [iv] = await tx.select().from(interviews).where(and(eq(interviews.id, c.req.param("id")), eq(interviews.companyId, t.companyId))).limit(1);
-    if (!iv) throw new HttpError(404, "not_found", "Interview not found.");
+  const actor = actorOf(c);
+  const done = await withTenant(container.db, t.companyId, async (tx) => {
+    // the application, then the interview itself, locked: a new set of times or a booking committed meanwhile is seen
+    const { iv, app } = await lockedInterview(tx, { companyId: t.companyId, interviewId: c.req.param("id") });
     if (iv.status !== "scheduling") throw new HttpError(409, "interview_not_schedulable", "Times are not being offered right now.");
     const slot = iv.offeredSlots.find((s) => s.id === body.slotId);
     if (!slot) throw new HttpError(400, "slot_unknown", "That time is not one of the offered slots.");
-    await tx.update(interviews).set({ selectedSlot: slot }).where(eq(interviews.id, iv.id));
-    await emit(tx, { type: "interview.slot_selected", companyId: t.companyId, actor: actorOf(c), subject: { type: "interview", id: iv.id }, payload: { slotId: slot.id, onBehalf: true, note: body.note ?? null } });
-    await audit(tx, { companyId: t.companyId, actor: actorOf(c), action: "candidate.viewed", target: { type: "interview", id: iv.id }, reason: `booked on the candidate's behalf: ${body.note ?? "no note"}` });
-    await container.engine.signal(tx, { companyId: t.companyId, key: `${iv.id}:interview.slot_selected`, payload: { slotId: slot.id, onBehalf: true } });
-    return iv.id;
+    const woken = await container.engine.signal(tx, { companyId: t.companyId, key: `${iv.id}:interview.slot_selected`, payload: { slotId: slot.id, onBehalf: true } });
+    const route = await routePick(tx, { iv, slot, woken, now: container.engine.clock() });
+    if (route === "stale") throw new HttpError(409, "slot_unknown", "That time has passed or starts within the hour. Choose a later one.");
+    if (route === "taken") throw new HttpError(409, "slot_taken", "That time is no longer free: an interviewer was booked for another interview then. Choose another time.");
+    const [picked] = await tx.update(interviews).set({ selectedSlot: slot }).where(and(eq(interviews.id, iv.id), eq(interviews.attempt, iv.attempt), eq(interviews.status, "scheduling"))).returning({ id: interviews.id });
+    if (!picked) throw new HttpError(409, "interview_not_schedulable", "The times changed a moment ago. Open the interview again and choose from the new ones.");
+    await emit(tx, { type: "interview.slot_selected", companyId: t.companyId, actor, subject: { type: "interview", id: iv.id }, payload: { slotId: slot.id, onBehalf: true, note: body.note ?? null, booking: route } });
+    await audit(tx, { companyId: t.companyId, actor, action: "interview.booked_on_behalf", target: { type: "interview", id: iv.id }, reason: `booked on the candidate's behalf: ${body.note ?? "no note"}`, details: { applicationId: iv.applicationId, slotId: slot.id, startsAt: slot.startsAt } });
+    // a direct booking that finds the interview moved on rolls the whole pick back, never a pick nothing books
+    if (route === "direct" && !(await bookPickNow(tx, container, { iv, roleId: app.roleId, actor }))) throw new HttpError(409, "interview_not_schedulable", "The times changed a moment ago. Open the interview again and choose from the new ones.");
+    return { id: iv.id, booking: route, resignal: route === "workflow" && woken === 0 };
   });
+  // A run that was mid-step when the pick was written (it read no pick, and now waits): told again after the commit.
+  if (done.resignal) await withTenant(container.db, t.companyId, (tx) => container.engine.signal(tx, { companyId: t.companyId, key: `${done.id}:interview.slot_selected`, payload: { slotId: body.slotId, onBehalf: true } }));
   await container.kick();
-  const row = await withTenant(container.db, t.companyId, async (tx) => summary(tx, (await tx.select().from(interviews).where(eq(interviews.id, id)))[0]));
-  return c.json(row);
+  const row = await withTenant(container.db, t.companyId, async (tx) => summary(tx, (await tx.select().from(interviews).where(eq(interviews.id, done.id)))[0]));
+  return c.json({ ...row, booking: done.booking });
 });
 
 /** Routes under /applications/:id that create interviews and record decisions. */
@@ -431,16 +546,25 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
   return c.json(result.out);
 });
 
-/** Interviews of one role. */
+/**
+ * Interviews of one role, by the same limits as GET /interviews: an interviewer sees the interviews they are on (the
+ * guard has already refused a role they do not interview for), and ITS staff under a grant about one candidate see that
+ * candidate's interviews only (a grant for another role is refused by the guard).
+ */
 export const roleInterviewRoutes = new Hono<Vars>();
 roleInterviewRoutes.use("/:id/*", roleScopeGuard);
 roleInterviewRoutes.get("/:id/interviews", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.read");
+  const only = t.staff?.scope.applicationId ?? null;
   const rows = await withTenant(c.get("container").db, t.companyId, async (tx) => {
-    const appIds = (await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.roleId, c.req.param("id")), eq(applications.companyId, t.companyId)))).map((a) => a.id);
+    const appIds = (await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.roleId, c.req.param("id")), eq(applications.companyId, t.companyId), ...(only ? [eq(applications.id, only)] : [])))).map((a) => a.id);
     if (!appIds.length) return [];
-    const list = await tx.select().from(interviews).where(inArray(interviews.applicationId, appIds)).orderBy(desc(interviews.createdAt));
+    let list = await tx.select().from(interviews).where(inArray(interviews.applicationId, appIds)).orderBy(desc(interviews.createdAt));
+    if (t.role === "interviewer") {
+      const mine = new Set((await tx.select({ id: interviewParticipants.interviewId }).from(interviewParticipants).where(eq(interviewParticipants.userId, t.userId))).map((r) => r.id));
+      list = list.filter((r) => mine.has(r.id));
+    }
     const followUps = await followUpsOf(tx, list);
     const out = [];
     for (const r of list) out.push(await summary(tx, r, followUps));
@@ -462,13 +586,24 @@ meRoutes.get("/calendar", requireTenant, async (c) => {
   return c.json(row);
 });
 
+/**
+ * Someone's availability changed (hours saved, or a calendar connected): interviews waiting for anyone's availability
+ * at all wait on the bare key; those waiting on "no common times" or "none of these work" wait on their own interview's
+ * key, so each open interview this person is on is woken too.
+ */
+export async function signalAvailabilityChanged(tx: Tx, container: Container, input: { companyId: string; userId: string }): Promise<void> {
+  await container.engine.signal(tx, { companyId: input.companyId, key: "availability.updated", payload: { userId: input.userId } });
+  const open = await tx.select({ id: interviews.id }).from(interviews).innerJoin(interviewParticipants, eq(interviewParticipants.interviewId, interviews.id)).where(and(eq(interviews.companyId, input.companyId), eq(interviewParticipants.userId, input.userId), inArray(interviews.status, ["proposed", "scheduling"])));
+  for (const iv of open) await container.engine.signal(tx, { companyId: input.companyId, key: `${iv.id}:availability.updated`, payload: { userId: input.userId } });
+}
+
 meRoutes.put("/availability", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   const body = InterviewerAvailabilityInput.parse(await c.req.json());
   const container = c.get("container");
   const row = await withTenant(container.db, t.companyId, async (tx) => {
     const r = await upsertAvailability(tx, { companyId: t.companyId, userId: t.userId, timezone: body.timezone, windows: body.windows, bufferMinutes: body.bufferMinutes, maxPerDay: body.maxPerDay, actor: actorOf(c) });
-    await container.engine.signal(tx, { companyId: t.companyId, key: "availability.updated", payload: { userId: t.userId } });
+    await signalAvailabilityChanged(tx, container, { companyId: t.companyId, userId: t.userId });
     return r;
   });
   await container.kick();

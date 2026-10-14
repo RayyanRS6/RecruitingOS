@@ -5,7 +5,7 @@ import { applications, companies, rolePackets, roles } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { descriptionBlocks, descriptionExcerpt } from "./pages/description";
-import { NO_RESUME_QUESTIONS, initials, noResumeAnswersFrom } from "./pages/job-page";
+import { NO_RESUME_QUESTIONS, expectAtAGlance, initials, noResumeAnswersFrom } from "./pages/job-page";
 import { resetPublicFeedCache } from "./pages/public-feeds";
 import { oneVisitMinutes } from "./services/job-preview";
 import { jobUrls } from "./services/job-urls";
@@ -59,6 +59,29 @@ describe("the description renderer (plan D10)", () => {
     expect(initials("Harbor Dental")).toBe("HD");
     expect(initials("Smile & Co.")).toBe("SC");
     expect(initials("acme")).toBe("AC");
+  });
+
+  it("'What to expect' at a glance: four lines at most, the first sentence of applying and of the conversation (never cut inside the company's name), the interviews on one line, the decision", () => {
+    const steps = [
+      "Apply in about 12 minutes, including a short written conversation with Dr. Lee Dental's AI assistant. We confirm by email.",
+      "The conversation: 5 questions, about 10 minutes. It is not a test. You can skip a question, stop and come back later, or ask for a person instead.",
+      "Phone call (20 minutes)",
+      "Meet the team (45 minutes)",
+      "A decision, and a real answer either way.",
+    ];
+    expect(expectAtAGlance(steps, "Dr. Lee Dental")).toEqual([
+      "Apply in about 12 minutes, including a short written conversation with Dr. Lee Dental's AI assistant.",
+      "The conversation: 5 questions, about 10 minutes.",
+      "Interviews: Phone call (20 minutes), Meet the team (45 minutes)",
+      "A decision, and a real answer either way.",
+    ]);
+    // one interview keeps its own words; none leaves three lines; the later path keeps its first sentence
+    expect(expectAtAGlance([steps[0], steps[1], steps[2], steps[4]], "Dr. Lee Dental")[2]).toBe("Phone call (20 minutes)");
+    expect(expectAtAGlance(["Send a short form, about 3 minutes. We confirm by email.", "Possibly a short written conversation with Acme's AI assistant (online, about 10 minutes). If so, we email you the link.", steps[4]], "Acme")).toEqual([
+      "Send a short form, about 3 minutes.",
+      "Possibly a short written conversation with Acme's AI assistant (online, about 10 minutes).",
+      "A decision, and a real answer either way.",
+    ]);
   });
 });
 
@@ -175,9 +198,15 @@ describe("the job page and the careers page (plan D10)", () => {
     expect(html).toContain(`<span>About ${total} minutes, including a short written conversation with Ledger Dental's AI assistant.</span>`);
     expect(html).toContain(`<li>Apply in about ${total} minutes, including a short written conversation with Ledger Dental's AI assistant. We confirm by email.</li>`);
     expect(html).toContain(`<li>The conversation: ${questionCount} questions, about ${maxMinutes} minutes. It is not a test. You can skip a question, stop and come back later, or ask for a person instead.</li>`);
+    // at a glance, the first sentence of each; every step in full one click away (founder brief, 14 October 2026)
+    const glance = html.slice(html.indexOf("<h2>What to expect</h2>"), html.indexOf('<details class="more"><summary>More about each step</summary>'));
+    expect(glance).toContain(`<li>Apply in about ${total} minutes, including a short written conversation with Ledger Dental's AI assistant.</li>`);
+    expect(glance).toContain(`<li>The conversation: ${questionCount} questions, about ${maxMinutes} minutes.</li>`);
+    expect(glance).toContain("<li>A decision, and a real answer either way.</li>");
+    expect(glance.match(/<li>/g)!.length).toBeLessThanOrEqual(4);
     expect(html).not.toMatch(/three minutes|looks like a fit/);
     let form = decode(await page(`/careers/${slug}/jobs/${roleId}/apply`));
-    expect(form).toContain(`<p class="lead">About ${total} minutes, including a short written conversation with Ledger Dental's AI assistant. First this form:`);
+    expect(form).toContain(`<p class="lead">About ${total} minutes, including a short written conversation with Ledger Dental's AI assistant. First, this form; no cover letter needed.</p>`);
     expect(form).toContain("Next comes the short written conversation with Ledger Dental's AI assistant. You can start it straight away, do it later, or ask for a person instead.");
     expect(form).not.toContain("three minutes");
     // ITS switched the role back to "form now, conversation later": the form alone, and a conversation that may follow by email
@@ -187,7 +216,7 @@ describe("the job page and the careers page (plan D10)", () => {
     expect(html).toContain(`<li>Possibly a short written conversation with Ledger Dental's AI assistant (online, about ${maxMinutes} minutes). If so, we email you the link.</li>`);
     expect(html).not.toContain("including a short written conversation");
     form = decode(await page(`/careers/${slug}/jobs/${roleId}/apply`));
-    expect(form).toContain('<p class="lead">A short form, about 3 minutes. Upload a resume');
+    expect(form).toContain('<p class="lead">A short form, about 3 minutes. No cover letter needed.</p>');
     expect(form).not.toContain("Next comes the short written conversation");
     await container.db.update(roles).set({ applyMode: null }).where(eq(roles.id, roleId));
     // the owner's rule for screen invitations is "Ask me first": the same later path, so the same words

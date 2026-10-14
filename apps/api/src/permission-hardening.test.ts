@@ -104,6 +104,33 @@ describe("team and permission hardening", () => {
     expect((await invite(owner, "fresh.admin@harden.test", "admin")).status).toBe(201);
   });
 
+  it("HR never withdraws or resends an invitation to become an admin or owner, never signs a teammate out, and only those who manage the team see invitations", async () => {
+    const created = (await (await invite(admin, "ali.admin@harden.test", "admin")).json()) as { invitation: { id: string } };
+    for (const action of ["revoke", "resend"]) {
+      const r = await json(hr, "POST", `/api/v1/companies/current/invitations/${created.invitation.id}/${action}`);
+      expect(r.status, action).toBe(403);
+      expect(await errorCode(r)).toBe("admin_only");
+    }
+    // nor withdraws it by inviting the same address again at a rank HR may give (a new invitation replaces the open one)
+    const replaced = await invite(hr, "ali.admin@harden.test", "interviewer");
+    expect(replaced.status).toBe(403);
+    expect(await errorCode(replaced)).toBe("admin_only");
+    expect((await container.db.select().from(invitations).where(eq(invitations.id, created.invitation.id)))[0].status).toBe("pending");
+    // HR still withdraws an invitation it may give, and sees the list; an admin withdraws the admin's
+    const plain = (await (await invite(hr, "ivo.interviewer@harden.test", "interviewer")).json()) as { invitation: { id: string } };
+    expect((await json(hr, "POST", `/api/v1/companies/current/invitations/${plain.invitation.id}/revoke`)).status).toBe(200);
+    expect((await json(hr, "GET", "/api/v1/companies/current/invitations")).status).toBe(200);
+    expect((await json(admin, "POST", `/api/v1/companies/current/invitations/${created.invitation.id}/revoke`)).status).toBe(200);
+    // an interviewer sees no pending invitations
+    const interviewer = await signInAs(container, app, { companyId, role: "interviewer", email: "iris.interviewer@harden.test" });
+    expect((await json(interviewer, "GET", "/api/v1/companies/current/invitations")).status).toBe(403);
+    // signing a teammate out is an owner's or an admin's, never HR's
+    const signOut = await json(hr, "POST", `/api/v1/companies/current/members/${await idOf("iris.interviewer@harden.test")}/sign-out`);
+    expect(signOut.status).toBe(403);
+    expect(await errorCode(signOut)).toBe("admin_only");
+    expect((await json(interviewer, "GET", "/api/v1/auth/me")).status).toBe(200);
+  });
+
   it("the AI-rules list says what the product does today; planned rules are marked, the 'always a person' ones stay in view", async () => {
     type Row = { actionType: string; available: boolean; settable: boolean; does: string | null; locked: boolean };
     const rows = (await (await json(owner, "GET", "/api/v1/policies")).json()) as Row[];

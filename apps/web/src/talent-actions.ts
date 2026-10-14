@@ -1,18 +1,32 @@
 import { OWNER_STAGE_LABEL, titleMidSentence, type MarkKind, type OwnerStage } from "@ros/contracts";
 import type { ActionResult, CandidateNotice, DecisionMessagesResponse, DeclineMessagePolicy, SendNewTimesBatchResult, SendNewTimesResult, StageMove } from "./api/client";
-import { safetyNetPromise } from "./telling";
+import { safetyNetDate, safetyNetShort } from "./telling";
 
 /**
- * What the Talent page and the candidate panel say after a choice, word for word from what the API reports (plan 0.5;
- * founder decision B6: decisions are private, so the words say exactly whether the candidate was told). Each toast has
- * a first line saying what happened and, when there is more, a second line saying what did or did not follow.
+ * What the Candidates page and the candidate panel say after a choice, word for word from what the API reports (plan
+ * 0.5; founder decision B6: decisions are private, so the words say exactly whether the candidate was told). Each toast
+ * has a first line saying what happened and, when there is more, a second line saying what did or did not follow. A
+ * decision's second line also says, in one short sentence, when the standard message goes by itself if nobody tells
+ * them first (founder decision D-03 A).
  */
 export type ToastParts = { title: string; detail?: string };
 
 /** The second line of every private choice: a decision, a mark, a hold. */
 export const NOT_TOLD = "Private: the candidate was not told.";
-/** The second line after a decision: private, and how the candidate will hear. */
-export const PRIVATE_DECISION = "Private: the candidate was not told. Send them the decision message when you are ready.";
+/** How a private decision's second line starts; the safety net follows it (see `decisionDetail`). */
+export const PRIVATE_DECISION = "Private: the candidate was not told.";
+
+/** What a decision's answer says about the decision message: the company's setting and whether there is an address. */
+type DecisionMessageHint = { decisionMessage?: { policy: DeclineMessagePolicy; to: string | null } | null };
+
+/**
+ * The safety net said after a decision is filed now (founder decision D-03 A): the day the standard message goes by
+ * itself, counted from `now` as the daily check counts it, in the way the company's settings run it when the answer says.
+ */
+export function safetyNetAfterDecision(r: DecisionMessageHint, now: Date = new Date(), what?: string): string {
+  const m = r.decisionMessage ?? null;
+  return safetyNetShort({ policy: m?.policy ?? null, hasEmail: m ? !!m.to : null, on: safetyNetDate(now.toISOString()), what });
+}
 /** A message saved in the outbox of a company ITS has not confirmed yet (founder decision B7): it is not on its way yet. */
 export const HELD_FOR_CHECK = "The message is saved and goes to the candidate as soon as ITS confirms your company; they have not been told yet.";
 
@@ -56,9 +70,12 @@ export function interviewsOffText(cancelled: number | undefined, toldOff?: numbe
   return ` ${parts.join(" ")}`;
 }
 
-/** A decision's second line: the private sentence while nothing went (always, since B6), else what became of the message. */
-function decisionDetail(r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes">): string {
-  if (!r.candidateNotice || r.candidateNotice === "not_told") return r.dispositionSent ? noticeText("queued") : `${PRIVATE_DECISION}${interviewsOffText(r.interviewsCancelled, r.interviewOffNotes)}`;
+/**
+ * A decision's second line: the private sentence while nothing went (always, since B6), the interviews it called off,
+ * and the day the standard message goes by itself if nobody tells them first; else what became of the message.
+ */
+function decisionDetail(r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes"> & DecisionMessageHint, now: Date): string {
+  if (!r.candidateNotice || r.candidateNotice === "not_told") return r.dispositionSent ? noticeText("queued") : `${PRIVATE_DECISION}${interviewsOffText(r.interviewsCancelled, r.interviewOffNotes)} ${safetyNetAfterDecision(r, now)}`;
   return noticeText(r.candidateNotice);
 }
 
@@ -68,13 +85,13 @@ export function holdDay(remindAt: string): string {
 }
 
 /** The toast after a choice on the candidate panel or a row (POST /applications/:id/actions). */
-export function actionToast(action: string, r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "next" | "talentPoolOptOut" | "mark" | "ownerStage" | "interviewsCancelled" | "interviewOffNotes">): ToastParts {
+export function actionToast(action: string, r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "next" | "talentPoolOptOut" | "mark" | "ownerStage" | "interviewsCancelled" | "interviewOffNotes"> & DecisionMessageHint, now: Date = new Date()): ToastParts {
   switch (action) {
     case "reject":
-      return { title: "Moved to Not moving forward.", detail: decisionDetail(r) };
+      return { title: "Moved to Not moving forward.", detail: decisionDetail(r, now) };
     case "hold":
     case "set_mark":
-      if (r.mark?.mark === "on_hold") return { title: r.mark.remindAt ? `On hold until ${holdDay(r.mark.remindAt)}.` : "On hold.", detail: `They come back to Today then. ${NOT_TOLD}` };
+      if (r.mark?.mark === "on_hold") return { title: r.mark.remindAt ? `On hold until ${holdDay(r.mark.remindAt)}.` : "On hold.", detail: `They come back to your Home page then. ${NOT_TOLD}` };
       return { title: `Moved to ${r.mark?.label ?? "the new stage"}.`, detail: NOT_TOLD };
     case "clear_mark":
       return { title: r.ownerStage ? `Moved to ${OWNER_STAGE_LABEL[r.ownerStage]}.` : "Mark taken off.", detail: NOT_TOLD };
@@ -83,12 +100,12 @@ export function actionToast(action: string, r: Pick<ActionResult, "candidateNoti
     case "move_to_talent_pool":
       // The person's own "don't keep me for future roles" stands (Wave 0 item 0.11); the page says so instead of "added".
       return r.talentPoolOptOut
-        ? { title: "Moved out of this role.", detail: `They asked not to be kept for future roles, so they are not in your talent pool and nobody will contact them about other openings. The candidate was not told.${interviewsOffText(r.interviewsCancelled, r.interviewOffNotes)}` }
-        : { title: "Added to your talent pool.", detail: `The candidate was not told.${interviewsOffText(r.interviewsCancelled, r.interviewOffNotes)}` };
+        ? { title: "Moved out of this role.", detail: `They asked not to be kept for future roles, so they are not in your talent pool and nobody will contact them about other openings. The candidate was not told.${interviewsOffText(r.interviewsCancelled, r.interviewOffNotes)} ${safetyNetAfterDecision(r, now)}` }
+        : { title: "Added to your talent pool.", detail: `The candidate was not told.${interviewsOffText(r.interviewsCancelled, r.interviewOffNotes)} ${safetyNetAfterDecision(r, now)}` };
     case "invite_screen":
       return { title: r.next ?? "Invitation on its way." };
     case "ask_in_screen":
-      return { title: r.next ?? "Invitation on its way. The screen starts with these questions." };
+      return { title: r.next ?? "Invitation on its way. The screening chat starts with these questions." };
     case "override_eligibility":
       return { title: "Kept in.", detail: "Your reason is recorded." };
     case "review_anyway":
@@ -98,7 +115,7 @@ export function actionToast(action: string, r: Pick<ActionResult, "candidateNoti
     case "told_in_person":
       return { title: "Recorded that you told them yourself.", detail: "Nothing more will be sent." };
     case "cancel_screen":
-      return { title: "Screen invitation stopped.", detail: r.next ?? (r.candidateNotice ? noticeText(r.candidateNotice) : "Their link no longer works.") };
+      return { title: "Screening chat invitation stopped.", detail: r.next ?? (r.candidateNotice ? noticeText(r.candidateNotice) : "Their link no longer works.") };
     case "undo_decision":
       // Back under Cancelled (founder decisions 1A-4A): the API's sentence says whether their new times still go on the
       // day they were promised, so "nothing will be sent" is never said about a set that will.
@@ -110,16 +127,16 @@ export function actionToast(action: string, r: Pick<ActionResult, "candidateNoti
 }
 
 /** The toast after "How did the interview go?" (POST /applications/:id/decision). */
-export function decisionToast(decision: "next_round" | "finalist" | "not_moving_forward", r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes"> & { nextRoundKey?: string | null }): ToastParts {
+export function decisionToast(decision: "next_round" | "finalist" | "not_moving_forward", r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes"> & DecisionMessageHint & { nextRoundKey?: string | null }, now: Date = new Date()): ToastParts {
   if (decision === "finalist") return { title: "Marked as a finalist.", detail: "The candidate was not told." };
   if (decision === "next_round") return { title: r.nextRoundKey ? "Next round." : "Next round recorded.", detail: r.nextRoundKey ? "Check the interviewers below and approve; times go out from there." : undefined };
-  return { title: "Recorded: not moving forward.", detail: decisionDetail(r) };
+  return { title: "Recorded: not moving forward.", detail: decisionDetail(r, now) };
 }
 
 /** The toast after "Record what happened" (POST /applications/:id/outcome); the team's own decisions are private. */
-export function outcomeToast(outcome: string, r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes">): ToastParts {
+export function outcomeToast(outcome: string, r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes"> & DecisionMessageHint, now: Date = new Date()): ToastParts {
   if (outcome === "hired_externally") return { title: "Hire recorded with your name." };
-  if (outcome === "employer_declined" || outcome === "no_hire") return { title: "Outcome recorded with your name.", detail: decisionDetail(r) };
+  if (outcome === "employer_declined" || outcome === "no_hire") return { title: "Outcome recorded with your name.", detail: decisionDetail(r, now) };
   return { title: "Outcome recorded with your name." };
 }
 
@@ -181,7 +198,7 @@ export function briefDecisionToast(action: { label: string; body?: Record<string
     return { title: "Turned down.", detail: "Recorded with your name." };
   }
   if (notice) return sendDecisionToast(notice);
-  if (/invite to a screen/i.test(action.label)) return { title: "Invitation on its way.", detail: "The screen goes to the candidate by email, or by text when they agreed to texts." };
+  if (/invite to a (screen|screening chat)/i.test(action.label)) return { title: "Invitation on its way.", detail: "The screening chat goes to the candidate by email, or by text when they agreed to texts." };
   if (/^Yes, interview/i.test(action.label)) {
     // The answer carries the interview approval filled in (plan H4): the page opens it on the candidate's panel.
     const filled = !!(response as { interviewDraft?: unknown } | null)?.interviewDraft;
@@ -226,6 +243,19 @@ export function declineConfirmText(policy: DeclineMessagePolicy, input: { hasEma
     parts.push(policy === "needs_approval" ? `When you send the decision message (${message}), it waits for approval before it goes out.` : `When you are ready, send the decision message from their page: ${message}.`);
   }
   return parts.join(" ");
+}
+
+/**
+ * The short lines a decline step shows before the click (founder decisions B6 and D-03 A): private now, any interview it
+ * calls off, and the day the standard message goes by itself if nobody tells them first (or the day an ITS recruiter is
+ * brought in, under the company's settings). The whole of `declineConfirmText` sits one click away under it.
+ */
+export function declineSummary(policy: DeclineMessagePolicy, input: { hasEmail: boolean; interviews?: readonly InterviewRef[]; now?: Date }): string[] {
+  const known = (input.interviews ?? []).filter(candidateKnowsOf);
+  const lead = !known.length ? "Private: nothing is sent to them now."
+    : `Private: the decision is not sent now. ${known.length === 1 ? "Their interview is" : `Their ${known.length} interviews are`} called off, and they get a short note saying so.`;
+  const on = safetyNetDate((input.now ?? new Date()).toISOString());
+  return [lead, safetyNetShort({ policy, hasEmail: input.hasEmail, on })];
 }
 
 /**
@@ -282,16 +312,17 @@ export const CLOSING_SENDERS = "An owner, admin, hiring manager or recruiter";
  * The toast after closing a role (POST /roles/:id/outcome): who moved, privately, and the interviews it called off. A
  * candidate who had a booked time or times to pick from was sent a short note at once saying only that the interview is
  * off (`interviewOffNotes`); the decision stays private until someone sends the one closing message (Q30), or the
- * safety net acts after five working days (Q27). `closingMessage.policy`, when the answer carries it, says which way the
- * safety net goes. `mayTell` is false for someone who may close a role but not tell candidates a decision (HR): they are
- * told who sends the message instead of being asked to send it.
+ * safety net acts after five working days (Q27), on the day named (D-03 A). `closingMessage.policy`, when the answer
+ * carries it, says which way the safety net goes. `mayTell` is false for someone who may close a role but not tell
+ * candidates a decision (HR): they are told who sends the message instead of being asked to send it.
  */
-export function closeRoleToast(r: { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; closingMessage?: { policy: DeclineMessagePolicy } | null }, title = "Role closed as filled.", mayTell = true): ToastParts {
+export function closeRoleToast(r: { movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; closingMessage?: { policy: DeclineMessagePolicy } | null }, title = "Role closed as filled.", mayTell = true, now: Date = new Date()): ToastParts {
   const moved = Math.max(0, (r.movedToTalentPool ?? 0) - (r.heldEmailsAddedToTalentPool ?? 0));
   const policy = r.closingMessage?.policy ?? null;
-  const tell = !mayTell ? `${CLOSING_SENDERS} sends them the closing message; it waits on their Today.`
-    : policy === "not_sent" ? `Under your settings no message is sent: tell each of them yourself, then record it on their page. ${safetyNetPromise(policy)}`
-    : `Send the closing message when you are ready. ${safetyNetPromise(policy, "the closing message")}`;
+  const net = safetyNetShort({ policy, on: safetyNetDate(now.toISOString()), what: "the closing message" });
+  const tell = !mayTell ? `${CLOSING_SENDERS} sends them the closing message; it waits on their Home page. ${net}`
+    : policy === "not_sent" ? `Under your settings no message is sent: tell each of them yourself, then record it on their page. ${net}`
+    : `Send the closing message when you are ready. ${net}`;
   const who = moved ? `${moved === 1 ? "The one person" : `The ${moved} people`} still in the process moved to your talent pool, privately: nobody is told yet. ${tell}` : "Nobody else was still in the process.";
   return { title, detail: `${who}${closedInterviewsText(r.interviewsCancelled ?? 0, r.interviewOffNotes ?? 0)}` };
 }

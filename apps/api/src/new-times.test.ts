@@ -558,7 +558,8 @@ describe("new times for people under Cancelled", () => {
     await hours(owner, false);
     try {
       await runAt(due);
-      expect((await runOf((await followUp(waiting.id)).autoRunId!)).status).toBe("completed");
+      // the deletion cancelled the run that waited for the day (Wave S3 G1), so its day comes and nothing runs
+      expect((await runOf((await followUp(waiting.id)).autoRunId!)).status).toBe("cancelled");
       expect((await ivRow(waiting.ivId)).status).toBe("cancelled");
       expect((await followUp(preparing.id)).autoState).toBe("preparing");
       await erase(preparing);
@@ -821,16 +822,19 @@ describe("new times for people under Cancelled", () => {
       const none = await form(`/c/schedule/${p.token}/none-work`, { timezone: TZ, note: "Evenings would suit me better." });
       expect(none.status).toBe(200);
       await container.drain();
-      // the automatic set's run offers again after its wait, with the takeover on: nothing to stop, nothing thrown
+      // the automatic set's run offers again after its wait, with the takeover on: nothing to stop, nothing thrown. The
+      // other times (a fresh window, two days on) are a new attempt with their own email; the set's email stays as it was
       await runAt(Date.parse(due) + 49 * H);
-      expect((await eventsOf(p.ivId, "interview.slots_offered")).filter((e) => e.payload.attempt === iv.attempt)).toHaveLength(2);
+      expect((await eventsOf(p.ivId, "interview.slots_offered")).filter((e) => e.payload.attempt === iv.attempt)).toHaveLength(1);
+      expect((await eventsOf(p.ivId, "interview.slots_offered")).filter((e) => e.payload.attempt === iv.attempt + 1)).toHaveLength(1);
       expect(await slotsEmail(p.ivId, iv.attempt)).toMatchObject({ id: email.id, status: email.status });
-      expect(await ivRow(p.ivId)).toMatchObject({ status: "scheduling", attempt: iv.attempt });
+      expect(await slotsEmail(p.ivId, iv.attempt + 1)).toMatchObject({ subject: `Other times for your interview: ${roleTitle} at Harbor Dental` });
+      expect(await ivRow(p.ivId)).toMatchObject({ status: "scheduling", attempt: iv.attempt + 1 });
       expect(await followUp(p.id)).toMatchObject({ autoState: "sent", timesSentCount: 1, resolvedAt: null });
       expect((await eventsOf(p.ivId, "interview.cancelled")).filter((e) => e.payload.cause === "new_times_stopped")).toHaveLength(0);
       expect((await notes("interview.new_times_not_sent")).filter((x) => x.title === "New times for Lou Grant were not sent")).toHaveLength(0);
       const run = (await scheduleRuns(p.ivId)).find((x) => x.idempotencyKey === `schedule:${p.ivId}:${iv.attempt}`)!;
-      expect(run).toMatchObject({ status: "waiting", state: expect.objectContaining({ via: "auto" }) });
+      expect(run).toMatchObject({ status: "waiting", state: expect.objectContaining({ via: "auto", attempt: iv.attempt + 1 }) });
     } finally {
       await container.db.update(takeovers).set({ status: "ended" }).where(eq(takeovers.id, takeover.id));
     }

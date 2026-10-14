@@ -8,6 +8,7 @@ import { Alert, Avatar, Button, Icon, Kbd } from "@ros/ui";
 import { api, type RoleSummary } from "@ros/web/src/api/client";
 import { NavLink } from "@ros/web/src/nav";
 import { railCompact, railListsRoles, railRoles, teamRoleWord } from "@ros/web/src/rail";
+import { clearAllQuickStarts } from "@ros/web/src/pages/new-role/quick-start";
 import { canSeeTalent, canStartHire } from "@ros/web/src/roles";
 import { browserStorage, isFormControl, isStartHireShortcut, SHORTCUT_CHANGED_EVENT, START_HIRE_HREF, START_HIRE_KEY, startHireShortcutOn } from "@ros/web/src/start-hire";
 import type { Me } from "../lib/session";
@@ -16,11 +17,12 @@ import "./app-shell.css";
 /**
  * The signed-in frame (docs/07): the rail, the staff-access notice, the development-mode notice, and the page.
  *
- * The rail, top to bottom: the company chip (your role, and a cog to Setup), "Start a hire" for the people who may start
- * one (N opens it from anywhere outside a text field, on a page with nothing changed), Today, Roles with the roles being
- * worked on listed underneath (for members only), Talent, Interviews, Setup (Queue and Console for ITS staff), and who
- * is signed in with Sign out. On a role's own pages it folds to a column of icons. Under 900px it becomes a top bar:
- * Start a hire and Sign out stay in it, and the links fold behind a Menu button.
+ * The rail, top to bottom: the company chip (your role, and a cog to Settings), "Start a hire" for the people who may
+ * start one (N opens it from anywhere outside a text field, on a page with nothing changed), Home, Jobs with the jobs
+ * being worked on listed underneath (for members only; a live job opens on its Candidates), Candidates, Interviews,
+ * Settings (Queue and Console for ITS staff), and who is signed in with Sign out. On a job's own pages it folds to a
+ * column of icons. Under 900px it becomes a top bar: Start a hire and Sign out stay in it, and the links fold behind a
+ * Menu button. (The routes keep their old names: /, /roles, /talent, /setup.)
  */
 export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
   const qc = useQueryClient();
@@ -31,14 +33,14 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
   const active = me.memberships.find((m) => m.companyId === me.activeCompanyId);
   const myRole = active?.role ?? null;
   const companyName = active?.companyName ?? me.staffAccess?.companyName ?? null;
-  // Links a role cannot use are not shown: an interviewer has no Talent page, only the interviews they are on.
+  // Links a role cannot use are not shown: an interviewer has no Candidates page, only the interviews they are on.
   const showTalent = !active || canSeeTalent(active.role);
-  // The same rule as Today's button: role.create, held through a membership (an ITS recruiter's grant does not start hires).
+  // The same rule as Home's button: role.create, held through a membership (an ITS recruiter's grant does not start hires).
   const mayStartHire = !!me.activeCompanyId && canStartHire(myRole);
 
-  // The roles under Roles, for members only: an ITS recruiter under a grant gets no list (each request they make is
-  // recorded for the customer as a page they opened). The API gives an interviewer only the roles they interview for.
-  // The list refreshes when a page changes a role and every two minutes while the tab is in view.
+  // The jobs under Jobs, for members only: an ITS recruiter under a grant gets no list (each request they make is
+  // recorded for the customer as a page they opened). The API gives an interviewer only the jobs they interview for.
+  // The list refreshes when a page changes a job and every two minutes while the tab is in view. Home reads the same list.
   const listRoles = railListsRoles(me);
   const roles = useQuery({ queryKey: ["roles"], queryFn: () => api.get<RoleSummary[]>("/api/v1/roles"), enabled: listRoles, refetchInterval: 120_000 });
   const listed = listRoles ? railRoles(roles.data ?? [], { role: myRole }) : [];
@@ -105,6 +107,8 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
 
   const logout = async () => {
     await api.post("/api/v1/auth/logout");
+    // The quick start's answers (pay ceiling, deal-breakers) are never left behind for the next person on this browser.
+    clearAllQuickStarts(browserStorage());
     qc.clear();
     router.push("/login");
     router.refresh();
@@ -125,7 +129,7 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
               <strong>{companyName}</strong>
               {roleWord ? <span>{roleWord}</span> : null}
             </div>
-            <NextLink href="/setup" className="icon-btn" aria-label="Company setup" title="Company setup">
+            <NextLink href="/setup" className="icon-btn" aria-label="Company settings" title="Company settings">
               <Icon name="settings" />
             </NextLink>
           </div>
@@ -144,13 +148,13 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
         <div className="rail-links" id="rail-links" data-open={menuOpen ? "true" : undefined}>
           {me.activeCompanyId ? (
             <>
-              <NavLink to="/" end><Icon name="today" />Today</NavLink>
-              <NavLink to="/roles"><Icon name="roles" />Roles</NavLink>
+              <NavLink to="/" end><Icon name="home" />Home</NavLink>
+              <NavLink to="/roles"><Icon name="roles" />Jobs</NavLink>
               {listed.length ? (
-                <ul className="rail-sub" aria-label="Roles in progress">
+                <ul className="rail-sub" aria-label="Jobs in progress">
                   {listed.map((r) => (
                     <li key={r.id}>
-                      <NavLink to={`/roles/${r.id}`}>
+                      <NavLink to={r.href} activeFor={`/roles/${r.id}`}>
                         <span className={r.live ? "dot good" : "dot"} aria-hidden="true" />
                         <span className="rail-sub-title">{r.title}</span>
                         {/* a count, or a short word where there is none: the dot's colour never says the status alone */}
@@ -159,12 +163,12 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
                       </NavLink>
                     </li>
                   ))}
-                  <li><NextLink href="/roles"><span className="rail-sub-title">All roles</span></NextLink></li>
+                  <li><NextLink href="/roles"><span className="rail-sub-title">All jobs</span></NextLink></li>
                 </ul>
               ) : null}
-              {showTalent ? <NavLink to="/talent"><Icon name="talent" />Talent</NavLink> : null}
+              {showTalent ? <NavLink to="/talent"><Icon name="talent" />Candidates</NavLink> : null}
               <NavLink to="/interviews"><Icon name="interviews" />Interviews</NavLink>
-              <NavLink to="/setup"><Icon name="settings" />Setup</NavLink>
+              <NavLink to="/setup"><Icon name="settings" />Settings</NavLink>
             </>
           ) : null}
           {isStaff ? (
@@ -180,7 +184,7 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
             </>
           ) : null}
         </div>
-        {/* Which AI company we use is shown in Setup, not here. Sign out stays reachable on phones and tablets (tokens.css). */}
+        {/* Which AI company we use is shown in Settings, not here. Sign out stays reachable on phones and tablets (tokens.css). */}
         <div className="foot">
           <div className="who">
             <Avatar name={who} tone="ink" size="sm" />
@@ -194,7 +198,7 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
       </nav>
       <main className="main" id="main">
         {me.staffAccess ? <div style={{ marginBottom: 14 }}><Alert tone="info">You are inside {me.staffAccess.companyName} through an escalation ({me.staffAccess.purpose}). Access is limited to that request and ends {new Date(me.staffAccess.expiresAt).toLocaleString()}. Every page you open is recorded for the customer.</Alert></div> : null}
-        {me.ai.provider === "fake" ? <div style={{ marginBottom: 14 }}><Alert tone="caution">Development mode: the AI provider is a deterministic stand-in. Role packets and extractions are heuristic drafts, labeled as such.</Alert></div> : null}
+        {me.ai.provider === "fake" ? <div style={{ marginBottom: 14 }}><Alert tone="caution">Development mode: the AI provider is a deterministic stand-in, so its drafts are rough.</Alert></div> : null}
         {children}
       </main>
     </div>

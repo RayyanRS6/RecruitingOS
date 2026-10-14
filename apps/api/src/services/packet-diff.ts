@@ -97,7 +97,7 @@ const SECTIONS: Section[] = [
     label: REVISABLE_SECTION_LABEL.screening,
     fields: [
       { path: "screening.questions", label: "Order of the screening questions", get: (p) => p.screening.questions.map((q) => q.key).join(" ") },
-      { path: "screening.maxMinutes", label: "Screening length", get: (p) => `About ${p.screening.maxMinutes} minutes` },
+      { path: "screening.maxMinutes", label: "Screening chat length", get: (p) => `About ${p.screening.maxMinutes} minutes` },
     ],
     keyed: [{ path: "screening.questions", label: "Screening question", items: (p) => p.screening.questions.map((q) => ({ key: q.key, value: q.question })) }],
   },

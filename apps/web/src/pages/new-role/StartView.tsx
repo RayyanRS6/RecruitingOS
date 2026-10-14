@@ -3,14 +3,16 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { IntakeSessionSummary, PlanRoom } from "@ros/contracts";
-import { Alert, Eyebrow, Icon, Skeleton } from "@ros/ui";
+import { Alert, Button, Eyebrow, Icon, Skeleton } from "@ros/ui";
 import { api } from "../../api/client";
 import { Link, useNavigate } from "../../nav";
 import { AskRecruiter } from "../../components/AskRecruiter";
 import { presetOf } from "../../recruiter-access";
+import { browserStorage, QUICK_START_HREF } from "../../start-hire";
 import { Composer } from "./Composer";
 import { AssistantMark, ChatMessage, Thinking } from "./Conversation";
 import { composerPlaceholder, startHireHref, type RecruiterAction } from "./rules";
+import { readQuickStart, type QuickScope } from "./quick-start";
 import { quickStartsFor } from "./quick-starts";
 import { useStartDraft } from "./use-start-draft";
 
@@ -45,13 +47,14 @@ export function RoomAlert({ room, ask }: { room: PlanRoom; ask: PlanAsk | null }
 }
 
 /**
- * The job builder's first screen (plan C4, C5, C13): "Who are you hiring?", one big box for a sentence or a whole job ad,
- * and quick starts for the roles our hiring guide knows. The draft is made only when the first message is sent, so
+ * The job builder's first screen (plan C4, C5, C13; Wave S2 K2): "Who are you hiring?" with two ways to start. First,
+ * the quick questions (ten small steps, `?way=quick`), the main button; then one big box for a sentence or a whole job
+ * ad, with quick starts for the roles our hiring guide knows. The draft is made only when the first message is sent, so
  * opening this page saves nothing. "Start a hire" picks up the draft this person already has in progress rather than
  * starting a second one; "Start a different role" comes here with ?new=1 to begin another. When the plan has no room
  * the page says so before anything is typed, with the roles holding the places.
  */
-export function StartView({ fresh, companyName }: { fresh: boolean; companyName: string | null }) {
+export function StartView({ fresh, companyName, scope = null }: { fresh: boolean; companyName: string | null; scope?: QuickScope | null }) {
   const nav = useNavigate();
   const drafts = useQuery({ queryKey: ["intake", "mine"], queryFn: () => api.get<{ sessions: IntakeSessionSummary[]; room: PlanRoom }>("/api/v1/intake/sessions?mine=1") });
   const company = useQuery({ queryKey: ["company"], queryFn: () => api.get<CompanyLite>("/api/v1/companies/current") });
@@ -66,6 +69,11 @@ export function StartView({ fresh, companyName }: { fresh: boolean; companyName:
 
   const [text, setText] = useState("");
   const box = useRef<HTMLTextAreaElement | null>(null);
+  // Quick answers kept in this browser: read after the first draw, so the server and the browser draw the same page.
+  const [quickKept, setQuickKept] = useState(false);
+  const scopeKey = scope ? `${scope.companyId}:${scope.userId}` : "";
+  // biome-ignore lint/correctness/useExhaustiveDependencies: read again only when the person or the company changes (scopeKey), not for each new scope object
+  useEffect(() => { setQuickKept(!!scope && !!readQuickStart(browserStorage(), scope)); }, [scopeKey]);
   const { start, pending, sent, notARole, problem, limit, clearProblem } = useStartDraft({ replace: true });
 
   if (drafts.isLoading || resume) return <Skeleton lines={4} />;
@@ -78,10 +86,20 @@ export function StartView({ fresh, companyName }: { fresh: boolean; companyName:
 
   return (
     <div className="start">
-      <Eyebrow>{name ? `New role · ${name}` : "New role"}</Eyebrow>
+      <Eyebrow>{name ? `New job · ${name}` : "New job"}</Eyebrow>
       <h1>Who are you hiring?</h1>
-      <p className="start-lede">Describe the role in a sentence or paste a job ad you already have. I'll ask a few questions and draft the job for you.</p>
+      <p className="start-lede">Two ways to start. The assistant drafts the job; you decide.</p>
       {full && room ? <RoomAlert room={room} ask={planAsk?.ask ?? null} /> : null}
+      {sent ? null : (
+        <section className="qcard" aria-labelledby="start-quick-h">
+          <h2 id="start-quick-h" className="qcard-prompt">Answer a few quick questions</h2>
+          <p className="small muted">Ten short steps, one at a time. Then the assistant writes the job post.</p>
+          <div className="row">
+            <Button variant="primary" iconEnd="arrow-right" disabled={full} onClick={() => nav(QUICK_START_HREF)}>{quickKept ? "Continue the quick questions" : "Start the quick questions"}</Button>
+          </div>
+        </section>
+      )}
+      <h2 style={{ fontSize: "var(--text-md)", marginTop: 6 }}>Or describe it, or paste a job ad</h2>
       {sent ? (
         <div className="start-sent">
           <ChatMessage m={{ role: "owner", content: sent, kind: sent.length >= 1200 ? "pasted_ad" : "text" }} />

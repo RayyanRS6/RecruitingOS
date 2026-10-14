@@ -395,7 +395,7 @@ describe("publishing: boards, ITS posting tasks, live edits, the legal check, th
     expect(d.autoActionsOnOpen.lines[1]).toMatchObject({ actionType: "application.invite_screen", level: "approval" });
     expect(d.autoActionsOnOpen.lines[1].text).toMatch(/waits for your approval/);
     // the line says plainly that the assistant's reading of an application is what starts it (the AI is never hidden)
-    expect(d.autoActionsOnOpen.lines[1].text).toMatch(/^When the assistant's reading of an application suggests a good fit/);
+    expect(d.autoActionsOnOpen.lines[1].text).toMatch(/^When the AI review of an application suggests a good fit/);
   });
 
   it("the legal check blocks approving a Colorado role until the benefits are described; the role then opens with a default closing date and its timer", async () => {

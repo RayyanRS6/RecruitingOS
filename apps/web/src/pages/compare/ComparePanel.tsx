@@ -23,7 +23,7 @@ export function ComparePanel({ roleId, candidates, initial }: { roleId: string; 
   const q = useQuery({ queryKey: ["compare", roleId, (ids ?? []).join(",")], queryFn: () => api.get<CompareView>(`/api/v1/roles/${roleId}/compare?ids=${(ids ?? []).join(",")}`), enabled: !!ids?.length });
   return (
     <Card title="Compare candidates" aside={<span className="small muted">{picked.length} of {COMPARE_MAX} chosen</span>}>
-      <p className="small muted" style={{ margin: 0 }}>Tick up to five people, then compare. Each match score is worked out from checked evidence; people decide.</p>
+      <p className="small muted" style={{ margin: 0 }}>Tick up to five people, then compare.</p>
       <div className="row" style={{ flexWrap: "wrap", gap: 12, marginTop: 8 }}>
         {candidates.map((c) => (
           <label key={c.id} className="row small" style={{ gap: 6 }}>
@@ -110,8 +110,8 @@ export function CompareTable({ data }: { data: CompareView }) {
           const tag = skillTag(cands, x.key);
           return <tr key={`sk:${x.key}`}><th scope="row" className="small" title={x.definition}>{tag ? <><span className="sbar-tag">{tag}</span> </> : null}{x.name}</th>{cands.map((c) => <td key={c.applicationId}><Cell c={c} keyName={x.key} mustHave={false} /></td>)}</tr>;
         })}
-        <tr><th scope="row" className="small muted">Screen</th>{cands.map((c) => <td key={c.applicationId} className="small">{c.screen ? REC_LABEL[c.screen.recommendation] ?? c.screen.recommendation.replace(/_/g, " ") : <span className="muted">no screen yet</span>}</td>)}</tr>
-        <tr><th scope="row" className="small muted">Résumé</th>{cands.map((c) => <td key={c.applicationId} className="small">{c.resume ? overallLabel(c.resume.overall) : <span className="muted">not read yet</span>}</td>)}</tr>
+        <tr><th scope="row" className="small muted">Screening chat</th>{cands.map((c) => <td key={c.applicationId} className="small">{c.screen ? REC_LABEL[c.screen.recommendation] ?? c.screen.recommendation.replace(/_/g, " ") : <span className="muted">no screening chat yet</span>}</td>)}</tr>
+        <tr><th scope="row" className="small muted">AI review of the résumé</th>{cands.map((c) => <td key={c.applicationId} className="small">{c.resume ? overallLabel(c.resume.overall) : <span className="muted">not reviewed yet</span>}</td>)}</tr>
         <tr><th scope="row" className="small muted">Still unknown</th>{cands.map((c) => <td key={c.applicationId} className="small">{c.unknownCount}</td>)}</tr>
         {/* The team's private notes (plan H3), for those who read notes; never the candidate's, never the AI's. */}
         {withNotes ? <tr><th scope="row" className="small muted">Team notes <span className="sr-only">(private)</span></th>{cands.map((c) => <td key={c.applicationId}><NotesCell notes={c.notes ?? []} /></td>)}</tr> : null}

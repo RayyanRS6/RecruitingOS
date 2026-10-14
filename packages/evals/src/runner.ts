@@ -3,13 +3,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, messageLinePrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, triageAssessPrompt, type AiRuntime, type IntakeContext, type ScreenContext } from "@ros/ai";
 import {
-  INTAKE_COMPILE_MAX_TOKENS, REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, TRIAGE_READINGS, advanceProgress, assessmentSources, combineOutcomes, credentialMustHaves, basisFor, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, mergeFacts, mergeRevision, redactProtected, registerFakeHandlers,
-  resolveBenchmark, verifyQuotes, type BenchmarkResult,
+  INTAKE_COMPILE_MAX_TOKENS, REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, SCORING_VIEW_VERSION, TRIAGE_READINGS, advanceProgress, assessmentSources, basisFor, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, hasPlaceholder, mergeFacts, mergeRevision, readingsOutcome, redactProtected, registerFakeHandlers,
+  resolveBenchmark, scorecardOutcome, verifyQuotes, type BenchmarkResult, type ScoringIdentity,
 } from "@ros/agents";
-import type { EvidenceAssessment, IntakeFacts, IntakeMessage, RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
+import type { EvidenceAssessment, IntakeFacts, IntakeMessage, ResumeExtraction, RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
 import { createDb, migrate } from "@ros/db";
 import { findPlaybook, matchPlaybookRole } from "@ros/playbooks";
-import { CONSISTENCY_READS, EMPTY_FACTS, RDH_FACTS, aboutCases, lineCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, quotesAreGrounded, resumeCases, reviseCases, screenAssessCases, screenPersonas, triageEdgeCases, type IntakeCase } from "./suites";
+import { leakedDetails, lostEvidence, modelInputDifference, scorecardModelInput, triageModelInput, type EarlierApplication, type EvalApplication } from "./scoring-inputs";
+import { CONSISTENCY_READS, EMPTY_FACTS, RDH_FACTS, SCREEN_CANDIDATE, aboutCases, lineCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, quotesAreGrounded, redactionCases, resumeCases, reviseCases, screenAssessCases, screenPersonas, screenRedactionCases, triageEdgeCases, type IntakeCase } from "./suites";
 
 /**
  * Evaluation runner (docs/11). `pnpm eval` runs every suite against the configured provider
@@ -148,42 +149,61 @@ async function main() {
     const packet = await goldenPacket();
     const edge: (typeof results)[string]["cases"] = [];
     const hall: (typeof results)[string]["cases"] = [];
-    /**
-     * An application read as the app reads it (agents/src/triage.ts, assessApplication): the résumé extracted, then
-     * TRIAGE_READINGS readings side by side, each through the evidence rules, combined into the middle answer. `raws` are
-     * the model's own readings before any check, which the hallucination suite measures.
-     */
-    const assess = async (id: string, text: string | null, noResumeSummary?: string) => {
-      let extraction = null;
-      if (text) {
-        const ex = await runPrompt(q, rt, resumeExtractPrompt, { text, filename: `${id}.txt` }, { companyId: null, inputRef: { eval: id } });
-        if (ex.ok) extraction = verifyQuotes(ex.output, text);
-      }
-      const applicationAnswers = { eligibility: { rdh_license: "yes", schedule: "yes" }, ...(noResumeSummary ? { noResumeSummary } : {}) };
-      const input = { packet, extraction, resumeText: text, applicationAnswers, eligibility: { evaluatedAt: new Date().toISOString(), passed: true, failedRules: [], unverifiable: [] }, priorApplications: [] };
-      const runs = await Promise.all(Array.from({ length: TRIAGE_READINGS }, (_, i) => runPrompt(q, rt, triageAssessPrompt, input, { companyId: null, inputRef: { eval: id, reading: i + 1 } })));
-      return { combined: combineOutcomes(runs, assessmentSources({ resumeText: text, applicationAnswers }), credentialMustHaves(packet)), raws: runs.flatMap((r) => (r.ok ? [r.output] : [])) };
+    /** The résumé read for its facts, from the ORIGINAL text, as the app does (`extractResume`): the record is filled from it. */
+    const extract = async (id: string, text: string | null): Promise<ResumeExtraction | null> => {
+      if (!text) return null;
+      const ex = await runPrompt(q, rt, resumeExtractPrompt, { text, filename: `${id}.txt` }, { companyId: null, inputRef: { eval: id } });
+      return ex.ok ? verifyQuotes(ex.output, text) : null;
     };
+    /** Who applied, the earlier applications on their record, and an extraction already read (the same résumé file). */
+    type Applied = { candidate: ScoringIdentity; noResumeSummary?: string; earlier?: readonly EarlierApplication[]; extraction?: ResumeExtraction | null };
+    /**
+     * An application read as the app reads it (agents/src/triage.ts, assessApplication; founder decision D-04 = C): the
+     * résumé extracted from the original, the reading's input built by `scoringInput` (name, email, phone, street address
+     * and links hidden; earlier applications never sent), TRIAGE_READINGS readings side by side, each with its quotes
+     * mapped back to the original words, through the evidence rules, combined into the middle answer. `raws` are the
+     * model's own readings before any check, and `seen` the texts it was given, which the hallucination suite measures
+     * them against; `modelInput` is everything the model was sent, and `app` the application as stored.
+     */
+    const assess = async (id: string, text: string | null, who: Applied) => {
+      const extraction = who.extraction !== undefined ? who.extraction : await extract(id, text);
+      const applicationAnswers = { eligibility: { rdh_license: "yes", schedule: "yes" }, ...(who.noResumeSummary ? { noResumeSummary: who.noResumeSummary } : {}) };
+      const app: EvalApplication = { packet, extraction, resumeText: text, applicationAnswers, eligibility: { evaluatedAt: new Date().toISOString(), passed: true, failedRules: [], unverifiable: [] }, identity: who.candidate, earlierApplications: who.earlier ?? [] };
+      const { promptInput, view, text: modelInput } = triageModelInput(app);
+      const runs = await Promise.all(Array.from({ length: TRIAGE_READINGS }, (_, i) => runPrompt(q, rt, triageAssessPrompt, promptInput, { companyId: null, inputRef: { eval: id, reading: i + 1, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() } })));
+      // what the app does once the model has answered (agents/src/triage.ts, readingsOutcome), not a copy of it
+      return { combined: readingsOutcome(runs, view, { resumeText: text, applicationAnswers, packet }), raws: runs.flatMap((r) => (r.ok ? [r.output] : [])), seen: assessmentSources(promptInput), modelInput, app };
+    };
+    /** A quote the model wrote is grounded when it is in what the model was given (the hidden view, placeholders and all). */
+    const groundedIn = (raws: EvidenceAssessment[], seen: ReturnType<typeof assessmentSources>) => raws.flatMap((raw, i) => assessmentQuotesGrounded(raw, { resume: seen.resume ?? "", application: seen.application ?? "" }).map((x) => `reading ${i + 1}: ${x}`));
     for (const c of triageEdgeCases) {
-      const { combined: r, raws } = await assess(c.id, c.resumeText, c.noResumeSummary);
+      const { combined: r, raws, seen } = await assess(c.id, c.resumeText, { candidate: c.candidate, noResumeSummary: c.noResumeSummary });
       if (!r.ok) { edge.push({ id: c.id, pass: false, failures: [r.error] }); hall.push({ id: c.id, pass: false, failures: [r.error] }); continue; }
       const f = c.expect(r.output);
       edge.push({ id: c.id, pass: f.length === 0, failures: f });
-      const h = raws.flatMap((raw, i) => assessmentQuotesGrounded(raw, { resume: c.resumeText ?? "", application: `${c.noResumeSummary ?? ""}\n{"rdh_license":"yes","schedule":"yes"}` }).map((x) => `reading ${i + 1}: ${x}`));
+      const h = groundedIn(raws, seen);
       hall.push({ id: c.id, pass: h.length === 0, failures: h });
     }
     results["triage.edge_cases"] = { cases: edge, passRate: edge.filter((x) => x.pass).length / edge.length };
     results["triage.hallucination"] = { cases: hall, passRate: hall.filter((x) => x.pass).length / hall.length };
 
-    // Bias pairs (docs/11): the same résumé but for a name, a graduation year or a zip code must read the same.
+    // Bias pairs (docs/11): the same résumé but for a name, a graduation year, a zip code or an earlier rejection at the
+    // same company must read the same. Where the scoring view hides the cue or never sends it, the model must be sent the
+    // very same input for both (`sameModelInput`).
     const bias: (typeof results)[string]["cases"] = [];
-    const readResume = async (id: string, text: string) => (await assess(id, text)).combined;
     for (const pair of biasPairs) {
-      const ra = await readResume(`${pair.id}_a`, pair.a);
-      const rb = await readResume(`${pair.id}_b`, pair.b);
-      if (!ra.ok || !rb.ok) { bias.push({ id: pair.id, pass: false, failures: [ra.ok ? "" : ra.error, rb.ok ? "" : rb.error].filter(Boolean) }); continue; }
+      // The same résumé file is read for its facts once, as it would be stored once.
+      const shared = pair.a === pair.b ? { extraction: await extract(`${pair.id}_resume`, pair.a) } : {};
+      const a = await assess(`${pair.id}_a`, pair.a, { candidate: pair.candidates[0], earlier: pair.earlier?.[0], ...shared });
+      const b = await assess(`${pair.id}_b`, pair.b, { candidate: pair.candidates[1], earlier: pair.earlier?.[1], ...shared });
+      // With two résumé files each has its own extraction, which a real model may word differently from one read to the
+      // next: then the candidate's texts are compared as the model reads them (the input without the extraction).
+      const inputDiff = !pair.sameModelInput ? [] : "extraction" in shared ? modelInputDifference(a.modelInput, b.modelInput) : modelInputDifference(triageModelInput({ ...a.app, extraction: null }).text, triageModelInput({ ...b.app, extraction: null }).text);
+      const ra = a.combined;
+      const rb = b.combined;
+      if (!ra.ok || !rb.ok) { bias.push({ id: pair.id, pass: false, failures: [...inputDiff, ra.ok ? "" : ra.error, rb.ok ? "" : rb.error].filter(Boolean) }); continue; }
       // the pair must read the same and score the same: the match score is worked out from these findings (founder decision B2)
-      const f = biasPairDifferences(pair, ra.output, rb.output, packet);
+      const f = [...inputDiff, ...biasPairDifferences(pair, ra.output, rb.output, packet)];
       bias.push({ id: pair.id, pass: f.length === 0, failures: f, notes: [findingsOf(pair.cues[0], ra.output), findingsOf(pair.cues[1], rb.output)] });
     }
     results["triage.bias_pairs"] = { cases: bias, passRate: bias.filter((x) => x.pass).length / bias.length };
@@ -194,7 +214,7 @@ async function main() {
       const reads: EvidenceAssessment[] = [];
       let failed: string | null = null;
       for (let i = 1; i <= CONSISTENCY_READS && !failed; i++) {
-        const r = await readResume(`${c.id}_read_${i}`, c.resume);
+        const r = (await assess(`${c.id}_read_${i}`, c.resume, { candidate: c.candidate })).combined;
         if (r.ok) reads.push(r.output);
         else failed = r.error;
       }
@@ -202,6 +222,19 @@ async function main() {
       steady.push({ id: c.id, pass: f.length === 0, failures: f, notes: reads.map((r, i) => findingsOf(`reading ${i + 1}`, r)) });
     }
     results["triage.consistency"] = { cases: steady, passRate: steady.filter((x) => x.pass).length / steady.length };
+
+    // What the scoring reading is sent (founder decision D-04 = C): a CV full of personal details and a written summary
+    // with contact details. None of them, and nothing of an earlier application, may be in the model's input; the words
+    // the job is judged on must be; and no placeholder may reach the team in the reading they see.
+    const hidden: (typeof results)[string]["cases"] = [];
+    for (const c of redactionCases) {
+      const { combined: r, modelInput, app } = await assess(c.id, c.resumeText, { candidate: c.candidate, noResumeSummary: c.noResumeSummary, earlier: c.earlier });
+      const f = [...leakedDetails(modelInput, c.personal), ...lostEvidence(triageModelInput(app).messages, c.kept)];
+      if (!r.ok) f.push(r.error);
+      else if (hasPlaceholder(JSON.stringify(r.output))) f.push("a placeholder reached the reading the team sees");
+      hidden.push({ id: c.id, pass: f.length === 0, failures: f });
+    }
+    results["triage.redaction"] = { cases: hidden, passRate: hidden.filter((x) => x.pass).length / hidden.length };
   }
 
   // The match score and the board's placement (plan F6): rules and determinism of the code, no model call.
@@ -294,19 +327,43 @@ async function main() {
   }
 
   // The scorecard (screen.assess v3, plan Wave E): a recruiter's notes kept apart, a skip unknown, an unfinished
-  // conversation never "strong interview". Judged on the model's own output, before the code's checks.
+  // conversation never "strong interview". Judged on the model's own output, before the code's checks. The model is
+  // sent what the app sends it (`scorecardInput`, founder decision D-04 = C): no name, email, phone, street or link.
   if (runs("screen.assess")) {
     const packet = await goldenPacket();
     const out: (typeof results)[string]["cases"] = [];
     for (const c of screenAssessCases) {
       const input = c.build(packet);
-      const ctx: ScreenContext = { company: { name: "Eval Dental" }, packet, candidate: { firstName: "Alex" }, channel: "web", progress: input.progress, answers: input.answers, transcript: input.transcript, focusUnknowns: [], latestCandidateMessage: null, incomplete: input.incomplete ?? null };
-      const r = await runPrompt(q, rt, screenAssessPrompt, ctx, { companyId: null, inputRef: { eval: c.id } });
+      const ctx: ScreenContext = { company: { name: "Eval Dental" }, packet, candidate: { firstName: SCREEN_CANDIDATE.firstName ?? "Alex" }, channel: "web", progress: input.progress, answers: input.answers, transcript: input.transcript, focusUnknowns: [], latestCandidateMessage: null, incomplete: input.incomplete ?? null };
+      const { ctx: seen, view } = scorecardModelInput(ctx, SCREEN_CANDIDATE);
+      const r = await runPrompt(q, rt, screenAssessPrompt, seen, { companyId: null, inputRef: { eval: c.id, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() } });
       if (!r.ok) { out.push({ id: c.id, pass: false, failures: [`assess failed: ${r.error}`] }); continue; }
       const f = c.expect(r.output, { packet, transcript: input.transcript });
       out.push({ id: c.id, pass: f.length === 0, failures: f });
     }
     results["screen.assess"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
+  }
+
+  // The scorecard's side of D-04 = C: a conversation full of personal details. None may be in the model's input, the
+  // answers must be, and the scorecard the team sees (quotes mapped back and checked as the app does) holds no placeholder.
+  if (runs("screen.redaction")) {
+    const packet = await goldenPacket();
+    const out: (typeof results)[string]["cases"] = [];
+    for (const c of screenRedactionCases) {
+      const input = c.build(packet);
+      const ctx: ScreenContext = { company: { name: "Eval Dental" }, packet, candidate: { firstName: c.candidate.firstName ?? "there" }, channel: "web", progress: input.progress, answers: input.answers, transcript: input.transcript, focusUnknowns: [], latestCandidateMessage: null, incomplete: null };
+      const { ctx: seen, view, text, messages } = scorecardModelInput(ctx, c.candidate);
+      const f = [...leakedDetails(text, c.personal), ...lostEvidence(messages, c.kept)];
+      const r = await runPrompt(q, rt, screenAssessPrompt, seen, { companyId: null, inputRef: { eval: c.id, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() } });
+      if (!r.ok) f.push(`assess failed: ${r.error}`);
+      else {
+        // what the app does once the model has answered (agents/src/screening.ts, scorecardOutcome), not a copy of it
+        const shown = scorecardOutcome(r.output, view, { transcript: input.transcript, answers: input.answers, progress: input.progress });
+        if (hasPlaceholder(JSON.stringify(shown))) f.push("a placeholder reached the scorecard the team sees");
+      }
+      out.push({ id: c.id, pass: f.length === 0, failures: f });
+    }
+    results["screen.redaction"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
   }
 
   const thresholds = JSON.parse(readFileSync(join(here, "..", "thresholds.json"), "utf8")) as Record<string, { minPassRate: number }>;

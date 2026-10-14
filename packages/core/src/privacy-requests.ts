@@ -1,9 +1,9 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, desc, eq, inArray, isNull, lte, notInArray, notLike, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, notInArray, notLike, or, sql, type SQL } from "drizzle-orm";
 import { RejectReason, type Actor } from "@ros/contracts";
-import { applicationMarks, applicationNotes, applications, approvalRequests, candidates, communications, dataRequests, documents, escalationMessages, events, hiringOutcomes, interviewFollowups, interviewParticipants, interviews, jobs, notifications, recruiterEscalations, screens, unconfirmedScreens, type Queryable } from "@ros/db";
+import { aiRuns, applicationMarks, applicationNotes, applications, approvalRequests, assessments, candidates, communications, dataRequests, documents, escalationMessages, events, hiringOutcomes, interviewFollowups, interviewParticipants, interviews, jobs, notifications, recruiterEscalations, screens, unconfirmedScreens, workflowRuns, workflowSteps, rowsOf, type Queryable } from "@ros/db";
 import { audit } from "./audit";
-import { emit } from "./events";
+import { SYSTEM_ACTOR, emit } from "./events";
 import { raiseAlert, resolveAlertsFor } from "./alerts";
 import { createEscalation } from "./escalations";
 import { normalizeEmail } from "./auth";
@@ -144,8 +144,9 @@ const CODED_REASONS: string[] = [...RejectReason.options, "hired_externally", "c
  * waiting for approval are withdrawn (and a closed role's closing message no longer names them), and an application
  * still in the process is withdrawn. Private marks lose their notes, and so do outcomes and the history (a move's own
  * reason, when it was a person's words rather than a fixed one). A decision nobody told them stays untold: nothing
- * is ever sent to them, and nobody is reminded or asked to (decision-messages.ts). The scheduling and screening runs end
- * on their own at their next step, since what they wait on is gone.
+ * is ever sent to them, and nobody is reminded or asked to (decision-messages.ts). The workflow runs about them that are
+ * still going (scheduling, screening, new times) are cancelled afterwards by `scrubCandidateWorkflowData`, before their
+ * records are scrubbed.
  */
 async function closeProcessOnDeletion(q: Queryable, input: { companyId: string; appIds: string[]; actor: Actor; now: Date }): Promise<void> {
   const { companyId, appIds, actor, now } = input;
@@ -226,14 +227,19 @@ async function closeProcessOnDeletion(q: Queryable, input: { companyId: string; 
 /**
  * Anonymization in place of deletion (runbook step 5): identity fields become tokens; resumes and their text, screening
  * transcripts and answers (the answers to a screen's opening questions included), message bodies and the team's private
- * notes are removed, and so is everything about them in a recruiter's copy and in requests and notices that name them; stage history, audit
- * records and aggregate counts stay. The person's part in every process ends first (`closeProcessOnDeletion`).
+ * notes are removed, and so is everything about them in a recruiter's copy and in requests and notices that name them;
+ * the AI's readings of them and the AI run log about them keep only their bookkeeping (`scrubCandidateAiData`), and so do
+ * the workflow engine's copies (`scrubCandidateWorkflowData`: run state and step records; a run still going is cancelled
+ * first, through `cancelRun` when the caller has the engine); stage history, audit records and aggregate counts stay. The
+ * person's part in every process ends first (`closeProcessOnDeletion`).
  * Refused unless counsel recorded an approval on this request and the administrator confirmed.
+ * `deleteFile` is called for each stored file; a caller inside a transaction should only collect the keys and remove the
+ * files once the transaction has committed (apps/api/src/routes/privacy-requests.ts does).
  */
 export async function anonymizeCandidate(
   q: Queryable,
-  input: { companyId: string; candidateId: string; actor: Actor; deleteFile: (storageKey: string) => Promise<void>; now?: Date },
-): Promise<{ documents: number; screens: number; communications: number }> {
+  input: { companyId: string; candidateId: string; actor: Actor; deleteFile: (storageKey: string) => Promise<void>; now?: Date; cancelRun?: CancelWorkflowRun },
+): Promise<{ documents: number; screens: number; communications: number; assessments: number; aiRuns: number; workflowRuns: number; workflowSteps: number }> {
   const now = input.now ?? new Date();
   const [cand] = await q.select().from(candidates).where(and(eq(candidates.id, input.candidateId), eq(candidates.companyId, input.companyId))).limit(1);
   if (!cand) throw new Error("candidate not found");
@@ -263,10 +269,326 @@ export async function anonymizeCandidate(
   const comms = await q.select({ id: communications.id }).from(communications).where(eq(communications.candidateId, cand.id));
   for (const c of comms) await q.update(communications).set({ bodyText: "[removed at the candidate's request]", bodyHtml: null, subject: "[removed]", toAddress: null }).where(eq(communications.id, c.id));
   const scrubbed = await scrubRecruiterCopies(q, { companyId: input.companyId, appIds, candidate: cand, now });
+  // The workflow engine's copies (run state, step records) lose every word too (Wave S3 G1); a run still going is
+  // cancelled first, so nothing it does next can write them back or break on a scrubbed state.
+  const wf = await scrubCandidateWorkflowData(q, { companyId: input.companyId, candidateId: cand.id, actor: input.actor, cancelRun: input.cancelRun });
+  // The AI's readings of them and the AI run log about them lose every word (founder brief S2, F3): only the bookkeeping stays.
+  const ai = await scrubCandidateAiData(q, { companyId: input.companyId, candidateId: cand.id });
   await q.update(candidates).set({ firstName: "Removed", lastName: token, email: null, phone: null, location: null, locationText: null, dedupeKey: `removed:${cand.id}`, tags: [], embedding: null, anonymizedAt: now.toISOString(), consent: {}, preferences: { smsOptOut: true } }).where(eq(candidates.id, cand.id));
-  await audit(q, { companyId: input.companyId, actor: input.actor, action: "data.anonymized", target: { type: "candidate", id: cand.id }, reason: "deletion request fulfilled by anonymization after a counsel decision", details: { documents: docs.length, screens: scrCount, communications: comms.length, escalations: scrubbed.escalations, notifications: scrubbed.notifications } });
+  await audit(q, { companyId: input.companyId, actor: input.actor, action: "data.anonymized", target: { type: "candidate", id: cand.id }, reason: "deletion request fulfilled by anonymization after a counsel decision", details: { documents: docs.length, screens: scrCount, communications: comms.length, escalations: scrubbed.escalations, notifications: scrubbed.notifications, assessments: ai.assessments, aiRuns: ai.aiRuns, workflowRunsCancelled: wf.cancelledRuns, workflowRuns: wf.workflowRuns, workflowSteps: wf.workflowSteps, workflowEvents: wf.workflowEvents } });
   await emit(q, { type: "candidate.anonymized", companyId: input.companyId, actor: input.actor, subject: { type: "candidate", id: cand.id }, payload: { documents: docs.length } });
-  return { documents: docs.length, screens: scrCount, communications: comms.length };
+  return { documents: docs.length, screens: scrCount, communications: comms.length, assessments: ai.assessments, aiRuns: ai.aiRuns, workflowRuns: wf.workflowRuns, workflowSteps: wf.workflowSteps };
+}
+
+/** What an AI run about a deleted candidate shows in place of what the model read and wrote. */
+export const REMOVED_RUN_OUTPUT: Readonly<Record<string, string>> = { removed: "This AI run was about a candidate whose information was deleted at their request." };
+
+/** Lists in a reading that hold nothing but words about the person (strengths, concerns, résumé facts): emptied. */
+const WORDED_LISTS = new Set(["strengths", "concerns", "unknowns", "anomalies", "confidenceReasons", "positions", "education", "licenses", "certifications", "skills", "languages"]);
+/** Optional fields that only ever hold the person's words or contact details: dropped. */
+const WORDED_OPTIONAL = new Set(["quote", "context", "ref", "note", "stated", "earliestStart", "fullName", "email", "phone", "locationText", "headline"]);
+/** Fields whose value is a fixed code (an enum or a packet key), kept so the score, the band and the reports still read. */
+const CODE_FIELDS = new Set(["overall", "confidence", "finding", "met", "source", "competencyKey", "requirementKey", "questionKey", "key", "kind", "recommendation", "meetsModelAnswer", "withinRange", "matchesSchedule", "confirmed", "status", "candidateAskedAbout", "sentiment"]);
+const CODE_VALUE = /^[a-z0-9][a-z0-9_.:-]{0,79}$/;
+
+/**
+ * An AI reading (an assessment's result, or a model's structured output) without the person in it: every free-text
+ * field becomes "[removed at the candidate's request]", quotes, notes and contact fields go, and lists of findings are
+ * emptied. Numbers, yes/no values and fixed codes (the band, the confidence, which must-have was met) stay, so the
+ * shape still reads and the counts still add up. Pure and idempotent: scrubbing a scrubbed reading changes nothing.
+ */
+export function scrubReading(value: unknown, field: string | null = null): unknown {
+  if (value === null || value === undefined || typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value === "string") return field && CODE_FIELDS.has(field) && CODE_VALUE.test(value) ? value : REMOVED;
+  if (Array.isArray(value)) return field && WORDED_LISTS.has(field) ? [] : value.map((v) => scrubReading(v, field));
+  if (typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (WORDED_OPTIONAL.has(k)) continue;
+      out[k] = scrubReading(v, k);
+    }
+    return out;
+  }
+  return REMOVED;
+}
+
+const UUID_VALUE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** An AI run's input reference keeps ids, counts and codes (what it was about), never words. */
+function scrubInputRef(ref: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(ref)) {
+    if (typeof v === "number" || typeof v === "boolean" || v === null) out[k] = v;
+    else if (typeof v === "string" && (UUID_VALUE.test(v) || CODE_VALUE.test(v))) out[k] = v;
+  }
+  return out;
+}
+
+type AiRunRow = typeof aiRuns.$inferSelect;
+
+/** An AI run with only its bookkeeping (ids, task, model, prompt, tokens, cost, timings, status): what it read and wrote goes. */
+export function scrubAiRun(run: Pick<AiRunRow, "inputRef" | "toolCalls" | "structuredOutput" | "policyDecision" | "humanOverride" | "finalOutcome" | "error">): Pick<AiRunRow, "inputRef" | "toolCalls" | "structuredOutput" | "policyDecision" | "humanOverride" | "finalOutcome" | "error"> {
+  const override = run.humanOverride ? { ...run.humanOverride, ...("note" in run.humanOverride ? { note: null } : {}) } : null;
+  return {
+    inputRef: scrubInputRef(run.inputRef ?? {}),
+    toolCalls: [],
+    structuredOutput: { ...REMOVED_RUN_OUTPUT },
+    policyDecision: run.policyDecision ? (scrubReading(run.policyDecision) as Record<string, unknown>) : null,
+    humanOverride: override,
+    finalOutcome: run.finalOutcome ? (scrubReading(run.finalOutcome) as Record<string, unknown>) : null,
+    error: run.error === null ? null : REMOVED,
+  };
+}
+
+const NO_ID = "00000000-0000-0000-0000-000000000000";
+const anyOf = (ids: string[]) => (ids.length ? ids : [NO_ID]);
+
+/**
+ * Scrubs the AI's readings of one candidate (assessments) and the AI run log about them (`ai_runs`: résumé reading,
+ * scoring readings, screening chat turns and scorecards, suggested message lines), found by the application, screen,
+ * document and workflow they were about, or by the assessment that points at them. Only rows that still hold words are
+ * written, so it is safe to run again: the deletion runs it, and the daily maintenance repeats it for every anonymized
+ * candidate (`scrubAnonymizedCandidatesAiData`), which catches a run that finished after the deletion.
+ */
+export async function scrubCandidateAiData(q: Queryable, input: { companyId: string; candidateId: string }): Promise<{ assessments: number; aiRuns: number }> {
+  const { companyId, candidateId } = input;
+  const refs = await candidateRefs(q, companyId, candidateId);
+  const { appIds, docIds, screenIds, unconfirmedIds } = refs;
+  const wfIds = (await workflowRunsAbout(q, companyId, candidateId, refs)).map((w) => w.id);
+
+  let assessmentCount = 0;
+  const runIds: string[] = [];
+  if (appIds.length) {
+    const rows = await q.select({ id: assessments.id, result: assessments.result, aiRunId: assessments.aiRunId }).from(assessments).where(inArray(assessments.applicationId, appIds));
+    for (const a of rows) {
+      if (a.aiRunId) runIds.push(a.aiRunId);
+      const result = scrubReading(a.result) as typeof a.result;
+      if (JSON.stringify(result) === JSON.stringify(a.result)) continue;
+      await q.update(assessments).set({ result }).where(eq(assessments.id, a.id));
+      assessmentCount++;
+    }
+  }
+
+  const about: SQL[] = [
+    inArray(aiRuns.id, anyOf(runIds)),
+    inArray(sql`${aiRuns.inputRef}->>'applicationId'`, anyOf(appIds)),
+    inArray(sql`${aiRuns.inputRef}->>'screenId'`, anyOf([...screenIds, ...unconfirmedIds])),
+    // the one-visit apply chat records its turns against the unconfirmed screen, with no workflow run (apply-conversation.ts)
+    inArray(sql`${aiRuns.inputRef}->>'unconfirmedScreenId'`, anyOf(unconfirmedIds)),
+    inArray(sql`${aiRuns.inputRef}->>'documentId'`, anyOf(docIds)),
+    inArray(sql`${aiRuns.inputRef}->>'candidateId'`, [candidateId]),
+    inArray(aiRuns.workflowRunId, anyOf(wfIds)),
+  ];
+  const runs = await q.select({ id: aiRuns.id, inputRef: aiRuns.inputRef, toolCalls: aiRuns.toolCalls, structuredOutput: aiRuns.structuredOutput, policyDecision: aiRuns.policyDecision, humanOverride: aiRuns.humanOverride, finalOutcome: aiRuns.finalOutcome, error: aiRuns.error }).from(aiRuns).where(and(eq(aiRuns.companyId, companyId), or(...about)));
+  let runCount = 0;
+  for (const r of runs) {
+    const { id, ...before } = r;
+    const after = scrubAiRun(before);
+    if (JSON.stringify(after) === JSON.stringify(before)) continue;
+    await q.update(aiRuns).set(after).where(eq(aiRuns.id, id));
+    runCount++;
+  }
+  return { assessments: assessmentCount, aiRuns: runCount };
+}
+
+/**
+ * The candidates anonymized so far, or only those anonymized since a time (the daily clean-up's window: a run that
+ * finishes late lands within days of the deletion). Cheap: one indexed-by-company read of ids.
+ */
+export async function anonymizedCandidates(q: Queryable, opts: { since?: Date } = {}): Promise<Array<{ id: string; companyId: string }>> {
+  const where = opts.since ? and(isNotNull(candidates.anonymizedAt), gte(candidates.anonymizedAt, opts.since.toISOString())) : isNotNull(candidates.anonymizedAt);
+  return q.select({ id: candidates.id, companyId: candidates.companyId }).from(candidates).where(where);
+}
+
+/**
+ * The clean-up (apps/api/src/maintenance.ts): every candidate anonymized so far (or since `since`) has their AI readings
+ * and AI run log scrubbed, which covers deletions made before this existed and any model run that finished after a
+ * deletion. Idempotent: a second run writes nothing. The daily maintenance calls scrubCandidateAiData itself, one short
+ * transaction per candidate; this all-in-one form stays for callers that already hold a transaction.
+ */
+export async function scrubAnonymizedCandidatesAiData(q: Queryable, opts: { since?: Date } = {}): Promise<{ candidates: number; assessments: number; aiRuns: number }> {
+  const gone = await anonymizedCandidates(q, opts);
+  const total = { candidates: 0, assessments: 0, aiRuns: 0 };
+  for (const c of gone) {
+    const n = await scrubCandidateAiData(q, { companyId: c.companyId, candidateId: c.id });
+    if (n.assessments || n.aiRuns) total.candidates++;
+    total.assessments += n.assessments;
+    total.aiRuns += n.aiRuns;
+  }
+  return total;
+}
+
+/** What a candidate's records are found by: their applications in the company and what hangs off them. */
+type CandidateRefs = { appIds: string[]; docIds: string[]; screenIds: string[]; unconfirmedIds: string[]; interviewIds: string[] };
+
+async function candidateRefs(q: Queryable, companyId: string, candidateId: string): Promise<CandidateRefs> {
+  const appIds = (await q.select({ id: applications.id }).from(applications).where(and(eq(applications.companyId, companyId), eq(applications.candidateId, candidateId)))).map((a) => a.id);
+  const docIds = (await q.select({ id: documents.id }).from(documents).where(eq(documents.candidateId, candidateId))).map((d) => d.id);
+  const screenIds = appIds.length ? (await q.select({ id: screens.id }).from(screens).where(inArray(screens.applicationId, appIds))).map((s) => s.id) : [];
+  const unconfirmedIds = appIds.length ? (await q.select({ id: unconfirmedScreens.id }).from(unconfirmedScreens).where(inArray(unconfirmedScreens.applicationId, appIds))).map((s) => s.id) : [];
+  const interviewIds = appIds.length ? (await q.select({ id: interviews.id }).from(interviews).where(inArray(interviews.applicationId, appIds))).map((i) => i.id) : [];
+  return { appIds, docIds, screenIds, unconfirmedIds, interviewIds };
+}
+
+/**
+ * The workflow runs about a candidate: those whose subject is one of their applications, screens or interviews (or the
+ * candidate), and those whose state names one of them (a scheduling run is about an interview, and carries the
+ * application; a new-times run carries both).
+ */
+async function workflowRunsAbout(q: Queryable, companyId: string, candidateId: string, refs: CandidateRefs): Promise<Array<{ id: string; status: string }>> {
+  const subjects = [...refs.appIds, ...refs.screenIds, ...refs.unconfirmedIds, ...refs.interviewIds, candidateId];
+  return q.select({ id: workflowRuns.id, status: workflowRuns.status }).from(workflowRuns).where(and(eq(workflowRuns.companyId, companyId), or(
+    inArray(sql`${workflowRuns.subject}->>'id'`, subjects),
+    inArray(sql`${workflowRuns.state}->>'applicationId'`, anyOf(refs.appIds)),
+    inArray(sql`${workflowRuns.state}->>'interviewId'`, anyOf(refs.interviewIds)),
+    inArray(sql`${workflowRuns.state}->>'screenId'`, anyOf(refs.screenIds)),
+  )));
+}
+
+/** Run statuses the engine never moves on from (WorkflowEngine.tick returns at once for them). */
+const ENDED_RUN = new Set(["completed", "failed", "cancelled"]);
+
+/** Cancels one workflow run with a reason; WorkflowEngine.cancel (packages/workflows) has this shape once bound to an actor. */
+export type CancelWorkflowRun = (q: Queryable, runId: string, reason: string) => Promise<void>;
+
+/**
+ * The engine's cancel path for a caller that does not hold the engine (core cannot import packages/workflows, which
+ * imports core): the same writes as WorkflowEngine.cancel (cancelled, no wait, the reason as its last error) and the same
+ * `workflow.cancelled` event. Callers that hold the engine pass `engine.cancel` instead (the admin console's deletion and
+ * the worker's daily clean-up both do); this copy is for callers without it (tests, scripts). Keep it in step with the
+ * engine's cancel if that ever changes.
+ */
+export function cancelRunAsEngineDoes(actor: Actor): CancelWorkflowRun {
+  return async (q, runId, reason) => {
+    const [run] = await q.select({ status: workflowRuns.status, companyId: workflowRuns.companyId }).from(workflowRuns).where(eq(workflowRuns.id, runId)).limit(1);
+    if (!run || ENDED_RUN.has(run.status)) return;
+    await q.update(workflowRuns).set({ status: "cancelled", wait: null, lastError: reason }).where(eq(workflowRuns.id, runId));
+    await emit(q, { type: "workflow.cancelled", companyId: run.companyId, actor, subject: { type: "workflow_run", id: runId }, payload: { reason }, correlationId: runId });
+  };
+}
+
+/** Keys in a run's state or a step's record that only ever hold the person's words or contact details: dropped. */
+const WORKFLOW_WORDED_KEYS = new Set([...WORDED_OPTIONAL, "invitationNote", "personalLine", "message", "messageToCandidate", "text", "body", "html", "answers", "answer", "transcript", "resumeText", "summary", "name", "firstName", "lastName", "candidateName", "senderName", "address", "toAddress"]);
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+/** Digits with a phone number's separators: never a code, whatever its shape. */
+const PHONE_LIKE = /^[\d\s().+-]+$/;
+
+/**
+ * Keys whose short lowercase values are fixed codes in the engine and the workflow definitions (a step, a status, a
+ * signal key, a decision). Under any other key a single lowercase word ("jane"), a slug or a run of digits (a zip code)
+ * could be the person, so it goes.
+ */
+const WORKFLOW_CODE_KEYS = new Set([
+  ...CODE_FIELDS,
+  "step", "nextStep", "resumeStep", "currentStep", "next", "result", "outcome", "decision", "choice", "action", "reason",
+  "via", "channel", "medium", "mode", "flow", "variant", "type", "tier", "task", "purpose", "stage", "fromStage", "toStage",
+  "roundKey", "offerKind", "invitedBy", "invitedVia", "workflowKey", "keys", "eventTypes", "subjectId", "subjectType", "token", "code",
+]);
+/** A code with its own structure (`slot_1`, `first_round`, `<id>:message.received`) reads as bookkeeping under any key. */
+const STRUCTURED_CODE = /[_:]/;
+
+/**
+ * A string that is bookkeeping, not words: an id, a time, or a fixed code (a step name, a status, a signal key). A code
+ * counts only with structure of its own or under a key that holds codes; a phone-like or zip-like run of digits never does.
+ */
+function isBookkeeping(s: string, key?: string): boolean {
+  if (UUID_VALUE.test(s) || ISO_TIME.test(s)) return true;
+  if (PHONE_LIKE.test(s) && s.replace(/\D/g, "").length >= 5) return false;
+  if (!CODE_VALUE.test(s)) return false;
+  return STRUCTURED_CODE.test(s) || (key !== undefined && WORKFLOW_CODE_KEYS.has(key));
+}
+
+/**
+ * A workflow run's state, wait or a step's record without the person in it: ids, times, numbers, yes/no values and
+ * fixed codes stay (so the run still reads: which application, which interview, which attempt, which step came next);
+ * every other string becomes "[removed at the candidate's request]", and keys that only hold words or contact details
+ * (a note to them, their name, an answer) go. Pure and idempotent.
+ */
+export function scrubWorkflowRecord(value: unknown): unknown {
+  return scrubWorkflowValue(value, undefined);
+}
+
+/** `key` is the field the value sits under (an array's elements sit under the array's field). */
+function scrubWorkflowValue(value: unknown, key: string | undefined): unknown {
+  if (value === null || value === undefined || typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value === "string") return isBookkeeping(value, key) ? value : REMOVED;
+  if (Array.isArray(value)) return value.map((v) => scrubWorkflowValue(v, key));
+  if (typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (WORKFLOW_WORDED_KEYS.has(k)) continue;
+      out[k] = scrubWorkflowValue(v, k);
+    }
+    return out;
+  }
+  return REMOVED;
+}
+
+/** An error kept with a run or a step: a code, or the deletion's own reason, stays; a message (which can quote what the model read) does not. */
+export function scrubWorkflowError(error: string | null): string | null {
+  if (error === null) return null;
+  return error === DELETION_REASON || isBookkeeping(error, "code") ? error : REMOVED;
+}
+
+/**
+ * The workflow engine's copies of one candidate (Wave S3 G1): the state of every run about their applications (a note to
+ * them, carried answers, what a model read) and every step's record (what woke it, what it returned, its error) keep only
+ * the bookkeeping: ids, status, timings, step names, codes; the copies of a step's error in the run's events and its
+ * queued job go the same way. A run still going is cancelled first through `cancelRun` (the engine's cancel;
+ * `cancelRunAsEngineDoes` without it), since a running step must never meet a scrubbed state: the engine re-reads the
+ * run's status under a row lock before it writes a step's result, so a step in flight stands down once the run is
+ * cancelled. A run that would not stop is left whole for the next clean-up. Only rows that still hold words are written,
+ * so it is safe to run again: the deletion runs it, and the daily maintenance repeats it for every anonymized candidate.
+ */
+export async function scrubCandidateWorkflowData(q: Queryable, input: { companyId: string; candidateId: string; actor?: Actor; cancelRun?: CancelWorkflowRun }): Promise<{ cancelledRuns: number; workflowRuns: number; workflowSteps: number; workflowEvents: number }> {
+  const { companyId, candidateId } = input;
+  const found = await workflowRunsAbout(q, companyId, candidateId, await candidateRefs(q, companyId, candidateId));
+  const result = { cancelledRuns: 0, workflowRuns: 0, workflowSteps: 0, workflowEvents: 0 };
+  if (!found.length) return result;
+  const cancel = input.cancelRun ?? cancelRunAsEngineDoes(input.actor ?? SYSTEM_ACTOR);
+  for (const r of found) {
+    if (ENDED_RUN.has(r.status)) continue;
+    await cancel(q, r.id, DELETION_REASON);
+    result.cancelledRuns++;
+  }
+  const runs = await q.select({ id: workflowRuns.id, status: workflowRuns.status, state: workflowRuns.state, wait: workflowRuns.wait, lastError: workflowRuns.lastError }).from(workflowRuns).where(inArray(workflowRuns.id, found.map((r) => r.id)));
+  const ended = runs.filter((r) => ENDED_RUN.has(r.status));
+  for (const r of ended) {
+    const after = { state: scrubWorkflowRecord(r.state) as typeof r.state, wait: (r.wait === null ? null : scrubWorkflowRecord(r.wait)) as typeof r.wait, lastError: scrubWorkflowError(r.lastError) };
+    if (JSON.stringify(after) === JSON.stringify({ state: r.state, wait: r.wait, lastError: r.lastError })) continue;
+    await q.update(workflowRuns).set(after).where(eq(workflowRuns.id, r.id));
+    result.workflowRuns++;
+  }
+  if (!ended.length) return result;
+  const steps = await q.select({ id: workflowSteps.id, input: workflowSteps.input, output: workflowSteps.output, error: workflowSteps.error }).from(workflowSteps).where(inArray(workflowSteps.runId, ended.map((r) => r.id)));
+  for (const s of steps) {
+    const after = { input: scrubWorkflowRecord(s.input) as typeof s.input, output: scrubWorkflowRecord(s.output) as typeof s.output, error: scrubWorkflowError(s.error) };
+    if (JSON.stringify(after) === JSON.stringify({ input: s.input, output: s.output, error: s.error })) continue;
+    await q.update(workflowSteps).set(after).where(eq(workflowSteps.id, s.id));
+    result.workflowSteps++;
+  }
+  // The engine writes a step's error to two more places at the same moment: the run's events (workflow.retried,
+  // workflow.failed) and the queued job's last error. They get the same treatment as the run's own last error.
+  const endedIds = ended.map((r) => r.id);
+  const evs = await q.select({ id: events.id, payload: events.payload }).from(events).where(and(eq(events.companyId, companyId), eq(events.subjectType, "workflow_run"), inArray(events.subjectId, endedIds), sql`${events.payload}->>'error' is not null`));
+  for (const e of evs) {
+    const before = typeof e.payload.error === "string" ? e.payload.error : null;
+    const after = scrubWorkflowError(before);
+    if (after === before) continue;
+    await q.update(events).set({ payload: sql`jsonb_set(${events.payload}, '{error}', to_jsonb(${after}::text))` }).where(eq(events.id, e.id));
+    result.workflowEvents++;
+  }
+  // The queue belongs to the platform: a tenant transaction may add a job but not read one, so a deletion made in one
+  // leaves the job's copy to the daily clean-up, which runs as the platform.
+  const [grant] = rowsOf<{ ok: boolean }>(await q.execute(sql`SELECT has_table_privilege('jobs', 'SELECT') AND has_table_privilege('jobs', 'UPDATE') AS ok`));
+  const queued = grant?.ok ? await q.select({ id: jobs.id, lastError: jobs.lastError }).from(jobs).where(and(inArray(sql`${jobs.payload}->>'runId'`, endedIds), isNotNull(jobs.lastError))) : [];
+  for (const j of queued) {
+    const after = scrubWorkflowError(j.lastError);
+    if (after === j.lastError) continue;
+    await q.update(jobs).set({ lastError: after }).where(eq(jobs.id, j.id));
+    result.workflowEvents++;
+  }
+  return result;
 }
 
 function escapeRegExp(s: string): string {
@@ -390,10 +712,10 @@ export class CounselDecisionRequired extends Error {
   }
 }
 
-export async function fulfilDeletionRequest(q: Queryable, row: DataRequestRow, input: { resolution: string; confirm: boolean; actor: Actor; deleteFile: (key: string) => Promise<void>; now?: Date }): Promise<DataRequestRow> {
+export async function fulfilDeletionRequest(q: Queryable, row: DataRequestRow, input: { resolution: string; confirm: boolean; actor: Actor; deleteFile: (key: string) => Promise<void>; now?: Date; cancelRun?: CancelWorkflowRun }): Promise<DataRequestRow> {
   if (row.counselDecision !== "approved" || !input.confirm) throw new CounselDecisionRequired();
   if (!row.candidateId) throw new Error("no candidate is linked to this request");
-  const counts = await anonymizeCandidate(q, { companyId: row.companyId, candidateId: row.candidateId, actor: input.actor, deleteFile: input.deleteFile, now: input.now });
+  const counts = await anonymizeCandidate(q, { companyId: row.companyId, candidateId: row.candidateId, actor: input.actor, deleteFile: input.deleteFile, now: input.now, cancelRun: input.cancelRun });
   return resolve(q, row, `${input.resolution} (anonymized: ${counts.documents} documents, ${counts.screens} screens, ${counts.communications} messages)`, input.actor, "fulfilled", input.now);
 }
 

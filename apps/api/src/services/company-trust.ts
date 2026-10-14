@@ -46,7 +46,7 @@ export async function verifyCompany(tx: Queryable, container: Container, input: 
     kind: "company.verified",
     title: "ITS confirmed your company",
     body: `Your careers page and job pages are public now, and any approved role is being published.${released ? ` ${released} ${released === 1 ? "message" : "messages"} to candidates that ${released === 1 ? "was" : "were"} waiting for this ${released === 1 ? "is" : "are"} on ${released === 1 ? "its" : "their"} way.` : ""}`,
-    action: { label: "Open Today", href: "/" },
+    action: { label: "Open Home", href: "/" },
     roles: ["owner", "admin", "hiring_manager"],
   });
   return { companyId: co.id, name: co.name, changed: true, verifiedAt: at, released };
@@ -69,7 +69,7 @@ export async function unverifyCompany(tx: Queryable, input: { companyId: string;
     kind: "company.unverified",
     title: "Your careers page is offline while ITS checks your company again",
     body: "Your careers page and job pages are offline for now, and messages to candidates wait until ITS confirms your company again. Your roles, candidates and decisions are unchanged. Your ITS contact will be in touch.",
-    action: { label: "Open Today", href: "/" },
+    action: { label: "Open Home", href: "/" },
     roles: ["owner", "admin", "hiring_manager"],
   });
   return { companyId: co.id, name: co.name, changed: true, verifiedAt: null, released: 0 };

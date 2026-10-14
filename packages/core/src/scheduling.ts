@@ -13,8 +13,16 @@ export type AvailabilityWindow = { day: number; start: string; end: string }; //
 
 export type ParticipantConstraints = {
   userId: string;
-  /** calendar: free/busy came from a connected calendar; declared: only the windows; none: nothing known (treated as unconstrained, reported). */
+  /**
+   * calendar: free/busy came from a connected calendar; declared: only the windows; none: nothing known. Nobody is assumed
+   * free when nothing is known: a person with no availability has no free time, unless they are optional (below).
+   */
   source: "calendar" | "declared" | "none";
+  /**
+   * An optional interviewer (`interview_participants.role` "optional"): left out of the merge while nothing is known about
+   * them, so the others' times can still be offered. Everyone else is required.
+   */
+  optional?: boolean;
   timezone: string;
   windows: AvailabilityWindow[];
   bufferMinutes: number;
@@ -40,7 +48,15 @@ export type SlotComputationInput = {
   maxSlotsPerDay?: number;
 };
 
-const DEFAULT_WINDOWS: AvailabilityWindow[] = [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" }));
+/** True for a person whose availability is unknown and who is optional on the interview: left out of the merge. */
+export function leftOutOfMerge(p: Pick<ParticipantConstraints, "source" | "optional">): boolean {
+  return p.source === "none" && !!p.optional;
+}
+
+/** Required interviewers with no availability at all: times cannot be offered until they add some (the owner is asked). */
+export function missingAvailability<P extends Pick<ParticipantConstraints, "source" | "optional">>(participants: readonly P[]): P[] {
+  return participants.filter((p) => p.source === "none" && !p.optional);
+}
 
 function toMin(hhmm: string): number {
   const [h, m] = hhmm.split(":").map(Number);
@@ -60,13 +76,17 @@ export function dayKeysBetween(fromDate: string, toDate: string): string[] {
   return out;
 }
 
-/** A participant's free ranges on one company day: declared windows in their own zone, minus busy time padded by the buffer. */
+/**
+ * A participant's free ranges on one company day: declared windows in their own zone, minus busy time padded by the
+ * buffer. Someone with no availability known has none (never an assumed 9 to 5).
+ */
 export function freeRangesForDay(p: ParticipantConstraints, dayKey: string): TimeRange[] {
+  if (p.source === "none") return [];
   const [y, m, d] = dayKey.split("-").map(Number);
   // The participant's windows are defined per weekday in their zone; map the company day to the participant's weekday at noon.
   const noon = zonedToUtc(y, m, d, 12, 0, p.timezone);
   const pp = zonedParts(noon, p.timezone);
-  const windows = (p.source === "none" ? DEFAULT_WINDOWS : p.windows).filter((w) => w.day === pp.weekday);
+  const windows = p.windows.filter((w) => w.day === pp.weekday);
   if (!windows.length) return [];
   if ((p.bookedPerDay?.[pp.dayKey] ?? 0) >= p.maxPerDay) return [];
   const ranges: TimeRange[] = windows.map((w) => ({ start: zonedToUtc(pp.year, pp.month, pp.day, Math.floor(toMin(w.start) / 60), toMin(w.start) % 60, p.timezone).toISOString(), end: zonedToUtc(pp.year, pp.month, pp.day, Math.floor(toMin(w.end) / 60), toMin(w.end) % 60, p.timezone).toISOString() }));
@@ -103,7 +123,11 @@ export function slotId(startsAt: string, interviewerUserIds: string[]): string {
   return `slot_${createHash("sha256").update(`${startsAt}|${[...interviewerUserIds].sort().join(",")}`).digest("hex").slice(0, 12)}`;
 }
 
-/** Up to `maxSlots` starts spread over the window: at most `maxSlotsPerDay` per day, preferring times a few hours apart. */
+/**
+ * Up to `maxSlots` starts spread over the window: at most `maxSlotsPerDay` per day, preferring times a few hours apart.
+ * An optional interviewer with no availability is left out of the merge; a required one with none has no free time, so
+ * nothing is offered until they add some. `unconstrained` lists everyone with no availability known.
+ */
 export function computeSlots(input: SlotComputationInput): { slots: OfferedSlot[]; unconstrained: string[] } {
   const step = (input.stepMinutes ?? 30) * 60_000;
   const duration = input.durationMinutes * 60_000;
@@ -111,15 +135,18 @@ export function computeSlots(input: SlotComputationInput): { slots: OfferedSlot[
   const maxSlots = input.maxSlots ?? 8;
   const perDay = input.maxSlotsPerDay ?? 2;
   const ids = input.participants.map((p) => p.userId);
+  const merged = input.participants.filter((p) => !leftOutOfMerge(p));
   const source: OfferedSlot["source"] = input.participants.some((p) => p.source === "calendar") ? "calendar" : "declared";
   const slots: OfferedSlot[] = [];
+  const unconstrained = input.participants.filter((p) => p.source === "none").map((p) => p.userId);
+  if (!merged.length) return { slots, unconstrained };
   for (const dayKey of dayKeysBetween(input.fromDate, input.toDate)) {
     if (slots.length >= maxSlots) break;
     const [y, m, d] = dayKey.split("-").map(Number);
     const companyNoon = zonedParts(zonedToUtc(y, m, d, 12, 0, input.companyTimezone), input.companyTimezone);
     if (input.businessDaysOnly && (companyNoon.weekday === 0 || companyNoon.weekday === 6)) continue;
     let common: TimeRange[] | null = null;
-    for (const p of input.participants) {
+    for (const p of merged) {
       const free = freeRangesForDay(p, dayKey);
       common = common === null ? free : intersectRanges(common, free);
       if (!common.length) break;
@@ -152,13 +179,25 @@ export function computeSlots(input: SlotComputationInput): { slots: OfferedSlot[
       slots.push({ id: slotId(startsAt, ids), startsAt, endsAt: new Date(t + duration).toISOString(), interviewerUserIds: ids, source });
     }
   }
-  return { slots, unconstrained: input.participants.filter((p) => p.source === "none").map((p) => p.userId) };
+  return { slots, unconstrained };
 }
 
-/** True when the slot still fits every participant's current constraints (the re-check at booking time). */
+/** The least time between a pick and the interview: a time that starts sooner than this is never booked. */
+export const PICK_LEAD_MS = 3600_000;
+
+/** True while a slot starts far enough ahead to be picked and booked (`PICK_LEAD_MS`); a time that has passed never is. */
+export function slotStillAhead(slot: { startsAt: string }, now: Date): boolean {
+  const start = Date.parse(slot.startsAt);
+  return Number.isFinite(start) && start >= now.getTime() + PICK_LEAD_MS;
+}
+
+/**
+ * True when the slot still fits every participant's current constraints (the re-check at booking time). An optional
+ * interviewer left out of the merge does not block it.
+ */
 export function slotStillFree(slot: { startsAt: string; endsAt: string }, participants: ParticipantConstraints[]): boolean {
   const pad = (p: ParticipantConstraints) => p.bufferMinutes * 60_000;
-  return participants.every((p) => p.busy.every((b) => Date.parse(b.end) + pad(p) <= Date.parse(slot.startsAt) || Date.parse(b.start) - pad(p) >= Date.parse(slot.endsAt)));
+  return participants.filter((p) => !leftOutOfMerge(p)).every((p) => p.busy.every((b) => Date.parse(b.end) + pad(p) <= Date.parse(slot.startsAt) || Date.parse(b.start) - pad(p) >= Date.parse(slot.endsAt)));
 }
 
 /** Groups offered slots by the candidate's local day for the pick-a-time page. */
@@ -190,4 +229,35 @@ export function defaultSchedulingWindow(now: Date, companyTimezone: string): { f
     i++;
   }
   return { fromDate: from, toDate: to, businessDaysOnly: true };
+}
+
+type WindowLike = { fromDate?: string; toDate?: string; businessDaysOnly?: boolean };
+const isWeekend = (dayKey: string) => [0, 6].includes(new Date(`${dayKey}T12:00:00.000Z`).getUTCDay());
+const addDays = (dayKey: string, n: number) => {
+  const [y, m, d] = dayKey.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+};
+
+/**
+ * A fresh scheduling window for times worked out again (a team reschedule, "Offer times again", the candidate's own
+ * reschedule, availability that arrived late, "none of these work"): it starts tomorrow in the company's zone and is as
+ * long as the old one (the same number of business days, or of days when weekends count), so times are never worked out
+ * over days that have passed. With no old dates, the default window. The rest of the old window (the candidate's zone)
+ * is kept.
+ */
+export function freshSchedulingWindow<W extends WindowLike>(old: W | null | undefined, now: Date, companyTimezone: string): W & { fromDate: string; toDate: string; businessDaysOnly: boolean } {
+  const prev = (old ?? {}) as W;
+  const base = defaultSchedulingWindow(now, companyTimezone);
+  const businessDaysOnly = prev.businessDaysOnly ?? true;
+  if (!prev.fromDate || !prev.toDate || prev.toDate < prev.fromDate) return { ...prev, fromDate: base.fromDate, toDate: base.toDate, businessDaysOnly };
+  const days = dayKeysBetween(prev.fromDate, prev.toDate);
+  const want = Math.max(1, businessDaysOnly ? days.filter((k) => !isWeekend(k)).length : days.length);
+  let counted = 0;
+  let toDate = base.fromDate;
+  for (let i = 0; i < 120 && counted < want; i++) {
+    const key = addDays(base.fromDate, i);
+    if (!businessDaysOnly || !isWeekend(key)) counted++;
+    toDate = key;
+  }
+  return { ...prev, fromDate: base.fromDate, toDate, businessDaysOnly };
 }

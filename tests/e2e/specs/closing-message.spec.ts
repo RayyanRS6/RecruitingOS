@@ -25,8 +25,10 @@ test.describe("closing a role", () => {
 
     // the close card names who is still in process; nothing is closed on the first click
     await page.goto(`/roles/${seeded.roleId}`);
-    await page.getByRole("button", { name: "Close", exact: true }).click();
-    const card = page.locator("section.card").filter({ has: page.getByRole("heading", { name: "Close this role" }) });
+    // closing sits in the job's More menu (Wave S1)
+    await page.getByRole("button", { name: "More for this job" }).click();
+    await page.getByRole("menuitem", { name: "Close the job" }).click();
+    const card = page.locator("section.card").filter({ has: page.getByRole("heading", { name: "Close this job" }) });
     await expect(card).toBeVisible();
     const still = card.getByRole("list", { name: "Still in process" });
     await expect(still.getByText("Maria Reyes")).toBeVisible({ timeout: 30_000 });
@@ -34,7 +36,7 @@ test.describe("closing a role", () => {
     await expect(card.getByText(/These 2 people move to your talent pool, privately/)).toBeVisible();
     await expectAccessible(page, "role page with the close card");
     await card.getByLabel("Outcome").selectOption("no_hire");
-    await card.getByRole("button", { name: "Confirm and close the role" }).click();
+    await card.getByRole("button", { name: "Confirm and close the job" }).click();
     await expect(page.getByRole("status").filter({ hasText: /Role closed; the outcome is recorded with your name\..*nobody is told yet\. Send the closing message when you are ready\./ })).toBeVisible();
 
     // the one closing message: who gets it, the words once with each person's own name, and a single Send
@@ -53,7 +55,8 @@ test.describe("closing a role", () => {
 
     // nobody is left untold: once the close card is put away, the closing message has nothing more to send
     await page.locator(".card", { has: page.getByRole("heading", { name: "2 closing messages on their way." }) }).getByRole("button", { name: "Close", exact: true }).click();
-    await page.getByRole("button", { name: "Closing message", exact: true }).click();
+    await page.getByRole("button", { name: "More for this job" }).click();
+    await page.getByRole("menuitem", { name: "Send the closing message" }).click();
     await expect(page.getByText("Everyone the role left in your talent pool has been told already.")).toBeVisible({ timeout: 30_000 });
   });
 });

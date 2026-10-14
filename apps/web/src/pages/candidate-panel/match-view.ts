@@ -1,4 +1,4 @@
-import { IMPORTANCE_LABEL, MISSING_MUST_HAVE_CAP, type BoardPlacement, type Importance, type MatchCriterion, type MatchScore, type MustHaveSummary, type ReadingVersion } from "@ros/contracts";
+import { IMPORTANCE_LABEL, MISSING_MUST_HAVE_CAP, type BoardPlacement, type Importance, type MatchCriterion, type MatchScore, type MustHaveSummary, type OwnerStage, type ReadingVersion } from "@ros/contracts";
 import type { ApplicationDetail } from "../../api/client";
 
 /**
@@ -12,6 +12,9 @@ import type { ApplicationDetail } from "../../api/client";
 export const MATCH_TITLE = "Against your must-haves";
 /** The promise wherever the score is explained, in the same words as MATCH_SCORE_PROMISE in packages/core. */
 export const MATCH_PROMISE = "A match score worked out from checked evidence, with the breakdown shown. A person always decides.";
+
+/** The verdict's line when the AI review could not be made at all (the card above the verdict says what to do). */
+export const NO_REVIEW_LINE = "No match score: the AI review could not be made, so read this one yourself.";
 
 /** What GET /applications/:id carries since Wave F; an older answer leaves it out, and the panel then shows nothing for it. */
 type ScoredDetail = { matchScore?: MatchScore | null; readingVersion?: ReadingVersion | null; mustHaves?: MustHaveSummary | null; placement?: BoardPlacement | null };
@@ -30,6 +33,50 @@ export function suggestedStepOf(a: ApplicationDetail): { label: string; reason: 
   const p = (a as ApplicationDetail & ScoredDetail).placement;
   if (p?.state !== "suggested" || !p.nextStep) return null;
   return { label: p.nextStep.label, reason: p.needsYourEye ?? p.nextStep.reason, needsYourEye: !!p.needsYourEye };
+}
+
+/** The button beside the suggested next step: a stage move (it opens the same step as the stage button), a section, or writing to them. */
+export type NextStepAction = { kind: "move"; to: OwnerStage; label: string } | { kind: "tab"; tab: "resume"; label: string } | { kind: "write"; label: string };
+
+const MOVE_WORDS: Partial<Record<OwnerStage, string>> = { shortlist: "Move to Shortlist", longlist: "Move to Longlist", interviewing: "Approve an interview", not_moving_forward: "Not moving forward" };
+
+/**
+ * What the one button beside the suggested next step does (Wave S1): the board's suggestion applied the way the stage
+ * button would (an interview opens the approval, Not moving forward opens the private decline; nothing moves by itself),
+ * the résumé for "Read it yourself", or the message box for "Ask for more detail". Null when there is nothing to press:
+ * no suggestion, or a move the API does not allow now.
+ */
+export function nextStepAction(a: Pick<ApplicationDetail, "stageMoves" | "candidate"> & ScoredDetail): NextStepAction | null {
+  const p = a.placement;
+  if (p?.state !== "suggested" || !p.nextStep) return null;
+  const may = (to: OwnerStage) => a.stageMoves.some((m) => m.to === to && m.allowed && !m.current);
+  const move = (to: OwnerStage): NextStepAction | null => (may(to) && MOVE_WORDS[to] ? { kind: "move", to, label: MOVE_WORDS[to]! } : null);
+  switch (p.nextStep.kind) {
+    case "read_yourself":
+      return { kind: "tab", tab: "resume", label: "Open the résumé" };
+    case "interview":
+      return move("interviewing") ?? (p.suggestedAction ? move(p.suggestedAction) : null);
+    case "ask_more":
+      return a.candidate.email ? { kind: "write", label: `Write to ${a.candidate.firstName || "them"}` } : null;
+    default:
+      return p.suggestedAction ? move(p.suggestedAction) : null;
+  }
+}
+
+/**
+ * The one line under the score (Wave S1): how many must-haves their words show, partly show, show are not met, and do
+ * not say yet ("1 of 5 must-haves shown · 3 not known yet"); without must-haves, what the score rests on. Null with neither.
+ */
+export function verdictLine(a: ScoredDetail): string | null {
+  const s = a.mustHaves;
+  if (s?.total) {
+    const parts = [`${s.shown} of ${s.total} must-haves shown`];
+    if (s.partly) parts.push(`${s.partly} partly`);
+    if (s.notShown) parts.push(`${s.notShown} not met`);
+    if (s.unknown) parts.push(`${s.unknown} not known yet`);
+    return parts.join(" · ");
+  }
+  return a.matchScore?.coverage.words ?? null;
 }
 /** A skill's label with its importance, as GET /applications/:id gives it since Wave F (plan F3). */
 export type LabelledSkill = { key: string; name: string; importance?: Importance | null };
@@ -56,15 +103,15 @@ export type MatchCardState = { kind: "hidden" } | { kind: "unread"; text: string
 export function matchCardState(a: ApplicationDetail): MatchCardState {
   const m = matchOf(a);
   if (m === undefined) return { kind: "hidden" };
-  if (!m) return { kind: "unread", text: a.assessments.length ? "No match score yet: there is no reading of this application against the role's requirements." : a.stage === "ineligible" ? "No match score yet. It is worked out from the assistant's reading, which comes once someone keeps them in." : "No match score yet. It is worked out from the assistant's reading, which usually comes a minute or two after they apply." };
+  if (!m) return { kind: "unread", text: a.assessments.length ? "No match score yet: there is no AI review of this application against the job's requirements." : a.stage === "ineligible" ? "No match score yet. It comes from the AI review, which starts once someone keeps them in." : "No match score yet. It comes from the AI review, which usually comes a minute or two after they apply." };
   if (m.score === null) return { kind: "nothing", text: m.coverage.words, m };
   return { kind: "scored", score: m.score, m };
 }
 
 const BASED_ON: Record<MatchScore["basedOn"], string> = {
-  resume: "from the résumé reading",
-  screen: "from the screening conversation",
-  resume_and_screen: "from the résumé reading and the screening conversation",
+  resume: "from the AI review of the résumé",
+  screen: "from the screening chat",
+  resume_and_screen: "from the AI review of the résumé and the screening chat",
 };
 
 /** "Based on 5 of 7 requirements, from the résumé reading and the screening conversation." */
@@ -84,14 +131,14 @@ export function confidenceChip(c: MatchScore["confidence"]): { label: string; to
   return {
     label: `${CONFIDENCE_WORD[c] ?? c} confidence`,
     tone: c === "low" ? "caution" : "neutral",
-    title: c === "low" ? "The assistant was not sure about the reading behind this score. Read the evidence yourself before you decide." : "How sure the assistant was about the reading behind this score. It does not change the number.",
+    title: c === "low" ? "The AI was not sure about the review behind this score. Read the evidence yourself before you decide." : "How sure the AI was about the review behind this score. It does not change the number.",
   };
 }
 
 /** One bar of the breakdown, in the panel's words. */
 export type MatchBar = { key: string; label: string; tag: string; mustHave: boolean; pctMet: number; pointsLost: number; finding: string; source: string; quote: string | null };
 
-const SOURCE_WORDS: Record<MatchCriterion["source"], string> = { resume: "from the résumé reading", screen: "from the screening conversation" };
+const SOURCE_WORDS: Record<MatchCriterion["source"], string> = { resume: "from the AI review of the résumé", screen: "from the screening chat" };
 
 /** The tag beside a requirement: "Must-have", or how much a skill counts (Essential, Important, Helpful). */
 export function criterionTag(c: { mustHave: boolean; importance: Importance | null }): string {
@@ -138,7 +185,7 @@ export function leftOut(m: MatchScore): { heading: string; items: Array<{ key: s
   return {
     heading: n === 1 ? "1 requirement not known yet" : `${n} requirements not known yet`,
     items: m.unknown.map((u) => ({ key: u.key, label: u.label, tag: criterionTag(u) })),
-    note: `Left out of the score, never counted against them. Ask about ${n === 1 ? "it" : "them"} in the screening conversation or a call.`,
+    note: `Left out of the score, never counted against them. Ask about ${n === 1 ? "it" : "them"} in the screening chat or a call.`,
   };
 }
 
@@ -150,7 +197,7 @@ export function versionNote(a: ApplicationDetail, m: MatchScore | null | undefin
   const rv = readingVersionOf(a);
   if (rv) return { text: `${rv.label} The score uses the requirements as they were then.`, changed: true };
   const v = m?.packetVersion;
-  return v ? { text: `Read against version ${v} of the role, the current one.`, changed: false } : null;
+  return v ? { text: `Read against version ${v} of the job details, the current one.`, changed: false } : null;
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */
