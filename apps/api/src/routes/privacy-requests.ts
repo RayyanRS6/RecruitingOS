@@ -137,7 +137,7 @@ privacyRequestRoutes.post("/:id/fulfil", async (c) => {
         return u;
       }
       if (row.kind === "delete") {
-        const u = await fulfilDeletionRequest(tx, row, { resolution: body.resolution, confirm: !!body.confirmAnonymize, actor, deleteFile: async (key) => { filesToRemove.push(key); }, now: container.engine.clock() });
+        const u = await fulfilDeletionRequest(tx, row, { resolution: body.resolution, confirm: !!body.confirmAnonymize, actor, deleteFile: async (key) => { filesToRemove.push(key); }, now: container.engine.clock(), cancelRun: (q, runId, reason) => container.engine.cancel(q, runId, actor, reason) });
         return u;
       }
       if (row.kind === "sms_opt_out") {

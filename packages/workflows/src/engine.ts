@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, notInArray, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { SYSTEM_ACTOR, createEscalation, emit, raiseAlert } from "@ros/core";
 import { jobs, randomToken, rowsOf, workflowRuns, workflowSteps, withTenant, type Queryable, type Tx, type WaitCondition } from "@ros/db";
@@ -256,7 +256,7 @@ export class WorkflowEngine {
     const seq = await this.nextSeq(run.id);
     const actor: Actor = { kind: "system", id: `workflow:${def.key}` };
 
-    let outcome: StepResult | { kind: "threw"; error: string };
+    let outcome: StepResult | { kind: "threw"; error: string } | { kind: "ended" };
     try {
       // The slow half of a two-phase step runs here, with no transaction open.
       let prepared: unknown ;
@@ -264,7 +264,10 @@ export class WorkflowEngine {
         const pctx: PrepareContext = { run, companyId, state: run.state, services: this.deps.services, wake, now: this.now(), actor, db: this.deps.db, read: (fn) => withTenant(this.deps.db, companyId, fn) };
         prepared = await step.prepare(pctx);
       }
-      outcome = await withTenant(this.deps.db, companyId, async (q) => {
+      outcome = await withTenant(this.deps.db, companyId, async (q): Promise<StepResult | { kind: "ended" }> => {
+        // A run that ended while the slow half ran (cancelled when the candidate's data was deleted, say) is never
+        // written again: the row lock makes a cancel and this step take turns, and the step stands down if it lost.
+        if (await runHasEnded(q, run.id, true)) return { kind: "ended" };
         const ctx: StepContext = {
           run,
           companyId,
@@ -289,6 +292,7 @@ export class WorkflowEngine {
       outcome = err instanceof StepFailed ? { kind: "fail", error: err.message, retryable: err.retryable } : { kind: "threw", error: err instanceof Error ? err.message : String(err) };
     }
 
+    if (outcome.kind === "ended") return "stop";
     if (outcome.kind === "threw" || (outcome.kind === "fail" && outcome.retryable !== false)) {
       const error = outcome.kind === "threw" ? outcome.error : outcome.error;
       return this.handleRetry(def, run, stepKey, seq, error, actor);
@@ -330,6 +334,7 @@ export class WorkflowEngine {
   private async handleRetry(def: WorkflowDefinition, run: RunRow, stepKey: string, seq: number, error: string, actor: Actor): Promise<"stop"> {
     const attempts = run.attempts + 1;
     const max = def.maxAttempts ?? 3;
+    if (await runHasEnded(this.deps.db, run.id)) return "stop"; // cancelled while the step ran: nothing to retry
     await this.deps.db.insert(workflowSteps).values({ runId: run.id, companyId: run.companyId, stepKey, seq, status: "error", input: {}, output: {}, attempts, error, finishedAt: this.now().toISOString() });
     if (attempts >= max) {
       await this.failForGood(def, run, stepKey, error, actor, attempts);
@@ -338,14 +343,17 @@ export class WorkflowEngine {
     const delayMs = Math.min(10 * 60_000, 2000 * 2 ** (attempts - 1));
     const until = new Date(this.now().getTime() + delayMs).toISOString();
     const token = randomToken(8);
-    await this.deps.db.update(workflowRuns).set({ status: "waiting", attempts, lastError: error, wait: { kind: "timer", until, reason: `retry ${attempts}/${max}`, token } }).where(eq(workflowRuns.id, run.id));
+    const retried = await this.deps.db.update(workflowRuns).set({ status: "waiting", attempts, lastError: error, wait: { kind: "timer", until, reason: `retry ${attempts}/${max}`, token } }).where(and(eq(workflowRuns.id, run.id), notInArray(workflowRuns.status, ENDED_STATUSES))).returning({ id: workflowRuns.id });
+    if (retried.length === 0) return "stop";
     await this.deps.db.insert(jobs).values({ kind: "workflow.tick", payload: { runId: run.id, wake: { kind: "timer", key: token } }, runAt: until });
     await emit(this.deps.db, { type: "workflow.retried", companyId: run.companyId, actor, subject: { type: "workflow_run", id: run.id }, payload: { step: stepKey, attempt: attempts, error, until }, correlationId: run.id });
     return "stop";
   }
 
   private async failForGood(def: WorkflowDefinition, run: RunRow, stepKey: string, error: string, actor: Actor, attempts = run.attempts + 1): Promise<void> {
-    await this.deps.db.update(workflowRuns).set({ status: "failed", attempts, lastError: error, wait: null }).where(eq(workflowRuns.id, run.id));
+    // A run cancelled while its step ran stays cancelled (and scrubbed, if that was why it was cancelled).
+    const failed = await this.deps.db.update(workflowRuns).set({ status: "failed", attempts, lastError: error, wait: null }).where(and(eq(workflowRuns.id, run.id), notInArray(workflowRuns.status, ENDED_STATUSES))).returning({ id: workflowRuns.id });
+    if (failed.length === 0) return;
     await emit(this.deps.db, { type: "workflow.failed", companyId: run.companyId, actor, subject: { type: "workflow_run", id: run.id }, payload: { step: stepKey, error, attempts }, correlationId: run.id });
     try {
       // The process's error reporter hears about the failed run with keys and ids only (H2); never the run's state.
@@ -412,6 +420,14 @@ export class WorkflowEngine {
     await q.update(workflowRuns).set({ status: "cancelled", wait: null, lastError: reason }).where(eq(workflowRuns.id, runId));
     await emit(q, { type: "workflow.cancelled", companyId: run.companyId, actor, subject: { type: "workflow_run", id: runId }, payload: { reason }, correlationId: runId });
   }
+}
+
+const ENDED_STATUSES = ["completed", "failed", "cancelled"];
+
+/** Whether the run has ended; `lock` takes the row lock (inside a step's transaction) so a cancel waits its turn. */
+async function runHasEnded(q: Queryable, runId: string, lock = false): Promise<boolean> {
+  const rows = rowsOf<{ status: string }>(await q.execute(lock ? sql`SELECT status FROM workflow_runs WHERE id = ${runId} FOR UPDATE` : sql`SELECT status FROM workflow_runs WHERE id = ${runId}`));
+  return !rows[0] || ENDED_STATUSES.includes(rows[0].status);
 }
 
 class StepFailed extends Error {

@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq, isNull } from "drizzle-orm";
-import { adminAlerts, cspReports, jobs, magicLinks, sessions, users, webhookReceipts, workerHeartbeats } from "@ros/db";
+import { and, eq, inArray, isNull } from "drizzle-orm";
+import { SYSTEM_ACTOR } from "@ros/core";
+import { adminAlerts, applications, candidates, companies, cspReports, events, jobs, magicLinks, randomToken, roles, sessions, users, webhookReceipts, workerHeartbeats, workflowRuns, workflowSteps, withTenant } from "@ros/db";
 import { createContainer, type Container } from "./container";
 import { HEALTH_ALERT_WINDOW_MS, MAINTENANCE_JOB_KIND, QUEUE_STALE_MS, RETENTION_DAYS, checkOperationalHealth, runMaintenance } from "./maintenance";
 import { DAILY_MS, recurring } from "./recurring-jobs";
@@ -50,7 +52,7 @@ describe("maintenance", () => {
     ]);
 
     const report = await runMaintenance(container.db, now, { workerInline: true });
-    expect(report).toMatchObject({ doneJobs: 1, failedJobs: 1, sessions: 1, magicLinks: 1, webhookReceipts: 1, cspReports: 1, staleHeartbeats: 1, interruptedSends: 0, anonymizedAssessments: 0, anonymizedAiRuns: 0, healthAlerts: 0 });
+    expect(report).toMatchObject({ doneJobs: 1, failedJobs: 1, sessions: 1, magicLinks: 1, webhookReceipts: 1, cspReports: 1, staleHeartbeats: 1, interruptedSends: 0, anonymizedAssessments: 0, anonymizedAiRuns: 0, anonymizedWorkflowRuns: 0, anonymizedWorkflowSteps: 0, anonymizedWorkflowEvents: 0, cancelledWorkflowRuns: 0, healthAlerts: 0 });
     expect((await container.db.select().from(workerHeartbeats)).map((h) => h.workerId)).toEqual(["worker-current"]);
     await container.db.delete(workerHeartbeats);
 
@@ -175,5 +177,90 @@ describe("maintenance", () => {
     // a run that succeeded still surfaces a failed re-arm, since nothing else would
     const fine = recurring(gone, container.db, kind, DAILY_MS, async () => undefined);
     await expect(fine({}, ctx)).rejects.toThrow("the database went away");
+  });
+
+  it("finishes a deletion made before the workflow clean-up: the run state and step records about the person lose every word, a run still going is cancelled first, and a second pass writes nothing", async () => {
+    const now = new Date();
+    const actor = { kind: "system" as const, id: "maintenance.test" };
+    const [company] = await container.db.insert(companies).values({ name: "Harbor Dental", slug: "harbor-dental-maintenance", vertical: "dental", sizeBand: "20-49" }).returning({ id: companies.id });
+    const companyId = company.id;
+    // one person deleted at their request (their record already anonymized), and someone else who was not
+    const { gone, kept } = await withTenant(container.db, companyId, async (tx) => {
+      const [role] = await tx.insert(roles).values({ companyId, title: "Hygienist", status: "open", createdBy: actor }).returning({ id: roles.id });
+      const person = async (first: string, last: string, email: string | null, anonymizedAt: string | null) => {
+        const [cand] = await tx.insert(candidates).values({ companyId, firstName: first, lastName: last, email, firstSource: "direct", anonymizedAt }).returning({ id: candidates.id });
+        const [a] = await tx.insert(applications).values({ companyId, roleId: role.id, candidateId: cand.id, packetVersion: 1, source: "direct", stage: "withdrawn", statusToken: randomToken(16) }).returning({ id: applications.id });
+        return { candidateId: cand.id, applicationId: a.id, roleId: role.id };
+      };
+      return { gone: await person("Removed", "anon-12345678", null, now.toISOString()), kept: await person("Omar", "Haddad", "omar.haddad@example.com", null) };
+    });
+    // the engine's copies still hold her words: a finished intake run with her résumé reading in its steps and a model
+    // error quoting her, and a scheduling run still waiting with a note to her and her reply in what woke it
+    const heldAt = new Date(now.getTime() - 3 * 86_400_000).toISOString();
+    const interviewId = randomUUID();
+    const [intake, scheduling, other] = await container.db.insert(workflowRuns).values([
+      { companyId, workflowKey: "application_intake", subject: { type: "application", id: gone.applicationId }, status: "completed", currentStep: "ready", state: { applicationId: gone.applicationId, roleId: gone.roleId, remindersSent: 1, heldAt, candidateEmail: "lena.ortiz@example.com", resumeText: "Lena Ortiz, RDH. Six years at Bright Smiles Dental. (512) 555-0142" }, completedAt: now.toISOString() },
+      { companyId, workflowKey: "schedule_interview", subject: { type: "interview", id: interviewId }, status: "waiting", currentStep: "await_pick", state: { interviewId, applicationId: gone.applicationId, roleId: gone.roleId, roundKey: "first", attempt: 1, invitationNote: { text: "Looking forward to meeting you, Lena Ortiz", aiHelped: false, senderName: "Dana" } }, wait: { kind: "event", eventTypes: ["interview.slot_selected"], subjectId: interviewId, reason: "waiting for Lena Ortiz to pick a time" } },
+      { companyId, workflowKey: "application_intake", subject: { type: "application", id: kept.applicationId }, status: "completed", currentStep: "ready", state: { applicationId: kept.applicationId, roleId: kept.roleId, note: "Omar Haddad called back" }, completedAt: now.toISOString() },
+    ]).returning();
+    await container.db.insert(workflowSteps).values([
+      { runId: intake.id, companyId, stepKey: "acknowledge", seq: 1, status: "ok", input: { wake: null }, output: { kind: "next", step: "validate" }, finishedAt: now.toISOString() },
+      { runId: intake.id, companyId, stepKey: "extract", seq: 2, status: "error", input: {}, output: {}, attempts: 1, error: "the model returned invalid JSON near 'Lena Ortiz, (512) 555-0142'", finishedAt: now.toISOString() },
+      { runId: intake.id, companyId, stepKey: "extract", seq: 3, status: "ok", input: { wake: null }, output: { kind: "next", step: "eligibility", reading: { fullName: "Lena Ortiz", email: "lena.ortiz@example.com", positions: ["Bright Smiles Dental"], yearsOfExperienceEstimate: 6 } }, finishedAt: now.toISOString() },
+      { runId: scheduling.id, companyId, stepKey: "offer", seq: 1, status: "ok", input: { wake: { kind: "event", key: `${interviewId}:interview.reply`, payload: { message: "Lena here, call me on (512) 555-0142" } } }, output: { kind: "wait", wait: { kind: "event", eventTypes: ["interview.slot_selected"], reason: "waiting for Lena Ortiz to pick a time" } }, finishedAt: now.toISOString() },
+      { runId: other.id, companyId, stepKey: "acknowledge", seq: 1, status: "ok", input: { wake: null }, output: { kind: "next", step: "validate", note: "Omar Haddad" }, finishedAt: now.toISOString() },
+    ]);
+    // the engine wrote the model error's words twice more: in the run's events and on the queued job
+    const quoted = "the model returned invalid JSON near 'Lena Ortiz, (512) 555-0142'";
+    const runEvent = (runId: string, type: string, error: string) => ({ companyId, type, actor: SYSTEM_ACTOR, subjectType: "workflow_run", subjectId: runId, correlationId: runId, payload: { step: "extract", attempt: 1, error } });
+    await container.db.insert(events).values([runEvent(intake.id, "workflow.retried", quoted), runEvent(intake.id, "workflow.failed", quoted), runEvent(other.id, "workflow.retried", "invalid JSON near 'Omar Haddad'")]);
+    await container.db.insert(jobs).values([{ kind: "workflow.tick", status: "failed", payload: { runId: intake.id }, lastError: quoted }, { kind: "workflow.tick", status: "failed", payload: { runId: other.id }, lastError: "invalid JSON near 'Omar Haddad'" }]);
+    const stepsOf = (runIds: string[]) => container.db.select().from(workflowSteps).where(inArray(workflowSteps.runId, runIds));
+    const runsOf = (ids: string[]) => container.db.select().from(workflowRuns).where(inArray(workflowRuns.id, ids));
+    const stepsBefore = await stepsOf([intake.id, scheduling.id]);
+    const [otherBefore] = await runsOf([other.id]);
+    const otherStepsBefore = await stepsOf([other.id]);
+
+    // the engine's own cancel path, as the worker wires it
+    const report = await runMaintenance(container.db, now, { workerInline: true, cancelRun: (q, runId, reason) => container.engine.cancel(q, runId, SYSTEM_ACTOR, reason) });
+    expect(report).toMatchObject({ cancelledWorkflowRuns: 1, anonymizedWorkflowRuns: 2, anonymizedWorkflowSteps: 3, anonymizedWorkflowEvents: 3 });
+    // the copies of the error in the run's events and on its job are gone; someone else's stay
+    const runEvents = await container.db.select().from(events).where(and(eq(events.subjectType, "workflow_run"), inArray(events.subjectId, [intake.id, other.id])));
+    expect(runEvents.filter((e) => e.subjectId === intake.id && e.payload.error !== undefined).map((e) => [e.type, e.payload])).toEqual([
+      ["workflow.retried", { step: "extract", attempt: 1, error: "[removed at the candidate's request]" }],
+      ["workflow.failed", { step: "extract", attempt: 1, error: "[removed at the candidate's request]" }],
+    ]);
+    expect(runEvents.find((e) => e.subjectId === other.id)!.payload.error).toBe("invalid JSON near 'Omar Haddad'");
+    const runJobs = await container.db.select().from(jobs).where(eq(jobs.kind, "workflow.tick"));
+    expect(runJobs.find((j) => (j.payload as { runId?: string }).runId === intake.id)!.lastError).toBe("[removed at the candidate's request]");
+    expect(runJobs.find((j) => (j.payload as { runId?: string }).runId === other.id)!.lastError).toBe("invalid JSON near 'Omar Haddad'");
+
+    const words = /Lena|Ortiz|lena\.ortiz|555-0142|Bright Smiles/;
+    const runsAfter = await runsOf([intake.id, scheduling.id]);
+    const stepsAfter = await stepsOf([intake.id, scheduling.id]);
+    expect(JSON.stringify(runsAfter)).not.toMatch(words);
+    expect(JSON.stringify(stepsAfter)).not.toMatch(words);
+    // the run still going was cancelled through the engine before anything was scrubbed
+    const sched = runsAfter.find((r) => r.id === scheduling.id)!;
+    expect(sched).toMatchObject({ status: "cancelled", wait: null, lastError: "the candidate asked for their information to be deleted", currentStep: "await_pick", workflowKey: "schedule_interview" });
+    expect(sched.state).toEqual({ interviewId, applicationId: gone.applicationId, roleId: gone.roleId, roundKey: "first", attempt: 1 });
+    expect((await container.db.select().from(events).where(and(eq(events.type, "workflow.cancelled"), eq(events.subjectId, scheduling.id)))).length).toBe(1);
+    // ids, status, timings, step names and codes stay
+    const done = runsAfter.find((r) => r.id === intake.id)!;
+    expect(done).toMatchObject({ status: "completed", currentStep: "ready", startedAt: intake.startedAt, completedAt: intake.completedAt, subject: { type: "application", id: gone.applicationId } });
+    expect(done.state).toEqual({ applicationId: gone.applicationId, roleId: gone.roleId, remindersSent: 1, heldAt, candidateEmail: "[removed at the candidate's request]" });
+    for (const s of stepsAfter) {
+      const was = stepsBefore.find((b) => b.id === s.id)!;
+      expect({ stepKey: s.stepKey, seq: s.seq, status: s.status, attempts: s.attempts, startedAt: s.startedAt, finishedAt: s.finishedAt }).toEqual({ stepKey: was.stepKey, seq: was.seq, status: was.status, attempts: was.attempts, startedAt: was.startedAt, finishedAt: was.finishedAt });
+    }
+    expect(stepsAfter.find((s) => s.seq === 1 && s.runId === intake.id)!.output).toEqual({ kind: "next", step: "validate" });
+    expect(stepsAfter.find((s) => s.seq === 2)!.error).toBe("[removed at the candidate's request]");
+    expect(stepsAfter.find((s) => s.seq === 3)!.output).toEqual({ kind: "next", step: "eligibility", reading: { positions: ["[removed at the candidate's request]"], yearsOfExperienceEstimate: 6 } });
+    // someone else's run is untouched
+    expect(await runsOf([other.id])).toEqual([otherBefore]);
+    expect(await stepsOf([other.id])).toEqual(otherStepsBefore);
+
+    // a second pass finds nothing left to do
+    expect(await runMaintenance(container.db, now, { workerInline: true })).toMatchObject({ cancelledWorkflowRuns: 0, anonymizedWorkflowRuns: 0, anonymizedWorkflowSteps: 0, anonymizedWorkflowEvents: 0 });
   });
 });

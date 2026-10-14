@@ -13,10 +13,12 @@ import { AssistantMark } from "./Conversation";
 import { PayFields } from "./PayCard";
 import {
   BELOW_CHOICES, DEAL_BREAKERS_MAX, EMPLOYMENT_CHOICES, EXPERIENCE_CHOICES, MUST_HAVES_MAX, OWN_QUESTIONS_MAX, QUICK_STEPS, STEP_HINT, STEP_LABEL, STEP_QUESTION, WORK_MODEL_CHOICES,
-  addItem, allMustHaves, clearQuickStart, closingDateAsked, emptyQuickState, enterMovesOn, experienceMustHave, fillFromAd, firstMessage, firstUnfinished, hasAnswers, mustHavesRoom, openDealBreakers,
-  quickStartDraftKey, quickStartPatch, readQuickStart, reviewRows, skippedAnswers, stepProblem, suggestedMustHaves, suggestedQuestions, todayDay, toggleItem, writeQuickStart,
+  addItem, allMustHaves, clearQuickStart, closingDateAsked, emptyQuickState, enterMovesOn, experienceMustHave, fillFromAd, firstMessage, firstUnfinished, hasAnswers, mustHavesRoom, offeredQuestions, openDealBreakers,
+  quickStartDraftKey, quickStartPatch, readQuickStart, reviewRows, skippedAnswers, stepProblem, suggestedMustHaves, todayDay, toggleItem, writeQuickStart,
   type QuickAnswers, type QuickScope, type QuickState,
 } from "./quick-start";
+import { GENERAL_QUESTIONS } from "./quick-starts";
+import { AI_NOTE, SUGGESTING_QUESTIONS, SUGGESTING_SKILLS, adoptSuggestion, aiSuggestFor, fetchSuggestions, suggestBody, suggestKey, suggestQueryKey, suggestView, wantsAiSuggestions, type AiSuggest, type SuggestView } from "./quick-suggest";
 import { NEW_ROLE_FRESH_HREF, errorWords, startHireHref, type RecruiterAction } from "./rules";
 import { RoomAlert } from "./StartView";
 
@@ -26,13 +28,19 @@ type CompanyLite = { name?: string; vertical?: string; settings: Record<string, 
 /** The pay boxes without a market figure: the quick start sets the pay; the builder's pay card compares it with the market. */
 const NO_MARKET: IntakePayCard = { basis: null, benchmark: null, gap: null, stated: { min: null, max: null, ceiling: null }, confirmed: null, belowMarket: false, summary: "" };
 
+/** The steps during which the assistant's suggestions are asked for: the job's facts are all in by the pay step. */
+const SUGGEST_FROM = QUICK_STEPS.indexOf("pay");
+const SUGGEST_UNTIL = QUICK_STEPS.indexOf("questions");
+
 /**
  * The quick start for a new job (Wave S2, K2), at /roles/new?way=quick: ten small steps, one question a screen with
  * "Step 3 of 10", Enter to move on, Back, and a review where every answer has its Edit. "Write the job post" starts a
  * draft in the existing job builder with the plain facts as the first message, puts every answer on it in one edit (the
  * server's fairness check reads each must-have, deal-breaker and question), keeps the closing date for the role, and
  * opens the builder, which writes the post at once. The answers are kept in this browser until then, so a reload loses
- * nothing; "Start over" clears them. Suggestions come from our hiring guides; nothing here calls the AI.
+ * nothing; "Start over" clears them. Suggestions come from our hiring guides when one knows the job; for any other job
+ * the assistant suggests must-haves and questions from the answers so far (quick-suggest.ts, Wave S3 G3): once per set
+ * of answers, in the background from the pay step on, never holding anyone up, and nothing shown when it fails.
  */
 export function QuickStart({ companyName, scope }: { companyName: string | null; scope: QuickScope | null }) {
   const qc = useQueryClient();
@@ -78,6 +86,37 @@ export function QuickStart({ companyName, scope }: { companyName: string | null;
     setState((s) => ({ ...s, step: Math.max(0, Math.min(index, QUICK_STEPS.length - 1)), fromReview }));
   };
   const review = QUICK_STEPS.indexOf("review");
+
+  // The assistant's suggestions for a job no hiring guide knows: asked once the job's facts are in (from the pay step
+  // to the questions step), once per set of answers, and kept with the answers. A failure or a slow answer is null.
+  const suggestKeyNow = suggestKey(a);
+  const suggestFor = suggestBody(a);
+  const askAi = (loaded || !scope) && !company.isPending && !!suggestFor && wantsAiSuggestions(vertical, a) && !aiSuggestFor(a) && state.step >= SUGGEST_FROM && state.step <= SUGGEST_UNTIL;
+  const suggestQ = useQuery({
+    queryKey: suggestQueryKey(suggestKeyNow),
+    queryFn: ({ signal }) => fetchSuggestions((path, body, init) => api.post<unknown>(path, body, init), suggestFor!, suggestKeyNow, signal),
+    enabled: askAi,
+    retry: false,
+    retryOnMount: false,
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+  const fresh: AiSuggest | null = suggestQ.data ?? null;
+  useEffect(() => {
+    if (!fresh || fresh.key !== suggestKeyNow) return;
+    setState((s) => {
+      const answers = adoptSuggestion(s.answers, fresh, s.step <= SUGGEST_UNTIL);
+      return answers === s.answers ? s : { ...s, answers };
+    });
+  }, [fresh, suggestKeyNow]);
+  // Past the questions step nobody is waiting for the call any more, so it stops; should an answer land all the same,
+  // the effect above keeps it with its questions unticked. Going back to those steps asks again.
+  useEffect(() => {
+    if (state.step > SUGGEST_UNTIL && suggestKeyNow) void qc.cancelQueries({ queryKey: suggestQueryKey(suggestKeyNow) });
+  }, [state.step, suggestKeyNow]);
+  const suggest = suggestView(vertical, a, { fresh, waiting: askAi && suggestQ.isFetching });
 
   const write = useMutation({
     mutationFn: async () => {
@@ -196,7 +235,7 @@ export function QuickStart({ companyName, scope }: { companyName: string | null;
       <p className="start-lede">{STEP_HINT[step]}</p>
       {full && room ? <RoomAlert room={room} ask={limit?.ask ?? null} /> : null}
       <form className="stack" style={{ gap: 14 }} onSubmit={onSubmit} onKeyDown={onKeyDown} noValidate>
-        <StepBody step={step} a={a} set={set} vertical={vertical} onEdit={(i) => goTo(i, true)} />
+        <StepBody step={step} a={a} set={set} vertical={vertical} suggest={suggest} onEdit={(i) => goTo(i, true)} />
         {problem ? <Alert tone="caution">{problem}</Alert> : null}
         {notARole ? (
           <div className="chat-msg assistant">
@@ -281,7 +320,18 @@ function AddOwn(props: { id: string; label: string; placeholder: string; items: 
   );
 }
 
-function StepBody({ step, a, set, vertical, onEdit }: { step: (typeof QUICK_STEPS)[number]; a: QuickAnswers; set: (patch: Partial<QuickAnswers>) => void; vertical: string | null; onEdit: (step: number) => void }): ReactNode {
+/** One line while the assistant suggests, read out once by screen readers; it never holds the step up. */
+function Suggesting({ words }: { words: string }) {
+  return <p className="small muted" role="status">{words}</p>;
+}
+
+const sameText = (x: string, y: string) => x.trim().toLowerCase() === y.trim().toLowerCase();
+
+/**
+ * One step's body. `suggest` says what the must-haves and questions steps offer: the hiring guide's, the assistant's
+ * (once they arrive), a short line while they are on their way, or nothing beyond "add your own".
+ */
+export function StepBody({ step, a, set, vertical, suggest = { kind: "none" }, onEdit }: { step: (typeof QUICK_STEPS)[number]; a: QuickAnswers; set: (patch: Partial<QuickAnswers>) => void; vertical: string | null; suggest?: SuggestView; onEdit: (step: number) => void }): ReactNode {
   switch (step) {
     case "title":
       return <TitleStep a={a} set={set} />;
@@ -323,9 +373,12 @@ function StepBody({ step, a, set, vertical, onEdit }: { step: (typeof QUICK_STEP
         </>
       );
     case "musts": {
-      const guide = suggestedMustHaves(vertical, a.title);
-      const fromAd = a.adMustHaves.filter((m) => !guide.some((s) => s.toLowerCase() === m.toLowerCase()));
-      const suggested = [...guide, ...fromAd];
+      const guide = suggest.kind === "guide" ? suggestedMustHaves(vertical, a.title) : [];
+      // the assistant's, for a job no guide knows: none ticked, so the person chooses
+      const ai = suggest.kind === "ai" ? suggest.mustHaves.filter((m) => !guide.some((s) => sameText(s, m))) : [];
+      const offered = [...guide, ...ai];
+      const fromAd = a.adMustHaves.filter((m) => !offered.some((s) => s.toLowerCase() === m.toLowerCase()));
+      const suggested = [...offered, ...fromAd];
       const own = a.mustHaves.filter((m) => !suggested.some((s) => s.toLowerCase() === m.toLowerCase()));
       const room = Math.max(0, mustHavesRoom(a));
       const count = allMustHaves(a).length;
@@ -333,8 +386,9 @@ function StepBody({ step, a, set, vertical, onEdit }: { step: (typeof QUICK_STEP
       return (
         <>
           {suggested.length ? (
-            <Choices legend={STEP_QUESTION.musts} name="qs-musts" multi options={[...guide.map((s) => ({ value: s, label: s, note: "Our hiring guide" })), ...fromAd.map((s) => ({ value: s, label: s, note: "Your job ad" }))]} checked={(v) => a.mustHaves.some((m) => m.toLowerCase() === v.toLowerCase())} onPick={(v) => set({ mustHaves: toggleItem(a.mustHaves, v) })} />
+            <Choices legend={STEP_QUESTION.musts} name="qs-musts" multi options={[...guide.map((s) => ({ value: s, label: s, note: "Our hiring guide" })), ...ai.map((s) => ({ value: s, label: s, note: AI_NOTE })), ...fromAd.map((s) => ({ value: s, label: s, note: "Your job ad" }))]} checked={(v) => a.mustHaves.some((m) => m.toLowerCase() === v.toLowerCase())} onPick={(v) => set({ mustHaves: toggleItem(a.mustHaves, v) })} />
           ) : null}
+          {suggest.kind === "waiting" ? <Suggesting words={SUGGESTING_SKILLS} /> : null}
           <AddOwn id="qs-must-own" label="Add a must-have" placeholder={suggested.length ? "Add your own…" : "e.g. Two years in a busy dental office"} items={own} max={room} onAdd={(t) => set({ mustHaves: addItem(a.mustHaves, t, room) })} onRemove={(t) => set({ mustHaves: a.mustHaves.filter((m) => m !== t) })} />
           <p className="small muted" aria-live="polite">{count} of {MUST_HAVES_MAX} chosen{experienceMustHave(a) ? ", with the experience" : ""}{dealCount ? `, with ${dealCount} deal-breaker${dealCount === 1 ? "" : "s"}` : ""}.</p>
         </>
@@ -377,10 +431,13 @@ function StepBody({ step, a, set, vertical, onEdit }: { step: (typeof QUICK_STEP
       );
     }
     case "questions": {
-      const suggested = suggestedQuestions(vertical, a.title);
+      // the guide's for a job it knows; else the general ones and the assistant's, all ticked as before
+      const suggested = offeredQuestions(a, vertical);
+      const fromAi = (q: string) => suggest.kind === "ai" && suggest.questions.some((x) => sameText(x, q)) && !GENERAL_QUESTIONS.some((g) => sameText(g, q));
       return (
         <>
-          <Choices legend={STEP_QUESTION.questions} name="qs-questions" multi options={suggested.map((q) => ({ value: q, label: q }))} checked={(v) => !a.questionsOff.some((x) => x.toLowerCase() === v.toLowerCase())} onPick={(v) => set({ questionsOff: toggleItem(a.questionsOff, v) })} />
+          <Choices legend={STEP_QUESTION.questions} name="qs-questions" multi options={suggested.map((q) => ({ value: q, label: q, ...(fromAi(q) ? { note: AI_NOTE } : {}) }))} checked={(v) => !a.questionsOff.some((x) => x.toLowerCase() === v.toLowerCase())} onPick={(v) => set({ questionsOff: toggleItem(a.questionsOff, v) })} />
+          {suggest.kind === "waiting" ? <Suggesting words={SUGGESTING_QUESTIONS} /> : null}
           <AddOwn id="qs-question-own" label="Add a question for the screening chat" placeholder="Add your own question…" items={a.ownQuestions} max={OWN_QUESTIONS_MAX} onAdd={(t) => set({ ownQuestions: addItem(a.ownQuestions, t, OWN_QUESTIONS_MAX) })} onRemove={(t) => set({ ownQuestions: a.ownQuestions.filter((q) => q !== t) })} />
         </>
       );

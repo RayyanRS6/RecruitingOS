@@ -4,6 +4,7 @@ export * from "./pricing";
 export * from "./runner";
 export * from "./prompts/registry";
 export * from "./prompts/intake";
+export * from "./prompts/intake-suggest";
 export * from "./prompts/packet-revise";
 export * from "./prompts/company-about";
 export * from "./prompts/message-line";

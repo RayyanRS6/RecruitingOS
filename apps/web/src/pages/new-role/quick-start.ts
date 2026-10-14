@@ -1,6 +1,7 @@
 import { formatPayRange, INTAKE_FIRST_MESSAGE_MAX, type IntakeAnswer, type IntakeFacts, type IntakeFactsPatch, type IntakeQuestion, type IntakeQuestionField } from "@ros/contracts";
 import { closingDateProblem, closingDateRequiredFor } from "../../publishing";
 import { GENERAL_QUESTIONS, guideRoleFor } from "./quick-starts";
+import { aiSuggestFor, readAiSuggest, type AiSuggest } from "./quick-suggest";
 import { dayWords, payPayload, payProblem, type PayForm } from "./rules";
 
 /**
@@ -117,6 +118,11 @@ export type QuickAnswers = {
   /** Suggested questions the person unticked (suggestions start ticked). */
   questionsOff: string[];
   ownQuestions: string[];
+  /**
+   * The assistant's suggestions for a job no hiring guide knows (Wave S3, G3), with the answers they were made from
+   * (quick-suggest.ts). Its must-haves are offered unticked; its questions are offered ticked, like the guide's.
+   */
+  aiSuggest: AiSuggest | null;
 };
 
 /**
@@ -130,6 +136,7 @@ export function emptyQuickAnswers(): QuickAnswers {
     title: "", ad: "", employmentType: "", remotePolicy: "", place: "", experience: "", below: "",
     pay: { basis: "", min: "", max: "", ceiling: "" }, closesOn: "", noClosingDate: false,
     mustHaves: [], adMustHaves: [], dealBreakers: [], dealBreakersPrivate: [], noDealBreakers: false, questionsOff: [], ownQuestions: [],
+    aiSuggest: null,
   };
 }
 
@@ -212,9 +219,37 @@ export function suggestedQuestions(vertical: string | null | undefined, title: s
   return guideRoleFor(vertical, title)?.questions ?? GENERAL_QUESTIONS;
 }
 
-/** The suggested questions still ticked. */
-export function chosenQuestions(a: Pick<QuickAnswers, "questionsOff" | "title">, vertical: string | null | undefined): string[] {
-  return suggestedQuestions(vertical, a.title).filter((q) => !a.questionsOff.some((x) => same(x, q)));
+type QuestionAnswers = Pick<QuickAnswers, "questionsOff" | "title"> & Partial<QuickAnswers>;
+
+/**
+ * Every yes/no question offered on the screening step, ticked unless the person unticked it: the guide's for a job it
+ * knows; else the general ones, then the assistant's for these very answers (Wave S3, G3), each once.
+ */
+export function offeredQuestions(a: QuestionAnswers, vertical: string | null | undefined): readonly string[] {
+  if (guideRoleFor(vertical, a.title)) return suggestedQuestions(vertical, a.title);
+  const ai = aiSuggestFor(a)?.questions ?? [];
+  return [...GENERAL_QUESTIONS, ...ai.filter((q) => !GENERAL_QUESTIONS.some((g) => same(g, q)))];
+}
+
+/** The one edit carries at most twenty list items (IntakeFactsPatch.add). */
+const PATCH_ADD_MAX = 20;
+
+/**
+ * Room on the one edit for the questions on the form, after every other item it carries (must-haves, the experience as
+ * a nice-to-have, deal-breakers, the person's own questions): an offered question is what gives way, never the person's own words.
+ */
+function formQuestionsRoom(a: QuestionAnswers): number {
+  const exp = { experience: a.experience ?? "", below: a.below ?? "" } as const;
+  const musts = allMustHaves({ ...exp, mustHaves: a.mustHaves ?? [], dealBreakers: a.dealBreakers, dealBreakersPrivate: a.dealBreakersPrivate, noDealBreakers: a.noDealBreakers }).slice(0, MUST_HAVES_MAX).length;
+  const nice = experienceNiceToHave(exp) ? 1 : 0;
+  const deals = a.noDealBreakers ? 0 : Math.min((a.dealBreakers ?? []).length, DEAL_BREAKERS_MAX);
+  const own = Math.min((a.ownQuestions ?? []).length, OWN_QUESTIONS_MAX);
+  return Math.max(0, PATCH_ADD_MAX - musts - nice - deals - own);
+}
+
+/** The offered questions still ticked, as many as the one edit has room for. */
+export function chosenQuestions(a: QuestionAnswers, vertical: string | null | undefined): string[] {
+  return offeredQuestions(a, vertical).filter((q) => !a.questionsOff.some((x) => same(x, q))).slice(0, formQuestionsRoom(a));
 }
 
 /* ------------------------------------------------------------------------------------------------------------------ */
@@ -555,6 +590,7 @@ export function readQuickStart(storage: Pick<Storage, "getItem"> | null | undefi
       noDealBreakers: a.noDealBreakers === true,
       questionsOff: strs(a.questionsOff, 12),
       ownQuestions: strs(a.ownQuestions, OWN_QUESTIONS_MAX),
+      aiSuggest: readAiSuggest(a.aiSuggest),
     };
     const step = typeof v.step === "number" && Number.isInteger(v.step) ? Math.max(0, Math.min(v.step, QUICK_STEPS.length - 1)) : 0;
     const sessionId = typeof v.sessionId === "string" && /^[\w-]{1,64}$/.test(v.sessionId) ? v.sessionId : null;

@@ -28,7 +28,7 @@ describe("the fairness run's summary", () => {
     expect(text).toContain("**All 2 checks passed.**");
     expect(text).toContain("Models: claude-sonnet-5-5 for the test job's draft; claude-haiku-5-5 for screening and most tasks; claude-haiku-5-5 for reading CVs.");
     expect(text).toContain("Cost of this run: $0.12 for 31 AI calls.");
-    expect(text).toContain("| Twin CVs | Two CVs that differ only in the name, the graduation year or the zip code get the same reading and the same score. | ✅ 3 of 3 |");
+    expect(text).toContain("| Twin CVs | Two CVs that differ only in the name, the graduation year, the zip code or an earlier rejection at the same company get the same reading and the same score. | ✅ 3 of 3 |");
   });
 
   it("names each check that needs a look and what differed", () => {

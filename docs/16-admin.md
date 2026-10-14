@@ -6,7 +6,7 @@ Route group `/admin` in the web app; API under `/api/v1/admin/*`; permission `pl
 
 | View | Shows | Actions |
 |---|---|---|
-| Customers | Every company: the ITS check (companies waiting for it listed first, longest waiting at the top, with how many messages to candidates are held), whether ITS can sign in to its job boards, plan, status, roles open, applicants this week, last owner activity, recruiter requests against the plan's allowance ("Recruiter requests: used of limit", with a caution chip "Past its recruiter requests: talk about billing" once over) and escalations in all, cost this month, churn signals (no login 14 days, roles stuck, brief unopened 7 days, downgrade, support tickets) | Open (with reason), impersonate in read-only mode, adjust entitlements, add credits; **Confirm** / **Check** opens the ITS check sheet (below); **Report** |
+| Customers | Every company: the ITS check (companies waiting for it listed first, longest waiting at the top, with how many messages to candidates are held), whether ITS can sign in to its job boards, plan, status, roles open, applicants this week, last owner activity, recruiter requests against the plan's allowance ("Recruiter requests: used of limit", with a caution chip "Past its recruiter requests: talk about billing" once over) and escalations in all, cost this month, churn signals (no login 14 days, roles stuck, brief unopened 7 days, downgrade, support tickets) | Open (with reason), impersonate in read-only mode, adjust entitlements, add credits; **Change plan** (below); **Confirm** / **Check** opens the ITS check sheet (below); **Report** |
 | Roles | All roles across tenants with pipeline counts and stuck flags | Open |
 | Candidates | Search across tenants (audited) for support and dedupe issues | Open |
 | Workflows | Active, waiting, failed runs with workflow key, subject, current step, wait reason, age | Inspect, retry step, cancel, escalate |
@@ -37,6 +37,13 @@ Plan Wave E (founder decisions B1/Q15 and Q17).
 - **How people apply** (the Customers column, and **Change**): the company's default, "Form now, conversation later" unless set (the one-visit flow runs on pilot roles first, founder decision B1; `POST /api/v1/admin/customers/:id/apply-flow`), and each open or draft role's own setting, or the company's default (`PUT /api/v1/roles/:id/apply-mode`). The same role control is on the role's Posting tab for ITS staff: an administrator can always use it, an ITS recruiter only under an active grant for that company that covers the role. The **Plan** column also shows this month's screening conversations against the allowance. A reason of five characters or more is required and audited. A role whose rule for screening invitations is "Ask me first" or "Only a person" always uses the later path; a change applies to new applicants only. Customers never see or change it.
 - **Screening conversations running low**: a card at the top of Customers, and a chip on the company's row, while an alert says a company has used 80% of the month's screening conversations or all of them (`billing.screens_warning`, `billing.screens_used_up`). Nothing is refused: applications are still accepted, anyone part-way through finishes, and once the allowance is used up new applicants get the conversation link by email when more are added. The owners and admins see the same on Today.
 
+## Plans and monthly allowances
+
+Wave S2 (slice F1, 15 October 2026).
+
+- **Change plan** (on the company's row in Customers): pick a plan from the active ones (`GET /api/v1/admin/plans`; a retired plan is not offered), give a reason of five characters or more, and confirm with a second press (`POST /api/v1/admin/customers/:id/plan`). It applies at once, is audited as `plan.changed` with the reason (the customer sees it in their own history), and settles the allowance alerts the new limits clear. Moving to Design Partner starts the pilot dates. This month's usage is kept: a plan change never hands out a fresh month.
+- **Monthly allowances reset**: each allowance starts again from zero when its period ends, on the dates already stored with it; this is worked out when the allowance is read or used, so no job and no migration is involved. Applicants held only because the allowance was used up are let through at the reset by the existing re-check. Active jobs never reset. Settings tells the customer the date ("Monthly allowances reset on October 30.", from `usage[key].resetsAt` on `GET /api/v1/companies/current`).
+
 ## The six questions for any AI action
 
 Inspecting an AI run must answer, on one screen:
@@ -53,6 +60,12 @@ One exception, from the founder decision of 9 October 2026 ("hide them until the
 ## Operational alerts
 
 Failed run rate above threshold; queue age above 5 minutes; adapter health failing; AI error or refusal rate spike; cost per tenant per day anomaly; escalation SLA breach; unmatched inbound emails growing.
+
+How an alert lives (Wave S2, slice F1):
+
+- **Acknowledge** means "seen": while the condition goes on it raises nothing new. An acknowledgement stands for a day at most; after that a condition still going on raises a fresh alert.
+- **Resolve** (`POST /api/v1/admin/alerts/:id/resolve`, with an optional note): the problem is dealt with. The alert leaves the console's list, stays in the table for the record, and is audited as `alert.resolved`. The toast says "Resolved. If it happens again, a new alert is raised." A condition that ends on its own (a worker back, a real email provider in use instead of the fake one, an allowance freed by a reset or a plan change) resolves its alert too.
+- **Critical alerts are emailed** to every platform administrator, once each, by a job written in the same transaction as the alert (so an alert that rolls back sends nothing); the app's health check sends a stopped worker's alert straight after the commit, since the worker that runs jobs is the thing that is down. The email provider decides whether it really leaves (the fake one in development). Other severities stay in the console only.
 
 ## The customer report: what each figure means
 

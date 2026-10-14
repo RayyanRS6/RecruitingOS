@@ -904,15 +904,23 @@ export async function assessScreen(db: Db, ai: AiRuntime, input: { companyId: st
   const { ctx, view } = scorecardInput({ ...contextOf(b, screen, null), incomplete: null }, { firstName: b.candidate.firstName, lastName: b.candidate.lastName, email: b.candidate.email, phone: b.candidate.phone, fullName: b.app.extraction?.fullName ?? null, keep: jobWords(null, b.app.extraction) });
   const out = await runPromptDetached(db, ai, screenAssessPrompt, ctx, { companyId: b.company.id, workflowRunId: input.workflowRunId ?? b.screen.workflowRunId, inputRef: { screenId: b.screen.id, turns: screen.transcript.length, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() } });
   if (!out.ok) return out;
-  // Quotes are checked against the candidate's ORIGINAL words: one written around a placeholder is mapped back first.
+  return { ...out, output: scorecardOutcome(out.output, view, screen) };
+}
+
+/**
+ * The scorecard as the team sees it, from the model's answer. Quotes are checked against the candidate's ORIGINAL words:
+ * one written around a placeholder is mapped back first; and the model's own words (summary, claims) keep no
+ * placeholder: "[name]" reads "the candidate". Shared with the fairness evals (packages/evals), so they check exactly
+ * what the app does after the model has answered.
+ */
+export function scorecardOutcome(output: ScreenAssessment, view: Pick<ScoringView, "restore">, screen: Pick<ScreenRow, "transcript" | "answers" | "progress">): ScreenAssessment {
   const candidateText = candidateWordsOf(screen);
   const recruiterNotes = recruiterNotesOf(screen);
-  // and the model's own words (summary, claims) keep no placeholder: "[name]" reads "the candidate"
-  const restored = withoutPlaceholders(restoreQuotes(out.output, view, (source) => (source === "recruiter_note" ? [recruiterNotes, candidateText] : [candidateText, recruiterNotes])));
+  const restored = withoutPlaceholders(restoreQuotes(output, view, (source) => (source === "recruiter_note" ? [recruiterNotes, candidateText] : [candidateText, recruiterNotes])));
   const checked = verifyScreenQuotes(restored, candidateText, { recruiterNotes, declined: screen.progress.declined ?? [], answered: Object.keys(answersOf(screen)) });
   // "incomplete_screen" marks a reading of a conversation nobody sent, written before 9 October 2026, which stays hidden
   // (`isUnsentConversationReading` in @ros/core): never on a reading of a sent one, whatever the model wrote.
-  return { ...out, output: { ...checked, anomalies: checked.anomalies.filter((a) => a.kind !== "incomplete_screen") } };
+  return { ...checked, anomalies: checked.anomalies.filter((a) => a.kind !== "incomplete_screen") };
 }
 
 /**

@@ -24,6 +24,9 @@ export const TASK_TIER: Record<TaskKey, Tier> = {
   "intake.compile": "judgment",
   // The cheap first read of a pasted job ad (C5): title, place, basis and pay before the market check.
   "intake.extract": "fast",
+  // Must-haves and yes/no questions to tick in the quick start (Wave S3, G3), for a job our hiring guides do not know:
+  // a few short lines from the job's own facts, each re-checked for fairness in code before anyone sees it.
+  "intake.suggest": "fast",
   // Changing a packet by chat (C10): usually one or two sections; merged, guarded and confirmed by a person.
   "packet.revise": "standard",
   // A few sentences about the company for its job pages (D10); a person edits and approves them in Setup.
@@ -90,8 +93,9 @@ export function modelForTask(task: TaskKey, table: ModelTable): string {
  * Tasks that think harder than their tier. Anthropic's guidance for Haiku 5.5 is high for strict instruction following,
  * and the fairness runs (14 Oct 2026) bore it out: at high, twin résumés read and scored the same, where medium and
  * Sonnet 5.5 at either level moved by 5 to 6 points. Both readings of a candidate run there; it costs a fraction of a cent.
+ * The quick start's suggestions (intake.suggest) think less: a short list the person ticks, shown while they wait.
  */
-export const TASK_EFFORT: Partial<Record<TaskKey, Effort>> = { "triage.assess": "high", "screen.assess": "high" };
+export const TASK_EFFORT: Partial<Record<TaskKey, Effort>> = { "triage.assess": "high", "screen.assess": "high", "intake.suggest": "low" };
 
 export function effortForTask(task: TaskKey): Effort {
   return TASK_EFFORT[task] ?? TIER_EFFORT[TASK_TIER[task]];

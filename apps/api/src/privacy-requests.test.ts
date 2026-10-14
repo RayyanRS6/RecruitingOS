@@ -1,7 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq } from "drizzle-orm";
-import { REMOVED_RUN_OUTPUT, entitlements, recordApplicationOutcome, scrubReading } from "@ros/core";
-import { adminAlerts, aiRuns, applications, assessments, auditRecords, candidates, communications, dataRequests, documents, events, hiringOutcomes, recruiterEscalations, screens, unconfirmedScreens, users, withTenant } from "@ros/db";
+import { and, eq, inArray } from "drizzle-orm";
+import { REMOVED_RUN_OUTPUT, entitlements, recordApplicationOutcome, scrubReading, scrubWorkflowError, scrubWorkflowRecord } from "@ros/core";
+import { adminAlerts, aiRuns, applications, assessments, auditRecords, candidates, communications, dataRequests, documents, events, hiringOutcomes, recruiterEscalations, screens, unconfirmedScreens, users, withTenant, workflowRuns, workflowSteps } from "@ros/db";
 import type { FakeEmailAdapter, MemoryStorageAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -197,6 +198,21 @@ describe("candidate privacy requests", () => {
     expect(runsBefore.some((r) => r.task === "resume.extract")).toBe(true);
     expect(runsBefore.some((r) => r.task === "triage.assess")).toBe(true);
     expect(JSON.stringify(runsBefore)).toContain("Maria Reyes");
+    // the workflow engine keeps copies too (Wave S3 G1): her intake run's state and a step's record (what a model read, an
+    // error quoting it), and a scheduling run still waiting on her with a note to her in its state
+    const workflowRunsAboutHer = async () => (await container.db.select().from(workflowRuns).where(eq(workflowRuns.companyId, companyId))).filter((r) => r.subject.id === applicationId || (r.state as { applicationId?: string }).applicationId === applicationId);
+    const [intakeRun] = (await workflowRunsAboutHer()).filter((r) => r.workflowKey === "application_intake");
+    expect(intakeRun).toBeTruthy();
+    await container.db.update(workflowRuns).set({ state: { ...intakeRun.state, candidateName: "Maria Reyes", contact: "maria.reyes@example.com, (949) 555-0100" } }).where(eq(workflowRuns.id, intakeRun.id));
+    await container.db.insert(workflowSteps).values({ runId: intakeRun.id, companyId, stepKey: "extract", seq: 99, status: "error", input: { wake: null }, output: { reading: { fullName: "Maria Reyes", phone: "(949) 555-0100", positions: ["Registered Dental Hygienist at Coastal Family Dentistry"], skills: ["Dentrix"] } }, error: "invalid JSON near 'Maria Reyes, RDH, Tustin'", finishedAt: new Date().toISOString() });
+    const ivId = randomUUID();
+    const [stillGoing] = await container.db.insert(workflowRuns).values({ companyId, workflowKey: "schedule_interview", subject: { type: "interview", id: ivId }, status: "waiting", currentStep: "await_pick", state: { interviewId: ivId, applicationId, roleId, roundKey: "first", attempt: 1, invitationNote: { text: "See you soon, Maria Reyes", aiHelped: false, senderName: "Dana" } }, wait: { kind: "event", eventTypes: ["interview.slot_selected"], subjectId: ivId } }).returning();
+    await container.db.insert(workflowSteps).values({ runId: stillGoing.id, companyId, stepKey: "offer", seq: 1, status: "ok", input: { wake: { kind: "event", key: `${ivId}:interview.reply`, payload: { message: "Maria here, call me on (949) 555-0100" } } }, output: { kind: "wait" }, finishedAt: new Date().toISOString() });
+    const wfBefore = await workflowRunsAboutHer();
+    const wfStepsOf = (ids: string[]) => container.db.select().from(workflowSteps).where(inArray(workflowSteps.runId, ids));
+    const wfStepsBefore = await wfStepsOf(wfBefore.map((r) => r.id));
+    expect(JSON.stringify(wfBefore)).toContain("Maria Reyes");
+    expect(JSON.stringify(wfStepsBefore)).toContain("Coastal Family Dentistry");
     // the "your data was deleted" email leaves only once the deletion committed: when it is sent, the record is already anonymized
     // (the adapter sits behind the do-not-send guard, whose `send` calls the adapter's own: the probe calls the class's)
     const email = container.integrations.email as FakeEmailAdapter;
@@ -234,6 +250,32 @@ describe("candidate privacy requests", () => {
       expect(JSON.stringify(r)).not.toMatch(words);
       expect({ task: r.task, model: r.model, costUsd: r.costUsd, latencyMs: r.latencyMs, inputTokens: r.inputTokens, status: r.status, workflowRunId: r.workflowRunId }).toEqual({ task: was.task, model: was.model, costUsd: was.costUsd, latencyMs: was.latencyMs, inputTokens: was.inputTokens, status: was.status, workflowRunId: was.workflowRunId });
     }
+    // the workflow runs about her keep their ids, status, timings and step names, and lose every word; the one still
+    // waiting was cancelled through the engine (by the administrator, with the deletion as its reason) before it was scrubbed
+    const wfAfter = await workflowRunsAboutHer();
+    expect(wfAfter.map((r) => r.id).sort()).toEqual(wfBefore.map((r) => r.id).sort());
+    for (const r of wfAfter) {
+      const was = wfBefore.find((b) => b.id === r.id)!;
+      expect(JSON.stringify({ state: r.state, wait: r.wait, lastError: r.lastError })).not.toMatch(words);
+      expect({ workflowKey: r.workflowKey, subject: r.subject, currentStep: r.currentStep, startedAt: r.startedAt, completedAt: r.completedAt, attempts: r.attempts }).toEqual({ workflowKey: was.workflowKey, subject: was.subject, currentStep: was.currentStep, startedAt: was.startedAt, completedAt: was.completedAt, attempts: was.attempts });
+      expect(r.status).toBe(["completed", "failed", "cancelled"].includes(was.status) ? was.status : "cancelled");
+      expect((r.state as { applicationId?: string }).applicationId ?? r.subject.id).toBe(applicationId);
+    }
+    const going = wfAfter.find((r) => r.id === stillGoing.id)!;
+    expect(going).toMatchObject({ status: "cancelled", wait: null, lastError: "the candidate asked for their information to be deleted" });
+    expect(going.state).toEqual({ interviewId: ivId, applicationId, roleId, roundKey: "first", attempt: 1 });
+    const cancelledEvent = await container.db.select().from(events).where(and(eq(events.type, "workflow.cancelled"), eq(events.subjectId, stillGoing.id)));
+    expect(cancelledEvent).toHaveLength(1);
+    expect(cancelledEvent[0].actor).toMatchObject({ kind: "user" });
+    const wfStepsAfter = await wfStepsOf(wfBefore.map((r) => r.id));
+    expect(wfStepsAfter).toHaveLength(wfStepsBefore.length);
+    expect(JSON.stringify(wfStepsAfter)).not.toMatch(words);
+    for (const s of wfStepsAfter) {
+      const was = wfStepsBefore.find((b) => b.id === s.id)!;
+      expect({ runId: s.runId, stepKey: s.stepKey, seq: s.seq, status: s.status, attempts: s.attempts, startedAt: s.startedAt, finishedAt: s.finishedAt }).toEqual({ runId: was.runId, stepKey: was.stepKey, seq: was.seq, status: was.status, attempts: was.attempts, startedAt: was.startedAt, finishedAt: was.finishedAt });
+    }
+    expect(wfStepsAfter.find((s) => s.runId === intakeRun.id && s.seq === 99)).toMatchObject({ error: "[removed at the candidate's request]", output: { reading: { positions: ["[removed at the candidate's request]"], skills: ["[removed at the candidate's request]"] } } });
+    expect((await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "data.anonymized"))))[0].details).toMatchObject({ workflowRunsCancelled: expect.any(Number), workflowRuns: expect.any(Number), workflowSteps: expect.any(Number) });
     // those words are gone; the fixed reasons stay, so the history still reads
     const history = JSON.stringify(await moves());
     expect(history).not.toContain(moveNote);
@@ -268,9 +310,16 @@ describe("candidate privacy requests", () => {
     const [app0] = await container.db.select({ roleId: applications.roleId, packetVersion: applications.packetVersion }).from(applications).where(eq(applications.id, applicationId));
     const [unconfirmed] = await container.db.insert(unconfirmedScreens).values({ companyId, roleId: app0.roleId, applicationId, packetVersion: app0.packetVersion, firstName: "Removed", token: "privacy-test-unconfirmed", expiresAt: new Date(Date.now() + 86_400_000).toISOString() }).returning({ id: unconfirmedScreens.id });
     const [turn] = await container.db.insert(aiRuns).values({ companyId, agent: "screen", task: "screen.turn", provider: "fake", model: "fake", promptKey: "screen.turn", promptVersion: 1, promptHash: "h", inputRef: { unconfirmedScreenId: unconfirmed.id, turn: 1 }, structuredOutput: { messageToCandidate: "Thanks, Maria! Next question.", answerRecorded: "Four years at Coastal Family Dentistry" }, costUsd: "0.0004", latencyMs: 300, status: "ok" }).returning();
+    // and the workflow engine's copies: a step that finished after the deletion, and a run's state written back with her words
+    const [lateStep] = await container.db.insert(workflowSteps).values({ runId: intakeRun.id, companyId, stepKey: "ready", seq: 100, status: "ok", input: { wake: null }, output: { kind: "complete", summary: "Maria Reyes fits", contact: "maria.reyes@example.com" }, finishedAt: new Date().toISOString() }).returning();
+    await container.db.update(workflowRuns).set({ state: { ...going.state, invitationNote: { text: "Hi Maria Reyes", aiHelped: false, senderName: "Dana" } } }).where(eq(workflowRuns.id, stillGoing.id));
     const swept = await runMaintenance(container.db, new Date(), { workerInline: true });
     expect(swept.anonymizedAssessments).toBe(1);
     expect(swept.anonymizedAiRuns).toBe(2);
+    expect(swept).toMatchObject({ anonymizedWorkflowRuns: 1, anonymizedWorkflowSteps: 1, cancelledWorkflowRuns: 0 });
+    const [lateStepAfter] = await container.db.select().from(workflowSteps).where(eq(workflowSteps.id, lateStep.id));
+    expect(lateStepAfter.output).toEqual({ kind: "complete", contact: "[removed at the candidate's request]" });
+    expect(JSON.stringify(await workflowRunsAboutHer())).not.toMatch(words);
     const [turnAfter] = await container.db.select().from(aiRuns).where(eq(aiRuns.id, turn.id));
     expect(turnAfter.structuredOutput).toEqual(REMOVED_RUN_OUTPUT);
     expect(turnAfter.inputRef).toEqual({ unconfirmedScreenId: unconfirmed.id, turn: 1 });
@@ -281,7 +330,7 @@ describe("candidate privacy requests", () => {
     const [rewritten] = await container.db.select().from(assessments).where(eq(assessments.id, readingsBefore[0].id));
     expect(JSON.stringify(rewritten.result)).not.toMatch(words);
     // and a second run writes nothing
-    expect(await runMaintenance(container.db, new Date(), { workerInline: true })).toMatchObject({ anonymizedAssessments: 0, anonymizedAiRuns: 0 });
+    expect(await runMaintenance(container.db, new Date(), { workerInline: true })).toMatchObject({ anonymizedAssessments: 0, anonymizedAiRuns: 0, anonymizedWorkflowRuns: 0, anonymizedWorkflowSteps: 0, cancelledWorkflowRuns: 0 });
 
     // a confirmation that did not go after the commit can be sent again from the console, once
     expect((await json(admin, "POST", `/api/v1/admin/data-requests/${req.id}/confirm-again`, {})).status).toBe(409);
@@ -470,5 +519,61 @@ describe("scrubbing an AI reading", () => {
       .toEqual({ messageToCandidate: R, questionKey: "start", answerRecorded: { questionKey: "start", answer: R, complete: true, status: "answered" }, followUpReason: null, candidateAskedAbout: "pay", sentiment: "fine", done: false, humanRequested: false });
     // a code field holding words is words
     expect(scrubReading({ status: "Maria withdrew" })).toEqual({ status: R });
+  });
+});
+
+/** What is left of a workflow run's state or a step's record after a deletion: ids, times, numbers and codes, never words. */
+describe("scrubbing a workflow record", () => {
+  const R = "[removed at the candidate's request]";
+  it("keeps ids, times, counts and codes; drops notes, names and contact fields; removes any other words, phone numbers included; and is idempotent", () => {
+    const appId = "0192a6b2-1111-7aaa-8bbb-123456789abc";
+    const state = {
+      applicationId: appId,
+      roleId: "0192a6b2-2222-7aaa-8bbb-123456789abc",
+      attempt: 2,
+      rescheduled: true,
+      roundKey: "first_round",
+      offeredAt: "2026-10-14T09:30:00.000Z",
+      closesOn: "2026-11-02",
+      invitationNote: { text: "See you Tuesday, Maria", aiHelped: false, senderName: "Dana" },
+      candidateEmail: "maria.reyes@example.com",
+      phoneDigits: "9495550100",
+      dashedPhone: "949-555-0100",
+      rejected: ["slot_1", "Tuesday with Maria"],
+      reading: { fullName: "Maria Reyes", yearsOfExperienceEstimate: 6, headline: "RDH", employer: "Coastal Family Dentistry" },
+      wake: { kind: "event", key: `${appId}:message.received`, payload: { message: "Call me on (949) 555-0100", decision: "approved" } },
+      // a single lowercase word, a slug or a zip code is a code only under a key that holds codes
+      preferredName: "jane",
+      profile: "janedoe-12",
+      zip: "92618",
+      status: "92618",
+    };
+    const out = scrubWorkflowRecord(state);
+    expect(out).toEqual({
+      applicationId: appId,
+      roleId: "0192a6b2-2222-7aaa-8bbb-123456789abc",
+      attempt: 2,
+      rescheduled: true,
+      roundKey: "first_round",
+      offeredAt: "2026-10-14T09:30:00.000Z",
+      closesOn: "2026-11-02",
+      candidateEmail: R,
+      phoneDigits: R,
+      dashedPhone: R,
+      rejected: ["slot_1", R],
+      reading: { yearsOfExperienceEstimate: 6, employer: R },
+      wake: { kind: "event", key: `${appId}:message.received`, payload: { decision: "approved" } },
+      preferredName: R,
+      profile: R,
+      zip: R,
+      status: R,
+    });
+    expect(scrubWorkflowRecord(out)).toEqual(out);
+    // an error keeps its code or the deletion's own reason; a message, which can quote what a model read, goes
+    expect(scrubWorkflowError(null)).toBeNull();
+    expect(scrubWorkflowError("timeout")).toBe("timeout");
+    expect(scrubWorkflowError("the candidate asked for their information to be deleted")).toBe("the candidate asked for their information to be deleted");
+    expect(scrubWorkflowError("invalid JSON near 'Maria Reyes'")).toBe(R);
+    expect(scrubWorkflowError(R)).toBe(R);
   });
 });

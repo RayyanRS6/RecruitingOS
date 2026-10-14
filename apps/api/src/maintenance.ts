@@ -1,13 +1,14 @@
 import { and, inArray, lt } from "drizzle-orm";
 import { expireEmptyDrafts, sweepStaleSending } from "@ros/agents";
-import { anonymizedCandidates, raiseAlertOnce, resolveAlertsOfKind, scrubCandidateAiData } from "@ros/core";
+import { anonymizedCandidates, raiseAlertOnce, resolveAlertsOfKind, scrubCandidateAiData, scrubCandidateWorkflowData, type CancelWorkflowRun } from "@ros/core";
 import { cspReports, jobs, magicLinks, sessions, webhookReceipts, withPlatform, workerHeartbeats, type Db } from "@ros/db";
 import { HEARTBEAT_STALE_MS, queueSnapshot, readWorkerHealth } from "./worker-health";
 
 /**
  * The daily sweep of operational rows that have served their purpose. Nothing here deletes candidate data: that follows
  * the privacy-request process and the anonymization rules (docs/09); the sweep only finishes an anonymization already
- * made (the AI readings and run log of a deleted candidate). The periods are conservative and named in one place.
+ * made (the AI readings and run log of a deleted candidate, and the workflow engine's run state and step records about
+ * them). The periods are conservative and named in one place.
  */
 export const MAINTENANCE_JOB_KIND = "maintenance.daily";
 
@@ -32,7 +33,7 @@ export const QUEUE_STALE_MS = 30 * 60_000;
 /** A stale worker or queue raises one alert an hour at most, and none while a person already has one open. */
 export const HEALTH_ALERT_WINDOW_MS = 60 * 60_000;
 
-export type MaintenanceReport = { doneJobs: number; failedJobs: number; sessions: number; magicLinks: number; webhookReceipts: number; cspReports: number; staleHeartbeats: number; interruptedSends: number; emptyDrafts: number; anonymizedAssessments: number; anonymizedAiRuns: number; healthAlerts: number };
+export type MaintenanceReport = { doneJobs: number; failedJobs: number; sessions: number; magicLinks: number; webhookReceipts: number; cspReports: number; staleHeartbeats: number; interruptedSends: number; emptyDrafts: number; anonymizedAssessments: number; anonymizedAiRuns: number; anonymizedWorkflowRuns: number; anonymizedWorkflowSteps: number; anonymizedWorkflowEvents: number; cancelledWorkflowRuns: number; healthAlerts: number };
 
 export type MaintenanceOptions = {
   /** True when the queue runs inside the app process (development): there is no separate worker to watch. */
@@ -45,6 +46,12 @@ export type MaintenanceOptions = {
    * this matters for the stale worker, whose job would wait for the very worker that is down.
    */
   emailCritical?: (alertId: string) => Promise<void>;
+  /**
+   * The engine's cancel (`engine.cancel` bound to the system actor), for a workflow run about a deleted candidate that is
+   * somehow still going (one from a deletion made before the workflow clean-up existed). Without it the same writes are
+   * made by `cancelRunAsEngineDoes` (packages/core/src/privacy-requests.ts).
+   */
+  cancelRun?: CancelWorkflowRun;
 };
 
 /** How far back the daily pass looks for deletions whose AI data may still hold words. */
@@ -53,15 +60,23 @@ export const AI_SCRUB_WINDOW_DAYS = 30;
 /** The day of the week (UTC, 0 = Sunday) the clean-up looks at every deletion ever made. */
 export const AI_SCRUB_FULL_DAY = 0;
 
-async function scrubDeletedCandidatesAi(db: Db, now: Date, opts: MaintenanceOptions): Promise<{ assessments: number; aiRuns: number }> {
+async function scrubDeletedCandidatesAi(db: Db, now: Date, opts: MaintenanceOptions): Promise<{ assessments: number; aiRuns: number; workflowRuns: number; workflowSteps: number; workflowEvents: number; cancelledRuns: number }> {
   const full = opts.fullAiScrub || now.getUTCDay() === AI_SCRUB_FULL_DAY;
   const since = full ? undefined : new Date(now.getTime() - AI_SCRUB_WINDOW_DAYS * 86_400_000);
   const gone = await withPlatform(db, (tx) => anonymizedCandidates(tx, { since }));
-  const total = { assessments: 0, aiRuns: 0 };
+  const total = { assessments: 0, aiRuns: 0, workflowRuns: 0, workflowSteps: 0, workflowEvents: 0, cancelledRuns: 0 };
   for (const c of gone) {
-    const n = await withPlatform(db, (tx) => scrubCandidateAiData(tx, { companyId: c.companyId, candidateId: c.id }));
+    // the workflow engine's copies first (a run still going is cancelled before anything is scrubbed), then the AI data
+    const n = await withPlatform(db, async (tx) => ({
+      ...(await scrubCandidateWorkflowData(tx, { companyId: c.companyId, candidateId: c.id, cancelRun: opts.cancelRun })),
+      ...(await scrubCandidateAiData(tx, { companyId: c.companyId, candidateId: c.id })),
+    }));
     total.assessments += n.assessments;
     total.aiRuns += n.aiRuns;
+    total.workflowRuns += n.workflowRuns;
+    total.workflowSteps += n.workflowSteps;
+    total.workflowEvents += n.workflowEvents;
+    total.cancelledRuns += n.cancelledRuns;
   }
   return total;
 }
@@ -81,13 +96,14 @@ export async function runMaintenance(db: Db, now: Date, opts: MaintenanceOptions
   const interruptedSends = await sweepStaleSending(db, now);
   // Drafts nobody wrote anything into are set aside quietly (plan C3); each one is recorded as an event.
   const emptyDrafts = await expireEmptyDrafts(db, now);
-  // The AI readings and AI run log of candidates deleted at their request keep no words (privacy-requests.ts): repeated
+  // The AI readings, the AI run log and the workflow run state and step records of candidates deleted at their request
+  // keep no words (privacy-requests.ts): repeated
   // daily for the deletions of the last AI_SCRUB_WINDOW_DAYS (a model run that finished after a deletion lands within
   // days), and once a week for every deletion ever made (those made before this existed). One short transaction per
   // candidate, so the sweep never holds a long platform transaction, and its cost stays bounded day to day.
   const ai = await scrubDeletedCandidatesAi(db, now, opts);
   const health = await checkOperationalHealth(db, now, opts);
-  const report = { ...swept, interruptedSends, emptyDrafts, anonymizedAssessments: ai.assessments, anonymizedAiRuns: ai.aiRuns, healthAlerts: health.raised };
+  const report = { ...swept, interruptedSends, emptyDrafts, anonymizedAssessments: ai.assessments, anonymizedAiRuns: ai.aiRuns, anonymizedWorkflowRuns: ai.workflowRuns, anonymizedWorkflowSteps: ai.workflowSteps, anonymizedWorkflowEvents: ai.workflowEvents, cancelledWorkflowRuns: ai.cancelledRuns, healthAlerts: health.raised };
   if (Object.values(report).some((n) => n > 0)) console.log(`[maintenance] ${Object.entries(report).map(([k, v]) => `${k}=${v}`).join(" ")}`);
   return report;
 }

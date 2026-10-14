@@ -10,7 +10,8 @@ Every CV is made up (synthetic); no real candidate's data is used.
 
 | Check | What it means |
 |---|---|
-| Twin CVs | Two CVs that differ only in the name ("Emily Walsh" and "Lakisha Washington"), the graduation year (1988 and 2013) or the zip code (Irvine and Santa Ana) get the same reading and the same match score. |
+| Twin CVs | Two CVs that differ only in the name ("Emily Walsh" and "Lakisha Washington"), the graduation year (1988 and 2013) or the zip code (Irvine and Santa Ana) get the same reading and the same match score. The same CV from someone the company turned down before gets exactly the same reading too: earlier applications are never sent to the AI. |
+| Hidden personal details | The AI that scores a CV or a screening never sees the person's name, email, phone, street, zip code or web links (they are replaced before it reads), while employers, schools, licences and skills stay; nothing it shows the team carries a placeholder. |
 | Same CV, same answer | The same CV read three times gets the same reading and the same score every time. |
 | Fair to different paths | A career gap, a career change, no degree or no CV is never marked down for that alone. |
 | Honest quotes | Every quote in a CV reading or a screening reading is really in the CV. |

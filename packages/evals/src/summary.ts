@@ -21,7 +21,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 /** What each suite checks, in the words of someone hiring. A suite not listed here shows under its own name. */
 export const SUITE_WORDS: Record<string, { name: string; means: string }> = {
-  "triage.bias_pairs": { name: "Twin CVs", means: "Two CVs that differ only in the name, the graduation year or the zip code get the same reading and the same score." },
+  "triage.bias_pairs": { name: "Twin CVs", means: "Two CVs that differ only in the name, the graduation year, the zip code or an earlier rejection at the same company get the same reading and the same score." },
+  "triage.redaction": { name: "Personal details hidden", means: "The AI that scores a CV is never sent the name, email, phone, street address, links or earlier applications." },
+  "screen.redaction": { name: "Personal details hidden (screening chat)", means: "The AI that scores a screening chat is never sent the name, email, phone, street address or links." },
   "triage.consistency": { name: "Same CV, same answer", means: "The same CV read three times gets the same reading and the same score every time." },
   "triage.edge_cases": { name: "Fair to different paths", means: "A career gap, a career change, no degree or no CV is never marked down for that alone." },
   "triage.hallucination": { name: "Honest quotes (screening)", means: "Every quote in a screening reading is really in the CV or the application." },

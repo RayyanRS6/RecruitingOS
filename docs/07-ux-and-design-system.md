@@ -16,6 +16,12 @@ Primary navigation (docs/FOUNDER-CONTEXT.md §14): **Today, Roles, Talent, Inter
 - *Settings*: five tabs, **Company · Team · Notifications · Hiring rules · Security** (`?tab=`); every old `#setup-…` link opens the right tab and scrolls to its card.
 - *Private decisions*: wherever a screen says a decision is private, it also says in one line that the standard message goes by itself after 5 working days if nobody sends one, with the date when it is known (founder decision D-03 A).
 
+**More of the Kanvis-like flow (Wave S2, 14-15 October 2026).** Built in our own words and code, with no new library:
+- *Jobs list* (`/roles`): heading "Jobs" with **Start a hire**; status chips with counts (**All · Live · Drafts · Paused · Closed**), **Search by title**, and a sort (**Recent activity**, Newest first, Oldest first, Title A to Z), all kept in the address (`?status=&sort=&q=`). Each row: title, status pill, one line of facts and small badges (**N to review**, **N new**, **Draft** with its age, **Not live**, **No applicants yet**); a live job's row opens its Candidates, with **Post on LinkedIn** for the people who may share it. Each filter that finds nothing has its own empty state with one button.
+- *Quick start* (`/roles/new?way=quick`): the new-job page offers two ways, **Answer a few quick questions** (the main button) or describe the job (the job builder's conversation, unchanged). Ten steps, one question per screen with "Step N of 10": title (or paste an ad to fill it in), employment type, where, minimum experience, pay (always shown on our ads), closing date, must-have skills, deal-breakers, screening questions, then a review with **Edit** on each row and **Write the job post**, which hands everything to the existing job builder and its fairness check. Enter moves on; the answers survive a reload in this browser; **Start over** clears them. Suggestions come from our hiring guide when it knows the job; for any other job (Wave S3) the assistant suggests must-haves and yes/no questions from the answers so far ("Suggesting skills from your answers…" while it works, nothing extra if it fails): must-haves unticked and labelled "AI suggestion", questions ticked after the general ones when they arrive while the questions step is open, unticked if they arrive after the person moved on.
+- *Post on LinkedIn* (the Share tab, `#linkedin`): three tones (**Proud**, **Straight**, **Friendly**), text made from the job's own facts and its LinkedIn tracked link, an editable box with a live preview and a character count, **Copy and open LinkedIn** and **Copy text**. No AI, no LinkedIn connection; nothing is posted for anyone. Only for a live job whose company ITS has confirmed.
+- *Application progress line* (the candidate's status page): **Applied → Screening chat** (only when the job uses one) **→ Review → Interview → Decision**, past steps ticked and the current one marked, with **What happens next** in one line under it. Server-rendered with no script; messages, withdrawal, privacy and every link stay below.
+
 **Today** answers four questions in one line and then in cards: what needs my attention, who are the best people to look at, what is at risk, what did the system accomplish since I last checked. It opens to the morning brief, a sequence of cards, each with a plain-language headline and one or two actions:
 
 | Brief section | Card | Primary action | Secondary |
@@ -68,7 +74,7 @@ Recruiter Mode never shows a candidate anything the owner cannot see; it shows m
 - **Screen**: text or web chat, one question at a time, progress ("3 of 7"), pause and resume, "talk to a person" always visible.
 - **Schedule**: tap a slot; confirmation with calendar file; reschedule and cancel links.
 - **Interview prep**: who they will meet, format, length, what to bring, the case prompt if any.
-- **Status**: where they are, what happens next, when they will hear; withdrawal in one tap.
+- **Status**: the progress line first (Applied, Screening chat, Review, Interview, Decision; Wave S2), then what happens next in one line and when they will hear; withdrawal in one tap.
 - **Offer**: the letter, a place to ask questions, signature, a countdown to day one.
 - **Privacy**: a page explaining what is stored, for how long, and how to request access or deletion.
 

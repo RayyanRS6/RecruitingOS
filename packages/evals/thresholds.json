@@ -32,6 +32,12 @@
   "triage.consistency": {
     "minPassRate": 1
   },
+  "triage.redaction": {
+    "minPassRate": 1
+  },
+  "screen.redaction": {
+    "minPassRate": 1
+  },
   "board.determinism": {
     "minPassRate": 1
   },

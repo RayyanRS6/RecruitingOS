@@ -2,7 +2,7 @@ import { createRuntime, type AiRuntime, type FakeProvider } from "@ros/ai";
 import { cancelInterviewEvents } from "@ros/agents";
 import { eq } from "drizzle-orm";
 import { createDb, inspectConnectionRole, migrate, migrationStatus, postings, problemsWithConnectionRole, roles, seedPlatform, withPlatform, withTenant, type Db, type DbHandle, type DbRole } from "@ros/db";
-import { POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, countActiveAdmins, createRateLimitStore, emit, raiseAlert, transitionPosting, type RateLimitStore } from "@ros/core";
+import { POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, SYSTEM_ACTOR, countActiveAdmins, createRateLimitStore, emit, raiseAlert, transitionPosting, type RateLimitStore } from "@ros/core";
 import { createIntegrations, type Integrations } from "@ros/integrations";
 import { createEngine, type WorkflowEngine } from "@ros/workflows";
 import { ALERT_EMAIL_JOB_KIND, REVOKE_JOB_KIND, checkPrivacyRequestDeadlines, emailCriticalAlert, listSuppressions, onSuppressionChange, revokeAndDeleteCredentials, setAlertEmails, setEventSink, setNotifyClock } from "@ros/core";
@@ -177,7 +177,8 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     // The daily sweep (docs/14, retention): finished jobs, expired sessions and sign-in links, old receipts and reports, old heartbeats,
     // interrupted sends; then the health checks (a stale worker, a stale queue). Re-armed even when a run fails (H13).
     engine.registerJob(MAINTENANCE_JOB_KIND, recurring(engine, handle.db, MAINTENANCE_JOB_KIND, DAILY_MS, async (ctx) => {
-      await runMaintenance(handle.db, ctx.now, { workerInline: env.WORKER_INLINE, emailCritical });
+      // a workflow run about a deleted candidate that is still going is cancelled through the engine itself
+      await runMaintenance(handle.db, ctx.now, { workerInline: env.WORKER_INLINE, emailCritical, cancelRun: (q, runId, reason) => engine.cancel(q, runId, SYSTEM_ACTOR, reason) });
     }));
 
     // The stale-queue check every hour, not only with the daily sweep (H3). A worker that stopped is noticed by the app's

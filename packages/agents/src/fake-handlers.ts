@@ -20,6 +20,37 @@ export function registerFakeHandlers(fake: FakeProvider): void {
   fake.register("packet.revise", (req) => fakeRevise(req));
   fake.register("company.about", (req) => fakeCompanyAbout(req));
   fake.register("message.freeform", (req) => fakeMessageLine(req));
+  fake.register("intake.suggest", (req) => fakeSuggest(req));
+}
+
+/**
+ * intake.suggest v1 (Wave S3, G3): must-haves and yes/no questions for the quick start, built only from the job facts in
+ * the request, the same every time for the same facts. Nothing about candidates is ever in the request. A title that is
+ * not a job (empty, or only instructions) gets nothing.
+ */
+function fakeSuggest(req: StructuredRequest<unknown>): { mustHaves: string[]; questions: string[] } {
+  const text = req.messages.map((m) => m.content).join("\n");
+  const job = text.match(/<job>\n([\s\S]*?)\n<\/job>/)?.[1] ?? "";
+  const fact = (label: string) => job.match(new RegExp(`^${label}: (.*)$`, "m"))?.[1]?.trim() ?? "";
+  const title = fact("Job title");
+  if (!title || /\b(?:ignore|instructions?|system prompt)\b/i.test(title)) return { mustHaves: [], questions: [] };
+  const lower = title.toLowerCase();
+  const model = fact("Work model");
+  const type = fact("Employment type");
+  const mustHaves = [`Hands-on ${lower} work`, `The tools a ${lower} uses every day`];
+  const questions = [`Have you worked as a ${lower} before?`];
+  if (/\bdriver|delivery|courier|truck/i.test(title)) {
+    mustHaves.push("Valid driver's licence and a clean driving record");
+    questions.push("Do you hold a valid driver's licence?");
+  }
+  if (model === "Remote") {
+    mustHaves.push("Working on your own, remotely");
+    questions.push("Do you have a quiet place to work from home?");
+  } else if (model === "On site" || model === "Hybrid") {
+    questions.push("Can you get to the workplace on the days the job needs?");
+  }
+  if (type === "Part time" || type === "Temporary") mustHaves.push("Available for the posted hours");
+  return { mustHaves: mustHaves.slice(0, 8), questions: questions.slice(0, 4) };
 }
 
 /**

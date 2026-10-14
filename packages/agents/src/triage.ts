@@ -115,11 +115,19 @@ export async function assessApplication(db: Db, ai: AiRuntime, input: AssessInpu
   const settled = await Promise.all(runs.map((r, i) => (!r.ok && r.reason === "error" ? read(i + 1) : r)));
   const outage = settled.find((r) => !r.ok && r.reason === "error");
   if (outage) return outage;
-  // Quotes are checked against the ORIGINAL words, and shown as the candidate wrote them: one the model wrote around a
-  // placeholder is mapped back first (`restoreReadingQuotes`); one that cannot be fails the check.
+  return readingsOutcome(settled, view, input);
+}
+
+/**
+ * The readings as the team sees them, combined into the middle answer. Quotes are checked against the ORIGINAL words,
+ * and shown as the candidate wrote them: one the model wrote around a placeholder is mapped back first
+ * (`restoreReadingQuotes`); one that cannot be fails the check. The model's own words (summary, claims, unknowns) keep no
+ * placeholder either: "[name]" reads "the candidate". Shared with the fairness evals (packages/evals), so they check
+ * exactly what the app does after the model has answered.
+ */
+export function readingsOutcome(readings: ReadonlyArray<RunOutcome<Reading>>, view: Pick<ScoringView, "restore">, input: Pick<AssessInput, "resumeText" | "applicationAnswers" | "packet">): RunOutcome<Reading> {
   const sources = assessmentSources(input);
-  // The model's own words (summary, claims, unknowns) keep no placeholder either: "[name]" reads "the candidate".
-  return combineOutcomes(settled.map((r) => (r.ok ? { ...r, output: withoutPlaceholders(restoreReadingQuotes(r.output, view, sources)) } : r)), sources, credentialMustHaves(input.packet));
+  return combineOutcomes(readings.map((r) => (r.ok ? { ...r, output: withoutPlaceholders(restoreReadingQuotes(r.output, view, sources)) } : r)), sources, credentialMustHaves(input.packet));
 }
 
 /**

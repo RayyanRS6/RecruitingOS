@@ -558,7 +558,8 @@ describe("new times for people under Cancelled", () => {
     await hours(owner, false);
     try {
       await runAt(due);
-      expect((await runOf((await followUp(waiting.id)).autoRunId!)).status).toBe("completed");
+      // the deletion cancelled the run that waited for the day (Wave S3 G1), so its day comes and nothing runs
+      expect((await runOf((await followUp(waiting.id)).autoRunId!)).status).toBe("cancelled");
       expect((await ivRow(waiting.ivId)).status).toBe("cancelled");
       expect((await followUp(preparing.id)).autoState).toBe("preparing");
       await erase(preparing);
