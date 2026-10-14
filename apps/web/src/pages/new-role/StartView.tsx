@@ -72,6 +72,7 @@ export function StartView({ fresh, companyName, scope = null }: { fresh: boolean
   // Quick answers kept in this browser: read after the first draw, so the server and the browser draw the same page.
   const [quickKept, setQuickKept] = useState(false);
   const scopeKey = scope ? `${scope.companyId}:${scope.userId}` : "";
+  // biome-ignore lint/correctness/useExhaustiveDependencies: read again only when the person or the company changes (scopeKey), not for each new scope object
   useEffect(() => { setQuickKept(!!scope && !!readQuickStart(browserStorage(), scope)); }, [scopeKey]);
   const { start, pending, sent, notARole, problem, limit, clearProblem } = useStartDraft({ replace: true });
 

@@ -99,13 +99,13 @@ export function Roles() {
       {again.problem ? <Alert tone="critical">{again.problem}</Alert> : null}
       {list && hasAny ? (
         <div className="talent-toolbar">
-          <div role="group" aria-label="Show jobs" className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+          <fieldset aria-label="Show jobs" className="row" style={{ gap: 6, flexWrap: "wrap", border: 0, padding: 0, margin: 0, minWidth: 0 }}>
             {JOB_FILTERS.map((f) => (
               <button key={f.id} type="button" className="toggle-chip" aria-pressed={view.status === f.id} onClick={() => setView({ status: f.id })}>
                 {f.label} <span className="count">{counts[f.id]}</span>
               </button>
             ))}
-          </div>
+          </fieldset>
           <input className="input talent-search" type="search" value={view.q} onChange={(e) => setView({ q: e.target.value })} placeholder="Search by title" maxLength={200} aria-label="Search jobs by title" />
           <select className="select" aria-label="Sort jobs" value={view.sort} onChange={(e) => setView({ sort: e.target.value as JobSort })}>
             {JOB_SORTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}

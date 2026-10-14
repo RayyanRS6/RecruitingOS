@@ -75,7 +75,7 @@ describe("Home's top", () => {
     expect(html).toMatch(/<h1>Good (morning|afternoon|evening), Dana<\/h1>/);
     // two decisions, the long wait, the draft, the share and the closing date (not the screening chat), plus getting started
     expect(html).toContain('<p class="page-header-sub">7 things need you</p>');
-    expect(html).toMatch(/<a href="\/roles\/new" class="btn primary"><svg[^]*?<\/svg>Start a hire<\/a>/);
+    expect(html).toMatch(/<a href="\/roles\/new" class="btn primary"><svg[\s\S]*?<\/svg>Start a hire<\/a>/);
     expect(html).toContain(">Bring in a recruiter</button>");
     expect(html).not.toContain("Today");
   });

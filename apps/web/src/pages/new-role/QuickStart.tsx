@@ -56,12 +56,14 @@ export function QuickStart({ companyName, scope }: { companyName: string | null;
   const [state, setState] = useState<QuickState>(() => emptyQuickState(scope?.companyId ?? null));
   const [loaded, setLoaded] = useState(false);
   const scopeKey = scope ? `${scope.companyId}:${scope.userId}` : "";
+  // biome-ignore lint/correctness/useExhaustiveDependencies: read again only when the person or the company changes (scopeKey), not for each new scope object
   useEffect(() => {
     if (!scope) return;
     const kept = readQuickStart(browserStorage(), scope);
     if (kept) setState(kept);
     setLoaded(true);
   }, [scopeKey]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the same scope rule as above; every change of the answers is written
   useEffect(() => {
     if (loaded && scope) writeQuickStart(browserStorage(), state, scope);
   }, [state, loaded, scopeKey]);
@@ -75,6 +77,7 @@ export function QuickStart({ companyName, scope }: { companyName: string | null;
   const step = QUICK_STEPS[state.step] ?? "title";
   const a = state.answers;
   // Moving to another step takes the reader to its question (never on the first draw).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: it runs for each new step, though the body does not read the step
   useEffect(() => {
     if (moved.current) heading.current?.focus();
   }, [state.step]);
@@ -115,7 +118,7 @@ export function QuickStart({ companyName, scope }: { companyName: string | null;
   // the effect above keeps it with its questions unticked. Going back to those steps asks again.
   useEffect(() => {
     if (state.step > SUGGEST_UNTIL && suggestKeyNow) void qc.cancelQueries({ queryKey: suggestQueryKey(suggestKeyNow) });
-  }, [state.step, suggestKeyNow]);
+  }, [state.step, suggestKeyNow, qc]);
   const suggest = suggestView(vertical, a, { fresh, waiting: askAi && suggestQ.isFetching });
 
   const write = useMutation({

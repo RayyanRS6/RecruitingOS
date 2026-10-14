@@ -91,6 +91,7 @@ export function Setup() {
   }, [ready]);
   // Once the card's tab is showing, bring the card into view (no animation, so reduced motion is respected) and move
   // focus to it, so the keyboard and a screen reader start there too; a card inside a fold opens it first.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: it runs again once the picked tab (active) has drawn the card
   useEffect(() => {
     if (!jump || !ready) return;
     const el = document.getElementById(jump);

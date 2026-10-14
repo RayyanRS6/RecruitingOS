@@ -54,7 +54,7 @@ export function scorecardModelInput(ctx: ScreenContext, identity: ScoringIdentit
   return { ctx: seen, view, text: modelInputText(screenAssessPrompt, seen), messages: modelMessagesText(screenAssessPrompt, seen) };
 }
 
-const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
  * The personal details that reached the model: each of `details` found in `modelInput`. A detail with seven or more
@@ -64,7 +64,7 @@ const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 export function leakedDetails(modelInput: string, details: readonly string[]): string[] {
   return details.filter((d) => {
     const digits = d.replace(/\D/g, "");
-    const pattern = digits.length >= 7 ? digits.split("").join("[^\\d\\n]{0,3}") : `(?<![\\p{L}\\p{N}])${escape(d)}(?![\\p{L}\\p{N}])`;
+    const pattern = digits.length >= 7 ? digits.split("").join("[^\\d\\n]{0,3}") : `(?<![\\p{L}\\p{N}])${escapeRegExp(d)}(?![\\p{L}\\p{N}])`;
     return new RegExp(pattern, "iu").test(modelInput);
   }).map((d) => `the model was sent "${d}"`);
 }

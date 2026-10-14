@@ -86,9 +86,9 @@ export type ScoringView = {
 const LETTER = "\\p{L}\\p{N}";
 const NOT_BEFORE = `(?<![${LETTER}])`;
 const NOT_AFTER = `(?![${LETTER}])`;
-const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** A literal piece of text as a pattern: any run of whitespace matches any other. */
-const loose = (s: string) => s.trim().split(/\s+/).filter(Boolean).map(escape).join("\\s+");
+const loose = (s: string) => s.trim().split(/\s+/).filter(Boolean).map(escapeRegExp).join("\\s+");
 
 const EMAIL = /(?<![\w.+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 const TLD = "com|net|org|io|dev|me|co|app|ai|us|ca|uk|info|biz|site|online|tech|page|xyz|ly|gg|edu|gov|so|blog|portfolio";
@@ -169,7 +169,7 @@ function namePatterns(identity: ScoringIdentity): RegExp[] {
     into.add(lower.charAt(0).toUpperCase() + lower.slice(1));
     into.add(t.toUpperCase());
   }
-  const single = (list: Set<string>) => [...list].sort((a, b) => b.length - a.length).map(escape).join("|");
+  const single = (list: Set<string>) => [...list].sort((a, b) => b.length - a.length).map(escapeRegExp).join("|");
   if (forms.size) out.push(new RegExp(`${NOT_BEFORE}${NOT_A_PLACE_BEFORE}(?:${single(forms)})${NOT_AFTER}${NOT_A_PLACE_AFTER}`, "gu"));
   if (keptForms.size) out.push(new RegExp(`(?<=${PERSON_CONTEXT})(?:${single(keptForms)})${NOT_AFTER}${NOT_A_PLACE_AFTER}`, "gu"));
   return out;
@@ -202,7 +202,7 @@ export function scoringView(identity: ScoringIdentity): ScoringView {
 
   const text = (original: string): string => {
     let s = original;
-    if (ownEmail) s = s.replace(new RegExp(escape(ownEmail), "gi"), (m) => hide("email", m));
+    if (ownEmail) s = s.replace(new RegExp(escapeRegExp(ownEmail), "gi"), (m) => hide("email", m));
     s = s.replace(EMAIL, (m) => hide("email", m));
     s = s.replace(LINK, (m) => {
       const [link, trailing] = splitTrailing(m);
@@ -251,7 +251,7 @@ export function scoringView(identity: ScoringIdentity): ScoringView {
 }
 
 const KIND_OF: Record<string, HiddenKind | "zip"> = Object.fromEntries(Object.entries(PLACEHOLDER).map(([k, v]) => [v, k as HiddenKind | "zip"]));
-const PLACEHOLDER_SPLIT = new RegExp(`(${Object.values(PLACEHOLDER).map(escape).join("|")})`);
+const PLACEHOLDER_SPLIT = new RegExp(`(${Object.values(PLACEHOLDER).map(escapeRegExp).join("|")})`);
 
 /** Whether a text still holds a placeholder: a quote that does must never reach the team. */
 export function hasPlaceholder(text: string): boolean {
@@ -273,7 +273,7 @@ export function withoutPlaceholders<T>(value: T): T {
   };
   return walk(value, null) as T;
 }
-const PLACEHOLDER_SPLIT_ALL = new RegExp(Object.values(PLACEHOLDER).map(escape).join("|"), "g");
+const PLACEHOLDER_SPLIT_ALL = new RegExp(Object.values(PLACEHOLDER).map(escapeRegExp).join("|"), "g");
 
 /**
  * Every quote in a reading (any object with a string `quote`, at any depth) mapped back to the candidate's original

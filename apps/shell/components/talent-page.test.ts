@@ -331,7 +331,7 @@ describe("the Jobs page (Wave S1; Wave S2: the Kanvis dashboard)", () => {
   it("filters by status with counts, searches by title and sorts, all from the address", () => {
     nav.search = "";
     const all = render(jobsClient(), createElement(Roles));
-    expect(all).toContain('role="group" aria-label="Show jobs"');
+    expect(all).toContain('<fieldset aria-label="Show jobs"');
     expect(text(all)).toMatch(/All 3 Live 1 Drafts 2 Paused 0 Closed 0/);
     expect(all).toContain('aria-pressed="true">All <span class="count">3</span>');
     expect(all).toContain('aria-label="Search jobs by title"');
