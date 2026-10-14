@@ -5,9 +5,9 @@ import { HANDED_TO_A_PERSON, createEscalation, emit, entitlements, humanResponse
 import { applications, assessments, candidates, companies, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { deliverSms, recordInbound, sendPersonRequestedNote } from "./coordinator";
-import { FOCUS_INTRO, answersOf, focusedPacket, isFocusKey, withFocusAnswer, type FocusQuestion } from "./screen-focus";
+import { FOCUS_INTRO, answersOf, focusedPacket, isFocusKey, unfairQuestion, withFocusAnswer, type FocusQuestion } from "./screen-focus";
 import { PLACEHOLDER, SCORING_VIEW_VERSION, restoreQuotes, scoringView, withoutPlaceholders, type ScoringIdentity, type ScoringView } from "./scoring-view";
-import { applyEvidenceRules, jobWords } from "./triage";
+import { TRIAGE_READINGS, answerInContext, applyEvidenceRules, combineRunOutcomes, credentialMustHaves, findingSubjects, jobWords, linkReadingRuns, sentenceAround, withoutInterviewSkills } from "./triage";
 
 /**
  * The Screening agent (docs/05). Conversation turns run when the candidate writes (web chat or SMS); the durable
@@ -124,7 +124,8 @@ export async function loadApplicationBundle(q: Queryable, applicationId: string)
   const [pv] = await q.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
   if (!candidate || !role || !company || !pv) return null;
   const triage = app.latestAssessmentId ? (await q.select().from(assessments).where(eq(assessments.id, app.latestAssessmentId)).limit(1))[0] : undefined;
-  return { app, candidate, role, company, packet: pv.packet, triageUnknowns: triage?.result.unknowns.map((u) => u.question) ?? [] };
+  // The reading's open questions steer the chat's follow-ups: only those that pass the code's fairness check (`unfairQuestion`).
+  return { app, candidate, role, company, packet: pv.packet, triageUnknowns: triage?.result.unknowns.map((u) => u.question).filter((q) => !unfairQuestion(q)) ?? [] };
 }
 type ApplicationBundle = NonNullable<Awaited<ReturnType<typeof loadApplicationBundle>>>;
 
@@ -832,6 +833,21 @@ export function enforceTurnRules(turn: ScreenTurn, packet: RolePacket, progress:
   if (!t.done && !t.humanRequested && candidateTurns >= keys.length && remaining.length === 0 && !t.questionKey) {
     t = { ...t, done: true, followUpReason: null };
   }
+  // The code's fairness check on what the model wrote to the candidate (known bug 29): a follow-up or an acknowledgment
+  // that touches a protected trait never reaches them. The packet's own questions passed the check when the job was
+  // approved, so only the model's words around them are read. On a hit the conversation moves on as the follow-up cap
+  // does: the next question in the packet's words, or the close.
+  const modelWords = packet.screening.questions.reduce((s, q) => s.split(q.question).join(" "), t.messageToCandidate);
+  if (unfairQuestion(modelWords)) {
+    if (t.humanRequested) t = { ...t, messageToCandidate: "Understood. A person from the hiring team will follow up with you.", followUpReason: null };
+    else if (t.questionKey && !t.done) t = { ...t, messageToCandidate: "Thanks.", followUpReason: null };
+    else {
+      const next = t.done ? undefined : remaining[0];
+      t = next
+        ? { ...t, messageToCandidate: "Thanks.", questionKey: next, followUpReason: null, answerRecorded: t.answerRecorded ?? (current ? { questionKey: current, answer: "", complete: false } : null) }
+        : { ...t, done: true, questionKey: null, followUpReason: null, messageToCandidate: `Thanks, that is everything I needed. ${SCREEN_NEXT_LINE} Reply HUMAN at any time to reach a person.` };
+    }
+  }
   if (t.answerRecorded && !t.answerRecorded.answer.trim()) t = { ...t, answerRecorded: null };
   // The packet's question in the packet's own words (plan E2): added after the model's acknowledgment when it is not there.
   if (t.questionKey && !t.done && !t.humanRequested) {
@@ -860,9 +876,28 @@ export function advanceProgress(progress: ScreenProgress, turn: ScreenTurn): Scr
 /* The scorecard                                                                                                  */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-/** What the candidate said, for the quote check: their own messages (typed, tapped, edited) and the recorded answers. Never a recruiter's notes. */
+/**
+ * What the candidate said, for the quote check: their own messages as they sent them (typed, tapped, or changed on
+ * "check your answers"). Never a recruiter's notes, and never the answers as the assistant recorded them: those are the
+ * model's words about what was said, which can be a paraphrase (known bug 13), so a quote of one counts only where the
+ * candidate's own messages have it (`saidByCandidate`).
+ */
 export function candidateWordsOf(screen: Pick<ScreenRow, "transcript" | "answers" | "progress">): string {
-  return `${screen.transcript.filter((t) => t.role === "candidate").map((t) => t.content).join("\n")}\n${Object.values(answersOf(screen)).join("\n")}`;
+  return screen.transcript.filter((t) => t.role === "candidate").map((t) => t.content).join("\n");
+}
+
+/**
+ * Whether a quote is the candidate's own words (`candidateText` from `candidateWordsOf`): found as it is, or, for a whole
+ * answer the assistant put together (their words over two messages after a follow-up, or with a personal sentence left
+ * out), every sentence of it found in what they sent.
+ */
+export function saidByCandidate(quote: string, candidateText: string): boolean {
+  const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+  const src = norm(candidateText);
+  const q = norm(quote);
+  if (!q || src.includes(q)) return true;
+  const sentences = quote.split(/(?<=[.!?])\s+/).map(norm).filter(Boolean);
+  return sentences.length > 1 && sentences.every((s) => src.includes(s));
 }
 
 /** A recruiter's call notes (E3), checked as their own source. */
@@ -895,6 +930,11 @@ export function scorecardInput(ctx: ScreenContext, identity: ScoringIdentity): {
  * reading is the résumé's. One a
  * recruiter finished from a call is read from the notes alone (`teamScreenView`): whatever the candidate typed before
  * asking for a person was never sent, so the model never sees it and no quote of it passes the check.
+ *
+ * Read `SCORECARD_READINGS` times side by side, like the résumé (known bugs 20 and 106: one reading overrode the
+ * résumé's findings and moved the score run to run), and the middle answer of each finding kept (`scorecardReadings`).
+ * A reading lost to an outage is asked once more; one still lost fails the step, which the engine retries. Every run is
+ * linked to the one the stored scorecard keeps (`linkReadingRuns`).
  */
 export async function assessScreen(db: Db, ai: AiRuntime, input: { companyId: string; screenId: string; workflowRunId?: string | null }): Promise<RunOutcome<ScreenAssessment>> {
   const b = await withTenant(db, input.companyId, (q) => loadScreenBundle(q, input.screenId));
@@ -902,22 +942,40 @@ export async function assessScreen(db: Db, ai: AiRuntime, input: { companyId: st
   if (b.screen.status !== "completed") throw new Error(`a conversation the candidate did not send is never read (it is ${b.screen.status})`);
   const screen = teamScreenView(b.screen);
   const { ctx, view } = scorecardInput({ ...contextOf(b, screen, null), incomplete: null }, { firstName: b.candidate.firstName, lastName: b.candidate.lastName, email: b.candidate.email, phone: b.candidate.phone, fullName: b.app.extraction?.fullName ?? null, keep: jobWords(null, b.app.extraction) });
-  const out = await runPromptDetached(db, ai, screenAssessPrompt, ctx, { companyId: b.company.id, workflowRunId: input.workflowRunId ?? b.screen.workflowRunId, inputRef: { screenId: b.screen.id, turns: screen.transcript.length, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() } });
-  if (!out.ok) return out;
-  return { ...out, output: scorecardOutcome(out.output, view, screen) };
+  const read = (reading: number) => runPromptDetached(db, ai, screenAssessPrompt, ctx, { companyId: b.company.id, workflowRunId: input.workflowRunId ?? b.screen.workflowRunId, inputRef: { screenId: b.screen.id, turns: screen.transcript.length, scoringView: SCORING_VIEW_VERSION, hidden: view.counts(), reading } });
+  const runs = await Promise.all(Array.from({ length: SCORECARD_READINGS }, (_, i) => read(i + 1)));
+  const settled = await Promise.all(runs.map((r, i) => (!r.ok && r.reason === "error" ? read(i + 1) : r)));
+  const outage = settled.find((r) => !r.ok && r.reason === "error");
+  if (outage) return outage;
+  const out = scorecardReadings(settled, view, screen, b.packet);
+  await linkReadingRuns(db, b.company.id, out, settled);
+  return out;
+}
+
+/** How many times a screening chat is read for its scorecard: as many as the résumé (`TRIAGE_READINGS`). */
+export const SCORECARD_READINGS = TRIAGE_READINGS;
+
+/**
+ * The scorecard readings as the team sees them: each through `scorecardOutcome` (quotes mapped back and checked, the
+ * licence rule), then the middle answer of each finding (`combineReadings`), with the words, answers, pay, availability
+ * and recommendation of the reading closest to it. Fewer than three usable readings: the first, saying so.
+ */
+export function scorecardReadings(readings: ReadonlyArray<RunOutcome<ScreenAssessment>>, view: Pick<ScoringView, "restore">, screen: Pick<ScreenRow, "transcript" | "answers" | "progress">, packet?: Pick<RolePacket, "requirements" | "competencies"> | null): RunOutcome<ScreenAssessment> {
+  return combineRunOutcomes(readings.map((r) => (r.ok ? { ...r, output: scorecardOutcome(r.output, view, screen, packet) } : r)), (r) => r, "this screening chat", SCORECARD_READINGS);
 }
 
 /**
  * The scorecard as the team sees it, from the model's answer. Quotes are checked against the candidate's ORIGINAL words:
  * one written around a placeholder is mapped back first; and the model's own words (summary, claims) keep no
- * placeholder: "[name]" reads "the candidate". Shared with the fairness evals (packages/evals), so they check exactly
- * what the app does after the model has answered.
+ * placeholder: "[name]" reads "the candidate". With the `packet`, the licence rule holds for its credential must-haves
+ * (`credentialFinding`) and skills checked in the interviews only are left out. Shared with the fairness evals
+ * (packages/evals), so they check exactly what the app does after the model has answered.
  */
-export function scorecardOutcome(output: ScreenAssessment, view: Pick<ScoringView, "restore">, screen: Pick<ScreenRow, "transcript" | "answers" | "progress">): ScreenAssessment {
+export function scorecardOutcome(output: ScreenAssessment, view: Pick<ScoringView, "restore">, screen: Pick<ScreenRow, "transcript" | "answers" | "progress">, packet?: Pick<RolePacket, "requirements" | "competencies"> | null): ScreenAssessment {
   const candidateText = candidateWordsOf(screen);
   const recruiterNotes = recruiterNotesOf(screen);
   const restored = withoutPlaceholders(restoreQuotes(output, view, (source) => (source === "recruiter_note" ? [recruiterNotes, candidateText] : [candidateText, recruiterNotes])));
-  const checked = verifyScreenQuotes(restored, candidateText, { recruiterNotes, declined: screen.progress.declined ?? [], answered: Object.keys(answersOf(screen)) });
+  const checked = verifyScreenQuotes(packet ? withoutInterviewSkills(restored, packet) : restored, candidateText, { recruiterNotes, declined: screen.progress.declined ?? [], answered: Object.keys(answersOf(screen)), transcript: screen.transcript, ...(packet ? { credentials: credentialMustHaves(packet), subjects: findingSubjects(packet) } : {}) });
   // "incomplete_screen" marks a reading of a conversation nobody sent, written before 9 October 2026, which stays hidden
   // (`isUnsentConversationReading` in @ros/core): never on a reading of a sent one, whatever the model wrote.
   return { ...checked, anomalies: checked.anomalies.filter((a) => a.kind !== "incomplete_screen") };
@@ -930,15 +988,19 @@ export function scorecardOutcome(output: ScreenAssessment, view: Pick<ScoringVie
  * answer findings and eligibility confirmations lose a quote that is not there. A recruiter's call notes (E3) are their
  * own source, `recruiter_note`: checked against the notes, never taken as the candidate's words, never a must-have
  * "no". A question the candidate skipped (E11) is unknown, whatever the model wrote, unless it has an answer on record
- * (`answered`: given before the skip, or added on "check your answers"), whose words are kept.
+ * (`answered`: given before the skip, or added on "check your answers"), whose words are kept. `credentials`: the
+ * must-haves the licence rule holds to (`credentialFinding`), as in the résumé reading, read from the whole message a
+ * quote sits in. With the `transcript` and the findings' `subjects`, a short answer ("Yes", "No, I don't") that is the
+ * whole of a message is read with the closed question it replies to, when that question is about the finding
+ * (`screenAnswerOf`): "Yes" to "Do you hold a California RDH license?" is evidence, and a bare "No" to it says plainly
+ * the licence is not held.
  */
-export function verifyScreenQuotes(a: ScreenAssessment, candidateText: string, opts: { recruiterNotes?: string; declined?: string[]; answered?: string[] } = {}): ScreenAssessment {
+export function verifyScreenQuotes(a: ScreenAssessment, candidateText: string, opts: { recruiterNotes?: string; declined?: string[]; answered?: string[]; credentials?: ReadonlySet<string>; transcript?: ReadonlyArray<Pick<ScreenTranscriptEntry, "role" | "content">>; subjects?: ReadonlyMap<string, string> } = {}): ScreenAssessment {
   const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
-  const src = norm(candidateText);
   const notes = norm(opts.recruiterNotes ?? "");
   const answered = new Set(opts.answered ?? []);
   const declined = new Set((opts.declined ?? []).filter((k) => !answered.has(k)));
-  const ok = (quote?: string, source?: string) => !quote?.trim() || (source === "recruiter_note" ? !!notes && notes.includes(norm(quote)) : src.includes(norm(quote)));
+  const ok = (quote?: string, source?: string) => !quote?.trim() || (source === "recruiter_note" ? !!notes && notes.includes(norm(quote)) : saidByCandidate(quote, candidateText));
   let stripped = 0;
   const questionFindings = a.questionFindings.map((f) => {
     if (declined.has(f.questionKey)) return { questionKey: f.questionKey, answered: false, finding: "Skipped by the candidate: unknown.", meetsModelAnswer: "unknown" as const };
@@ -952,9 +1014,50 @@ export function verifyScreenQuotes(a: ScreenAssessment, candidateText: string, o
     return { ...e, quote: undefined };
   });
   // Every quote in a scorecard is checked against the words it names: the candidate's, or a recruiter's notes (which pass as not the candidate's own).
-  const checked = applyEvidenceRules({ ...a, questionFindings, eligibilityConfirmations }, (e) => (e.source === "recruiter_note" ? (notes?.includes(norm(e.quote ?? "")) ? null : false) : src.includes(norm(e.quote ?? ""))));
+  const transcript = opts.transcript ?? [];
+  const checked = applyEvidenceRules({ ...a, questionFindings, eligibilityConfirmations }, (e) => (e.source === "recruiter_note" ? (notes?.includes(norm(e.quote ?? "")) ? null : false) : saidByCandidate(e.quote ?? "", candidateText)), {
+    credentials: opts.credentials,
+    ...(opts.subjects ? { subjects: opts.subjects } : {}),
+    lineOf: (e) => sentenceAround(e.quote ?? "", candidateText),
+    answerOf: (e, subject) => screenAnswerOf(e.quote ?? "", subject, transcript),
+  });
   if (!stripped) return checked;
   return { ...checked, anomalies: [...checked.anomalies, { kind: "unverified_quote", detail: `${stripped} answer quote${stripped === 1 ? "" : "s"} not found in the transcript; discarded` }] };
+}
+
+/** Words too common to say what a question is about ("Do you have experience with...?"). */
+const PLAIN_WORDS = new Set(["the", "and", "you", "your", "are", "have", "has", "had", "with", "for", "any", "this", "that", "what", "how", "did", "does", "can", "will", "would", "about", "from", "years", "year", "experience", "work", "working", "able", "ability", "skills", "skill", "knowledge"]);
+const topicWords = (s: string): string[] => (s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((w) => w.length > 2 && !PLAIN_WORDS.has(w));
+
+/**
+ * A short quote read with the question it answers (`answerInContext`), for the evidence rules: only when the quote is
+ * the whole of one of the candidate's messages, and the assistant's question just before it shares a word with what the
+ * finding is about (`subject`), so a "Yes" to "Can you work Saturdays?" is never read as a "yes" to a licence. Where
+ * the same answer replied to several such questions, the one closest to the subject (then the latest). Else null.
+ */
+export function screenAnswerOf(quote: string, subject: string | null, transcript: ReadonlyArray<Pick<ScreenTranscriptEntry, "role" | "content">>): string | null {
+  if (!subject) return null;
+  const plain = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}'’ ]+/gu, " ").replace(/\s+/g, " ").trim();
+  const q = plain(quote);
+  const about = new Set(topicWords(subject));
+  if (!q || !about.size) return null;
+  let best: string | null = null;
+  let bestShared = 0;
+  for (let i = 0; i < transcript.length; i++) {
+    const t = transcript[i]!;
+    if (t.role !== "candidate" || plain(t.content) !== q) continue;
+    let j = i - 1;
+    while (j >= 0 && transcript[j]!.role !== "assistant") j -= 1;
+    if (j < 0) continue;
+    const question = transcript[j]!.content;
+    const shared = new Set(topicWords(question).filter((w) => about.has(w))).size;
+    const read = shared > 0 ? answerInContext(question, t.content) : null;
+    if (read && shared >= bestShared) {
+      best = read;
+      bestShared = shared;
+    }
+  }
+  return best;
 }
 
 /** The most recent screen for an application, if any. */

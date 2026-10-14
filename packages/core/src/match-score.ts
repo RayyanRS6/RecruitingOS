@@ -11,9 +11,14 @@ import { MATCH_WEIGHT, MISSING_MUST_HAVE_CAP, importanceOf, matchBand, type Conf
  *   coverage ("based on 5 of 7 requirements") and as an open question.
  * - Met counts in full, partly met counts half, not met counts nothing. A must-have counts as not met, and a skill as
  *   going against the candidate, only on a verified quote from their own words; anything else is "not known".
+ * - Met with nothing quoted (no quote at all, or one the evidence rules marked `unquoted`: not found, or too short to
+ *   show anything) counts as partly met, never in full, and the breakdown says "no quote" (Wave S5, 15 Oct 2026).
  * - A must-have shown not met holds the score at 54 at most and is named ("Missing must-have: ...").
- * - Per requirement the screening conversation's finding wins where it has one (the candidate spoke to it directly);
- *   otherwise the résumé reading's counts.
+ * - A skill the role checks in the interviews only (`evaluatedIn: "interview"`) is not part of the score: the owner
+ *   was told it is judged there, so no reading of a résumé or a screening chat moves the number with it.
+ * - Per requirement the screening conversation's finding wins where it has one with a checked quote (the candidate
+ *   spoke to it directly); then the résumé reading's checked one; a finding with nothing quoted counts only when neither
+ *   reading has a checked one (the screen's first).
  */
 export const MATCH_SCORE_PROMISE = "A match score worked out from checked evidence, with the breakdown shown. A person always decides.";
 
@@ -43,27 +48,35 @@ type Found = { status: Status; e: Evidence; saidNo: boolean };
 
 const verified = (e: Evidence) => !!e?.quote?.trim() && !e.unquoted;
 
+// A "yes" (or "evidenced") with nothing quoted is partly met: an unquoted claim never earns full marks.
 function requirementStatus(met: string, e: Evidence): Status {
-  if (met === "yes") return "yes";
+  if (met === "yes") return verified(e) ? "yes" : "partly";
   if (met === "partially") return "partly";
   return met === "no" && verified(e) ? "no" : "unknown";
 }
 
 function competencyStatus(finding: string, e: Evidence): Status {
-  if (finding === "evidenced") return "yes";
+  if (finding === "evidenced") return verified(e) ? "yes" : "partly";
   if (finding === "partially_evidenced") return "partly";
   // "not evidenced" is missing information, set aside; "goes against it" needs the candidate's own words
   return finding === "contradicted" && verified(e) ? "no" : "unknown";
 }
 
-/** The finding for one requirement: the screen's when it has a known one, otherwise the résumé reading's. */
+/**
+ * The finding for one requirement, ranked by evidence first and source second: a checked screen finding, then a checked
+ * résumé finding, then an unquoted screen finding, then an unquoted résumé finding. So a scorecard "yes" that lost its
+ * quote never replaces the résumé's checked "yes" (or checked "no") with "partly".
+ */
 function resolve(pair: ReadingPair, find: (r: Findings) => Found | null): Resolved {
   const pick = (r: ScoredReading | null, source: "resume" | "screen"): Resolved | null => {
     const f = r ? find(r.result) : null;
     return f && f.status !== "unknown" ? { status: f.status, source, quote: f.e?.quote?.trim() || null, unquoted: !!f.e?.unquoted || !f.e?.quote?.trim(), unquotedNo: false } : null;
   };
+  const screen = pick(pair.screen, "screen");
+  const resume = pick(pair.resume, "resume");
+  const checked = (r: Resolved | null) => (r && !r.unquoted ? r : null);
   const unquotedNo = [pair.screen, pair.resume].some((r) => !!r && !!find(r.result)?.saidNo);
-  return pick(pair.screen, "screen") ?? pick(pair.resume, "resume") ?? { status: "unknown", source: pair.screen && !pair.resume ? "screen" : "resume", quote: null, unquoted: true, unquotedNo };
+  return checked(screen) ?? checked(resume) ?? screen ?? resume ?? { status: "unknown", source: pair.screen && !pair.resume ? "screen" : "resume", quote: null, unquoted: true, unquotedNo };
 }
 
 const mustHaveFound = (m: { key: string }) => (r: Findings): Found | null => {
@@ -77,9 +90,17 @@ const SKILL_WORDS: Record<Exclude<Status, "unknown">, string> = { yes: "Shown", 
 
 type Requirement = { key: string; label: string; mustHave: boolean; importance: Importance | null; weight: number; found: Resolved };
 
+/**
+ * Whether a skill is read from a résumé or a screening chat at all: one the role checks in the interviews only is not
+ * (the résumé reading and the scorecard are not asked about it, and the match score leaves it out).
+ */
+export function scoredSkill(c: { evaluatedIn?: string | null }): boolean {
+  return c.evaluatedIn !== "interview";
+}
+
 function requirementsOf(pair: ReadingPair, packet: Pick<RolePacket, "requirements" | "competencies">): Requirement[] {
   const must = packet.requirements.mustHaves.map((m): Requirement => ({ key: m.key, label: m.text, mustHave: true, importance: null, weight: MATCH_WEIGHT.must_have, found: resolve(pair, mustHaveFound(m)) }));
-  const skills = packet.competencies.map((c): Requirement => {
+  const skills = packet.competencies.filter(scoredSkill).map((c): Requirement => {
     const importance = importanceOf(c);
     return {
       key: c.key, label: c.name, mustHave: false, importance, weight: MATCH_WEIGHT[importance],

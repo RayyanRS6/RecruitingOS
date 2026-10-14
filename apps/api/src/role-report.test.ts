@@ -2,8 +2,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, gte, inArray, isNull } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { createApplicationLink, entitlements, findPostingLink, groupFor, openFollowUp, ownerGroup, setAutoState } from "@ros/core";
-import { applicationMarks, applications, approvalRequests, assessments, auditRecords, communications, events, interviews, postings, recruiterEscalations, users, withTenant } from "@ros/db";
+import { applicationMarks, applications, approvalRequests, assessments, auditRecords, communications, events, interviews, jobs, postings, recruiterEscalations, users, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
+import { SEND_MAX_ATTEMPTS, TRIAGE_READINGS } from "@ros/agents";
 import { localDays } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -138,10 +139,15 @@ describe("role report", () => {
     ids.ivy = await apply("Ivy", "Chen", "ivy.chen@example.com", { role: role2Id });
 
     // People decide: Eve's eligibility answer is overridden, Ben goes to interview, Ana is held and her assessment flagged, Hal is hired.
+    // Since Wave S5 the reading treats someone kept in as eligible (known bug 30), so the stand-in would suggest a
+    // screening chat; hers is scripted to leave her to a person (her exam is next week), so she waits on the owner as
+    // this report expects.
+    for (let i = 0; i < TRIAGE_READINGS; i++) container.fake!.scriptNext("triage.assess", { overall: "potential", confidence: "medium", confidenceReasons: [], summary: "Hygiene work; the licence exam is still to come.", strengths: [], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: [], anomalies: [], recommendation: "review_manually", rationale: "Scripted: a person looks first." });
     expect((await json(owner, "POST", `/api/v1/applications/${ids.eve}/actions`, { action: "override_eligibility", note: "She sits the exam next week." })).status).toBe(200);
     // the held application's review timer notices the override when it fires (as in app.test.ts): a day passes
     setClock(25 * HOUR);
     await container.drain();
+    container.fake!.clearScripts();
     setClock(0);
     expect((await json(owner, "POST", `/api/v1/applications/${ids.ben}/actions`, { action: "advance_to_interview", note: "Strong referral." })).status).toBe(200);
     expect((await json(owner, "POST", `/api/v1/applications/${ids.ana}/actions`, { action: "hold", note: "Waiting on her reply." })).status).toBe(200);
@@ -181,9 +187,13 @@ describe("role report", () => {
     // for good: the outbox retries it, it ends failed, and Gia counts as not told.
     const declined = await json(owner, "POST", `/api/v1/applications/${ids.gia}/actions`, { action: "reject", reason: "not_a_match_experience", note: "Wants weekends off." });
     expect(declined.status).toBe(200);
+    // The outbox keeps trying for about an hour before it gives up (Wave S5 C2). Rather than move the clock an hour
+    // (other timers would fire), the send job is brought to its last try, as if the hour had passed.
     fake().failNext(20);
     expect((await json(owner, "POST", `/api/v1/applications/${ids.gia}/actions`, { action: "send_decision" })).status).toBe(200);
-    for (let i = 1; i <= 10; i++) { setClock(i * 70_000); await container.drain(); }
+    const sendJobs = (await container.db.select().from(jobs).where(and(eq(jobs.kind, "communication.send"), eq(jobs.status, "queued")))).filter((j) => j.attempts > 0);
+    for (const j of sendJobs) await container.db.update(jobs).set({ attempts: SEND_MAX_ATTEMPTS - 1 }).where(eq(jobs.id, j.id));
+    for (let i = 1; i <= 2; i++) { setClock(i * 70_000); await container.drain(); }
     fake().failNext(0);
     setClock(0);
     const giaMessages = await container.db.select().from(communications).where(and(eq(communications.applicationId, ids.gia), eq(communications.templateKey, "disposition:human")));

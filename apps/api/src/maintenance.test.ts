@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { SYSTEM_ACTOR } from "@ros/core";
-import { adminAlerts, applications, candidates, companies, cspReports, events, jobs, magicLinks, randomToken, roles, sessions, users, webhookReceipts, workerHeartbeats, workflowRuns, workflowSteps, withTenant } from "@ros/db";
+import { adminAlerts, applications, candidates, companies, cspReports, events, inboundEmails, jobs, magicLinks, randomToken, roles, sessions, users, webhookReceipts, workerHeartbeats, workflowRuns, workflowSteps, withTenant } from "@ros/db";
 import { createContainer, type Container } from "./container";
 import { HEALTH_ALERT_WINDOW_MS, MAINTENANCE_JOB_KIND, QUEUE_STALE_MS, RETENTION_DAYS, checkOperationalHealth, runMaintenance } from "./maintenance";
 import { DAILY_MS, recurring } from "./recurring-jobs";
@@ -61,6 +61,25 @@ describe("maintenance", () => {
     expect((await container.db.select().from(magicLinks).where(eq(magicLinks.email, "sweep@example.com"))).map((l) => l.tokenHash)).toEqual(["fresh-link"]);
     expect((await container.db.select().from(webhookReceipts)).map((r) => r.externalId)).toEqual(["new"]);
     expect((await container.db.select().from(cspReports)).map((r) => r.documentPath)).toEqual(["/c/y"]);
+  });
+
+  it("an emailed-in application that failed a month ago loses its stored file and its words; a recent one keeps them (Wave S5 review)", async () => {
+    const now = new Date();
+    const at = (daysAgo: number) => new Date(now.getTime() - daysAgo * DAY).toISOString();
+    const storage = container.integrations.storage;
+    await storage.put("inbound/test/old.txt", new TextEncoder().encode("Old résumé"), "text/plain");
+    await storage.put("inbound/test/new.txt", new TextEncoder().encode("New résumé"), "text/plain");
+    const [old] = await container.db.insert(inboundEmails).values({ toAddress: "jobs@in.test", fromAddress: "ezra@example.com", subject: "Application", rawStorageKey: "inbound/test/old.txt", parsed: { text: "Ezra applied" }, status: "error", createdAt: at(RETENTION_DAYS.failedInboundEmails + 1) }).returning({ id: inboundEmails.id });
+    const [recent] = await container.db.insert(inboundEmails).values({ toAddress: "jobs@in.test", fromAddress: "zoe@example.com", subject: "Application", rawStorageKey: "inbound/test/new.txt", parsed: { text: "Zoe applied" }, status: "error", createdAt: at(2) }).returning({ id: inboundEmails.id });
+    // without a way to remove the file, nothing is cleared (no file is ever left without its record)
+    expect((await runMaintenance(container.db, now, { workerInline: true })).purgedInboundEmails).toBe(0);
+    const report = await runMaintenance(container.db, now, { workerInline: true, deleteStored: (key) => storage.delete(key) });
+    expect(report.purgedInboundEmails).toBe(1);
+    const [gone] = await container.db.select().from(inboundEmails).where(eq(inboundEmails.id, old.id));
+    expect(gone).toMatchObject({ rawStorageKey: null, parsed: {}, fromAddress: "[removed]", subject: "[removed]", status: "purged" });
+    expect(await storage.get("inbound/test/old.txt")).toBeNull();
+    expect((await container.db.select().from(inboundEmails).where(eq(inboundEmails.id, recent.id)))[0]).toMatchObject({ rawStorageKey: "inbound/test/new.txt", status: "error" });
+    expect(await storage.get("inbound/test/new.txt")).not.toBeNull();
   });
 
   it("a recurring job is armed once, re-armed by its own run, and never doubled by a second boot", async () => {

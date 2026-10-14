@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MATCH_SCORE_BANDS, MISSING_MUST_HAVE_CAP, importanceOf, matchBand, type EvidenceAssessment, type RolePacket } from "@ros/contracts";
-import { coverageWords, matchScore, mustHaveSummary, readingPair, readingVersion, type ScoredReading } from "./match-score";
+import { coverageWords, matchScore, mustHaveSummary, readingPair, readingVersion, scoredSkill, type ScoredReading } from "./match-score";
 
 /**
  * The match score (founder decision B2): worked out by code from the stored, quote-checked findings. Must-haves count
@@ -91,6 +91,45 @@ describe("matchScore", () => {
     expect(s.breakdown.find((c) => c.key === "rdh_license")).toMatchObject({ source: "resume" });
     expect(s.breakdown.find((c) => c.key === "chairside")).toMatchObject({ source: "screen", pctMet: 100 });
     expect(s).toMatchObject({ basedOn: "resume_and_screen", confidence: "high", score: 100 });
+  });
+
+  it("ranks findings by evidence first: a scorecard 'yes' that lost its quote never replaces the résumé's checked one", () => {
+    const one = { ...packet, requirements: { ...packet.requirements, mustHaves: [packet.requirements.mustHaves[0]!] }, competencies: [] };
+    const resume = reading("triage", [must("rdh_license", "yes", "RDH license CA active")]);
+    // the evidence rules marked the screen's bare "Yes" as no quote
+    const bare = reading("screen", [{ requirementKey: "rdh_license", met: "yes", evidence: { source: "screen", unquoted: true } }]);
+    const s = matchScore(pair(resume, bare), one)!;
+    expect(s.score).toBe(100);
+    expect(s.breakdown[0]).toMatchObject({ source: "resume", quote: "RDH license CA active", pctMet: 100 });
+    expect(mustHaveSummary(pair(resume, bare), one)!.words).toBe("Must-haves: 1 of 1 shown");
+    // a "Yes" read with the question it answers keeps its quote, and so counts in full from the screen
+    const answered = reading("screen", [{ requirementKey: "rdh_license", met: "yes", evidence: { source: "screen", quote: "Yes" } }]);
+    expect(matchScore(pair(resume, answered), one)!.breakdown[0]).toMatchObject({ source: "screen", pctMet: 100 });
+    // with no checked finding anywhere, the unquoted screen finding still counts (partly)
+    expect(matchScore(pair(reading("triage", [must("rdh_license", "unknown")]), bare), one)!.breakdown[0]).toMatchObject({ source: "screen", pctMet: 50, unquoted: true });
+  });
+
+  it("counts a 'yes' with nothing quoted as partly met, never in full, and says 'no quote' (known bug 32)", () => {
+    const all = [skill("chairside", "evidenced", "x"), skill("patients", "evidenced", "y"), skill("software", "evidenced", "z")];
+    const quoted = matchScore(pair(reading("triage", [must("rdh_license", "yes", "RDH license CA active"), must("perio", "yes", "Perio charting daily")], all)), packet)!;
+    expect(quoted.score).toBe(100);
+    const bare = matchScore(pair(reading("triage", [must("rdh_license", "yes"), { requirementKey: "perio", met: "yes", evidence: { source: "resume", unquoted: true } }], [skill("chairside", "evidenced"), skill("patients", "evidenced", "y"), skill("software", "evidenced", "z")])), packet)!;
+    // rdh 4/14 and perio 4/14 at half, chairside 3/14 at half: 100 - 28.57 - 10.71 = 61
+    expect(bare.score).toBe(61);
+    expect(bare.breakdown.find((c) => c.key === "rdh_license")).toMatchObject({ pctMet: 50, finding: "Partly shown", unquoted: true, quote: null });
+    expect(bare.breakdown.find((c) => c.key === "chairside")).toMatchObject({ pctMet: 50, unquoted: true });
+    expect(bare.fullMarks).toBe(2);
+    expect(mustHaveSummary(pair(reading("triage", [must("rdh_license", "yes"), must("perio", "yes", "Perio charting daily")])), packet)!.words).toBe("Must-haves: 1 of 2 shown, 1 partly");
+  });
+
+  it("leaves out a skill the role checks in the interviews only (known bug 18)", () => {
+    const interview = { ...packet, competencies: packet.competencies.map((c) => (c.key === "software" ? { ...c, evaluatedIn: "interview" as const } : c)) };
+    const s = matchScore(pair(reading("triage", [must("rdh_license", "yes", "RDH license CA active"), must("perio", "yes", "Perio charting daily")], [skill("chairside", "evidenced", "x"), skill("patients", "evidenced", "y"), skill("software", "contradicted", "never used dental software")])), interview)!;
+    expect(s.score).toBe(100);
+    expect(s.coverage.total).toBe(4);
+    expect([...s.breakdown.map((b) => b.key), ...s.unknown.map((u) => u.key)]).not.toContain("software");
+    expect(scoredSkill({ evaluatedIn: "interview" })).toBe(false);
+    expect(scoredSkill({ evaluatedIn: "both" })).toBe(true);
   });
 
   it("is deterministic whatever the order of the findings", () => {

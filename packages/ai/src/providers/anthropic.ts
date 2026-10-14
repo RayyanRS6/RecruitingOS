@@ -123,9 +123,13 @@ export class AnthropicProvider implements AiProvider {
   readonly id = "anthropic";
   private client: Anthropic;
 
-  /** `client` is a test seam; production passes only the key (or nothing, and the SDK reads ANTHROPIC_API_KEY). */
+  /**
+   * `client` is a test seam; production passes only the key (or nothing, and the SDK reads ANTHROPIC_API_KEY). The
+   * client's own timeout is the call budget too, so no request can outlive it even where a per-request timeout were
+   * left out (every request here passes the time left of its call, see `ask`).
+   */
   constructor(apiKey?: string, client?: Anthropic) {
-    this.client = client ?? (apiKey ? new Anthropic({ apiKey }) : new Anthropic());
+    this.client = client ?? (apiKey ? new Anthropic({ apiKey, timeout: CALL_BUDGET_MS }) : new Anthropic({ timeout: CALL_BUDGET_MS }));
   }
 
   async structured<T>(req: StructuredRequest<T>, model: string): Promise<StructuredResult<T>> {

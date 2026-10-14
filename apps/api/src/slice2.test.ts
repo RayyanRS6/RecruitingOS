@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { addBusinessHours, isPostingTask } from "@ros/core";
+import { SCORECARD_READINGS } from "@ros/agents";
 import { and, eq } from "drizzle-orm";
 import { aiRuns, applications, approvalRequests, assessments, auditRecords, candidates, entitlements, events, interventions, recruiterEscalations, screens, workflowRuns, companies } from "@ros/db";
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
@@ -170,7 +171,8 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     const turns = await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.turn"));
     // one per answer: on the web the opening is the fixed introduction and the packet's first question, never the model (plan E2)
     expect(turns).toHaveLength(Object.keys(answers).length);
-    expect(await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.assess"))).toHaveLength(1);
+    // the scorecard is read three times and keeps the middle answer, like the résumé (Wave S5)
+    expect(await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.assess"))).toHaveLength(SCORECARD_READINGS);
     const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
     expect(notes.some((n) => n.kind === "candidate.recommended" && /Maria Reyes/.test(n.title))).toBe(true);
     expect(await (await app.request(`/c/screen/${mariaToken}`)).text()).toMatch(/that is everything/i);
@@ -498,8 +500,8 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
   });
 
   it("a scorecard that does not add up holds the interview suggestion for a person, with the reason (plan A8)", async () => {
-    // The scorecard suggests an interview for a Weak reading: the software check holds it.
-    container.fake!.scriptNext("screen.assess", { overall: "weak", confidence: "medium", summary: "Answered every question.", strengths: [], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: [], anomalies: [], questionFindings: [], compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation: "interview", rationale: "Scripted for the consistency check." });
+    // The scorecard suggests an interview for a Weak reading: the software check holds it (every one of its readings).
+    for (let i = 0; i < SCORECARD_READINGS; i++) container.fake!.scriptNext("screen.assess", { overall: "weak", confidence: "medium", summary: "Answered every question.", strengths: [], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: [], anomalies: [], questionFindings: [], compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation: "interview", rationale: "Scripted for the consistency check." });
     const a = await apply({ first: "Wes", last: "Lund", email: "wes@example.com", resume: "Wes Lund\nRegistered Dental Hygienist at Lakeside Dental 2015 - present\nRDH license CA active\nPerio charting, Open Dental" });
     expect(a.stage).toBe("screen_invited");
     await finishScreen(a.id);

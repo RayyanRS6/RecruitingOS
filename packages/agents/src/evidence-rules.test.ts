@@ -4,7 +4,7 @@ import type { EvidenceAssessment, RolePacket, ScreenAssessment, ScreenTranscript
 import { registerFakeHandlers } from "./fake-handlers";
 import { hasPlaceholder, restoreQuotes } from "./scoring-view";
 import { candidateWordsOf, scorecardInput, verifyScreenQuotes } from "./screening";
-import { applyEvidenceRules, restoreReadingQuotes, scoringInput, stepDownConfidence, verifyAssessmentQuotes } from "./triage";
+import { applyEvidenceRules, meaningfulQuote, readingsOutcome, restoreReadingQuotes, scoringInput, stepDownConfidence, verifyAssessmentQuotes } from "./triage";
 
 /**
  * Evidence honesty (plan 0.9): what the owner sees has passed the code-side rules, whatever the model said. A quote not
@@ -94,6 +94,39 @@ describe("the evidence rules on a résumé reading", () => {
     expect(out.strengths).toEqual([]);
   });
 
+  it("checks a quote citing a source the reading was never given against the candidate's own texts (known bug 34)", () => {
+    const out = verifyAssessmentQuotes(reading({
+      strengths: [
+        { claim: "Verified perio work", evidence: { source: "verified", quote: "fifteen years of periodontal surgery" } },
+        { claim: "Charts in Dentrix", evidence: { source: "owner_statement", quote: "Periodontal charting, scaling and root planing" } },
+      ],
+      requirementFindings: [{ requirementKey: "mh_1_license", met: "yes", evidence: { source: "playbook", quote: "an active RDH license is held" } }],
+    }), { resume: RESUME });
+    // an invented quote under any label is dropped; real words of the candidate stand whatever the label
+    expect(out.strengths.map((s) => s.claim)).toEqual(["Charts in Dentrix"]);
+    // a must-have "yes" on a quote that is nowhere in their texts is no longer a full "yes"
+    expect(out.requirementFindings[0]).toMatchObject({ met: "partially", evidence: { source: "playbook" } });
+    expect(out.requirementFindings[0].evidence?.quote).toBeUndefined();
+  });
+
+  it("never counts a lone 'yes' or one word as evidence: the claim stays, marked 'no quote'", () => {
+    const sources = { resume: RESUME, application: '\n{"el_license":"yes"}' };
+    const out = verifyAssessmentQuotes(reading({
+      strengths: [{ claim: "Uses Dentrix", evidence: { source: "resume", quote: "Dentrix" } }],
+      competencyFindings: [{ competencyKey: "software", finding: "evidenced", evidence: { source: "resume", quote: "Dentrix" } }],
+      requirementFindings: [
+        { requirementKey: "mh_1_license", met: "yes", evidence: { source: "application", quote: "yes" } },
+        { requirementKey: "mh_2_perio", met: "no", evidence: { source: "application", quote: "no" } },
+        { requirementKey: "mh_3_perio", met: "yes", evidence: { source: "resume", quote: "Periodontal charting" } },
+      ],
+    }), sources);
+    expect(out.strengths[0].evidence).toEqual({ source: "resume", unquoted: true });
+    expect(out.competencyFindings[0]).toMatchObject({ finding: "evidenced", evidence: { source: "resume", unquoted: true } });
+    expect(out.requirementFindings.map((r) => [r.met, r.evidence?.quote ?? null, !!r.evidence?.unquoted])).toEqual([["yes", null, true], ["unknown", null, true], ["yes", "Periodontal charting", false]]);
+    expect(meaningfulQuote("Yes, I do")).toBe(false);
+    expect(meaningfulQuote("patient education")).toBe(true);
+  });
+
   it("steps down one level at a time and never below low", () => {
     expect(stepDownConfidence("high")).toBe("medium");
     expect(stepDownConfidence("medium")).toBe("low");
@@ -155,12 +188,14 @@ describe("no number from the model", () => {
     registerFakeHandlers(fake);
     const rt = { provider: fake, models: { judgment: "fake", standard: "fake", fast: "fake" } };
     // Version 3 (fairness run on Haiku 5.5, 14 Oct 2026): written definitions of each finding, the candidate never named;
-    // version 4 (D-04 = C, Wave S2): the scoring view, no earlier applications, candidate text that cannot close a tag.
-    expect(triageAssessPrompt.version).toBe(4);
+    // version 4 (D-04 = C, Wave S2): the scoring view, no earlier applications, candidate text that cannot close a tag;
+    // version 5 (Wave S5): the licence rule, a lone "yes" is no quote, skills for the interviews left out, "kept in".
+    expect(triageAssessPrompt.version).toBe(5);
     // Version 3 (plan Wave E): recruiter call notes kept apart, skipped questions unknown, unfinished conversations read
     // for what they have; version 4: the same definitions of each finding as the résumé reading; version 5 (D-04 = C):
-    // the conversation through the scoring view; version 6: the answers and the progress in their own <answers> block.
-    expect(screenAssessPrompt.version).toBe(6);
+    // the conversation through the scoring view; version 6: the answers and the progress in their own <answers> block;
+    // version 7 (Wave S5): read three times, the licence rule, a lone "yes" is no quote.
+    expect(screenAssessPrompt.version).toBe(7);
     const input = { packet: PACKET as never, extraction: null, resumeText: RESUME, applicationAnswers: { eligibility: {} }, eligibility: null };
     expect(triageAssessPrompt.system(input).map((b) => b.text).join("\n")).not.toMatch(/secondaryScore|0 to 100/);
     fake.scriptNext("triage.assess", { ...reading(), secondaryScore: 87 });
@@ -203,6 +238,32 @@ describe("what the AI sees when it scores (D-04 = C)", () => {
     // the record of the reading: counts only, never the values
     expect(view.counts()).toMatchObject({ name: 6, email: 2, phone: 2, street: 2, link: 2 });
     expect(JSON.stringify(view.counts())).not.toContain("Dana");
+  });
+
+  it("someone a person kept in after an eligibility answer reads as eligible, without the answer set aside (known bug 30)", () => {
+    const failed = { evaluatedAt: "2026-10-15T10:00:00Z", passed: false, failedRules: [{ key: "el_license", question: "Do you hold an active CA RDH license?", answer: "no", reason: "answered no" }], unverifiable: [] };
+    const base = { packet: PACKET as never, extraction: null, resumeText: RESUME, applicationAnswers: { eligibility: { el_license: "no", el_schedule: "yes" } }, eligibility: failed, identity: {} };
+    const held = triageAssessPrompt.messages(scoringInput(base).promptInput).map((m) => m.content).join("\n");
+    expect(held).toContain("Eligibility result: failed el_license");
+    const { promptInput } = scoringInput({ ...base, eligibilityKeptIn: true });
+    const kept = triageAssessPrompt.messages(promptInput).map((m) => m.content).join("\n");
+    expect(kept).toContain("Eligibility result: passed (a person on the hiring team checked the eligibility answers and kept the candidate in");
+    expect(kept).not.toContain("el_license");
+    expect(kept).toContain('"el_schedule":"yes"');
+    expect(promptInput.eligibility).toMatchObject({ passed: true, failedRules: [] });
+  });
+
+  it("a skill checked in the interviews only is not asked of the reading, and a finding on it is dropped (known bug 18)", () => {
+    const packet = { ...PACKET, requirements: { mustHaves: [], niceToHaves: [] }, competencies: [{ key: "perio", name: "Perio", definition: "Does perio.", weight: 5, evaluatedIn: "both", indicators: ["x"] }, { key: "leadership", name: "Leadership", definition: "Leads a team.", weight: 3, evaluatedIn: "interview", indicators: ["y"] }] };
+    const { promptInput, view } = scoringInput({ packet: packet as never, extraction: null, resumeText: RESUME, applicationAnswers: { eligibility: {} }, eligibility: null, identity: {} });
+    const sent = triageAssessPrompt.system(promptInput).map((b) => b.text).join("\n");
+    expect(sent).toContain("[perio] Perio");
+    expect(sent).not.toContain("[leadership]");
+    const quote = { source: "resume" as const, quote: "Periodontal charting, scaling and root planing" };
+    const read = reading({ competencyFindings: [{ competencyKey: "perio", finding: "evidenced", evidence: quote }, { competencyKey: "leadership", finding: "evidenced", evidence: quote }] });
+    const out = readingsOutcome([1, 2, 3].map((n) => ({ ok: true as const, output: read, runId: `r${n}`, model: "m" })), view, { packet: packet as never, resumeText: RESUME, applicationAnswers: { eligibility: {} } });
+    if (!out.ok) throw new Error("expected a reading");
+    expect(out.output.competencyFindings.map((f) => f.competencyKey)).toEqual(["perio"]);
   });
 
   it("candidate text can never close the reading's data blocks (prompt injection)", () => {

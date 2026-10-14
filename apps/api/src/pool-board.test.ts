@@ -370,7 +370,7 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       return (await container.db.select().from(applications).where(and(eq(applications.roleId, roleId), eq(applications.candidateId, cand.id))))[0].id;
     }
 
-    it("strong on the Shortlist, possible on the Longlist, a lapsed licence under Not moving forward", async () => {
+    it("strong on the Shortlist, possible on the Longlist, no licence (said plainly) under Not moving forward", async () => {
       const strong = await apply("Sol", FAKE_SAMPLE_RESUMES.strong);
       const possible = await apply("Pat", FAKE_SAMPLE_RESUMES.possible);
       const weak = await apply("Wes", FAKE_SAMPLE_RESUMES.weak);
@@ -381,7 +381,7 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       expect(where(possible).placement).toMatchObject({ column: "longlist", confident: true });
       expect(where(possible).score?.band).toBe("medium");
       expect(where(weak).placement.column).toBe("not_moving_forward");
-      expect(where(weak).score?.missingMustHave.map((m) => m.quote)).toEqual(["RDH license CA expired in 2021"]);
+      expect(where(weak).score?.missingMustHave.map((m) => m.quote)).toEqual(["I do not hold a CA RDH license"]);
       expect(where(weak).reading).toBe("Weak match");
     });
   });

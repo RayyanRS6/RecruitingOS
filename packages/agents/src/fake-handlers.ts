@@ -3,6 +3,7 @@ import type { FakeProvider, IntakeContext, StructuredRequest } from "@ros/ai";
 import { marketPlace, normalizeCriterion, screenCriterion } from "@ros/core";
 import { redactProtected } from "./screening";
 import { FOCUS_INTRO, isFocusKey } from "./screen-focus";
+import { plainlyNotHeld } from "./triage";
 
 /**
  * Deterministic handlers for the fake AI provider. They exist so tests, evals, and local development run
@@ -540,6 +541,12 @@ function fakeTriageAssess(req: StructuredRequest<unknown>): EvidenceAssessment {
     // The candidate's own line saying they do not meet it ("RDH license expired in 2021", "I do not have a forklift
     // certificate"): a "no" with that line quoted, which the quote check keeps. It gives local runs weak readings too.
     const miss = lines.find((l) => NOT_MET.test(l) && tks.some((t) => l.toLowerCase().includes(t)));
+    // The licence rule (founder decision, 15 Oct 2026): a credential that is lapsed, expired or pending is "unknown", quoted
+    // and asked about; only a plain "I do not hold it" is a "no".
+    if (miss && CREDENTIAL.test(m.text) && !plainlyNotHeld(miss)) {
+      unknowns.push({ question: `Is your ${plainPhrase(what)} current?`, whyItMatters: `It is a must-have for this role and the ${where} says it is lapsed or pending.` });
+      return { requirementKey: m.key, met: "unknown" as const, evidence: { source, quote: miss } };
+    }
     if (miss) {
       concerns.push({ claim: `Their own words show ${plainPhrase(what)} is not met`, evidence: { source, quote: miss } });
       return { requirementKey: m.key, met: "no" as const, evidence: { source, quote: miss } };
@@ -604,17 +611,20 @@ function fakeTriageAssess(req: StructuredRequest<unknown>): EvidenceAssessment {
 /**
  * Three dental hygienist résumés that the fake reads three ways against the hygienist role it drafts when the owner's
  * must-haves are "active CA RDH license, periodontal charting": everything shown (a very high score, the Shortlist),
- * the license with the rest only partly shown (a middling score, the Longlist), and the license lapsed in their own
- * words (a missing must-have, Not moving forward). For local runs of the pool board and for tests.
+ * the license with the rest only partly shown (a middling score, the Longlist), and no license, said plainly in their own
+ * words (a missing must-have, Not moving forward; a lapsed one would be "not known yet" under the founder's licence rule
+ * of 15 Oct 2026). For local runs of the pool board and for tests.
  */
 export const FAKE_SAMPLE_RESUMES = {
   strong: "Registered Dental Hygienist at Harbor Dental 2019 - present\nRDH license CA active\nPeriodontal charting, scaling and root planing, Dentrix\nThorough, gentle clinical care to high standards\nPatient communication: explains findings plainly and builds trust\nKeeps to time without cutting corners\nShows up consistently and communicates early",
   possible: "Dental Hygienist at Coastal Smiles 2022 - present\nRDH license CA active\nCharting in Dentrix, patient reminders",
-  weak: "Dental Hygienist at Pacific Dental 2010 - 2020\nRDH license CA expired in 2021\nPeriodontal charting, Dentrix",
+  weak: "Dental Hygienist at Pacific Dental 2010 - 2020\nI do not hold a CA RDH license\nPeriodontal charting, Dentrix",
 } as const;
 
 /** A line where the candidate says, in their own words, that they do not have something: lapsed, expired, never, do not have. */
 const NOT_MET = /\b(expired|lapsed|no longer (?:hold|have|active)|not (?:licensed|certified|currently licensed)|(?:do|does) not (?:have|hold)|don't (?:have|hold)|never (?:had|held|done|worked))\b/i;
+/** A must-have that names a licence, certificate, permit or registration (as `credentialMustHaves` reads it). */
+const CREDENTIAL = /licen[cs]|certif|permit|registration|registered|credential/i;
 
 /** "Active CA RDH license" reads as "active CA RDH license" after "your"; an acronym at the start ("RDH license") is left alone. */
 function plainPhrase(s: string): string {
@@ -772,6 +782,7 @@ function fakeScreenAssess(req: StructuredRequest<unknown>): ScreenAssessment {
   const noElig = eligibilityConfirmations.find((e) => e.confirmed === "no");
   if (noElig?.quote) concerns.push({ claim: "Did not confirm a required eligibility item", evidence: { source: "screen", quote: noElig.quote } });
   const unknowns = questionFindings.filter((f) => !f.answered).map((f) => ({ question: s.questions.find((q) => q.key === f.questionKey)?.question ?? f.questionKey, whyItMatters: "Not covered in the screen." }));
+  const requirementFindings = fakeScreenMustHaves(req, user);
   // screen.assess v3: a conversation that was not finished is read for what it has, says so, and is never "strong interview".
   const unfinished = /This conversation was not finished/.test(user);
   const recommendation: ScreenAssessment["recommendation"] = noElig ? "decline_recommended" : withinRange === "above" ? "hold" : answered >= Math.max(1, s.questions.length - 1) ? (strengths.length >= 2 && !unfinished ? "strong_interview" : "interview") : answered > 0 ? "interview" : "hold";
@@ -784,7 +795,7 @@ function fakeScreenAssess(req: StructuredRequest<unknown>): ScreenAssessment {
     concerns,
     unknowns,
     competencyFindings,
-    requirementFindings: [],
+    requirementFindings,
     anomalies: [],
     questionFindings,
     compensationExpectation: { stated: payAnswer, withinRange },
@@ -793,6 +804,40 @@ function fakeScreenAssess(req: StructuredRequest<unknown>): ScreenAssessment {
     recommendation,
     rationale: recommendation === "decline_recommended" ? "The candidate's own answer did not confirm a required eligibility item; a person decides." : recommendation === "hold" ? (withinRange === "above" ? "Pay expectations are above the posted range; worth a conversation before an interview." : "Too few answers to recommend an interview.") : `Answered the screen with ${strengths.length} concrete example${strengths.length === 1 ? "" : "s"}; logistics look workable.`,
   };
+}
+
+/**
+ * The scorecard's must-have findings (screen.assess v7), the way the model is asked to write them: for each must-have the
+ * chat was to confirm, the candidate's message about it quoted verbatim (a short "Yes" or "No" quoted as it is, when it
+ * answers a question about it): "no" when they say plainly they do not meet it, "unknown" for a credential they say is
+ * lapsed or pending, "yes" when they speak to it; nothing when the chat never touched it. The code's checks
+ * (`verifyScreenQuotes`) then hold it to the licence and short-quote rules, as they hold the real model.
+ */
+function fakeScreenMustHaves(req: StructuredRequest<unknown>, user: string): ScreenAssessment["requirementFindings"] {
+  const sys = req.system.map((b) => b.text).join("\n");
+  const mustHaves = parseBracketList(sys.match(/Must-haves this screen should confirm \(evidencedBy includes screen\): ([^\n]+)/)?.[1]);
+  if (!mustHaves.length) return [];
+  const lines = (user.match(/<transcript>\n?([\s\S]*?)\n?<\/transcript>/)?.[1] ?? "").split("\n");
+  // each candidate message with the assistant's question just before it
+  const said: Array<{ text: string; asked: string }> = [];
+  let asked = "";
+  for (const l of lines) {
+    if (l.startsWith("assistant: ")) asked = l.slice("assistant: ".length);
+    else if (l.startsWith("candidate: ")) said.push({ text: l.slice("candidate: ".length).trim(), asked });
+  }
+  return mustHaves.flatMap((m) => {
+    const what = m.text.replace(/\(.*\)$/, "").trim().replace(/[.!]+$/, "");
+    const tks = tokens(what);
+    const about = (s: string) => tks.some((t) => s.toLowerCase().includes(t));
+    const own = said.find((s) => about(s.text));
+    const short = said.find((s) => /^(yes|no)\b/i.test(s.text) && s.text.split(/\s+/).length <= 4 && about(s.asked));
+    if (own) {
+      const met = plainlyNotHeld(own.text) ? "no" : NOT_MET.test(own.text) ? (CREDENTIAL.test(m.text) ? "unknown" : "no") : "yes";
+      return [{ requirementKey: m.key, met, evidence: { source: "screen" as const, quote: own.text } }];
+    }
+    if (short) return [{ requirementKey: m.key, met: /^no\b/i.test(short.text) ? ("no" as const) : ("yes" as const), evidence: { source: "screen" as const, quote: short.text } }];
+    return [];
+  });
 }
 
 /**

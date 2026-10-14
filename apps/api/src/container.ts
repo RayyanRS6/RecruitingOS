@@ -1,11 +1,11 @@
 import { createRuntime, type AiRuntime, type FakeProvider } from "@ros/ai";
 import { cancelInterviewEvents } from "@ros/agents";
 import { eq } from "drizzle-orm";
-import { createDb, inspectConnectionRole, migrate, migrationStatus, postings, problemsWithConnectionRole, roles, seedPlatform, withPlatform, withTenant, type Db, type DbHandle, type DbRole } from "@ros/db";
+import { communications, createDb, inspectConnectionRole, migrate, migrationStatus, postings, problemsWithConnectionRole, roles, seedPlatform, withPlatform, withTenant, type Db, type DbHandle, type DbRole } from "@ros/db";
 import { POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, SYSTEM_ACTOR, countActiveAdmins, createRateLimitStore, emit, raiseAlert, transitionPosting, type RateLimitStore } from "@ros/core";
 import { createIntegrations, type Integrations } from "@ros/integrations";
-import { createEngine, type WorkflowEngine } from "@ros/workflows";
-import { ALERT_EMAIL_JOB_KIND, REVOKE_JOB_KIND, checkPrivacyRequestDeadlines, emailCriticalAlert, listSuppressions, onSuppressionChange, revokeAndDeleteCredentials, setAlertEmails, setEventSink, setNotifyClock } from "@ros/core";
+import { AI_HOLD_CHECK_JOB_KIND, aiNoticeSentSignal, createEngine, type WorkflowEngine } from "@ros/workflows";
+import { ALERT_EMAIL_JOB_KIND, ESCALATION_QUEUE_EMAIL_JOB_KIND, REVOKE_JOB_KIND, checkPrivacyRequestDeadlines, emailCriticalAlert, listSuppressions, onSuppressionChange, revokeAndDeleteCredentials, setAlertEmails, setEscalationQueueEmails, setEventSink, setNotifyClock } from "@ros/core";
 import { SEND_JOB_KIND, retryCommunication, sendFallbackSms, sendQueuedCommunication } from "@ros/agents";
 import { guardEmailAdapter } from "@ros/integrations";
 import type { Actor } from "@ros/contracts";
@@ -13,7 +13,8 @@ import { toProductEvent } from "@ros/integrations";
 import { loadEnv, type Env } from "./env";
 import { registerSecretValue } from "@ros/core";
 import { UploadGrants } from "./uploads";
-import { HEALTH_CHECK_JOB_KIND, HOURLY_MS, MAINTENANCE_JOB_KIND, checkOperationalHealth, runMaintenance } from "./maintenance";
+import { HEALTH_CHECK_JOB_KIND, HOURLY_MS, MAINTENANCE_JOB_KIND, runHourlyChecks, runMaintenance } from "./maintenance";
+import { emailQueueAboutRequest } from "./services/escalation-queue";
 import { checkScannerForProduction } from "./scanner-gate";
 import { checkEmailForProduction } from "./email-gate";
 import { reportError } from "./observability";
@@ -178,14 +179,27 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     // interrupted sends; then the health checks (a stale worker, a stale queue). Re-armed even when a run fails (H13).
     engine.registerJob(MAINTENANCE_JOB_KIND, recurring(engine, handle.db, MAINTENANCE_JOB_KIND, DAILY_MS, async (ctx) => {
       // a workflow run about a deleted candidate that is still going is cancelled through the engine itself
-      await runMaintenance(handle.db, ctx.now, { workerInline: env.WORKER_INLINE, emailCritical, cancelRun: (q, runId, reason) => engine.cancel(q, runId, SYSTEM_ACTOR, reason) });
+      await runMaintenance(handle.db, ctx.now, { workerInline: env.WORKER_INLINE, emailCritical, deleteStored: (key) => integrations.storage.delete(key), cancelRun: (q, runId, reason) => engine.cancel(q, runId, SYSTEM_ACTOR, reason) });
     }));
 
-    // The stale-queue check every hour, not only with the daily sweep (H3). A worker that stopped is noticed by the app's
-    // /healthz instead (maintenance.ts, appHealthWatch): a job cannot report that the process meant to run it is gone.
+    // The hourly checks, not only with the daily sweep (H3; Wave S5 C2): interrupted sends, recruiter requests past their
+    // reply-by time, the stale queue. A worker that stopped is noticed by the app's /healthz instead (maintenance.ts,
+    // appHealthWatch): a job cannot report that the process meant to run it is gone.
     engine.registerJob(HEALTH_CHECK_JOB_KIND, recurring(engine, handle.db, HEALTH_CHECK_JOB_KIND, HOURLY_MS, async (ctx) => {
-      await checkOperationalHealth(handle.db, ctx.now, { workerInline: env.WORKER_INLINE, emailCritical });
+      await runHourlyChecks(handle.db, ctx.now, { workerInline: env.WORKER_INLINE, emailCritical });
+      // Runs held for the AI provider always have a check on its way, even after one gave up for good (the database was
+      // down when it tried to arm the next): re-armed here every hour while anything is held.
+      if ((await engine.heldRuns()).length) await engine.ensureQueued(handle.db, { kind: AI_HOLD_CHECK_JOB_KIND });
     }));
+
+    // A recruiter request the system raised (or a candidate, through the product) is emailed to the ITS queue mailbox
+    // like one a customer raised (Wave S5 C2): the job is written with the request, the email goes through the outbox.
+    engine.registerJob(ESCALATION_QUEUE_EMAIL_JOB_KIND, async (payload) => {
+      const escalationId = String(payload.escalationId ?? "");
+      const companyId = String(payload.companyId ?? "");
+      if (!escalationId || !companyId) return;
+      await emailQueueAboutRequest({ db: handle.db, integrations, env, clock: () => engine.clock() }, { escalationId, companyId });
+    });
 
     // Critical alerts go to the platform administrators by email (Wave S2 F1): a job queued with the alert (raiseAlert),
     // and, from the app's health watch, straight after the commit (the job would wait for a worker that is down). Both
@@ -197,14 +211,25 @@ export async function createContainer(opts: { env?: Record<string, string | unde
       // thrown after the commit, so the addresses already reached stay recorded and the queue retries the rest
       if (r.retry) throw new Error(r.retry);
     });
-    if (env.NODE_ENV !== "test") setAlertEmails(() => engine.clock());
+    if (env.NODE_ENV !== "test") {
+      setAlertEmails(() => engine.clock());
+      setEscalationQueueEmails(() => engine.clock());
+    }
 
     // The outbox: every email and text queued inside a transaction is sent here, after that transaction committed, once.
     engine.registerJob(SEND_JOB_KIND, async (payload, ctx) => {
       const communicationId = String(payload.communicationId ?? "");
       const companyId = String(payload.companyId ?? "");
       if (!communicationId || !companyId) return;
-      await sendQueuedCommunication(handle.db, integrations, { communicationId, companyId }, ctx);
+      const outcome = await sendQueuedCommunication(handle.db, integrations, { communicationId, companyId }, ctx);
+      // An acknowledgment carries the AI notice for someone who applied by email: their intake run waits for it before any
+      // AI reading (application-intake `ai_notice`, known-bugs row 16), so it hears at once that the email went or never will.
+      if (outcome === "sent" || outcome === "failed" || outcome === "unknown" || outcome === "cancelled") {
+        await withTenant(handle.db, companyId, async (tx) => {
+          const [row] = await tx.select({ templateKey: communications.templateKey, applicationId: communications.applicationId }).from(communications).where(eq(communications.id, communicationId)).limit(1);
+          if (row?.templateKey === "acknowledgment" && row.applicationId) await engine.signal(tx, { companyId, key: aiNoticeSentSignal(row.applicationId) });
+        });
+      }
     });
 
     // "Lost your link?" (Wave 0 item 0.1): the page queued the request and answered at once; the lookup and the emails happen here.
@@ -283,7 +308,8 @@ export async function createContainer(opts: { env?: Record<string, string | unde
 
     // The recurring jobs exist from the first boot of any process; tests arm them explicitly so a moved clock never runs a sweep by surprise.
     if (env.NODE_ENV !== "test") {
-      for (const kind of [PRIVACY_DEADLINE_JOB_KIND, MAINTENANCE_JOB_KIND, HEALTH_CHECK_JOB_KIND, PUBLISHING_BACKFILL_JOB_KIND]) await engine.ensureQueued(handle.db, { kind });
+      // the AI hold check too: with nothing held it resolves any outage alert left open and arms nothing more
+      for (const kind of [PRIVACY_DEADLINE_JOB_KIND, MAINTENANCE_JOB_KIND, HEALTH_CHECK_JOB_KIND, PUBLISHING_BACKFILL_JOB_KIND, AI_HOLD_CHECK_JOB_KIND]) await engine.ensureQueued(handle.db, { kind });
     }
 
     let draining: Promise<void> | null = null;

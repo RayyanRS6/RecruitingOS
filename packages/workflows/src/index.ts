@@ -14,9 +14,11 @@ import type { EngineDeps, EngineOptions, Services } from "./types";
 
 export * from "./types";
 export { WorkflowEngine };
+export { AI_HOLD_CHECK_EVERY_MS, AI_HOLD_CHECK_JOB_KIND, AI_HOLD_KEY, AI_OUTAGE_ALERT_KIND, HELD_RELEASE_SPACING_MS, JOB_RETRY_CAP_MS, PROVIDER_OUTAGE_PATIENCE_MS, isProviderOutage, jobRetryDelayMs, outageAttempts, providerProblem, retryDelayMs } from "./engine";
 export { COMPANY_CHECK_WAIT_REASON, companyVerifiedSignal } from "./definitions/publish-role";
+export { decidersInWords } from "./definitions/role-approval";
 export { ROLE_CLOSING_DATE_KEY, armClosingDate } from "./definitions/closing-date";
-export { heldDecisionSignal } from "./definitions/application-intake";
+export { AI_NOTICE_SENT_EVENT, aiNoticeSentSignal, heldDecisionSignal } from "./definitions/application-intake";
 export { NEW_TIMES_KEY, armNewTimes, cancelNewTimesRuns } from "./definitions/new-times";
 export { activeInterviewersOf, newTimesStoppedByTakeover, reopenForNewTimes, stopPreparedNewTimes, withdrawNewTimesInterview, type NewTimesOfferKind, type NewTimesVia, type PreparedStopReason, type ReopenRefusal, type ReopenResult } from "./new-times-reopen";
 export { ALERT_TEMPLATE, DIGEST_TEMPLATE, NOTIFICATION_DIGEST_KEY, emailNotifications, startNotificationDigest } from "./definitions/notification-digest";

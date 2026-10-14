@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { RolePacket, ScreenAssessment, ScreenProgress, ScreenTurn } from "@ros/contracts";
-import { FakeProvider, screenAssessPrompt, screenTurnPrompt, type ScreenContext } from "@ros/ai";
-import { EMPTY_SCREEN_PROGRESS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, candidateWordsOf, enforceTurnRules, nextQuestion, recruiterNotesOf, reviewItems, screenCommand, screenIntro, verifyScreenQuotes, withdrawPending } from "./screening";
+import { FakeProvider, screenAssessPrompt, screenTurnPrompt, type RunOutcome, type ScreenContext } from "@ros/ai";
+import { EMPTY_SCREEN_PROGRESS, SCORECARD_READINGS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, candidateWordsOf, enforceTurnRules, nextQuestion, recruiterNotesOf, reviewItems, saidByCandidate, scorecardReadings, screenAnswerOf, screenCommand, screenIntro, verifyScreenQuotes, withdrawPending } from "./screening";
+import { answerInContext } from "./triage";
+import { focusQuestionsFrom, unfairQuestion } from "./screen-focus";
 import { registerFakeHandlers } from "./fake-handlers";
 
 /**
@@ -219,6 +221,144 @@ describe("the scorecard keeps a recruiter's call notes apart from the candidate'
     expect(turn).not.toContain("perio maintenance for six years");
     expect(turn).not.toContain("recruiter note");
     expect(screenAssessPrompt.messages(ctx).map((m) => m.content).join("\n")).toContain("recruiter note: Called her: she has done perio maintenance for six years.");
+  });
+});
+
+describe("the scorecard trusts only what the candidate sent (known bug 13)", () => {
+  const card = (over: Partial<ScreenAssessment>): ScreenAssessment => ({ overall: "potential", confidence: "high", summary: "s", strengths: [], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: [], anomalies: [], questionFindings: [], compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation: "interview", rationale: "r", ...over });
+  const screen = {
+    transcript: [
+      { role: "assistant" as const, content: "Tell me about your most recent work.", at: "t", questionKey: "experience" },
+      { role: "candidate" as const, content: "Hygiene at a family practice.", at: "t" },
+      { role: "assistant" as const, content: "How many patients a day?", at: "t" },
+      { role: "candidate" as const, content: "About nine a day, with perio charting.", at: "t" },
+    ],
+    // as the assistant recorded it: the two messages joined, and a paraphrase it made up for another question
+    answers: { experience: "Hygiene at a family practice. About nine a day, with perio charting.", leadership: "I led a team of six hygienists" },
+    progress: EMPTY_SCREEN_PROGRESS,
+  };
+
+  it("never counts the assistant's recorded answers as the candidate's words, but finds a whole answer they sent over two messages", () => {
+    expect(candidateWordsOf(screen)).not.toContain("led a team");
+    expect(saidByCandidate("I led a team of six hygienists", candidateWordsOf(screen))).toBe(false);
+    expect(saidByCandidate("Hygiene at a family practice. About nine a day, with perio charting.", candidateWordsOf(screen))).toBe(true);
+    const out = verifyScreenQuotes(card({ strengths: [{ claim: "Leads a team", evidence: { source: "screen", quote: "I led a team of six hygienists" } }, { claim: "Busy practice", evidence: { source: "screen", quote: "About nine a day, with perio charting" } }] }), candidateWordsOf(screen));
+    expect(out.strengths.map((s) => s.claim)).toEqual(["Busy practice"]);
+  });
+
+  it("finds an answer with a personal sentence left out, sentence by sentence", () => {
+    const said = "I have six years in hygiene. My kids are at school till three. I do perio charting daily.";
+    expect(saidByCandidate("I have six years in hygiene. I do perio charting daily.", said)).toBe(true);
+    expect(saidByCandidate("I have six years in hygiene. I run the practice.", said)).toBe(false);
+  });
+
+  it("a lone 'yes' is no quote: the claim stays, marked 'no quote', and never scores in full", () => {
+    const out = verifyScreenQuotes(card({ requirementFindings: [{ requirementKey: "licence", met: "yes", evidence: { source: "screen", quote: "Yes" } }, { requirementKey: "perio", met: "no", evidence: { source: "screen", quote: "No." } }] }), "Yes\nNo.");
+    expect(out.requirementFindings[0]).toEqual({ requirementKey: "licence", met: "yes", evidence: { source: "screen", unquoted: true } });
+    expect(out.requirementFindings[1].met).toBe("unknown");
+  });
+
+  it("reads a short answer with the closed question it replies to, when that question is about the finding (review of Wave S5)", () => {
+    const chat = [
+      { role: "assistant" as const, content: "Thanks. Next: Do you hold a California RDH license?", at: "t", questionKey: "licence" },
+      { role: "candidate" as const, content: "Yes", at: "t" },
+      { role: "assistant" as const, content: "Can you work Saturdays?", at: "t", questionKey: "saturdays" },
+      { role: "candidate" as const, content: "No.", at: "t" },
+    ];
+    const subjects = new Map([["licence", "Active California RDH license"], ["perio", "Periodontal charting"]]);
+    const opts = { transcript: chat, subjects, credentials: new Set(["licence"]) };
+    const said = candidateWordsOf({ transcript: chat, answers: {}, progress: EMPTY_SCREEN_PROGRESS });
+    const yes = verifyScreenQuotes(card({ requirementFindings: [{ requirementKey: "licence", met: "yes", evidence: { source: "screen", quote: "Yes" } }] }), said, opts);
+    // the "Yes" answers the licence question: it stays, quoted, so it counts in full
+    expect(yes.requirementFindings[0]).toEqual({ requirementKey: "licence", met: "yes", evidence: { source: "screen", quote: "Yes" } });
+    // a "No." to a question about something else is still too short to show anything about periodontal charting
+    const other = verifyScreenQuotes(card({ requirementFindings: [{ requirementKey: "perio", met: "no", evidence: { source: "screen", quote: "No." } }] }), said, opts);
+    expect(other.requirementFindings[0].met).toBe("unknown");
+    // a bare "No" to the licence question says plainly the licence is not held
+    const no = [chat[0]!, { role: "candidate" as const, content: "No", at: "t" }];
+    const plain = verifyScreenQuotes(card({ requirementFindings: [{ requirementKey: "licence", met: "no", evidence: { source: "screen", quote: "No" } }] }), "No", { ...opts, transcript: no });
+    expect(plain.requirementFindings[0]).toMatchObject({ met: "no", evidence: { source: "screen", quote: "No" } });
+    expect(screenAnswerOf("No", "Active California RDH license", no)).toBe("I do not hold a California RDH license");
+    expect(screenAnswerOf("No", null, no)).toBeNull();
+    expect(answerInContext("Is your license active?", "Maybe")).toBeNull();
+  });
+});
+
+describe("the scorecard is read three times, like the résumé (known bugs 20 and 106)", () => {
+  const packet = { requirements: { mustHaves: [{ key: "licence", text: "Active CA RDH license", rationale: "law", evidencedBy: ["screen"] }], niceToHaves: [], eligibility: [] }, competencies: [{ key: "chairside", name: "Chairside", definition: "d", weight: 5, evaluatedIn: "both", indicators: ["x"] }, { key: "leadership", name: "Leadership", definition: "d", weight: 3, evaluatedIn: "interview", indicators: ["x"] }] } as unknown as RolePacket;
+  const said = "My RDH license expired last spring and the renewal is in progress.\nI anticipate the next instrument every time.";
+  const screen = { transcript: said.split("\n").map((content) => ({ role: "candidate" as const, content, at: "t" })), answers: {}, progress: EMPTY_SCREEN_PROGRESS };
+  const view = { restore: (s: string) => s };
+  const card = (met: "yes" | "no" | "unknown", chairside: "evidenced" | "partially_evidenced", over: Partial<ScreenAssessment> = {}): ScreenAssessment => ({ overall: "potential", confidence: "medium", summary: `licence ${met}`, strengths: [], concerns: [], unknowns: [], competencyFindings: [{ competencyKey: "chairside", finding: chairside, evidence: { source: "screen", quote: "I anticipate the next instrument every time" } }, { competencyKey: "leadership", finding: "evidenced", evidence: { source: "screen", quote: "I anticipate the next instrument every time" } }], requirementFindings: [{ requirementKey: "licence", met, ...(met === "unknown" ? {} : { evidence: { source: "screen" as const, quote: "My RDH license expired last spring" } }) }], anomalies: [], questionFindings: [], compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation: "interview", rationale: "r", ...over });
+  const ok = (output: ScreenAssessment, runId: string): RunOutcome<ScreenAssessment> => ({ ok: true, output, runId, model: "m" });
+
+  it("keeps the middle answer, holds the licence to the licence rule, and leaves out skills for the interviews", () => {
+    const out = scorecardReadings([ok(card("no", "evidenced"), "r1"), ok(card("yes", "partially_evidenced"), "r2"), ok(card("unknown", "evidenced"), "r3")], view, screen, packet);
+    if (!out.ok) throw new Error("expected a scorecard");
+    // an expired licence is "unknown" whatever each reading said, so the middle is too
+    expect(out.output.requirementFindings.map((f) => `${f.requirementKey}:${f.met}`)).toEqual(["licence:unknown"]);
+    expect(out.output.competencyFindings.map((f) => `${f.competencyKey}:${f.finding}`)).toEqual(["chairside:evidenced"]);
+    expect(out.runId).toBe("r1");
+    // and the same whatever order they come back in
+    const again = scorecardReadings([ok(card("unknown", "evidenced"), "r3"), ok(card("no", "evidenced"), "r1"), ok(card("yes", "partially_evidenced"), "r2")], view, screen, packet);
+    if (!again.ok) throw new Error("expected a scorecard");
+    expect(again.output.requirementFindings).toEqual(out.output.requirementFindings);
+    expect(again.output.competencyFindings).toEqual(out.output.competencyFindings);
+  });
+
+  it("uses the first reading when fewer came back, saying so, and fails on an outage", () => {
+    const invalid: RunOutcome<ScreenAssessment> = { ok: false, runId: "r8", model: "m", reason: "invalid", error: "no valid output" };
+    const outage: RunOutcome<ScreenAssessment> = { ok: false, runId: "r9", model: "m", reason: "error", error: "provider error: 529" };
+    const one = scorecardReadings([invalid, ok(card("unknown", "evidenced"), "r2"), invalid], view, screen, packet);
+    expect(one).toMatchObject({ ok: true, runId: "r2" });
+    if (one.ok) expect(one.output.confidenceReasons).toContain(`the assistant could read this screening chat once instead of ${SCORECARD_READINGS}`);
+    expect(scorecardReadings([invalid, outage, invalid], view, screen, packet)).toBe(outage);
+  });
+});
+
+describe("AI-written questions pass the code's fairness check before a candidate sees them (known bug 29)", () => {
+  const two = { screening: { questions: [{ key: "experience", question: "Tell me about your most recent work.", kind: "skills" }, { key: "availability", question: "Which days and hours are you available?", kind: "availability" }], maxMinutes: 15 } } as unknown as RolePacket;
+  const ask = (messageToCandidate: string, over: Partial<ScreenTurn> = {}): ScreenTurn => ({ ...followUp, messageToCandidate, ...over });
+
+  it("a follow-up about a protected trait is never sent: the chat moves on to the next question in the packet's words", () => {
+    for (const unfair of ["You mentioned school runs. How old are your kids?", "Thanks! Where are you originally from?", "Are you planning to have children soon?", "What year did you graduate?", "What is your current salary?", "Do you attend church on Sundays?"]) {
+      const t = enforceTurnRules(ask(unfair), two, asking("experience"), {});
+      expect(t.messageToCandidate, unfair).toBe("Thanks. Which days and hours are you available?");
+      expect(t.questionKey).toBe("availability");
+      expect(t.followUpReason).toBeNull();
+    }
+    // a fair follow-up passes as it was
+    expect(enforceTurnRules(ask("You mentioned nine patients a day: how long is each visit?"), two, asking("experience"), {}).messageToCandidate).toBe("You mentioned nine patients a day: how long is each visit?");
+    expect(unfairQuestion("You said 12 years of experience in perio: what changed most?")).toBeNull();
+  });
+
+  it("catches criminal history, health, graduation, children and workers' comp, and lets ordinary dental questions through (review of Wave S5)", () => {
+    for (const unfair of [
+      "Have you ever been convicted of a crime?", "Do you have a criminal record?", "Do you have any health issues that would affect your work?", "Do you have any medical conditions we should know about?",
+      "When did you graduate from high school?", "How many kids do you have?", "Do you have reliable childcare?", "Have you ever filed a workers' comp claim?", "What is your current pay?", "How much do you make now?",
+    ]) expect(unfairQuestion(unfair), unfair).not.toBeNull();
+    for (const fair of [
+      "How do you review their medical history and their medications before a cleaning?", "How do you explain gum disease to patients and their health risks?",
+      "Thanks, that is within the current pay range for this role.", "How many children do you see in a typical day?", "How do you adjust care for a patient with a medical condition?",
+    ]) expect(unfairQuestion(fair), fair).toBeNull();
+  });
+
+  it("an unfair acknowledgment is replaced, the packet's own question kept; with nothing left the chat closes", () => {
+    const moved = enforceTurnRules(ask("Great, and congratulations on the pregnancy!", { questionKey: "availability", followUpReason: null }), two, asking("experience"), {});
+    expect(moved.messageToCandidate).toBe("Thanks. Which days and hours are you available?");
+    const last = enforceTurnRules(ask("How old are you, if you don't mind me asking?"), two, asking("availability", {}, ["experience", "availability"]), { experience: "Six years." });
+    expect(last).toMatchObject({ done: true, questionKey: null, followUpReason: null });
+    expect(last.messageToCandidate).toMatch(/that is everything I needed/);
+  });
+
+  it("the résumé reading's open questions are asked only when they pass", () => {
+    const qs = focusQuestionsFrom([
+      { question: "Is your CA RDH license active?", whyItMatters: "must-have" },
+      { question: "How old are you?", whyItMatters: "x" },
+      { question: "Do you have kids at home?", whyItMatters: "x" },
+      { question: "Can you tell me about your perio charting?", whyItMatters: "must-have" },
+    ]);
+    expect(qs.map((q) => [q.key, q.question])).toEqual([["unknown_1", "Is your CA RDH license active?"], ["unknown_2", "Can you tell me about your perio charting?"]]);
   });
 });
 

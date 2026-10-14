@@ -26,9 +26,19 @@ import type { Integrations, SendResult } from "@ros/integrations";
  * step its link opens ended, while it waited) is cancelled with its reason.
  */
 export const SEND_JOB_KIND = "communication.send";
-export const SEND_MAX_ATTEMPTS = 6;
-/** A row that has been `sending` longer than this was interrupted between the provider call and the record. */
-export const SENDING_STALE_MS = 15 * 60_000;
+/**
+ * Tries before a message is marked failed. The queue waits 2 s, 4 s, 8 s ... up to 15 minutes between tries
+ * (`jobRetryDelayMs` in packages/workflows/src/engine.ts), so the 13th try comes about an hour (62 minutes) after the
+ * first: a short email or text provider outage delays messages, it never fails them for good (Wave S5 C2, audit row 35).
+ */
+export const SEND_MAX_ATTEMPTS = 13;
+/**
+ * A row that has been `sending` longer than this was interrupted between the provider call and the record. Every
+ * provider call has its own timeout well under this (Postmark and Twilio: 30 s). The hourly check finds such rows
+ * (`sweepStaleSending`, apps/api/src/maintenance.ts `runHourlyChecks`): five minutes plus at most an hour between
+ * checks, so the team hears within about 65 minutes of the interruption.
+ */
+export const SENDING_STALE_MS = 5 * 60_000;
 
 export type CommunicationRow = typeof communications.$inferSelect;
 
@@ -306,7 +316,8 @@ async function cancelIfUnwanted(tx: Queryable, input: { communicationId: string;
   return !!reason && (await cancelWaiting(tx, row, reason, row.sentBy, now));
 }
 
-export type SendOutcome = "sent" | "failed" | "skipped" | "retry" | "held" | "cancelled";
+/** `unknown`: the provider may have taken it but its reply was cut off; marked unknown, alerted, never re-sent. */
+export type SendOutcome = "sent" | "failed" | "skipped" | "retry" | "held" | "cancelled" | "unknown";
 
 /**
  * The worker's half: claim the queued row, call the provider outside any transaction, record what happened. A
@@ -367,8 +378,15 @@ export async function sendQueuedCommunication(db: Db, integrations: Integrations
       await settleDecisionTold(tx, claimed, "sent", ctx.now);
       return "sent";
     }
-    const retryable = result.status === "failed" ? result.retryable : false;
     const error = describeFailure(result);
+    // The provider may have taken it (its reply was cut off): like an interrupted send (`sweepStaleSending`), it is marked
+    // unknown and put in front of a person, never re-sent on a guess and never told to the team as "could not be sent".
+    if (result.status === "failed" && result.uncertain) {
+      await tx.update(communications).set({ status: "unknown", error, sendingAt: null }).where(eq(communications.id, claimed.id));
+      await settleDecisionTold(tx, claimed, "unknown", ctx.now);
+      return "unknown";
+    }
+    const retryable = result.status === "failed" ? result.retryable : false;
     if (retryable && !final) {
       await tx.update(communications).set({ status: "queued", error, sendingAt: null }).where(eq(communications.id, claimed.id));
       await emit(tx, { type: "message.retried", companyId: claimed.companyId, actor, subject: { type: "communication", id: claimed.id }, payload: { ...payload, error, retryOf: claimed.id }, correlationId: claimed.correlationId });
@@ -385,6 +403,9 @@ export async function sendQueuedCommunication(db: Db, integrations: Integrations
   if (outcome === "failed" && (result.status !== "failed" || result.retryable)) {
     // The provider itself failed for good (an outage that outlasted every retry, or an adapter that is not configured): an operator must see it.
     await raiseAlert(db, { kind: "message.delivery_failed", severity: "high", title: `A ${claimed.channel} could not be delivered after ${ctx.attempt} attempt${ctx.attempt === 1 ? "" : "s"}`, body: `${claimed.templateKey ?? "message"} to a recipient in this company failed: ${describeFailure(result)}. Check the provider's status and credentials; the message is marked failed and was not sent.`, companyId: claimed.companyId, target: { type: "communication", id: claimed.id }, details: { channel: claimed.channel, template: claimed.templateKey, attempts: ctx.attempt } }).catch((err) => console.warn(`[outbox] could not raise the delivery alert: ${err instanceof Error ? err.message : String(err)}`));
+  }
+  if (outcome === "unknown") {
+    await raiseAlert(db, { kind: "message.delivery_unknown", severity: "high", title: `A ${claimed.channel} may or may not have been delivered`, body: `The provider's reply to sending ${claimed.templateKey ?? "a message"} was cut off (${describeFailure(result).slice(0, 200)}). Check the provider's activity log before sending it again by hand; it was not re-sent automatically.`, companyId: claimed.companyId, target: { type: "communication", id: claimed.id }, details: { channel: claimed.channel, template: claimed.templateKey } }).catch((err) => console.warn(`[outbox] could not raise the delivery alert: ${err instanceof Error ? err.message : String(err)}`));
   }
   if (outcome === "retry") throw new Error(`delivery failed (attempt ${ctx.attempt} of ${ctx.maxAttempts}): ${describeFailure(result)}`);
   return outcome;

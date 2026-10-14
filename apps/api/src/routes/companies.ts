@@ -6,7 +6,8 @@ import { companies, plans, recruiterEscalations, roles, staffAccessGrants, users
 import { actorOf, requireTenant, requireUser, type Vars } from "../middleware/session";
 import { createCompany } from "../services/companies";
 import { tellItsAboutNewCompany } from "../services/company-trust";
-import { inviteMember, listInvitations, listTeam, resendMemberInvitation, revokeMemberInvitation, updateMember } from "../services/team";
+import { sendToIts } from "../services/escalation-queue";
+import { inviteMember, leaveCompany, listInvitations, listTeam, resendMemberInvitation, revokeMemberInvitation, updateMember } from "../services/team";
 import { HttpError } from "../middleware/errors";
 
 export const companyRoutes = new Hono<Vars>();
@@ -106,6 +107,19 @@ companyRoutes.patch("/current/members/:userId", requireTenant, async (c) => {
   return c.json(await updateMember(teamOf(c), { userId: idParam(c, "userId", "That person is not an active member of your team."), body }));
 });
 
+/**
+ * "Leave this company" (founder decision L-10): any member, for themselves, with `{ confirm: true }`; an owner only while
+ * another owner remains (409 `last_owner`). Answers `{ ok, left, movedTo, signedOut, ... }`: this session moves to the
+ * person's other company (`movedTo`), or, with none, they are signed out. The rules live in services/team.ts.
+ */
+companyRoutes.post("/current/leave", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  assertCan(t.role, "company.read");
+  const body = (await c.req.json().catch(() => ({}))) as { confirm?: unknown };
+  if (body.confirm !== true) throw new HttpError(400, "confirmation_required", "Confirm that you want to leave this company.");
+  return c.json(await leaveCompany(teamOf(c), { sessionId: c.get("session")!.sessionId }));
+});
+
 /** ITS recruiter access to this company: who, why, what it covers, when it ends. Everyone on the team can see it. */
 companyRoutes.get("/current/staff-access", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -173,6 +187,7 @@ companyRoutes.post("/current/staff-access/:grantId/revoke", requireTenant, async
       await audit(container.db, { companyId: t.companyId, actor: { kind: "system", id: "email" }, action: "staff.access_revoked", target: { type: "user", id: result.recruiterUserId }, reason: "recruiter notification failed", details: { grantId: result.grant.id, error: sent.error } });
     }
   }
-  await container.integrations.email.send({ to: container.env.ITS_QUEUE_EMAIL, from, subject: `[access ended] ${result.companyName} ended a recruiter's access`, text: `Recruiter: ${result.recruiter?.name ?? result.recruiter?.email ?? result.recruiterUserId}\nReason given by the customer: ${reason}\n${result.escalationId ? `The request is open again in the queue: ${container.env.APP_BASE_URL}/recruiter/queue/${result.escalationId}` : ""}`, idempotencyKey: `grant_revoked_queue:${result.grant.id}`, tags: { template: "staff_access_revoked_queue" } });
+  // Through the outbox, so a failure is recorded, retried and alerted (audit row 125).
+  await sendToIts(container, { companyId: t.companyId, subject: `[access ended] ${result.companyName} ended a recruiter's access`, text: `Recruiter: ${result.recruiter?.name ?? result.recruiter?.email ?? result.recruiterUserId}\nReason given by the customer: ${reason}\n${result.escalationId ? `The request is open again in the queue: ${container.env.APP_BASE_URL}/recruiter/queue/${result.escalationId}` : ""}`, idempotencyKey: `grant_revoked_queue:${result.grant.id}`, template: "staff_access_revoked_queue" });
   return c.json({ ok: true, grantId: result.grant.id, endedAt: now.toISOString(), escalationId: result.escalationId, recruiterNotified });
 });

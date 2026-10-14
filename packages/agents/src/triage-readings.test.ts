@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RunOutcome } from "@ros/ai";
 import type { EvidenceAssessment } from "@ros/contracts";
-import { applyEvidenceRules, combineOutcomes, combineReadings, credentialMustHaves, shownNotHeld } from "./triage";
+import { applyEvidenceRules, assessmentSources, combineOutcomes, combineReadings, credentialFinding, credentialMustHaves, findingSubjects, plainlyNotHeld, shownNotHeld, verifyAssessmentQuotes } from "./triage";
 
 /**
  * The fairness run on Haiku 5.5 (14 Oct 2026): one résumé read three times scored 83, 71 and 67, and an expired licence
@@ -105,20 +105,100 @@ describe("a credential the candidate's own words show is not held", () => {
     ]) expect(shownNotHeld(q), q).toBe(false);
   });
 
-  it("settles only an 'unknown' credential must-have on a verified quote from the candidate", () => {
+  it("reads pending, applied for, in training and not yet as not in force too", () => {
+    for (const q of ["CA RDH license pending: board exam passed", "Applied for my RDH license in May", "Enrolled in a dental hygiene program, graduating 2027", "Not yet licensed", "RDH trainee"]) expect(shownNotHeld(q), q).toBe(true);
+    // "currently" alone no longer says it is held ("currently enrolled"); "currently licensed" does
+    expect(shownNotHeld("Currently enrolled in an RDH program")).toBe(true);
+    expect(shownNotHeld("Currently licensed in CA; renewal due 2027")).toBe(false);
+  });
+
+  it("is 'not held' plainly only when the candidate says so, with nothing pending, lapsed or held about it", () => {
+    for (const q of ["I do not hold a California RDH license", "I don't have an RDH license", "Not licensed in California", "No RDH license", "I have no hygiene license", "Never held a license", "Unlicensed"]) expect(plainlyNotHeld(q), q).toBe(true);
+    for (const q of ["RDH license CA expired in 2021", "I do not have my license yet", "I don't hold it yet: exam in May", "No RDH license; application pending", "I do not hold an active CA license", "Enrolled in a dental hygiene program, graduating 2027", "RDH license CA active"]) expect(plainlyNotHeld(q), q).toBe(false);
+  });
+
+  /**
+   * The founder's licence rule (15 Oct 2026): a credential must-have is "no" only when the candidate's own words say
+   * plainly they do not hold it; lapsed, expired, pending or unclear is "unknown", whatever the model answered, so every
+   * reading of the same CV gives the same finding and score.
+   */
+  it("holds a credential must-have to the licence rule, whatever the model answered", () => {
     const credentials = credentialMustHaves({ requirements: { mustHaves: [{ key: "licence", text: "Active CA RDH license", rationale: "law", evidencedBy: ["resume"] }, { key: "perio", text: "Periodontal therapy", rationale: "work", evidencedBy: ["resume"] }], niceToHaves: [], eligibility: [] } });
     expect([...credentials]).toEqual(["licence"]);
-    const inResume = (e: { quote?: string; source: string }) => (e.source === "resume" ? RESUME.includes(e.quote ?? "") : null);
+    const text = `${RESUME}\nI do not hold a Nevada RDH license\nRDH license CA active`;
+    const inResume = (e: { quote?: string; source: string }) => (e.source === "resume" ? text.includes(e.quote ?? "") : null);
     const quoted = (key: string, met: Met, quote: string, source: "resume" | "recruiter_note" = "resume") => reading("yes", "yes", "evidenced", { requirementFindings: [{ requirementKey: key, met, evidence: { source, quote } }] });
-    expect(metOf(applyEvidenceRules(quoted("licence", "unknown", "RDH license CA expired in 2021"), inResume, { credentials }), "licence")).toBe("no");
-    // never overturns a "yes" or a "partially"
-    expect(metOf(applyEvidenceRules(quoted("licence", "yes", "RDH license CA expired in 2021"), inResume, { credentials }), "licence")).toBe("yes");
-    expect(metOf(applyEvidenceRules(quoted("licence", "partially", "RDH license CA expired in 2021"), inResume, { credentials }), "licence")).toBe("partially");
-    // only a credential must-have, and only when the caller names the credentials (the screen scorecard does not)
-    expect(metOf(applyEvidenceRules(quoted("perio", "unknown", "RDH license CA expired in 2021"), inResume, { credentials }), "perio")).toBe("unknown");
-    expect(metOf(applyEvidenceRules(quoted("licence", "unknown", "RDH license CA expired in 2021"), inResume), "licence")).toBe("unknown");
-    // never on a recruiter's note, never on a quote that is not in the résumé
-    expect(metOf(applyEvidenceRules(quoted("licence", "unknown", "said the licence expired", "recruiter_note"), () => true, { credentials }), "licence")).toBe("unknown");
-    expect(metOf(applyEvidenceRules(quoted("licence", "unknown", "license expired in 2010"), inResume, { credentials }), "licence")).toBe("unknown");
+    const lapsed = "RDH license CA expired in 2021; renewal not started";
+    // lapsed: "unknown" from every answer the model could give, so three readings always agree
+    for (const met of ["no", "unknown", "partially", "yes"] as const) expect(metOf(applyEvidenceRules(quoted("licence", met, lapsed), inResume, { credentials }), "licence"), met).toBe("unknown");
+    // said plainly: a "no" stands
+    expect(metOf(applyEvidenceRules(quoted("licence", "no", "I do not hold a Nevada RDH license"), inResume, { credentials }), "licence")).toBe("no");
+    // held: a "yes" stands
+    expect(metOf(applyEvidenceRules(quoted("licence", "yes", "RDH license CA active"), inResume, { credentials }), "licence")).toBe("yes");
+    // the reason says why, without stepping the confidence down (nothing was invented)
+    const settled = applyEvidenceRules(quoted("licence", "no", lapsed), inResume, { credentials });
+    expect(settled.confidence).toBe("medium");
+    expect(settled.confidenceReasons?.at(-1)).toMatch(/lapsed, pending or unclear in the candidate's words, so not known yet/);
+    // only a credential must-have, and only when the caller names the credentials
+    expect(metOf(applyEvidenceRules(quoted("perio", "no", lapsed), inResume, { credentials }), "perio")).toBe("no");
+    expect(metOf(applyEvidenceRules(quoted("licence", "no", lapsed), inResume), "licence")).toBe("no");
+    // a recruiter's note never makes a "no", and a lapsed licence in it is not a "yes" either
+    expect(metOf(applyEvidenceRules(quoted("licence", "no", "said the licence expired", "recruiter_note"), () => null, { credentials }), "licence")).toBe("unknown");
+    expect(metOf(applyEvidenceRules(quoted("licence", "yes", "said the licence expired last year", "recruiter_note"), () => null, { credentials }), "licence")).toBe("unknown");
+    // a quote that is not in the résumé is no evidence at all
+    expect(metOf(applyEvidenceRules(quoted("licence", "no", "I do not hold any license"), inResume, { credentials }), "licence")).toBe("unknown");
+  });
+
+  it("reads the candidate's whole line, never only the part the model quoted (review of Wave S5)", () => {
+    const packet = { requirements: { mustHaves: [{ key: "licence", text: "Active CA RDH license", rationale: "law", evidencedBy: ["resume" as const] }], niceToHaves: [], eligibility: [] } };
+    const credentials = credentialMustHaves(packet);
+    const subjects = findingSubjects(packet);
+    const sources = { resume: `${RESUME}\nI do not hold a CA RDH license` };
+    const said = (met: Met, quote: string) => reading("yes", "yes", "evidenced", { requirementFindings: [{ requirementKey: "licence", met, evidence: { source: "resume", quote } }] });
+    // a "yes" quoting only "RDH license CA" from the expired line is read with the whole line: unknown
+    expect(metOf(verifyAssessmentQuotes(said("yes", "RDH license CA"), sources, credentials, subjects), "licence")).toBe("unknown");
+    // an "unknown" quoting the plain words is "no": the finding rests on the words, not on the model's answer
+    for (const met of ["unknown", "no", "partially", "yes"] as const) expect(metOf(verifyAssessmentQuotes(said(met, "I do not hold a CA RDH license"), sources, credentials, subjects), "licence"), met).toBe("no");
+    const ok = (out: EvidenceAssessment, runId: string): RunOutcome<EvidenceAssessment> => ({ ok: true, output: out, runId, model: "m" });
+    const middle = (mets: Met[]) => {
+      const out = combineOutcomes(mets.map((m, i) => ok(said(m, "I do not hold a CA RDH license"), `r${i}`)), sources, credentials, subjects);
+      if (!out.ok) throw new Error("expected readings");
+      return metOf(out.output, "licence");
+    };
+    expect(middle(["no", "unknown", "unknown"])).toBe("no");
+    expect(middle(["no", "no", "unknown"])).toBe("no");
+  });
+
+  it("does not read a renewal or another qualification as the licence's state", () => {
+    expect(credentialFinding("yes", "RDH license CA #12345, renewal expected 2026")).toBe("yes");
+    expect(credentialFinding("yes", "RDH license CA #12345; renewal in progress", "Active CA RDH license")).toBe("yes");
+    expect(credentialFinding("yes", "Enrolled in a dental hygiene program")).toBe("unknown");
+    expect(credentialFinding("yes", "Enrolled in a dental hygiene program", "Active CA RDH license")).toBe("unknown");
+    expect(credentialFinding("yes", "RDH license CA; studying for local anesthesia permit", "Active CA RDH license")).toBe("yes");
+    // the licence's own state still counts on a line that also names another
+    expect(credentialFinding("yes", "RDH license CA expired 2021; BLS current", "Active CA RDH license")).toBe("unknown");
+    expect(credentialFinding("no", "RDH license CA; not licensed in Nevada", "Active CA RDH license")).toBe("unknown");
+  });
+
+  it("never takes a self-reported eligibility box as a quote (the answers only, not their field names)", () => {
+    const input = { resumeText: null, applicationAnswers: { eligibility: { rdh_license: "yes", work_authorization: "I am authorised to work in the US" } } };
+    const sources = assessmentSources(input);
+    expect(sources.application).not.toContain("rdh_license");
+    const out = verifyAssessmentQuotes(reading("yes", "yes", "evidenced", { requirementFindings: [{ requirementKey: "licence", met: "yes", evidence: { source: "application", quote: 'rdh_license":"yes' } }] }), sources);
+    expect(out.requirementFindings[0]).toMatchObject({ met: "partially", evidence: { source: "application", unquoted: true } });
+    expect(sources.application).toContain("I am authorised to work in the US");
+  });
+
+  it("makes the lapsed licence of the fairness run read the same in all three readings", () => {
+    const credentials = new Set(["licence"]);
+    const sources = { resume: RESUME };
+    const lapsedReading = (met: Met) => reading(met, "partially", "partially_evidenced", { requirementFindings: [{ requirementKey: "licence", met, ...(met === "unknown" ? {} : { evidence: { source: "resume" as const, quote: "RDH license CA expired in 2021; renewal not started" } }) }] });
+    const ok = (out: EvidenceAssessment, runId: string): RunOutcome<EvidenceAssessment> => ({ ok: true, output: out, runId, model: "m" });
+    // the run of 14 Oct 2026: "no", "no", "unknown" in one application, "unknown" three times in the next
+    const first = combineOutcomes([ok(lapsedReading("no"), "r1"), ok(lapsedReading("no"), "r2"), ok(lapsedReading("unknown"), "r3")], sources, credentials);
+    const second = combineOutcomes([ok(lapsedReading("unknown"), "r4"), ok(lapsedReading("unknown"), "r5"), ok(lapsedReading("unknown"), "r6")], sources, credentials);
+    if (!first.ok || !second.ok) throw new Error("expected readings");
+    expect(metOf(first.output, "licence")).toBe("unknown");
+    expect(metOf(second.output, "licence")).toBe("unknown");
   });
 });

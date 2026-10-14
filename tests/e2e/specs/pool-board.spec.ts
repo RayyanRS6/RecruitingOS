@@ -10,7 +10,8 @@ async function noHorizontalOverflow(page: Page, name: string) {
  * The pool board in a real browser (plan F6-F10; founder decisions B2, B4, B5, B6): three applicants to a hygienist role
  * whose must-haves are an active CA RDH license and periodontal charting, read three ways by the fake model (the same
  * résumés as FAKE_SAMPLE_RESUMES in packages/agents/src/fake-handlers.ts): everything shown, the license with the rest
- * only partly shown, and the license lapsed in their own words. Today's card leads to Review and apply; the board
+ * only partly shown, and no license, plainly in their own words (a lapsed one reads "not known yet" since Wave S5's
+ * licence rule, so it would no longer be a missing must-have). Today's card leads to Review and apply; the board
  * sorts them into Shortlist, Longlist and Not moving forward with the reasons; the one-click questions answer from
  * the checked findings; applying files everyone privately and the candidate's own page shows none of it; on a phone
  * the columns stack. Everything is synthetic.
@@ -19,7 +20,7 @@ const run = Date.now().toString(36);
 const RESUMES = {
   strong: "Registered Dental Hygienist at Harbor Dental 2019 - present\nRDH license CA active\nPeriodontal charting, scaling and root planing, Dentrix\nThorough, gentle clinical care to high standards\nPatient communication: explains findings plainly and builds trust\nKeeps to time without cutting corners\nShows up consistently and communicates early",
   possible: "Dental Hygienist at Coastal Smiles 2022 - present\nRDH license CA active\nCharting in Dentrix, patient reminders",
-  weak: "Dental Hygienist at Pacific Dental 2010 - 2020\nRDH license CA expired in 2021\nPeriodontal charting, Dentrix",
+  weak: "Dental Hygienist at Pacific Dental 2010 - 2020\nI do not hold a CA RDH license\nPeriodontal charting, Dentrix",
 };
 
 /** A hygienist role with two must-haves, approved, and three applicants who each answer every eligibility question "yes". */
@@ -72,7 +73,7 @@ test.describe("the pool board", () => {
     for (const column of ["Shortlist", "Longlist", "Not moving forward"]) await expect(page.getByRole("heading", { level: 3, name: new RegExp(`^${column} \\d+$`) })).toBeVisible();
     await expect(page.getByRole("heading", { name: "What the pool looks like" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Suggested next steps" })).toBeVisible();
-    // Cleo's own words show the license lapsed: the one red chip, and Not moving forward
+    // Cleo's own words say she holds no license: the one red chip, and Not moving forward
     const cleoCard = page.locator(".board-card").filter({ hasText: "Cleo Park" });
     await expect(cleoCard.locator(".chip.critical")).toHaveText(/^Missing must-have: /);
     await expect(page.locator(".board-col[data-column='not_moving_forward']")).toContainText("Cleo Park");

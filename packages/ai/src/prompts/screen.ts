@@ -1,5 +1,6 @@
 import { ScreenAssessment, ScreenTurn, type RolePacket, type ScreenChannel, type ScreenProgress, type ScreenTranscriptEntry } from "@ros/contracts";
 import { FAIRNESS_RULES, FINDING_RULES, withoutTag, type PromptDef } from "./registry";
+import { skillsForReading } from "./triage";
 
 export type ScreenContext = {
   company: { name: string };
@@ -65,7 +66,8 @@ function packetBlock(p: RolePacket, company: string, payShown: boolean): string 
     `Company: ${company}. Role: ${p.identity.title}, ${p.identity.employmentType.replace("_", " ")}${p.identity.schedule ? `, schedule ${p.identity.schedule}` : ""}, ${p.identity.locations.map((l) => [l.city, l.region].filter(Boolean).join(", ")).join("; ")}.`,
     `Posted pay: ${payShown ? `${comp.basis} ${comp.min} to ${comp.max} ${comp.currency}` : "not disclosed; say a person can discuss pay"}.`,
     `Screening questions in order (about ${p.screening.maxMinutes} minutes): ${p.screening.questions.map((q, i) => `${i + 1}. [${q.key}] (${q.kind}${q.competencyKey ? `, competency ${q.competencyKey}` : ""}) ${q.question}${q.modelAnswer ? ` Model answer: ${q.modelAnswer}` : ""}${q.followUpIf ? ` Follow up if: ${q.followUpIf}` : ""}`).join(" ")}`,
-    `Competencies: ${p.competencies.map((c) => `[${c.key}] ${c.name}: ${c.definition}`).join(" | ")}`,
+    // a skill the role checks in the interviews only is left to the interviews: the chat neither asks about it nor scores it
+    `Competencies: ${skillsForReading(p).map((c) => `[${c.key}] ${c.name}: ${c.definition}`).join(" | ")}`,
     // Must-haves the packet marks as evidenced in the screen: the conversation confirms each one in plain words, inside the questions above or as a short follow-up.
     `Must-haves this screen should confirm (evidencedBy includes screen): ${p.requirements.mustHaves.filter((m) => m.evidencedBy.includes("screen")).map((m) => `[${m.key}] ${m.text}`).join(" | ") || "none; the questions above are enough"}.`,
     `What candidates may be told: ${p.communication.candidateMayBeTold.join("; ") || "the posted range, the schedule, and the process"}.`,
@@ -81,9 +83,11 @@ function packetBlock(p: RolePacket, company: string, payShown: boolean): string 
 // they are the team's own, and the assistant writes to the candidate (they are read only for the scorecard).
 // Version 4 (plan Wave G): the close never promises a time ("within a few days"): decisions are private with no
 // deadline (founder decision B6), so it says people decide and the candidate hears either way.
+// Version 5 (Wave S5, 15 Oct 2026): skills the role checks in the interviews only are not listed; a follow-up that
+// touches a protected trait never reaches the candidate (`enforceTurnRules` in packages/agents checks it in code).
 export const screenTurnPrompt: PromptDef<ScreenContext, ScreenTurn> = {
   key: "screen.turn",
-  version: 4,
+  version: 5,
   task: "screen.turn",
   agent: "screening",
   schema: ScreenTurn,
@@ -101,7 +105,7 @@ export const screenTurnPrompt: PromptDef<ScreenContext, ScreenTurn> = {
   ],
 };
 
-const ASSESS_SYSTEM = `You write the scorecard for a completed screening conversation. Findings must quote the candidate's own words verbatim from the transcript (source "screen"); quotes are verified in code, a quote that is not in the transcript is removed and its claim discarded, and a claim with no quote is shown to the owner marked "no quote". Per question: answered or not, what was established, whether it meets the model answer. Per competency: evidenced / partially_evidenced / not_evidenced / contradicted with a quote when evidenced. requirementFindings: one entry per must-have the screen was to confirm (use the requirement key): met yes / partially / no / unknown, with a quote when yes, partially or no; "no" only when the candidate's own words show it is not met, otherwise "unknown" (code turns a "no" without a verified quote into "unknown"). Record the compensation expectation and whether it is within the posted range, availability and whether it matches the schedule, and eligibility confirmations. Recommendation: strong_interview when the must-haves and most competencies are evidenced and logistics fit; interview when the substance is there with some unknowns; hold when logistics do not fit or the evidence is thin; decline_recommended only when the candidate's own statements contradict a must-have. Give no number or score of any kind. People decide; this is advice. Do not record or reason about any protected characteristic the candidate may have mentioned.
+const ASSESS_SYSTEM = `You write the scorecard for a completed screening conversation. Findings must quote the candidate's own words verbatim from the transcript (source "screen"); quotes are verified in code, a quote that is not in the transcript is removed and its claim discarded, and a claim with no quote is shown to the owner marked "no quote". Per question: answered or not, what was established, whether it meets the model answer. Per competency: evidenced / partially_evidenced / not_evidenced / contradicted with a quote when evidenced. requirementFindings: one entry per must-have the screen was to confirm (use the requirement key): met yes / partially / no / unknown, with a quote when yes, partially or no; "no" only when the candidate's own words show it is not met, otherwise "unknown" (code turns a "no" without a verified quote into "unknown"); for a licence, certificate, permit or registration, "no" only when they say plainly they do not hold it, and "unknown" when it is lapsed, expired, pending or unclear. Record the compensation expectation and whether it is within the posted range, availability and whether it matches the schedule, and eligibility confirmations. Recommendation: strong_interview when the must-haves and most competencies are evidenced and logistics fit; interview when the substance is there with some unknowns; hold when logistics do not fit or the evidence is thin; decline_recommended only when the candidate's own statements contradict a must-have. Give no number or score of any kind. People decide; this is advice. Do not record or reason about any protected characteristic the candidate may have mentioned.
 
 Lines marked "recruiter note" are a recruiter's notes from a phone call with the candidate, not the candidate's own words: never quote them as the candidate (source "screen"). A finding that rests on them uses source "recruiter_note" with the note's exact words as the quote; it can support "yes" or "partially", never a must-have "no".
 A question the candidate skipped (listed in progress.declined) is unknown: answered false, meetsModelAnswer "unknown", never a concern and never held against them.
@@ -126,10 +130,13 @@ export const ScreenAssessModelOutput = ScreenAssessment.omit({ secondaryScore: t
 // no line of it can close the transcript block.
 // Version 6 (Wave S2 review): the recorded answers and the progress (which carries the answers to the focus questions)
 // sit in their own <answers> block, which no candidate text can close or open, nor the transcript block.
+// Version 7 (Wave S5, 15 Oct 2026): read three times like the résumé (the middle answer is kept, `assessScreen`); a
+// credential is "no" only when the candidate says plainly they do not hold it; a lone "yes" is no quote; skills checked
+// in the interviews only are not listed.
 const dataOnly = (text: string) => withoutTag(withoutTag(text, "transcript"), "answers");
 export const screenAssessPrompt: PromptDef<ScreenContext, ScreenAssessment> = {
   key: "screen.assess",
-  version: 6,
+  version: 7,
   task: "screen.assess",
   agent: "screening",
   schema: ScreenAssessModelOutput,

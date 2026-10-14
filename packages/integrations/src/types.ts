@@ -31,7 +31,11 @@ export type OutboundEmail = {
 export type SendResult =
   | { status: "sent"; providerMessageId: string }
   | { status: "pending"; reason: string }
-  | { status: "failed"; error: string; retryable: boolean };
+  /**
+   * `uncertain`: the provider may have taken the message but its reply was cut off (a timeout after the request was
+   * sent): never sent again on a guess; the outbox marks it unknown for a person to check (additive, Wave S5 review).
+   */
+  | { status: "failed"; error: string; retryable: boolean; uncertain?: boolean };
 
 export type InboundAttachment = { filename: string; contentType: string; contentBase64: string; sizeBytes: number };
 

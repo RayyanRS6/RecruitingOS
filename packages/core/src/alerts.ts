@@ -5,6 +5,12 @@ import { audit } from "./audit";
 
 /** The queued job that emails a critical alert to the platform administrators (`emailCriticalAlert`). */
 export const ALERT_EMAIL_JOB_KIND = "alert.email";
+/**
+ * The tries a critical alert's email gets: as many as a queued message (`SEND_MAX_ATTEMPTS` in @ros/agents), which with
+ * the queue's growing waits (2 s doubling to 15 minutes) cover about an hour, so a short email outage never loses the
+ * alert about an AI outage or an overdue request.
+ */
+export const ALERT_EMAIL_MAX_ATTEMPTS = 13;
 
 /**
  * Whether critical alerts are emailed, and on which clock their job is due. The process that registers the
@@ -23,7 +29,7 @@ export function setAlertEmails(clock: (() => Date) | null): void {
  */
 export async function raiseAlert(q: Queryable, input: { kind: string; severity?: "info" | "high" | "critical"; title: string; body: string; companyId?: string | null; target?: Subject | null; details?: Record<string, unknown> }): Promise<{ id: string }> {
   const [row] = await q.insert(adminAlerts).values({ kind: input.kind, severity: input.severity ?? "high", title: input.title, body: input.body, companyId: input.companyId ?? null, target: input.target ?? null, details: input.details ?? {} }).returning({ id: adminAlerts.id });
-  if (input.severity === "critical" && alertEmailClock) await q.insert(jobs).values({ kind: ALERT_EMAIL_JOB_KIND, payload: { alertId: row.id }, runAt: alertEmailClock().toISOString(), maxAttempts: 5 });
+  if (input.severity === "critical" && alertEmailClock) await q.insert(jobs).values({ kind: ALERT_EMAIL_JOB_KIND, payload: { alertId: row.id }, runAt: alertEmailClock().toISOString(), maxAttempts: ALERT_EMAIL_MAX_ATTEMPTS });
   return row;
 }
 

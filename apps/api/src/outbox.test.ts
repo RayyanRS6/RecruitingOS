@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { queueCommunication, sweepStaleSending } from "@ros/agents";
+import { SEND_MAX_ATTEMPTS, queueCommunication, sweepStaleSending } from "@ros/agents";
 import { adminAlerts, communications, events, jobs, notifications, uuidv7, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
@@ -84,16 +84,35 @@ describe("outbox: messages leave after commit, once, and failures are visible", 
     expect(row.sendAttempts).toBe(3);
     expect(fake().sent.length - before).toBe(1);
 
-    // a longer outage: every attempt fails; the message ends failed, an operator is alerted, the candidate's team is told
-    fake().failNext(20);
+    // an outage of most of an hour (Wave S5 C2): still queued, never failed; it goes once the provider answers again
+    fake().failNext(100);
+    const patient = await withTenant(container.db, companyId, (tx) => queueCommunication(tx, container.integrations, draft("patient")));
+    for (let i = 1; i <= 3; i++) { setClock(200_000 + i * 16 * 60_000); await container.drain(); }
+    [row] = await container.db.select().from(communications).where(eq(communications.id, patient.communicationId));
+    expect(row.status).toBe("queued"); // 48 minutes in
+    fake().failNext(0);
+    setClock(200_000 + 4 * 16 * 60_000);
+    await container.drain();
+    [row] = await container.db.select().from(communications).where(eq(communications.id, patient.communicationId));
+    expect(row.status).toBe("sent");
+    expect((await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "message.delivery_failed"))).some((a) => a.target?.id === patient.communicationId)).toBe(false);
+
+    // a longer outage: every attempt for over an hour fails; the message ends failed, an operator is alerted, the candidate's team is told
+    fake().failNext(100);
     const candidateId = uuidv7();
     const applicationId = uuidv7();
+    const start = 2 * 3600_000;
+    setClock(start);
     const doomed = await withTenant(container.db, companyId, (tx) => queueCommunication(tx, container.integrations, draft("doomed", { candidateId, applicationId })));
-    for (let i = 0; i < 8; i++) { setClock(200_000 + i * 70_000); await container.drain(); }
+    await container.drain();
+    for (let i = 1; i <= 3; i++) { setClock(start + i * 16 * 60_000); await container.drain(); }
+    [row] = await container.db.select().from(communications).where(eq(communications.id, doomed.communicationId));
+    expect(row.status).toBe("queued"); // still trying 48 minutes in
+    for (let i = 4; i <= 16; i++) { setClock(start + i * 16 * 60_000); await container.drain(); }
     fake().failNext(0);
     [row] = await container.db.select().from(communications).where(eq(communications.id, doomed.communicationId));
     expect(row.status).toBe("failed");
-    expect(row.sendAttempts).toBe(6);
+    expect(row.sendAttempts).toBe(SEND_MAX_ATTEMPTS);
     expect((await container.db.select().from(events).where(and(eq(events.type, "message.failed"), eq(events.subjectId, doomed.communicationId)))).length).toBe(1);
     expect((await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "message.delivery_failed"))).some((a) => a.target?.id === doomed.communicationId)).toBe(true);
     expect((await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "candidate.unreachable")))).length).toBeGreaterThanOrEqual(1);
@@ -121,5 +140,27 @@ describe("outbox: messages leave after commit, once, and failures are visible", 
     expect((await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "message.delivery_unknown"))).some((a) => a.target?.id === stuck.id)).toBe(true);
     await container.drain();
     expect(fake().sent.length).toBe(before);
+  });
+
+  it("a send the provider may have taken (its reply cut off) is marked unknown and alerted, never failed or re-sent (Wave S5 review)", async () => {
+    const adapter = fake();
+    let calls = 0;
+    adapter.send = async () => {
+      calls += 1;
+      return { status: "failed", error: "postmark took the message but its reply did not finish within 30 seconds; it may have been delivered", retryable: false, uncertain: true };
+    };
+    try {
+      const queued = await withTenant(container.db, companyId, (tx) => queueCommunication(tx, container.integrations, draft("cut-off", { candidateId: uuidv7(), applicationId: uuidv7() })));
+      await container.drain();
+      const [row] = await container.db.select().from(communications).where(eq(communications.id, queued.communicationId));
+      expect(row.status).toBe("unknown");
+      expect(calls).toBe(1);
+      expect((await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "message.delivery_unknown"))).some((a) => a.target?.id === queued.communicationId)).toBe(true);
+      expect((await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "message.delivery_failed"))).some((a) => a.target?.id === queued.communicationId)).toBe(false);
+      expect(await container.db.select().from(events).where(and(eq(events.type, "message.failed"), eq(events.subjectId, queued.communicationId)))).toHaveLength(0);
+    } finally {
+      // back to the class's own send (the override is an own property of the adapter)
+      Reflect.deleteProperty(adapter, "send");
+    }
   });
 });

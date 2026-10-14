@@ -3,14 +3,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, messageLinePrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, triageAssessPrompt, type AiRuntime, type IntakeContext, type ScreenContext } from "@ros/ai";
 import {
-  INTAKE_COMPILE_MAX_TOKENS, REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, SCORING_VIEW_VERSION, TRIAGE_READINGS, advanceProgress, assessmentSources, basisFor, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, hasPlaceholder, mergeFacts, mergeRevision, readingsOutcome, redactProtected, registerFakeHandlers,
-  resolveBenchmark, scorecardOutcome, verifyQuotes, type BenchmarkResult, type ScoringIdentity,
+  INTAKE_COMPILE_MAX_TOKENS, REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, SCORING_VIEW_VERSION, TRIAGE_READINGS, advanceProgress, assessmentSources, basisFor, credentialMustHaves, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, hasPlaceholder, mergeFacts, mergeRevision, readingsOutcome, redactProtected, registerFakeHandlers,
+  SCORECARD_READINGS, resolveBenchmark, scorecardOutcome, scorecardReadings, unfairQuestion, verifyQuotes, type BenchmarkResult, type ScoringIdentity,
 } from "@ros/agents";
 import type { EvidenceAssessment, IntakeFacts, IntakeMessage, ResumeExtraction, RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
 import { createDb, migrate } from "@ros/db";
 import { findPlaybook, matchPlaybookRole } from "@ros/playbooks";
 import { leakedDetails, lostEvidence, modelInputDifference, scorecardModelInput, triageModelInput, type EarlierApplication, type EvalApplication } from "./scoring-inputs";
-import { CONSISTENCY_READS, EMPTY_FACTS, RDH_FACTS, SCREEN_CANDIDATE, aboutCases, lineCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, quotesAreGrounded, redactionCases, resumeCases, reviseCases, screenAssessCases, screenPersonas, screenRedactionCases, triageEdgeCases, type IntakeCase } from "./suites";
+import { CONSISTENCY_READS, EMPTY_FACTS, KEPT_IN_ANSWER, RDH_FACTS, SCREEN_CANDIDATE, aboutCases, lineCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, interviewSkillFailures, keptInInputFailures, withInterviewSkill, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, questionFairnessCases, quotesAreGrounded, redactionCases, resumeCases, reviseCases, scorecardDifferences, screenAssessCases, screenConsistencyCases, screenPersonas, screenRedactionCases, scriptedCredentialCases, scriptedReading, triageEdgeCases, type IntakeCase, type ScreenAssessCase } from "./suites";
 
 /**
  * Evaluation runner (docs/11). `pnpm eval` runs every suite against the configured provider
@@ -155,8 +155,12 @@ async function main() {
       const ex = await runPrompt(q, rt, resumeExtractPrompt, { text, filename: `${id}.txt` }, { companyId: null, inputRef: { eval: id } });
       return ex.ok ? verifyQuotes(ex.output, text) : null;
     };
-    /** Who applied, the earlier applications on their record, and an extraction already read (the same résumé file). */
-    type Applied = { candidate: ScoringIdentity; noResumeSummary?: string; earlier?: readonly EarlierApplication[]; extraction?: ResumeExtraction | null };
+    /**
+     * Who applied, the earlier applications on their record, and an extraction already read (the same résumé file).
+     * `role`: another version of the golden packet to read against; `keptIn`: an eligibility answer did not match and a
+     * person kept them in (known bug 30), as application-intake.ts tells the reading.
+     */
+    type Applied = { candidate: ScoringIdentity; noResumeSummary?: string; earlier?: readonly EarlierApplication[]; extraction?: ResumeExtraction | null; role?: RolePacket; keptIn?: boolean };
     /**
      * An application read as the app reads it (agents/src/triage.ts, assessApplication; founder decision D-04 = C): the
      * résumé extracted from the original, the reading's input built by `scoringInput` (name, email, phone, street address
@@ -166,13 +170,16 @@ async function main() {
      * them against; `modelInput` is everything the model was sent, and `app` the application as stored.
      */
     const assess = async (id: string, text: string | null, who: Applied) => {
+      const role = who.role ?? packet;
       const extraction = who.extraction !== undefined ? who.extraction : await extract(id, text);
-      const applicationAnswers = { eligibility: { rdh_license: "yes", schedule: "yes" }, ...(who.noResumeSummary ? { noResumeSummary: who.noResumeSummary } : {}) };
-      const app: EvalApplication = { packet, extraction, resumeText: text, applicationAnswers, eligibility: { evaluatedAt: new Date().toISOString(), passed: true, failedRules: [], unverifiable: [] }, identity: who.candidate, earlierApplications: who.earlier ?? [] };
+      const answered = who.keptIn ? { [KEPT_IN_ANSWER.key]: KEPT_IN_ANSWER.answer, schedule: "yes" } : { rdh_license: "yes", schedule: "yes" };
+      const applicationAnswers = { eligibility: answered, ...(who.noResumeSummary ? { noResumeSummary: who.noResumeSummary } : {}) };
+      const failedRules = who.keptIn ? [{ key: KEPT_IN_ANSWER.key, question: "Do you hold an active California RDH license?", answer: KEPT_IN_ANSWER.answer, reason: "answered no" }] : [];
+      const app: EvalApplication = { packet: role, extraction, resumeText: text, applicationAnswers, eligibility: { evaluatedAt: new Date().toISOString(), passed: !who.keptIn, failedRules, unverifiable: [] }, identity: who.candidate, earlierApplications: who.earlier ?? [], ...(who.keptIn ? { eligibilityKeptIn: true } : {}) };
       const { promptInput, view, text: modelInput } = triageModelInput(app);
       const runs = await Promise.all(Array.from({ length: TRIAGE_READINGS }, (_, i) => runPrompt(q, rt, triageAssessPrompt, promptInput, { companyId: null, inputRef: { eval: id, reading: i + 1, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() } })));
       // what the app does once the model has answered (agents/src/triage.ts, readingsOutcome), not a copy of it
-      return { combined: readingsOutcome(runs, view, { resumeText: text, applicationAnswers, packet }), raws: runs.flatMap((r) => (r.ok ? [r.output] : [])), seen: assessmentSources(promptInput), modelInput, app };
+      return { combined: readingsOutcome(runs, view, { resumeText: text, applicationAnswers, packet: role }), raws: runs.flatMap((r) => (r.ok ? [r.output] : [])), seen: assessmentSources(promptInput), modelInput, app };
     };
     /** A quote the model wrote is grounded when it is in what the model was given (the hidden view, placeholders and all). */
     const groundedIn = (raws: EvidenceAssessment[], seen: ReturnType<typeof assessmentSources>) => raws.flatMap((raw, i) => assessmentQuotesGrounded(raw, { resume: seen.resume ?? "", application: seen.application ?? "" }).map((x) => `reading ${i + 1}: ${x}`));
@@ -222,6 +229,58 @@ async function main() {
       steady.push({ id: c.id, pass: f.length === 0, failures: f, notes: reads.map((r, i) => findingsOf(`reading ${i + 1}`, r)) });
     }
     results["triage.consistency"] = { cases: steady, passRate: steady.filter((x) => x.pass).length / steady.length };
+
+    // Licence readings (founder decision, 15 Oct 2026): a credential is "no" only when the candidate says plainly they do
+    // not hold it; lapsed, expired, pending or in training is "unknown". Each CV is read as the app reads it (three
+    // readings and their middle answer), twice, and both must give the expected finding.
+    const credentials = credentialMustHaves(packet);
+    const licence: (typeof results)[string]["cases"] = [];
+    for (const c of credentialCases) {
+      const reads: EvidenceAssessment[] = [];
+      const f: string[] = [];
+      for (let i = 1; i <= 2; i++) {
+        const r = (await assess(`${c.id}_licence_${i}`, c.resume, { candidate: c.candidate })).combined;
+        if (!r.ok) f.push(r.error);
+        else {
+          reads.push(r.output);
+          f.push(...credentialFailures(r.output, credentials, c.expect).map((x) => `reading ${i}: ${x}`));
+        }
+      }
+      if (reads.length > 1) f.push(...consistencyDifferences(reads, packet));
+      licence.push({ id: c.id, pass: f.length === 0, failures: f, notes: reads.map((r, i) => findingsOf(`reading ${i + 1}`, r)) });
+    }
+    // Readings that disagree, scripted (no model call): the finding the team sees rests on the candidate's words, so it
+    // is the same whatever each reading said and whichever part of the licence line it quoted.
+    const asIs = { restore: (s: string) => s };
+    for (const c of scriptedCredentialCases) {
+      const scripted = c.readings.map((r, i) => ({ ok: true as const, output: scriptedReading([...credentials], r), runId: `${c.id}_${i + 1}`, model: "scripted" }));
+      const r = readingsOutcome(scripted, asIs, { resumeText: c.resume, applicationAnswers: { eligibility: {} }, packet });
+      const f = r.ok ? credentialFailures(r.output, credentials, c.expect) : [r.error];
+      licence.push({ id: `scripted_${c.id}`, pass: f.length === 0, failures: f, ...(r.ok ? { notes: [findingsOf("combined", r.output)] } : {}) });
+    }
+    results["triage.credentials"] = { cases: licence, passRate: licence.filter((x) => x.pass).length / licence.length };
+
+    // A skill the owner set to be judged in the interviews (known bug 18): never asked of the résumé reading, never in
+    // the reading the team sees, never in the score.
+    {
+      const moved = withInterviewSkill(packet);
+      const c = consistencyCases[0]!;
+      const { combined: r, modelInput } = await assess(`${c.id}_interview_skill`, c.resume, { candidate: c.candidate, role: moved.packet });
+      const f = r.ok ? interviewSkillFailures(moved.key, modelInput, r.output, moved.packet) : [r.error];
+      results["triage.interview_skills"] = { cases: [{ id: "skill_for_the_interviews", pass: f.length === 0, failures: f, ...(r.ok ? { notes: [findingsOf("reading", r.output)] } : {}) }], passRate: f.length === 0 ? 1 : 0 };
+    }
+
+    // An eligibility answer a person overrode (known bug 30): the reading is told they were kept in, never sent the answer
+    // set aside, and reads them as it reads the same CV with the answer passed.
+    {
+      const c = consistencyCases[0]!;
+      const passed = await assess(`${c.id}_eligible`, c.resume, { candidate: c.candidate });
+      const kept = await assess(`${c.id}_kept_in`, c.resume, { candidate: c.candidate, keptIn: true });
+      const f = [...keptInInputFailures(kept.modelInput)];
+      if (!passed.combined.ok || !kept.combined.ok) f.push(...[passed.combined, kept.combined].flatMap((x) => (x.ok ? [] : [x.error])));
+      else f.push(...consistencyDifferences([passed.combined.output, kept.combined.output], packet).map((x) => x.replace(/^reading 2/, "kept in").replace(/reading 1/, "passed")));
+      results["triage.kept_in"] = { cases: [{ id: "kept_in_after_a_no", pass: f.length === 0, failures: f }], passRate: f.length === 0 ? 1 : 0 };
+    }
 
     // What the scoring reading is sent (founder decision D-04 = C): a CV full of personal details and a written summary
     // with contact details. None of them, and nothing of an earlier application, may be in the model's input; the words
@@ -329,19 +388,63 @@ async function main() {
   // The scorecard (screen.assess v3, plan Wave E): a recruiter's notes kept apart, a skip unknown, an unfinished
   // conversation never "strong interview". Judged on the model's own output, before the code's checks. The model is
   // sent what the app sends it (`scorecardInput`, founder decision D-04 = C): no name, email, phone, street or link.
+  /**
+   * A sent screening chat scored as the app scores it (agents/src/screening.ts, assessScreen): the scoring view's input,
+   * SCORECARD_READINGS readings side by side, each through the code's checks, combined into the middle answer
+   * (`scorecardReadings`). `raws` are the model's own readings before any check.
+   */
+  const scoreChat = async (id: string, packet: RolePacket, input: ReturnType<ScreenAssessCase["build"]>) => {
+    const role = input.packet ?? packet;
+    const ctx: ScreenContext = { company: { name: "Eval Dental" }, packet: role, candidate: { firstName: SCREEN_CANDIDATE.firstName ?? "Alex" }, channel: "web", progress: input.progress, answers: input.answers, transcript: input.transcript, focusUnknowns: [], latestCandidateMessage: null, incomplete: input.incomplete ?? null };
+    const { ctx: seen, view } = scorecardModelInput(ctx, SCREEN_CANDIDATE);
+    const readings = await Promise.all(Array.from({ length: SCORECARD_READINGS }, (_, i) => runPrompt(q, rt, screenAssessPrompt, seen, { companyId: null, inputRef: { eval: id, reading: i + 1, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() } })));
+    // what the app does once the model has answered, not a copy of it
+    const shown = scorecardReadings(readings, view, { transcript: input.transcript, answers: input.answers, progress: input.progress }, role);
+    return { shown, raws: readings.flatMap((r) => (r.ok ? [r.output] : [])), role };
+  };
+
   if (runs("screen.assess")) {
     const packet = await goldenPacket();
     const out: (typeof results)[string]["cases"] = [];
     for (const c of screenAssessCases) {
       const input = c.build(packet);
-      const ctx: ScreenContext = { company: { name: "Eval Dental" }, packet, candidate: { firstName: SCREEN_CANDIDATE.firstName ?? "Alex" }, channel: "web", progress: input.progress, answers: input.answers, transcript: input.transcript, focusUnknowns: [], latestCandidateMessage: null, incomplete: input.incomplete ?? null };
-      const { ctx: seen, view } = scorecardModelInput(ctx, SCREEN_CANDIDATE);
-      const r = await runPrompt(q, rt, screenAssessPrompt, seen, { companyId: null, inputRef: { eval: c.id, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() } });
-      if (!r.ok) { out.push({ id: c.id, pass: false, failures: [`assess failed: ${r.error}`] }); continue; }
-      const f = c.expect(r.output, { packet, transcript: input.transcript });
+      const { shown, raws, role } = await scoreChat(c.id, packet, input);
+      if (!shown.ok || !raws[0]) { out.push({ id: c.id, pass: false, failures: [`assess failed: ${shown.ok ? "no reading came back" : shown.error}`] }); continue; }
+      const f = [...(c.expect?.(raws[0], { packet: role, transcript: input.transcript }) ?? []), ...(c.expectShown?.(shown.output, { packet: role, transcript: input.transcript }) ?? []).map((x) => `shown: ${x}`)];
       out.push({ id: c.id, pass: f.length === 0, failures: f });
     }
     results["screen.assess"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
+  }
+
+  // The scorecard read again (known bugs 20 and 106): the same chat, scored as the app scores it, twice, must read the same.
+  if (runs("screen.consistency")) {
+    const packet = await goldenPacket();
+    const out: (typeof results)[string]["cases"] = [];
+    for (const c of screenConsistencyCases) {
+      const input = c.build(packet);
+      const one = await scoreChat(`${c.id}_read_1`, packet, input);
+      const two = await scoreChat(`${c.id}_read_2`, packet, input);
+      if (!one.shown.ok || !two.shown.ok) { out.push({ id: c.id, pass: false, failures: [one.shown, two.shown].flatMap((x) => (x.ok ? [] : [x.error])) }); continue; }
+      const f = scorecardDifferences(one.shown.output, two.shown.output);
+      out.push({ id: c.id, pass: f.length === 0, failures: f });
+    }
+    results["screen.consistency"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
+  }
+
+  // The code's fairness check on what the AI writes for a candidate to read (no model call): protected questions caught,
+  // ordinary dental ones let through, and an unfair follow-up replaced by the packet's next question.
+  if (runs("screen.question_fairness")) {
+    const out: (typeof results)[string]["cases"] = questionFairnessCases.map((c) => {
+      const said = unfairQuestion(c.text);
+      const f = c.unfair && !said ? [`not caught: "${c.text}"`] : !c.unfair && said ? [`blocked an ordinary question: "${c.text}" (${said})`] : [];
+      return { id: c.id, pass: f.length === 0, failures: f };
+    });
+    const two = { screening: { questions: [{ key: "experience", question: "Tell me about your most recent work.", kind: "skills" }, { key: "availability", question: "Which days and hours are you available?", kind: "availability" }], maxMinutes: 15 } } as unknown as RolePacket;
+    const followUp: ScreenTurn = { messageToCandidate: "Thanks. Have you ever been convicted of a crime?", questionKey: null, answerRecorded: null, followUpReason: "scripted", candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
+    const t = enforceTurnRules(followUp, two, { askedKeys: ["experience"], currentQuestionKey: "experience", followUps: {}, confusedTurns: 0, failures: 0 }, {});
+    const sent = unfairQuestion(t.messageToCandidate) ? [`an unfair follow-up reached the candidate: "${t.messageToCandidate}"`] : [];
+    out.push({ id: "unfair_follow_up_never_sent", pass: sent.length === 0, failures: sent });
+    results["screen.question_fairness"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
   }
 
   // The scorecard's side of D-04 = C: a conversation full of personal details. None may be in the model's input, the
@@ -358,7 +461,7 @@ async function main() {
       if (!r.ok) f.push(`assess failed: ${r.error}`);
       else {
         // what the app does once the model has answered (agents/src/screening.ts, scorecardOutcome), not a copy of it
-        const shown = scorecardOutcome(r.output, view, { transcript: input.transcript, answers: input.answers, progress: input.progress });
+        const shown = scorecardOutcome(r.output, view, { transcript: input.transcript, answers: input.answers, progress: input.progress }, packet);
         if (hasPlaceholder(JSON.stringify(shown))) f.push("a placeholder reached the scorecard the team sees");
       }
       out.push({ id: c.id, pass: f.length === 0, failures: f });

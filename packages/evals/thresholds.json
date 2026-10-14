@@ -35,6 +35,15 @@
   "triage.redaction": {
     "minPassRate": 1
   },
+  "triage.credentials": {
+    "minPassRate": 1
+  },
+  "triage.interview_skills": {
+    "minPassRate": 1
+  },
+  "triage.kept_in": {
+    "minPassRate": 1
+  },
   "screen.redaction": {
     "minPassRate": 1
   },
@@ -45,6 +54,12 @@
     "minPassRate": 1
   },
   "screen.assess": {
+    "minPassRate": 1
+  },
+  "screen.consistency": {
+    "minPassRate": 1
+  },
+  "screen.question_fairness": {
     "minPassRate": 1
   },
   "packet.revise": {
