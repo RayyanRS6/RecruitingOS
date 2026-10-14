@@ -8,7 +8,6 @@ recruiting-os/
 ├── pnpm-workspace.yaml
 ├── tsconfig.base.json
 ├── biome.json                   lint rules (run in CI)
-├── railway.json                 the Railway worker service: build, start, health check
 ├── .env.example                 every environment variable, documented
 ├── .gitleaks.toml               secret scanning, with the fake values the tests use on purpose
 ├── README.md                    how to run and test

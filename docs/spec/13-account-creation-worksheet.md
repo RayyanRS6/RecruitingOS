@@ -99,14 +99,14 @@ Conventions: owners = Nadine and Paul (named human accounts); billing = `billing
   workspace; the docs offer no rename, so the workspace name stays and the project name carries the meaning).
 - What runs there: `apps/api/src/worker.ts`, the always-on queue poller (workflows, reminders, timers, credential
   revocations, privacy deadlines). It listens on `PORT` (Railway provides it) for its own health check only, `GET
-  /healthz`, named in `railway.json`; the probe runs inside Railway, so no public networking or domain is needed.
+  /healthz`, set in the worker service's Settings; the probe runs inside Railway, so no public networking or domain is needed.
 - Service creation: in the project, `New`, then the GitHub repository `identified-talent-solutions/recruiting-os`
-  (the Railway GitHub App must have access to that private repository), branch `main`. Railway reads `railway.json` at
-  the repository root: builder Railpack, build command `pnpm worker:check` (a typecheck; the worker runs from source
+  (the Railway GitHub App must have access to that private repository), branch `main`. The worker service's Settings hold
+  the build and deploy values (from `railway.json` until 15 Oct 2026): builder Railpack, build command `pnpm worker:check` (a typecheck; the worker runs from source
   with `tsx`, which is a runtime dependency of `@ros/api` for that reason), start command `pnpm worker:start`, restart
   policy On Failure with ten retries. Root directory stays `/` because the pnpm workspace installs from the root; Node
   comes from `.node-version` (24). Watch paths: `apps/api/**`, `packages/**`, `package.json`, `pnpm-lock.yaml`,
-  `railway.json`, `.node-version`.
+  `.node-version`.
 - Region: **US West Metal (California)**, the closest offered to the Oregon database; changeable later without downtime.
 - Environment: the project's default `production` environment holds the staging worker (the project is the staging
   one); a production project or environment follows the production database.
@@ -284,7 +284,7 @@ Status: existing = used by the code today; planned = introduced by the Next.js p
 | COMP_BLS_ENABLED | Vercel, Railway | no | existing |
 | WORKER_INLINE | local only (`false` in production) | no | existing |
 | WORKER_POLL_MS | Railway | no | existing (the worker process polls the queue; its health check goes stale after three polls plus thirty seconds) |
-| PORT | Railway (set by the platform, not by hand) | no | built 30 Sep: the worker's health-check port (`GET /healthz`, named in `railway.json`) |
+| PORT | Railway (set by the platform, not by hand) | no | built 30 Sep: the worker's health-check port (`GET /healthz`, set in the worker service's Settings) |
 | LOG_LEVEL | none | no | retired: not read by the code; remove it where an older setup has it |
 | INDEED_CLIENT_ID, INDEED_CLIENT_SECRET, ZIPRECRUITER_API_KEY | none | — | unused (manual channels); may be removed |
 

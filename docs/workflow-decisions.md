@@ -609,7 +609,7 @@ The plan question numbers Q1, Q15, Q18, Q21, Q22 and Q26 were answered as B7, B1
 
 | What you decided | Where it lives in the code | Status |
 |---|---|---|
-| Keep Vercel, Supabase and Railway; "don't change anything" about hosting. | `apps/shell` (the Vercel app, which also serves the API: PLATFORM-01); `railway.json` and `apps/api/src/worker.ts` (the Railway worker: PLATFORM-02); `packages/db` (Supabase Postgres) | Built (unchanged) |
+| Keep Vercel, Supabase and Railway; "don't change anything" about hosting. | `apps/shell` (the Vercel app, which also serves the API: PLATFORM-01); `apps/api/src/worker.ts` and the worker service's Railway settings (the Railway worker: PLATFORM-02; `railway.json` removed 15 Oct); `packages/db` (Supabase Postgres) | Built (unchanged) |
 
 ### 4.5 AI models: 13 October 2026 (PR #36)
 

@@ -1,24 +1,19 @@
 # Railway: the staging worker service, one screen at a time
 
 Status: written 23 September 2026 from Railway's documentation (docs.railway.com, read that day) for founder decision 1
-(Railway hosts the worker; Trigger.dev deferred). The worker is the existing `apps/api/src/worker.ts`; Railway reads
-`railway.json` at the repository root (build `pnpm worker:check`, start `pnpm worker:start`, health check `GET /healthz`
-with a 120-second timeout, restart on failure up to ten times). Nothing here is a secret; secret values go from
-1Password into Railway's Variables tab and are sealed.
+(Railway hosts the worker; Trigger.dev deferred). The worker is the existing `apps/api/src/worker.ts`. Its settings
+live in the worker service's **Settings** in the Railway dashboard: builder **Railpack**, build command
+`pnpm worker:check`, start command `pnpm worker:start`, health check path `/healthz` with a 120-second timeout,
+restart policy **On Failure** with **10** retries. Nothing here is a secret; secret values go from 1Password into
+Railway's Variables tab and are sealed.
 
-Note for the register: Railway calls the `railway.json` mechanism "Config as Code" and says it is deprecated in favour
-of its Infrastructure as Code, with legacy support ending 1 December 2026 (a hard cutoff: the file then stops being
-read). The replacement (`.railway/railway.ts`) is not read during deploys either; it is applied from Railway's command
-line by someone signed in to the workspace, and its documented options do not cover the restart policy (checked 9
-October 2026, docs.railway.com/infrastructure-as-code). For one service, the simpler path is the dashboard:
-
-1. Railway, project `recruiting-os-staging`, service `worker`, **Settings**. Enter the values the file holds today:
-   build command `pnpm worker:check`; start command `pnpm worker:start`; health check path `/healthz`; health check
-   timeout `120`; restart policy **On Failure** with **10** retries; builder **Railpack**.
-2. Then remove `railway.json` from the repository, so the dashboard values are the only ones (until then the file
-   overrides them). The next deployment should start as in screen 4 below.
-
-Doing it in this order means nothing changes for the running worker at any point.
+Note for the register: until 15 October 2026 these settings came from a `railway.json` file at the repository root.
+Railway calls that mechanism "Config as Code", deprecated with legacy support ending 1 December 2026 (a hard cutoff).
+Its replacement (`.railway/railway.ts`) is not read during deploys either; it is applied from Railway's command line,
+and its documented options do not cover the restart policy (checked 9 October 2026,
+docs.railway.com/infrastructure-as-code). So the dashboard holds them: the founder entered the values on 13 October
+2026, they were checked against the file on 15 October 2026 (identical, and no custom config-file path set), and the
+file was removed that day. **When production is created, enter the same values on the production worker's Settings.**
 
 ## Screen 1: create the service from the repository
 
@@ -41,13 +36,13 @@ Select the service, **Settings** tab:
 - **Service name**: `worker`.
 - **Source**: repository `identified-talent-solutions/recruiting-os`, branch `main`, root directory left as the
   repository root (the worker runs from the root through `pnpm worker:start`).
-- **Watch paths** (optional, reduces rebuilds): `apps/api/**`, `packages/**`, `railway.json`, `package.json`,
-  `pnpm-lock.yaml`, `pnpm-workspace.yaml`.
+- **Watch paths** (optional, reduces rebuilds): `apps/api/**`, `packages/**`, `package.json`, `pnpm-lock.yaml`,
+  `pnpm-workspace.yaml`.
 - **Region**: US West Metal (California, `us-west2`), the region nearest the Oregon database.
-- **Config as Code**: leave the default path so `railway.json` at the root is read.
-- **Health check**: comes from `railway.json` (`/healthz`, 120 seconds). The worker listens on `PORT`, which Railway
-  provides; the probe runs inside Railway, so no public domain or networking is needed. If the Settings tab shows a
-  health-check path already, leave it as `/healthz`.
+- **Build and deploy**: builder Railpack; build command `pnpm worker:check`; start command `pnpm worker:start`;
+  restart policy On Failure, 10 retries. Leave **Config as Code** without a file path.
+- **Health check**: path `/healthz`, timeout `120`. The worker listens on `PORT`, which Railway provides; the probe
+  runs inside Railway, so no public domain or networking is needed.
 
 ## Screen 3: variables
 
