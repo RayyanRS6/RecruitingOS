@@ -46,7 +46,7 @@ function RequestForm(props: { privacyEmail: string; company: string | null; erro
       <p class="back"><a href="/privacy"><Icon name="arrow-left" />How we handle your information</a></p>
       <p class="eyebrow">Privacy</p>
       <h1>Your information</h1>
-      <p class="lead">Ask for a copy of what we hold about you, correct it, or have it deleted. Use the email address you applied with. We send a link to that address to confirm it is you; nothing happens until you open it and press the button.</p>
+      <p class="lead">Ask for a copy of what we hold about you, correct it, or have it deleted. Use the email address you applied with.</p>
       {props.error ? <div class="err" role="alert">{props.error}</div> : null}
       <form method="post" action="/c/privacy-request" class="card">
         {props.company ? <input type="hidden" name="company" value={props.company} /> : null}
@@ -59,10 +59,15 @@ function RequestForm(props: { privacyEmail: string; company: string | null; erro
         </select>
         <label for="details">Details (optional)</label>
         <textarea id="details" name="details" rows={3} maxlength={2000} placeholder="For example: my phone number is wrong, it should be ...">{v.details ?? ""}</textarea>
-        <p class="notice">
-          <strong>What we collect and why:</strong> the information you gave when you applied (your name, contact details, résumé, your answers and any screening conversation), to consider you for employment. <strong>Who can see it:</strong> the hiring team at the employer, an Identified Talent Solutions recruiter only if the employer brings one in to help, and the service providers that store files and deliver email on our behalf. <strong>How this works:</strong> a person handles every request; nothing is decided by software. We confirm receipt and completion by email. Deleting keeps only what the law requires, without your name or contact details.
-        </p>
-        <p class="notice">{privacy?.text}</p>
+        <p class="meta">We email that address a link to confirm it is you; nothing happens until you open it and press the button.</p>
+        {/* The notice, word for word, one click away (founder brief, 14 October 2026). */}
+        <details class="more">
+          <summary>Read the full notice</summary>
+          <p class="notice">
+            <strong>What we collect and why:</strong> the information you gave when you applied (your name, contact details, résumé, your answers and any screening conversation), to consider you for employment. <strong>Who can see it:</strong> the hiring team at the employer, an Identified Talent Solutions recruiter only if the employer brings one in to help, and the service providers that store files and deliver email on our behalf. <strong>How this works:</strong> a person handles every request; nothing is decided by software. We confirm receipt and completion by email. Deleting keeps only what the law requires, without your name or contact details.
+          </p>
+          <p class="notice">{privacy?.text}</p>
+        </details>
         <button class="btn" type="submit">Send me the confirmation link</button>
       </form>
       <p class="foot">Prefer email? Write to <a href={`mailto:${props.privacyEmail}`}>{props.privacyEmail}</a> from the address you applied with.</p>

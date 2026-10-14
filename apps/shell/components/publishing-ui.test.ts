@@ -22,7 +22,7 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 (globalThis as { React?: typeof React }).React = React;
 const { AfterApproval, StatusPill } = await import("@ros/web/src/pages/AfterApproval");
 const { PacketApprovalCard } = await import("@ros/web/src/pages/RolePlan");
-const { PostingTab } = await import("@ros/web/src/pages/RolePosting");
+const { PostingTab, acceptingMode, postingNeedsTeam } = await import("@ros/web/src/pages/RolePosting");
 const { People } = await import("@ros/web/src/pages/People");
 const { RecruiterQueue } = await import("@ros/web/src/pages/RecruiterQueue");
 const { Setup } = await import("@ros/web/src/pages/Setup");
@@ -176,9 +176,35 @@ describe("the approval card (D1, D5, D6, D9)", () => {
   });
 });
 
-describe("the Posting tab when ITS posts (D3, D6, D7, D8)", () => {
+describe("the Share tab (once Posting) when ITS posts (D3, D6, D7, D8)", () => {
   const html = render(client(), createElement(PostingTab, { roleId: "r1", roleStatus: "open", canManage: true, canShare: true, roleTitle: "Dental hygienist", companyName: "Bright Dental" }));
   const words = text(html);
+
+  it("leads with the job's public link, with Copy and Open, before anything about the boards (Wave S1)", () => {
+    const link = html.indexOf('<div class="share-link">');
+    expect(link).toBeGreaterThan(-1);
+    expect(link).toBeLessThan(html.indexOf("Where it is posted"));
+    expect(html.slice(link)).toMatch(/^<div class="share-link">.*<code title="https:\/\/jobs\.test\/c\/bright\/jobs\/r1">https:\/\/jobs\.test\/c\/bright\/jobs\/r1<\/code>.*Copy<\/button><a class="btn secondary sm" href="https:\/\/jobs\.test\/c\/bright\/jobs\/r1" target="_blank" rel="noopener noreferrer">.*Open<span class="sr-only"> the job page \(opens in a new tab\)<\/span><\/a><\/div>/);
+    // the message, the ready-made places, each board's card, the tracked links and the counts by source are one click away
+    expect(words).toContain("The message that goes with it");
+    expect(words).toContain("Links for a referral, a school or a group");
+    expect(words).toContain("Each board and page, step by step (3)");
+    expect(words).toContain("Your own tracked links (0)");
+    expect(words).toContain("Applications by source, last 14 days");
+    // nothing waits on the team here (ITS posts), so the boards' cards start folded
+    expect(html).toContain('<details class="more"><summary>Each board and page, step by step (3)</summary>');
+  });
+
+  it("opens the boards' cards when one holds a step for the team, and offers the link to someone who cannot share", () => {
+    const qc = client();
+    const self = posting({ postedBy: "self", task: null });
+    qc.setQueryData(["postings", "r1"], { ...postings, whoPosts: "self", postings: [postings.postings[0], postings.postings[1], self] });
+    const open = render(qc, createElement(PostingTab, { roleId: "r1", roleStatus: "open", canManage: true, canShare: true, roleTitle: "Dental hygienist", companyName: "Bright Dental" }));
+    expect(open).toContain('<details class="more" open=""><summary>Each board and page, step by step (3)</summary>');
+    const readOnly = render(client(), createElement(PostingTab, { roleId: "r1", roleStatus: "open", canManage: false, canShare: false, roleTitle: "Dental hygienist", companyName: "Bright Dental" }));
+    expect(text(readOnly)).toContain("Your job link");
+    expect(readOnly).toContain('<code title="https://jobs.test/c/bright/jobs/r1">');
+  });
 
   it("says ITS is posting, with the task, and keeps the address field folded away", () => {
     expect(words).toContain("Posted by ITS from your company's own account");
@@ -211,6 +237,29 @@ describe("the Posting tab when ITS posts (D3, D6, D7, D8)", () => {
     expect(out).toContain("Nothing is on Indeed yet: ITS could not post it.");
     expect(out).toContain("Pat Poster wrote: \"Your Indeed account has no job slots left.\"");
     expect(out).toContain("Ask ITS again");
+  });
+});
+
+describe("what keeps a board's card open, and which way the accepting switch goes (Wave S1)", () => {
+  it("opens the boards' cards only for a step the team has to take", () => {
+    const p = (over: Record<string, unknown>) => posting(over) as never;
+    // ITS posts: nothing for the team, unless ITS could not do it
+    expect(postingNeedsTeam(p({}), true)).toBe(false);
+    expect(postingNeedsTeam(p({ task: { id: "t1", kind: "post_job", status: "resolved", label: "Post", recruiterName: null, createdAt: "", resolvedAt: "", notDone: true, note: null } }), true)).toBe(true);
+    // the team posts: an address to record, a failed check, a listing to take down, an earlier version still up
+    expect(postingNeedsTeam(p({ postedBy: "self", task: null }), true)).toBe(true);
+    expect(postingNeedsTeam(p({ postedBy: "self", task: null, status: "failed" }), true)).toBe(true);
+    expect(postingNeedsTeam(p({ postedBy: "self", task: null, status: "closed", closureRequired: true }), false)).toBe(true);
+    expect(postingNeedsTeam(p({ postedBy: "self", task: null, status: "closed", closureRequired: true, closureConfirmedAt: "2026-10-09" }), false)).toBe(false);
+    expect(postingNeedsTeam(p({ postedBy: "self", task: null, status: "live_verified", showsOldVersion: true }), true)).toBe(true);
+    expect(postingNeedsTeam(p({ postedBy: "self", task: null, status: "live_verified" }), true)).toBe(false);
+  });
+
+  it("stops applications, takes them again, or (after the closing date) offers a later date; nothing once the job is not live", () => {
+    expect(acceptingMode({ status: "open", acceptingApplications: true, closingDate: null } as never)).toBe("stop");
+    expect(acceptingMode({ status: "paused", acceptingApplications: false, closingDate: null } as never)).toBe("reopen");
+    expect(acceptingMode({ status: "open", acceptingApplications: false, closingDate: { ...closingDate, applicationsClosedByDate: true } } as never)).toBe("extend");
+    expect(acceptingMode({ status: "closed", acceptingApplications: false, closingDate: null } as never)).toBeNull();
   });
 });
 
@@ -263,7 +312,7 @@ describe("Setup: how candidates see the company, and the job boards (Q13, D3, Q1
   it("offers the assistant's draft or your own words, and a picture for the logo, before anything shows", () => {
     const html = page({});
     const words = text(html);
-    expect(html).toContain('<div id="setup-profile" class="setup-section">');
+    expect(html).toContain('<div id="setup-profile" class="setup-section" tabindex="-1">');
     expect(words).toContain("How candidates see you");
     expect(words).toContain("No logo yet: job pages show your company's name.");
     expect(html).toMatch(/<input id="co-logo-file" class="input" type="file" accept="image\/png,image\/jpeg,image\/webp"/);
@@ -314,7 +363,9 @@ describe("Setup: When a candidate cancels (founder decisions 1A to 4A; 3A)", () 
     const html = page();
     const words = text(html);
     expect(html.indexOf('id="setup-boards"')).toBeLessThan(html.indexOf('id="setup-new-times"'));
-    expect(html).toContain('<a href="#setup-new-times">When a candidate cancels</a>');
+    // its own section, which the old #setup-new-times links still reach (Settings' tabs are slice D's; kept loose)
+    expect(html).toContain('id="setup-new-times"');
+    expect(words).toContain("When a candidate cancels");
     expect(words).toContain("When candidates cancel a booked interview, they choose: send me new times later, or I'm no longer interested.");
     expect(html).toMatch(/<input type="checkbox" checked=""\/>Send new times automatically to people who ask for them/);
     expect(html).toMatch(/<input id="new-times-days" class="input" type="number" min="1" max="10" step="1" style="width:100px" value="3"\/>/);

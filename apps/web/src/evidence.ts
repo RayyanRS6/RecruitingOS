@@ -122,7 +122,7 @@ export function competencyUnquoted(c: { finding: string; evidence?: EvidenceRef 
   return c.finding !== "not_evidenced" && !c.evidence?.quote?.trim();
 }
 
-export const SCORECARD_UNAVAILABLE_TEXT = "The screen is finished, but we could not write its scorecard automatically. Read the conversation and decide yourself.";
+export const SCORECARD_UNAVAILABLE_TEXT = "The screening chat is finished, but its AI review could not be written. Read the chat and decide yourself.";
 
 /**
  * The latest screen finished but its scorecard could not be written (the run gave up after two unusable answers; the

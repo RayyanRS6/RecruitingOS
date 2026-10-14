@@ -162,7 +162,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
     onMutate: () => { setPolling(true); setBlockers(null); setProblem(null); setRoom(null); },
     onSuccess: async (r) => {
       // The chosen closing date goes on the new role; if that fails the role is still waiting for approval, and the
-      // Posting tab can set the date.
+      // Share tab can set the date.
       let dateProblem: string | null = null;
       if (closesOn && mayManage) {
         try {
@@ -172,7 +172,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
           dateProblem = e instanceof ApiError ? e.message : "The closing date could not be set.";
         }
       }
-      toast("Sent for approval.", dateProblem ? `The role is created, but the closing date was not set: ${dateProblem} Set it on the role's Posting tab.` : "The role is created. Nothing is posted until it is approved.");
+      toast("Sent for approval.", dateProblem ? `The job is created, but the closing date was not set: ${dateProblem} Set it on the job's Share tab.` : "The job is created. Nothing is posted until it is approved.");
       for (const k of [["roles"], ["brief"], ["intake", "mine"]]) qc.invalidateQueries({ queryKey: k });
       nav(`/roles/${r.roleId}`);
     },

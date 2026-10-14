@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { BoardCard, BoardPlacement, BoardView, MatchScore, PoolSummary } from "../../apps/web/src/api/client";
 import {
   ASK_INTRO, ASK_SOON, BOARD_COLUMNS, DECLINE_CHOICES, GROUP_WORDS, NEEDS_EYE_WARNING, NO_DECLINE_HERE, POOL_CARD_NOTE, RECRUITER_CHECK, REVIEW_FOOT, REVIEW_SUB, SORT_TEXT,
-  answerPath, appliedToast, applyLabel, batchItems, boardOrder, boardPersonPath, boardSearch, cardChip, cardFacts, confidenceChip, countsLine, evidenceLines, headerCounts, extraWarnings, groupCount, initialReview, isTicked,
-  lookedAtLine, modeFrom, needsReason, poolCardView, previewByPerson, previewItems, readyCounts, readyLine, reasonLine, reviewRows, rowWarnings, scoreText, snapshotOf, snapshotPlace,
+  answerPath, appliedNote, appliedToast, applyLabel, batchItems, boardOrder, boardPersonPath, boardSearch, cardChip, cardFacts, confidenceChip, countsLine, evidenceLines, headerCounts, extraWarnings, groupCount, initialReview, isTicked,
+  lookedAtLine, modeFrom, needsReason, poolCardView, previewByPerson, previewItems, readyCounts, readyLine, reasonLine, reviewFootNote, reviewRows, rowWarnings, scoreText, snapshotOf, snapshotPlace,
   sortedText, summarySentences, tickable, togglePick, type ReviewState,
 } from "../../apps/web/src/pages/board/board-model";
+import { SAFETY_NET_NOTE } from "../../apps/web/src/talent-list";
 
 /**
  * The pool board's pure pieces (plan F6-F10; founder decisions B2, B4, B5, B6): the board's words and cards, Review and
@@ -62,11 +63,12 @@ describe("the board's address and strip", () => {
     expect(boardSearch("view=board", { mode: "list" })).toBe("");
   });
 
-  it("says what sorting does, that nothing moves until applied, and that nothing is sent", () => {
+  it("says what sorting does, that nothing moves until applied, and that nothing is sent, in one short line", () => {
+    expect(SORT_TEXT).toBe("Groups everyone who finished applying, with a reason for each. Nothing moves until you apply it, and nothing is sent to anyone.");
     expect(SORT_TEXT).toMatch(/finished applying/);
-    expect(SORT_TEXT).toMatch(/explains every call/);
+    expect(SORT_TEXT).toMatch(/a reason for each/);
     expect(SORT_TEXT).toMatch(/nothing is sent to anyone/);
-    expect(sortedText("2026-10-09T10:42:00.000Z")).toMatch(/^Sorted at \d{1,2}:\d{2}\s?(AM|PM) by fixed rules from the checked evidence/);
+    expect(sortedText("2026-10-09T10:42:00.000Z")).toMatch(/^Sorted at \d{1,2}:\d{2}\s?(AM|PM) by fixed rules from the checked evidence\. Nothing moves until you apply it/);
     expect(sortedText(null)).toMatch(/^Sorted by fixed rules/);
     expect(sortedText("not a date")).toMatch(/^Sorted by fixed rules/);
   });
@@ -84,8 +86,8 @@ describe("the board", () => {
     expect(headerCounts({ counts: { shortlist: 1 } })).toBe("To sort: 1 shortlist · 0 longlist · 0 not moving forward");
   });
 
-  it("shows the reading's own confidence as a chip of its own, amber only when low", () => {
-    expect(confidenceChip({ confidence: "high" })).toMatchObject({ label: "High confidence", tone: "neutral" });
+  it("shows the AI review's own confidence as a chip of its own, amber only when low", () => {
+    expect(confidenceChip({ confidence: "high" })).toMatchObject({ label: "High confidence", tone: "neutral", title: "How sure the AI was about its review. It is not part of the score." });
     expect(confidenceChip({ confidence: "low" })).toMatchObject({ label: "Low confidence", tone: "caution" });
     expect(confidenceChip({ confidence: null })).toBeNull();
   });
@@ -96,13 +98,14 @@ describe("the board", () => {
     const facts = { openScreen: true, invitedAutomatically: true, suggestionWaiting: true, stillApplying: false, lowConfidence: false, needsCloserLook: false };
     expect(cardFacts({ mustHaves, score: score(80, { basedOn: "resume_and_screen" }), readingVersion, facts })).toEqual([
       "Must-haves: 3 of 4 shown, 1 not yet known",
-      "From the résumé and the screening conversation",
+      "From the résumé and the screening chat",
       "Read against version 1 of the role; the role is now on version 2.",
-      "Invited to the screening conversation automatically",
+      "Invited to the screening chat automatically",
       "A suggestion is waiting for you",
     ]);
-    expect(cardFacts({ mustHaves: null, score: score(80), readingVersion: null, facts: { ...facts, invitedAutomatically: false, suggestionWaiting: false } })).toEqual(["From the résumé reading", "Screening conversation open"]);
-    expect(cardFacts(ana)).toEqual(["From the résumé reading"]);
+    expect(cardFacts({ mustHaves: null, score: score(80), readingVersion: null, facts: { ...facts, invitedAutomatically: false, suggestionWaiting: false } })).toEqual(["From the AI review of the résumé", "Screening chat open"]);
+    expect(cardFacts(ana)).toEqual(["From the AI review of the résumé"]);
+    expect(cardFacts({ mustHaves: null, score: score(80, { basedOn: "screen" }), readingVersion: null, facts: { ...facts, openScreen: false, invitedAutomatically: false, suggestionWaiting: false } })).toEqual(["From the screening chat"]);
   });
 
   it("writes the score as the band's word and the number, coloured like the badge", () => {
@@ -134,7 +137,7 @@ describe("the board", () => {
   it("shows two strengths and the gap, each with where it came from, and says when nothing was quoted", () => {
     expect(evidenceLines(ana)).toEqual([
       { kind: "strength", text: "Active CA RDH license", source: "résumé", quoted: true },
-      { kind: "strength", text: "Periodontal charting", source: "screening conversation", quoted: false },
+      { kind: "strength", text: "Periodontal charting", source: "screening chat", quoted: false },
       { kind: "gap", text: "Patient communication: partly shown", source: "résumé", quoted: true },
     ]);
     expect(evidenceLines({ strengths: [], gap: null })).toEqual([]);
@@ -251,13 +254,20 @@ describe("Review and apply", () => {
     expect(r.left).toBe(3);
   });
 
-  it("says where each group goes and that it is private, and the footer says nobody is emailed", () => {
+  it("says where each group goes and that it is private, and the footer says nobody is emailed now", () => {
     expect(GROUP_WORDS.shortlist).toBe("Added to your Shortlist. Private, the candidate is not told.");
     expect(GROUP_WORDS.longlist).toMatch(/Private, no email\.$/);
-    // nobody is emailed now, and the safety net (Q27) is named rather than promising that nothing ever goes by itself
-    expect(GROUP_WORDS.not_moving_forward).toBe("Filed privately. Nobody is emailed now; you will be reminded to send the decision message from the Talent page. If nobody tells them within 5 working days, the standard message goes by itself (if your settings ask for approval or keep these messages with a person, an ITS recruiter is brought in instead and nothing is sent).");
-    expect(REVIEW_SUB).toBe("Untick anyone you want to decide yourself, change a reason if needed, then apply. Unticked people stay where they are.");
-    expect(REVIEW_FOOT).toBe("This files people into your pipeline privately. Nobody is emailed.");
+    // nobody is emailed now, and the safety net (Q27; founder decision D-03) is named in one short line rather than
+    // promising that nothing ever goes by itself
+    expect(SAFETY_NET_NOTE).toBe("If nobody tells them within 5 working days, the standard message goes by itself (or an ITS recruiter is brought in, if your settings say so).");
+    expect(GROUP_WORDS.not_moving_forward).toBe(`Filed privately; nobody is emailed now. ${SAFETY_NET_NOTE}`);
+    expect(REVIEW_SUB).toBe("Untick anyone you want to decide yourself. Unticked people stay where they are.");
+    expect(REVIEW_FOOT).toBe("Private: nobody is emailed now.");
+  });
+
+  it("names the safety net in the footer while anyone ticked is filed as not moving forward (D-03)", () => {
+    expect(reviewFootNote({ not_moving_forward: 0 })).toBeNull();
+    expect(reviewFootNote({ not_moving_forward: 2 })).toBe("Not moving forward: if nobody tells them within 5 working days, the standard message goes by itself (or an ITS recruiter is brought in, if your settings say so).");
   });
 
   it("offers the fixed reasons in the team's words, never closing the role", () => {
@@ -271,6 +281,15 @@ describe("Review and apply", () => {
     expect(appliedToast({ applied: 1, refused: 2 })).toEqual({ title: "Applied 1 decision", detail: "Filed privately. Nobody was emailed. 2 people could not be applied; each says why." });
     expect(appliedToast({ applied: 0, refused: 3 })).toEqual({ title: "Nothing was applied", detail: "Each person says why. Nobody was emailed." });
   });
+
+  it("adds the safety net to the toast and the result once anyone was filed as not moving forward (D-03)", () => {
+    const results = [{ ok: true, action: "shortlist" as const }, { ok: true, action: "not_moving_forward" as const }];
+    expect(appliedToast({ applied: 2, refused: 0, results })).toEqual({ title: "Applied 2 decisions", detail: `Filed privately. Nobody was emailed. ${SAFETY_NET_NOTE}` });
+    expect(appliedNote({ results })).toBe(`Nobody was emailed. ${SAFETY_NET_NOTE}`);
+    // a refused not-moving-forward was not filed, so it promises nothing
+    expect(appliedNote({ results: [{ ok: false, action: "not_moving_forward" as const }] })).toBe("Nobody was emailed.");
+    expect(appliedNote({})).toBe("Nobody was emailed.");
+  });
 });
 
 describe("one-click questions", () => {
@@ -282,8 +301,8 @@ describe("one-click questions", () => {
   });
 
   it("says what it looked at, and that nothing new was asked of the AI", () => {
-    expect(lookedAtLine({ people: 6, resumeReadings: 6, screenReadings: 2, requirements: ["A", "B"], words: "" })).toBe("Looked at: 6 people (6 résumé readings and 2 screening conversations), against 2 must-haves. Nothing new was asked of the AI.");
-    expect(lookedAtLine({ people: 1, resumeReadings: 1, screenReadings: 0, requirements: ["Active CA RDH license"], words: "" })).toBe("Looked at: 1 person (1 résumé reading), against \"Active CA RDH license\". Nothing new was asked of the AI.");
+    expect(lookedAtLine({ people: 6, resumeReadings: 6, screenReadings: 2, requirements: ["A", "B"], words: "" })).toBe("Looked at: 6 people (6 résumé reviews and 2 screening chats), against 2 must-haves. Nothing new was asked of the AI.");
+    expect(lookedAtLine({ people: 1, resumeReadings: 1, screenReadings: 0, requirements: ["Active CA RDH license"], words: "" })).toBe("Looked at: 1 person (1 résumé review), against \"Active CA RDH license\". Nothing new was asked of the AI.");
     expect(lookedAtLine({ people: 0, resumeReadings: 0, screenReadings: 0, requirements: [], words: "" })).toBe("Looked at: 0 people. Nothing new was asked of the AI.");
   });
 
@@ -296,8 +315,9 @@ describe("one-click questions", () => {
   });
 
   it("says plainly where answers come from, and that typing a question is not available yet", () => {
-    expect(ASK_INTRO).toBe("Answers come from the checked findings already on file for everyone who finished applying. Pick a question; each answer says what it looked at.");
-    expect(ASK_SOON).toBe("Typing your own question is not available yet. Pick a question above, or bring in a recruiter.");
+    // where answers come from is the panel's own line under its title; the intro is one short instruction
+    expect(ASK_INTRO).toBe("Pick a question. Each answer says what it looked at.");
+    expect(ASK_SOON).toBe("Typing your own question is not available yet. Pick one above, or bring in a recruiter.");
   });
 });
 

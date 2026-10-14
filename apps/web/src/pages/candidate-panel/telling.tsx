@@ -90,11 +90,12 @@ export function TellCard({ a, roleId, myRole }: { a: ApplicationDetail; roleId: 
       {waiting ? (
         <p className="small" style={{ color: "var(--ink-2)" }}>{mayApprove ? `Someone on your team wants to send the decision message, in ${chosen}.` : `The decision message, in ${chosen}, is waiting for ${whoDecides(waiting.requiredRoles)} to approve it.`} Nothing goes out until it is approved.</p>
       ) : a.decisionMessageWaiting ? (
-        <p className="small" style={{ color: "var(--ink-2)" }}>The role's closing message, which includes {first}, is waiting for approval. Nothing goes out until it is approved; it is decided on Today.</p>
+        <p className="small" style={{ color: "var(--ink-2)" }}>The role's closing message, which includes {first}, is waiting for approval. Nothing goes out until it is approved; it is decided on Home.</p>
       ) : (
-        <p className="small" style={{ color: "var(--ink-2)" }}>Your decision is private: nothing has been sent to {first}. Send the decision message when you are ready, or record that you told them yourself.</p>
+        <p className="small" style={{ color: "var(--ink-2)" }}>Your decision is private: nothing has been sent to {first}.</p>
       )}
       {waiting && line ? <p className="small" style={{ margin: "6px 0 0" }}>Their personal line: <q>{line}</q></p> : null}
+      {/* The safety net in one short line (founder decision D-03 A), with its day. */}
       {safety && !sending ? <p className="small muted safety-net" style={{ margin: "8px 0 0" }}>{safety}</p> : null}
       {waiting && mayApprove ? (
         <div className="row" style={{ marginTop: 10 }}>
@@ -198,11 +199,17 @@ export function SendDecisionStep({ a, roleId, onClose, onSent }: { a: Applicatio
           ))}
         </fieldset>
       )}
-      <Field label="A personal line (optional)" htmlFor={`personal-line-${a.id}`} hint={PERSONAL_LINE_HINT}>
-        <textarea id={`personal-line-${a.id}`} className="textarea" rows={2} maxLength={PERSONAL_LINE_MAX} value={line} onChange={(e) => setLine(e.target.value)} placeholder={`For example: It was a pleasure to meet you, ${a.candidate.firstName}.`} />
-      </Field>
-      {/* the count is announced only near the limit, not on every keystroke */}
-      <p className="small muted" style={{ margin: "-4px 0 0", textAlign: "right" }} aria-live={line.length >= PERSONAL_LINE_MAX - 30 ? "polite" : "off"}>{line.length} of {PERSONAL_LINE_MAX}</p>
+      {/* The personal line is optional: one click away; the message below always shows what goes, line included. */}
+      <details className="more">
+        <summary>{line.trim() ? "Your personal line" : "Add a personal line (optional)"}</summary>
+        <div className="stack" style={{ gap: 4 }}>
+          <Field label="A personal line (optional)" htmlFor={`personal-line-${a.id}`} hint={PERSONAL_LINE_HINT}>
+            <textarea id={`personal-line-${a.id}`} className="textarea" rows={2} maxLength={PERSONAL_LINE_MAX} value={line} onChange={(e) => setLine(e.target.value)} placeholder={`For example: It was a pleasure to meet you, ${a.candidate.firstName}.`} />
+          </Field>
+          {/* the count is announced only near the limit, not on every keystroke */}
+          <p className="small muted" style={{ margin: 0, textAlign: "right" }} aria-live={line.length >= PERSONAL_LINE_MAX - 30 ? "polite" : "off"}>{line.length} of {PERSONAL_LINE_MAX}</p>
+        </div>
+      </details>
       {refused ? <Alert tone="critical">{refused}</Alert> : null}
       {custom && preview.error && !refused ? <ErrorState message={preview.error instanceof ApiError ? preview.error.message : "Could not show the message with your changes."} onRetry={() => preview.refetch()} /> : null}
       {shown && !refused ? (

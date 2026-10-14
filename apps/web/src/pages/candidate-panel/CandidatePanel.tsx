@@ -9,14 +9,15 @@ import { isTextEntry } from "../../start-hire";
 import { stageBlocked, stageIntent, type PanelStep } from "../../talent-actions";
 import { NO_COMPOSE, PANEL_TABS, composeFor, hasUnsent, latestByTab, markSeen, neighbours, unreadTabs, type PanelTab, type SeenTabs } from "./helpers";
 import { DraftContext, useCandidateAction, useViewer } from "./hooks";
-import { matchOf } from "./match-view";
+import { matchOf, type NextStepAction } from "./match-view";
 import { NeedsYou } from "./needs-you";
 import { NotesTab } from "./notes";
 import { type Compose, HistoryTab, MessagesTab, OverviewTab, ResumeTab, ScreenTab } from "./sections";
 
 /**
- * The candidate panel (plan A10; founder decisions B3 and B6): a drawer with a sticky header (who, when they applied, the
- * role, Email, the stage button, More, next and previous), what needs you under it, then the sections. The page keeps
+ * The candidate panel (plan A10; founder decisions B3 and B6; Wave S1): a drawer with a sticky header (who, when they
+ * applied, the role, Email, the stage button, More, next and previous), the decisions waiting for you under it (each one
+ * line and its buttons, the rest behind "Why"), then the sections, the Overview first. The page keeps
  * the panel's place in the address (`?open=<id>&tab=…`). Moving to the next person never carries a half-filled form
  * over (everything under the header is keyed by the person), and unsent text is never thrown away without asking.
  * Nothing is fetched ahead for the neighbours: each opening is recorded as a view of that candidate.
@@ -138,9 +139,15 @@ export function CandidatePanel(props: PanelProps) {
     if (intent.kind === "action") act.mutate(intent.body);
     else if (intent.kind === "step") props.onStep(intent.step);
   };
+  // The Overview's suggested next step: its one button does what the stage button, a section or Email would.
+  const onNext = (x: NextStepAction) => {
+    if (x.kind === "move") onMove(x.to);
+    else if (x.kind === "tab") onTab(x.tab);
+    else openCompose();
+  };
   const more: MenuItem[] = a
     ? [
-        { id: "invite_screen", label: "Invite to a screen", icon: "send", disabled: !a.allowedActions.includes("invite_screen"), reason: a.blockedReasons.invite_screen },
+        { id: "invite_screen", label: "Invite to a screening chat", icon: "send", disabled: !a.allowedActions.includes("invite_screen"), reason: a.blockedReasons.invite_screen },
         { id: "record_outcome", label: "Record an outcome", icon: "edit", disabled: !a.allowedActions.includes("record_outcome"), reason: a.blockedReasons.record_outcome },
       ]
     : [];
@@ -206,7 +213,7 @@ export function CandidatePanel(props: PanelProps) {
           <div key={id}>
             <NeedsYou a={a} roleId={roleId} myRole={viewer.role} myUserId={viewer.userId} step={props.step} setStep={props.onStep} roundKey={props.roundKey} onTab={onTab} />
             <TabPanel idBase="candidate-panel" value={tab}>
-              {tab === "overview" ? <OverviewTab a={a} roleId={roleId} onHistory={() => onTab("history")} /> : null}
+              {tab === "overview" ? <OverviewTab a={a} roleId={roleId} onHistory={() => onTab("history")} onNext={onNext} /> : null}
               {tab === "screen" ? <ScreenTab a={a} roleId={roleId} myRole={viewer.role} /> : null}
               {tab === "resume" ? <ResumeTab a={a} roleId={roleId} /> : null}
               {tab === "messages" ? <MessagesTab a={a} roleId={roleId} compose={composing} setCompose={setCompose} /> : null}

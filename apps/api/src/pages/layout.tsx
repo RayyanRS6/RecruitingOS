@@ -281,6 +281,9 @@ details.no-resume { margin: 20px 0 0; padding: 14px 16px; border: 1px solid var(
 details.no-resume > summary { color: var(--ink); font-weight: 600; cursor: pointer; }
 details.no-resume fieldset > p { margin: 10px 0 0; }
 details.no-resume label { margin-top: 16px; }
+details.more { margin-top: 12px; }
+details.more > summary { color: var(--ink-2); cursor: pointer; }
+details.more[open] > summary { margin-bottom: 8px; }
 @media (max-width: 600px) {
   main { width: auto; margin: 12px; padding: 24px 18px 28px; border-radius: var(--r-card); }
   main.wide { margin: 0 auto; padding: 24px 16px 48px; }

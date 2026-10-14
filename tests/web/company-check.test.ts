@@ -24,13 +24,15 @@ describe("approving a role while the company waits", () => {
     // nothing is promised as posted before it is checked (plan D2): the screen after approval says where it is going
     expect(approvedToast({ editWhileOpen: false, check: "confirmed" })).toBe("Approved. Getting it ready on its channels.");
     expect(approvedToast({ editWhileOpen: false, check: "confirmed" })).not.toMatch(/Posting now/);
-    expect(approvedToast({ editWhileOpen: true, check: "waiting" })).toBe("Approved. The role now runs on the new version.");
+    expect(approvedToast({ editWhileOpen: true, check: "waiting" })).toBe("Approved. The job now runs on the new version.");
     expect(APPROVE_WAITS_FOR_CHECK).toMatch(/goes public on its own as soon as ITS confirms/);
   });
 
-  it("the role page, the Posting tab and Setup say why nothing is public", () => {
+  it("the job page, the Share tab and Settings say why nothing is public", () => {
     expect(ROLE_WAITS_FOR_CHECK).toMatch(/^Not public yet: ITS is confirming your company\./);
-    expect(POSTING_WAITS_FOR_CHECK).toMatch(/^Nothing of this role is public until ITS confirms your company/);
+    expect(ROLE_WAITS_FOR_CHECK).toMatch(/The Share tab says more\.$/);
+    expect(POSTING_WAITS_FOR_CHECK).toMatch(/^Nothing of this job is public until ITS confirms your company/);
+    expect(POSTING_WAITS_FOR_CHECK).toMatch(/Home shows how the check is going\.$/);
     expect(POSTING_WAITS_FOR_CHECK).toContain("\"not found\"");
     expect(CAREERS_PAGE_WAITS).toBe("Offline until ITS confirms your company.");
     expect(read("../../apps/web/src/pages/RolePlan.tsx")).toContain("approvedToast({ editWhileOpen: !!pending?.editWhileOpen, check })");

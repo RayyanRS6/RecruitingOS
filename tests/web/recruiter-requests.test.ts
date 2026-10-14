@@ -147,7 +147,7 @@ describe("loosening an AI rule asks first (plan B7)", () => {
 describe("reopening and the recruiter-request allowance", () => {
   it("the reopen form promises only what happens: back to the recruiter when they can take it, otherwise the queue", () => {
     const hint = reopenHint("Kai Recruiter", "this role and its candidates", 14);
-    expect(hint).toBe("Reopening sets a new reply-by time. It goes back to Kai Recruiter, who answered, when they can still take it; otherwise to the ITS queue. Whoever has it then can see this role and its candidates for up to 14 days, or until a day after it is resolved again. That access is recorded in your activity, your team is told, and an owner or admin can end it in Setup.");
+    expect(hint).toBe("Reopening sets a new reply-by time. It goes back to Kai Recruiter, who answered, when they can still take it; otherwise to the ITS queue. Whoever has it then can see this role and its candidates for up to 14 days, or until a day after it is resolved again. That access is recorded in your activity, your team is told, and an owner or admin can end it in Settings.");
     expect(reopenHint(null, "all of your hiring", 14)).toMatch(/^Reopening sets a new reply-by time\. It goes back to the ITS queue\./);
     expect(hint).not.toMatch(/gets access again/);
   });

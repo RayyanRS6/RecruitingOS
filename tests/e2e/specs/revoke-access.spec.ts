@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn, skipWithoutFakeSignIn } from "./helpers";
 
 /**
- * Founder instruction of 21 September 2026, item 1: the customer ends a recruiter's access from Setup. The button is
+ * Founder instruction of 21 September 2026, item 1: the customer ends a recruiter's access from Settings. The button is
  * only for owners and admins, it asks for confirmation and a reason, the recruiter loses access at once, and the
  * customer's own history records it. Driven through the real page, not the API.
  */
@@ -24,7 +24,7 @@ test("the owner sees who has access, must confirm with a reason, and the access 
   expect((await staffPage.request.get(`${baseURL}/api/v1/roles/${seeded.roleId}`)).status()).toBe(200);
 
   // the owner sees the grant and ends it: confirmation first, a reason of at least five characters, then the button
-  await page.goto("/setup");
+  await page.goto("/setup?tab=security"); // the card sits on the Settings page's Security tab
   const card = page.locator(".card", { has: page.getByRole("heading", { name: "ITS recruiter access" }) });
   await expect(card.getByText("Admin", { exact: false }).first()).toBeVisible({ timeout: 30_000 });
   const end = card.getByRole("button", { name: "End this recruiter's access" });

@@ -7,9 +7,9 @@ import { AskRecruiter } from "../../components/AskRecruiter";
 import { BOARD_COLUMNS, RECRUITER_CHECK, SORT_TEXT, SORT_TITLE, cardChip, cardFacts, confidenceChip, evidenceLines, headerCounts, reasonLine, scoreText, sortedText, summarySentences, type TalentMode } from "./board-model";
 
 /**
- * The strip above the Talent page's list and board (plan F6): what "Sort the pool" does, in one line, and the Board /
- * List switch. On the list the button opens the board; on the board it sorts again (the board is worked out afresh
- * from the stored evidence every time). Nothing moves and nothing is sent from here.
+ * The strip above the Candidates list and board (plan F6; Wave S1): what "Sort the pool" does, in one line, its button
+ * and the Board / List switch. On the list the button opens the board; on the board it sorts again (the board is
+ * worked out afresh from the stored evidence every time). Nothing moves and nothing is sent from here.
  */
 export function SortStrip(props: { mode: TalentMode; onMode: (mode: TalentMode) => void; onSort: () => void; sorting: boolean; generatedAt: string | null }) {
   const board = props.mode === "board";
@@ -17,7 +17,6 @@ export function SortStrip(props: { mode: TalentMode; onMode: (mode: TalentMode) 
     <section className="sort-strip" aria-label={SORT_TITLE}>
       <span className="sort-strip-mark" aria-hidden="true"><Icon name="assistant" size={18} /></span>
       <p className="sort-strip-text">
-        <strong>{board ? "The pool, sorted" : SORT_TITLE}</strong>
         <span>{board ? sortedText(props.generatedAt) : SORT_TEXT}</span>
       </p>
       <div className="sort-strip-actions">

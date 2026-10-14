@@ -151,7 +151,7 @@ describe("the interview approval's meeting link", () => {
     expect(words).toContain("Approve an interview");
     expect(words).not.toContain("Create it with the calendar event");
     expect(words).toContain("Meeting link (optional)");
-    expect(words).toContain("A link is made with the calendar event only for an interviewer who connected their calendar in Setup.");
+    expect(words).toContain("A link is made with the calendar event only for an interviewer who connected their calendar in Settings.");
     expect(words).toContain("This round is a video call. Without a link here, the invitation names the format only, so send Maria the link yourself.");
     // a calendar that needs attention makes no link either
     expect(step({ status: "manual_action_required" })).not.toContain("Create it with the calendar event");

@@ -56,7 +56,7 @@ export function AskRecruiter(props: { roleId?: string; applicationId?: string; l
   const send = useMutation({
     mutationFn: () => api.post<{ id: string; slaDueAt: string; message: string }>("/api/v1/escalations", { kind, scope, ...(target ?? {}), question: note || QUICK.find((q) => q[0] === kind)![1], urgency, ...(topic ? { topic } : {}), ...(draftId ? { intakeSessionId: draftId } : {}) }),
     onSuccess: (r) => {
-      setDone(`${r.message} You can follow it, and read the answer in full, under Your recruiter requests on Today.`);
+      setDone(`${r.message} You can follow it, and read the answer in full, under Your recruiter requests on Home.`);
       toast(topic === "plan" ? "Sent to ITS." : "A recruiter has it.");
       props.onSent?.(r.message);
       qc.invalidateQueries({ queryKey: ["escalations", "mine"] });
@@ -77,7 +77,7 @@ export function AskRecruiter(props: { roleId?: string; applicationId?: string; l
             {picks ? (
               <Field label="Which hire is this about?" htmlFor="ask-about" hint="The recruiter sees only what you choose here.">
                 <select id="ask-about" className="select" value={about} onChange={(e) => setAbout(e.target.value)}>
-                  <option value="" disabled>{roles.isLoading ? "Loading your roles…" : "Choose a role"}</option>
+                  <option value="" disabled>{roles.isLoading ? "Loading your jobs…" : "Choose a job"}</option>
                   {choosable.map((r) => <option key={r.id} value={r.id}>{r.title}</option>)}
                   <option value={ALL_HIRING}>All of your hiring</option>
                 </select>

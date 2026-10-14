@@ -7,7 +7,7 @@ async function noHorizontalOverflow(page: Page, name: string) {
 }
 
 /**
- * The Talent page's stage strip and the candidate panel in a real browser (Wave A; founder decision B3): the strip
+ * The Candidates page's stage strip and the candidate panel in a real browser (Wave A; founder decision B3): the strip
  * counts everyone at each stage and filters by a click; a row's stage button moves someone to the shortlist in one
  * click, privately, and the candidate's own status page never shows it; the panel keeps its place in the address,
  * steps to the next and previous person, and never throws away text that was not sent. Everything is synthetic.
@@ -35,7 +35,8 @@ test.describe("the stage strip and the candidate panel", () => {
     await page.goto(`/roles/${seeded.roleId}/talent`);
     await expect(page.getByText(`Job · Strip Dental ${run}`)).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("heading", { level: 1 })).toContainText(/Hygienist/i);
-    await expect(page.getByText(/^2 applicants/)).toBeVisible({ timeout: 30_000 });
+    // how many applied: the count on the job's Candidates tab (Wave S1: the header's line is the job's facts)
+    await expect(page.getByRole("navigation", { name: "Job sections" }).getByRole("link", { name: /^Candidates 2$/ })).toBeVisible({ timeout: 30_000 });
     const strip = page.getByRole("tablist", { name: "Stages" });
     await strip.getByRole("tab", { name: /^All/ }).click();
     await expect(strip.getByRole("tab", { name: /^All 2$/ })).toBeVisible({ timeout: 30_000 });
@@ -45,7 +46,7 @@ test.describe("the stage strip and the candidate panel", () => {
 
     // Both were offered the screening conversation with their application and have not answered (plan E6): they stay
     // in New, are counted apart beside the strip, and never as waiting on you
-    await expect(page.getByText("2 applicants · 2 still applying")).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Job sections" }).getByRole("link", { name: /^Candidates 2$/ })).toBeVisible();
     const applying = page.getByRole("button", { name: /^Still applying 2$/ });
     await expect(applying).toHaveAttribute("aria-pressed", "false");
     await expect(page.getByRole("button", { name: /^Waiting on you/ })).toHaveCount(0);
@@ -70,9 +71,9 @@ test.describe("the stage strip and the candidate panel", () => {
     await strip.getByRole("tab", { name: /^All/ }).click();
 
     // Search narrows the list; clearing it brings everyone back
-    await page.getByRole("searchbox", { name: "Search applicants" }).fill("ortega");
+    await page.getByRole("searchbox", { name: "Search candidates" }).fill("ortega");
     await expect(page.locator(".talent-row")).toHaveCount(1);
-    await page.getByRole("searchbox", { name: "Search applicants" }).fill("");
+    await page.getByRole("searchbox", { name: "Search candidates" }).fill("");
     await expect(page.locator(".talent-row")).toHaveCount(2);
 
     // The candidate never sees the team's marks on their status page

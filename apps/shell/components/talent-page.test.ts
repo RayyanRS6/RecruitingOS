@@ -5,9 +5,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
 /**
- * The Talent page and the candidate panel (Wave A; founder decisions B3 and B6) as the server first draws them, from
- * answers shaped like the API's: the job's header, the stage strip with its counts, the calm rows, the "waiting on
- * you" view it opens on, the panel's header with the stage button, what needs you, and the steps a stage choice opens.
+ * The Candidates page and the candidate panel (Wave A; founder decisions B3 and B6; Wave S1) as the server first draws
+ * them, from answers shaped like the API's: the job's shared header and tab strip (also on the job page), the stage
+ * strip with its counts and "More stages", the calm rows with at most two chips, the "waiting on you" view it opens on,
+ * the panel's header with the stage button, what needs you, and the steps a stage choice opens; and the Jobs page.
  */
 const nav = vi.hoisted(() => ({ search: "", params: { id: "r1" } as Record<string, string> }));
 vi.mock("next/navigation", () => ({
@@ -20,6 +21,8 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 
 (globalThis as { React?: typeof React }).React = React;
 const { People } = await import("@ros/web/src/pages/People");
+const { RoleDetail } = await import("@ros/web/src/pages/RoleDetail");
+const { Roles } = await import("@ros/web/src/pages/Roles");
 const { CandidatePanel } = await import("@ros/web/src/pages/candidate-panel/CandidatePanel");
 
 const STAGES = ["new", "longlist", "shortlist", "interviewing", "cancelled", "on_hold", "offer", "hired", "not_moving_forward"] as const;
@@ -68,10 +71,19 @@ function detail(row: Row, over: Record<string, unknown> = {}) {
   };
 }
 
+// The job itself (GET /roles/:id), for the shared header's facts line and its More menu.
+const job = {
+  id: "r1", title: "Dental Hygienist", status: "open", acceptingApplications: true, applicationsClosedAt: null, applicationsClosedReason: null, closingDate: null, proposedPacket: null, packetApproval: { pending: null, latest: null },
+  packetVersions: [{ version: 1, status: "approved", source: "intake_session", createdAt: daysAgo(8), createdBy: { kind: "user", id: "u1", name: "Dana Whitfield" }, changeSummary: null }],
+  counts: { waiting_on_you: 1, not_moving_forward: 1 }, boardsStillUp: [], boardsShowingOldVersion: [], whoPosts: "its", decisionMaker: null,
+  currentPacket: { version: 1, status: "approved", packet: { identity: { locations: [{ city: "Irvine", region: "CA" }], employmentType: "full_time", remotePolicy: "onsite" }, compensation: { basis: "hourly", min: 40, max: 52, discloseRange: true } } },
+};
+
 function client(details: Array<ReturnType<typeof detail>>) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
   qc.setQueryData(["me"], { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } });
   qc.setQueryData(["roles"], [{ id: "r1", title: "Dental Hygienist", status: "open", openedAt: daysAgo(7), counts: { total: 2, waiting_on_you: 1, not_moving_forward: 1 }, stageCounts: counts.byOwnerStage, needsYou: 1, daysOpen: 7 }]);
+  qc.setQueryData(["role", "r1"], job);
   qc.setQueryData(["applications", "r1"], { applications: [maria, luis], counts });
   for (const d of details) qc.setQueryData(["application", d.id], d);
   return qc;
@@ -79,18 +91,34 @@ function client(details: Array<ReturnType<typeof detail>>) {
 const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
-describe("the Talent page", () => {
-  it("heads the page with the job, its status and the count, and opens on the people waiting on you", () => {
+describe("the Candidates page", () => {
+  it("heads the page with the job's shared header and tabs, and opens on the people waiting on you", () => {
     nav.search = "";
     const html = render(client([]), createElement(People));
     expect(html).toContain("Job · Bright Dental");
     expect(html).toMatch(/<h1>Dental Hygienist<\/h1>/);
     expect(text(html)).toContain("Live");
-    expect(html).toContain("2 applicants · 1 waiting on you");
-    // the strip: every stage with its count, the count a separate word for a screen reader
+    // one facts line, the same as on the job's other tabs (Wave S1)
+    expect(text(html)).toContain("Irvine, CA · full time · On site · $40–$52 an hour");
+    // Bring in a recruiter and one More menu for the rest (pause, the accepting switch, close, edit, Candidate view, Compare)
+    expect(text(html)).toContain("Bring in a recruiter");
+    expect(html).toContain('aria-haspopup="menu" aria-expanded="false" aria-label="More for this job"');
+    // the job's one tab strip, Candidates first and current, the others on the job page
+    expect(html).toContain('<nav aria-label="Job sections">');
+    expect(html).toMatch(/<a href="\/roles\/r1\/talent" class="tab" aria-current="page"><span class="tab-label" data-label="Candidates">Candidates<\/span> <span class="count">2<\/span><\/a>/);
+    expect(html).toContain('<a href="/roles/r1" class="tab">');
+    expect(html).toContain('<a href="/roles/r1?tab=scoring" class="tab">');
+    expect(html).toContain('<a href="/roles/r1?tab=share" class="tab">');
+    expect(text(html)).toContain("Candidates 2 Job Scoring Interview plan Share Report Activity");
+    // the strip: All, New, Shortlist, Interviewing, Hired, Not moving forward and any stage someone is at, each with its
+    // count (a separate word for a screen reader); the stages nobody is at wait under "More stages"
     expect(html).toContain('role="tablist" aria-label="Stages"');
     expect(html).toContain('<span class="tab-label" data-label="All">All</span> <span class="count">2</span>');
     expect(html).toContain('<span class="tab-label" data-label="Not moving forward">Not moving forward</span> <span class="count">1</span>');
+    expect(html).toContain('<span class="tab-label" data-label="Hired">Hired</span> <span class="count">0</span>');
+    expect(html).not.toContain('data-label="Longlist"');
+    expect(html).not.toContain('data-label="On hold"');
+    expect(html).toContain('aria-label="More stages"');
     // waiting on you is on, so only Maria is listed; the decision nobody has told is one click away
     expect(html).toMatch(/<button type="button" class="toggle-chip" aria-pressed="true">Waiting on you/);
     expect(html).toContain('class="talent-name">Maria Reyes</button>');
@@ -142,16 +170,15 @@ describe("the Talent page", () => {
     expect(html.match(/aria-label="Stage: New\. Move to another stage"/g)?.length).toBe(2);
     // the list it opened from: one person, so next and previous say so
     expect(text(html)).toContain("1 of 1");
-    // the assistant's suggestion, with Yes and Not now
-    expect(text(html)).toContain("The assistant suggests a screen");
-    expect(text(html)).toContain("Yes, invite to a screen");
+    // the assistant's suggestion, with Yes and Not now, in the staff glossary's words (screening chat)
+    expect(text(html)).toContain("The assistant suggests a screening chat");
+    expect(text(html)).toContain("Yes, invite to a screening chat");
     expect(text(html)).toContain("Not now");
-    // sections, the Overview's latest reading and recent activity, who did what
+    // sections, and the Overview's verdict with the full breakdown one click away (the candidate drawer is slice C's;
+    // these stay loose so its wording can settle); the assistant is named, never its internal id
     expect(html).toContain('aria-label="Candidate sections"');
-    expect(text(html)).toContain("Latest reading: the résumé");
+    expect(text(html)).toContain("Full breakdown");
     expect(text(html)).toContain("Active CA RDH license");
-    expect(text(html)).toContain("Recent activity");
-    expect(text(html)).toContain("Assessed the résumé: Worth a screen");
     expect(text(html)).toContain("The assistant");
     expect(text(html)).not.toContain("triage-agent");
   });
@@ -178,7 +205,84 @@ describe("the Talent page", () => {
     expect(text(html)).toContain("Your decision is private: nothing has been sent to Luis.");
     expect(text(html)).toContain("Send message");
     expect(text(html)).toContain("I told them myself");
-    expect(text(html)).toContain("Private: the candidate was not told.");
+    // private, and honest about the day-5 safety net (founder decision D-03)
+    expect(text(html)).toMatch(/standard message goes by itself/);
+  });
+
+  it("keeps who did what, and that a decision was private, on the History tab (the Overview links to it)", () => {
+    nav.search = "open=a2&tab=history";
+    const html = text(render(client([detail(luis)]), createElement(People)));
+    expect(html).toContain("AI review of the résumé: Worth a screening chat");
+    expect(html).toContain("Private: the candidate was not told.");
+    expect(html).toContain("Dana Whitfield");
+  });
+
+  it("tells the people not told yet, on the list, that the safety net acts after 5 working days (D-03)", () => {
+    nav.search = "ownerStage=not_moving_forward";
+    const html = text(render(client([]), createElement(People)));
+    expect(html).toContain("1 person has not been told your decision. If nobody tells them within 5 working days, the standard message goes by itself (or an ITS recruiter is brought in, if your settings say so).");
+  });
+
+  it("keeps a row to two chips beside the score and the stage button; the rest are counted and said in full", () => {
+    nav.search = "";
+    const qc = client([]);
+    const busy = { ...maria, tags: ["Check eligibility", "Hold ended"], evidence: { ...evidence, lowConfidence: true } };
+    qc.setQueryData(["applications", "r1"], { applications: [busy, luis], counts });
+    const html = render(qc, createElement(People));
+    const row = html.slice(html.indexOf('data-application="a1"'));
+    const chips = row.slice(row.indexOf('class="talent-row-chips"'), row.indexOf('class="score-slot"'));
+    expect(chips).toContain('<span class="chip caution">Check eligibility</span>');
+    expect(chips).toContain('<span class="chip caution">Hold ended</span>');
+    expect(chips).not.toContain(">Strong match<");
+    // "+2": the review's word and the low-confidence check, in full for a screen reader and on hover
+    expect(chips).toMatch(/<span class="chip neutral" title="Strong match; [^"]+"><span aria-hidden="true">\+2<\/span><span class="sr-only">Also: Strong match; /);
+  });
+});
+
+describe("the job page: the same header and tab strip as Candidates (Wave S1)", () => {
+  it("marks the tab an older link asked for as current, so a notification's ?tab=posting lands on Share", () => {
+    nav.search = "tab=posting";
+    const html = render(client([]), createElement(RoleDetail));
+    expect(html).toContain("Job · Bright Dental");
+    expect(html).toMatch(/<h1>Dental Hygienist<\/h1>/);
+    expect(text(html)).toContain("Irvine, CA · full time · On site · $40–$52 an hour");
+    expect(text(html)).toContain("Bring in a recruiter");
+    expect(html).toContain('aria-label="More for this job"');
+    expect(html).toContain('<a href="/roles/r1?tab=share" class="tab" aria-current="page">');
+    // Candidates first, with how many applied, a link to the job's own Candidates page
+    expect(html).toMatch(/<a href="\/roles\/r1\/talent" class="tab"><span class="tab-label" data-label="Candidates">Candidates<\/span> <span class="count">2<\/span><\/a>/);
+    // the buttons the header once had are in the More menu now, not beside it
+    expect(text(html)).not.toMatch(/\bPause\b|Stop accepting applications|Hire for this job again/);
+  });
+
+  it("keeps every version of the job under Activity (once History), in plain words", () => {
+    nav.search = "tab=history";
+    const html = render(client([]), createElement(RoleDetail));
+    expect(html).toContain('<a href="/roles/r1?tab=activity" class="tab" aria-current="page">');
+    expect(text(html)).toContain("Versions of the job");
+    expect(text(html)).toMatch(/Version 1 · approved · intake session · .+ · Dana Whitfield/);
+    expect(text(html)).toContain("Every version is kept. Nothing is overwritten.");
+    expect(text(html)).not.toMatch(/packet/i);
+  });
+});
+
+describe("the Jobs page (Wave S1)", () => {
+  it("opens a live job on its Candidates and a draft on its details, the other view one small link away", () => {
+    const qc = client([]);
+    qc.setQueryData(["roles"], [
+      { id: "r1", title: "Dental Hygienist", status: "open", openedAt: daysAgo(7), counts: { total: 2, waiting_on_you: 1 }, stageCounts: { ...counts.byOwnerStage, new: 1 }, needsYou: 1, daysOpen: 7 },
+      { id: "r2", title: "Office Manager", status: "pending_approval", openedAt: null, counts: { total: 0 }, needsYou: 0, daysOpen: null },
+    ]);
+    const html = render(qc, createElement(Roles));
+    expect(html).toMatch(/<h1>Jobs<\/h1>/);
+    expect(text(html)).toContain("Open a job to see who applied.");
+    expect(html).toContain('<a href="/roles/r1/talent" class="list-item-main"');
+    expect(text(html)).toContain("Dental Hygienist 1 new · 2 applicants · 1 to review · 7 days open");
+    expect(html).toContain('<a href="/roles/r1" class="small">Job details<span class="sr-only">: Dental Hygienist</span></a>');
+    expect(html).toContain('<a href="/roles/r2" class="list-item-main"');
+    expect(text(html)).toContain("Waiting for approval");
+    expect(text(html)).toContain("1 decision waiting");
+    expect(text(html)).toContain("Start a hire");
   });
 });
 

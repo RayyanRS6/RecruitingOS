@@ -166,7 +166,7 @@ export const REOPEN_MIN = 5;
  */
 export function reopenHint(recruiterName: string | null, access: string, days: number): string {
   const where = recruiterName ? `It goes back to ${recruiterName}, who answered, when they can still take it; otherwise to the ITS queue.` : "It goes back to the ITS queue.";
-  return `Reopening sets a new reply-by time. ${where} Whoever has it then can see ${access} for up to ${days} days, or until a day after it is resolved again. That access is recorded in your activity, your team is told, and an owner or admin can end it in Setup.`;
+  return `Reopening sets a new reply-by time. ${where} Whoever has it then can see ${access} for up to ${days} days, or until a day after it is resolved again. That access is recorded in your activity, your team is told, and an owner or admin can end it in Settings.`;
 }
 
 /** Where a company stands against its plan's recruiter requests (Q33), as GET /admin/customers reports it. */

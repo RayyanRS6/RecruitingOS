@@ -9,44 +9,53 @@ import { toast } from "../../toast";
 import { AskRecruiter } from "../../components/AskRecruiter";
 import { InlineUndo } from "../../components/InlineUndo";
 import { useTakeBack, useUndoToast } from "../../components/use-undo";
-import { LOW_CONFIDENCE_LABEL, LOW_CONFIDENCE_TEXT, closerLook, openScreenOf } from "../../evidence";
+import { openScreenOf } from "../../evidence";
 import { offerMadeOn, plainDayWords } from "../../hiring";
 import { callNotesState, overviewScreenLine } from "../../screen-view";
 import { holdDay } from "../../talent-actions";
 import { sentWithUndoToast, suggestedLineNote, threadItems, threadWhen, undoMillisLeft } from "../../telling";
-import { AssessmentCard, NoAssessmentCard, ScorecardUnavailableCard, ScreenCard } from "./assessment";
+import { AssessmentCard, NoAssessmentCard, ScorecardUnavailableCard, ScreenCard, StrengthsAndConcerns } from "./assessment";
 import { CallNotesCard } from "./call-notes";
-import { MatchCard } from "./match";
-import { eligibilityAnswerWords, historyItems, notReadYetWords, recruiterEventsFor, resumeToShow, resumeView, suggestionAndDecision, type Compose, type HistoryItem } from "./helpers";
+import { MatchVerdict, NextStepLine, ScoreBreakdown } from "./match";
+import type { NextStepAction } from "./match-view";
+import { eligibilityAnswerWords, historyItems, recruiterEventsFor, resumeToShow, resumeView, suggestionAndDecision, type Compose, type HistoryItem } from "./helpers";
+import { Why } from "./why";
 
 export type { Compose } from "./helpers";
 import { useCandidateAction, useRefreshCandidate } from "./hooks";
 
-/** The candidate panel's sections (plan A10): Overview, Screen, Résumé, Messages and History; the Notes tab is notes.tsx. */
+/** The candidate panel's sections (plan A10): Overview, Screening chat, Résumé, Messages and History; the Notes tab is notes.tsx. */
 
 /**
- * Overview: where they are, the match score against your must-haves with its breakdown (founder decision B2), the
- * latest reading (the screen's scorecard once there is one), the eligibility answers and the last three things that
- * happened. The rest of the evidence is one tab away.
+ * Overview, the Kanvis way (Wave S1; founder decision B2): the verdict first (the match score, its band and how sure the
+ * AI was, one line on the must-haves), the suggested next step with its one button, the first strengths and concerns,
+ * then where things stand. The full breakdown (how the score was worked out, the AI review with every finding and quote,
+ * the open questions, the eligibility answers and "Something wrong?") is one click away; so are consent and source under
+ * the contact line, and everything that happened, on the History tab.
  */
-export function OverviewTab({ a, roleId, onHistory }: { a: ApplicationDetail; roleId: string; onHistory: () => void }) {
+export function OverviewTab({ a, roleId, onHistory, onNext }: { a: ApplicationDetail; roleId: string; onHistory: () => void; onNext?: (action: NextStepAction) => void }) {
   const latest = a.assessments[0] ?? null;
-  const look = closerLook(a);
-  const recent = historyItems(a.timeline).slice(0, 3);
   return (
     <div className="stack" style={{ gap: 14 }}>
-      <WhereTheyAre a={a} />
-      {look.lowConfidence && !look.needsCloserLook ? <Alert tone="caution"><strong>{LOW_CONFIDENCE_LABEL}.</strong> {LOW_CONFIDENCE_TEXT}</Alert> : null}
-      <MatchCard a={a} />
+      <NoAssessmentCard detail={a} />
       <ScorecardUnavailableCard detail={a} roleId={roleId} />
-      {latest ? <AssessmentCard assessment={latest} detail={a} roleId={roleId} labels={a.packetLabels} title={latest.kind === "screen" ? "Latest reading: the screen" : "Latest reading: the résumé"} /> : look.assessmentUnavailable ? <NoAssessmentCard detail={a} /> : <Card title="Latest reading"><p className="small muted">{notReadYetWords(a.stage)}</p></Card>}
-      <EligibilityAnswers a={a} />
-      <Card title="Recent activity" aside={<Button size="sm" variant="quiet" onClick={onHistory}>All history</Button>}>
-        {recent.length ? <HistoryList items={recent} /> : <p className="small muted">Nothing yet.</p>}
-      </Card>
-      <ContactCard a={a} />
+      <MatchVerdict a={a}>
+        <NextStepLine a={a} onAction={onNext} />
+        <StrengthsAndConcerns assessment={latest} />
+      </MatchVerdict>
+      <WhereTheyAre a={a} />
+      <details className="more">
+        <summary>Full breakdown</summary>
+        <div className="stack" style={{ gap: 14 }}>
+          <ScoreBreakdown a={a} />
+          {/* Without an AI review yet, the verdict above already says why (`notReadYetWords`, or the card that says it could not be made). */}
+          {latest ? <AssessmentCard assessment={latest} detail={a} roleId={roleId} labels={a.packetLabels} title={latest.kind === "screen" ? "AI review: the screening chat" : "AI review: the résumé"} /> : null}
+          <EligibilityAnswers a={a} />
+        </div>
+      </details>
+      <ContactLine a={a} />
       <div className="row" style={{ justifyContent: "space-between" }}>
-        <span className="small muted">Want a second opinion on {a.candidate.firstName}?</span>
+        <Button size="sm" variant="quiet" icon="clock" onClick={onHistory}>See all activity</Button>
         <AskRecruiter roleId={roleId} applicationId={a.id} size="sm" />
       </div>
     </div>
@@ -103,19 +112,26 @@ function EligibilityAnswers({ a }: { a: ApplicationDetail }) {
   );
 }
 
-function ContactCard({ a }: { a: ApplicationDetail }) {
+/** Contact in one line (email · phone · place), with consent and where they applied one click away (Wave S1). */
+function ContactLine({ a }: { a: ApplicationDetail }) {
+  const c = a.candidate;
+  const parts = [c.email ?? "No email address", c.phone ?? "No phone", c.locationText].filter((x): x is string => !!x);
   return (
-    <Card title="Contact and consent">
-      <dl className="kv">
-        <dt>Email</dt><dd>{a.candidate.email ?? "none"}</dd>
-        <dt>Phone</dt><dd>{a.candidate.phone ?? "none"}</dd>
-        <dt>Location</dt><dd>{a.candidate.locationText ?? "not given"}</dd>
-        <dt>Text messages</dt><dd>{a.candidate.consent.sms?.granted ? `Consented (${a.candidate.consent.sms.source})` : "No consent; email only"}</dd>
-        <dt>AI notice</dt><dd>{a.candidate.consent.ai_notice ? `Shown ${new Date(a.candidate.consent.ai_notice.at).toLocaleDateString()}` : "not recorded"}</dd>
-        <dt>Applied through</dt><dd>{a.source.replace(/_/g, " ")}</dd>
-        {a.candidate.preferences?.talentPoolOptOut ? <><dt>Future roles</dt><dd>Asked not to be kept for future roles; nobody contacts them about other openings</dd></> : null}
-      </dl>
-    </Card>
+    <section className="small" aria-label="Contact">
+      <p style={{ margin: 0, overflowWrap: "anywhere" }}><span className="muted">Contact: </span>{parts.join(" · ")}</p>
+      <details className="more" style={{ marginTop: 6 }}>
+        <summary>Consent and source</summary>
+        <dl className="kv">
+          <dt>Email</dt><dd>{c.email ?? "none"}</dd>
+          <dt>Phone</dt><dd>{c.phone ?? "none"}</dd>
+          <dt>Location</dt><dd>{c.locationText ?? "not given"}</dd>
+          <dt>Text messages</dt><dd>{c.consent.sms?.granted ? `Consented (${c.consent.sms.source})` : "No consent; email only"}</dd>
+          <dt>AI notice</dt><dd>{c.consent.ai_notice ? `Shown ${new Date(c.consent.ai_notice.at).toLocaleDateString()}` : "not recorded"}</dd>
+          <dt>Applied through</dt><dd>{a.source.replace(/_/g, " ")}</dd>
+          {c.preferences?.talentPoolOptOut ? <><dt>Future roles</dt><dd>Asked not to be kept for future roles; nobody contacts them about other openings</dd></> : null}
+        </dl>
+      </details>
+    </section>
   );
 }
 
@@ -135,7 +151,7 @@ export function StopScreen({ a, roleId }: { a: ApplicationDetail; roleId: string
   if (!confirming) {
     return (
       <div className="row" style={{ marginTop: 8 }}>
-        <Button size="sm" disabled={!allowed} title={allowed ? "Calls off the invitation before they start" : a.blockedReasons.cancel_screen} onClick={() => setConfirming(true)}>Stop this screen</Button>
+        <Button size="sm" disabled={!allowed} title={allowed ? "Calls off the invitation before they start" : a.blockedReasons.cancel_screen} onClick={() => setConfirming(true)}>Stop this screening chat</Button>
         {!allowed && a.blockedReasons.cancel_screen ? <span className="small muted">{a.blockedReasons.cancel_screen}</span> : null}
       </div>
     );
@@ -143,7 +159,7 @@ export function StopScreen({ a, roleId }: { a: ApplicationDetail; roleId: string
   return (
     <Alert tone="caution">
       <div className="stack" style={{ gap: 8 }}>
-        <span>Stop the screening invitation for {a.candidate.firstName}? Their link stops working, and they get a short, polite note saying the screen is no longer needed. It does not decide anything about them.</span>
+        <span>Stop {a.candidate.firstName}'s screening chat invitation? Their link stops working, and they get a short, polite note saying it is no longer needed. Nothing is decided about them.</span>
         <div className="row"><Button size="sm" variant="primary" loading={act.isPending} onClick={() => act.mutate({ action: "cancel_screen" })}>Yes, stop it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>Keep it open</Button></div>
       </div>
     </Alert>
@@ -151,8 +167,9 @@ export function StopScreen({ a, roleId }: { a: ApplicationDetail; roleId: string
 }
 
 /**
- * Screen: every screening conversation, newest first, with its transcript open, and the scorecards. A recruiter can add
- * notes from a call here (plan E3); when the candidate asked for a person, that form waits at the top of the panel instead.
+ * Screening chat: every screening chat, newest first, with its transcript open, and the AI reviews of them. A recruiter
+ * can add notes from a call here (plan E3); when the candidate asked for a person, that form waits at the top of the
+ * panel instead.
  */
 export function ScreenTab({ a, roleId, myRole = null }: { a: ApplicationDetail; roleId: string; myRole?: string | null }) {
   const scorecards = a.assessments.filter((x) => x.kind === "screen");
@@ -161,7 +178,10 @@ export function ScreenTab({ a, roleId, myRole = null }: { a: ApplicationDetail; 
   if (!a.screens.length) {
     return (
       <div className="stack" style={{ gap: 14 }}>
-        <Card title="Screening conversation"><p className="small muted">{a.candidate.firstName} has not been invited to a screen yet. A screen is a short conversation, by web or text, with the questions you approved for this role.</p></Card>
+        <Card title="Screening chat">
+          <p className="small muted" style={{ margin: 0 }}>{a.candidate.firstName} has not been invited to a screening chat yet.</p>
+          <Why label="What is a screening chat?">A short chat, by web or text, with the questions you approved for this job. Invite them from More at the top.</Why>
+        </Card>
         {notesCard}
       </div>
     );
@@ -172,7 +192,7 @@ export function ScreenTab({ a, roleId, myRole = null }: { a: ApplicationDetail; 
       {notesCard}
       <ScorecardUnavailableCard detail={a} roleId={roleId} />
       {scorecards.slice(a.assessments[0]?.kind === "screen" ? 1 : 0).map((s) => <AssessmentCard key={s.id} assessment={s} detail={a} roleId={roleId} labels={a.packetLabels} />)}
-      {a.assessments[0]?.kind === "screen" ? <p className="small muted">The latest scorecard is on the Overview.</p> : null}
+      {a.assessments[0]?.kind === "screen" ? <p className="small muted">The latest AI review of this chat is on the Overview, under Full breakdown.</p> : null}
     </div>
   );
 }
@@ -253,7 +273,7 @@ function ResumeViewer({ a, doc }: { a: ApplicationDetail; doc: ApplicationDetail
   );
 }
 
-/** Résumé: the file itself (plan H5), what the résumé says, the files (each opening is recorded), and any earlier readings. */
+/** Résumé: the file itself (plan H5), what the résumé says, the files (each opening is recorded), and any earlier AI reviews. */
 export function ResumeTab({ a, roleId }: { a: ApplicationDetail; roleId: string }) {
   const readings = a.assessments.filter((x) => x.kind === "triage" && x.id !== a.assessments[0]?.id);
   const shown = resumeToShow(a.documents, a.resumeDocumentId);
@@ -287,7 +307,7 @@ export function ResumeTab({ a, roleId }: { a: ApplicationDetail; roleId: string 
           </ul>
         ) : null}
       </Card>
-      {readings.map((r) => <AssessmentCard key={r.id} assessment={r} detail={a} roleId={roleId} labels={a.packetLabels} title="Résumé assessment" />)}
+      {readings.map((r) => <AssessmentCard key={r.id} assessment={r} detail={a} roleId={roleId} labels={a.packetLabels} title="Earlier AI review of the résumé" />)}
     </div>
   );
 }
@@ -379,7 +399,8 @@ export function MessagesTab({ a, roleId, compose, setCompose }: { a: Application
           </div>
         ) : (
           <div className="stack" style={{ gap: 8 }}>
-            <p className="small muted" style={{ margin: 0 }}>Your own words, sent as {preview.data?.fromName ?? "the hiring team"} to {preview.data?.to ?? a.candidate.email}. {preview.data ? (preview.data.repliesComeBack ? "Replies come back to this panel." : "Replies reach the ITS mailbox, where a person reads them.") : ""}{preview.data?.needsApproval ? " An owner or admin reads your message before it goes out." : ""}{preview.data?.undoSeconds ? ` After Send you have ${preview.data.undoSeconds} seconds to undo it.` : ""}</p>
+            <p className="small muted" style={{ margin: 0 }}>To {preview.data?.to ?? a.candidate.email}, from {preview.data?.fromName ?? "the hiring team"}.{preview.data?.needsApproval ? " An owner or admin reads it before it goes out." : ""}</p>
+            <Why label="How sending works">Your own words, sent as {preview.data?.fromName ?? "the hiring team"} to {preview.data?.to ?? a.candidate.email}. {preview.data ? (preview.data.repliesComeBack ? "Replies come back to this panel." : "Replies reach the ITS mailbox, where a person reads them.") : ""}{preview.data?.needsApproval ? " An owner or admin reads your message before it goes out." : ""}{preview.data?.undoSeconds ? ` After Send you have ${preview.data.undoSeconds} seconds to undo it.` : ""}</Why>
             <Field label="Subject (optional)" htmlFor="msg-subject"><input id="msg-subject" className="input" value={subject} onChange={(e) => setCompose({ ...compose, subject: e.target.value })} maxLength={200} /></Field>
             <Field label="Message" htmlFor="msg-text"><textarea id="msg-text" className="input" rows={6} value={text} onChange={(e) => { setCompose({ ...compose, text: e.target.value }); if (!e.target.value.trim()) setKept(null); }} maxLength={5000} placeholder={`Hi ${first},`} /></Field>
             {suggestion?.line && !kept ? (
@@ -426,8 +447,8 @@ export function HistoryTab({ a, mayReadActivity }: { a: ApplicationDetail; mayRe
           <p className="small" style={{ margin: 0 }}>
             The assistant suggested <strong>{both.suggested}</strong>.{" "}
             {both.decided ? <>{both.decidedBy === "A team member" ? "Your team" : both.decidedBy} decided <strong>{both.decided}</strong>.</> : "Nobody has decided yet."}
-            <span className="muted"> People make the hiring decisions. The assistant reads applications and suggests next steps, and under your settings it can invite people to its screening conversation on its own.</span>
           </p>
+          <Why label="Who decides?">People make the hiring decisions. The assistant reads applications and suggests next steps, and under your settings it can invite people to its screening chat on its own.</Why>
         </Card>
       ) : null}
       <Card title="What happened">

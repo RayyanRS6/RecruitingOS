@@ -7,7 +7,7 @@ export default function NotFound() {
       <div className="empty">
         <h1>That page does not exist</h1>
         <p style={{ marginTop: 6 }}>It may have moved, or the link is old.</p>
-        <div style={{ marginTop: 14 }}><Link to="/" className="btn primary">Go to Today</Link></div>
+        <div style={{ marginTop: 14 }}><Link to="/" className="btn primary">Go to Home</Link></div>
       </div>
     </main>
   );

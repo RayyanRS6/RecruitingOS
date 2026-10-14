@@ -37,7 +37,7 @@ export function NotificationsCard() {
   const view = q.data;
   return (
     <Card title="Email alerts" aside={<Link to="/updates" className="btn secondary sm">See all your updates</Link>}>
-      <p className="small muted">Every update shows on Today and in your updates. Choose which ones also reach you by email{view?.email ? ` at ${view.email}` : ""}. Emails name the role and link to it; candidate names and details stay in the app.</p>
+      <p className="small muted">Choose which updates also reach you by email{view?.email ? ` at ${view.email}` : ""}.</p>
       {q.isLoading ? <Skeleton lines={4} /> : notMember ? (
         <p className="small muted" style={{ marginTop: 8 }}>Email alerts are for the people on this company's team.</p>
       ) : q.error || !view ? <ErrorState message="Could not load your email alerts." onRetry={() => q.refetch()} /> : (
@@ -53,17 +53,26 @@ export function NotificationsCard() {
               </div>
             ))}
           </div>
-          <p className="small muted" style={{ marginTop: 10 }}>{digestTimeText(view.digest)}</p>
-          <h3 style={{ margin: "14px 0 6px" }}>Always emailed at once</h3>
-          <p className="small muted" style={{ margin: "0 0 6px" }}>These go out whatever you choose above.</p>
-          <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
-            {view.alwaysSent.map((a) => <li key={a.label} style={{ marginBottom: 4 }}><strong>{a.label}.</strong> {a.why}</li>)}
-          </ul>
           {view.groups.some((g) => g.cadence !== g.defaultCadence) ? (
             <div className="row" style={{ justifyContent: "flex-end", marginTop: 10 }}>
               <Button size="sm" variant="quiet" loading={resetAll.isPending} onClick={() => resetAll.mutate(view)}>Go back to the usual settings</Button>
             </div>
           ) : null}
+          {/* The few updates that always go, and how summaries work: one click away. */}
+          <details className="more" style={{ marginTop: 10 }}>
+            <summary>Always emailed at once ({view.alwaysSent.length})</summary>
+            <p className="small muted" style={{ margin: "0 0 6px" }}>These go out whatever you choose above.</p>
+            <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+              {view.alwaysSent.map((a) => <li key={a.label} style={{ marginBottom: 4 }}><strong>{a.label}.</strong> {a.why}</li>)}
+            </ul>
+          </details>
+          <details className="more" style={{ marginTop: 6 }}>
+            <summary>How this works</summary>
+            <div className="stack small muted" style={{ gap: 6 }}>
+              <p style={{ margin: 0 }}>Every update shows on Home and in your updates. Emails name the job and link to it; candidate names and details stay in the app.</p>
+              <p style={{ margin: 0 }}>{digestTimeText(view.digest)}</p>
+            </div>
+          </details>
         </>
       )}
     </Card>

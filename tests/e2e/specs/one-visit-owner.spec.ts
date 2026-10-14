@@ -25,7 +25,9 @@ test("still applying on the list, the panel and the report; ITS switches the com
 
   // The list: counted beside the strip, shown only when asked, never as waiting on you
   await page.goto(`/roles/${seeded.roleId}/talent`);
-  await expect(page.getByText("1 applicant · 1 still applying")).toBeVisible({ timeout: 30_000 });
+  // one applicant on the job's Candidates tab, and one still applying beside the strip (Wave S1: the header shows the job's facts)
+  await expect(page.getByRole("navigation", { name: "Job sections" }).getByRole("link", { name: /^Candidates 1$/ })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("button", { name: /^Still applying 1$/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /^Waiting on you/ })).toHaveCount(0);
   await page.getByRole("button", { name: /^Still applying 1$/ }).click();
   const row = page.locator(".talent-row", { has: page.getByRole("button", { name: "Maria Reyes" }) });
@@ -46,10 +48,10 @@ test("still applying on the list, the panel and the report; ITS switches the com
 
   // The role report: how the conversation goes, counts only, with the way back to the people still applying
   await page.goto(`/roles/${seeded.roleId}?tab=report`);
-  const card = page.locator(".card", { has: page.getByRole("heading", { name: "The screening conversation" }) });
+  const card = page.locator(".card", { has: page.getByRole("heading", { name: "The screening chat" }) });
   await expect(card.getByText("Offered the conversation")).toBeVisible({ timeout: 30_000 });
   await expect(card.getByText("Still applying now", { exact: true })).toBeVisible();
-  await expectAccessible(page, "role report with the screening conversation");
+  await expectAccessible(page, "role report with the screening chat");
   await card.getByRole("link", { name: "See who is still applying" }).click();
   await expect(page.getByRole("button", { name: /^Still applying 1$/ })).toHaveAttribute("aria-pressed", "true", { timeout: 30_000 });
 

@@ -125,9 +125,9 @@ export function AfterApproval(props: { open: boolean; onClose: () => void; roleI
           </div>
         </Alert>
       ) : null}
-      {q.error ? <Alert tone="critical">Could not read where the job stands. The Posting tab shows it too.</Alert> : null}
+      {q.error ? <Alert tone="critical">Could not read where the job stands. The Share tab shows it too.</Alert> : null}
       <p className="small muted" style={{ margin: 0 }}>
-        {props.canManage ? <>Change the boards, the closing date or the links on the <button type="button" className="link-btn" onClick={() => goTo("posting")}>Posting tab</button>.</> : "Only an owner or an admin changes where the job is posted. The Posting tab shows where it stands."}
+        {props.canManage ? <>Change the boards, the closing date or the links on the <button type="button" className="link-btn" onClick={() => goTo("posting")}>Share tab</button>.</> : "Only an owner or an admin changes where the job is posted. The Share tab shows where it stands."}
       </p>
     </Dialog>
   );

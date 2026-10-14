@@ -12,17 +12,19 @@ import { defaultInterviewers } from "../../interview-defaults";
 import { interviewDraftLine } from "../../hiring";
 import { canDecline, canReadNotes } from "../../roles";
 import { callNotesState } from "../../screen-view";
-import { NOT_NOW_TOAST, declineConfirmText, decisionToast, holdDay, newTimesToast, outcomeNoticeText, outcomeToast, type PanelStep } from "../../talent-actions";
+import { NOT_NOW_TOAST, declineConfirmText, declineSummary, decisionToast, holdDay, newTimesToast, outcomeNoticeText, outcomeToast, safetyNetAfterDecision, type InterviewRef, type PanelStep } from "../../talent-actions";
 import { CallNotesCard } from "./call-notes";
-import { DECLINE_REASONS, activeInterviews, eligibilityAnswerWords, holdDateBounds, whoDecides, type PanelTab } from "./helpers";
+import { DECLINE_REASONS, activeInterviews, eligibilityAnswerWords, firstSentence, holdDateBounds, whoDecides, type PanelTab } from "./helpers";
 import { FinalistCard, HireStep, OfferStep, WaitingOnCandidateCard } from "./hiring";
 import { useCandidateAction, useDraft, useFocusOnMount, useRefreshCandidate } from "./hooks";
 import { NotesSummary } from "./notes";
 import { TellCard } from "./telling";
+import { Why } from "./why";
 
 /**
- * The area under the panel's header (plan A10): everything that waits on a person about this candidate, then the step a
- * stage choice opened. Each card is the same decision it always was; only where it sits changed.
+ * The area under the panel's header (plan A10; founder decision Q23): everything that waits on a person about this
+ * candidate, then the step a stage choice opened. Each card is the same decision it always was, said in one short line
+ * with its buttons (Wave S1); the longer words are one click away under "Why".
  */
 
 type Props = { a: ApplicationDetail; roleId: string; myRole: string | null; myUserId: string | null; step: PanelStep | null; setStep: (step: PanelStep | null, opts?: { roundKey?: string }) => void; roundKey?: string; onTab?: (tab: PanelTab) => void };
@@ -84,8 +86,30 @@ export function NeedsYou(props: Props) {
 /* Steps a stage choice opens.                                                                                   */
 /* ------------------------------------------------------------------------------------------------------------ */
 
+/** How the company's settings run this person's decision message, as the panel knows it: the safety net's way (D-03 A). */
+function decisionHint(a: ApplicationDetail): { policy: ApplicationDetail["declineMessage"]; to: string | null } {
+  return { policy: a.declineMessage, to: a.candidate.email };
+}
+
 /**
- * On hold (plan A4): until a date, with an optional note; private, and they come back to Today on that date. For someone
+ * What a decline says before the click (founder decisions B6 and D-03 A): private now, any interview it calls off, and
+ * the day the standard message goes by itself if nobody tells them first, in short lines; the whole of it (how the
+ * candidate will hear under the company's settings, each interview by name and time) one click away.
+ */
+export function DeclineNotice({ a, interviews, eligibility = false }: { a: ApplicationDetail; interviews?: readonly InterviewRef[]; eligibility?: boolean }) {
+  const lines = declineSummary(a.declineMessage, { hasEmail: !!a.candidate.email, interviews });
+  return (
+    <Alert tone="caution">
+      <div className="stack" style={{ gap: 4 }}>
+        {lines.map((l) => <span key={l}>{l}</span>)}
+      </div>
+      <Why label="What happens next">{declineConfirmText(a.declineMessage, { hasEmail: !!a.candidate.email, interviews, eligibility })}{eligibility ? " The reason recorded is the eligibility answer above." : ""}</Why>
+    </Alert>
+  );
+}
+
+/**
+ * On hold (plan A4): until a date, with an optional note; private, and they come back to Home on that date. For someone
  * under Cancelled, a hold takes them out of it, and no automatic new times go to them.
  */
 function HoldStep({ a, roleId, cancelled, onClose }: { a: ApplicationDetail; roleId: string; cancelled: boolean; onClose: () => void }) {
@@ -98,7 +122,8 @@ function HoldStep({ a, roleId, cancelled, onClose }: { a: ApplicationDetail; rol
   const valid = until >= bounds.min && until <= bounds.max;
   return (
     <Card needsYou lift title="Put on hold">
-      <p className="small" style={{ color: "var(--ink-2)" }}>Nothing about {a.candidate.firstName} waits on anyone until the date you choose; then they come back to Today. Private: nothing is sent to the candidate.{cancelled ? ` ${HOLD_ENDS_CANCELLED}` : ""}</p>
+      <p className="small" style={{ color: "var(--ink-2)" }}>Private: nothing is sent to the candidate.{cancelled ? ` ${HOLD_ENDS_CANCELLED}` : ""}</p>
+      <Why>Nothing about {a.candidate.firstName} waits on anyone until the date you choose; then they come back to your Home page.</Why>
       <div className="stack" style={{ gap: 8, marginTop: 10 }}>
         <Field label="Bring them back on" htmlFor="hold-until" hint="Eight weeks at most."><input ref={first} id="hold-until" className="input" type="date" min={bounds.min} max={bounds.max} value={until} onChange={(e) => setUntil(e.target.value)} /></Field>
         <Field label="Note (kept internally, optional)" htmlFor="hold-note"><input id="hold-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="For example: waiting to hear about the second chair" /></Field>
@@ -125,7 +150,7 @@ function DeclineStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId: str
   const interviews = activeInterviews(a.interviews);
   return (
     <Card needsYou lift title="Not moving forward">
-      <Alert tone="caution">{declineConfirmText(a.declineMessage, { hasEmail: !!a.candidate.email, interviews })}</Alert>
+      <DeclineNotice a={a} interviews={interviews} />
       <div className="stack" style={{ gap: 8, marginTop: 10 }}>
         <Field label="Reason" htmlFor="decline-reason"><select ref={first} id="decline-reason" className="select" value={reason} onChange={(e) => setReason(e.target.value)}>{DECLINE_REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field>
         <Field label="Note (kept internally, optional)" htmlFor="decline-note"><input id="decline-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
@@ -209,9 +234,12 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
   const suggestion = suggest.data;
   return (
     <Card needsYou lift title="Approve an interview">
-      <p className="small" style={{ color: "var(--ink-2)" }}>Your approval is what starts scheduling; the assistant never does this on its own. Times are offered to the candidate from the interviewers' calendars or declared hours.</p>
-      {filled && filled.roundKey === chosenRoundKey ? <p className="small interview-filled" style={{ margin: "8px 0 0" }}>{interviewDraftLine(filled)}</p> : null}
-      {a.interviewPlan.length === 0 ? <Alert tone="caution">This role has no interview rounds yet. Add them on the role's Interview plan tab.</Alert> : (
+      <p className="small" style={{ color: "var(--ink-2)" }}>Times go out to {a.candidate.firstName} once you approve.{filled && filled.roundKey === chosenRoundKey ? " Filled in from your interview plan." : ""}</p>
+      <Why>
+        <span>Your approval is what starts scheduling; the assistant never does this on its own. Times are offered to the candidate from the interviewers' calendars or declared hours.</span>
+        {filled && filled.roundKey === chosenRoundKey ? <span className="interview-filled">{interviewDraftLine(filled)}</span> : null}
+      </Why>
+      {a.interviewPlan.length === 0 ? <Alert tone="caution">This job has no interview rounds yet. Add them on the job's Interview plan tab.</Alert> : (
         <>
           <Field label="Round" htmlFor="iv-round"><select ref={first} id="iv-round" className="select" value={chosenRoundKey ?? ""} onChange={(e) => { setRoundKey(e.target.value); setInterviewers(null); }}>{a.interviewPlan.map((r) => <option key={r.key} value={r.key}>{r.title} · {r.durationMinutes} min · {r.format.replace("_", " ")}</option>)}</select></Field>
           <fieldset style={{ border: 0, padding: 0, margin: "10px 0" }}>
@@ -223,31 +251,38 @@ function InterviewStep({ a, roleId, initialRoundKey, onClose }: { a: Application
               </label>
             ))}
           </fieldset>
-          {chosenInterviewers.length && (members.data ?? []).some((m) => chosenInterviewers.includes(m.userId) && !m.schedulable) ? <Alert tone="caution">An interviewer has neither a connected calendar nor declared hours. Times cannot be offered until they add one in Setup; they will be asked.</Alert> : null}
+          {chosenInterviewers.length && (members.data ?? []).some((m) => chosenInterviewers.includes(m.userId) && !m.schedulable) ? <Alert tone="caution">An interviewer has neither a connected calendar nor declared hours. Times cannot be offered until they add one in Settings; they will be asked.</Alert> : null}
           {link.offerCalendar ? <Field label="Meeting link" htmlFor="iv-link"><select id="iv-link" className="select" value={link.mode} onChange={(e) => setLinkPicked(e.target.value as LinkChoice)}><option value="calendar">Create it with the calendar event</option><option value="pasted">I'll paste a link</option></select></Field> : null}
           {link.mode === "pasted" ? (
-            <Field label={link.urlRequired ? "Link" : "Meeting link (optional)"} htmlFor="iv-url" hint={link.urlRequired ? undefined : "For a video call, paste its link (it starts with https://). Leave it empty for an interview in person. A link is made with the calendar event only for an interviewer who connected their calendar in Setup."}>
+            <Field label={link.urlRequired ? "Link" : "Meeting link (optional)"} htmlFor="iv-url" hint={link.urlRequired ? undefined : "For a video call, paste its link. Leave it empty for an interview in person."}>
               <input id="iv-url" className="input" type="url" value={meetingUrl} onChange={(e) => setMeetingUrl(e.target.value)} placeholder="https://" />
             </Field>
           ) : null}
           {!link.offerCalendar && videoRound && !meetingUrl.trim() ? <p className="small muted" style={{ margin: 0 }}>This round is a video call. Without a link here, the invitation names the format only, so send {a.candidate.firstName} the link yourself.</p> : null}
-          <Field label="A personal line for the invitation (optional)" htmlFor="iv-line" hint={`It goes with the times, under your name: one or two sentences, ${PERSONAL_LINE_MAX} characters at most. It is checked before anything is sent: no scores, nothing about age, family, health, religion or background.`}>
-            <textarea id="iv-line" className="textarea" rows={2} maxLength={PERSONAL_LINE_MAX} value={line} onChange={(e) => { setLine(e.target.value); if (!e.target.value.trim()) setKept(null); }} placeholder={`For example: We enjoyed reading about your work, ${a.candidate.firstName}.`} />
-          </Field>
-          {suggestion?.line && !kept ? (
-            <div className="suggested-line">
-              <p className="small" style={{ margin: 0 }}><q>{suggestion.line}</q></p>
-              <p className="small muted" style={{ margin: "4px 0 0" }}>{suggestion.note}</p>
-              <div className="row" style={{ marginTop: 6 }}><Button size="sm" onClick={() => { setLine(suggestion.line!); setKept({ line: suggestion.line!, runId: suggestion.suggestionRunId }); }}>Use this line</Button><Button size="sm" variant="quiet" onClick={() => suggest.reset()}>No thanks</Button></div>
+          {!link.offerCalendar ? <Why label="Why no calendar link?">A link is made with the calendar event only for an interviewer who connected their calendar in Settings.</Why> : null}
+          {/* The personal line is optional and rarely used: one click away (the assistant's suggestion is asked for inside it). */}
+          <details className="more">
+            <summary>{line.trim() ? "Your personal line (it goes with the times)" : "Add a personal line (optional)"}</summary>
+            <div className="stack" style={{ gap: 8 }}>
+              <Field label="A personal line for the invitation (optional)" htmlFor="iv-line" hint={`It goes with the times, under your name: one or two sentences, ${PERSONAL_LINE_MAX} characters at most. It is checked before anything is sent: no scores, nothing about age, family, health, religion or background.`}>
+                <textarea id="iv-line" className="textarea" rows={2} maxLength={PERSONAL_LINE_MAX} value={line} onChange={(e) => { setLine(e.target.value); if (!e.target.value.trim()) setKept(null); }} placeholder={`For example: We enjoyed reading about your work, ${a.candidate.firstName}.`} />
+              </Field>
+              {suggestion?.line && !kept ? (
+                <div className="suggested-line">
+                  <p className="small" style={{ margin: 0 }}><q>{suggestion.line}</q></p>
+                  <p className="small muted" style={{ margin: "4px 0 0" }}>{suggestion.note}</p>
+                  <div className="row" style={{ marginTop: 6 }}><Button size="sm" onClick={() => { setLine(suggestion.line!); setKept({ line: suggestion.line!, runId: suggestion.suggestionRunId }); }}>Use this line</Button><Button size="sm" variant="quiet" onClick={() => suggest.reset()}>No thanks</Button></div>
+                </div>
+              ) : suggestion && !suggestion.line ? <p className="small muted" style={{ margin: 0 }}>{suggestion.note}</p> : null}
+              {!kept ? <div className="row"><Button size="sm" variant="secondary" icon="sparkle" loading={suggest.isPending} disabled={!chosenRoundKey} onClick={() => suggest.mutate()} title="The assistant suggests one friendly line; if you keep it, the invitation says the assistant helped">Suggest a line</Button></div> : null}
+              {lineAiHelped ? (
+                <div className="row" style={{ gap: 8 }}>
+                  <p className="small muted" style={{ margin: 0 }}>{suggestedLineNote(lineStillWhole, "invitation")}</p>
+                  {lineStillWhole ? <Button size="sm" variant="quiet" onClick={() => { setLine(line.replace(kept!.line, "").trim()); setKept(null); }}>Take out the assistant's line</Button> : null}
+                </div>
+              ) : null}
             </div>
-          ) : suggestion && !suggestion.line ? <p className="small muted" style={{ margin: 0 }}>{suggestion.note}</p> : null}
-          {!kept ? <div className="row"><Button size="sm" variant="secondary" icon="sparkle" loading={suggest.isPending} disabled={!chosenRoundKey} onClick={() => suggest.mutate()} title="The assistant suggests one friendly line; if you keep it, the invitation says the assistant helped">Suggest a line</Button></div> : null}
-          {lineAiHelped ? (
-            <div className="row" style={{ gap: 8 }}>
-              <p className="small muted" style={{ margin: 0 }}>{suggestedLineNote(lineStillWhole, "invitation")}</p>
-              {lineStillWhole ? <Button size="sm" variant="quiet" onClick={() => { setLine(line.replace(kept!.line, "").trim()); setKept(null); }}>Take out the assistant's line</Button> : null}
-            </div>
-          ) : null}
+          </details>
         </>
       )}
       <div className="row" style={{ marginTop: 10 }}>
@@ -272,9 +307,9 @@ function OutcomeStep({ a, roleId, onClose, onHire }: { a: ApplicationDetail; rol
   useDraft("outcome-note", form.note);
   const first = useFocusOnMount<HTMLSelectElement>();
   const record = useMutation({
-    mutationFn: () => api.post<{ roleStillOpen: boolean; roleId: string } & Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes">>(`/api/v1/applications/${a.id}/outcome`, { outcome: form.outcome, confirm: true, reason: form.outcome === "employer_declined" ? form.reason : undefined, note: form.note.trim() || undefined }),
+    mutationFn: () => api.post<{ roleStillOpen: boolean; roleId: string } & Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes" | "decisionMessage">>(`/api/v1/applications/${a.id}/outcome`, { outcome: form.outcome, confirm: true, reason: form.outcome === "employer_declined" ? form.reason : undefined, note: form.note.trim() || undefined }),
     onSuccess: async (r) => {
-      const t = outcomeToast(form.outcome, r);
+      const t = outcomeToast(form.outcome, { ...r, decisionMessage: r.decisionMessage ?? decisionHint(a) });
       toast(t.title, t.detail);
       onClose();
       await refresh();
@@ -284,7 +319,8 @@ function OutcomeStep({ a, roleId, onClose, onHire }: { a: ApplicationDetail; rol
   const pastDecision = a.stage === "talent_pool";
   return (
     <Card needsYou lift title="Record what happened">
-      <p className="small muted">You record it with your name; the platform never makes or sends an offer, and it asks for no pay, tax, identity or banking details. {outcomeNoticeText(activeInterviews(a.interviews))}</p>
+      <p className="small" style={{ color: "var(--ink-2)" }}>Recorded with your name. {outcomeNoticeText(activeInterviews(a.interviews))}</p>
+      <Why>You record it with your name; the platform never makes or sends an offer, and it asks for no pay, tax, identity or banking details.</Why>
       <div className="row" style={{ marginTop: 8 }}>
         <span className="small">Hired them?</span>
         <Button size="sm" onClick={onHire}>Open the hire sheet</Button>
@@ -301,8 +337,10 @@ function OutcomeStep({ a, roleId, onClose, onHire }: { a: ApplicationDetail; rol
           </select></Field>
           {form.outcome === "employer_declined" ? <>
             <Field label="Reason (recorded with your name)" htmlFor="oc-reason"><select id="oc-reason" className="select" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })}>{DECLINE_REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field>
-            <p className="small muted" style={{ margin: 0 }}>{declineConfirmText(a.declineMessage, { hasEmail: !!a.candidate.email, interviews: activeInterviews(a.interviews) })}</p>
+            <DeclineNotice a={a} interviews={activeInterviews(a.interviews)} />
           </> : null}
+          {/* "No hire" is a private decision too (they move to the talent pool untold): the safety net is said (D-03 A). */}
+          {form.outcome === "no_hire" ? <p className="small muted" style={{ margin: 0 }}>Private: nothing is sent to them now. {safetyNetAfterDecision({ decisionMessage: decisionHint(a) })}</p> : null}
           <Field label="Note (kept internally, optional)" htmlFor="oc-note"><input id="oc-note" className="input" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} /></Field>
           {form.confirming ? (
             <Alert tone="caution"><div className="row" style={{ justifyContent: "space-between" }}><span>Record this outcome under your name? It is audited and can only be corrected by an administrator.</span><span className="row"><Button size="sm" variant="primary" loading={record.isPending} onClick={() => record.mutate()}>Yes, record it</Button><Button size="sm" variant="quiet" onClick={() => setForm({ ...form, confirming: false })}>No</Button></span></div></Alert>
@@ -333,7 +371,7 @@ function SuggestionCard({ a, roleId, p, onInterview }: { a: ApplicationDetail; r
     mutationFn: (input: { decision: "approve" | "reject"; note?: string }) => api.post<{ interviewDraft?: InterviewDraft | null }>(`/api/v1/approvals/${p.id}/decide`, input),
     onSuccess: async (r, input) => {
       if (input.decision === "reject") toast(NOT_NOW_TOAST.title, NOT_NOW_TOAST.detail);
-      else if (screen) toast("Invitation on its way.", "The screen goes to the candidate by email, or by text when they agreed to texts.");
+      else if (screen) toast("Invitation on its way.", "The screening chat goes to the candidate by email, or by text when they agreed to texts.");
       else {
         toast("Moved to Interviewing.", "Check the interview below and approve it; times go out to the candidate from there.");
         if (r.interviewDraft) qc.setQueryData(["interview-draft", a.id], r.interviewDraft);
@@ -343,9 +381,11 @@ function SuggestionCard({ a, roleId, p, onInterview }: { a: ApplicationDetail; r
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : "That did not go through. Try again."),
   });
+  const rationale = firstSentence(p.rationale);
   return (
-    <Card needsYou lift title={screen ? "The assistant suggests a screen" : "The assistant suggests an interview"}>
-      <p className="small" style={{ color: "var(--ink-2)" }}>{p.rationale}</p>
+    <Card needsYou lift title={screen ? "The assistant suggests a screening chat" : "The assistant suggests an interview"}>
+      {rationale.line ? <p className="small" style={{ color: "var(--ink-2)" }}>{rationale.line}</p> : null}
+      {rationale.rest ? <Why>{rationale.rest}</Why> : null}
       {declining ? (
         <div className="stack" style={{ gap: 8, marginTop: 10 }}>
           <Field label="Why not now? (optional, kept internally)" htmlFor={`why-${p.id}`}><input id={`why-${p.id}`} className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
@@ -356,7 +396,7 @@ function SuggestionCard({ a, roleId, p, onInterview }: { a: ApplicationDetail; r
         </div>
       ) : (
         <div className="row" style={{ marginTop: 10 }}>
-          <Button variant="primary" size="sm" loading={decide.isPending} onClick={() => decide.mutate({ decision: "approve" })}>{screen ? "Yes, invite to a screen" : "Yes, interview"}</Button>
+          <Button variant="primary" size="sm" loading={decide.isPending} onClick={() => decide.mutate({ decision: "approve" })}>{screen ? "Yes, invite to a screening chat" : "Yes, interview"}</Button>
           <Button size="sm" onClick={() => setDeclining(true)}>Not now</Button>
           <AskRecruiter roleId={roleId} applicationId={a.id} size="sm" />
         </div>
@@ -384,10 +424,11 @@ function ReadyToInterviewCard({ a, onApprove }: { a: ApplicationDetail; onApprov
   const w = readyToInterviewWords(a);
   return (
     <Card needsYou title={w.title}>
-      <p className="small" style={{ color: "var(--ink-2)" }}>{w.body} Nothing is sent until you approve it.</p>
+      <p className="small" style={{ color: "var(--ink-2)" }}>{w.body}</p>
       <div className="row" style={{ marginTop: 10 }}>
         <Button variant="primary" size="sm" onClick={onApprove}>{w.button}</Button>
       </div>
+      <Why>Nothing is sent until you approve it. The approval opens filled in from your interview plan.</Why>
     </Card>
   );
 }
@@ -473,9 +514,10 @@ function DecisionCard({ a, roleId, myRole, onNextRound, onHire, onNotes }: { a: 
   const [note, setNote] = useState("");
   useDraft("decision-note", note);
   const record = useMutation({
-    mutationFn: (body: { decision: "next_round" | "finalist" | "not_moving_forward"; reason?: string; note?: string }) => api.post<{ stage: string; nextRoundKey: string | null } & Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes">>(`/api/v1/applications/${a.id}/decision`, body),
+    mutationFn: (body: { decision: "next_round" | "finalist" | "not_moving_forward"; reason?: string; note?: string }) => api.post<{ stage: string; nextRoundKey: string | null } & Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes" | "decisionMessage">>(`/api/v1/applications/${a.id}/decision`, body),
     onSuccess: async (r, body) => {
-      const t = decisionToast(body.decision, r);
+      // the safety net's way under the company's settings (D-03 A): the answer's own word, else what this panel knows
+      const t = decisionToast(body.decision, { ...r, decisionMessage: r.decisionMessage ?? decisionHint(a) });
       toast(t.title, t.detail);
       setDecision(null);
       setNote("");
@@ -490,7 +532,7 @@ function DecisionCard({ a, roleId, myRole, onNextRound, onHire, onNotes }: { a: 
   const hasNextRound = idx >= 0 && idx + 1 < a.interviewPlan.length && last?.outcome !== "no_show_candidate";
   return (
     <Card needsYou lift title="How did the interview go?">
-      <p className="small" style={{ color: "var(--ink-2)" }}>{last ? `${last.title}${last.outcome === "no_show_candidate" ? " (the candidate did not attend)" : last.outcome === "no_show_interviewer" ? " (the interviewer did not attend)" : ""}. ` : ""}The decision is yours and is recorded with your name.</p>
+      <p className="small" style={{ color: "var(--ink-2)" }}>{last ? `${last.title}${last.outcome === "no_show_candidate" ? " (the candidate did not attend)" : last.outcome === "no_show_interviewer" ? " (the interviewer did not attend)" : ""}. ` : ""}Your decision, recorded with your name.</p>
       {canReadNotes(myRole) ? <NotesSummary applicationId={a.id} onOpen={onNotes} /> : null}
       {!decision ? (
         <div className="row" style={{ marginTop: 10 }}>
@@ -504,7 +546,7 @@ function DecisionCard({ a, roleId, myRole, onNextRound, onHire, onNotes }: { a: 
         <div className="stack" style={{ marginTop: 12 }}>
           {decision === "not_moving_forward" ? (
             <>
-              <Alert tone="caution">{declineConfirmText(a.declineMessage, { hasEmail: !!a.candidate.email, interviews: activeInterviews(a.interviews) })}</Alert>
+              <DeclineNotice a={a} interviews={activeInterviews(a.interviews)} />
               <Field label="Reason" htmlFor="decision-reason"><select id="decision-reason" className="select" value={reason} onChange={(e) => setReason(e.target.value)}>{DECLINE_REASONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field>
             </>
           ) : null}
@@ -532,7 +574,8 @@ function EligibilityCard({ a, roleId }: { a: ApplicationDetail; roleId: string }
   return (
     <Card needsYou title="Held on an eligibility answer">
       <p className="small" style={{ color: "var(--ink-2)" }}>{a.eligibility?.failedRules.map((f) => `${f.question} → ${eligibilityAnswerWords(f)}`).join("; ")}</p>
-      <p className="small muted" style={{ marginTop: 6 }}>Held for your decision; nothing has been sent to them about it. Keep them in if the answer was a mistake. You are reminded daily, and an ITS recruiter is brought in after three days. Say why if you keep them in; it is recorded and the system learns from it.</p>
+      <p className="small muted" style={{ marginTop: 6 }}>Held for your decision; nothing was sent to them.</p>
+      <Why>Keep them in if the answer was a mistake. You are reminded daily, and an ITS recruiter is brought in after three days. Say why if you keep them in; it is recorded and the system learns from it.</Why>
       <Field label="Why keep them in?" htmlFor="ovnote"><input id="ovnote" className="input" value={overrideNote} onChange={(e) => setOverrideNote(e.target.value)} placeholder="For example: sitting the licensing exam next week" /></Field>
       <div className="row" style={{ marginTop: 10 }}>
         <Button variant="primary" size="sm" disabled={!overrideNote.trim() || !can("override_eligibility")} title={can("override_eligibility") ? (overrideNote.trim() ? "Keeps them in the process with your reason" : "Say why first") : blocked("override_eligibility")} loading={act.isPending && act.variables?.action === "override_eligibility"} onClick={() => act.mutate({ action: "override_eligibility", note: overrideNote })}>Keep them in</Button>
@@ -541,7 +584,7 @@ function EligibilityCard({ a, roleId }: { a: ApplicationDetail; roleId: string }
       {!can("reject") ? <p className="small muted" style={{ marginTop: 6 }}>{blocked("reject")}</p> : null}
       {confirming ? (
         <div className="stack" style={{ marginTop: 12 }}>
-          <Alert tone="caution">{declineConfirmText(a.declineMessage, { hasEmail: !!a.candidate.email, eligibility: true })} The reason recorded is the eligibility answer above.</Alert>
+          <DeclineNotice a={a} eligibility />
           <Field label="Note (kept internally, optional)" htmlFor="elig-note"><input id="elig-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
           <div className="row"><Button variant="destructive" loading={act.isPending && act.variables?.action === "reject"} onClick={() => act.mutate({ action: "reject", reason: "eligibility", note: note.trim() || "Confirmed after the eligibility hold" })}>Confirm decline</Button><Button onClick={() => setConfirming(false)}>Cancel</Button></div>
         </div>
@@ -567,7 +610,8 @@ function HoldEndedCard({ a, roleId, onHoldAgain }: { a: ApplicationDetail; roleI
   const act = useCandidateAction(a.id, roleId);
   return (
     <Card needsYou title="The hold has ended">
-      <p className="small" style={{ color: "var(--ink-2)" }}>You put {a.candidate.firstName} on hold{a.mark?.remindAt ? ` until ${holdDay(a.mark.remindAt)}` : ""}{a.mark?.note ? ` (${a.mark.note})` : ""}. Decide what comes next: take them off hold, hold them again, or choose another stage. Nothing has been sent to them.</p>
+      <p className="small" style={{ color: "var(--ink-2)" }}>You put {a.candidate.firstName} on hold{a.mark?.remindAt ? ` until ${holdDay(a.mark.remindAt)}` : ""}{a.mark?.note ? ` (${a.mark.note})` : ""}.</p>
+      <Why>Decide what comes next: take them off hold, hold them again, or choose another stage at the top. Nothing has been sent to them.</Why>
       <div className="row" style={{ marginTop: 10 }}>
         <Button size="sm" variant="primary" disabled={!a.allowedActions.includes("clear_mark")} loading={act.isPending} onClick={() => act.mutate({ action: "clear_mark", note: "Hold ended" })}>Take off hold</Button>
         <Button size="sm" onClick={onHoldAgain}>Hold again</Button>

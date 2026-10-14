@@ -112,9 +112,9 @@ describe("History: who did what, why, and what the candidate was told", () => {
     const item = historyItem(ev("candidate.recommended", { by: "approval", approvalRequestId: "p1" }));
     expect(item).toMatchObject({ what: "Moved to Interviewing", who: "Suggested by the assistant, approved by Dana Whitfield" });
     expect(historyItem(ev("candidate.recommended", { by: "human" }))?.what).toBe("Marked for interview");
-    expect(historyItem(ev("application.triaged", { recommendation: "screen" }, { kind: "agent", id: "triage" }))).toMatchObject({ what: "Assessed the résumé: Worth a screen", who: "The assistant" });
+    expect(historyItem(ev("application.triaged", { recommendation: "screen" }, { kind: "agent", id: "triage" }))).toMatchObject({ what: "AI review of the résumé: Worth a screening chat", who: "The assistant" });
     // the assistant's "hold" is thin evidence, never the On hold mark
-    expect(historyItem(ev("application.triaged", { recommendation: "hold" }, { kind: "agent", id: "triage" }))?.what).toBe("Assessed the résumé: Thin evidence: your call");
+    expect(historyItem(ev("application.triaged", { recommendation: "hold" }, { kind: "agent", id: "triage" }))?.what).toBe("AI review of the résumé: Thin evidence: your call");
   });
 
   it("gives the reason and note of a decision and says the candidate was not told", () => {
@@ -154,25 +154,25 @@ describe("History: who did what, why, and what the candidate was told", () => {
 
   it("tells what became of the assistant's suggestions: asked, approved by whom, 'Not now', closed, run out of time", () => {
     const agent = { kind: "agent", id: "triage" };
-    expect(historyItem(ev("approval.requested", { actionType: "application.invite_screen" }, agent))).toMatchObject({ what: "The assistant suggested a screen", who: "The assistant" });
-    expect(historyItem(ev("approval.granted", { actionType: "application.invite_screen" }))).toMatchObject({ what: "Approved the suggestion of a screen", who: "Suggested by the assistant, approved by Dana Whitfield" });
+    expect(historyItem(ev("approval.requested", { actionType: "application.invite_screen" }, agent))).toMatchObject({ what: "The assistant suggested a screening chat", who: "The assistant" });
+    expect(historyItem(ev("approval.granted", { actionType: "application.invite_screen" }))).toMatchObject({ what: "Approved the suggestion of a screening chat", who: "Suggested by the assistant, approved by Dana Whitfield" });
     // a person who did it themselves has their own line; an approved interview says it on "Moved to Interviewing"
     expect(historyItem(ev("approval.granted", { actionType: "application.invite_screen", by: "invite_screen" }))).toBeNull();
     expect(historyItem(ev("approval.granted", { actionType: "application.recommend_interview" }))).toBeNull();
     expect(historyItem(ev("approval.denied", { actionType: "application.recommend_interview", note: "Not now" }))).toMatchObject({ what: "Not now: set aside the suggestion of an interview", told: "The candidate was not told." });
     expect(historyItem(ev("approval.denied", { actionType: "application.invite_screen", note: "Waiting on her license" }))?.why).toBe("Waiting on her license");
-    expect(historyItem(ev("approval.cancelled", { actionType: "application.invite_screen", by: "left_process" }))).toMatchObject({ what: "The suggestion of a screen was closed", why: "Because they left the process." });
-    expect(historyItem(ev("approval.expired", { actionType: "application.invite_screen", windowDays: 7 }, { kind: "system", id: "wf" }))?.what).toBe("The suggestion of a screen ran out of time (7 days)");
+    expect(historyItem(ev("approval.cancelled", { actionType: "application.invite_screen", by: "left_process" }))).toMatchObject({ what: "The suggestion of a screening chat was closed", why: "Because they left the process." });
+    expect(historyItem(ev("approval.expired", { actionType: "application.invite_screen", windowDays: 7 }, { kind: "system", id: "wf" }))?.what).toBe("The suggestion of a screening chat ran out of time (7 days)");
     expect(historyItem(ev("approval.denied", { actionType: "disposition.send" }))?.what).toBe("Turned down sending the decision message");
     // a role's own approvals never show on a candidate
     expect(historyItem(ev("approval.granted", { actionType: "role_packet.approve" }))).toBeNull();
   });
 
   it("tells what happened to their screens, with the reason a screen was closed", () => {
-    expect(historyItem(ev("screen.cancelled", { reason: "stopped_by_team", note: "Phoned her instead" }))).toMatchObject({ what: "Screening invitation stopped by the team", why: "Phoned her instead" });
-    expect(historyItem(ev("screen.cancelled", { reason: "left_process" }))?.what).toBe("Screen closed: no longer in the process");
-    expect(historyItem(ev("screen.cancelled", { reason: "deletion_request" }))?.what).toBe("Screen closed: their information was deleted");
-    expect(historyItem(ev("screen.completed", {}, { kind: "candidate", id: "c" }))?.what).toBe("Finished the screening conversation");
+    expect(historyItem(ev("screen.cancelled", { reason: "stopped_by_team", note: "Phoned her instead" }))).toMatchObject({ what: "Screening chat invitation stopped by the team", why: "Phoned her instead" });
+    expect(historyItem(ev("screen.cancelled", { reason: "left_process" }))?.what).toBe("Screening chat closed: no longer in the process");
+    expect(historyItem(ev("screen.cancelled", { reason: "deletion_request" }))?.what).toBe("Screening chat closed: their information was deleted");
+    expect(historyItem(ev("screen.completed", {}, { kind: "candidate", id: "c" }))?.what).toBe("Finished the screening chat");
     // withdrawing says "Withdrew" once, on the application
     expect(historyItem(ev("screen.abandoned", { reason: "withdrawn" }))).toBeNull();
     expect(historyItem(ev("application.told", { how: "before_tracking" }, { kind: "system", id: "migration_0026" }))).toMatchObject({ what: "Counted as told: decided before decisions became private" });
@@ -181,22 +181,22 @@ describe("History: who did what, why, and what the candidate was told", () => {
   it("tells the conversation in the same visit as applying (Wave E): offered, skipped, changed, sent without it, a recruiter's call", () => {
     const apply = { kind: "system" as const, id: "apply_page" };
     const cand = { kind: "candidate" as const, id: "c" };
-    expect(historyItem(ev("screen.invited", { invitedBy: "apply", invitedVia: "apply" }, apply))?.what).toBe("Offered the screening conversation right after the application form");
+    expect(historyItem(ev("screen.invited", { invitedBy: "apply", invitedVia: "apply" }, apply))?.what).toBe("Offered the screening chat right after the application form");
     expect(historyItem(ev("screen.question_skipped", { questionKey: "q_pay" }, cand))).toMatchObject({ what: "Chose not to answer a screening question", who: "The candidate" });
     expect(historyItem(ev("screen.answer_edited", { questionKey: "q_start" }, cand))?.what).toBe("Changed an answer before sending");
     expect(historyItem(ev("screen.answer_tapped", { questionKey: "q_days" }, cand))).toBeNull();
-    expect(historyItem(ev("screen.declined_by_candidate", { answered: 0, questions: 5 }, cand))).toMatchObject({ what: "Sent the application without the screening conversation", why: "Their own choice; it is never held against them." });
-    expect(historyItem(ev("screen.idle_reminded", { answered: 2 }, { kind: "system", id: "wf" }))?.what).toBe("Reminded once to finish the screening conversation");
+    expect(historyItem(ev("screen.declined_by_candidate", { answered: 0, questions: 5 }, cand))).toMatchObject({ what: "Sent the application without the screening chat", why: "Their own choice; it is never held against them." });
+    expect(historyItem(ev("screen.idle_reminded", { answered: 2 }, { kind: "system", id: "wf" }))?.what).toBe("Reminded once to finish the screening chat");
     // never how far they got: they did not send their answers (founder decision of 9 October 2026)
-    expect(historyItem(ev("screen.unfinished", { answered: 2, questions: 5 }, { kind: "system", id: "wf" }))).toMatchObject({ what: "Didn't finish the screening conversation; it closed after one reminder", why: "They never sent their answers, so they are not shown." });
+    expect(historyItem(ev("screen.unfinished", { answered: 2, questions: 5 }, { kind: "system", id: "wf" }))).toMatchObject({ what: "Didn't finish the screening chat; it closed after one reminder", why: "They never sent their answers, so they are not shown." });
     expect(JSON.stringify(historyItem(ev("screen.unfinished", { answered: 2, questions: 5 }, { kind: "system", id: "wf" })))).not.toContain("2 of 5");
     expect(historyItem(ev("screen.paused", { reason: "model down" }, { kind: "system", id: "screening" }))?.told).toBe("They are emailed a link to finish once it is back.");
-    expect(historyItem(ev("screen.resumed", {}, { kind: "system", id: "screening" }))?.what).toBe("The screening conversation is back on");
+    expect(historyItem(ev("screen.resumed", {}, { kind: "system", id: "screening" }))?.what).toBe("The screening chat is back on");
     // the most model calls a conversation may make: to checking the answers, or closed with what was said
-    expect(historyItem(ev("screen.turn_cap_reached", { ending: "review", cap: 23 }, { kind: "system", id: "screening" }))).toMatchObject({ what: "The screening conversation reached its length limit", who: "The system", why: "They were taken to check their answers, where they can answer any question still open, and send them." });
-    expect(historyItem(ev("screen.turn_cap_reached", { ending: "closed", cap: 23 }, { kind: "system", id: "screening" }))?.why).toBe("It closed with what they had said so far, and the scorecard reads only that.");
+    expect(historyItem(ev("screen.turn_cap_reached", { ending: "review", cap: 23 }, { kind: "system", id: "screening" }))).toMatchObject({ what: "The screening chat reached its length limit", who: "The system", why: "They were taken to check their answers, where they can answer any question still open, and send them." });
+    expect(historyItem(ev("screen.turn_cap_reached", { ending: "closed", cap: 23 }, { kind: "system", id: "screening" }))?.why).toBe("It closed with what they had said so far, and the AI review reads only that.");
     // the plan's conversations stayed used up for the whole wait: never silent, for the team or the person promised the link
-    expect(historyItem(ev("screen.allowance_lapsed", { promised: true, days: 60 }, { kind: "system", id: "workflow" }))).toMatchObject({ what: "Never got the screening conversation: the plan's conversations stayed used up", told: "They were told it is not going ahead and that nothing else is needed." });
+    expect(historyItem(ev("screen.allowance_lapsed", { promised: true, days: 60 }, { kind: "system", id: "workflow" }))).toMatchObject({ what: "Never got the screening chat: the plan's screening chats stayed used up", told: "They were told it is not going ahead and that nothing else is needed." });
     expect(historyItem(ev("screen.recruiter_notes_added", { notes: 3, complete: true }, { kind: "user", id: "s1", name: "Rae Recruiter" }))).toMatchObject({ what: "Added notes from a call with the candidate", who: "Rae Recruiter", why: "Kept as the recruiter's notes, never as the candidate's own words." });
     expect(historyItem(ev("screen.completed", { via: "recruiter_call" }, { kind: "user", id: "s1", name: "Rae Recruiter" }))?.what).toBe("Screening finished with a recruiter's notes from a call");
     expect(historyItem(ev("screen.repeat_confirmed", { intent: "answers", added: true }, cand))?.what).toBe("Confirmed by email: answers given when applying again were added");
@@ -204,9 +204,9 @@ describe("History: who did what, why, and what the candidate was told", () => {
     // a skip during a follow-up keeps the answer; answers sent after the reminder; never started; a person after an outage
     expect(historyItem(ev("screen.question_skipped", { questionKey: "q_work", answerKept: true }, cand))?.what).toBe("Moved on from a follow-up question, keeping the answer already given");
     expect(historyItem(ev("screen.completed", { via: "review_timeout" }, { kind: "system", id: "wf" }))).toMatchObject({ what: "Their screening answers were sent as they were", who: "The system" });
-    expect(historyItem(ev("screen.expired", { oneVisit: true }, { kind: "system", id: "wf" }))).toMatchObject({ what: "Did not start the screening conversation that goes with the application", who: "The system" });
-    expect(historyItem(ev("screen.expired", {}, { kind: "system", id: "wf" }))?.what).toBe("The screening invitation lapsed without an answer");
-    expect(historyItem(ev("screen.repeat_confirmed", { intent: "outage", added: true }, cand))?.what).toBe("Confirmed by email: a person to finish the conversation the assistant could not, after applying again");
+    expect(historyItem(ev("screen.expired", { oneVisit: true }, { kind: "system", id: "wf" }))).toMatchObject({ what: "Did not start the screening chat that goes with the application", who: "The system" });
+    expect(historyItem(ev("screen.expired", {}, { kind: "system", id: "wf" }))?.what).toBe("The screening chat invitation lapsed without an answer");
+    expect(historyItem(ev("screen.repeat_confirmed", { intent: "outage", added: true }, cand))?.what).toBe("Confirmed by email: a person to finish the chat the assistant could not, after applying again");
   });
 
   it("tells the Cancelled column in plain words (founder decisions 1A to 4A): in, out, and what became of the new times", () => {
@@ -236,6 +236,9 @@ describe("History: who did what, why, and what the candidate was told", () => {
     expect(historyItem(ev("interview.new_times_sent", { via: "person", attempt: 2 }, sys))?.what).toBe("New times sent");
     expect(historyItem(ev("interview.new_times_not_sent", { reason: "takeover", from: "waiting" }, sys))).toMatchObject({ what: "The automatic new times did not go", why: "An ITS recruiter is running this role, so nothing was sent automatically." });
     expect(historyItem(ev("interview.new_times_not_sent", { reason: "switched_off", from: "waiting" }))?.why).toBe("Automatic new times were switched off in Setup.");
+    // the staff side says "screening chat", as the drawer's tab and menu do
+    expect(historyItem(ev("application.stage_changed", { from: "triaged", to: "screen_invited" }))?.what).toBe('Now "Invited to a screening chat"');
+    expect(historyItem(ev("application.stage_changed", { from: "screening", to: "screen_complete" }))?.what).toBe('Now "Screening chat done"');
     expect(historyItem(ev("interview.new_times_not_sent", { reason: "candidate_replied", from: "waiting" }))?.why).toBe("They replied to us, so nothing went automatically: read their reply first.");
     expect(historyItem(ev("interview.new_times_not_sent", { reason: "left_process", from: "waiting" }))).toBeNull();
     expect(historyItem(ev("interview.new_times_not_sent", { reason: "details_deleted", from: "waiting" }))).toBeNull();
@@ -273,8 +276,8 @@ describe("History: who did what, why, and what the candidate was told", () => {
       ev("application.stage_changed", { from: "eligible", to: "triaged" }, { kind: "system", id: "wf" }, "2026-10-01T10:00:01.000Z"),
       ev("application.marked", { mark: "shortlist" }, { kind: "user", id: "u1", name: "Dana Whitfield" }, "2026-10-02T10:00:00.000Z"),
     ];
-    expect(suggestionAndDecision(timeline)).toEqual({ suggested: "Worth a screen", decided: "Shortlist", decidedBy: "Dana Whitfield" });
-    expect(suggestionAndDecision(timeline.slice(0, 2))).toEqual({ suggested: "Worth a screen", decided: null, decidedBy: null });
+    expect(suggestionAndDecision(timeline)).toEqual({ suggested: "Worth a screening chat", decided: "Shortlist", decidedBy: "Dana Whitfield" });
+    expect(suggestionAndDecision(timeline.slice(0, 2))).toEqual({ suggested: "Worth a screening chat", decided: null, decidedBy: null });
     expect(suggestionAndDecision([])).toEqual({ suggested: null, decided: null, decidedBy: null });
   });
 });

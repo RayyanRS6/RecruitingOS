@@ -63,9 +63,9 @@ test("getting started guides a new owner; taking the ITS confirmation back puts 
   await expect(page.getByText(/ITS is checking your company again/).first()).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("Waiting for ITS")).toBeVisible();
   await expectAccessible(page, "today while ITS confirms the company");
-  // the role's Posting tab says why nothing of it is public, and Setup says the careers page is offline
+  // the job's Share tab says why nothing of it is public, and Settings says the careers page is offline
   await page.goto(`/roles/${seeded.roleId}?tab=posting`);
-  await expect(page.getByText(/Nothing of this role is public until ITS confirms your company/)).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/Nothing of this job is public until ITS confirms your company/)).toBeVisible({ timeout: 30_000 });
   await page.goto("/setup#setup-company");
   await expect(page.locator("#setup-company").getByText(/Offline until ITS confirms your company/)).toBeVisible({ timeout: 30_000 });
 

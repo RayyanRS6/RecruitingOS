@@ -82,7 +82,7 @@ export function PreferencesCard({ packet, decisionMaker }: { packet: RolePacket;
         <dd>
           {decisionMaker ? <>{decisionMaker.name ?? decisionMaker.email} <Pill size="sm" tone="good">on the team</Pill></> : stated ? <>{stated}{statedIsAPerson ? <> <Pill size="sm" tone="caution">not on the team yet</Pill></> : null}</> : "Not named yet"}
           <br />
-          <span className="small muted">{decisionMaker ? "Packet approvals are reserved for them; an owner can also decide." : statedIsAPerson ? "Invite them to the team and approvals will go to them." : "Any owner, admin or hiring manager can approve."}</span>
+          <span className="small muted">{decisionMaker ? "Approvals of the job are reserved for them; an owner can also decide." : statedIsAPerson ? "Invite them to the team and approvals will go to them." : "Any owner, admin or hiring manager can approve."}</span>
         </dd>
         <dt>Deal-breakers</dt>
         <dd>{pref.dealBreakersInTheirWords.length ? <ul style={{ margin: 0, paddingLeft: 18 }}>{pref.dealBreakersInTheirWords.map((d, i) => <li key={i}>{d}</li>)}</ul> : <span className="muted">None stated</span>}</dd>
@@ -90,7 +90,7 @@ export function PreferencesCard({ packet, decisionMaker }: { packet: RolePacket;
         <dd>{pref.whatFailureLooksLike ?? <span className="muted">Not stated</span>}</dd>
         {pref.interviewStyle ? <><dt>Interview style</dt><dd>{pref.interviewStyle}</dd></> : null}
       </dl>
-      <p className="small muted" style={{ marginTop: 8 }}>In your words from the conversation with the assistant. Change them with Edit.</p>
+      <p className="small muted" style={{ marginTop: 8 }}>In your words, from the job builder. Change them with Edit.</p>
     </Card>
   );
 }
@@ -174,8 +174,8 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
   const musts = packet?.requirements?.mustHaves ?? [];
   const nices = packet?.requirements?.niceToHaves ?? [];
   return (
-    <Card needsYou lift title={pending.editWhileOpen ? `Approve packet v${pending.version} of ${role.title}` : "Approve this role packet"}>
-      <p style={{ color: "var(--ink-2)" }}>{pending.rationale ?? (pending.editWhileOpen ? "The role keeps running on its approved version until you decide." : "Review the packet, edit anything, then approve. Approval opens the role: your careers page and Google come first, and each job board follows once the job is posted there and its address checked.")}</p>
+    <Card needsYou lift title={pending.editWhileOpen ? `Approve version ${pending.version} of ${role.title}` : "Approve this job"}>
+      <p style={{ color: "var(--ink-2)" }}>{pending.rationale ?? (pending.editWhileOpen ? "The job keeps running on its approved version until you decide." : "Review the job, edit anything, then approve. Approval opens the job: your careers page and Google come first, then each job board once it is posted there and checked.")}</p>
       {!pending.editWhileOpen && check === "waiting" ? <Alert tone="info">{APPROVE_WAITS_FOR_CHECK}</Alert> : null}
       {canSeePay ? (
         <div className="row" style={{ marginTop: 8 }}>
@@ -195,8 +195,8 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
       {autoLine ? <p className="small muted" style={{ marginTop: 8 }}>{autoLine} <Link to={role.autoActionsOnOpen.changeHref}>Change these rules</Link></p> : null}
       {pending.editWhileOpen && role.proposedPacket ? (
         <div className="row" style={{ marginTop: 6, flexWrap: "wrap" }}>
-          <p className="small" style={{ color: "var(--ink-2)", margin: 0 }}>What changed: {role.proposedPacket.changeSummary ?? "edited"} · by {role.proposedPacket.createdBy.name ?? "a team member"} on {new Date(role.proposedPacket.createdAt).toLocaleDateString()}. Current version: v{role.currentPacket?.version ?? "?"}.</p>
-          <Button size="sm" onClick={() => onShowProposed(!showingProposed)}>{showingProposed ? `Back to v${role.currentPacket?.version ?? "?"}` : `Show v${role.proposedPacket.version}`}</Button>
+          <p className="small" style={{ color: "var(--ink-2)", margin: 0 }}>What changed: {role.proposedPacket.changeSummary ?? "edited"} · by {role.proposedPacket.createdBy.name ?? "a team member"} on {new Date(role.proposedPacket.createdAt).toLocaleDateString()}. Current version: {role.currentPacket?.version ?? "?"}.</p>
+          <Button size="sm" onClick={() => onShowProposed(!showingProposed)}>{showingProposed ? `Back to version ${role.currentPacket?.version ?? "?"}` : `Show version ${role.proposedPacket.version}`}</Button>
         </div>
       ) : null}
       <p className="small muted" style={{ marginTop: 6 }}>
@@ -213,7 +213,7 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canSeePay
       {!pending.viewer.mayDecide && !(legal.missing.length && isLegalReason(pending.viewer.reason)) ? <Alert tone="info">{pending.viewer.reason ?? "Someone else on your team decides this one."}</Alert> : null}
       {sendingBack ? (
         <div className="stack" style={{ gap: 8, marginTop: 12, maxWidth: 520 }}>
-          <Field label="What should change? (the note goes back with the packet)" htmlFor="sendback-note"><input id="sendback-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Raise the ceiling before we post this" /></Field>
+          <Field label="What should change? (the note goes back with the job)" htmlFor="sendback-note"><input id="sendback-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Raise the ceiling before we post this" /></Field>
           <div className="row">
             <Button variant="destructive" loading={sendBack.isPending} onClick={() => sendBack.mutate()}>Send back</Button>
             <Button variant="quiet" onClick={() => setSendingBack(false)}>Keep reviewing</Button>
@@ -287,7 +287,7 @@ function LegalCheckList({ role, check, canEdit, canManage, onEdit }: { role: Rol
               <li key={i.key}>
                 <strong>{i.label}.</strong> {i.detail}{i.fix ? ` ${i.fix}` : ""}
                 {i.key === "pay_range" && canEdit ? <div className="row" style={{ marginTop: 6 }}><Button size="sm" onClick={onEdit}>Edit the pay</Button></div> : null}
-                {i.key === "benefits" ? <div className="row" style={{ marginTop: 6 }}><Link to="/setup#setup-company" className="btn secondary sm">Describe the benefits in Setup</Link>{canEdit ? <Button size="sm" variant="ghost" onClick={onEdit}>Or only for this role</Button> : null}</div> : null}
+                {i.key === "benefits" ? <div className="row" style={{ marginTop: 6 }}><Link to="/setup#setup-company" className="btn secondary sm">Describe the benefits in Settings</Link>{canEdit ? <Button size="sm" variant="ghost" onClick={onEdit}>Or only for this job</Button> : null}</div> : null}
                 {i.key === "closing_date" ? <div style={{ marginTop: 6 }}><ClosingDateField roleId={role.id} closingDate={role.closingDate} canEdit={canManage} roleStatus={role.status} idBase="legal" /></div> : null}
               </li>
             ))}
@@ -398,8 +398,8 @@ export function InterviewPlanTab({ roleId, canEdit }: { roleId: string; canEdit:
   const d = plan.data;
   const toggle = (id: string, on: boolean) => setPicked((p) => (on ? [...new Set([...p, id])] : p.filter((x) => x !== id)));
   return (
-    <Card title="Interview rounds" aside={<Chip>Packet v{d.version}</Chip>}>
-      <p className="small muted" style={{ marginBottom: 10 }}>Each round names who interviews. Someone with a connected calendar or declared hours can be offered times straight away; the others are asked to add theirs. {canEdit ? "Assigning interviewers saves a new packet version." : "An owner, an admin or a hiring manager assigns the interviewers."}</p>
+    <Card title="Interview rounds" aside={<Chip>Version {d.version}</Chip>}>
+      <p className="small muted" style={{ marginBottom: 10 }}>Each round names who interviews. People with a calendar or hours can be offered times straight away; the others are asked to add theirs. {canEdit ? "Assigning interviewers saves a new version of the job." : "An owner, an admin or a hiring manager assigns the interviewers."}</p>
       <ol style={{ paddingLeft: 18, margin: 0 }} className="stack">
         {d.rounds.map((r) => (
           <li key={r.key}>
@@ -421,7 +421,7 @@ export function InterviewPlanTab({ roleId, canEdit }: { roleId: string; canEdit:
                     <span>{m.name} <span className="small muted">({m.role.replace(/_/g, " ")})</span></span>
                     <Pill size="sm" tone={m.schedulable ? "good" : "caution"}>{m.schedulable ? "availability known" : "no calendar or hours yet"}</Pill>
                   </label>
-                )) : <p className="small muted">Nobody is on the team yet. Invite people from Setup.</p>}
+                )) : <p className="small muted">Nobody is on the team yet. Invite people from Settings.</p>}
                 <div className="row">
                   <Button variant="primary" size="sm" loading={save.isPending} onClick={() => save.mutate({ key: r.key, ids: picked })}>Save interviewers</Button>
                   <Button size="sm" variant="quiet" onClick={() => setEditingKey(null)}>Cancel</Button>
@@ -441,12 +441,12 @@ export function InterviewPlanTab({ roleId, canEdit }: { roleId: string; canEdit:
 export function ActivityTab({ roleId }: { roleId: string }) {
   const q = useQuery({ queryKey: ["role-timeline", roleId], queryFn: () => api.get<RoleEvent[]>(`/api/v1/roles/${roleId}/timeline`) });
   if (q.isLoading) return <Skeleton lines={5} />;
-  if (q.error || !q.data) return <ErrorState message={q.error instanceof ApiError && q.error.status === 403 ? "Your role cannot see this role's activity." : "Could not load the activity."} onRetry={() => q.refetch()} />;
-  if (!q.data.length) return <EmptyState title="Nothing yet" body="What happens on this role shows up here, newest first." />;
+  if (q.error || !q.data) return <ErrorState message={q.error instanceof ApiError && q.error.status === 403 ? "Your role cannot see this job's activity." : "Could not load the activity."} onRetry={() => q.refetch()} />;
+  if (!q.data.length) return <EmptyState title="Nothing yet" body="What happens on this job shows up here, newest first." />;
   return (
     <Card title="Activity" aside={<Chip>{q.data.length} {q.data.length === 1 ? "entry" : "entries"}</Chip>}>
       <Timeline items={q.data.map((e) => ({ when: e.occurredAt, what: describeRoleEvent(e), who: actorWords(e.actor) }))} />
-      <p className="small muted" style={{ marginTop: 8 }}>Candidates are not named here; open Talent for the people.</p>
+      <p className="small muted" style={{ marginTop: 8 }}>Candidates are not named here; open Candidates for the people.</p>
     </Card>
   );
 }

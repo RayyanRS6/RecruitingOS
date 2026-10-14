@@ -56,7 +56,7 @@ describe("the comparison view", () => {
     expect(scoreSummary(ana)).toMatchObject({ score: ana.score!.score, band: ana.score!.bandLabel, coverage: "Based on 4 of 5 requirements" });
     // two must-haves judged, one shown missing by their own words: half the points, already under the cap of 54
     expect(scoreSummary(ben)).toMatchObject({ score: 50, missing: ["Missing must-have: Active CA RDH license"] });
-    expect(scoreSummary(cy)).toEqual({ score: null, band: null, coverage: "No reading yet", missing: [] });
+    expect(scoreSummary(cy)).toEqual({ score: null, band: null, coverage: "No AI review yet", missing: [] });
   });
 
   it("shows, per requirement, what was found, how much was met and the points it cost", () => {

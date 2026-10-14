@@ -218,7 +218,7 @@ export function workingDaysFrom(text: string): number | null {
 /** The card's fixed words. */
 export const NEW_TIMES_SETUP = {
   title: "When a candidate cancels",
-  intro: "When candidates cancel a booked interview, they choose: send me new times later, or I'm no longer interested. Either way they go under Cancelled on the role's Talent page, so you can see who and why. People who did not come to an interview go there too.",
+  intro: "When candidates cancel a booked interview, they choose: send me new times later, or I'm no longer interested. Either way they go under Cancelled on the job's Candidates page, so you can see who and why. People who did not come to an interview go there too.",
   checkbox: "Send new times automatically to people who ask for them",
   daysLabel: "Working days to wait",
   daysHint: "1 to 10. Weekends and holidays are not counted. The email goes out in the morning, your company's time.",

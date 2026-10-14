@@ -6,14 +6,14 @@ import { Alert, Avatar, Button, Card, Chip, ErrorState, Field, Skeleton } from "
 import { api, ApiError, type ApplicationsWithCounts, type ClosingMessagePreview, type ClosingMessageResult } from "../api/client";
 import { toast } from "../toast";
 import { CLOSING_SENDERS, closeRoleToast } from "../talent-actions";
-import { bulkUndoMillis, closingResultToast, closingSendLabel, closingSheetLines, safetyNetPromise, undoable } from "../telling";
+import { bulkUndoMillis, closingResultToast, closingSendLabel, closingSheetLines, safetyNetDate, safetyNetPromise, safetyNetShort, undoable } from "../telling";
 import { InlineUndo } from "./InlineUndo";
 import { useBulkTakeBack, useBulkUndoToast } from "./use-undo";
 
 /**
  * Closing a role and telling the people it leaves (founder decisions B6 and Q30; plan G4). The close card lists who is
  * still in process; closing moves them to the talent pool privately, and then one courteous closing message, seen first,
- * tells all of them with a single approval. Nothing is sent now; "Not now" leaves it on Today, and if nobody tells them
+ * tells all of them with a single approval. Nothing is sent now; "Not now" leaves it on Home, and if nobody tells them
  * the safety net acts after five working days (Q27). Someone who may close a role but not tell candidates (HR) is told
  * who sends it instead of being shown a Send they could not use.
  */
@@ -33,9 +33,9 @@ const ROLE_OUTCOMES: ReadonlyArray<[string, string]> = [
 ];
 
 /**
- * "Close this role" on the role page: the outcome, an optional reason, who is still in process (they move to the talent
- * pool privately, and anyone with an interview booked or times offered is told now that it is off), then the closing
- * message for them all.
+ * "Close this job" on the job page: the outcome, an optional reason, who is still in process (they move to the talent
+ * pool privately, with the day the safety net acts if nobody tells them first, and anyone with an interview booked or
+ * times offered is told now that it is off), then the closing message for them all.
  */
 export function CloseRoleCard({ roleId, initialOutcome, mayTell, onClose }: { roleId: string; initialOutcome: string; /** May tell candidates a decision (application.reject); HR closes roles but does not send the closing message. */ mayTell: boolean; onClose: () => void }) {
   const qc = useQueryClient();
@@ -54,11 +54,11 @@ export function CloseRoleCard({ roleId, initialOutcome, mayTell, onClose }: { ro
       if (mayTell && res.closingMessage && (res.closingMessage.count > 0 || res.closingMessage.waitingApprovalId)) setClosed(res.closingMessage);
       else onClose();
     },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not close the role."),
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not close the job."),
   });
   if (closed) return <ClosingMessageCard roleId={roleId} preview={closed} onDone={onClose} />;
   return (
-    <Card needsYou title="Close this role">
+    <Card needsYou title="Close this job">
       <p className="small" style={{ color: "var(--ink-2)" }}>Say what happened. It is recorded with your name. The platform made no offer.</p>
       <div className="stack" style={{ gap: 10, marginTop: 8, maxWidth: 620 }}>
         <Field label="Outcome" htmlFor="rc-outcome"><select id="rc-outcome" className="select" value={outcome} onChange={(e) => setOutcome(e.target.value)}>
@@ -74,11 +74,11 @@ export function CloseRoleCard({ roleId, initialOutcome, mayTell, onClose }: { ro
                   <li key={a.id}><Avatar name={a.candidate?.name ?? "?"} size="sm" /><span>{a.candidate?.name ?? "A candidate"}</span><span className="muted small">{a.ownerStageLabel}</span></li>
                 ))}
               </ul>
-              <p className="small muted" style={{ margin: "6px 0 0" }}>{still.length === 1 ? "They move" : `These ${still.length} people move`} to your talent pool, privately: nobody is told the decision yet. Anyone with an interview booked or times offered is told now, in a short note that gives no reason, that it is off. {mayTell ? "Next you see the one closing message for all of them before anything goes." : `${CLOSING_SENDERS} then sends them the one closing message; it waits on their Today.`}</p>
+              <p className="small muted" style={{ margin: "6px 0 0" }}>{still.length === 1 ? "They move" : `These ${still.length} people move`} to your talent pool, privately: nobody is told the decision yet. {safetyNetShort({ policy: null, on: safetyNetDate(new Date().toISOString()), what: "the closing message" })} Anyone with an interview booked or times offered is told now, in a short note that gives no reason, that it is off. {mayTell ? "Next you see the one closing message for all of them before anything goes." : `${CLOSING_SENDERS} then sends them the one closing message; it waits on their Home page.`}</p>
             </>
           ) : <p className="small muted" style={{ margin: 0 }}>Nobody is still in process.</p>}
         </div>
-        <div className="row"><Button variant="destructive" loading={close.isPending} onClick={() => close.mutate()}>Confirm and close the role</Button><Button variant="quiet" onClick={onClose}>Keep it open</Button></div>
+        <div className="row"><Button variant="destructive" loading={close.isPending} onClick={() => close.mutate()}>Confirm and close the job</Button><Button variant="quiet" onClick={onClose}>Keep it open</Button></div>
       </div>
     </Card>
   );
@@ -152,7 +152,7 @@ export function ClosingMessageCard({ roleId, preview, onDone }: { roleId: string
         {sendable ? <Button size="sm" variant="primary" icon="send" loading={send.isPending} onClick={() => send.mutate()}>{closingSendLabel(p)}</Button> : null}
         <Button size="sm" variant="quiet" onClick={onDone}>{sendable ? "Not now" : "Close"}</Button>
       </div>
-      {sendable ? <p className="small muted" style={{ marginTop: 6 }}>Not now leaves them on Today as not told yet. {safetyNetPromise(p.policy, "the closing message")}</p> : null}
+      {sendable ? <p className="small muted" style={{ marginTop: 6 }}>Not now leaves them on your Home page as not told yet. {safetyNetPromise(p.policy, "the closing message")}</p> : null}
     </Card>
   );
 }

@@ -11,6 +11,26 @@ This page lists the product decisions waiting for the founder, one batch at a ti
 
 Every statement about Recruiting OS in batch 1 was checked again against the code on 14 October 2026. Nothing here has been tried on the real AI model or with real candidates. The automated tests run on stand-in providers: 2,148 passed, 6 skipped, 0 failed.
 
+## 14 October 2026: founder delegated
+
+The founder said the documents were too much to review, and asked Claude to decide: keep the app basic, with a Kanvis-like flow for the employer and for candidates, on the current tech stack, with nothing extra added. Claude decided batch 1 on that basis:
+
+| Id | Decision | What it means |
+|---|---|---|
+| D-01 | **A** | No candidate accounts. Candidates keep the private emailed link, one application per role and the status page. C's two small pieces are not built now. |
+| D-02 | **Not now** | Keep the app basic: no manual add or import of people who did not apply yet. Referrals keep using the job link or the email-in address. Can be asked again later. |
+| D-03 | **A** | Keep the day-5 standard message (Q27 A as built). Every screen that says a decision is private also says, in one short line, that the standard message goes by itself after 5 working days if nobody sends one, with the date when it is known. Done in Wave S1. |
+| D-04 | **C** | Hide earlier applications and their outcomes, and the name, email, phone, street address and web links, from the AI's scoring reading; then re-run the fairness tests with a pair that differs only in an earlier rejection. To be built in the next wave. |
+| D-05 | **Not now** | Keep the labels only ("read against version N"); nothing re-reads. Can be asked again later. |
+
+**Wave S1 (simple screens), built the same day** on branch `kanvis-simple`. No capability was removed; details moved one click away (a tab, a More menu or a "Show more" block):
+- The menu reads Home, Jobs, Candidates, Interviews, Settings.
+- Home: a greeting, one line, "Needs you" (up to 5 short rows, each with its "Why"), "Your jobs", the "Who are you hiring?" box and the recent activity folded.
+- Jobs: one row per job; a live job opens on its Candidates. Each job has one header and one tab strip: Candidates, Job, Scoring, Interview plan, Share, Report, Activity, with the rarer actions in its More menu.
+- The candidate panel: the verdict, the next step, strengths and concerns first; the full breakdown one click away.
+- Settings: five tabs (Company, Team, Notifications, Hiring rules, Security). Old links still land on the right card.
+- Candidate pages: shorter first views; every legal text is still on the page, folded under "How AI is used" or "Read the full notice".
+
 ---
 
 ## 1. How to answer
@@ -51,7 +71,7 @@ Kanvis has shipped no new version since 7 October: the deployment and its code f
 
 ---
 
-## 2. Batch 1 (pending, asked 14 October 2026)
+## 2. Batch 1 (asked 14 October 2026; decided the same day by delegation, see the section at the top)
 
 | Id | Workflow | Recommended |
 |---|---|---|
@@ -627,3 +647,4 @@ Your words: "if haiku thinks that the score is 81 then that is okay ... the CV s
 |---|---|
 | 14 Oct 2026 | Register created. Batch 1 (D-01 to D-05) asked. Batches 2 to 5 (L-01 to L-15) listed, not yet asked. Decisions already made reproduced in section 4 with their place in the code. |
 | 14 Oct 2026 | Cross-document check: bug references changed to `known-bugs.md` row numbers; D-02 C's expiry periods aligned with the implementation plan (14-day link, 30-day wipe, counsel item 9). No option changed. |
+| 14 Oct 2026 | The founder delegated batch 1 to Claude (section at the top): D-01 A, D-02 not now, D-03 A, D-04 C (next wave), D-05 not now. Wave S1 (simple screens) built on `kanvis-simple`. |

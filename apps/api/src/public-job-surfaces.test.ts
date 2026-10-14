@@ -121,7 +121,14 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(box).toContain('name="acknowledged"');
     expect(box).toContain("required");
     expect(box).not.toContain("checked");
-    expect(html).toContain("I have read the notice above and I understand that people, not software, make the hiring decisions.");
+    expect(html).toContain("I have read the full notice above and I understand that people, not software, make the hiring decisions.");
+    // the first view is three short lines and the privacy link; every word of the notice, the notices included, sits under
+    // "Read the full notice", above the box that says it was read (founder brief, 14 October 2026)
+    const block = html.slice(html.indexOf('<h2 id="before-you-send">'), html.indexOf('<label class="check" for="acknowledged">'));
+    expect(block).toContain("<ul class=\"steps\"><li>People at Ledger Dental make every hiring decision.</li><li>Software helps organize applications and works out a match score.</li><li>You can ask for a person at any time.</li></ul><p><a href=\"/privacy\">Read how we handle your information</a></p><details class=\"more\"><summary>Read the full notice</summary><p><strong>Ledger Dental</strong> runs this hiring process");
+    const full = block.slice(block.indexOf("<summary>Read the full notice</summary>"));
+    for (const words of ["What we collect:", "Why:", "Who can see it:", "Your choices:", "People make the hiring decisions", "The pay range for this position is shown above as required by law", '<a href="/privacy">Read how we handle your information</a>']) expect(full).toContain(words);
+    expect(full.endsWith("</details>")).toBe(true);
     // never the recording notice, and with texting off no consent box and no promise of texts
     expect(html).not.toContain("may be recorded");
     expect(html).not.toContain('name="smsConsent"');
@@ -143,7 +150,7 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(header).toContain('<span class="fact-text">Full time</span>');
     expect(header).toMatch(/<span class="fact-text">\$45–\$55 an hour<\/span>/);
     // how long it really takes (plan E8): the form and the written conversation that follows it in the same visit
-    expect(header).toMatch(/About \d+ minutes, including a short written conversation with Ledger Dental's AI assistant\. First this form: upload a resume, or answer four short questions about your work instead\. No cover letter needed\./);
+    expect(header).toMatch(/About \d+ minutes, including a short written conversation with Ledger Dental's AI assistant\. First, this form; no cover letter needed\./);
     // the pre-apply line: help, or a change to how to apply because of a disability, from a person (here the ITS inbox)
     expect(header).toContain(`Need help applying, or a change to how you apply because of a disability? Email <a href="mailto:${container.env.EMAIL_REPLY_TO}">`);
     // the four short questions instead of one box, behind a disclosure that works without script; closed until used
@@ -199,6 +206,8 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(box).toContain('aria-describedby="acknowledged-error"');
     expect(box).not.toContain("checked");
     expect(html).toContain('id="acknowledged-error"');
+    // sent back for the box: the full notice it confirms is open, not folded away
+    expect(html).toMatch(/<details class="more" open[^>]*><summary>Read the full notice<\/summary>/);
     expect(await container.db.select().from(applications).where(eq(applications.roleId, roleId))).toHaveLength(0);
 
     // with the box ticked: the application is in, the acknowledgment recorded, and the notice versions are the server's, not the browser's claim

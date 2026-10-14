@@ -50,7 +50,7 @@ async function seedPool(request: APIRequestContext, base: string) {
 
 test.describe("the pool board", () => {
   skipWithoutFakeSignIn();
-  test("Today's card, the board, the one-click questions, Review and apply, privately, and the board on a phone", async ({ page, baseURL }) => {
+  test("Home's pool row, the board, the one-click questions, Review and apply, privately, and the board on a phone", async ({ page, baseURL }) => {
     test.setTimeout(300_000);
     await page.goto("/login");
     await signIn(page, { email: `dana+${run}@board.test`, name: "Dana Whitfield", provider: "google" });
@@ -79,7 +79,7 @@ test.describe("the pool board", () => {
     await expect(page.locator(".board-card").filter({ hasText: "Ana Holt" }).locator(".board-card-score")).toContainText(/(Very high|High|Medium|Low) · \d+/);
     // each card says what its score rests on, and the reading's own confidence sits apart
     await expect(cleoCard.locator(".board-card-facts")).toContainText(/Must-haves: \d+ of \d+ shown/);
-    await expect(cleoCard.locator(".board-card-facts")).toContainText("From the résumé reading");
+    await expect(cleoCard.locator(".board-card-facts")).toContainText("From the AI review of the résumé");
     await expect(cleoCard.getByText(/^(High|Medium|Low) confidence$/)).toBeVisible();
     await expectAccessible(page, "the pool board");
 
@@ -94,8 +94,8 @@ test.describe("the pool board", () => {
     // Ask about this pool: one click, an answer from the checked findings, the people as chips, what it looked at
     await page.getByRole("button", { name: "Ask about this pool" }).click();
     const panel = page.getByRole("dialog", { name: "Ask about this pool" });
-    await expect(panel.getByText("Answers come from the checked findings already on file for everyone who finished applying. Pick a question; each answer says what it looked at.")).toBeVisible();
-    await expect(panel.getByText("Typing your own question is not available yet. Pick a question above, or bring in a recruiter.")).toBeVisible();
+    await expect(panel.getByText("Pick a question. Each answer says what it looked at.")).toBeVisible();
+    await expect(panel.getByText("Typing your own question is not available yet. Pick one above, or bring in a recruiter.")).toBeVisible();
     await expect(panel.locator("textarea")).toHaveCount(0);
     await panel.getByRole("button", { name: "Who is missing a must-have, and why?" }).click();
     await expect(panel.getByText(/^Looked at: \d+ (person|people)/)).toBeVisible({ timeout: 30_000 });
@@ -108,7 +108,7 @@ test.describe("the pool board", () => {
     await expect(page.locator(".board-card")).toHaveCount(1);
     await only.click();
 
-    // Today: the pool card leads straight to Review and apply
+    // Home: the pool row leads straight to Review and apply
     await page.goto("/");
     const card = page.locator(".card").filter({ hasText: /people to sort for/ });
     await expect(card).toBeVisible({ timeout: 30_000 });
@@ -119,9 +119,9 @@ test.describe("the pool board", () => {
     // Review and apply: three groups, the confident ticked, a reason from their own evidence, the private footer
     const review = page.getByRole("dialog", { name: "Review and apply" });
     await expect(review).toBeVisible({ timeout: 30_000 });
-    await expect(review.getByText("This files people into your pipeline privately. Nobody is emailed.")).toBeVisible();
-    await expect(review.getByText(/^Filed privately\. Nobody is emailed now; you will be reminded to send the decision message from the Talent page\. If nobody tells them within 5 working days, the standard message goes by itself/)).toBeVisible();
-    await expect(review.getByText("Untick anyone you want to decide yourself, change a reason if needed, then apply. Unticked people stay where they are.")).toBeVisible();
+    await expect(review.getByText("Private: nobody is emailed now.")).toBeVisible();
+    await expect(review.getByText(/^Filed privately; nobody is emailed now\. If nobody tells them within 5 working days, the standard message goes by itself/)).toBeVisible();
+    await expect(review.getByText("Untick anyone you want to decide yourself. Unticked people stay where they are.")).toBeVisible();
     await expect(review.getByRole("checkbox", { name: "Cleo Park" })).toBeChecked();
     await expect(review.getByLabel("Reason for Cleo Park (change it if you disagree)")).toBeVisible();
     await expect(review.getByText(/From their evidence: Missing must-have/)).toBeVisible();

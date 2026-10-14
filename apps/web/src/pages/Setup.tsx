@@ -2,7 +2,7 @@
 
 import { type ReactNode, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Avatar, Button, Card, Chip, ErrorState, Field, PageHeader, Pill, Segmented, Skeleton, Table, type Tone, useTableSort } from "@ros/ui";
+import { Alert, Avatar, Button, Card, Chip, ErrorState, Field, PageHeader, Pill, Segmented, Skeleton, Table, TabPanel, Tabs, type Tone, useTableSort } from "@ros/ui";
 import { api, ApiError, type MyCalendar, type NewTimesSettingView } from "../api/client";
 import { useSearchParams } from "../nav";
 import { STILL_REVIEWING_LABEL, STILL_REVIEWING_NOTE, hasChoice, loosens, looseningQuestion, splitRules } from "../ai-rules";
@@ -13,7 +13,7 @@ import { ABOUT_MAX, LOGO_TYPES, aboutCheckOf, aboutDraftOf, aboutProblem, logoPr
 import { LEVELS, allowedLevels, type PolicyLevel } from "../policy-levels";
 import { ACCESS_DAYS, accessChip } from "../recruiter-access";
 import { canChangeCompany, canSeeActivity, canStartHire } from "../roles";
-import { setupSections } from "../setup-sections";
+import { SETTINGS_TABS, type SettingsTab, defaultTab, leadAndRest, settingsHref, settingsLanding, setupSections, tabFrom } from "../setup-sections";
 import { browserStorage, SHORTCUT_CHANGED_EVENT, START_HIRE_KEY, setStartHireShortcut, startHireShortcutOn } from "../start-hire";
 import { toast } from "../toast";
 import { NotificationsCard } from "./NotificationsCard";
@@ -60,104 +60,149 @@ export function Setup() {
     else { setLoosening(null); setPolicy.mutate({ actionType: row.actionType, level: to, approverRoles: row.approverRoles }); }
   };
 
-  // The section menu (plan I1): every card has an id; the menu lists the ones this person sees.
+  // The tabs (Wave S1): `?tab=` opens one; an old link's #hash (or the calendar coming back) opens the card's own tab and
+  // scrolls to the card. A tab picked by hand writes `?tab=` into the address without reloading anything.
   const sections = setupSections({ mayStartHire: canStartHire(myRole), seesAudit: canSeeActivity(myRole) });
-  const [inView, setInView] = useSectionInView(sections.map((s) => s.id).join(" "), !!company.data);
+  const wantedTab = params.get("tab");
+  const calendarBack = params.get("calendar");
+  const [picked, setPicked] = useState<SettingsTab | null>(() => settingsLanding({ tab: wantedTab, calendar: calendarBack })?.tab ?? null);
+  const [jump, setJump] = useState<string | null>(null);
+  const ready = !!company.data;
+  const active = picked ?? defaultTab(myRole);
+  // A link followed while this page is open changes only the query string: follow it.
+  useEffect(() => {
+    const landing = settingsLanding({ tab: wantedTab, calendar: calendarBack });
+    if (!landing) return;
+    setPicked(landing.tab);
+    if (landing.section) setJump(landing.section);
+  }, [wantedTab, calendarBack]);
+  // An old link's #hash ("/setup#setup-notifications"), on arrival and when a link on this page changes it.
+  useEffect(() => {
+    if (!ready) return;
+    const follow = () => {
+      const landing = settingsLanding({ hash: window.location.hash });
+      if (!landing?.section) return;
+      setPicked(landing.tab);
+      setJump(landing.section);
+    };
+    follow();
+    window.addEventListener("hashchange", follow);
+    return () => window.removeEventListener("hashchange", follow);
+  }, [ready]);
+  // Once the card's tab is showing, bring the card into view (no animation, so reduced motion is respected) and move
+  // focus to it, so the keyboard and a screen reader start there too; a card inside a fold opens it first.
+  useEffect(() => {
+    if (!jump || !ready) return;
+    const el = document.getElementById(jump);
+    if (!el) return;
+    const folded = el.closest("details");
+    if (folded) folded.open = true;
+    el.scrollIntoView({ block: "start" });
+    el.focus({ preventScroll: true });
+    setJump(null);
+  }, [jump, active, ready]);
+  const pick = (id: string) => {
+    const next = tabFrom(id);
+    if (!next) return;
+    setPicked(next);
+    setJump(null);
+    window.history.replaceState(null, "", settingsHref(next, window.location.search));
+  };
 
   if (company.isLoading) return <Skeleton lines={5} />;
   if (company.error || !company.data) return <ErrorState message="Could not load settings." onRetry={() => company.refetch()} />;
   const c = company.data;
-  // What the product does today, with every "always a person" guarantee; the rest under "Coming later" (plan B7).
+  // What the product does today, with every "always a person" guarantee; the rest under "Coming later" (plan B7). Work
+  // done the same way for everyone (nothing to choose) folds under its own "Show more", so the choices stand out.
   const rules = splitRules(policies.data ?? []);
-  const groups = [...new Set(rules.now.map((p) => p.group))];
+  const choices = rules.now.filter((p) => hasChoice(p));
+  const fixed = rules.now.filter((p) => !hasChoice(p));
+  const groups = [...new Set(choices.map((p) => p.group))];
+  const shown = new Set(sections.map((s) => s.tab));
+  const tabs = SETTINGS_TABS.filter((t) => shown.has(t.id));
+  const panel = (id: SettingsTab, children: ReactNode) => (
+    // Every tab stays on the page, hidden until chosen, so a half-typed change survives a look at another tab.
+    <div key={id} hidden={id !== active}>
+      <TabPanel idBase={TABS_ID} value={id}>
+        <div className="stack" style={{ gap: 18 }}>{children}</div>
+      </TabPanel>
+    </div>
+  );
+  const ruleRow = (p: PolicyRow) => (
+    <div key={p.actionType} style={{ padding: "6px 0", borderTop: "1px solid var(--line)" }}>
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <div><span>{actionLabel(p.actionType)}</span>{p.locked ? <Chip>always a person</Chip> : p.minLevel === "approval" ? <Chip>a person approves</Chip> : p.source !== "default" && hasChoice(p) ? <Chip tone="accent">customized</Chip> : null}</div>
+        {!hasChoice(p) ? <Chip tone="neutral">Nothing to choose</Chip> : canManagePolicy ? (
+          <Segmented value={loosening?.row.actionType === p.actionType ? loosening.to : p.level} onChange={(v) => choose(p, v)} options={allowedLevels(p)} ariaLabel={actionLabel(p.actionType)} />
+        ) : <Chip tone="neutral">{levelLabel(p.level)}</Chip>}
+      </div>
+      {p.does ? <p className="small muted" style={{ margin: "4px 0 0" }}>{p.does}</p> : null}
+      {ACTION_NOTE[p.actionType] ? <p className="small muted" style={{ margin: "4px 0 0" }}>{ACTION_NOTE[p.actionType]}</p> : null}
+      {ACTION_MORE[p.actionType] ? <details className="more" style={{ marginTop: 4 }}><summary>What each choice does</summary><p className="small muted" style={{ margin: 0 }}>{ACTION_MORE[p.actionType]}</p></details> : null}
+      {p.actionType === "message.still_reviewing" ? <p className="small muted" style={{ margin: "4px 0 0" }}>{STILL_REVIEWING_NOTE[p.level] ?? STILL_REVIEWING_NOTE.human_only}</p> : null}
+      {loosening?.row.actionType === p.actionType ? (
+        <div style={{ marginTop: 8 }}>
+          <Alert tone="caution">
+            <div className="stack" style={{ gap: 6 }}>
+              <span>{looseningQuestion(actionLabel(p.actionType), p.level, loosening.to)}</span>
+              <div className="row"><Button size="sm" variant="primary" loading={setPolicy.isPending} onClick={() => setPolicy.mutate({ actionType: p.actionType, level: loosening.to, approverRoles: p.approverRoles })}>Yes, change it</Button><Button size="sm" variant="quiet" onClick={() => setLoosening(null)}>Keep it as it is</Button></div>
+            </div>
+          </Alert>
+        </div>
+      ) : null}
+    </div>
+  );
 
   return (
     <div className="stack" style={{ gap: 18 }}>
-      <PageHeader eyebrow={c.name} title="Setup" sub="Your company, your team, what is connected, and what the AI may do on its own." />
+      <PageHeader eyebrow={c.name} title="Settings" sub="Your company, team, alerts and hiring rules." />
 
       {reauthOutcome === "ok" ? <Alert tone="info">Thanks, that is confirmed. For the next ten minutes you can change the rules and the candidate notices, and make someone an admin or an owner.</Alert> : reauthOutcome === "mismatch" ? <Alert tone="critical">That sign-in was a different account. Confirm with the account you are signed in as.</Alert> : reauthOutcome === "failed" ? <Alert tone="critical">The confirmation did not complete. Try again.</Alert> : null}
-      {reauthNeeded ? <ReauthPrompt /> : null}
+      {reauthNeeded ? <ReauthPrompt returnTo={settingsHref(active)} /> : null}
 
-      <div className="setup-layout">
-        <nav className="section-menu" aria-label="Setup sections">
-          {sections.map((s) => <a key={s.id} href={`#${s.id}`} aria-current={inView === s.id ? "true" : undefined} onClick={() => setInView(s.id)}>{s.label}</a>)}
-        </nav>
-        <div className="stack" style={{ gap: 18 }}>
-          <div className="grid-2">
-            <Section id="setup-company"><CompanyCard company={c} canEdit={["owner", "admin"].includes(myRole)} onReauthRequired={() => setReauthNeeded(true)} /></Section>
-            <Section id="setup-team"><TeamCard myRole={myRole} myUserId={me.data?.user.id ?? ""} onReauthRequired={() => setReauthNeeded(true)} /></Section>
-          </div>
+      <div>
+        <Tabs items={tabs.map((t) => ({ id: t.id, label: t.label }))} label="Settings" value={active} onChange={pick} idBase={TABS_ID} />
 
-          <div className="grid-2">
-            <Section id="setup-profile"><CompanyProfileCard company={c} canEdit={canChangeCompany(myRole)} /></Section>
-            <Section id="setup-boards"><JobBoardsCard company={c} canEdit={canChangeCompany(myRole)} /></Section>
-          </div>
+        {panel("company", <>
+          <Section id="setup-company"><CompanyCard company={c} canEdit={["owner", "admin"].includes(myRole)} onReauthRequired={() => setReauthNeeded(true)} /></Section>
+          <Section id="setup-profile"><CompanyProfileCard company={c} canEdit={canChangeCompany(myRole)} /></Section>
+        </>)}
 
-          <Section id="setup-new-times"><NewTimesCard company={c} canEdit={canChangeCompany(myRole)} onReauthRequired={() => setReauthNeeded(true)} /></Section>
+        {panel("team", <Section id="setup-team"><TeamCard myRole={myRole} myUserId={me.data?.user.id ?? ""} onReauthRequired={() => setReauthNeeded(true)} /></Section>)}
 
-          <Section id="setup-recruiters"><RecruiterAccess canRevoke={["owner", "admin"].includes(myRole)} /></Section>
-
-          <Section id="setup-sessions"><YourSessions /></Section>
-
-          <Section id="setup-availability"><MyAvailability /></Section>
-
+        {panel("notifications", <>
           <Section id="setup-notifications"><NotificationsCard /></Section>
-
+          <Section id="setup-availability"><MyAvailability /></Section>
           {canStartHire(myRole) ? <Section id="setup-shortcut"><ShortcutCard /></Section> : null}
+        </>)}
 
-          <Section id="setup-services">
-            <Card title="Connected services">
-              <Table head={["What", "Provider", "Status", "What it takes"]} empty="No services connected yet.">
-                {c.integrations.map((i) => (
-                  <tr key={`${i.kind}-${i.provider}`}>
-                    <td>{i.kind}</td>
-                    <td>{i.provider}</td>
-                    <td><Pill size="sm" tone={SERVICE_STATE_TONE[i.status] ?? "neutral"}>{SERVICE_STATE_LABEL[i.status] ?? i.status.replace(/_/g, " ")}</Pill></td>
-                    <td className="small muted">{explainStatus(i, c.settings.boardPosting === "self" ? "self" : "its")}</td>
-                  </tr>
-                ))}
-              </Table>
-              <p className="small muted" style={{ marginTop: 8 }}>AI provider: <strong>{c.ai.provider}</strong>{c.ai.provider === "fake" ? " (deterministic stand-in for development; production refuses to start with it)" : ""}.</p>
-            </Card>
-          </Section>
-
+        {panel("rules", <>
           <Section id="setup-rules">
             <Card title="What the AI may do on its own">
-              <p className="small muted" style={{ marginBottom: 10 }}>What the product does today, and how much of it may happen without a person. Some decisions always stay with a person, and approving a role always waits for a person; those offer only the choices allowed. Work the product does the same way for everyone says what it does, with nothing to choose. Letting something happen with less checking asks you first, and every change is recorded.</p>
-              {!canManagePolicy && myRole ? <Alert tone="info">Only owners and admins change these rules. You can see what applies; ask one of them if something should work differently.</Alert> : null}
+              <p className="small muted" style={{ marginBottom: 6 }}>Choose how much the AI does without asking you.</p>
+              <details className="more" style={{ marginBottom: 10 }}>
+                <summary>How this works</summary>
+                <p className="small muted" style={{ margin: 0 }}>What the product does today, and how much of it may happen without a person. Some decisions always stay with a person, and approving a job always waits for a person; those offer only the choices allowed. Work the product does the same way for everyone says what it does, with nothing to choose. Letting something happen with less checking asks you first, and every change is recorded.</p>
+              </details>
+              {!canManagePolicy && myRole ? <Alert tone="info">Only owners and admins change these rules. Ask one of them if something should work differently.</Alert> : null}
               {policies.isLoading ? <Skeleton lines={6} /> : groups.map((g) => (
                 <div key={g} style={{ marginBottom: 14 }}>
                   <h3 style={{ marginBottom: 6 }}>{g}</h3>
                   <div className="stack" style={{ gap: 6 }}>
-                    {rules.now.filter((p) => p.group === g).map((p) => (
-                      <div key={p.actionType} style={{ padding: "6px 0", borderTop: "1px solid var(--line)" }}>
-                        <div className="row" style={{ justifyContent: "space-between" }}>
-                          <div><span>{actionLabel(p.actionType)}</span>{p.locked ? <Chip>always a person</Chip> : p.minLevel === "approval" ? <Chip>a person approves</Chip> : p.source !== "default" && hasChoice(p) ? <Chip tone="accent">customized</Chip> : null}</div>
-                          {!hasChoice(p) ? <Chip tone="neutral">Nothing to choose</Chip> : canManagePolicy ? (
-                            <Segmented value={loosening?.row.actionType === p.actionType ? loosening.to : p.level} onChange={(v) => choose(p, v)} options={allowedLevels(p)} ariaLabel={actionLabel(p.actionType)} />
-                          ) : <Chip tone="neutral">{levelLabel(p.level)}</Chip>}
-                        </div>
-                        {p.does ? <p className="small muted" style={{ margin: "4px 0 0" }}>{p.does}</p> : null}
-                        {p.actionType === "message.still_reviewing" ? <p className="small muted" style={{ margin: "4px 0 0" }}>{STILL_REVIEWING_NOTE[p.level] ?? STILL_REVIEWING_NOTE.human_only}</p> : null}
-                        {loosening?.row.actionType === p.actionType ? (
-                          <div style={{ marginTop: 8 }}>
-                            <Alert tone="caution">
-                              <div className="stack" style={{ gap: 6 }}>
-                                <span>{looseningQuestion(actionLabel(p.actionType), p.level, loosening.to)}</span>
-                                <div className="row"><Button size="sm" variant="primary" loading={setPolicy.isPending} onClick={() => setPolicy.mutate({ actionType: p.actionType, level: loosening.to, approverRoles: p.approverRoles })}>Yes, change it</Button><Button size="sm" variant="quiet" onClick={() => setLoosening(null)}>Keep it as it is</Button></div>
-                              </div>
-                            </Alert>
-                          </div>
-                        ) : null}
-                      </div>
-                    ))}
+                    {choices.filter((p) => p.group === g).map(ruleRow)}
                   </div>
                 </div>
               ))}
+              {fixed.length ? (
+                <details className="more" style={{ marginTop: 6 }}>
+                  <summary>What it always does the same way ({fixed.length})</summary>
+                  <div className="stack" style={{ gap: 6 }}>{fixed.map(ruleRow)}</div>
+                </details>
+              ) : null}
               {rules.later.length ? (
-                <details style={{ marginTop: 6 }}>
-                  <summary className="small">Coming later ({rules.later.length})</summary>
-                  <p className="small muted" style={{ margin: "6px 0" }}>Planned, not in the product yet, so there is nothing to choose. When one arrives it moves up into the list above, with its choices.</p>
+                <details className="more" style={{ marginTop: 6 }}>
+                  <summary>Coming later ({rules.later.length})</summary>
+                  <p className="small muted" style={{ margin: "0 0 6px" }}>Planned, not in the product yet, so there is nothing to choose. When one arrives it moves up into the list above, with its choices.</p>
                   <ul className="small" style={{ paddingLeft: 18, margin: 0 }}>
                     {rules.later.map((p) => <li key={p.actionType}>{actionLabel(p.actionType)}</li>)}
                   </ul>
@@ -166,44 +211,43 @@ export function Setup() {
               {setPolicy.error ? <Alert tone="critical">{setPolicy.error instanceof ApiError ? setPolicy.error.message : "Could not save."}</Alert> : null}
             </Card>
           </Section>
+          <div className="grid-2">
+            <Section id="setup-boards"><JobBoardsCard company={c} canEdit={canChangeCompany(myRole)} /></Section>
+            <Section id="setup-new-times"><NewTimesCard company={c} canEdit={canChangeCompany(myRole)} onReauthRequired={() => setReauthNeeded(true)} /></Section>
+          </div>
+        </>)}
 
+        {panel("security", <>
+          <Section id="setup-sessions"><YourSessions /></Section>
+          <Section id="setup-recruiters"><RecruiterAccess canRevoke={["owner", "admin"].includes(myRole)} /></Section>
+          <Section id="setup-services">
+            <Card title="Connected services">
+              <Table head={["What", "Provider", "Status", "What it takes"]} empty="No services connected yet.">
+                {c.integrations.map((i) => (
+                  <tr key={`${i.kind}-${i.provider}`}>
+                    <td>{SERVICE_KIND_LABEL[i.kind] ?? i.kind.replace(/_/g, " ")}</td>
+                    <td>{SERVICE_PROVIDER_LABEL[i.provider] ?? i.provider.replace(/_/g, " ")}</td>
+                    <td><Pill size="sm" tone={SERVICE_STATE_TONE[i.status] ?? "neutral"}>{SERVICE_STATE_LABEL[i.status] ?? i.status.replace(/_/g, " ")}</Pill></td>
+                    <td className="small muted">{explainStatus(i, c.settings.boardPosting === "self" ? "self" : "its")}</td>
+                  </tr>
+                ))}
+              </Table>
+              <p className="small muted" style={{ marginTop: 8 }}>AI provider: <strong>{c.ai.provider}</strong>{c.ai.provider === "fake" ? " (deterministic stand-in for development; production refuses to start with it)" : ""}.</p>
+            </Card>
+          </Section>
           {canSeeActivity(myRole) ? <Section id="setup-audit"><AuditHistory /></Section> : null}
-        </div>
+        </>)}
       </div>
     </div>
   );
 }
 
-/** One card's place on the page: the section menu jumps here, and stops short of the sticky menu on phones. */
-function Section({ id, children }: { id: string; children: ReactNode }) {
-  return <div id={id} className="setup-section">{children}</div>;
-}
+/** The tab strip and its panels share these ids (aria-controls, aria-labelledby). */
+const TABS_ID = "settings";
 
-/**
- * Which section is on screen, for the menu to mark: the first one crossing the upper part of the window. A click on the
- * menu marks its section at once. `ids` is a space-separated list; nothing is watched until the cards are on the page.
- */
-function useSectionInView(ids: string, ready: boolean): [string | null, (id: string) => void] {
-  const [current, setCurrent] = useState<string | null>(null);
-  useEffect(() => {
-    if (!ready || typeof IntersectionObserver === "undefined") return;
-    const order = ids.split(" ");
-    const visible = new Set<string>();
-    const watcher = new IntersectionObserver((entries) => {
-      for (const e of entries) {
-        if (e.isIntersecting) visible.add(e.target.id);
-        else visible.delete(e.target.id);
-      }
-      const first = order.find((id) => visible.has(id));
-      if (first) setCurrent(first);
-    }, { rootMargin: "-15% 0px -60% 0px" });
-    for (const id of order) {
-      const el = document.getElementById(id);
-      if (el) watcher.observe(el);
-    }
-    return () => watcher.disconnect();
-  }, [ids, ready]);
-  return [current, setCurrent];
+/** One card's place on its tab: old links jump here by id (#setup-notifications), stop short of the top edge and take focus. */
+function Section({ id, children }: { id: string; children: ReactNode }) {
+  return <div id={id} className="setup-section" tabIndex={-1}>{children}</div>;
 }
 
 /**
@@ -221,11 +265,15 @@ function ShortcutCard() {
   };
   return (
     <Card title="Keyboard shortcut">
-      <p className="small muted">Press {START_HIRE_KEY} on any page to start a hire, unless you are typing in a box or have changed something on that page, so nothing you were working on is lost. Turn it off if it gets in your way, for example when you use speech input. This is saved in this browser only.</p>
+      <p className="small muted">Press {START_HIRE_KEY} on any page to start a hire.</p>
       <label className="small" style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
         <input type="checkbox" checked={on} onChange={(e) => change(e.target.checked)} />
         Press {START_HIRE_KEY} to start a hire
       </label>
+      <details className="more" style={{ marginTop: 10 }}>
+        <summary>How this works</summary>
+        <p className="small muted" style={{ margin: 0 }}>It does nothing while you are typing in a box or have changed something on that page, so nothing you were working on is lost. Turn it off if it gets in your way, for example when you use speech input. This is saved in this browser only.</p>
+      </details>
     </Card>
   );
 }
@@ -233,6 +281,9 @@ function ShortcutCard() {
 /** Only verified states are shown (founder decision F4). */
 const SERVICE_STATE_LABEL: Record<string, string> = { live: "Connected and working", awaiting_verification: "Submitted, awaiting verification", manual_action_required: "Manual action required", not_connected: "Not connected", fake: "Development stand-in", disabled: "Disabled" };
 const SERVICE_STATE_TONE: Record<string, Tone> = { live: "good", awaiting_verification: "accent", manual_action_required: "caution", fake: "caution" };
+/** What each service is and who provides it, in plain words (packages/integrations registry.ts names them in code). */
+const SERVICE_KIND_LABEL: Record<string, string> = { email: "Email", sms: "Text messages", jobboard: "Job board", link_verifier: "Link checker", comp: "Pay data", storage: "File storage", scanner: "File scanner", secrets: "Key vault", identity: "Sign-in", calendar: "Calendar", analytics: "Analytics" };
+const SERVICE_PROVIDER_LABEL: Record<string, string> = { careers_page: "Careers page", google_jobs: "Google for Jobs", indeed: "Indeed", ziprecruiter: "ZipRecruiter", linkedin_basic: "LinkedIn", email_in: "Email in", postmark: "Postmark", twilio: "Twilio", google: "Google" };
 
 /**
  * What each connected service takes, in a line. The job boards are not connected to the product: ITS posts on them from
@@ -240,15 +291,15 @@ const SERVICE_STATE_TONE: Record<string, Tone> = { live: "good", awaiting_verifi
  */
 function explainStatus(i: { kind: string; provider: string; status: string }, whoPosts: "its" | "self" = "its"): string {
   if (i.status === "fake") return "Development stand-in: records what it would send. Never used in production.";
-  if (i.provider === "careers_page") return "Served by the product; every open role has a public page and apply form.";
+  if (i.provider === "careers_page") return "Served by the product; every open job has a public page and apply form.";
   if (i.provider === "google_jobs") return "Every job page carries the details Google reads. Google lists jobs on its own schedule; a job is marked found once someone sees it in a Google search.";
-  if (i.provider === "email_in") return i.status === "live" ? "Forward application emails to each role's intake address." : "The inbound mail domain is not configured yet, so forwarded applications cannot arrive. Share the apply link directly.";
+  if (i.provider === "email_in") return i.status === "live" ? "Forward application emails to each job's intake address." : "The inbound mail domain is not configured yet, so forwarded applications cannot arrive. Share the apply link directly.";
   if (["indeed", "ziprecruiter", "linkedin_basic"].includes(i.provider) && whoPosts === "its") return "Not connected to the product: ITS posts your jobs here from your company's own account, with each job's own apply link, and nothing is called up until its address is checked.";
   if (i.provider === "indeed") return "Not connected to Indeed. Post from your own Indeed account with the apply link, or forward applications to the intake address once email-in is connected.";
   if (i.provider === "ziprecruiter") return "Not connected to ZipRecruiter. Post from your own account with the apply link.";
   if (i.provider === "linkedin_basic") return "Not connected to LinkedIn. Post a free listing from your company page with the apply link.";
   if (i.provider === "postmark") return i.status === "live" ? "Candidate email is sent from the dedicated ITS domain." : "The sending domain is not configured; candidate email is not being sent.";
-  if (i.provider === "twilio" || i.provider === "fake-sms") return "Text messaging is off until carrier registration and counsel review are complete. Screening runs by web chat from an email link.";
+  if (i.provider === "twilio" || i.provider === "fake-sms") return "Text messaging is off until carrier registration and counsel review are complete. The screening chat runs on the web from an email link.";
   if (i.kind === "secrets") return i.status === "live" ? "Connected credentials are kept in the managed key vault." : "Development stand-in; production uses the managed key vault.";
   if (i.kind === "comp") return i.status === "live" ? "Public wage data from the Bureau of Labor Statistics." : "Wage benchmarks unavailable; playbook ranges are used and cited.";
   return "";
@@ -258,24 +309,39 @@ function levelLabel(l: string): string {
   return LEVELS.find((x) => x.value === l)?.label ?? l;
 }
 
+/** Each rule in a few words: the name a person scans, and what its choice buttons are called for a screen reader. */
 function actionLabel(a: string): string {
   return ({
-    "role_packet.approve": "Approve a drafted role, pay included", "posting.sponsor_spend": "Spend on sponsored ads within budget",
-    "application.triage": "Read and assess applicants (information only)", "application.hold_ineligible": "Hold an applicant who answers no to an eligibility question, and remind you (never declines)", "application.reject_ineligible": "Decline an applicant held on an eligibility answer",
-    "application.reject_on_assessment": "Decline a candidate on judgment", "application.invite_screen": "Invite an applicant to a screen", "screen.conduct": "Run a screening conversation",
-    "application.recommend_interview": "Recommend who to interview", "message.send_templated": "Send confirmations and reminders", "message.send_freeform": "Send a message a team member wrote to a candidate (set to approval or only a person, an owner or admin reads it first; their own go at once)",
-    "disposition.send": "Send the decision message when someone on your team presses Send (declining never sends anything by itself; Do it: it goes then, and if nobody has told someone five working days after a decision, the standard message goes by itself and you are told; Ask me first: a second person approves it, and a recruiter is brought in instead of the message going by itself; Only a person: the app sends none and you tell candidates yourself, and if nobody has after five working days a recruiter is brought in to make sure they hear from you)",
+    "role_packet.approve": "Approve a drafted job, pay included", "posting.sponsor_spend": "Spend on sponsored ads within budget",
+    "application.triage": "Read and assess applicants (information only)", "application.hold_ineligible": "Hold an applicant who answers no to an eligibility question", "application.reject_ineligible": "Decline an applicant held on an eligibility answer",
+    "application.reject_on_assessment": "Decline a candidate on judgment", "application.invite_screen": "Invite an applicant to the screening chat", "screen.conduct": "Run the screening chat",
+    "application.recommend_interview": "Recommend who to interview", "message.send_templated": "Send confirmations and reminders", "message.send_freeform": "Send a message a team member wrote to a candidate",
+    "disposition.send": "Send the decision message when someone presses Send",
     "message.still_reviewing": STILL_REVIEWING_LABEL,
     "interview.request": "Advance someone to an interview", "interview.schedule": "Book interviews on calendars",
     "interview.reschedule": "Reschedule an interview", "interview.record": "Record an interview (with consent)", "scorecard.draft": "Draft scorecards for interviewers",
     "debrief.recommend": "Recommend a finalist", "candidate.hire_decision": "Decide who to hire", "offer.draft": "Draft an offer", "offer.send": "Send an offer",
     "offer.negotiate": "Negotiate an offer", "offer.revise": "Revise an offer", "reference.request": "Request references", "background_check.order": "Order a background check",
     "background_check.adverse_action": "Act on a background check", "employee.create_in_hris": "Create the new hire in payroll/HR", "welcome.send": "Send welcome and start reminders",
-    "checkin.request": "Ask how the hire is going at 30/60/90 days", "intervention.nudge": "Nudge when a role is stuck", "intervention.offer_recruiter": "Offer a recruiter when stuck",
+    "checkin.request": "Ask how the hire is going at 30/60/90 days", "intervention.nudge": "Nudge when a job is stuck", "intervention.offer_recruiter": "Offer a recruiter when stuck",
     "sourcing.search_internal": "Search your own talent pool", "sourcing.enrich_external": "Look up outside candidates (uses credits)", "outreach.send": "Reach out to outside candidates",
     "policy.change": "Change these rules", "knockout_rule.change": "Change eligibility rules", "notice_text.change": "Change candidate notices", "data.delete": "Delete candidate data", "data.export": "Export data",
   } as Record<string, string>)[a] ?? a;
 }
+
+/** A short line under a rule, said in full on view. */
+const ACTION_NOTE: Record<string, string> = {
+  "application.hold_ineligible": "It reminds you, and never declines anyone.",
+  "message.send_freeform": "Ask me first or Only a person: an owner or admin reads it first. Their own messages go at once.",
+};
+
+/**
+ * What each choice of a rule does, when that takes more than a line: one click away under the rule. The decision
+ * message says what happens after five working days in every case (founder decision D-03 = A, 14 Oct 2026).
+ */
+const ACTION_MORE: Record<string, string> = {
+  "disposition.send": "Declining never sends anything by itself. Do it: the message goes when someone presses Send, and if nobody has told someone five working days after a decision, the standard message goes by itself and you are told. Ask me first: a second person approves it, and a recruiter is brought in instead of the message going by itself. Only a person: the app sends none and you tell candidates yourself, and if nobody has after five working days a recruiter is brought in to make sure they hear from you.",
+};
 
 /**
  * Whether "Connect Google Calendar" can work on this deployment: only with the real Google provider set up. The
@@ -324,6 +390,7 @@ function MyAvailability() {
   return (
     <Card title="My availability for interviews">
       {calParam === "connected" ? <Alert tone="info">Calendar connected. Interviews now use your real free time.</Alert> : calParam && calParam !== "connected" ? <Alert tone="critical">The calendar connection did not complete ({calParam.replace(/_/g, " ")}). Try again.</Alert> : null}
+      <p className="small muted" style={{ marginBottom: 10 }}>When you can interview. Candidates are offered times from here.</p>
       <div className="stack" style={{ gap: 12 }}>
         <div>
           <h3 style={{ marginBottom: 6 }}>Calendar</h3>
@@ -334,11 +401,16 @@ function MyAvailability() {
             </div>
           ) : connectable ? (
             <div className="row" style={{ justifyContent: "space-between" }}>
-              <span className="small muted">Not connected. With a calendar, times are offered from your real free time; without one, your declared hours below are used.</span>
+              <span className="small muted">Not connected. Until you connect, your hours below are used.</span>
               <a className="btn primary sm" href="/api/v1/integrations/calendar/google/connect">Connect Google Calendar</a>
             </div>
           ) : <p className="small muted" style={{ margin: 0 }}>{CALENDAR_OFF_LINE}</p>}
-          {connectable || connected ? <p className="small muted" style={{ marginTop: 6 }}>We ask only for events on your calendar and free/busy times. Disconnecting deletes the credential; you can see when that is done.</p> : null}
+          {connectable || connected ? (
+            <details className="more" style={{ marginTop: 6 }}>
+              <summary>How this works</summary>
+              <p className="small muted" style={{ margin: 0 }}>With a calendar, times are offered from your real free time; without one, your declared hours below are used. We ask only for events on your calendar and free/busy times. Disconnecting deletes the credential; you can see when that is done.</p>
+            </details>
+          ) : null}
         </div>
         <div>
           <h3 style={{ marginBottom: 6 }}>Declared hours</h3>
@@ -381,7 +453,11 @@ function RecruiterAccess({ canRevoke }: { canRevoke: boolean }) {
   const past = (q.data ?? []).filter((g) => !g.active).slice(0, 10);
   return (
     <Card title="ITS recruiter access">
-      <p className="small muted">A recruiter gets access when your team asks for one, and also when the system brings one in on its own: a candidate asks for a person, or something gets stuck. A request about one candidate or one role gives access to that alone; all of your hiring only when someone on your team chose that. Access ends a day after the request is resolved, or after {ACCESS_DAYS} days at most, and you are told when a recruiter starts. Reopening an answered request gives fresh access, listed here like any other. Every page they open is recorded in your activity. {canRevoke ? "You can end it at any time." : "Owners and admins can end it at any time."}</p>
+      <p className="small muted">Which ITS recruiters can see your hiring, and until when.</p>
+      <details className="more" style={{ marginTop: 6 }}>
+        <summary>How this works</summary>
+        <p className="small muted" style={{ margin: 0 }}>A recruiter gets access when your team asks for one, and also when the system brings one in on its own: a candidate asks for a person, or something gets stuck. A request about one candidate or one job gives access to that alone; all of your hiring only when someone on your team chose that. Access ends a day after the request is resolved, or after {ACCESS_DAYS} days at most, and you are told when a recruiter starts. Reopening an answered request gives fresh access, listed here like any other. Every page they open is recorded in your activity. {canRevoke ? "You can end it at any time." : "Owners and admins can end it at any time."}</p>
+      </details>
       {q.isLoading ? <Skeleton lines={2} /> : active.length === 0 ? <p className="small muted" style={{ marginTop: 8 }}>No recruiter has access right now.</p> : (
         <div className="stack" style={{ gap: 8, marginTop: 8 }}>
           {active.map((g) => (
@@ -440,7 +516,11 @@ function AuditHistory() {
   if (q.error) return null;
   return (
     <Card title="Audit history" aside={<a className="btn secondary sm" href="/api/v1/companies/current/audit.csv">Download as a spreadsheet</a>}>
-      <p className="small muted">Who did what in your workspace: recruiter access, team changes, rule changes, company changes, candidate records opened, outcomes and downloads. The last 50 are shown; the spreadsheet has everything, and downloading it is recorded too.</p>
+      <p className="small muted">Who did what in your workspace, newest first.</p>
+      <details className="more" style={{ marginTop: 6 }}>
+        <summary>How this works</summary>
+        <p className="small muted" style={{ margin: 0 }}>It lists recruiter access, team changes, rule changes, company changes, candidate records opened, outcomes and downloads. The last 50 are shown; the spreadsheet has everything, and downloading it is recorded too.</p>
+      </details>
       <label className="small" style={{ display: "block", margin: "8px 0" }}><input type="checkbox" checked={everyPage} onChange={(e) => setEveryPage(e.target.checked)} /> Include every page an ITS recruiter opened</label>
       {!q.isLoading && !q.data?.length ? <p className="small muted">Nothing recorded yet.</p> : (
         <Table head={[s.col("when", "When", "date"), "What happened", s.col("who", "Who", "text")]} label="Audit history" scroll loading={q.isLoading ? 5 : undefined} announce={s.announce}>
@@ -465,7 +545,11 @@ function YourSessions() {
   const PROVIDER: Record<string, string> = { google: "Google", azure: "Microsoft", magic_link: "email link", email: "email link" };
   return (
     <Card title="Your sessions" aside={rows.length > 1 ? <Button size="sm" variant="secondary" loading={revokeOthers.isPending} onClick={() => revokeOthers.mutate()}>Sign out everywhere else</Button> : null}>
-      <p className="small muted">Every place you are signed in. If you see one you do not recognise, sign it out; the address is shown only as a short code, never in full.</p>
+      <p className="small muted">Every place you are signed in. Sign out any you do not recognise.</p>
+      <details className="more" style={{ marginTop: 6 }}>
+        <summary>How this works</summary>
+        <p className="small muted" style={{ margin: 0 }}>Each place's internet address is shown only as a short code, never in full.</p>
+      </details>
       {q.isLoading ? <Skeleton lines={2} /> : q.error ? <p className="small muted">Could not load your sessions.</p> : (
         <div className="stack" style={{ gap: 6, marginTop: 8 }}>
           {rows.map((s) => (
@@ -480,17 +564,20 @@ function YourSessions() {
   );
 }
 
-/** Sends the person through their sign-in provider again; they come straight back here with the confirmation recorded. */
-function ReauthPrompt() {
+/**
+ * Sends the person through their sign-in provider again; they come straight back to the same tab (`returnTo`, e.g.
+ * "/setup?tab=rules") with the confirmation recorded.
+ */
+function ReauthPrompt({ returnTo }: { returnTo: string }) {
   const start = useMutation({
-    mutationFn: () => api.post<{ url: string }>("/api/v1/auth/reauth/start", { returnTo: "/setup" }),
+    mutationFn: () => api.post<{ url: string }>("/api/v1/auth/reauth/start", { returnTo }),
     onSuccess: (r) => { window.location.assign(r.url); },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not start the confirmation."),
   });
   return (
     <Alert tone="caution">
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-        <span><strong>Confirm it's you.</strong> Changing the rules or the candidate notices, or making someone an admin or an owner, needs a fresh sign-in. You will come straight back here.</span>
+        <span><strong>Confirm it's you.</strong> Rules, candidate notices and new admins or owners need a fresh sign-in. You come straight back here.</span>
         <Button size="sm" variant="primary" loading={start.isPending} onClick={() => start.mutate()}>Confirm with my sign-in</Button>
       </div>
     </Alert>
@@ -503,7 +590,7 @@ const NOTICE_LABEL: Record<string, string> = { ai_use: "How we use AI (shown on 
 const NOTICE_SHORT: Record<string, string> = { ai_use: "AI notice", privacy: "privacy notice", pay_transparency: "pay range notice", adverse_decision_explanation: "decision review notice" };
 const SIZE_BANDS = ["1-19", "20-49", "50-99", "100-199", "200-499", "500+"];
 /** The plan's allowances in the company card's words (recruiter_asks counts the team's own requests, founder decision Q33). */
-const USAGE_LABEL: Record<string, string> = { active_roles: "active roles", text_screens: "screening conversations this month", screen_person_requests: "requests for a person instead of the screening conversation",voice_minutes: "voice minutes", sourcing_contacts: "sourcing contacts", recruiter_asks: "recruiter requests", seats: "seats" };
+const USAGE_LABEL: Record<string, string> = { active_roles: "active jobs", text_screens: "screening chats this month", screen_person_requests: "requests for a person instead of the screening chat", voice_minutes: "voice minutes", sourcing_contacts: "sourcing contacts", recruiter_asks: "recruiter requests", seats: "seats" };
 const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /**
@@ -563,20 +650,28 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
   return (
     <Card title="Company" aside={canEdit && !editing ? <Button size="sm" variant="secondary" onClick={() => { setForm(formOf(c, notices.data ?? [])); setEditing(true); }}>Edit</Button> : null}>
       {!editing || !f ? (
-        <dl className="kv">
-          <dt>Name</dt><dd>{c.name}</dd>
-          <dt>ITS check</dt><dd>{companyCheckOf(c) === "waiting" ? <Chip tone="caution">ITS is confirming your company</Chip> : <Chip tone="good">Confirmed</Chip>}</dd>
-          <dt>Careers page</dt><dd><a href={`/careers/${c.slug}`} target="_blank" rel="noreferrer">/careers/{c.slug}</a>{companyCheckOf(c) === "waiting" ? <span className="small muted"> · {CAREERS_PAGE_WAITS}</span> : null}</dd>
-          <dt>Website</dt><dd>{c.settings.website || <span className="muted">not set</span>}</dd>
-          <dt>Business type</dt><dd>{VERTICALS.find(([v]) => v === c.vertical)?.[1] ?? c.vertical.replace(/_/g, " ")}</dd>
-          <dt>Size</dt><dd>{c.sizeBand} employees</dd>
-          <dt>Time zone</dt><dd>{c.timezone}</dd>
-          <dt>Locations</dt><dd>{c.locations.map((l) => [l.city, l.region].filter(Boolean).join(", ")).join("; ")}</dd>
-          <dt>Contact hours</dt><dd>{hours ? `${hours.days.map((d) => DAY_SHORT[d]).join(", ")} ${hours.start} to ${hours.end}` : "Any day, 8:00 to 21:00 local time (the legal default for texts)"}</dd>
-          <dt>Notices</dt><dd className="small">{shownNotices.some((n) => n.overridden) ? shownNotices.filter((n) => n.overridden).map((n) => `${NOTICE_SHORT[n.key] ?? n.key} reworded (version ${n.version})`).join("; ") : "Standard wording"}</dd>
-          <dt>Plan</dt><dd><Chip tone="accent">{c.plan?.name ?? c.planKey}</Chip>{c.settings.pilot ? <span className="small muted"> · pilot until {new Date(c.settings.pilot.extendedUntil ?? c.settings.pilot.endsAt).toLocaleDateString()}; roles in progress are never cut off</span> : null}</dd>
-          {c.usage ? <><dt>Usage</dt><dd className="small">{Object.entries(c.usage).map(([k, v]) => `${USAGE_LABEL[k] ?? k.replace(/_/g, " ")}: ${v.used}${v.limit === null ? "" : ` of ${v.limit}`}`).join(" · ")}{c.usage.recruiter_asks ? <span className="muted"> Recruiter requests count only what your team asks for. Going over never holds a request up; ITS will talk with you about the extra.</span> : null}</dd></> : null}
-        </dl>
+        <>
+          <dl className="kv">
+            <dt>Name</dt><dd>{c.name}</dd>
+            <dt>ITS check</dt><dd>{companyCheckOf(c) === "waiting" ? <Chip tone="caution">ITS is confirming your company</Chip> : <Chip tone="good">Confirmed</Chip>}</dd>
+            <dt>Careers page</dt><dd><a href={`/careers/${c.slug}`} target="_blank" rel="noreferrer">/careers/{c.slug}</a>{companyCheckOf(c) === "waiting" ? <span className="small muted"> · {CAREERS_PAGE_WAITS}</span> : null}</dd>
+            <dt>Website</dt><dd>{c.settings.website || <span className="muted">not set</span>}</dd>
+            <dt>Locations</dt><dd>{c.locations.map((l) => [l.city, l.region].filter(Boolean).join(", ")).join("; ")}</dd>
+            <dt>Plan</dt><dd><Chip tone="accent">{c.plan?.name ?? c.planKey}</Chip>{c.settings.pilot ? <span className="small muted"> · pilot until {new Date(c.settings.pilot.extendedUntil ?? c.settings.pilot.endsAt).toLocaleDateString()}; jobs in progress are never cut off</span> : null}</dd>
+            {c.usage ? <><dt>Usage</dt><dd className="small">{Object.entries(c.usage).map(([k, v]) => `${USAGE_LABEL[k] ?? k.replace(/_/g, " ")}: ${v.used}${v.limit === null ? "" : ` of ${v.limit}`}`).join(" · ")}{c.usage.recruiter_asks ? <span className="muted"> Recruiter requests count only what your team asks for. Going over never holds a request up; ITS will talk with you about the extra.</span> : null}</dd></> : null}
+          </dl>
+          {/* The rest of the company's details, one click away. The plan and its usage stay on view: "See usage" links land here. */}
+          <details className="more" style={{ marginTop: 10 }}>
+            <summary>Type, size, hours and notices</summary>
+            <dl className="kv">
+              <dt>Business type</dt><dd>{VERTICALS.find(([v]) => v === c.vertical)?.[1] ?? c.vertical.replace(/_/g, " ")}</dd>
+              <dt>Size</dt><dd>{c.sizeBand} employees</dd>
+              <dt>Time zone</dt><dd>{c.timezone}</dd>
+              <dt>Contact hours</dt><dd>{hours ? `${hours.days.map((d) => DAY_SHORT[d]).join(", ")} ${hours.start} to ${hours.end}` : "Any day, 8:00 to 21:00 local time (the legal default for texts)"}</dd>
+              <dt>Notices</dt><dd className="small">{shownNotices.some((n) => n.overridden) ? shownNotices.filter((n) => n.overridden).map((n) => `${NOTICE_SHORT[n.key] ?? n.key} reworded (version ${n.version})`).join("; ") : "Standard wording"}</dd>
+            </dl>
+          </details>
+        </>
       ) : (
         <div className="stack" style={{ gap: 10 }}>
           <Field label="Company name" htmlFor="co-name"><input id="co-name" className="input" value={f.name} onChange={(e) => set({ name: e.target.value })} /></Field>
@@ -587,9 +682,10 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
           </div>
           <Field label="Locations (one per line, as City, ST)" htmlFor="co-loc"><textarea id="co-loc" className="input" rows={2} value={f.locations} onChange={(e) => set({ locations: e.target.value })} /></Field>
           <Field label="Careers page introduction" htmlFor="co-intro" hint="The first line candidates read on your careers page"><textarea id="co-intro" className="input" rows={2} maxLength={1000} value={f.intro} onChange={(e) => set({ intro: e.target.value })} /></Field>
-          <Field label="Benefits summary" htmlFor="co-ben" hint="Shown on job pages where a role describes none of its own; some states ask for it on every job ad"><textarea id="co-ben" className="input" rows={2} maxLength={2000} value={f.benefits} onChange={(e) => set({ benefits: e.target.value })} /></Field>
-          <div>
-            <h3 style={{ marginBottom: 6 }}>Contact hours</h3>
+          <Field label="Benefits summary" htmlFor="co-ben" hint="Shown on job pages where a job describes none of its own; some states ask for it on every job ad"><textarea id="co-ben" className="input" rows={2} maxLength={2000} value={f.benefits} onChange={(e) => set({ benefits: e.target.value })} /></Field>
+          {/* Rarely changed, so folded: the hours candidates may be texted, and the legal wording of the notices. */}
+          <details className="more">
+            <summary>Contact hours for texts</summary>
             <p className="small muted">When candidates may be texted. The law already keeps texts between 8:00 and 21:00 local time; your hours can only narrow that.</p>
             <label className="small" style={{ display: "block", margin: "6px 0" }}><input type="checkbox" checked={f.hoursOn} onChange={(e) => set({ hoursOn: e.target.checked })} /> Set our own contact hours</label>
             {f.hoursOn ? (
@@ -600,16 +696,16 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
                 <input aria-label="Contact hours end" className="input" type="time" style={{ width: 130 }} value={f.end} onChange={(e) => set({ end: e.target.value })} />
               </div>
             ) : null}
-          </div>
-          <div>
-            <h3 style={{ marginBottom: 6 }}>Candidate notices</h3>
+          </details>
+          <details className="more">
+            <summary>Candidate notices (legal wording)</summary>
             <p className="small muted">Leave a box empty to use the standard wording. A reworded notice gets a new version (today's date), which is recorded with every application from then on. Changing a notice needs a fresh sign-in.</p>
             {shownNotices.map((n) => (
               <Field key={n.key} label={NOTICE_LABEL[n.key]} htmlFor={`co-n-${n.key}`} hint={n.overridden ? `Reworded (version ${n.version}). Clear the box to go back to the standard text.` : `Standard text (version ${n.defaultVersion}): ${n.defaultText}`}>
                 <textarea id={`co-n-${n.key}`} className="input" rows={3} maxLength={4000} placeholder={n.defaultText} value={f.notices[n.key] ?? ""} onChange={(e) => set({ notices: { ...f.notices, [n.key]: e.target.value } })} />
               </Field>
             ))}
-          </div>
+          </details>
           <p className="small muted">The plan, the pilot term and the allowances are set by Identified Talent Solutions; ask them to change those.</p>
           <div className="row"><Button variant="primary" loading={save.isPending} onClick={() => save.mutate(f)}>Save changes</Button><Button variant="quiet" onClick={() => { setEditing(false); setForm(null); }}>Cancel</Button></div>
         </div>
@@ -641,7 +737,7 @@ type PublicProfile = { hiringContact: { email: string; name: string | null } | n
 function CompanyProfileCard({ company: c, canEdit }: { company: Company; canEdit: boolean }) {
   return (
     <Card title="How candidates see you">
-      <p className="small muted" style={{ marginBottom: 10 }}>Your logo, a few words about the company and who candidates can write to, on your careers page and every job page.</p>
+      <p className="small muted" style={{ marginBottom: 10 }}>What candidates see on your careers page and every job page.</p>
       <div className="stack" style={{ gap: 18 }}>
         <LogoPicker company={c} canEdit={canEdit} />
         <AboutText company={c} canEdit={canEdit} />
@@ -862,20 +958,26 @@ function JobBoardsCard({ company: c, canEdit }: { company: Company; canEdit: boo
   });
   return (
     <Card title="Job boards">
-      <p className="small muted" style={{ marginBottom: 10 }}>Every job goes on your careers page and Google. LinkedIn, Indeed and ZipRecruiter are ticked per role, and nothing is called up on a board until its address has been checked.</p>
+      <p className="small muted" style={{ marginBottom: 10 }}>Every job goes on your careers page and Google.</p>
       <div className="stack" style={{ gap: 12 }}>
         <Field label="Who posts your jobs on the boards">
           {canEdit ? (
             <Segmented value={whoPosts} onChange={(v) => save.mutate({ boardPosting: v })} ariaLabel="Who posts your jobs on the boards" options={[{ value: "its", label: "ITS posts them for us" }, { value: "self", label: "Our team posts them" }]} />
           ) : <Chip>{whoPosts === "its" ? "ITS posts them for you" : "Your team posts them"}</Chip>}
         </Field>
-        <p className="small" style={{ color: "var(--ink-2)", margin: 0 }}>{whoPosts === "its" ? "An ITS recruiter posts each job from your company's own board accounts and takes it down when the job closes. You see who has it on the role's Posting tab." : "Each role's Posting tab has the words to paste, the board's own apply link and the steps. You record the listing's address there once it is up."}</p>
         <label className="row small" style={{ gap: 8 }}>
           <input type="checkbox" checked={!!c.settings.zipRecruiterPlan} disabled={!canEdit || save.isPending} onChange={(e) => save.mutate({ zipRecruiterPlan: e.target.checked })} />
           We have our own paid ZipRecruiter plan
         </label>
-        <p className="small muted" style={{ margin: 0 }}>Posting on ZipRecruiter needs a paid plan of your own, so it is offered on a role only once you say you have one.</p>
         {!canEdit ? <p className="small muted" style={{ margin: 0 }}>Only owners and admins change these.</p> : null}
+        <details className="more">
+          <summary>How this works</summary>
+          <div className="stack small muted" style={{ gap: 6 }}>
+            <p style={{ margin: 0 }}>LinkedIn, Indeed and ZipRecruiter are ticked on each job, and nothing is called up on a board until its address has been checked.</p>
+            <p style={{ margin: 0 }}>{whoPosts === "its" ? "An ITS recruiter posts each job from your company's own board accounts and takes it down when the job closes. You see who has it on the job's Share tab." : "Each job's Share tab has the words to paste, the board's own apply link and the steps. You record the listing's address there once it is up."}</p>
+            <p style={{ margin: 0 }}>Posting on ZipRecruiter needs a paid plan of your own, so it is offered on a job only once you say you have one.</p>
+          </div>
+        </details>
       </div>
     </Card>
   );
@@ -934,9 +1036,22 @@ function NewTimesCard({ company: c, canEdit, onReauthRequired }: { company: Comp
     if (!on && saved.auto && pending > 0) setAsking({ pending, choice: null });
     else save.mutate({ auto: on, workingDays: saved.workingDays });
   };
+  // The card's explanation and, when it is on, what the setting does: the first sentence of each on view, the rest under
+  // "How this works". When it is off the setting says it in two short sentences, both on view.
+  const intro = leadAndRest(NEW_TIMES_SETUP.intro);
+  const setting = saved.auto ? leadAndRest(newTimesSettingText(saved)) : { lead: newTimesSettingText(saved), rest: "" };
+  const howItWorks = (
+    <details className="more" style={{ marginTop: 10 }}>
+      <summary>How this works</summary>
+      <div className="stack small muted" style={{ gap: 6 }}>
+        {intro.rest ? <p style={{ margin: 0 }}>{intro.rest}</p> : null}
+        {setting.rest ? <p style={{ margin: 0 }}>{setting.rest}</p> : null}
+      </div>
+    </details>
+  );
   return (
     <Card title={NEW_TIMES_SETUP.title}>
-      <p className="small muted" style={{ marginBottom: 10 }}>{NEW_TIMES_SETUP.intro}</p>
+      <p className="small muted" style={{ marginBottom: 10 }}>{intro.lead}</p>
       {canEdit ? (
         <div className="stack" style={{ gap: 12 }}>
           <div className="stack" style={{ gap: 4 }}>
@@ -970,16 +1085,17 @@ function NewTimesCard({ company: c, canEdit, onReauthRequired }: { company: Comp
               <Button size="sm" variant="primary" disabled={n === null || n === saved.workingDays} loading={save.isPending} onClick={() => { if (n !== null) save.mutate({ auto: true, workingDays: n }); }}>Save</Button>
             </div>
           ) : null}
-          <p className="small" style={{ color: "var(--ink-2)", margin: 0 }}>{newTimesSettingText(saved)}</p>
+          <p className="small" style={{ color: "var(--ink-2)", margin: 0 }}>{setting.lead}</p>
           {notice ? <Alert tone="info">{notice}</Alert> : null}
         </div>
       ) : (
         <div className="stack" style={{ gap: 6 }}>
           <p className="small" style={{ margin: 0 }}>{newTimesReadOnlyText(saved)} {NEW_TIMES_SETUP.readOnly}</p>
           {!confirmed ? <p className="small muted" style={{ margin: 0 }}>{NEW_TIMES_SETUP.beforeCheck}</p> : null}
-          <p className="small muted" style={{ margin: 0 }}>{newTimesSettingText(saved)}</p>
+          <p className="small muted" style={{ margin: 0 }}>{setting.lead}</p>
         </div>
       )}
+      {howItWorks}
     </Card>
   );
 }

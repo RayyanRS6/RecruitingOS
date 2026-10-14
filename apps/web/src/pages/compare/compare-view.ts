@@ -29,7 +29,7 @@ export function orderCandidates<T extends { score?: MatchScore | null }>(cands: 
 /** What the top line of a column says: the number and its band, what it rests on, and any missing must-have. */
 export function scoreSummary(c: CompareCandidateView): { score: number | null; band: string | null; coverage: string | null; missing: string[] } {
   const m = c.score;
-  if (!m) return { score: null, band: null, coverage: "No reading yet", missing: [] };
+  if (!m) return { score: null, band: null, coverage: "No AI review yet", missing: [] };
   return { score: m.score, band: m.bandLabel, coverage: m.coverage.words, missing: m.missingMustHave.map((x) => `Missing must-have: ${x.label}`) };
 }
 

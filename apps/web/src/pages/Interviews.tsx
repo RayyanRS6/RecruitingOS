@@ -30,7 +30,7 @@ export function Interviews() {
   const list = useQuery({ queryKey: ["interviews"], queryFn: () => api.get<InterviewSummary[]>("/api/v1/interviews"), refetchInterval: 15000 });
   const upcoming = (list.data ?? []).filter((i) => ["proposed", "scheduling", "scheduled"].includes(i.status));
   const past = (list.data ?? []).filter((i) => !["proposed", "scheduling", "scheduled"].includes(i.status));
-  // In motion opens soonest first (unscheduled last), as it always has; Past opens latest first.
+  // Coming up opens soonest first (unscheduled last), as it always has; Past opens latest first.
   const soon = useTableSort<"candidate" | "round" | "when">({ key: "when", dir: "ascending" });
   const done = useTableSort<"candidate" | "round" | "when">({ key: "when", dir: "descending" });
   // The interviewer line names people soonest interview first, whatever order the table is sorted in
@@ -38,11 +38,11 @@ export function Interviews() {
   for (const i of sortRows(upcoming, INTERVIEW_SORT.when, "ascending")) for (const p of i.participants) load[p.name ?? p.email] = (load[p.name ?? p.email] ?? 0) + 1;
   return (
     <div className="stack" style={{ gap: 18 }}>
-      <PageHeader eyebrow={company.name ?? undefined} title="Interviews" sub={canManageInterviews(role) ? "Every interview a person approved: waiting on the candidate, scheduled, or done. Reschedule and cancel from here; nothing is decided by software." : "Your interviews: waiting on the candidate, scheduled, or done. Afterwards, tell us whether it took place; the hiring team records the decision."} />
+      <PageHeader eyebrow={company.name ?? undefined} title="Interviews" sub={canManageInterviews(role) ? "Every interview a person approved. Reschedule or cancel from here." : "Your interviews. Afterwards, tell us whether it took place."} />
       {list.isLoading ? <Skeleton lines={4} /> : list.error ? <ErrorState message="Could not load interviews." onRetry={() => list.refetch()} /> : (
         <>
-          {upcoming.length === 0 ? <EmptyState icon="interviews" title="No interviews in motion" body={canSeeTalent(role) ? "Open a candidate and move them to Interviewing to start one." : "You will see an interview here as soon as you are put on one."} action={canSeeTalent(role) ? <Link to="/talent" className="btn primary">Go to Talent</Link> : undefined} /> : (
-            <Card title={`In motion (${upcoming.length})`}>
+          {upcoming.length === 0 ? <EmptyState icon="interviews" title="No interviews coming up" body={canSeeTalent(role) ? "Open a candidate and move them to Interviewing to start one." : "You will see an interview here as soon as you are put on one."} action={canSeeTalent(role) ? <Link to="/talent" className="btn primary">Go to Candidates</Link> : undefined} /> : (
+            <Card title={`Coming up (${upcoming.length})`}>
               <Table head={[soon.col("candidate", "Candidate", "text"), soon.col("round", "Round", "text"), soon.col("when", "When", "date", { first: "ascending" }), "Interviewers", "Status", ""]} announce={soon.announce}>
                 {soon.apply(upcoming, INTERVIEW_SORT).map((i) => (
                   <tr key={i.id}>
@@ -285,7 +285,7 @@ function BriefCard({ brief }: { brief: InterviewerBrief }) {
         </div>
         {brief.screen?.answers.length ? (
           <details>
-            <summary className="small">What they said in the screen ({brief.screen.answers.length} answers)</summary>
+            <summary className="small">What they said in the screening chat ({brief.screen.answers.length} answers)</summary>
             <dl className="kv small" style={{ marginTop: 6 }}>{brief.screen.answers.map((a, i) => <div key={i}><dt>{a.question}</dt><dd>{a.answer}</dd></div>)}</dl>
           </details>
         ) : null}

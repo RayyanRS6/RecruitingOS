@@ -166,7 +166,7 @@ describe("the role report and the ITS controls", () => {
     const qc = client();
     qc.setQueryData(["role", "r1", "screening"], { offered: 10, started: 8, finished: 6, unfinished: 1, stillApplying: 2, medianMinutes: 6.4, personChosen: { contactMe: 1, sendWithout: 1 }, skipped: [{ key: "q_pay", question: "What pay are you looking for?", count: 3 }] });
     const words = text(render(qc, createElement(ScreeningCard, { roleId: "r1" })));
-    expect(words).toContain("The screening conversation");
+    expect(words).toContain("The screening chat");
     expect(words).toContain("Started it 8 of 10 (80%)");
     expect(words).toContain("Typical time to finish about 6 minutes");
     // never where anyone stopped: a conversation that stopped was never sent (founder decision of 9 October 2026)

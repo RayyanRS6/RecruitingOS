@@ -1,84 +1,132 @@
 "use client";
 
-import { Alert, Card, Chip, ScoreBadge, type ScoreBarItem, ScoreBars } from "@ros/ui";
+import type { ReactNode } from "react";
+import { Alert, Button, Card, Chip, ScoreBadge, type ScoreBarItem, ScoreBars } from "@ros/ui";
 import type { ApplicationDetail } from "../../api/client";
-import { MATCH_PROMISE, MATCH_TITLE, cappedLine, confidenceChip, coverageLine, leftOut, matchBars, matchCardState, missingMustHaves, mustHaveLineOf, quoteSummary, suggestedStepOf, versionNote, type MatchBar } from "./match-view";
+import { CLOSER_LOOK_LABEL, LOW_CONFIDENCE_LABEL, LOW_CONFIDENCE_TEXT, closerLook } from "../../evidence";
+import { overallLabel } from "./assessment";
+import { firstSentence, notReadYetWords } from "./helpers";
+import { MATCH_PROMISE, MATCH_TITLE, NO_REVIEW_LINE, cappedLine, confidenceChip, coverageLine, leftOut, matchBars, matchCardState, missingMustHaves, nextStepAction, quoteSummary, suggestedStepOf, verdictLine, versionNote, type MatchBar, type NextStepAction } from "./match-view";
+import { Why } from "./why";
 
 /**
- * "Against your must-haves" on the candidate panel's Overview (founder decision B2; docs/spec/22 section 5): the match
- * score as a big "91/100" with its band word, the confidence of the reading as a chip of its own, what the number rests
- * on ("Based on 5 of 7 requirements"), a red chip for each must-have their own words show is missing, then one bar per
- * requirement, the costliest first, each with its tag, how much was met, the points it cost and their words one click
- * away; the ones at full marks fold under one line. What the evidence says nothing about is listed apart: left out of
- * the score, never counted against them. The number is worked out by code from checked findings; a person decides.
+ * The match score on the candidate panel's Overview (founder decision B2; docs/spec/22 section 5), split the Kanvis way
+ * (Wave S1): the verdict first (the score as a big "91/100" with its band word, how sure the AI was, one line on the
+ * must-haves, and a red chip for each must-have their own words show is missing), then the suggested next step with its
+ * one button. How the number was worked out (the bars per requirement, costliest first, what was left out of the score,
+ * the version label and the promise) sits under "Full breakdown". The number is worked out by code; a person decides.
  */
-export function MatchCard({ a }: { a: ApplicationDetail }) {
+
+/** The verdict card: the score and its words; `children` (the next step, strengths and concerns) sit under it. */
+export function MatchVerdict({ a, children }: { a: ApplicationDetail; children?: ReactNode }) {
   const state = matchCardState(a);
-  if (state.kind === "hidden") return null;
-  if (state.kind === "unread") {
-    return (
-      <Card title={MATCH_TITLE}>
-        <p className="small muted" style={{ margin: 0 }}>{state.text}</p>
-      </Card>
-    );
-  }
-  const m = state.m;
+  const look = closerLook(a);
+  const latest = a.assessments[0] ?? null;
+  const m = state.kind === "scored" || state.kind === "nothing" ? state.m : null;
   const version = versionNote(a, m);
-  const mustHaveLine = mustHaveLineOf(a);
-  const next = suggestedStepOf(a);
-  if (state.kind === "nothing") {
-    return (
-      <Card title={MATCH_TITLE} aside={<ScoreBadge score={null} />}>
-        <p className="small" style={{ margin: 0 }}>{state.text}</p>
-        {mustHaveLine ? <p className="match-coverage">{mustHaveLine}</p> : null}
-        <LeftOut m={m} />
-        <NextStep next={next} />
-        <Footer version={version} />
-      </Card>
-    );
-  }
-  const bars = matchBars(m);
-  const confidence = confidenceChip(m.confidence);
-  const missing = missingMustHaves(m);
-  const capped = cappedLine(m);
+  const confidence = m ? confidenceChip(m.confidence) : null;
+  const missing = m ? missingMustHaves(m) : [];
+  // An older answer without the score: the AI review's own words stand in for it.
+  const fallback = state.kind === "hidden" && latest ? latest : null;
+  // When the AI review could not be made at all, the card above the verdict says so; the line never promises one soon.
+  const line = !m && look.assessmentUnavailable ? NO_REVIEW_LINE
+    : state.kind === "unread" ? state.text
+    : m ? verdictLine(a) ?? (state.kind === "nothing" ? state.text : null)
+    : fallback ? firstSentence(fallback.result.summary).line
+    : notReadYetWords(a.stage);
+  const lowShown = confidence?.tone === "caution" || fallback?.confidence === "low";
   return (
     <Card title={MATCH_TITLE}>
       <div className="match-head">
-        <ScoreBadge score={state.score} size="lg" showBand />
-        {confidence ? <span title={confidence.title}><Chip tone={confidence.tone}>{confidence.label}</Chip></span> : null}
+        {state.kind === "scored" ? <ScoreBadge score={state.score} size="lg" showBand /> : fallback ? <Chip tone={fallback.overall === "strong" ? "good" : fallback.overall === "weak" ? "caution" : "accent"}>{overallLabel(fallback.overall)}</Chip> : <ScoreBadge score={null} />}
+        {confidence ? <span title={confidence.title}><Chip tone={confidence.tone}>{confidence.label}</Chip></span> : fallback ? <Chip tone={fallback.confidence === "low" ? "caution" : "neutral"}>{fallback.confidence} confidence</Chip> : null}
+        {look.needsCloserLook ? <span title={look.reason ?? undefined}><Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip></span> : look.lowConfidence && !lowShown ? <span title={LOW_CONFIDENCE_TEXT}><Chip tone="caution">{LOW_CONFIDENCE_LABEL}</Chip></span> : null}
+        {version?.changed ? <span title={version.text}><Chip tone="caution">Read against older job details</Chip></span> : null}
       </div>
-      <p className="match-coverage">{coverageLine(m)}</p>
-      {mustHaveLine ? <p className="match-coverage">{mustHaveLine}</p> : null}
+      {line ? <p className="match-coverage">{line}</p> : null}
+      {/* the chip's reason, for keyboard and touch too (a title shows on hover only); the card above says it when no review could be made */}
+      {look.needsCloserLook && look.reason && !look.assessmentUnavailable ? <Why label="Why a closer look?">{look.reason}</Why> : null}
       {missing.length ? (
         <div className="stack" style={{ gap: 6, marginTop: 10 }}>
           {missing.map((x) => (
             <div key={x.key}>
               <Chip tone="critical" icon="alert">{x.chip}</Chip>
-              {x.quote ? <blockquote className="small" style={{ margin: "6px 0 0", paddingLeft: 10, borderLeft: "2px solid var(--critical-line)" }}>Their own words: "{x.quote}"</blockquote> : null}
+              {x.quote ? <TheirWords quote={x.quote} /> : null}
             </div>
           ))}
-          {capped ? <p className="small muted" style={{ margin: 0 }}>{capped}</p> : null}
         </div>
       ) : null}
-      <div className="match-section">
-        <h3>{bars.costly.length ? "What cost points" : "The breakdown"}</h3>
-        <ScoreBars label="Requirements, the ones that cost the most points first" items={bars.costly.map(barItem)} folded={bars.full.map(barItem)} foldedLabel={bars.foldedLabel ?? undefined} />
-      </div>
-      <LeftOut m={m} />
-      <NextStep next={next} />
-      <Footer version={version} />
+      {children}
     </Card>
   );
 }
 
-/** The step the pool board suggests, as on their board card; nothing moves until a person applies it. */
-function NextStep({ next }: { next: ReturnType<typeof suggestedStepOf> }) {
+/** A quote from the candidate, one click away. */
+export function TheirWords({ quote, label = "Their words" }: { quote: string; label?: string }) {
+  return (
+    <details className="more" style={{ marginTop: 4 }}>
+      <summary>{label}</summary>
+      <blockquote className="small" style={{ margin: 0, paddingLeft: 10, borderLeft: "2px solid var(--line-2)" }}>"{quote}"</blockquote>
+    </details>
+  );
+}
+
+/**
+ * The step the pool board suggests, as on their board card, in one line with its one button (`nextStepAction`); the
+ * rest of the reason is under "Why". Nothing moves until a person presses it.
+ */
+export function NextStepLine({ a, onAction }: { a: ApplicationDetail; onAction?: (action: NextStepAction) => void }) {
+  const next = suggestedStepOf(a);
   if (!next) return null;
+  const action = onAction ? nextStepAction(a) : null;
+  const { line, rest } = firstSentence(next.reason);
   return (
     <div className="match-section">
       <h3>Suggested next step</h3>
-      <p className="small" style={{ margin: 0 }}><span className="next-step-tag">{next.label}</span> {next.needsYourEye ? <span style={{ color: "var(--caution)" }}>{next.reason}</span> : next.reason}</p>
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <p className="small" style={{ margin: 0, flex: "1 1 220px" }}><strong>{next.label}</strong>{line ? <> · <span style={next.needsYourEye ? { color: "var(--caution)" } : undefined}>{line}</span></> : null}</p>
+        {action ? <Button size="sm" onClick={() => onAction?.(action)}>{action.label}</Button> : null}
+      </div>
+      {rest ? <Why>{rest}</Why> : null}
     </div>
+  );
+}
+
+/**
+ * How the score was worked out, under "Full breakdown": what it rests on, why a missing must-have holds it down, the bars
+ * per requirement (the costliest first, the ones at full marks folded), what is not known yet, how sure the AI was, the
+ * version of the job it was read against, and the promise that a person decides. Nothing for an older answer without
+ * the score, or before there is one (the verdict says so).
+ */
+export function ScoreBreakdown({ a }: { a: ApplicationDetail }) {
+  const state = matchCardState(a);
+  if (state.kind === "hidden" || state.kind === "unread") return null;
+  const m = state.m;
+  const version = versionNote(a, m);
+  const confidence = confidenceChip(m.confidence);
+  const capped = cappedLine(m);
+  const look = closerLook(a);
+  const bars = state.kind === "scored" ? matchBars(m) : null;
+  return (
+    <Card title="How the score was worked out">
+      <p className="match-coverage" style={{ marginTop: 0 }}>{state.kind === "nothing" ? state.text : coverageLine(m)}</p>
+      {capped ? <p className="small muted" style={{ margin: "6px 0 0" }}>{capped}</p> : null}
+      {bars ? (
+        <div className="match-section">
+          <h3>{bars.costly.length ? "What cost points" : "The breakdown"}</h3>
+          <ScoreBars label="Requirements, the ones that cost the most points first" items={bars.costly.map(barItem)} folded={bars.full.map(barItem)} foldedLabel={bars.foldedLabel ?? undefined} />
+        </div>
+      ) : null}
+      <LeftOut m={m} />
+      {confidence || look.lowConfidence ? (
+        <div className="match-section">
+          <h3>How sure the AI is</h3>
+          {confidence ? <p className="small" style={{ margin: 0 }}><Chip tone={confidence.tone}>{confidence.label}</Chip> {confidence.title}</p> : null}
+          {look.lowConfidence ? <p className="small muted" style={{ margin: "6px 0 0" }}><strong>{LOW_CONFIDENCE_LABEL}.</strong> {LOW_CONFIDENCE_TEXT}</p> : null}
+        </div>
+      ) : null}
+      <Footer version={version} />
+    </Card>
   );
 }
 

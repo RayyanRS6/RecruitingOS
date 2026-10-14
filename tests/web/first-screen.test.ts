@@ -52,7 +52,7 @@ describe("the words for a recruiter's access", () => {
   });
 
   it("say who can end the access, since hiring managers and HR may ask but only owners and admins can end it", () => {
-    expect(ACCESS_LIMITS).toContain("An owner or admin can end it sooner in Setup");
+    expect(ACCESS_LIMITS).toContain("An owner or admin can end it sooner in Settings");
     expect(ACCESS_LIMITS).not.toMatch(/You can end it/);
     expect(can("hiring_manager", "escalation.create") && !can("hiring_manager", "staff_access.revoke")).toBe(true);
     expect(can("hr", "escalation.create") && !can("hr", "staff_access.revoke")).toBe(true);

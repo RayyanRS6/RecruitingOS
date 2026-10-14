@@ -7,6 +7,7 @@ import { api, ApiError, type ApplicationDetail } from "../../api/client";
 import { toast } from "../../toast";
 import { callNotesBody, callNotesMayStayOpen, callNotesToast } from "../../screen-view";
 import { useDraft, useRefreshCandidate } from "./hooks";
+import { Why } from "./why";
 
 /**
  * A recruiter's notes from a call (plan E3; founder decision Q16). A candidate who would rather talk to a person than to
@@ -41,15 +42,18 @@ export function CallNotesCard({ a, roleId, prominent }: { a: ApplicationDetail; 
   if (!open) {
     return (
       <Card title="Notes from a call">
-        <p className="small muted">Talked with {first} on the phone? Add what you learned; it is kept as your notes, never as {first}'s own words.</p>
+        <p className="small muted">Talked with {first} by phone? Add what you learned.</p>
         <div className="row" style={{ marginTop: 8 }}><Button size="sm" icon="edit" onClick={() => setOpen(true)}>Add notes from a call</Button></div>
       </Card>
     );
   }
   return (
     <Card needsYou={prominent} lift={prominent} title={prominent ? `${first} asked to talk to a person` : "Notes from a call"}>
-      {prominent ? <p className="small" style={{ color: "var(--ink-2)" }}>{first} chose a person instead of the assistant. Call or email them, then add what you learned here, under each question where it fits.</p> : null}
-      <p className="small muted" style={{ marginTop: 4 }}>Your notes are kept as yours and labelled as notes from a call. They are never shown or quoted as {first}'s own words, never used to say a must-have is not met, and {first} does not see them.</p>
+      <p className="small" style={{ color: "var(--ink-2)" }}>{prominent ? "Call or email them, then add what you learned here." : `Add what you learned on the call with ${first}.`}</p>
+      <Why>
+        {prominent ? <span>{first} chose a person instead of the assistant. Add what you learned under each question where it fits.</span> : null}
+        <span>Your notes are kept as yours and labelled as notes from a call. They are never shown or quoted as {first}'s own words, never used to say a must-have is not met, and {first} does not see them.</span>
+      </Why>
       <div className="stack" style={{ gap: 8, marginTop: 10 }}>
         {a.packetLabels.questions.map((q) => (
           <Field key={q.key} label={q.question} htmlFor={`call-note-${q.key}`}>
@@ -60,10 +64,10 @@ export function CallNotesCard({ a, roleId, prominent }: { a: ApplicationDetail; 
         {mayStayOpen ? (
           <label className="row small" style={{ gap: 8 }}>
             <input type="checkbox" checked={complete} onChange={(e) => setComplete(e.target.checked)} />
-            Finish the screening with these notes, so the scorecard is written from them
+            Finish the screening with these notes, so the AI review is written from them
           </label>
-        ) : <p className="small muted" style={{ margin: 0 }}>{first} has no screening conversation, so these notes are the screening: the scorecard is written from them.</p>}
-        {mayStayOpen && !complete ? <p className="small muted" style={{ margin: 0 }}>The conversation stays open, and you can add more notes later.</p> : null}
+        ) : <p className="small muted" style={{ margin: 0 }}>{first} has no screening chat, so these notes are the screening: the AI review is written from them.</p>}
+        {mayStayOpen && !complete ? <p className="small muted" style={{ margin: 0 }}>The chat stays open, and you can add more notes later.</p> : null}
         <div className="row">
           <Button variant="primary" size="sm" disabled={!body} loading={save.isPending} onClick={() => save.mutate()}>Add the notes</Button>
           {!prominent ? <Button variant="quiet" size="sm" onClick={() => setOpen(false)}>Cancel</Button> : null}

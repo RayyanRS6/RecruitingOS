@@ -130,7 +130,10 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     expect(html).toContain(`<form method="post" action="/c/screen/${mariaToken}/start"><button class="btn" type="submit">Start</button></form>`);
     expect(html).toContain(`<form method="post" action="/c/screen/${mariaToken}/later"><button class="btn secondary" type="submit">Do this later</button></form>`);
     expect(html).toContain(`<a class="btn secondary" href="/c/screen/${mariaToken}/person">I'd rather talk to a person</a>`);
-    expect(html).toMatch(/<p class="notice">[^<]*artificial intelligence/);
+    // the first view is the points and the three ways on; what each way does, and the AI notice word for word, are one click away (founder brief, 14 October 2026)
+    expect(html).toMatch(/<\/div><details class="more"><summary>More about this conversation<\/summary><p>Would you rather talk to a person\?/);
+    expect(html).toContain('"Do this later" emails you the link.');
+    expect(html).toMatch(/<details class="more"><summary>How AI is used<\/summary>(<p class="notice">[^<]*<\/p>)*<p class="notice">[^<]*artificial intelligence/);
     // nothing to type yet, no script but the one that stops a second press, and the model was never asked to write an opening
     expect(html).not.toContain("<textarea");
     expect(scriptsOf(html)).toEqual([SCREEN_BUSY_JS]);
@@ -188,9 +191,10 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     // honest about both things: the team sees the answers only once she sends them, and nothing sends them for her:
     // without Send the conversation closes a few days later and the application goes on without them (founder decision
     // of 9 October 2026, "hide them until they send")
-    expect(html).toContain('<p class="lead">This is what you told the assistant. The hiring team sees your answers only once you send them. Change any answer you like, then press Send.</p>');
+    expect(html).toContain('<p class="lead">The hiring team sees your answers only once you send them. Change any answer you like, then press Send.</p>');
     expect(html).not.toContain("can see your answers as you give them");
-    expect(html).toContain("<p>If you do not press Send, the conversation closes a few days after your last answer or change, and your application goes to the hiring team without these answers. If we have not reminded you yet, we email you once before then.</p>");
+    // what happens without Send stays in the page, word for word, one click away (founder brief, 14 October 2026)
+    expect(html).toContain("<details class=\"more\"><summary>What if I don't press Send?</summary><p>If you do not press Send, the conversation closes a few days after your last answer or change, and your application goes to the hiring team without these answers. If we have not reminded you yet, we email you once before then.</p></details>");
     expect(html).not.toContain("we send your answers as they are");
     expect(html).not.toContain("Nothing is sent until you do");
     for (const q of packet.screening.questions) expect(html).toContain(`<p class="answer-q">${packet.screening.questions.indexOf(q) + 1}. ${q.question}</p>`);
@@ -296,6 +300,8 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     expect(receipt).toContain("<h1>Thanks for applying</h1>");
     expect(receipt).toContain("The hiring team at Visit Dental reviews your application. People make every decision.");
     expect(receipt).not.toMatch(/eligib|conversation|did not match/i);
+    // "No email?" and sending the link again, one click away (founder brief, 14 October 2026)
+    expect(receipt).toMatch(/<details class="more"><summary>No email\?<\/summary><p>It can take a few minutes\.[^<]*<\/p><p>[^<]*<\/p><a class="btn secondary" href="\/c\/link-request">Send my link again<\/a><\/details>/);
     const [cand] = await container.db.select().from(candidates).where(eq(candidates.email, "sam.nguyen@example.com"));
     const [a] = await container.db.select().from(applications).where(and(eq(applications.roleId, roleId), eq(applications.candidateId, cand.id)));
     expect(await container.db.select().from(screens).where(eq(screens.applicationId, a.id))).toHaveLength(0);

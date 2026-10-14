@@ -168,11 +168,15 @@ schedulePages.get("/c/schedule/:token", async (c) => {
       <p class="eyebrow">{b.company.name} · {b.packet?.identity.title ?? b.role.title}</p>
       <h1>Pick a time for your {b.iv.title.toLowerCase()}</h1>
       <p class="lead">{b.iv.durationMinutes} minutes, {b.iv.format.replace("_", " ")}{b.participants.length ? ` with ${b.participants.map((p) => p.firstName).join(" and ")}` : ""}. Times are shown in <strong>{tz.replace(/_/g, " ")}</strong>.</p>
-      <form method="get" action={`/c/schedule/${b.iv.scheduleToken}`} class="card">
-        <label for="tz" class="flush">Show times in</label>
-        <select id="tz" name="tz">{[...new Set([tz, ...ZONES])].map((z) => <option value={z} selected={z === tz}>{z.replace(/_/g, " ")}</option>)}</select>
-        <button class="btn secondary" type="submit">Show times</button>
-      </form>
+      {/* Another time zone, one click away (founder brief, 14 October 2026): the line above already names the one shown. */}
+      <details class="more">
+        <summary>Change the time zone</summary>
+        <form method="get" action={`/c/schedule/${b.iv.scheduleToken}`} class="card">
+          <label for="tz" class="flush">Show times in</label>
+          <select id="tz" name="tz">{[...new Set([tz, ...ZONES])].map((z) => <option value={z} selected={z === tz}>{z.replace(/_/g, " ")}</option>)}</select>
+          <button class="btn secondary" type="submit">Show times</button>
+        </form>
+      </details>
       {error === "slot_unknown" ? <div class="err">That time is no longer available. Choose another.</div> : null}
       <form method="post" action={`/c/schedule/${b.iv.scheduleToken}`}>
         <input type="hidden" name="timezone" value={tz} />
@@ -191,13 +195,16 @@ schedulePages.get("/c/schedule/:token", async (c) => {
         <input type="text" id="access" name="accessibilityNote" maxlength={500} placeholder="For example: captions on, or a phone call instead of video" />
         <button class="btn" type="submit">Confirm this time</button>
       </form>
-      <h2>None of these work?</h2>
-      <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/none-work`} class="card">
-        <input type="hidden" name="timezone" value={tz} />
-        <label for="note" class="flush">Tell us what does</label>
-        <textarea id="note" name="note" rows={3} maxlength={1000} placeholder="For example: mornings before 10, any day but Wednesday"></textarea>
-        <button class="btn secondary" type="submit">Ask for other times</button>
-      </form>
+      {/* Asking for other times, one click away (founder brief, 14 October 2026): picking a time is the page's one job. */}
+      <details class="more">
+        <summary>None of these work?</summary>
+        <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/none-work`} class="card">
+          <input type="hidden" name="timezone" value={tz} />
+          <label for="note" class="flush">Tell us what does</label>
+          <textarea id="note" name="note" rows={3} maxlength={1000} placeholder="For example: mornings before 10, any day but Wednesday"></textarea>
+          <button class="btn secondary" type="submit">Ask for other times</button>
+        </form>
+      </details>
       <p class="notice">Reply to any of our emails with HUMAN to reach a person. Nothing here is decided by software.</p>
     </Layout>,
   );
@@ -302,22 +309,26 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
       ) : (
         <div class="card"><p>You have rescheduled twice. Reply to any of our emails and a person will arrange a time with you.</p></div>
       )}
-      {/* Cancelling, with what they would like next (founder decision 2A), only while the interview is still ahead. */}
+      {/* Cancelling, with what they would like next (founder decision 2A), only while the interview is still ahead. One
+          click away (founder brief, 14 October 2026), and open when a send came back incomplete (?error=cancel#cancel). */}
       {plan ? (
-        <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/cancel`} class="card" id="cancel">
-          {missing ? <div class="err" role="alert" id="cancel-error">Choose what you would like next, and tick the box to confirm.</div> : null}
-          <fieldset aria-describedby={missing ? "cancel-error" : undefined}>
-            <legend class="question-legend">If you cancel, what would you like next?</legend>
-            <label class="check slot" for="next-new-times"><input type="radio" id="next-new-times" name="next" value="new_times" required aria-describedby="next-new-times-hint" /> Send me new times later</label>
-            <small id="next-new-times-hint">{newTimesHint(plan, b)}</small>
-            <label class="check slot" for="next-not-interested"><input type="radio" id="next-not-interested" name="next" value="not_interested" aria-describedby="next-not-interested-hint" /> I'm no longer interested</label>
-            <small id="next-not-interested-hint">We will let the team know. Your application stays open unless you withdraw it.</small>
-          </fieldset>
-          <label for="cancel-reason">Tell us why, if you like (optional)</label>
-          <input type="text" id="cancel-reason" name="reason" maxlength={500} placeholder="For example: I accepted another offer" />
-          <label class="check"><input type="checkbox" name="confirm" value="yes" required aria-invalid={missing ? "true" : undefined} aria-describedby={missing ? "cancel-error" : undefined} /> Yes, cancel this interview.</label>
-          <button class="btn secondary" type="submit">Cancel the interview</button>
-        </form>
+        <details class="more" open={missing}>
+          <summary>I need to cancel</summary>
+          <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/cancel`} class="card" id="cancel">
+            {missing ? <div class="err" role="alert" id="cancel-error">Choose what you would like next, and tick the box to confirm.</div> : null}
+            <fieldset aria-describedby={missing ? "cancel-error" : undefined}>
+              <legend class="question-legend">If you cancel, what would you like next?</legend>
+              <label class="check slot" for="next-new-times"><input type="radio" id="next-new-times" name="next" value="new_times" required aria-describedby="next-new-times-hint" /> Send me new times later</label>
+              <small id="next-new-times-hint">{newTimesHint(plan, b)}</small>
+              <label class="check slot" for="next-not-interested"><input type="radio" id="next-not-interested" name="next" value="not_interested" aria-describedby="next-not-interested-hint" /> I'm no longer interested</label>
+              <small id="next-not-interested-hint">We will let the team know. Your application stays open unless you withdraw it.</small>
+            </fieldset>
+            <label for="cancel-reason">Tell us why, if you like (optional)</label>
+            <input type="text" id="cancel-reason" name="reason" maxlength={500} placeholder="For example: I accepted another offer" />
+            <label class="check"><input type="checkbox" name="confirm" value="yes" required aria-invalid={missing ? "true" : undefined} aria-describedby={missing ? "cancel-error" : undefined} /> Yes, cancel this interview.</label>
+            <button class="btn secondary" type="submit">Cancel the interview</button>
+          </form>
+        </details>
       ) : null}
     </Layout>,
   );

@@ -11,10 +11,11 @@ function copy(text: string, what: string) {
 }
 
 /**
- * "Share it now" (plan D8): the job's address with Copy, one button per place people share (email, a text message,
- * WhatsApp, LinkedIn, Facebook, X) and the ready-made places that get a link of their own to copy (a referral from the
- * team, a school or training program, a community group). Each place gets its own tracked link the first time it is
- * used, so the Talent page can say where applicants came from; the same link is used every time after.
+ * "Share it now" (plan D8): the job's address with Copy and Open, one button per place people share (email, a text
+ * message, WhatsApp, LinkedIn, Facebook, X) and the ready-made places that get a link of their own to copy (a referral
+ * from the team, a school or training program, a community group). Each place gets its own tracked link the first time
+ * it is used, so Candidates can say where applicants came from; the same link is used every time after. The message
+ * that goes with a share and the ready-made places are one click away, each under its own "Show more".
  *
  * Plain links only: a share opens the person's own email or text app, or the network's own share page in a new tab.
  * Nothing from those networks ever loads on our pages. The first tap on a place makes its link and opens the share in
@@ -30,8 +31,8 @@ export function ShareJob(props: { roleId: string; roleTitle: string; companyName
   if (q.isLoading) return <Skeleton lines={2} />;
   if (q.error || !q.data) return <Alert tone="critical">Could not load the share links. Reload the page to try again.</Alert>;
   const d = q.data;
-  if (d.role.status === "closed") return <p className="small muted">The role is closed, so there is nothing to share.</p>;
-  if (d.role.status !== "open" && d.role.status !== "paused") return <p className="small muted">{d.publishing.state === "preparing" ? "Getting the job ready. The share links appear here in a moment." : "Sharing opens once the role is approved and live."}</p>;
+  if (d.role.status === "closed") return <p className="small muted">The job is closed, so there is nothing to share.</p>;
+  if (d.role.status !== "open" && d.role.status !== "paused") return <p className="small muted">{d.publishing.state === "preparing" ? "Getting the job ready. The share links appear here in a moment." : "Sharing opens once the job is approved and live."}</p>;
   if (d.publishing.state === "waiting_for_company_check") return <Alert tone="info">The job goes public as soon as ITS confirms your company. Share it then: until that moment the link shows "not found".</Alert>;
   const share = d.share;
   const subject = shareSubject(props.companyName, props.roleTitle);
@@ -73,6 +74,7 @@ export function ShareJob(props: { roleId: string; roleTitle: string; companyName
         <Icon name="link" size={16} />
         <code title={share.jobUrl}>{share.jobUrl}</code>
         <Button size="sm" icon="copy" onClick={() => copy(share.jobUrl, "the job's address")}>Copy</Button>
+        <a className="btn secondary sm" href={share.jobUrl} target="_blank" rel="noopener noreferrer"><Icon name="external" />Open<span className="sr-only"> the job page (opens in a new tab)</span></a>
       </div>
       <fieldset className="share-buttons" aria-label="Share the job">
         {SHARE_BUTTONS.map((b) => {
@@ -86,33 +88,38 @@ export function ShareJob(props: { roleId: string; roleTitle: string; companyName
           return <Button key={b.key} size="sm" icon={b.icon} disabled={make.isPending} onClick={() => void tap(b.key)}>{b.label}</Button>;
         })}
       </fieldset>
+      <p className="small muted" style={{ margin: 0 }}>Each place gets its own link, so you see where applicants come from.</p>
       {props.compact ? null : (
-        <>
-          <p className="small muted" style={{ margin: 0 }}>Each place gets its own link, so you can see where applicants come from. The message starts with:</p>
+        <details className="more">
+          <summary>The message that goes with it</summary>
           <p className="share-text" style={{ margin: 0 }}>{share.text}</p>
-          <p className="small muted" style={{ margin: 0 }}>You see it in your own app before anything is sent, and can change it there.</p>
-        </>
+          <p className="small muted" style={{ margin: "6px 0 0" }}>You see it in your own app before anything is sent, and can change it there.</p>
+        </details>
       )}
-      <ul className="share-places" aria-label="Places with a link of their own">
-        {SHARE_PLACES_TO_COPY.map((place) => {
-          const row = placeOf(place);
-          const label = row?.label ?? place;
-          return (
-            <li key={place} className="share-place">
-              <div className="share-place-head">
-                <strong className="small">{label}</strong>
-                {row?.link ? (
-                  <span className="row">
-                    <span className="small muted">{visitsWords(row.link.visits)}</span>
-                    <Button size="sm" icon="copy" onClick={() => copy(shareTextFor(share, row.link!.url), "the link and a message to go with it")}>Copy</Button>
-                  </span>
-                ) : <Button size="sm" icon="link" disabled={make.isPending} onClick={() => void makePlace(place)}>Make a link to copy</Button>}
-              </div>
-              {row?.link ? <code className="small" style={{ overflowWrap: "anywhere" }}>{row.link.url}</code> : null}
-            </li>
-          );
-        })}
-      </ul>
+      {/* the ready-made places with a link of their own, one click away (Wave S1) */}
+      <details className="more">
+        <summary>Links for a referral, a school or a group</summary>
+        <ul className="share-places" aria-label="Places with a link of their own">
+          {SHARE_PLACES_TO_COPY.map((place) => {
+            const row = placeOf(place);
+            const label = row?.label ?? place;
+            return (
+              <li key={place} className="share-place">
+                <div className="share-place-head">
+                  <strong className="small">{label}</strong>
+                  {row?.link ? (
+                    <span className="row">
+                      <span className="small muted">{visitsWords(row.link.visits)}</span>
+                      <Button size="sm" icon="copy" onClick={() => copy(shareTextFor(share, row.link!.url), "the link and a message to go with it")}>Copy</Button>
+                    </span>
+                  ) : <Button size="sm" icon="link" disabled={make.isPending} onClick={() => void makePlace(place)}>Make a link to copy</Button>}
+                </div>
+                {row?.link ? <code className="small" style={{ overflowWrap: "anywhere" }}>{row.link.url}</code> : null}
+              </li>
+            );
+          })}
+        </ul>
+      </details>
     </div>
   );
 }

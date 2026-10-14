@@ -12,6 +12,8 @@ export { NOTE_BODY_MAX };
 
 /** Said beside every note box (counsel register item 25: notes can be asked for in a data request). */
 export const NOTES_REMINDER = "Stick to job-related facts: what they said and did, and how it bears on the work. Leave out anything about age, family, health, religion, background or other personal characteristics, and anything you would not want them to read.";
+/** The reminder in one short line, always in sight on the Notes tab; the whole of `NOTES_REMINDER` is one click away. */
+export const NOTES_REMINDER_SHORT = "Stick to job-related facts. Leave out age, family, health, religion or background.";
 
 /** Autosave waits this long after the last change before it saves. */
 export const NOTE_AUTOSAVE_MS = 1200;

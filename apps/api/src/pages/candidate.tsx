@@ -486,8 +486,7 @@ function Receipt(props: { company: { slug: string; name: string }; role: { id: s
       <p class="eyebrow"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>{props.packet.identity.title}</a> · {props.company.name}</p>
       <h1>Thanks for applying</h1>
       <div class="card" role="status">
-        {/* True for a first application and a repeat alike: a repeat's reminder goes at most once a day, so it may be in an earlier email. */}
-        <p><strong>Check your email.</strong> Your own link to this application goes to {props.to ?? "the email address you gave"}. If you applied for this job before, look in our earlier emails too: we send the link again at most once a day.</p>
+        <p><strong>Check your email.</strong> Your own link to this application goes to {props.to ?? "the email address you gave"}.</p>
         <p>Keep that email. The link is how you check where things stand, withdraw, or ask about your information. There is no account or password.</p>
       </div>
       <h2>What happens next</h2>
@@ -496,9 +495,14 @@ function Receipt(props: { company: { slug: string; name: string }; role: { id: s
         <li>The hiring team at {props.company.name} reviews your application. People make every decision.</li>
         <li>You hear from us by email either way.</li>
       </ol>
-      <h2>No email?</h2>
-      <p>It can take a few minutes. Look in your spam or promotions folder too. If it still has not arrived, we can send your link again.</p>
-      <a class="btn secondary" href="/c/link-request">Send my link again</a>
+      {/* "No email?" one click away (founder brief, 14 October 2026). The earlier-emails line is true for a first application
+          and a repeat alike: a repeat's reminder goes at most once a day, so it may be in an earlier email. */}
+      <details class="more">
+        <summary>No email?</summary>
+        <p>It can take a few minutes. Look in your spam or promotions folder too. If you applied for this job before, look in our earlier emails too: we send the link again at most once a day.</p>
+        <p>If it still has not arrived, we can send your link again.</p>
+        <a class="btn secondary" href="/c/link-request">Send my link again</a>
+      </details>
       <p class="foot"><a href="/privacy">How we handle your information</a></p>
     </Layout>
   );
@@ -527,7 +531,7 @@ function LinkRequestPage(props: { error?: string; email?: string }) {
     <Layout title="Get your application link again">
       <p class="eyebrow">Your application</p>
       <h1>Lost your link?</h1>
-      <p class="lead">Type the email address you applied with. If we have an application from that address, we email your link to it. We only ever send it to that address, never to this page.</p>
+      <p class="lead">Type the email address you applied with. If we have an application from it, we email your link there, never to this page.</p>
       {props.error ? <div class="err" role="alert">{props.error}</div> : null}
       <form method="post" action="/c/link-request" class="card">
         <div style="position:absolute;left:-10000px" aria-hidden="true"><label for="website">Leave this empty</label><input id="website" name="website" type="text" tabindex={-1} autocomplete="off" /></div>
@@ -757,20 +761,26 @@ candidatePages.get("/c/status/:token", async (c) => {
       <ol class="track" aria-label="Where your application is">
         {steps.map((s, i) => <li class={s === step ? "current" : i < steps.indexOf(step) ? "done" : undefined} aria-current={s === step ? "step" : undefined}>{CANDIDATE_STEP_LABEL[s]}</li>)}
       </ol>
+      {/* Where things stand, then the one thing to do now (founder brief, 14 October 2026): the line, and the button or card. */}
+      <h2>What happens next</h2>
+      <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null, news, wording, companyName: company?.name ?? "The company" })}</p>
+      {/* The choice the decision message points to (Q30), one click away from the decision itself. */}
+      {told && !poolOptOut ? <p>Would you rather we did not keep your details for future roles? <a href="#future-roles">Say so below</a>; it takes one click.</p> : null}
+      {openScreen_ ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue the screening conversation" : "Start the screening conversation"}</a> : null}
+      {offered ? <div class="card"><strong>Pick a time for your {iv!.title.toLowerCase()}.</strong><p>{company?.name} would like to interview you.</p><a class="btn" href={`/c/schedule/${iv!.scheduleToken}`}><Icon name="calendar" />Choose a time</a></div> : null}
+      {booked ? <div class="card"><strong>Your interview: {iv!.title}</strong><p>{new Intl.DateTimeFormat("en-US", { timeZone: ivTz, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(iv!.startsAt!))}{iv!.meetingUrl ? <span> · <a href={iv!.meetingUrl}>Join link</a></span> : null}</p>{prepare ? <p><strong>What to prepare:</strong> {prepare} Bring examples from your own work, and any questions you have for the team.</p> : null}<p><a href={`/c/schedule/${iv!.scheduleToken}/confirmed`}>Details, calendar file, reschedule or cancel</a></p></div> : null}
+      {c.req.query("withdrawn") === "1" ? <div class="card" role="status"><strong>Your application is withdrawn.</strong><p>Thank you for your time. If you have a question, reply to any of our emails.</p></div> : null}
+      {/* One line that people decide; how the AI helps is one click away. */}
+      <p class="meta">People on the hiring team at {company?.name ?? "the company"} make every decision about your application.</p>
+      <details class="more">
+        <summary>How AI is used</summary>
+        <p class="meta">An AI assistant reads applications and runs the screening conversation for them; who is interviewed, hired or turned down is always a person's decision.</p>
+      </details>
       <div class="card status">
         <div><span>Status</span><strong>{CANDIDATE_STEP_LABEL[step]}</strong></div>
         <div><span>Applied</span><span>{new Date(app.createdAt).toLocaleDateString()}</span></div>
         <div><span>Last update</span><span>{new Date(view.since).toLocaleDateString()}</span></div>
       </div>
-      <h2>What happens next</h2>
-      <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null, news, wording, companyName: company?.name ?? "The company" })}</p>
-      {/* The choice the decision message points to (Q30), one click away from the decision itself. */}
-      {told && !poolOptOut ? <p>Would you rather we did not keep your details for future roles? <a href="#future-roles">Say so below</a>; it takes one click.</p> : null}
-      <p class="meta">People on the hiring team at {company?.name ?? "the company"} make every decision about your application. An AI assistant reads applications and runs the screening conversation for them; who is interviewed, hired or turned down is always a person's decision.</p>
-      {openScreen_ ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue the screening conversation" : "Start the screening conversation"}</a> : null}
-      {offered ? <div class="card"><strong>Pick a time for your {iv!.title.toLowerCase()}.</strong><p>{company?.name} would like to interview you.</p><a class="btn" href={`/c/schedule/${iv!.scheduleToken}`}><Icon name="calendar" />Choose a time</a></div> : null}
-      {booked ? <div class="card"><strong>Your interview: {iv!.title}</strong><p>{new Intl.DateTimeFormat("en-US", { timeZone: ivTz, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(iv!.startsAt!))}{iv!.meetingUrl ? <span> · <a href={iv!.meetingUrl}>Join link</a></span> : null}</p>{prepare ? <p><strong>What to prepare:</strong> {prepare} Bring examples from your own work, and any questions you have for the team.</p> : null}<p><a href={`/c/schedule/${iv!.scheduleToken}/confirmed`}>Details, calendar file, reschedule or cancel</a></p></div> : null}
-      {c.req.query("withdrawn") === "1" ? <div class="card" role="status"><strong>Your application is withdrawn.</strong><p>Thank you for your time. If you have a question, reply to any of our emails.</p></div> : null}
       <h2>Your choices</h2>
       {smsEnabled || smsOn ? (
         <div class="card">
@@ -783,13 +793,17 @@ candidatePages.get("/c/status/:token", async (c) => {
           ) : null}
         </div>
       ) : null}
-      {/* Open to anyone still in the process, and to anyone whose decision they have not been told (plan A1). */}
+      {/* Open to anyone still in the process, and to anyone whose decision they have not been told (plan A1). One click
+          away (founder brief, 14 October 2026); open when a send without the confirmation box came back (?confirm=withdraw). */}
       {mayWithdraw(app.stage, app.toldState) ? (
-        <form method="post" action={`/c/status/${app.statusToken}/withdraw`} class="card">
-          <p><strong>No longer interested?</strong> One click withdraws your application; we will confirm by email and keep your information only as long as the law requires.</p>
-          <label class="check"><input type="checkbox" name="confirm" value="yes" required /> Yes, withdraw my application.</label>
-          <button class="btn secondary" type="submit">Withdraw my application</button>
-        </form>
+        <details class="more" open={c.req.query("confirm") === "withdraw"}>
+          <summary>No longer interested?</summary>
+          <form method="post" action={`/c/status/${app.statusToken}/withdraw`} class="card">
+            <p>One click withdraws your application; we will confirm by email and keep your information only as long as the law requires.</p>
+            <label class="check"><input type="checkbox" name="confirm" value="yes" required /> Yes, withdraw my application.</label>
+            <button class="btn secondary" type="submit">Withdraw my application</button>
+          </form>
+        </details>
       ) : null}
       {/* Wave 0 item 0.11: the talent-pool choice is one click either way, and it only ever affects future roles. The
           decision and closing messages link straight here (#future-roles, Q30). */}
@@ -809,22 +823,27 @@ candidatePages.get("/c/status/:token", async (c) => {
       )}
       <MessageThread messages={thread.messages} more={thread.more} companyName={company?.name ?? "The hiring team"} timeZone={cand?.location?.timezone ?? company?.timezone ?? "America/Los_Angeles"} />
       <h2>Need something?</h2>
-      <p>Reply to any of our emails with HUMAN to reach a person, or use the form below. To request, correct, or delete your information you can also email <a href={`mailto:${c.get("container").env.PRIVACY_EMAIL}`}>{c.get("container").env.PRIVACY_EMAIL}</a>; see <a href="/privacy">how we handle your information</a>.</p>
+      <p>Reply to any of our emails with HUMAN to reach a person, or make a request below.</p>
       {c.req.query("request") ? <div class="card" role="status"><strong>We have your request.</strong><p>A confirmation with the completion date is on its way to {cand?.email ?? "your email"}. Reference {c.req.query("request")}.</p></div> : null}
-      <h2>Your information</h2>
-      <form method="post" action={`/c/status/${app.statusToken}/privacy`} class="card">
-        <label for="pk" class="flush">What would you like?</label>
-        <select id="pk" name="kind" required>
-          <option value="access">Send me a copy of my information</option>
-          <option value="correct">Correct something in my information</option>
-          <option value="delete">Delete my information</option>
-          <option value="human_review">Have a person review my application</option>
-        </select>
-        <label for="pd">Details (optional)</label>
-        <textarea id="pd" name="details" rows={3} maxlength={2000} placeholder="For example: my phone number is wrong, it should be ..."></textarea>
-        <p class="notice">Requests made from this page are verified by the link itself. We confirm receipt and completion by email. Deleting keeps only what the law requires, without your name or contact details. A person handles every request; nothing is decided by software.</p>
-        <button class="btn secondary" type="submit">Send request</button>
-      </form>
+      {/* Requests about their information, and a review by a person, one click away (founder brief, 14 October 2026). */}
+      <details class="more">
+        <summary>Ask for a copy, a fix, deletion, or a person's review</summary>
+        <p>To request, correct, or delete your information you can also email <a href={`mailto:${c.get("container").env.PRIVACY_EMAIL}`}>{c.get("container").env.PRIVACY_EMAIL}</a>; see <a href="/privacy">how we handle your information</a>.</p>
+        <form method="post" action={`/c/status/${app.statusToken}/privacy`} class="card">
+          <label for="pk" class="flush">What would you like?</label>
+          <select id="pk" name="kind" required>
+            <option value="access">Send me a copy of my information</option>
+            <option value="correct">Correct something in my information</option>
+            <option value="delete">Delete my information</option>
+            <option value="human_review">Have a person review my application</option>
+          </select>
+          <label for="pd">Details (optional)</label>
+          <textarea id="pd" name="details" rows={3} maxlength={2000} placeholder="For example: my phone number is wrong, it should be ..."></textarea>
+          <p class="notice">Requests made from this page are verified by the link itself. We confirm receipt and completion by email. Deleting keeps only what the law requires, without your name or contact details. A person handles every request; nothing is decided by software.</p>
+          <button class="btn secondary" type="submit">Send request</button>
+        </form>
+      </details>
+      <p class="foot"><a href="/privacy">How we handle your information</a></p>
     </Layout>,
   );
 });
@@ -989,9 +1008,11 @@ function AiLine(props: { companyName: string }) {
 
 /**
  * Every page of the conversation: the AI line, the company and the job, the page, the line that says an answer is on its
- * way (empty until a button is pressed), the AI notice, the privacy link, and the script that stops a second press.
+ * way (empty until a button is pressed), the AI notice, the privacy link, and the script that stops a second press. The
+ * AI line on top already says it is the company's AI assistant, so the notice's full text (and `aiMore`, the role's own
+ * AI wording on the introduction) sits one click away under "How AI is used" (founder brief, 14 October 2026).
  */
-function ConversationPage(props: { view: ConversationView; title: string; children?: unknown }) {
+function ConversationPage(props: { view: ConversationView; title: string; aiMore?: string | null; children?: unknown }) {
   const { view } = props;
   return (
     <Layout title={`${props.title}: ${view.roleTitle} at ${view.companyName}`} extraCss={SCREEN_CSS}>
@@ -999,7 +1020,13 @@ function ConversationPage(props: { view: ConversationView; title: string; childr
       <p class="eyebrow">{view.companyName} · {view.roleTitle}</p>
       {props.children}
       <p class="sending" id="sending" role="status" />
-      {view.intro.aiNotice ? <p class="notice">{view.intro.aiNotice.text}</p> : null}
+      {view.intro.aiNotice || props.aiMore ? (
+        <details class="more">
+          <summary>How AI is used</summary>
+          {props.aiMore ? <p class="notice">{props.aiMore}</p> : null}
+          {view.intro.aiNotice ? <p class="notice">{view.intro.aiNotice.text}</p> : null}
+        </details>
+      ) : null}
       <p class="foot"><a href="/privacy">How we handle your information</a></p>
       <script nonce={currentNonce()} dangerouslySetInnerHTML={{ __html: SCREEN_BUSY_JS }} />
     </Layout>
@@ -1182,8 +1209,10 @@ function IntroPage(props: { view: ConversationView; applied: string | null }) {
   // press away, so it says that, and keeps whatever else the company wrote (polish list).
   const teamLine = forTheWeb(intro.humanAlternative);
   const disclosure = forTheWeb(intro.packetDisclosure);
+  // First view (founder brief, 14 October 2026): the four points and the three ways on. What each way does, how to
+  // answer, and the role's own AI wording are one click away.
   return (
-    <ConversationPage view={view} title="Before you start">
+    <ConversationPage view={view} title="Before you start" aiMore={disclosure || null}>
       {props.applied ? (
         <div class="card" role="status">
           <strong>Your application is sent.</strong>
@@ -1193,20 +1222,23 @@ function IntroPage(props: { view: ConversationView; applied: string | null }) {
       <h1>{intro.title}</h1>
       <p class="lead">{intro.disclosure}</p>
       <ul class="points">
-        <li><Icon name="people" /><span>It is a conversation, not a test. There are no trick questions: answer in your own words, as briefly as you like.</span></li>
+        <li><Icon name="people" /><span>It is a conversation, not a test. There are no trick questions.</span></li>
         <li><Icon name="clock" /><span>About {intro.questions} {intro.questions === 1 ? "question" : "questions"} and {intro.minutes} minutes, one question at a time.</span></li>
         <li><Icon name="check" /><span>You can skip any question, or stop and come back later: this page keeps your place.</span></li>
-        <li><Icon name="eye" /><span>It helps the hiring team at {view.companyName} learn about your work beyond your resume. Your answers go to them, and people decide.</span></li>
+        <li><Icon name="eye" /><span>It helps the hiring team at {view.companyName} learn about your work. People decide.</span></li>
       </ul>
       {teamLine ? <p class="pre">{teamLine}</p> : null}
-      <p>Would you rather talk to a person? {PERSON_ON_THE_WEB}</p>
       <div class="actions">
         <form method="post" action={`${base}/start`}><button class="btn" type="submit">Start</button></form>
         <form method="post" action={`${base}/later`}><button class="btn secondary" type="submit">Do this later</button></form>
         <a class="btn secondary" href={`${base}/person`}>I'd rather talk to a person</a>
       </div>
-      <p class="meta">"Do this later" emails you the link. "I'd rather talk to a person" lets you send your application without the conversation, or have a person contact you.</p>
-      {disclosure ? <p class="notice">{disclosure}</p> : null}
+      <details class="more">
+        <summary>More about this conversation</summary>
+        <p>Would you rather talk to a person? {PERSON_ON_THE_WEB}</p>
+        <p class="meta">"Do this later" emails you the link. "I'd rather talk to a person" lets you send your application without the conversation, or have a person contact you.</p>
+        <p class="meta">Answer in your own words, as briefly as you like. The conversation helps the team learn about your work beyond your resume, and your answers go to them.</p>
+      </details>
     </ConversationPage>
   );
 }
@@ -1290,8 +1322,13 @@ function ReviewPage(props: { view: ConversationView; changed: string | null; err
     <ConversationPage view={view} title="Check your answers">
       <Progress at={view.total} total={view.total} text={`All ${view.total} questions done`} />
       <h1>Check your answers</h1>
-      <p class="lead">This is what you told the assistant. The hiring team sees your answers only once you send them. Change any answer you like, then press Send.</p>
-      <p>If you do not press Send, the conversation closes a few days after your last answer or change, and your application goes to the hiring team without these answers. If we have not reminded you yet, we email you once before then.</p>
+      {/* Both halves stay true and in the page (founder brief, 14 October 2026): the lead says nothing goes before Send,
+          and what happens without Send is one click away. */}
+      <p class="lead">The hiring team sees your answers only once you send them. Change any answer you like, then press Send.</p>
+      <details class="more">
+        <summary>What if I don't press Send?</summary>
+        <p>If you do not press Send, the conversation closes a few days after your last answer or change, and your application goes to the hiring team without these answers. If we have not reminded you yet, we email you once before then.</p>
+      </details>
       {props.changed && items.some((i) => i.key === props.changed) ? <div class="card" role="status"><strong>Your answer is changed.</strong></div> : null}
       <ErrorNote code={props.error} />
       <ol class="answers">{items.map((item, i) => <AnswerItem item={item} n={i + 1} base={base} />)}</ol>
@@ -1384,7 +1421,7 @@ function PersonPage(props: { view: ConversationView }) {
     <ConversationPage view={view} title="Talk to a person instead">
       <p class="back"><a href={base}><Icon name="arrow-left" />Back to the conversation</a></p>
       <h1>Talk to a person instead</h1>
-      <p class="lead">That is fine. Choose whichever suits you. Anything you have answered so far is not sent to the hiring team.</p>
+      <p class="lead">That is fine. Anything you have answered so far is not sent to the hiring team.</p>
       <div class="paths">
         <section class="card" aria-labelledby="path-send">
           <h2 id="path-send">Send my application as it is</h2>

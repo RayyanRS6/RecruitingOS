@@ -1,7 +1,7 @@
 import type { NotifyCadence } from "@ros/contracts";
 
 /**
- * Email alerts and the history of updates (plan B3): the words Setup's "Email alerts" card and the Updates page use,
+ * Email alerts and the history of updates (plan B3): the words Settings' "Email alerts" card and the Updates page use,
  * kept out of the pages so they can be checked without a browser.
  */
 
@@ -34,10 +34,10 @@ export function digestTimeText(d: DigestTime): string {
 
 /** What a change of setting did, as a toast. */
 export function cadenceToast(label: string, cadence: NotifyCadence, d: DigestTime): { title: string; detail: string } {
-  if (cadence === "immediate") return { title: `${label}: emailed as it happens.`, detail: "One short email for each update, with the role and a link." };
+  if (cadence === "immediate") return { title: `${label}: emailed as it happens.`, detail: "One short email for each update, with the job and a link." };
   if (cadence === "daily") return { title: `${label}: in your daily summary.`, detail: `It arrives at ${hourText(d.hour)}, ${zoneText(d.timezone)}.` };
   if (cadence === "weekly") return { title: `${label}: in your weekly summary.`, detail: `It arrives on ${d.weekday} at ${hourText(d.hour)}, ${zoneText(d.timezone)}.` };
-  return { title: `${label}: no emails.`, detail: "You still see these on Today and in your updates." };
+  return { title: `${label}: no emails.`, detail: "You still see these on Home and in your updates." };
 }
 
 /** How many updates one request to mark read may carry (the API's limit). */

@@ -9,7 +9,9 @@ import { ClosingMessageCard } from "../../components/ClosingMessage";
 import { closeRoleToast, type PanelStep } from "../../talent-actions";
 import { useCompanyTimeZone } from "../../components/use-company-time-zone";
 import { hireConfirmText, hireFollowUpView, hireToast, keepWarmToast, offerAnswerToast, offerDateBounds, offerMadeToast, offerNote, offerStepText, waitingOnCandidateText } from "../../hiring";
+import { firstSentence } from "./helpers";
 import { useDraft, useFocusOnMount, useRefreshCandidate } from "./hooks";
+import { Why } from "./why";
 
 /**
  * Interviews to hire on the candidate panel (plan Wave H; founder decision Q29): what comes after a finalist (an offer
@@ -23,7 +25,8 @@ export function FinalistCard({ a, setStep }: { a: ApplicationDetail; setStep: (s
   const first = a.candidate.firstName;
   return (
     <Card needsYou title={`${first} is a finalist: what next?`}>
-      <p className="small" style={{ color: "var(--ink-2)" }}>Make the offer yourself, by phone or in writing, then record it here; the app never writes or sends an offer. When they accept, record the hire. Nothing here is sent to {first}.</p>
+      <p className="small" style={{ color: "var(--ink-2)" }}>Make the offer yourself, then record it here.</p>
+      <Why>Make the offer yourself, by phone or in writing, then record it here; the app never writes or sends an offer. When they accept, record the hire. Nothing here is sent to {first}.</Why>
       <div className="row" style={{ marginTop: 10 }}>
         <Button size="sm" variant="primary" onClick={() => setStep("offer")} title="Records the day and an optional private note; nothing is sent">Offer made</Button>
         <Button size="sm" onClick={() => setStep("hire")}>They accepted: hire</Button>
@@ -56,10 +59,11 @@ export function OfferStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId
   const valid = !!madeOn && madeOn <= bounds.max;
   return (
     <Card needsYou lift title="Offer made">
-      <p className="small" style={{ color: "var(--ink-2)" }}>{offerStepText(a.candidate.firstName)}</p>
+      <p className="small" style={{ color: "var(--ink-2)" }}>Record the day you made it. Nothing is sent to {a.candidate.firstName}.</p>
+      <Why>{offerStepText(a.candidate.firstName)}</Why>
       <div className="stack" style={{ gap: 8, marginTop: 10 }}>
         <Field label="The day you made the offer" htmlFor="offer-day"><input ref={first} id="offer-day" className="input" type="date" max={bounds.max} value={madeOn} onChange={(e) => setMadeOn(e.target.value)} /></Field>
-        <Field label="Private note (kept internally, optional)" htmlFor="offer-note" hint="For your team only, for example what was agreed to follow up on. Never sent to the candidate; no pay, tax or bank details are asked for."><textarea id="offer-note" className="textarea" rows={2} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+        <Field label="Private note (kept internally, optional)" htmlFor="offer-note" hint="Only your team sees it. No pay, tax or bank details."><textarea id="offer-note" className="textarea" rows={2} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
         <div className="row">
           <Button variant="primary" size="sm" disabled={!valid} loading={record.isPending} onClick={() => record.mutate()}>Record the offer</Button>
           <Button variant="quiet" size="sm" onClick={onClose}>Cancel</Button>
@@ -87,9 +91,11 @@ export function WaitingOnCandidateCard({ a, roleId, onAccepted }: { a: Applicati
   });
   const mayRecord = a.allowedActions.includes("record_outcome");
   const privateNote = offerNote(a);
+  const words = firstSentence(waitingOnCandidateText(a));
   return (
     <Card needsYou title={`Waiting on ${a.candidate.firstName}'s answer`}>
-      <p className="small" style={{ color: "var(--ink-2)" }}>{waitingOnCandidateText(a)}</p>
+      <p className="small" style={{ color: "var(--ink-2)" }}>{words.line}</p>
+      {words.rest ? <Why>{words.rest}</Why> : null}
       {privateNote ? <p className="small muted" style={{ marginTop: 4 }}>Your note with the offer (kept internally): {privateNote}</p> : null}
       {!mayRecord ? <p className="small muted" style={{ marginTop: 6 }}>{a.blockedReasons.record_outcome ?? "Your role can't record their answer."}</p> : answer ? (
         <div className="stack" style={{ gap: 8, marginTop: 10 }}>
@@ -199,7 +205,8 @@ export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail
   const valid = !!startDate;
   return (
     <Card needsYou lift title={`Hire ${name}`}>
-      <p className="small muted">You record it with your name; the platform never makes or sends an offer, and it asks for no pay, tax, identity or banking details.</p>
+      <p className="small" style={{ color: "var(--ink-2)" }}>Recorded with your name. Nothing is sent to anyone.</p>
+      <Why>You record it with your name; the platform never makes or sends an offer, and it asks for no pay, tax, identity or banking details.</Why>
       <div className="stack" style={{ gap: 8, marginTop: 8 }}>
         <Field label="Start date (agreed with them)" htmlFor="hire-start"><input ref={first} id="hire-start" className="input" type="date" value={startDate} onChange={(e) => { setStartDate(e.target.value); setConfirming(false); }} /></Field>
         <Field label="The day they accepted the offer (optional)" htmlFor="hire-accepted"><input id="hire-accepted" className="input" type="date" max={latestAccepted} value={acceptedOn} onChange={(e) => { setAcceptedOn(e.target.value); setConfirming(false); }} /></Field>

@@ -56,20 +56,119 @@ const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(create
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/\s+/g, " ");
 const panel = (qc: QueryClient, opts: { tab?: string; step?: string | null } = {}) => render(qc, createElement(CandidatePanel, { id: "a1", roleId: "r1", roleTitle: "Dental Hygienist", tab: (opts.tab ?? "overview") as never, onTab: () => undefined, step: (opts.step ?? null) as never, onStep: () => undefined, ids: ["a1"], onGo: () => undefined, onClose: () => undefined, composeOnOpen: false }));
 
+describe("the candidate panel's Overview, the Kanvis way (Wave S1)", () => {
+  const scored = detail({
+    matchScore: {
+      score: 82, band: "high", bandLabel: "High", coverage: { known: 2, total: 3, words: "Based on 2 of 3 requirements" },
+      breakdown: [
+        { key: "c1", label: "Perio charting", mustHave: false, importance: "essential", weightPct: 40, pctMet: 50, pointsLost: 18, finding: "Partly shown", source: "resume", quote: "some perio charting", unquoted: false },
+        { key: "mh_1", label: "Active CA RDH license", mustHave: true, importance: null, weightPct: 60, pctMet: 100, pointsLost: 0, finding: "Shown", source: "resume", quote: "RDH since 2019", unquoted: false },
+      ],
+      unknown: [{ key: "mh_2", label: "Saturday availability", mustHave: true, importance: null }], fullMarks: 1, missingMustHave: [], capped: false, confidence: "high", basedOn: "resume", packetVersion: 2,
+    },
+    mustHaves: { total: 2, shown: 1, partly: 0, notShown: 0, unknown: 1, gaps: [], words: "Must-haves: 1 of 2 shown, 1 not yet known" },
+    placement: { column: "shortlist", state: "suggested", doneLabel: null, confident: true, needsYourEye: null, reason: "Strong match", nextStep: { kind: "interview", label: "Interview them", reason: "Strong on every must-have shown. Ask about Saturdays." }, suggestedAction: "shortlist", declineReason: null },
+    assessments: [{
+      id: "as1", kind: "triage", overall: "strong", confidence: "high", createdAt: daysAgo(9),
+      result: {
+        summary: "Strong on the license and patient care.", recommendation: "screen", rationale: "Read from the résumé.",
+        strengths: [1, 2, 3, 4].map((n) => ({ claim: `Strength ${n}`, evidence: { source: "resume", quote: `quote ${n}` } })),
+        concerns: [{ claim: "Little perio charting", evidence: { source: "resume", quote: "some perio charting" } }],
+        unknowns: [{ question: "Can they work Saturdays?", whyItMatters: "The office opens Saturdays" }],
+      },
+    }],
+    timeline: [{ type: "application.triaged", occurredAt: daysAgo(9), actor: { kind: "agent", id: "triage" }, payload: { recommendation: "screen" } }],
+  });
+
+  it("leads with the verdict, the next step with its one button, then strengths and concerns; the breakdown one click away", () => {
+    const html = panel(client([scored]));
+    const t = text(html);
+    const at = (s: string) => html.indexOf(s);
+    expect(at("Against your must-haves")).toBeGreaterThan(-1);
+    expect(at("Against your must-haves")).toBeLessThan(at("Suggested next step"));
+    expect(at("Suggested next step")).toBeLessThan(at(">Strengths<"));
+    expect(at(">Strengths<")).toBeLessThan(at("<summary>Full breakdown</summary>"));
+    expect(at("<summary>Full breakdown</summary>")).toBeLessThan(at("Contact: "));
+    // the verdict: the score, how sure the AI was, and one line on the must-haves
+    expect(t).toContain("High confidence");
+    expect(t).toContain("1 of 2 must-haves shown · 1 not known yet");
+    // the next step: one line, its one button (the stage button's own step), the rest under "Why"
+    expect(t).toContain("Interview them · Strong on every must-have shown.");
+    expect(html).toMatch(/<button[^>]*>Approve an interview<\/button>/);
+    expect(t).toContain("Why Ask about Saturdays.");
+    // three strengths at most, each with their words one click away; the rest counted
+    expect(t).toContain("Strength 3");
+    expect(html).toContain("<summary>Their words</summary>");
+    expect(t).toContain("1 more under Full breakdown.");
+    expect(t).toContain("Little perio charting");
+  });
+
+  it("keeps everything else under Full breakdown: the bars, what is not known yet, the AI review with its flag, and the eligibility answers", () => {
+    const html = panel(client([scored]));
+    const more = html.slice(html.indexOf("<summary>Full breakdown</summary>"));
+    const t = text(more);
+    expect(t).toContain("How the score was worked out");
+    expect(t).toContain("Based on 2 of 3 requirements, from the AI review of the résumé.");
+    expect(t).toContain("What cost points");
+    expect(t).toContain("1 requirement not known yet");
+    expect(t).toContain("How sure the AI is");
+    expect(t).toContain("Read against version 2 of the job details, the current one.");
+    expect(t).toContain("A person always decides.");
+    expect(t).toContain("AI review: the résumé");
+    expect(t).toContain("Strength 4");
+    expect(t).toContain("Can they work Saturdays?");
+    expect(more).toContain('aria-label="Something wrong with this assessment?"');
+    expect(t).toContain("Eligibility answers");
+  });
+
+  it("says contact in one line with consent and source behind a click, and links to all activity instead of repeating it", () => {
+    const html = panel(client([scored]));
+    const t = text(html);
+    expect(t).toContain("Contact: maria@example.com · No phone · Tustin, CA");
+    expect(html).toContain("<summary>Consent and source</summary>");
+    expect(t).toContain("Applied through careers page");
+    expect(t).toContain("See all activity");
+    expect(t).not.toContain("Recent activity");
+    expect(t).toContain("Bring in a recruiter");
+    // the whole record stays on the History tab, in the glossary's words
+    expect(text(panel(client([scored]), { tab: "history" }))).toContain("AI review of the résumé: Worth a screening chat");
+  });
+
+  it("never promises a review in a minute when none could be made", () => {
+    const t = text(panel(client([detail({ matchScore: null })])));
+    expect(t).toContain("AI review of the résumé");
+    expect(t).toContain("We could not assess this application automatically; please review it yourself.");
+    expect(t).toContain("No match score: the AI review could not be made, so read this one yourself.");
+    expect(t).not.toContain("a minute or two");
+  });
+});
+
 describe("telling a candidate the decision (Wave G)", () => {
   const declined = detail({ stage: "rejected", stageLabel: "Not moving forward", group: "not_moving_forward", ownerStage: "not_moving_forward", ownerStageLabel: "Not moving forward", toldState: "not_told", rejectReason: "not_a_match_skills", rejectedAt: daysAgo(1), stageChangedAt: daysAgo(1), allowedActions: ["send_decision", "told_in_person"] });
 
-  it("the 'not told yet' card says the decision is private, and on which day the safety net acts", () => {
+  it("the 'not told yet' card says the decision is private, and in one short line on which day the safety net acts", () => {
     const t = text(panel(client([declined])));
     expect(t).toContain("Maria has not been told yet");
     expect(t).toContain("Your decision is private: nothing has been sent to Maria.");
-    expect(t).toMatch(/Safety net: the standard message goes to Maria by itself on \w+day, \w+ \d{1,2}, unless you send a message or mark it told before then\./);
+    expect(t).toMatch(/If nobody tells Maria first, the standard message goes by itself on \w+day, \w+ \d{1,2}\./);
     expect(t).toContain("Send message");
     expect(t).toContain("I told them myself");
   });
 
   it("under 'Ask me first' the safety net brings in a recruiter instead, and sends nothing", () => {
-    expect(text(panel(client([{ ...declined, declineMessage: "needs_approval" }])))).toMatch(/an ITS recruiter is brought in to make sure they are\. Nothing is sent by itself\./);
+    expect(text(panel(client([{ ...declined, declineMessage: "needs_approval" }])))).toMatch(/If nobody tells Maria first, an ITS recruiter is brought in on \w+day, \w+ \d{1,2}\. Nothing is sent by itself\./);
+  });
+
+  it("the decline step says it is private and names the safety net's day before the click; the rest one click away (D-03 A)", () => {
+    const maria = detail({ allowedActions: ["reject"] });
+    const html = panel(client([maria]), { step: "decline" });
+    const t = text(html);
+    expect(t).toContain("Private: nothing is sent to them now.");
+    expect(t).toMatch(/If nobody tells them first, the standard message goes by itself on \w+day, \w+ \d{1,2}\./);
+    // the whole explanation is still there, under "What happens next"
+    expect(html).toMatch(/<details class="more"[^>]*><summary>What happens next<\/summary>/);
+    expect(t).toContain("Not moving forward is your decision, recorded with your reason.");
+    expect(t).toContain("Confirm: not moving forward");
   });
 
   it("a waiting approval names the chosen wording and the personal line to the approver", () => {
@@ -197,16 +296,19 @@ describe("closing a role and its one closing message (Q30)", () => {
   it("the close card lists who is still in process before anything is closed", () => {
     const apps = { applications: [{ id: "a1", stage: "triaged", ownerStage: "new", ownerStageLabel: "New", candidate: { id: "c1", name: "Maria Reyes" } }, { id: "a2", stage: "rejected", ownerStage: "not_moving_forward", ownerStageLabel: "Not moving forward", candidate: { id: "c2", name: "Luis Ortega" } }, { id: "a3", stage: "finalist", ownerStage: "interviewing", ownerStageLabel: "Interviewing", candidate: { id: "c3", name: "Ana Holt" } }], counts: {} };
     const t = text(render(client([], [[["applications", "r1"], apps]]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled_outside_platform", mayTell: true, onClose: () => undefined })));
-    expect(t).toContain("Close this role");
+    expect(t).toContain("Close this job");
+    expect(t).toContain("Confirm and close the job");
     expect(t).toContain("Still in process");
     expect(t).toContain("Maria Reyes");
     expect(t).toContain("Ana Holt");
     expect(t).not.toContain("Luis Ortega");
     expect(t).toContain("These 2 people move to your talent pool, privately");
+    // rule 8 (D-03 A): "private" also says the safety net, with the day it acts if they close now
+    expect(t).toMatch(/nobody is told the decision yet\. If nobody tells them first, the closing message goes by itself on \w+, \w+ \d+ \(or an ITS recruiter is brought in, if your settings say so\)\./);
     expect(t).toContain("Next you see the one closing message for all of them before anything goes.");
     // HR may close the role but not tell candidates: told who sends the message, never promised a Send of their own
     const hr = text(render(client([], [[["applications", "r1"], apps]]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled_outside_platform", mayTell: false, onClose: () => undefined })));
-    expect(hr).toContain("An owner, admin, hiring manager or recruiter then sends them the one closing message; it waits on their Today.");
+    expect(hr).toContain("An owner, admin, hiring manager or recruiter then sends them the one closing message; it waits on their Home page.");
     expect(hr).not.toContain("Next you see the one closing message");
   });
 
@@ -221,7 +323,7 @@ describe("closing a role and its one closing message (Q30)", () => {
     expect(t).toContain("Send to 2 people");
     expect(t).toContain("Not now");
     // "Not now" does not promise that nothing ever goes: the safety net (Q27) sends it by itself under these settings
-    expect(t).toContain("Not now leaves them on Today as not told yet. If nobody tells them within 5 working days, the closing message goes to them by itself.");
+    expect(t).toContain("Not now leaves them on your Home page as not told yet. If nobody tells them within 5 working days, the closing message goes to them by itself.");
     expect(t).not.toContain("nothing is sent until someone sends it");
     const asked = text(render(client([]), createElement(ClosingMessageCard, { roleId: "r1", preview: { ...preview, policy: "needs_approval" } as never, onDone: () => undefined })));
     expect(asked).toContain("Nothing is sent by itself: if nobody tells them within 5 working days, an ITS recruiter is brought in to make sure they are told.");

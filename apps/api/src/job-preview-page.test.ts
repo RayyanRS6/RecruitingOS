@@ -83,8 +83,9 @@ describe("the job-page preview (plan D1)", () => {
     expectPreview(r, html);
     expect(html).toContain("<strong>Not public yet.</strong> Preview of version 1: not public.");
     // what the page could still show about the company (plan D10)
-    expect(html).toContain("<li>There is no text about your company yet. Draft and approve it in Setup, and it shows on every job page.</li>");
-    expect(html).toContain("<li>There is no logo yet. Upload one in Setup; until then the page shows your initials.</li>");
+    // the staff glossary (14 October 2026): Setup is called Settings on screen
+    expect(html).toContain("<li>There is no text about your company yet. Draft and approve it in Settings, and it shows on every job page.</li>");
+    expect(html).toContain("<li>There is no logo yet. Upload one in Settings; until then the page shows your initials.</li>");
     expect(html).toContain("<title>Preview: ");
     expect(html).toContain("Careers at Preview Dental");
     expect(html).toMatch(/<a class="btn go head-apply" href="\/api\/v1\/roles\/[^"]+\/preview\?version=1&view=apply"><span class="go-fill" aria-hidden="true"><\/span><span class="go-icon"><svg class="icon"[^>]*>.*?<\/svg><\/span><span class="go-text">Apply now<\/span><\/a>/);

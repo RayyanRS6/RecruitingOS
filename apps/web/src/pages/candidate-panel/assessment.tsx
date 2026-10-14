@@ -12,6 +12,7 @@ import { APPLIED_IN_ONE_VISIT, DECLINED_WORDS, EDITED_WORDS, SCREEN_STATUS_LABEL
 import { actionToast } from "../../talent-actions";
 import { REC_LABEL } from "./helpers";
 import { competencyChip, importanceTag, orderCompetencyFindings, orderRequirementFindings, requirementChip, skillLabels } from "./match-view";
+import { Why } from "./why";
 
 /**
  * The evidence on the candidate panel (plan A10): the assistant's readings with every claim's source and quote, the
@@ -39,7 +40,7 @@ const FLAG_KINDS: Array<[string, string]> = [
 ];
 
 /** Said before a team member's flag goes to ITS: what the recruiter will see, and for how long (Q31: say the real access). */
-export const FLAG_SHARE = `This asks an ITS recruiter to check the reading. Once they pick it up they see ${accessWords("application")}. ${ACCESS_LIMITS}`;
+export const FLAG_SHARE = `This asks an ITS recruiter to check the AI review. Once they pick it up they see ${accessWords("application")}. ${ACCESS_LIMITS}`;
 
 /**
  * One-click flag with the founder context's taxonomy (§23). It records; it never retrains anything on its own. A team
@@ -69,7 +70,7 @@ function FlagAssessment({ applicationId, assessmentId }: { applicationId: string
         <Dialog
           open
           onClose={() => setKind("")}
-          title="Ask an ITS recruiter to check this reading?"
+          title="Ask an ITS recruiter to check this AI review?"
           sub={`You chose: ${label}.`}
           footer={<><Button variant="ghost" onClick={() => setKind("")} disabled={flag.isPending}>Cancel</Button><Button variant="primary" loading={flag.isPending} onClick={() => flag.mutate(kind)}>Send for a check</Button></>}
         >
@@ -95,12 +96,12 @@ function AskInScreen({ detail, roleId, unknowns }: { detail: ApplicationDetail; 
   });
   if (!unknowns) return null;
   const open = openScreenOf(detail);
-  if (open) return <p className="small muted" style={{ marginTop: 6 }}>{open.progress.focusQuestions?.length ? "A screen that starts with these questions is already open; the answers appear here once they finish it." : "A screen is already open; these questions are part of its follow-ups, so there is nothing more to send."}</p>;
+  if (open) return <p className="small muted" style={{ marginTop: 6 }}>{open.progress.focusQuestions?.length ? "A screening chat that starts with these questions is already open; the answers appear here once they finish it." : "A screening chat is already open; these questions are part of its follow-ups, so there is nothing more to send."}</p>;
   if (!detail.allowedActions.includes("invite_screen")) return null;
   return (
     <div className="row" style={{ marginTop: 8 }}>
-      <Button size="sm" variant="primary" loading={ask.isPending} onClick={() => ask.mutate()} title="Invites them to a short web screen that starts with these questions">Ask about this in a screen</Button>
-      <span className="small muted">A short web screen, by email, that opens with {unknowns === 1 ? "this question" : "these questions"}.</span>
+      <Button size="sm" variant="primary" loading={ask.isPending} onClick={() => ask.mutate()} title="Invites them to a short web chat that starts with these questions">Ask about this in a screening chat</Button>
+      <span className="small muted">Sent by email; it starts with {unknowns === 1 ? "this question" : "these questions"}.</span>
     </div>
   );
 }
@@ -110,11 +111,11 @@ export function NoAssessmentCard({ detail }: { detail: ApplicationDetail }) {
   const look = closerLook(detail);
   if (!look.assessmentUnavailable) return null;
   return (
-    <Card needsYou title="Résumé assessment" className="assessment">
+    <Card needsYou title="AI review of the résumé" className="assessment">
       <div className="row"><Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip></div>
       <p style={{ marginTop: 8 }}>{ASSESSMENT_UNAVAILABLE_TEXT}</p>
-      <p className="small muted" style={{ marginTop: 6 }}>Nothing is hidden: the résumé, the answers and the messages are on this panel. The assistant's answer was not usable after two tries; ITS has the details.</p>
       {resumeUnreadable(detail) ? <p className="small" style={{ color: "var(--needs-you)", marginTop: 6 }}>{RESUME_UNREADABLE_TEXT}</p> : null}
+      <Why>Nothing is hidden: the résumé, the answers and the messages are on this panel. The assistant's answer was not usable after two tries; ITS has the details.</Why>
     </Card>
   );
 }
@@ -132,12 +133,58 @@ export function ScorecardUnavailableCard({ detail, roleId }: { detail: Applicati
   const state = scorecardUnavailable(detail);
   if (!state.unavailable) return null;
   return (
-    <Card needsYou title="Screen scorecard" className="assessment">
+    <Card needsYou title="AI review of the screening chat" className="assessment">
       <div className="row"><Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip></div>
       <p style={{ marginTop: 8 }}>{SCORECARD_UNAVAILABLE_TEXT}</p>
-      <p className="small muted" style={{ marginTop: 6 }}>Nothing is hidden: the whole conversation is on the Screen tab. {state.recruiterAsked ? "An ITS recruiter has been asked to look into it." : "ITS has the details."}</p>
       <div className="row" style={{ marginTop: 10 }}><AskRecruiter roleId={roleId} applicationId={detail.id} size="sm" /></div>
+      <Why>Nothing is hidden: the whole chat is on the Screening chat tab. {state.recruiterAsked ? "An ITS recruiter has been asked to look into it." : "ITS has the details."}</Why>
     </Card>
+  );
+}
+
+/** A claim's source the candidate wrote or said: its quote is "their words". */
+const THEIR_SOURCES = new Set(["resume", "application", "candidate_statement", "screen", "interview"]);
+
+type Point = AssessmentResult["strengths"][number];
+
+/**
+ * Strengths and concerns on the Overview (Wave S1): the latest AI review's first three of each as short bullets, each
+ * quote one click away. Every one of them, with its source, is in the AI review under "Full breakdown".
+ */
+export function StrengthsAndConcerns({ assessment }: { assessment: Assessment | null }) {
+  if (!assessment) return null;
+  const { strengths, concerns } = assessment.result;
+  if (!strengths.length && !concerns.length) return null;
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(220px, 100%), 1fr))", gap: "0 16px" }}>
+      <Points title="Strengths" items={strengths} />
+      <Points title="Concerns" items={concerns} />
+    </div>
+  );
+}
+
+function Points({ title, items }: { title: string; items: readonly Point[] }) {
+  const shown = items.slice(0, 3);
+  return (
+    <div className="match-section" style={{ marginTop: 10 }}>
+      <h3>{title}</h3>
+      {shown.length ? (
+        <ul className="small" style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 4 }}>
+          {shown.map((s, j) => (
+            <li key={j}>
+              {s.claim}
+              {s.evidence.quote ? (
+                <details className="more">
+                  <summary>{THEIR_SOURCES.has(s.evidence.source) ? "Their words" : "The source"}</summary>
+                  <span className="muted">"{s.evidence.quote}"</span>
+                </details>
+              ) : isUnquoted(s.evidence) ? <NoQuote /> : null}
+            </li>
+          ))}
+        </ul>
+      ) : <p className="small muted" style={{ margin: 0 }}>None recorded.</p>}
+      {items.length > shown.length ? <p className="small muted" style={{ margin: "4px 0 0" }}>{items.length - shown.length} more under Full breakdown.</p> : null}
+    </div>
   );
 }
 
@@ -158,7 +205,7 @@ export function AssessmentCard({ assessment, detail, roleId, labels, title }: { 
   const marked = look.checkedId === assessmentId;
   const reasons = result.confidenceReasons ?? [];
   return (
-    <Card title={title ?? (kind === "screen" ? "Screen scorecard" : "Résumé assessment")} className="assessment" needsYou={marked} aside={<span className="row"><span className="small muted">{new Date(createdAt).toLocaleDateString()}</span><FlagAssessment applicationId={detail.id} assessmentId={assessmentId} /></span>}>
+    <Card title={title ?? (kind === "screen" ? "AI review of the screening chat" : "AI review of the résumé")} className="assessment" needsYou={marked} aside={<span className="row"><span className="small muted">{new Date(createdAt).toLocaleDateString()}</span><FlagAssessment applicationId={detail.id} assessmentId={assessmentId} /></span>}>
       <div className="row"><Chip tone={overall === "strong" ? "good" : overall === "weak" ? "caution" : "accent"}>{overallLabel(overall)}</Chip><Chip tone={result.recommendation === "decline_recommended" ? "caution" : "neutral"}>{REC_LABEL[result.recommendation] ?? result.recommendation}</Chip><Chip>{confidence} confidence</Chip>{marked ? <Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip> : null}</div>
       {marked && look.inconsistent && look.reason ? <Alert tone="caution">{look.reason}</Alert> : null}
       <p style={{ marginTop: 8 }}>{result.summary}</p>
@@ -230,7 +277,7 @@ export function ScreenCard({ screen, open, action, questions = [], timeline = []
   const notes = screen.transcript.filter(isRecruiterNote).map((t) => ({ text: t.content, by: t.by ?? null, question: t.questionKey ? questions.find((q) => q.key === t.questionKey)?.question ?? null : null }));
   const counts = screen.answersShared === false ? "" : ` · ${answered} answered${skipped ? `, ${skipped} not answered by choice` : ""}${asked > answered + skipped ? `, ${asked - answered - skipped} asked` : ""}`;
   return (
-    <Card title="Screening conversation" aside={<div className="row">{origin ? <Chip tone={origin === APPLIED_IN_ONE_VISIT ? "good" : "neutral"}>{origin}</Chip> : null}<Chip>{screen.channel === "sms" ? "text + web" : "web chat"}</Chip><Chip tone={screen.status === "completed" ? "good" : screen.status === "human_requested" ? "needs" : screen.status === "expired" ? "caution" : "accent"}>{SCREEN_STATUS_LABEL[screen.status] ?? screen.status.replace(/_/g, " ")}</Chip></div>}>
+    <Card title="Screening chat" aside={<div className="row">{origin ? <Chip tone={origin === APPLIED_IN_ONE_VISIT ? "good" : "neutral"}>{origin}</Chip> : null}<Chip>{screen.channel === "sms" ? "text + web" : "web chat"}</Chip><Chip tone={screen.status === "completed" ? "good" : screen.status === "human_requested" ? "needs" : screen.status === "expired" ? "caution" : "accent"}>{SCREEN_STATUS_LABEL[screen.status] ?? screen.status.replace(/_/g, " ")}</Chip></div>}>
       <p className="small muted">{screen.invitedAt ? `${origin ? "Offered" : "Invited"} ${new Date(screen.invitedAt).toLocaleDateString()}` : ""}{screen.remindedAt ? ` · reminded ${new Date(screen.remindedAt).toLocaleDateString()}` : ""}{screen.completedAt ? ` · ${screen.status === "completed" ? "completed" : "closed"} ${new Date(screen.completedAt).toLocaleDateString()}` : ""}{counts}</p>
       {hidden ? <p className="small" style={{ marginTop: 8 }}>{hidden}</p> : null}
       {action}
@@ -273,7 +320,7 @@ export function ScreenCard({ screen, open, action, questions = [], timeline = []
       ) : null}
       {screen.transcript.length ? (
         <details style={{ marginTop: 8 }} open={open}>
-          <summary className="small">Read the conversation ({screen.transcript.length} messages)</summary>
+          <summary className="small">Read the chat ({screen.transcript.length} messages)</summary>
           <div className="stack" style={{ gap: 6, marginTop: 8 }}>
             {screen.transcript.map((t, i) => {
               const b = transcriptBubble(t);

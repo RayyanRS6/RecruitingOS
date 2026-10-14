@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ApplicationSummary } from "../../apps/web/src/api/client";
-import { ORDERS, READING, appliedWhen, applyView, defaultView, emptyText, fold, isStillApplying, matchesQuery, orderRows, readingCounts, readingOf, stageSummary, stillApplyingCount, stripItems, waitingOnYouCount, waitingText, type TalentView } from "../../apps/web/src/talent-list";
+import { ORDERS, READING, READING_FILTERS, ROW_CHIP_LIMIT, SAFETY_NET_NOTE, appliedWhen, applyView, defaultView, emptyText, fold, isStillApplying, jobCardFacts, matchesQuery, orderRows, readingCounts, readingOf, rowChips, stageSummary, stillApplyingCount, stripItems, stripParts, waitingOnYouCount, waitingText, type TalentView } from "../../apps/web/src/talent-list";
 
 /**
- * The Talent list (plan A3; founder decisions B2, B3 and B6): the stage strip, the reading chip, the filters, search and
- * the four orders. The AI reading's words only ever filter; the match score, worked out by code from the checked
- * findings, can order the list.
+ * The Candidates list (plan A3; founder decisions B2, B3 and B6; Wave S1): the stage strip and its "More stages", the
+ * chips on a row, the filters, search and the four orders, and the one line on each job of the Jobs page. The AI
+ * review's words only ever filter; the match score, worked out by code from the checked findings, can order the list.
  */
 let n = 0;
 function row(over: Partial<ApplicationSummary> & { name?: string; overall?: string } = {}): ApplicationSummary {
@@ -145,8 +145,63 @@ describe("the strip and the row's words", () => {
     expect(waitingText({ group: "in_process", daysInStage: 9 })).toBeNull();
   });
 
+  it("shows All, New, Shortlist, Interviewing, Hired and Not moving forward, and any stage someone is at; the rest wait under More stages (Wave S1)", () => {
+    const counts = { total: 6, byOwnerStage: { new: 2, longlist: 0, shortlist: 1, interviewing: 0, cancelled: 2, on_hold: 0, offer: 1, hired: 0, not_moving_forward: 0 } };
+    const parts = stripParts(counts, "all");
+    expect(parts.shown.map((i) => `${i.label} ${i.count}`)).toEqual(["All 6", "New 2", "Shortlist 1", "Interviewing 0", "Cancelled 2", "Offer 1", "Hired 0", "Not moving forward 0"]);
+    // still clickable from the menu, with their counts, in strip order
+    expect(parts.more.map((i) => `${i.label} ${i.count}`)).toEqual(["Longlist 0", "On hold 0"]);
+    // the column being shown stays on the strip even when nobody is in it (a link opened it, or someone just left it)
+    expect(stripParts(counts, "on_hold").shown.map((i) => i.id)).toContain("on_hold");
+    expect(stripParts(counts, "on_hold").more.map((i) => i.id)).toEqual(["longlist"]);
+    // nothing is lost: the two parts together are the whole strip
+    expect([...parts.shown, ...parts.more].map((i) => i.id).sort()).toEqual(stripItems(counts).map((i) => i.id).sort());
+    expect(stripParts(null, "all").shown.map((i) => i.id)).toEqual(["all", "new", "shortlist", "interviewing", "hired", "not_moving_forward"]);
+  });
+
+  const words = { stillApplying: "Sent the form and answering now", onItsWay: "Message on its way", lowConfidence: "Low confidence: read it yourself" };
+  it("lists a row's chips most pressing first; the page shows two and counts the rest", () => {
+    expect(ROW_CHIP_LIMIT).toBe(2);
+    const busy = row({ overall: "strong", tags: ["Check eligibility"], toldState: "not_told", evidence: { ...row().evidence!, lowConfidence: true } });
+    expect(rowChips(busy, words).map((c) => c.label)).toEqual(["Check eligibility", "Not told yet", "Strong match", "Check"]);
+    // "Check" is short on screen; its full words are its title (and what a screen reader hears)
+    expect(rowChips(busy, words).at(-1)).toEqual({ key: "low", label: "Check", tone: "caution", title: "Low confidence: read it yourself", kind: "chip" });
+    // "Not told yet" carries the day-5 safety net (founder decision D-03); a message waiting for approval does not
+    expect(rowChips(busy, words).find((c) => c.key === "told")?.title).toBe(SAFETY_NET_NOTE);
+    expect(rowChips(row({ toldState: "not_told", decisionMessageWaiting: true }), words).map((c) => [c.label, c.title])).toEqual([["Message waiting for approval", undefined]]);
+    expect(rowChips(row({ toldState: "queued" }), words).map((c) => c.label)).toEqual(["Message on its way"]);
+    expect(rowChips(row({ stillApplying: true, overall: "potential" }), words).map((c) => c.label)).toEqual(["Still applying", "Potential match"]);
+    // a closer look already says it: no second "Check"
+    const closer = row({ overall: "strong" });
+    closer.evidence = { ...closer.evidence!, needsCloserLook: true, lowConfidence: true };
+    expect(rowChips(closer, words).map((c) => c.label)).toEqual(["Needs a closer look"]);
+    expect(rowChips(row({}), words)).toEqual([]);
+  });
+
+  it("says the safety net in one short line for lists that know neither the day nor the setting (D-03)", () => {
+    expect(SAFETY_NET_NOTE).toBe("If nobody tells them within 5 working days, the standard message goes by itself (or an ITS recruiter is brought in, if your settings say so).");
+  });
+
+  it("calls the match filter's first choice All matches, never 'Any reading'", () => {
+    expect(READING_FILTERS[0]).toEqual({ id: "any", label: "All matches" });
+    expect(READING_FILTERS.map((f) => f.label).join(" ")).not.toMatch(/reading/i);
+  });
+
+  it("gives each job on the Jobs page one line: new, applicants, to review, days open", () => {
+    const job = { counts: { total: 12, waiting_on_you: 3 }, stageCounts: { new: 5 } as never, countsHidden: false, daysOpen: 9 };
+    expect(jobCardFacts(job)).toBe("5 new · 12 applicants · 3 to review · 9 days open");
+    expect(jobCardFacts({ ...job, counts: { total: 1 }, stageCounts: { new: 1 } as never, daysOpen: 1 })).toBe("1 new · 1 applicant · 1 day open");
+    expect(jobCardFacts({ counts: { total: 0 }, countsHidden: false, daysOpen: null })).toBe("Not posted yet");
+    // a count of nothing is left out, as on Home: never "0 new"
+    expect(jobCardFacts({ ...job, stageCounts: { new: 0 } as never })).toBe("12 applicants · 3 to review · 9 days open");
+    expect(jobCardFacts({ ...job, stageCounts: null as never, counts: { total: 4 } })).toBe("4 applicants · 9 days open");
+    // an interviewer's list has no counts
+    expect(jobCardFacts({ ...job, countsHidden: true })).toBe("9 days open");
+  });
+
   it("explains an empty list for the view chosen", () => {
     expect(emptyText(view(), 0).title).toBe("Nobody has applied yet");
+    expect(emptyText(view(), 0).body).toContain("The Share tab has the job's links");
     expect(emptyText(view({ query: "zed" }), 3).body).toMatch(/Nobody here matches "zed"/);
     expect(emptyText(view({ waiting: true }), 3).title).toBe("Nobody is waiting on you");
     expect(emptyText(view({ stage: "offer" }), 3).title).toBe("Nobody here");

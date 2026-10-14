@@ -75,8 +75,8 @@ function previewCompany(company: CompanyRow, container: Container): JobPageCompa
 function profileGaps(company: CompanyRow): string[] {
   const p = profileOf(company.settings);
   return [
-    ...(approvedAbout(company.settings) ? [] : ["There is no text about your company yet. Draft and approve it in Setup, and it shows on every job page."]),
-    ...(p.logo ? [] : ["There is no logo yet. Upload one in Setup; until then the page shows your initials."]),
+    ...(approvedAbout(company.settings) ? [] : ["There is no text about your company yet. Draft and approve it in Settings, and it shows on every job page."]),
+    ...(p.logo ? [] : ["There is no logo yet. Upload one in Settings; until then the page shows your initials."]),
   ];
 }
 

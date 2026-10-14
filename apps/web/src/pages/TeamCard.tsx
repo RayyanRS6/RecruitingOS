@@ -13,7 +13,7 @@ type Invitation = { id: string; email: string; role: string; name: string | null
 const ROLES: Array<{ value: string; label: string; help: string }> = [
   { value: "owner", label: "Owner", help: "Everything, including making other owners." },
   { value: "admin", label: "Admin", help: "Everything except the owner role." },
-  { value: "hiring_manager", label: "Hiring manager", help: "Runs hires: approves roles, decides on candidates. Owners and admins handle the job-board postings." },
+  { value: "hiring_manager", label: "Hiring manager", help: "Runs hires: approves jobs, decides on candidates. Owners and admins handle the job-board postings." },
   { value: "interviewer", label: "Interviewer", help: "Sees the interviews they are on and the candidates in them, and says whether each took place. Never sees pay." },
   { value: "hr", label: "HR", help: "Talent pool, offers and the team list. Cannot make anyone an admin or an owner." },
 ];
@@ -111,6 +111,8 @@ export function TeamCard({ myRole, myUserId, onReauthRequired }: { myRole: strin
                   <span className="row" style={{ flexWrap: "nowrap", minWidth: 0 }}><Avatar name={nameOf(m)} size="sm" /><span>{nameOf(m)}{self ? <span className="muted small"> (you)</span> : null} <span className="muted small">{m.email}</span></span></span>
                   <span className="row" style={{ gap: 6, flexWrap: "wrap" }}>
                     <Pill size="sm" tone={m.schedulable ? "good" : "caution"}>{m.calendar?.status === "live" ? `${m.calendar.provider} calendar` : m.availability ? "hours declared" : "no availability"}</Pill>
+                    {/* the way to one's own hours, on the Notifications tab (Settings follows the #hash to the card) */}
+                    {self && !m.schedulable ? <a className="small" href="#setup-availability">Set your hours</a> : null}
                     {canTouch ? (
                       <select className="select" aria-label={`Role of ${nameOf(m)}`} value={roleChange?.userId === m.userId ? roleChange.role : m.role} onChange={(e) => setRoleChange({ userId: m.userId, role: e.target.value })} disabled={update.isPending}>
                         {grantable(myRole).map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
@@ -130,7 +132,11 @@ export function TeamCard({ myRole, myUserId, onReauthRequired }: { myRole: strin
                 {removing === m.userId ? (
                   <Alert tone="critical">
                     <div className="stack" style={{ gap: 6 }}>
-                      <span>Remove {nameOf(m)} from the team? They lose access right away and are signed out everywhere. Their calendar connection is disconnected and its credential deleted. An interview they were going to run alone is cancelled (a candidate with a booked time is told) and you approve a new one with someone else; an interview others also run goes ahead with them. You will be told which ones. What they did stays in the record.</span>
+                      <span>Remove {nameOf(m)} from the team? They lose access right away and are signed out everywhere.</span>
+                      <details className="more">
+                        <summary>What else happens</summary>
+                        <span>Their calendar connection is disconnected and its credential deleted. An interview they were going to run alone is cancelled (a candidate with a booked time is told) and you approve a new one with someone else; an interview others also run goes ahead with them. You will be told which ones. What they did stays in the record.</span>
+                      </details>
                       <div className="row"><Button size="sm" variant="destructive" loading={update.isPending} onClick={() => update.mutate({ userId: m.userId, body: { status: "removed" } })}>Remove {nameOf(m)}</Button><Button size="sm" variant="quiet" onClick={() => setRemoving(null)}>Keep them</Button></div>
                     </div>
                   </Alert>
@@ -165,13 +171,23 @@ export function TeamCard({ myRole, myUserId, onReauthRequired }: { myRole: strin
             <Field label="Role" htmlFor="invrole"><select id="invrole" className="select" value={invite.role} onChange={(e) => setInvite({ ...invite, role: e.target.value })}>{grantable(myRole).map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}</select></Field>
             <Button type="submit" variant="primary" loading={sendInvite.isPending}>Invite</Button>
           </div>
-          <p className="small muted">{ROLES.find((r) => r.value === invite.role)?.help} They get one email with a link that works for seven days, and sign in with Google or Microsoft using that address.</p>
+          <p className="small muted">{ROLES.find((r) => r.value === invite.role)?.help}</p>
         </form>
       ) : (
-        <p className="small muted" style={{ marginTop: 12 }}>Owners, admins and HR invite people and change roles. Ask one of them to add someone or change a role.</p>
+        <p className="small muted" style={{ marginTop: 12 }}>Only owners, admins and HR invite people or change roles.</p>
       )}
       {inviteLink ? <p className="small muted" style={{ marginTop: 8 }}>Development mode: <a href={inviteLink}>invitation link</a></p> : null}
-      <p className="small muted" style={{ marginTop: 8 }}>Interviewers never see pay. Hiring managers can approve roles and decide on candidates. Only owners and admins can make someone an admin, and only an owner can make another owner; either needs a recent sign-in. The last owner cannot be removed.</p>
+      {/* Who can do what, and how an invitation works: one click away. */}
+      <details className="more" style={{ marginTop: 10 }}>
+        <summary>Who can do what</summary>
+        <div className="stack small muted" style={{ gap: 6 }}>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {ROLES.map((r) => <li key={r.value}><strong>{r.label}:</strong> {r.help}</li>)}
+          </ul>
+          <p style={{ margin: 0 }}>An invited person gets one email with a link that works for seven days, and signs in with Google or Microsoft using that address.</p>
+          <p style={{ margin: 0 }}>Interviewers never see pay. Hiring managers can approve jobs and decide on candidates. Only owners and admins can make someone an admin, and only an owner can make another owner; either needs a recent sign-in. The last owner cannot be removed.</p>
+        </div>
+      </details>
     </Card>
   );
 }

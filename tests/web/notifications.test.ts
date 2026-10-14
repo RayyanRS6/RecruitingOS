@@ -33,7 +33,7 @@ describe("the email alert choices", () => {
     expect(cadenceToast("Candidates", "immediate", d).title).toBe("Candidates: emailed as it happens.");
     expect(cadenceToast("Candidates", "daily", d).detail).toBe("It arrives at 8:00 AM, Chicago time.");
     expect(cadenceToast("Candidates", "weekly", d).detail).toBe("It arrives on Monday at 8:00 AM, Chicago time.");
-    expect(cadenceToast("Candidates", "off", d)).toEqual({ title: "Candidates: no emails.", detail: "You still see these on Today and in your updates." });
+    expect(cadenceToast("Candidates", "off", d)).toEqual({ title: "Candidates: no emails.", detail: "You still see these on Home and in your updates." });
   });
 });
 
