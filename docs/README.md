@@ -28,6 +28,19 @@ The current state of the product (what is built, what tests prove, what needs a 
 
 Release-1 production specification (14 September 2026, awaiting founder approval): [spec/README.md](spec/README.md). It begins with a decisions register of contradictions, open decisions, security risks, compliance questions, and simulated behavior; the ten documents that follow are the build contract for the first release.
 
+## Product audit and the Kanvis-inspired evolution (14 October 2026)
+
+A code-verified baseline of everything the product does today, a study of Kanvis (kanvis.me), and the plan for adding Kanvis-inspired flows without removing anything. Read in this order:
+
+| Document | What it settles |
+|---|---|
+| [product-audit.md](product-audit.md) | Architecture, routes, feature inventory, roles and permissions, journeys, data, integrations and AI, tests, known bugs, unknowns; detail in [audit/](audit/) (nine area files, the 364-row [feature inventory](audit/feature-inventory.md) and the [known bugs](audit/known-bugs.md)) |
+| [kanvis-reverse-engineering.md](kanvis-reverse-engineering.md) | What Kanvis does, recruiter and candidate journeys, interaction patterns, each claim labelled observed, inferred or unknown; the REA toolkit assessment |
+| [feature-comparison.md](feature-comparison.md) | Feature-by-feature matrix (164 rows), our strengths to preserve, conflicts, fix-first list |
+| [workflow-decisions.md](workflow-decisions.md) | Decisions waiting for the founder (batch 1: D-01 to D-05), later batches, and every decision already made |
+| [implementation-plan.md](implementation-plan.md) | Draft design and ordered backlog; decision-dependent parts wait for answers |
+| [regression-checklist.md](regression-checklist.md) | What must still work before any change is called done, with the 14 October test baseline |
+
 ## Runbooks (`runbooks/`)
 
 Step-by-step procedures for the team and the founder. The two marked new were written with the release-1 completion work on 30 September 2026.
