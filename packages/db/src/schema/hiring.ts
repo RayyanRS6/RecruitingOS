@@ -10,6 +10,7 @@ import type {
   IntakeFacts,
   IntakeMessage,
   IntakeServerState,
+  LearnedFact,
   Location,
   MarkKind,
   MarkSource,
@@ -269,7 +270,25 @@ export const documents = pgTable(
 
 /** The candidate's affirmative acknowledgment on the apply form: when it was ticked, which notice versions the server rendered above it, and the address the trusted proxy reported. */
 export type ApplicationAcknowledgment = { at: string; noticeVersions: string[]; ip?: string };
-export type ApplicationAnswers = { eligibility?: Record<string, unknown>; screening?: Record<string, unknown>; noResume?: Record<string, string>; noticeVersionsShown?: string[]; acknowledgment?: ApplicationAcknowledgment };
+/**
+ * Wave S7 (no migration: keys inside the existing JSON column, erased by an anonymization with the rest of `answers` and
+ * part of an access export with them): `quick`, the company's quick questions answered on the form, by key (a choice's
+ * words, or a number as typed); `fromCv`, the form fields (`firstName`, `locationText`, `q_<key>`, `elig_<key>`, ...)
+ * whose value the CV filled and the candidate kept as it was ("From your CV — check it"); `workSummary`, the short
+ * summary of their work the CV reading wrote and they checked; `learned`, what the profile learned from this
+ * application's sent chat (`LearnedFact`).
+ */
+export type ApplicationAnswers = {
+  eligibility?: Record<string, unknown>;
+  screening?: Record<string, unknown>;
+  noResume?: Record<string, string>;
+  noticeVersionsShown?: string[];
+  acknowledgment?: ApplicationAcknowledgment;
+  quick?: Record<string, string>;
+  fromCv?: string[];
+  workSummary?: string;
+  learned?: LearnedFact[];
+};
 
 export const applications = pgTable(
   "applications",

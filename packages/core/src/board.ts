@@ -7,7 +7,8 @@ import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, LOW_CONFIDENCE_TEXT, RE
  * Shortlist, Longlist, Not moving forward. Nothing here moves anyone: a person applies the board's suggestions in Review
  * and apply, privately, and every decline needs a reason.
  *
- * - High or very high score, read with confidence, every must-have known → Shortlist.
+ * - High or very high score, read with confidence, every must-have known → Shortlist. A must-have only partly shown
+ *   that the score counted at the rest's level (Wave S7: it costs nothing there) → Longlist, ticked, asking for more.
  * - Medium score → Longlist.
  * - Low score, or a must-have the candidate's own words show is not met → Not moving forward.
  * - Needs a closer look → Longlist, unticked, with the reason ("Needs your eye"), whatever the score says: the reading
@@ -46,9 +47,12 @@ const STILL_BEING_READ: readonly ApplicationStage[] = ["applied", "received", "e
 
 const step = (kind: NextStepKind, reason: string): NextStep => ({ kind, label: NEXT_STEP_LABEL[kind], reason });
 
-/** "Match score 62: Perio charting partly shown." The costliest requirement in a line; the score alone when nothing cost points. */
+/**
+ * "Match score 62: Perio charting partly shown." The costliest requirement in a line, or one not met in full that cost
+ * nothing (a partly shown one counted at the rest's level, `PARTLY_SHOWN_RULE`); the score alone when every one is met.
+ */
 function scoreLine(match: MatchScore): string {
-  const top = costliest(match);
+  const top = costliest(match) ?? match.breakdown.find((c) => c.pctMet < 100) ?? null;
   const head = `Match score ${match.score}`;
   return top ? `${head}: ${top.label} ${top.finding.toLowerCase()}.` : `${head}: every requirement judged so far is met.`;
 }
@@ -158,6 +162,14 @@ export function boardPlacement(input: PlacementInput): BoardPlacement {
   const needsYourEye = eye?.why ?? null;
   let next: NextStep | null = eye?.next ?? null;
   if (needsYourEye) column = "longlist";
+
+  // A must-have only partly shown costs the score nothing when the rest of the evidence is strong (`PARTLY_SHOWN_RULE`,
+  // Wave S7): the board asks for more instead of suggesting the Shortlist on it.
+  const partlyMust = column === "shortlist" && !next ? (match?.breakdown ?? []).filter((c) => c.mustHave && c.countedPct !== undefined) : [];
+  if (partlyMust.length) {
+    column = "longlist";
+    next = step("ask_more", `Their application only partly shows ${listOf(partlyMust.map((c) => c.label))}.`);
+  }
 
   if (!next) {
     if (column === "shortlist") {

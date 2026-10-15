@@ -17,7 +17,10 @@ const RAW_QUERY = /(?:container|c\.get\("container"\)|handle)\.db\.(?:select|ins
 /** Raw queries per file as of the audit remediation (September 2026). Lower is fine; higher needs a reason and a change here. */
 const ALLOWED: Record<string, number> = {
   "apps/api/src/app.ts": 1,
-  "apps/api/src/pages/candidate.tsx": 9, // +1 Wave 0: the talent-pool choice looks up its status token before any tenant is known, like the other status routes
+  // Wave S7 (S7-0) split pages/candidate.tsx (9) into files of their own, each query moving with its code; the total is unchanged:
+  "apps/api/src/pages/application-record.tsx": 7, // the status page's forms look up their status token before any tenant is known (+1 Wave 0: the talent-pool choice)
+  "apps/api/src/pages/candidate-shared.tsx": 1, // whether the person behind a link was deleted
+  "apps/api/src/pages/conversation-frame.tsx": 1, // the application a conversation link names
   "apps/api/src/routes/admin.ts": 11,
   "apps/api/src/routes/auth-mfa.tsx": 3,
   "apps/api/src/routes/auth-shared.ts": 1,

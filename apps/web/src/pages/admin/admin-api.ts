@@ -41,9 +41,10 @@ export const adminKeys = {
 
 /**
  * A customer as GET /admin/customers lists it. `applyFlowDefault`: how the company's roles meet the screening
- * conversation unless a role has its own setting (plan E1).
+ * conversation unless a role has its own setting (plan E1). `candidateScoreShown`: whether its candidates see their
+ * match score after sending (founder decision S7-1; on unless ITS turned it off; absent from an older API reads as on).
  */
-export type CustomerRow ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; planKey: string; status: string; roles: number; applications: number; aiCostUsd: number; lastActivityAt: string | null; escalations: number; createdAt: string; settings: { website?: string }; verifiedAt: string | null; verifiedBy: { id: string; name?: string } | null; heldMessages: number; jobBoardsConfirmedAt: string | null; recruiterAsks?: RecruiterAskStanding; applyFlowDefault?: ApplyMode; screeningConversations?: { used: number; limit: number | null; resetsAt?: string | null } };
+export type CustomerRow ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; planKey: string; status: string; roles: number; applications: number; aiCostUsd: number; lastActivityAt: string | null; escalations: number; createdAt: string; settings: { website?: string; candidateScoreSetBy?: { at: string; by: { id: string; name?: string }; reason: string } }; verifiedAt: string | null; verifiedBy: { id: string; name?: string } | null; heldMessages: number; jobBoardsConfirmedAt: string | null; recruiterAsks?: RecruiterAskStanding; applyFlowDefault?: ApplyMode; screeningConversations?: { used: number; limit: number | null; resetsAt?: string | null }; candidateScoreShown?: boolean };
 
 /** An alert as GET /admin/alerts and GET /admin/failures list it. */
 export type AlertRow ={ id: string; kind: string; severity: string; title: string; body: string; status: string; companyId: string | null; target: { type: string; id: string } | null; details: Record<string, unknown>; createdAt: string };

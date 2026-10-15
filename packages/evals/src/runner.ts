@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, messageLinePrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, triageAssessPrompt, type AiRuntime, type IntakeContext, type ScreenContext } from "@ros/ai";
+import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, messageLinePrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, screenWriteupPrompt, triageAssessPrompt, type AiRuntime, type IntakeContext, type ScreenContext } from "@ros/ai";
 import {
   INTAKE_COMPILE_MAX_TOKENS, REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, SCORING_VIEW_VERSION, TRIAGE_READINGS, advanceProgress, assessmentSources, basisFor, credentialMustHaves, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, hasPlaceholder, mergeFacts, mergeRevision, readingsOutcome, redactProtected, registerFakeHandlers,
   SCORECARD_READINGS, resolveBenchmark, scorecardOutcome, scorecardReadings, unfairQuestion, verifyQuotes, type BenchmarkResult, type ScoringIdentity,
@@ -9,8 +9,10 @@ import {
 import type { EvidenceAssessment, IntakeFacts, IntakeMessage, ResumeExtraction, RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
 import { createDb, migrate } from "@ros/db";
 import { findPlaybook, matchPlaybookRole } from "@ros/playbooks";
+import { runChatSuite } from "./chat-suite";
+import { writeupCaseFailures, writeupCases, writeupContextOf } from "./writeup-suite";
 import { leakedDetails, lostEvidence, modelInputDifference, scorecardModelInput, triageModelInput, type EarlierApplication, type EvalApplication } from "./scoring-inputs";
-import { CONSISTENCY_READS, EMPTY_FACTS, KEPT_IN_ANSWER, RDH_FACTS, SCREEN_CANDIDATE, aboutCases, lineCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, interviewSkillFailures, keptInInputFailures, withInterviewSkill, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, questionFairnessCases, quotesAreGrounded, redactionCases, resumeCases, reviseCases, scorecardDifferences, screenAssessCases, screenConsistencyCases, screenPersonas, screenRedactionCases, scriptedCredentialCases, scriptedReading, triageEdgeCases, type IntakeCase, type ScreenAssessCase } from "./suites";
+import { CONSISTENCY_READS, EMPTY_FACTS, KEPT_IN_ANSWER, RDH_FACTS, fairnessRuleCases, formAnswers, SCREEN_CANDIDATE, aboutCases, lineCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, interviewSkillFailures, keptInInputFailures, withInterviewSkill, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, questionFairnessCases, quotesAreGrounded, redactionCases, resumeCases, reviseCases, scorecardDifferences, screenAssessCases, screenConsistencyCases, screenPersonas, screenRedactionCases, scriptedCredentialCases, scriptedReading, triageEdgeCases, type IntakeCase, type ScreenAssessCase } from "./suites";
 
 /**
  * Evaluation runner (docs/11). `pnpm eval` runs every suite against the configured provider
@@ -172,14 +174,17 @@ async function main() {
     const assess = async (id: string, text: string | null, who: Applied) => {
       const role = who.role ?? packet;
       const extraction = who.extraction !== undefined ? who.extraction : await extract(id, text);
-      const answered = who.keptIn ? { [KEPT_IN_ANSWER.key]: KEPT_IN_ANSWER.answer, schedule: "yes" } : { rdh_license: "yes", schedule: "yes" };
+      // the role's own questions on the form, each answered as a candidate who meets them would (Wave S7: the reading
+      // is shown them as sentences); the kept-in case answers "no" to the licence question
+      const { answered, setAside } = formAnswers(role, !!who.keptIn);
       const applicationAnswers = { eligibility: answered, ...(who.noResumeSummary ? { noResumeSummary: who.noResumeSummary } : {}) };
-      const failedRules = who.keptIn ? [{ key: KEPT_IN_ANSWER.key, question: "Do you hold an active California RDH license?", answer: KEPT_IN_ANSWER.answer, reason: "answered no" }] : [];
-      const app: EvalApplication = { packet: role, extraction, resumeText: text, applicationAnswers, eligibility: { evaluatedAt: new Date().toISOString(), passed: !who.keptIn, failedRules, unverifiable: [] }, identity: who.candidate, earlierApplications: who.earlier ?? [], ...(who.keptIn ? { eligibilityKeptIn: true } : {}) };
+      const failedRules = who.keptIn ? [{ key: setAside.key, question: setAside.question, answer: KEPT_IN_ANSWER.answer, reason: "answered no" }] : [];
+      const eligibility = { evaluatedAt: new Date().toISOString(), passed: !who.keptIn, failedRules, unverifiable: [] };
+      const app: EvalApplication = { packet: role, extraction, resumeText: text, applicationAnswers, eligibility, identity: who.candidate, earlierApplications: who.earlier ?? [], ...(who.keptIn ? { eligibilityKeptIn: true } : {}) };
       const { promptInput, view, text: modelInput } = triageModelInput(app);
       const runs = await Promise.all(Array.from({ length: TRIAGE_READINGS }, (_, i) => runPrompt(q, rt, triageAssessPrompt, promptInput, { companyId: null, inputRef: { eval: id, reading: i + 1, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() } })));
       // what the app does once the model has answered (agents/src/triage.ts, readingsOutcome), not a copy of it
-      return { combined: readingsOutcome(runs, view, { resumeText: text, applicationAnswers, packet: role }), raws: runs.flatMap((r) => (r.ok ? [r.output] : [])), seen: assessmentSources(promptInput), modelInput, app };
+      return { combined: readingsOutcome(runs, view, { resumeText: text, applicationAnswers, packet: role, eligibility, ...(who.keptIn ? { eligibilityKeptIn: true } : {}) }), raws: runs.flatMap((r) => (r.ok ? [r.output] : [])), seen: assessmentSources(promptInput), modelInput, app, setAside };
     };
     /** A quote the model wrote is grounded when it is in what the model was given (the hidden view, placeholders and all). */
     const groundedIn = (raws: EvidenceAssessment[], seen: ReturnType<typeof assessmentSources>) => raws.flatMap((raw, i) => assessmentQuotesGrounded(raw, { resume: seen.resume ?? "", application: seen.application ?? "" }).map((x) => `reading ${i + 1}: ${x}`));
@@ -276,7 +281,7 @@ async function main() {
       const c = consistencyCases[0]!;
       const passed = await assess(`${c.id}_eligible`, c.resume, { candidate: c.candidate });
       const kept = await assess(`${c.id}_kept_in`, c.resume, { candidate: c.candidate, keptIn: true });
-      const f = [...keptInInputFailures(kept.modelInput)];
+      const f = [...keptInInputFailures(kept.modelInput, kept.setAside.question)];
       if (!passed.combined.ok || !kept.combined.ok) f.push(...[passed.combined, kept.combined].flatMap((x) => (x.ok ? [] : [x.error])));
       else f.push(...consistencyDifferences([passed.combined.output, kept.combined.output], packet).map((x) => x.replace(/^reading 2/, "kept in").replace(/reading 1/, "passed")));
       results["triage.kept_in"] = { cases: [{ id: "kept_in_after_a_no", pass: f.length === 0, failures: f }], passRate: f.length === 0 ? 1 : 0 };
@@ -294,6 +299,17 @@ async function main() {
       hidden.push({ id: c.id, pass: f.length === 0, failures: f });
     }
     results["triage.redaction"] = { cases: hidden, passRate: hidden.filter((x) => x.pass).length / hidden.length };
+  }
+
+  // The fairness rules in code (Wave S7; the real-model run of 15 Oct 2026): a monotonic score, the overall reading
+  // settled from the findings, and the answers on the form as the candidate's own words. No model call; it runs with
+  // the "triage" family, so the fairness workflow (--suite resume,triage) checks it on every run.
+  if (runs("triage.fairness_rules")) {
+    const out: (typeof results)[string]["cases"] = fairnessRuleCases.map((c) => {
+      const f = c.failures();
+      return { id: c.id, pass: f.length === 0, failures: f };
+    });
+    results["triage.fairness_rules"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
   }
 
   // The match score and the board's placement (plan F6): rules and determinism of the code, no model call.
@@ -467,6 +483,28 @@ async function main() {
       out.push({ id: c.id, pass: f.length === 0, failures: f });
     }
     results["screen.redaction"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
+  }
+
+  // The chat after the application form (Wave S7, slice S7-C): one restatement and one question, the push and the
+  // analog steps, no guesses, no form answer asked again, no private note, the fairness check and the close.
+  if (familyRuns("chat")) {
+    const chat = await runChatSuite(async (ctx, c) => {
+      const r = await runPrompt(q, rt, screenTurnPrompt, ctx, { companyId: null, inputRef: { eval: `chat_${c.id}` } });
+      return r.ok ? r.output : null;
+    }, runs);
+    Object.assign(results, chat);
+  }
+
+  // The answers written up for Review & send (Wave S7, slice S7-D). "model:" failures measure what the model wrote;
+  // "kept:" failures mean the app's own checks let something through, and must stay at zero.
+  if (runs("screen.writeup")) {
+    const out: (typeof results)[string]["cases"] = [];
+    for (const c of writeupCases) {
+      const r = await runPrompt(q, rt, screenWriteupPrompt, writeupContextOf(c), { companyId: null, inputRef: { eval: c.id } });
+      const f = writeupCaseFailures(c, r.ok ? r.output : null);
+      out.push({ id: c.id, pass: f.length === 0, failures: f });
+    }
+    results["screen.writeup"] = { cases: out, passRate: out.filter((x) => x.pass).length / Math.max(1, out.length) };
   }
 
   const thresholds = JSON.parse(readFileSync(join(here, "..", "thresholds.json"), "utf8")) as Record<string, { minPassRate: number }>;

@@ -9,7 +9,7 @@ import { createEscalation } from "./escalations";
 import { normalizeEmail } from "./auth";
 import { dedupeKey } from "./dedupe";
 import { notify } from "./notifications";
-import { openingQuestionsOf, screenAnswersOf, withoutFocusAnswers } from "./screen-answers";
+import { openingQuestionsOf, screenAnswersOf, withoutCandidateWords } from "./screen-answers";
 import { DECISION_STAGES, canTransition, transition } from "./stages";
 
 /**
@@ -91,7 +91,8 @@ export async function exportCandidateData(q: Queryable, companyId: string, candi
   const docs = await q.select({ id: documents.id, kind: documents.kind, filename: documents.filename, mime: documents.mime, sizeBytes: documents.sizeBytes, textExtracted: documents.textExtracted, createdAt: documents.createdAt }).from(documents).where(eq(documents.candidateId, cand.id));
   // A screen's answers live in two places (screen-answers.ts): the export carries every one of them, with the opening questions in the words they were asked.
   const scrRows = await q.select({ applicationId: screens.applicationId, channel: screens.channel, status: screens.status, transcript: screens.transcript, answers: screens.answers, progress: screens.progress, createdAt: screens.createdAt }).from(screens).where(inArray(screens.applicationId, apps.map((a) => a.id).concat(["00000000-0000-0000-0000-000000000000"])));
-  const scr = scrRows.map((s) => ({ applicationId: s.applicationId, channel: s.channel, status: s.status, transcript: s.transcript, answers: screenAnswersOf(s), openingQuestions: openingQuestionsOf(s.progress), createdAt: s.createdAt }));
+  // The written-up answers of Review & send (Wave S7) are their words condensed: in the export when there are any.
+  const scr = scrRows.map((s) => ({ applicationId: s.applicationId, channel: s.channel, status: s.status, transcript: s.transcript, answers: screenAnswersOf(s), openingQuestions: openingQuestionsOf(s.progress), ...(s.progress?.writeup ? { writtenUp: s.progress.writeup.answers } : {}), createdAt: s.createdAt }));
   const comms = await q.select({ direction: communications.direction, channel: communications.channel, subject: communications.subject, bodyText: communications.bodyText, status: communications.status, deliveredAt: communications.deliveredAt, createdAt: communications.createdAt }).from(communications).where(eq(communications.candidateId, cand.id)).orderBy(desc(communications.createdAt));
   const outbound = comms.filter((c) => c.direction === "outbound");
   const history = await q.select({ type: events.type, occurredAt: events.occurredAt, subjectId: events.subjectId }).from(events).where(and(eq(events.companyId, companyId), inArray(events.subjectId, apps.map((a) => a.id).concat([cand.id]))));
@@ -279,9 +280,12 @@ export async function anonymizeCandidate(
   if (appIds.length) {
     const scr = await q.select({ id: screens.id, progress: screens.progress }).from(screens).where(inArray(screens.applicationId, appIds));
     scrCount = scr.length;
-    for (const s of scr) await q.update(screens).set({ transcript: [], answers: {}, progress: withoutFocusAnswers(s.progress) }).where(eq(screens.id, s.id));
-    // A repeat submission's conversation waiting for the address owner to confirm it (plan E1) goes too, confirmed or not.
-    await q.update(unconfirmedScreens).set({ transcript: [], answers: {}, firstName: "", confirmTokenHash: null, discardedAt: now.toISOString(), confirmation: "discarded" }).where(inArray(unconfirmedScreens.applicationId, appIds));
+    for (const s of scr) await q.update(screens).set({ transcript: [], answers: {}, progress: withoutCandidateWords(s.progress) }).where(eq(screens.id, s.id));
+    // A repeat submission's conversation waiting for the address owner to confirm it (plan E1) goes too, confirmed or not,
+    // with everything of theirs in its progress (`withoutCandidateWords`): the written-up answers (Wave S7), the open
+    // questions' answers, and what that visit typed for the chat (`typedFacts`: their CV lines and form answers).
+    const unconfirmed = await q.select({ id: unconfirmedScreens.id, progress: unconfirmedScreens.progress }).from(unconfirmedScreens).where(inArray(unconfirmedScreens.applicationId, appIds));
+    for (const u of unconfirmed) await q.update(unconfirmedScreens).set({ transcript: [], answers: {}, progress: withoutCandidateWords(u.progress), firstName: "", confirmTokenHash: null, discardedAt: now.toISOString(), confirmation: "discarded" }).where(eq(unconfirmedScreens.id, u.id));
     // The reply address of every old email is retired with a fresh random token: a reply to one of them no longer names
     // this application, so it cannot write an address or a message back onto the removed record (the webhook also refuses
     // a reply to an anonymized candidate). The status link keeps its token: its page already says the record is gone.

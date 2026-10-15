@@ -3,7 +3,7 @@ import {
   type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeEssentialKey, type IntakeFacts, type IntakeFactsPatch, type IntakeListFact,
   type IntakeMessage, type IntakePayCard, type IntakeQuestion, type IntakeReadiness, type IntakeRefusal, type IntakeServerState, type PayOrigin, type RolePacket,
 } from "@ros/contracts";
-import { openFlagsMessage, screenCriterion, normalizeCriterion, unresolvedFlags } from "./packet-guard";
+import { openFlagsMessage, questionCheck, screenCriterion, normalizeCriterion, unresolvedFlags } from "./packet-guard";
 
 /**
  * The job builder's rules that need no model and no database (Wave C: C2, C6, C7, C8, C14, C17): what is still missing,
@@ -404,11 +404,17 @@ function emptyEdit(facts: IntakeFacts): FactsEdit {
   return { facts: normalizeFacts(structuredClone(facts)), removed: [], restored: [], refused: [], pay: null, summary: [] };
 }
 
+/**
+ * The answers that are questions put to candidates (the form's yes/no questions, the screening chat's questions, both on
+ * a card and in the quick start's one edit): read for protected-characteristic questions too (Wave S7, `questionCheck`).
+ */
+const QUESTION_FIELDS: ReadonlySet<string> = new Set(["eligibility", "eligibilityNotes", "screening_questions", "screeningQuestions"]);
+
 /** The fairness check on words a person typed: a refusal is recorded with the reason, as the assistant would have declined it. */
 function screened(edit: FactsEdit, field: string, values: string[]): string[] {
   const ok: string[] = [];
   for (const v of values) {
-    const hit = screenCriterion(v);
+    const hit = QUESTION_FIELDS.has(field) ? questionCheck(v) : screenCriterion(v);
     if (!hit) {
       ok.push(v);
       continue;

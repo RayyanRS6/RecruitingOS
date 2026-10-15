@@ -1,5 +1,8 @@
-import { SCREENING_QUESTIONS_MAX, SCREENING_QUESTIONS_MIN, type Actor, type EligibilityRule, type PacketFieldEdit, type RolePacket, type ScreeningQuestion } from "@ros/contracts";
-import { DECIDER_ROLES, normalizeCriterion, type TeamMember } from "@ros/core";
+import {
+  CHOICE_OPTIONS_MAX, CHOICE_OPTIONS_MIN, QUICK_QUESTIONS_MAX, SCREENING_QUESTIONS_MAX, SCREENING_QUESTIONS_MIN, WRITTEN_QUESTIONS_MAX,
+  type Actor, type CompanyQuestionRefusal, type CompanyQuestions, type CompanyQuestionsEdit, type EligibilityRule, type PacketFieldEdit, type QuickQuestion, type RolePacket, type ScreeningQuestion, type WrittenQuestion,
+} from "@ros/contracts";
+import { DECIDER_ROLES, companyQuestionProblemWords, companyQuestionProblems, normalizeCriterion, type TeamMember } from "@ros/core";
 import { HttpError } from "../middleware/errors";
 
 /**
@@ -122,6 +125,100 @@ export function applyFieldEdit(base: RolePacket, edit: PacketFieldEdit, ctx: { t
     if (JSON.stringify(sectionOf(key, base)) !== JSON.stringify(sectionOf(key, p))) fields.push(key);
   }
   return { packet: p, fields, notes, summary: fields.length ? `Edited: ${fields.map((f) => FIELD_LABEL[f]).join(", ")}` : "" };
+}
+
+/* ------------------------------------------------------------------------------------------------------------------ */
+/* "Questions every applicant answers" (Wave S7)                                                                         */
+/* ------------------------------------------------------------------------------------------------------------------ */
+
+const sameWords = (a: string, b: string) => normalizeCriterion(a) === normalizeCriterion(b);
+
+/** JSON with every object's keys in order: a stored packet's keys come back from the database in their own order. */
+function stableJson(v: unknown): string {
+  const sorted = (x: unknown): unknown => {
+    if (Array.isArray(x)) return x.map(sorted);
+    if (x && typeof x === "object") return Object.fromEntries(Object.entries(x as Record<string, unknown>).filter(([, y]) => y !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([k, y]) => [k, sorted(y)]));
+    return x;
+  };
+  return JSON.stringify(sorted(v));
+}
+
+/**
+ * The 422 every save path gives for a question that asks about a protected characteristic: the first one in plain words,
+ * and every refused part in `details.problems` so the page can mark each row.
+ */
+export function refuseCompanyQuestions(cq: Parameters<typeof companyQuestionProblems>[0]): void {
+  const problems = companyQuestionProblems(cq);
+  if (!problems.length) return;
+  const listed: CompanyQuestionRefusal[] = problems.map((p) => ({ ...p, words: companyQuestionProblemWords(p) }));
+  const others = new Set(listed.filter((p) => p.list !== listed[0].list || p.index !== listed[0].index).map((p) => `${p.list}:${p.index}`)).size;
+  throw new HttpError(422, "question_not_allowed", `${listed[0].words}${others ? ` ${others} more ${others === 1 ? "question needs" : "questions need"} the same change.` : ""} Nothing was saved.`, { problems: listed });
+}
+
+function quickQuestions(base: QuickQuestion[], sent: NonNullable<CompanyQuestionsEdit["quick"]>): QuickQuestion[] {
+  if (sent.length > QUICK_QUESTIONS_MAX) throw new HttpError(400, "too_many_questions", `Keep at most ${QUICK_QUESTIONS_MAX} quick questions. This list has ${sent.length}.`);
+  const taken = new Set(base.map((q) => q.key));
+  const seen = new Set<string>();
+  return sent.map((q, i) => {
+    const n = i + 1;
+    if (sent.some((o, j) => j < i && sameWords(o.question, q.question))) throw new HttpError(400, "duplicate_question", `Quick question ${n} is the same as an earlier one.`);
+    let key: string;
+    if (q.key) {
+      if (!base.some((b) => b.key === q.key)) throw new HttpError(409, "unknown_question", "One of these questions is no longer on this job. Reload the page and try again.");
+      if (seen.has(q.key)) throw new HttpError(400, "duplicate_question", "The same question is in the list twice.");
+      key = q.key;
+    } else key = keyFrom("cq", q.question, taken);
+    seen.add(key);
+    const help = q.help?.trim() ? { help: q.help.trim() } : {};
+    if (q.kind === "choice") {
+      const options: string[] = [];
+      for (const o of q.options.map((x) => x.trim()).filter(Boolean)) if (!options.some((x) => sameWords(x, o))) options.push(o);
+      if (options.length < CHOICE_OPTIONS_MIN || options.length > CHOICE_OPTIONS_MAX) throw new HttpError(400, "choice_options", `Quick question ${n} needs between ${CHOICE_OPTIONS_MIN} and ${CHOICE_OPTIONS_MAX} different answers to choose from. It has ${options.length}.`);
+      return { kind: "choice", key, question: q.question, ...help, required: q.required ?? true, options };
+    }
+    if (q.min !== undefined && q.max !== undefined && q.min > q.max) throw new HttpError(400, "number_range", `Quick question ${n}: the smallest number allowed is above the largest.`);
+    return { kind: "number", key, question: q.question, ...help, required: q.required ?? true, ...(q.unit?.trim() ? { unit: q.unit.trim() } : {}), ...(q.min !== undefined ? { min: q.min } : {}), ...(q.max !== undefined ? { max: q.max } : {}) };
+  });
+}
+
+function writtenQuestions(base: WrittenQuestion[], sent: NonNullable<CompanyQuestionsEdit["written"]>): WrittenQuestion[] {
+  if (sent.length > WRITTEN_QUESTIONS_MAX) throw new HttpError(400, "too_many_questions", `Keep at most ${WRITTEN_QUESTIONS_MAX} written questions. This list has ${sent.length}.`);
+  const taken = new Set(base.map((q) => q.key));
+  const seen = new Set<string>();
+  return sent.map((q, i) => {
+    if (sent.some((o, j) => j < i && sameWords(o.question, q.question))) throw new HttpError(400, "duplicate_question", `Written question ${i + 1} is the same as an earlier one.`);
+    let key: string;
+    if (q.key) {
+      if (!base.some((b) => b.key === q.key)) throw new HttpError(409, "unknown_question", "One of these questions is no longer on this job. Reload the page and try again.");
+      if (seen.has(q.key)) throw new HttpError(400, "duplicate_question", "The same question is in the list twice.");
+      key = q.key;
+    } else key = keyFrom("wq", q.question, taken);
+    seen.add(key);
+    return { key, question: q.question, required: q.required ?? true, ...(q.lookFor?.trim() ? { lookFor: q.lookFor.trim() } : {}) };
+  });
+}
+
+/**
+ * The next packet with the company's questions as sent (only the lists sent change), the lists that changed and the
+ * plain summary ("Edited: quick questions, written questions"). Refused with plain words, before anything is saved, when
+ * a list breaks the packet's limits, and with `question_not_allowed` when a question asks about a protected
+ * characteristic. Wording the phrase list flags is saved with the flag, as everywhere: approval waits for a person.
+ */
+export function applyCompanyQuestionsEdit(base: RolePacket, edit: CompanyQuestionsEdit): { packet: RolePacket; summary: string; fields: Array<"quick" | "written"> } {
+  refuseCompanyQuestions({ quick: edit.quick, written: edit.written });
+  const p = structuredClone(base);
+  const before: CompanyQuestions = { quick: base.companyQuestions?.quick ?? [], written: base.companyQuestions?.written ?? [] };
+  const next: CompanyQuestions = {
+    quick: edit.quick !== undefined ? quickQuestions(before.quick, edit.quick) : before.quick,
+    written: edit.written !== undefined ? writtenQuestions(before.written, edit.written) : before.written,
+  };
+  if (next.quick.length || next.written.length) p.companyQuestions = next;
+  else delete p.companyQuestions;
+  const fields: Array<"quick" | "written"> = [];
+  if (stableJson(before.quick) !== stableJson(next.quick)) fields.push("quick");
+  if (stableJson(before.written) !== stableJson(next.written)) fields.push("written");
+  const label = { quick: "quick questions", written: "written questions" } as const;
+  return { packet: p, fields, summary: fields.length ? `Edited: ${fields.map((f) => label[f]).join(", ")}` : "" };
 }
 
 /** The part of the packet a field lives in, to tell whether an edit changed anything. */

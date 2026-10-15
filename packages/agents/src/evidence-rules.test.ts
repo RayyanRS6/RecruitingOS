@@ -4,7 +4,7 @@ import type { EvidenceAssessment, RolePacket, ScreenAssessment, ScreenTranscript
 import { registerFakeHandlers } from "./fake-handlers";
 import { hasPlaceholder, restoreQuotes } from "./scoring-view";
 import { candidateWordsOf, scorecardInput, verifyScreenQuotes } from "./screening";
-import { applyEvidenceRules, meaningfulQuote, readingsOutcome, restoreReadingQuotes, scoringInput, stepDownConfidence, verifyAssessmentQuotes } from "./triage";
+import { SUGGESTED_FROM_RESUME, applyEvidenceRules, formAnswerAround, meaningfulQuote, readingsOutcome, restoreReadingQuotes, scoringInput, stepDownConfidence, verifyAssessmentQuotes } from "./triage";
 
 /**
  * Evidence honesty (plan 0.9): what the owner sees has passed the code-side rules, whatever the model said. A quote not
@@ -13,6 +13,11 @@ import { applyEvidenceRules, meaningfulQuote, readingsOutcome, restoreReadingQuo
  */
 const RESUME = "Dana Kim, RDH\nRegistered Dental Hygienist at Harbor Dental 2021 - present\nRDH license CA expired 2019\nPeriodontal charting, scaling and root planing, Dentrix";
 const PACKET = { identity: { title: "Registered Dental Hygienist", employmentType: "full_time", locations: [{ city: "Irvine", region: "CA" }] }, requirements: { mustHaves: [], niceToHaves: [] }, competencies: [], evaluation: { criteria: [], redFlags: [] }, compensation: { basis: "hourly", min: 45, max: 55, currency: "USD" } };
+/** Two eligibility questions as the form asks them (Wave S7: the reading is shown the answers as sentences). */
+const ELIGIBILITY = [
+  { key: "el_license", type: "license" as const, question: "Do you hold an active CA RDH license?", expectation: {}, rationale: "Required by law.", knockout: true },
+  { key: "el_schedule", type: "schedule_availability" as const, question: "Can you work the posted schedule?", expectation: {}, rationale: "Coverage.", knockout: true },
+];
 
 const reading = (over: Partial<EvidenceAssessment> = {}): EvidenceAssessment => ({
   overall: "potential",
@@ -189,8 +194,9 @@ describe("no number from the model", () => {
     const rt = { provider: fake, models: { judgment: "fake", standard: "fake", fast: "fake" } };
     // Version 3 (fairness run on Haiku 5.5, 14 Oct 2026): written definitions of each finding, the candidate never named;
     // version 4 (D-04 = C, Wave S2): the scoring view, no earlier applications, candidate text that cannot close a tag;
-    // version 5 (Wave S5): the licence rule, a lone "yes" is no quote, skills for the interviews left out, "kept in".
-    expect(triageAssessPrompt.version).toBe(5);
+    // version 5 (Wave S5): the licence rule, a lone "yes" is no quote, skills for the interviews left out, "kept in";
+    // version 6 (Wave S7): the answers on the form as plain sentences, never field names.
+    expect(triageAssessPrompt.version).toBe(6);
     // Version 3 (plan Wave E): recruiter call notes kept apart, skipped questions unknown, unfinished conversations read
     // for what they have; version 4: the same definitions of each finding as the résumé reading; version 5 (D-04 = C):
     // the conversation through the scoring view; version 6: the answers and the progress in their own <answers> block;
@@ -242,15 +248,64 @@ describe("what the AI sees when it scores (D-04 = C)", () => {
 
   it("someone a person kept in after an eligibility answer reads as eligible, without the answer set aside (known bug 30)", () => {
     const failed = { evaluatedAt: "2026-10-15T10:00:00Z", passed: false, failedRules: [{ key: "el_license", question: "Do you hold an active CA RDH license?", answer: "no", reason: "answered no" }], unverifiable: [] };
-    const base = { packet: PACKET as never, extraction: null, resumeText: RESUME, applicationAnswers: { eligibility: { el_license: "no", el_schedule: "yes" } }, eligibility: failed, identity: {} };
+    const packet = { ...PACKET, requirements: { ...PACKET.requirements, eligibility: ELIGIBILITY } };
+    const base = { packet: packet as never, extraction: null, resumeText: RESUME, applicationAnswers: { eligibility: { el_license: "no", el_schedule: "yes" } }, eligibility: failed, identity: {} };
     const held = triageAssessPrompt.messages(scoringInput(base).promptInput).map((m) => m.content).join("\n");
     expect(held).toContain("Eligibility result: failed el_license");
+    expect(held).toContain("Do you hold an active CA RDH license? No.");
     const { promptInput } = scoringInput({ ...base, eligibilityKeptIn: true });
     const kept = triageAssessPrompt.messages(promptInput).map((m) => m.content).join("\n");
     expect(kept).toContain("Eligibility result: passed (a person on the hiring team checked the eligibility answers and kept the candidate in");
     expect(kept).not.toContain("el_license");
-    expect(kept).toContain('"el_schedule":"yes"');
+    expect(kept).not.toContain("Do you hold an active CA RDH license?");
+    expect(kept).toContain("Can you work the posted schedule? Yes.");
     expect(promptInput.eligibility).toMatchObject({ passed: true, failedRules: [] });
+  });
+
+  /**
+   * The fairness run of 15 Oct 2026 (triage.hallucination no_resume_text): a reading quoted the raw eligibility JSON
+   * ('"rdh_license":"yes"'). Since Wave S7 the reading is shown each answer as a sentence, the question then the answer,
+   * and a quote of one is the candidate's own words; the field names and the JSON never reach the model.
+   */
+  it("shows the answers on the form as plain sentences, which count as the candidate's own words (Wave S7)", () => {
+    const packet = { ...PACKET, requirements: { ...PACKET.requirements, eligibility: ELIGIBILITY } };
+    const input = { packet: packet as never, extraction: null, resumeText: null, applicationAnswers: { eligibility: { el_license: "yes", el_schedule: "no", el_retired: "I can start on 3 November" } }, eligibility: null, identity: {} };
+    const { promptInput, view } = scoringInput(input);
+    expect(promptInput.answerSentences).toEqual(["Do you hold an active CA RDH license? Yes.", "Can you work the posted schedule? No.", "I can start on 3 November"]);
+    const sent = triageAssessPrompt.messages(promptInput).map((m) => m.content).join("\n");
+    expect(sent).toContain("Their answers to the company's questions (their own words, one per line):\nDo you hold an active CA RDH license? Yes.\nCan you work the posted schedule? No.\nI can start on 3 November");
+    for (const raw of ["el_license", "el_schedule", "el_retired", '":"', "{"]) expect(sent, raw).not.toContain(raw);
+    // a quote of a whole answer is found and kept, and the licence rule reads it as the statement it makes
+    const licence = { key: "licence", text: "Active CA RDH license", rationale: "law", evidencedBy: ["application" as const] };
+    const role = { ...packet, requirements: { ...packet.requirements, mustHaves: [licence] } };
+    const said = (met: "yes" | "no" | "unknown", quote: string) => [1, 2, 3].map((n) => ({ ok: true as const, output: reading({ requirementFindings: [{ requirementKey: "licence", met, evidence: { source: "application", quote } }] }), runId: `r${n}`, model: "m" }));
+    const yes = readingsOutcome(said("yes", "Do you hold an active CA RDH license? Yes."), view, { ...input, packet: role as never });
+    if (!yes.ok) throw new Error("expected a reading");
+    expect(yes.output.requirementFindings[0]).toMatchObject({ met: "yes", evidence: { source: "application", quote: "Do you hold an active CA RDH license? Yes." } });
+    expect(yes.output.requirementFindings[0]?.evidence).not.toHaveProperty("unquoted");
+    // "No" to an *active* licence may be a lapsed one: not known (the licence rule); "No" to holding one at all is plain
+    const no = readingsOutcome(said("no", "Do you hold an active CA RDH license? No."), view, { ...input, applicationAnswers: { eligibility: { el_license: "no" } }, packet: role as never });
+    if (!no.ok) throw new Error("expected a reading");
+    expect(no.output.requirementFindings[0]?.met).toBe("unknown");
+    const plainRole = { ...role, requirements: { ...role.requirements, eligibility: [{ ...ELIGIBILITY[0]!, question: "Do you hold a CA RDH license?" }] } };
+    const plain = readingsOutcome(said("unknown", "Do you hold a CA RDH license? No."), view, { ...input, applicationAnswers: { eligibility: { el_license: "no" } }, packet: plainRole as never });
+    if (!plain.ok) throw new Error("expected a reading");
+    expect(plain.output.requirementFindings[0]?.met).toBe("no");
+    expect(formAnswerAround("CA RDH license? No", "Do you hold a CA RDH license? No.\nCan you work the posted schedule? Yes.")).toBe("I do not hold a CA RDH license");
+    expect(formAnswerAround("posted schedule", "Can you work the posted schedule? Yes.")).toBe("Can you work the posted schedule? Yes.");
+    expect(formAnswerAround("I can start on 3 November", "I can start on 3 November")).toBeNull();
+    // the old way of quoting is still no evidence
+    const json = readingsOutcome(said("yes", 'el_license":"yes'), view, { ...input, packet: role as never });
+    if (!json.ok) throw new Error("expected a reading");
+    expect(json.output.requirementFindings[0]).toMatchObject({ met: "partially", evidence: { source: "application", unquoted: true } });
+    // a "Yes" the form suggested from the résumé and the candidate left as it was (review of Wave S7): marked for the
+    // reading as the résumé's, and never found as the candidate's own words
+    const suggestedInput = { ...input, applicationAnswers: { ...input.applicationAnswers, fromCv: ["elig_el_license"] } };
+    const suggested = scoringInput(suggestedInput);
+    expect(suggested.promptInput.answerSentences?.[0]).toBe(`${SUGGESTED_FROM_RESUME}Do you hold an active CA RDH license? Yes.`);
+    const fromResume = readingsOutcome(said("yes", "Do you hold an active CA RDH license? Yes."), suggested.view, { ...suggestedInput, packet: role as never });
+    if (!fromResume.ok) throw new Error("expected a reading");
+    expect(fromResume.output.requirementFindings[0]?.evidence).toMatchObject({ source: "application", unquoted: true });
   });
 
   it("a skill checked in the interviews only is not asked of the reading, and a finding on it is dropped (known bug 18)", () => {

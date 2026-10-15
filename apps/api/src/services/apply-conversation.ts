@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, type Actor, type ReviewItem, type RolePacket, type ScreenProgress, type ScreenStatus, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat, type UnconfirmedIntent } from "@ros/contracts";
+import { SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, type Actor, type ChatCounter, type ReviewItem, type RolePacket, type ScreenProgress, type ScreenStatus, type ScreenTranscriptEntry, type ScreenTurn, type ScreenWriteup, type TapAnswer, type TapFormat, type UnconfirmedIntent, type WrittenQuestionView } from "@ros/contracts";
 import { runPromptDetached, screenTurnPrompt, type AiRuntime, type RunOutcome, type ScreenContext } from "@ros/ai";
 import {
-  EMPTY_SCREEN_PROGRESS, MOVED_ON_MESSAGE, REVIEW_MESSAGE, SCREEN_COMPLETE_MESSAGE, SKIPPED_MESSAGE, TURN_CAP_REVIEW_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, modelTurnCap, modelTurnsUsed, answerWithdrawPrompt, answersOf, countConversation, createScreen, currentQuestion, declineConversation, editScreenAnswer, enforceTurnRules, flagAllowance,
+  CHAT_CAP_CLOSING, EMPTY_SCREEN_PROGRESS, MOVED_ON_MESSAGE, REVIEW_MESSAGE, SCREEN_COMPLETE_MESSAGE, SKIPPED_MESSAGE, TURN_CAP_REVIEW_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, chatClosingMessage, chatCodeLead, chatFactsFor, chatGaps, chatOpening, chatPacket, enforceChatTurn, withChatPlan, modelTurnCap, modelTurnsUsed, answerWithdrawPrompt, answersOf, countConversation, createScreen, currentQuestion, declineConversation, editScreenAnswer, enforceTurnRules, flagAllowance,
   isFocusKey, loadScreenBundle, nextQuestion, pausedMessage, redactProtected, requestHuman, reviewItems, runScreenTurn, screenCommand, screenContextOf, screenIntro, sendConversationForLater, sendRepeatConfirmation,
-  sendRepeatConversationLater, sendRepeatConversationResume, startScreenConversation, statusUrlFor, submitScreenAnswers, tapWords, withFocusAnswer, withdrawPending, withdrawnMessage, type AllowanceNote, type ScreenDeps, type ScreenIntro, type TurnResult,
+  sendRepeatConversationLater, sendRepeatConversationResume, startScreenConversation, statusUrlFor, submitScreenAnswers, tapWords, withFocusAnswer, withdrawPending, withdrawnMessage, type AllowanceNote, type ChatFacts, type ScreenDeps, type ScreenIntro, type TurnResult,
 } from "@ros/agents";
-import { addBusinessHours, deadlineWords, emit, entitlements, evaluateEligibility, humanResponseExpectation, loadBusinessCalendar, oneVisitPolicyAllows, resolveApplyMode, resolvePolicy, tapFormatFor, transition } from "@ros/core";
+import { addBusinessHours, applicationAnswerSentences, chatCounter, deadlineWords, emit, entitlements, evaluateEligibility, humanResponseExpectation, loadBusinessCalendar, oneVisitPolicyAllows, resolveApplyMode, resolvePolicy, tapFormatFor, transition, withoutCandidateWords, writtenQuestionsOf } from "@ros/core";
 import { applications, candidates, communications, companies, randomToken, rolePackets, roles, screens, unconfirmedScreens, withTenant, workflowRuns, type Db, type Tx } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import type { WorkflowEngine } from "@ros/workflows";
@@ -87,6 +87,15 @@ export type ApplyVisitInput = {
   /** What the form said, never what is on file: a repeat submission's conversation greets the name that was typed. */
   typedFirstName: string;
   eligibilityAnswers: Record<string, unknown>;
+  /** The answers to the company's own quick questions, as the form posted them (for the form-answer sentences). */
+  quickAnswers?: Record<string, string> | null;
+  /**
+   * Wave S7: what was typed in this visit, for the chat to name: the CV's lines (as `chatFactsOf` makes them from the
+   * form's own reading of the CV, or the no-résumé answers) and the form's answers as sentences
+   * (`applicationAnswerSentences`). A first application's chat then names its own CV and answers; a repeat
+   * submission's, these. Absent: neither names any, so the two still read alike.
+   */
+  typedFacts?: ChatFacts | null;
 };
 
 /**
@@ -115,7 +124,9 @@ export async function startApplyConversation(tx: Tx, container: Container, input
     // Past the day's conversations for this application, the same receipt as when the month's are used up: no row, no
     // link, no model calls. Never an existing conversation's link instead: that would show one person's words to the next.
     if (!(await anotherConversationToday(tx, app.id))) return { kind: "receipt", reason: "conversation_by_email" };
-    const row = await createUnconfirmedConversation(tx, container, { application: app, role, company, firstName: input.typedFirstName, now });
+    // Its chat names only what this visit typed: what the visit passed, or at least the form's answers (`chatFactsFor`).
+    const typedFacts = input.typedFacts ?? { cv: [], formAnswers: applicationAnswerSentences(packet, { eligibility: input.eligibilityAnswers, quick: input.quickAnswers ?? null }).map((s) => s.sentence) };
+    const row = await createUnconfirmedConversation(tx, container, { application: app, role, company, firstName: input.typedFirstName, now, typedFacts });
     return { kind: "conversation", token: row.token };
   }
   // The intake workflow has not run yet; anything else means this application was already under way.
@@ -131,6 +142,13 @@ export async function startApplyConversation(tx: Tx, container: Container, input
     return { kind: "receipt", reason: "conversation_by_email" };
   }
   const scr = await createScreen(tx, { companyId: company.id, applicationId: app.id, channel: "web", expiresAt: new Date(now.getTime() + SCREEN_LINK_HOURS * HOUR).toISOString(), now, invitedVia: "apply", flow: "one_visit" });
+  // The visit passed what was typed: the chat names exactly that (`chatFactsFor` reads `typedFacts` first), as a repeat
+  // submission's does, since the application's own reading of the CV may not have run yet when the chat starts. Erased
+  // with the candidate's other words (`withoutCandidateWords`).
+  if (input.typedFacts && !scr.progress.ownFacts) {
+    const typedFacts = { cv: input.typedFacts.cv.slice(0, 20).map((l) => l.slice(0, 500)), formAnswers: input.typedFacts.formAnswers.slice(0, 20).map((l) => l.slice(0, 500)) };
+    await tx.update(screens).set({ progress: { ...scr.progress, ownFacts: true, typedFacts } }).where(eq(screens.id, scr.id));
+  }
   await transition(tx, { applicationId: app.id, companyId: company.id, to: "screen_invited", by: "system", actor: APPLY_ACTOR });
   await emit(tx, { type: "screen.invited", companyId: company.id, actor: APPLY_ACTOR, subject: { type: "screen", id: scr.id }, payload: { channel: "web", applicationId: app.id, invitedBy: "apply", invitedVia: "apply" } });
   const run = await container.engine.start(tx, { workflowKey: "screen", companyId: company.id, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: role.id, screenId: scr.id, channel: "web", invitedVia: "apply", invitedBy: "apply" }, idempotencyKey: `screen:${app.id}`, actor: APPLY_ACTOR });
@@ -184,12 +202,14 @@ async function anotherConversationToday(tx: Tx, applicationId: string): Promise<
   return Number(own?.n ?? 0) + Number(repeats?.n ?? 0) < CONVERSATIONS_PER_APPLICATION_PER_DAY;
 }
 
-async function createUnconfirmedConversation(tx: Tx, container: Container, input: { application: Application; role: Role; company: Company; firstName: string; now: Date }): Promise<Unconfirmed> {
+async function createUnconfirmedConversation(tx: Tx, container: Container, input: { application: Application; role: Role; company: Company; firstName: string; now: Date; typedFacts: ChatFacts | null }): Promise<Unconfirmed> {
   const expiresAt = new Date(input.now.getTime() + UNCONFIRMED_DAYS * 24 * HOUR);
   const firstName = input.firstName.trim().slice(0, 80) || "there";
+  // What was typed in this visit, for its chat to name (never anything on file); wiped with the rest.
+  const typedFacts = input.typedFacts ? { cv: input.typedFacts.cv.slice(0, 20).map((l) => l.slice(0, 500)), formAnswers: input.typedFacts.formAnswers.slice(0, 20).map((l) => l.slice(0, 500)) } : undefined;
   const [row] = await tx
     .insert(unconfirmedScreens)
-    .values({ companyId: input.company.id, roleId: input.role.id, applicationId: input.application.id, packetVersion: input.role.currentPacketVersion ?? input.application.packetVersion, firstName, token: randomToken(24), status: "invited", progress: { ...EMPTY_SCREEN_PROGRESS, flow: "one_visit" }, expiresAt: expiresAt.toISOString() })
+    .values({ companyId: input.company.id, roleId: input.role.id, applicationId: input.application.id, packetVersion: input.role.currentPacketVersion ?? input.application.packetVersion, firstName, token: randomToken(24), status: "invited", progress: { ...EMPTY_SCREEN_PROGRESS, flow: "one_visit", ...(typedFacts ? { typedFacts } : {}) }, expiresAt: expiresAt.toISOString() })
     .returning();
   // A fact about the detached conversation, never about the application: the team's history shows nothing of it.
   await emit(tx, { type: "screen.repeat_started", companyId: input.company.id, actor: { kind: "candidate", id: "applicant" }, subject: { type: "screen", id: row.id }, payload: { roleId: input.role.id, detached: true } });
@@ -210,13 +230,15 @@ async function loadDetached(q: Tx, id: string, opts: { lock?: boolean } = {}) {
   const [app] = await q.select().from(applications).where(eq(applications.id, row.applicationId)).limit(1);
   const [candidate] = app ? await q.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1) : [];
   if (!company || !role || !pv || !app || !candidate) return null;
-  return { row, company, role, packet: pv.packet, app, candidate };
+  // `packet`: the questions as this conversation asks them (a Kanvis-style chat's plan, Wave S7); `rolePacket`: the job's own.
+  return { row, company, role, packet: chatPacket(pv.packet, row.progress), rolePacket: pv.packet, app, candidate };
 }
 type Detached = NonNullable<Awaited<ReturnType<typeof loadDetached>>>;
 
 function detachedContext(d: Detached, state: { progress: ScreenProgress; answers: Record<string, string>; transcript: ScreenTranscriptEntry[] }, latest: string | null): ScreenContext {
-  // The typed first name and no résumé questions: nothing about the person on file reaches the model or the page.
-  return screenContextOf({ companyName: d.company.name, companyLocations: d.company.locations, noticeOverrides: d.company.settings.notices, packet: d.packet, firstName: d.row.firstName, focusUnknowns: [] }, { channel: "web", ...state }, latest);
+  // The typed first name and no résumé questions: nothing about the person on file reaches the model or the page. A
+  // Kanvis-style chat names only what was typed in this visit (`typedFacts`), as a first application's does.
+  return screenContextOf({ companyName: d.company.name, companyLocations: d.company.locations, noticeOverrides: d.company.settings.notices, packet: d.packet, firstName: d.row.firstName, focusUnknowns: [], facts: chatFactsFor(null, state.progress, "apply") }, { channel: "web", ...state }, latest);
 }
 
 function closedFor(status: string, companyName: string): string {
@@ -267,9 +289,12 @@ export function hashToken(raw: string): string {
 
 type DetachedState = { status: ScreenStatus; transcript: ScreenTranscriptEntry[]; answers: Record<string, string>; progress: ScreenProgress };
 
-/** Writes the assistant's reply on a detached conversation; the end of the questions goes to "check your answers" (E10), saying `reviewMessage` (REVIEW_MESSAGE unless given). */
-async function detachedReply(tx: Tx, d: Detached, s: DetachedState & { message: string; questionKey: string | null; done: boolean; aiRunId?: string; reviewMessage?: string }): Promise<TurnResult> {
-  const message = s.done ? s.reviewMessage ?? REVIEW_MESSAGE : s.message;
+/**
+ * Writes the assistant's reply on a detached conversation; the end of the questions goes to "check your answers" (E10),
+ * saying `reviewMessage` (REVIEW_MESSAGE unless given), or, in a Kanvis-style chat, its close and what happens next.
+ */
+async function detachedReply(tx: Tx, d: Detached, s: DetachedState & { message: string; questionKey: string | null; done: boolean; aiRunId?: string; reviewMessage?: string; closing?: string | null }): Promise<TurnResult> {
+  const message = s.done ? (s.progress.chat ? chatClosingMessage(s.closing, d.company.name) : s.reviewMessage ?? REVIEW_MESSAGE) : s.message;
   const progress: ScreenProgress = s.done ? { ...s.progress, phase: "review", currentQuestionKey: null } : s.progress;
   const transcript = [...s.transcript, { role: "assistant" as const, content: message, at: new Date().toISOString(), questionKey: s.questionKey ?? undefined, channel: "web" as const, aiRunId: s.aiRunId }];
   await tx.update(unconfirmedScreens).set({ status: s.status, transcript, answers: s.answers, progress }).where(eq(unconfirmedScreens.id, d.row.id));
@@ -327,14 +352,16 @@ async function beginDetachedTurn(tx: Tx, deps: ConversationDeps, id: string, inp
     const lead = tapped ? "Thanks." : "No problem.";
     const silent: ScreenTurn = { messageToCandidate: " ", questionKey: next?.key ?? null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: !next, humanRequested: false };
     progress = advanceProgress(progress, silent);
-    return { done: await detachedReply(tx, d, { ...state, answers, progress, message: next ? `${lead} Next: ${next.question}` : lead, questionKey: next?.key ?? null, done: !next }) };
+    // The Kanvis-style chat says it in its own shape, as a first application's does (`answerInCode`).
+    const message = next ? (progress.chat ? `${chatCodeLead(tapped, movesOn)}\n\n${next.question}` : `${lead} Next: ${next.question}`) : lead;
+    return { done: await detachedReply(tx, d, { ...state, answers, progress, message, questionKey: next?.key ?? null, done: !next, closing: `Thank you, ${row.firstName || "there"}.` }) };
   }
   // The same cap on model calls as the real conversation (`modelTurnCap`), ending the same way: "check your answers",
   // where nothing calls the model. Nothing about it tells this conversation apart from a first application's.
-  if (modelTurnsUsed(transcript) >= modelTurnCap(packet)) {
-    await emit(tx, { type: "screen.turn_cap_reached", companyId: d.company.id, actor: { kind: "system", id: "screening" }, subject: { type: "screen", id: row.id }, payload: { detached: true, modelTurns: modelTurnsUsed(transcript), cap: modelTurnCap(packet), ending: "review", channel: "web" } });
+  if (modelTurnsUsed(transcript) >= modelTurnCap(packet, row.progress)) {
+    await emit(tx, { type: "screen.turn_cap_reached", companyId: d.company.id, actor: { kind: "system", id: "screening" }, subject: { type: "screen", id: row.id }, payload: { detached: true, modelTurns: modelTurnsUsed(transcript), cap: modelTurnCap(packet, row.progress), ending: "review", channel: "web" } });
     const ended: ScreenTurn = { messageToCandidate: " ", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: true, humanRequested: false };
-    return { done: await detachedReply(tx, d, { ...state, progress: advanceProgress(state.progress, ended), message: TURN_CAP_REVIEW_MESSAGE, reviewMessage: TURN_CAP_REVIEW_MESSAGE, questionKey: null, done: true }) };
+    return { done: await detachedReply(tx, d, { ...state, progress: advanceProgress(state.progress, ended), message: TURN_CAP_REVIEW_MESSAGE, reviewMessage: TURN_CAP_REVIEW_MESSAGE, questionKey: null, done: true, closing: CHAT_CAP_CLOSING }) };
   }
   return { ctx: detachedContext(d, state, message), turn: transcript.length };
 }
@@ -358,7 +385,10 @@ async function finishDetachedTurn(tx: Tx, deps: ConversationDeps, id: string, ou
     await tx.update(unconfirmedScreens).set({ progress: { ...row.progress, failures } }).where(eq(unconfirmedScreens.id, row.id));
     return { kind: "error", message: "Sorry, something went wrong on our end. Please send that again in a minute." };
   }
-  let turn = enforceTurnRules(out.output, packet, row.progress, answersOf(row));
+  // A Kanvis-style chat is held to its own rules, exactly as a first application's (`finishScreenTurn`).
+  const latest = [...row.transcript].reverse().find((t) => t.role === "candidate")?.content ?? null;
+  const enforced = row.progress.chat ? enforceChatTurn(out.output, packet, row.progress, answersOf(row), { transcript: row.transcript, latest }) : { turn: enforceTurnRules(out.output, packet, row.progress, answersOf(row)), move: null };
+  let turn = enforced.turn;
   if (turn.humanRequested) {
     turn = !/business/i.test(turn.messageToCandidate) ? { ...turn, messageToCandidate: `${turn.messageToCandidate} You can expect to hear from a person ${humanResponseExpectation(new Date(), await loadBusinessCalendar(tx))}.` } : turn;
     await tx.update(unconfirmedScreens).set({ transcript: [...row.transcript, { role: "assistant", content: turn.messageToCandidate, at: now.toISOString(), channel: "web", aiRunId: out.runId }] }).where(eq(unconfirmedScreens.id, row.id));
@@ -367,14 +397,14 @@ async function finishDetachedTurn(tx: Tx, deps: ConversationDeps, id: string, ou
     return { kind: "reply", message: turn.messageToCandidate, done: false, humanRequested: true };
   }
   const answers = { ...row.answers };
-  let progress = advanceProgress(row.progress, turn);
+  let progress = advanceProgress(row.progress, turn, enforced.move);
   if (turn.answerRecorded) {
     const recorded = redactProtected(turn.answerRecorded.answer);
     if (isFocusKey(turn.answerRecorded.questionKey)) progress = withFocusAnswer(progress, turn.answerRecorded.questionKey, recorded);
     else answers[turn.answerRecorded.questionKey] = recorded;
   }
   if (row.status === "paused") progress = { ...progress, pausedAt: undefined };
-  return detachedReply(tx, d, { status: "in_progress", transcript: row.transcript, answers, progress, message: turn.messageToCandidate, questionKey: turn.questionKey, done: turn.done, aiRunId: out.runId });
+  return detachedReply(tx, d, { status: "in_progress", transcript: row.transcript, answers, progress, message: turn.messageToCandidate, questionKey: turn.questionKey, done: turn.done, aiRunId: out.runId, closing: turn.done ? turn.messageToCandidate : null });
 }
 
 /**
@@ -455,7 +485,7 @@ export async function discardUnconfirmed(tx: Tx, id: string, now: Date): Promise
   const [row] = await tx.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.id, id)).limit(1);
   if (!row || row.discardedAt || row.confirmation === "confirmed" || row.confirmation === "not_added") return false;
   if (Date.parse(row.expiresAt) > now.getTime()) return false;
-  await tx.update(unconfirmedScreens).set({ transcript: [], answers: {}, firstName: "", confirmTokenHash: null, confirmation: "discarded", discardedAt: now.toISOString(), status: ACTIVE.has(row.status) || row.status === "paused" ? "expired" : row.status }).where(eq(unconfirmedScreens.id, id));
+  await tx.update(unconfirmedScreens).set({ transcript: [], answers: {}, progress: withoutCandidateWords(row.progress), firstName: "", confirmTokenHash: null, confirmation: "discarded", discardedAt: now.toISOString(), status: ACTIVE.has(row.status) || row.status === "paused" ? "expired" : row.status }).where(eq(unconfirmedScreens.id, id));
   await emit(tx, { type: "screen.repeat_discarded", companyId: row.companyId, actor: { kind: "system", id: "repeat_application" }, subject: { type: "screen", id }, payload: { confirmation: row.confirmation } });
   return true;
 }
@@ -480,7 +510,11 @@ async function findByConfirmToken(db: Db, raw: string): Promise<{ id: string; co
 const PERSON_INTENTS: readonly string[] = ["person", "outage"];
 
 function confirmationView(d: Detached, now: Date): RepeatConfirmationView {
-  const base = { intent: d.row.intent ?? null, companyName: d.company.name, roleTitle: d.packet.identity.title, answered: Object.keys(answersOf(d.row)).length, questions: d.packet.screening.questions.length };
+  // A Kanvis-style chat counts its written questions, as Review & send does (what it asked about the CV is in the conversation).
+  const plan = d.row.progress.chat;
+  const written = plan ? plan.items.filter((i) => i.kind === "written").map((i) => i.key) : null;
+  const given = answersOf(d.row);
+  const base = { intent: d.row.intent ?? null, companyName: d.company.name, roleTitle: d.packet.identity.title, answered: written ? written.filter((k) => given[k] !== undefined).length : Object.keys(given).length, questions: written ? written.length : d.packet.screening.questions.length };
   if (d.row.confirmation === "confirmed") return { ...base, state: PERSON_INTENTS.includes(d.row.intent ?? "") ? "person" : "added" };
   if (d.row.confirmation === "not_added") return { ...base, state: "not_added" };
   if (d.row.confirmation !== "sent" || d.row.discardedAt || Date.parse(d.row.expiresAt) <= now.getTime()) return { ...base, state: "gone" };
@@ -521,7 +555,10 @@ export async function confirmRepeat(container: Container, raw: string): Promise<
     const open = ["received", "eligible", "triaged", "screen_invited"].includes(app.stage);
     const candidateActor: Actor = { kind: "candidate", id: candidate.id };
     const finish = async (confirmation: "confirmed" | "not_added", mergedScreenId: string | null) => {
-      await tx.update(unconfirmedScreens).set({ confirmation, confirmedAt: now.toISOString(), mergedScreenId, transcript: [], answers: {}, firstName: "" }).where(eq(unconfirmedScreens.id, row.id));
+      // Everything of theirs goes from the copy (`withoutCandidateWords`): what was typed in that visit (Wave S7,
+      // `typedFacts`), the written-up answers and the open questions' answers. A merged screen already holds them all;
+      // answers that were not added never joined any application, so nothing of them is kept.
+      await tx.update(unconfirmedScreens).set({ confirmation, confirmedAt: now.toISOString(), mergedScreenId, transcript: [], answers: {}, firstName: "", progress: withoutCandidateWords(row.progress) }).where(eq(unconfirmedScreens.id, row.id));
       await emit(tx, { type: "screen.repeat_confirmed", companyId: company.id, actor: candidateActor, subject: { type: "screen", id: mergedScreenId ?? row.id }, payload: { unconfirmedId: row.id, intent, added: confirmation === "confirmed" } });
     };
     if (!open || hasAnswers || stoppedByTeam) {
@@ -530,7 +567,7 @@ export async function confirmRepeat(container: Container, raw: string): Promise<
     }
     const target = own.find((s) => s.status === "invited" || s.status === "reminded") ?? (await createScreen(tx, { companyId: company.id, applicationId: app.id, channel: "web", expiresAt: new Date(now.getTime() + SCREEN_LINK_HOURS * HOUR).toISOString(), now, invitedVia: "confirmed_repeat", flow: "one_visit" }));
     const answered = Object.keys(answersOf(row)).length;
-    const progress: ScreenProgress = { ...row.progress, flow: "one_visit", ...(intent === "answers" ? { submittedAt: row.progress.submittedAt ?? now.toISOString() } : {}) };
+    const progress: ScreenProgress = { ...row.progress, typedFacts: undefined, flow: "one_visit", ...(intent === "answers" ? { submittedAt: row.progress.submittedAt ?? now.toISOString() } : {}) };
     const done = intent === "answers";
     await tx.update(screens).set({ transcript: row.transcript, answers: row.answers, progress, status: done ? "completed" : "in_progress", startedAt: row.startedAt ?? now.toISOString(), lastCandidateMessageAt: row.lastCandidateMessageAt ?? now.toISOString(), completedAt: done ? now.toISOString() : null }).where(eq(screens.id, target.id));
     // The stages a first application would have passed through.
@@ -611,9 +648,23 @@ export type ConversationView = {
   personAsked: { dueWords: string; overdue: boolean } | null;
   /** Closed as complete by a recruiter's notes from a call: the candidate never sent their own answers, so the page never says they did. */
   finishedOnACall: boolean;
+  /**
+   * Wave S7 (the contracts in s7-contracts.md): the written questions in order (`writtenQuestionsOf`, never their private
+   * `lookFor`), the header's counter (null for a chat without a plan), and the written-up answers Review & send shows
+   * (null until written). Read only by the candidate's own pages.
+   */
+  written: WrittenQuestionView[];
+  counter: ChatCounter | null;
+  writeup: ScreenWriteup | null;
+  /**
+   * The form's answers as sentences, as the chat read them (`chatFactsFor`): for a chat offered in the visit, what that
+   * visit typed (`typedFacts`), the same for a first application and a repeat one; for a chat emailed later, the
+   * application's own. Review & send lists them read only.
+   */
+  formAnswers: string[];
 };
 
-function viewOf(input: { token: string; status: string; channel: string; progress: ScreenProgress; answers: Record<string, string>; transcript: ScreenTranscriptEntry[]; companyName: string; notices: Company["settings"]["notices"]; packet: RolePacket; firstName: string; expectation: string; personAsked: ConversationView["personAsked"] }): ConversationView {
+function viewOf(input: { token: string; status: string; channel: string; progress: ScreenProgress; answers: Record<string, string>; transcript: ScreenTranscriptEntry[]; companyName: string; notices: Company["settings"]["notices"]; packet: RolePacket; rolePacket: RolePacket; firstName: string; expectation: string; personAsked: ConversationView["personAsked"]; formAnswers: string[] }): ConversationView {
   const { progress, packet } = input;
   const status = input.status as ScreenStatus;
   const oneVisit = progress.flow === "one_visit";
@@ -632,7 +683,8 @@ function viewOf(input: { token: string; status: string; channel: string; progres
     companyName: input.companyName,
     roleTitle: packet.identity.title,
     firstName: input.firstName,
-    intro: screenIntro({ companyName: input.companyName, firstName: input.firstName, packet, noticeOverrides: input.notices, focus: !!progress.focusQuestions?.length }),
+    // The chat offered in the same visit on the web gets its plan at Start (`withChatPlan`), and so asks the company's written questions.
+    intro: screenIntro({ companyName: input.companyName, firstName: input.firstName, packet, noticeOverrides: input.notices, focus: !!progress.focusQuestions?.length, chat: !!progress.chat || (web && oneVisit) }),
     transcript: input.transcript.filter((t) => t.role !== "recruiter").map((t) => ({ role: t.role as "assistant" | "candidate" | "system", content: t.content, ...(t.questionKey ? { questionKey: t.questionKey } : {}) })),
     answered: Object.keys(answers).length,
     total: packet.screening.questions.length,
@@ -642,6 +694,10 @@ function viewOf(input: { token: string; status: string; channel: string; progres
     personExpectation: input.expectation,
     personAsked: status === "human_requested" ? input.personAsked : null,
     finishedOnACall: status === "completed" && progress.completedBy === "recruiter_call",
+    written: writtenQuestionsOf(input.rolePacket),
+    counter: chatCounter(progress.chat),
+    writeup: progress.writeup ?? null,
+    formAnswers: input.formAnswers,
   };
 }
 
@@ -665,13 +721,13 @@ export async function conversationView(db: Db, ref: ConversationRef, now: Date =
     if (ref.kind === "screen") {
       const b = await loadScreenBundle(tx, ref.id);
       if (!b) return null;
-      return viewOf({ token: ref.token, status: b.screen.status, channel: b.screen.channel, progress: b.screen.progress, answers: b.screen.answers, transcript: b.screen.transcript, companyName: b.company.name, notices: b.company.settings.notices, packet: b.packet, firstName: b.candidate.firstName, expectation, personAsked: b.screen.status === "human_requested" ? asked(b.screen.humanRequestedAt) : null });
+      return viewOf({ token: ref.token, status: b.screen.status, channel: b.screen.channel, progress: b.screen.progress, answers: b.screen.answers, transcript: b.screen.transcript, companyName: b.company.name, notices: b.company.settings.notices, packet: b.packet, rolePacket: b.rolePacket, firstName: b.candidate.firstName, expectation, personAsked: b.screen.status === "human_requested" ? asked(b.screen.humanRequestedAt) : null, formAnswers: chatFactsFor(b.chatFacts, b.screen.progress, b.screen.invitedVia)?.formAnswers ?? [] });
     }
     const d = await loadDetached(tx, ref.id);
     if (!d) return null;
     // A wiped conversation reads as an expired link, like a screen nobody answered.
     const status = d.row.discardedAt ? "expired" : d.row.status;
-    return viewOf({ token: ref.token, status, channel: "web", progress: d.row.progress, answers: d.row.answers, transcript: d.row.discardedAt ? [] : d.row.transcript, companyName: d.company.name, notices: d.company.settings.notices, packet: d.packet, firstName: d.row.firstName || "there", expectation, personAsked: status === "human_requested" ? asked(d.row.finishedAt) : null });
+    return viewOf({ token: ref.token, status, channel: "web", progress: d.row.progress, answers: d.row.answers, transcript: d.row.discardedAt ? [] : d.row.transcript, companyName: d.company.name, notices: d.company.settings.notices, packet: d.packet, rolePacket: d.rolePacket, firstName: d.row.firstName || "there", expectation, personAsked: status === "human_requested" ? asked(d.row.finishedAt) : null, formAnswers: d.row.discardedAt ? [] : chatFactsFor(null, d.row.progress, "apply")?.formAnswers ?? [] });
   });
 }
 
@@ -690,12 +746,21 @@ export async function conversationStart(container: Container, ref: ConversationR
   });
 }
 
-/** The first question of a detached conversation, in the packet's words, as `startScreenConversation` writes it. */
+/**
+ * The first question of a detached conversation, in the packet's words, as `startScreenConversation` writes it. A
+ * Kanvis-style chat gets its plan here too, with no gaps: nothing about the person on file (their CV, their reading,
+ * their form) is read for a conversation anyone could have started with their address. It opens on the typed name.
+ */
 async function openDetached(tx: Tx, d: Detached, at: string): Promise<boolean> {
-  const first = nextQuestion(d.packet, d.row.progress, answersOf(d.row));
+  const facts = chatFactsFor(null, d.row.progress, "apply");
+  const gaps = chatGaps({ packet: d.rolePacket, progress: d.row.progress, triageMet: null, facts, written: writtenQuestionsOf(d.rolePacket).map((w) => w.key) });
+  const planned = withChatPlan(d.rolePacket, d.row.progress, { channel: "web", gaps, at });
+  const packet = planned.chat ? chatPacket(d.rolePacket, planned) : d.packet;
+  const first = nextQuestion(packet, planned, answersOf(d.row));
   if (!first) return false;
-  const progress = advanceProgress(d.row.progress, { messageToCandidate: first.question, questionKey: first.key, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false });
-  await tx.update(unconfirmedScreens).set({ status: "in_progress", startedAt: d.row.startedAt ?? at, lastCandidateMessageAt: at, progress, transcript: [...d.row.transcript, { role: "assistant", content: first.question, at, questionKey: first.key, channel: "web", source: "system" }] }).where(eq(unconfirmedScreens.id, d.row.id));
+  const content = planned.chat ? chatOpening({ firstName: d.row.firstName, cv: facts?.cv ?? [], question: first.question }) : first.question;
+  const progress = advanceProgress(planned, { messageToCandidate: content, questionKey: first.key, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false });
+  await tx.update(unconfirmedScreens).set({ status: "in_progress", startedAt: d.row.startedAt ?? at, lastCandidateMessageAt: at, progress, transcript: [...d.row.transcript, { role: "assistant", content, at, questionKey: first.key, channel: "web", source: "system" }] }).where(eq(unconfirmedScreens.id, d.row.id));
   return true;
 }
 

@@ -1,9 +1,9 @@
 import { and, desc, eq, ne, or } from "drizzle-orm";
-import type { EvidenceAssessment, ResumeExtraction } from "@ros/contracts";
+import { ResumeExtraction, type EvidenceAssessment } from "@ros/contracts";
 import type { RunOutcome } from "@ros/ai";
 import { ASSESSMENT_UNAVAILABLE_TEXT, RESUME_UNREADABLE_TEXT, audit, createEscalation, evaluateEligibility, emit, gate, notify, readingConsistency, resolvePolicy, transition } from "@ros/core";
-import { applications, assessments, candidates, communications, companies, documents, rolePackets, roles, screens, workflowRuns, type ConsentRecord, type Tx } from "@ros/db";
-import { assessApplication, extractResume, sendAcknowledgment, type AcknowledgedConversation } from "@ros/agents";
+import { aiRuns, applications, assessments, candidates, communications, companies, documents, rolePackets, roles, screens, workflowRuns, type ConsentRecord, type Tx } from "@ros/db";
+import { assessApplication, extractResume, sendAcknowledgment, verifyQuotes, type AcknowledgedConversation } from "@ros/agents";
 import { twoPhase, type WorkflowDefinition } from "../types";
 import { examineQuarantinedDocument, queueObjectDiscard, recordQuarantineVerdict, type QuarantineExamination } from "../documents";
 import { SUGGESTION_WINDOW_HOURS, settleSuggestion, waitForSuggestion, type SuggestionState } from "../suggestions";
@@ -149,6 +149,11 @@ export const applicationIntake: WorkflowDefinition<State> = {
           return d && d.status === "clean" && d.textExtracted ? d : null;
         });
         if (!doc) return null;
+        // Wave S7: the apply form read this very file already (after the same checks and scan, on the worker); its reading
+        // is reused, its quotes checked again against the text the scan step extracted, and the model is not asked twice.
+        const formRun = doc.extractedByAiRunId;
+        const reused = formRun ? await ctx.read((q) => formReadingOf(q, { aiRunId: formRun, documentId: doc.id })) : null;
+        if (reused) return { documentId: doc.id, out: { ok: true, output: verifyQuotes(reused.output, doc.textExtracted ?? ""), runId: reused.runId, model: reused.model } };
         const out = await extractResume(ctx.db, ctx.services.ai, { companyId: ctx.companyId, workflowRunId: ctx.run.id, text: doc.textExtracted!, filename: doc.filename, documentId: doc.id });
         return { documentId: doc.id, out };
       },
@@ -265,7 +270,9 @@ export const applicationIntake: WorkflowDefinition<State> = {
             packet,
             extraction: app.extraction,
             resumeText: doc?.textExtracted ?? null,
-            applicationAnswers: { eligibility: (app.answers.eligibility ?? {}) as Record<string, unknown>, noResumeSummary: app.answers.noResume?.summary },
+            // `fromCv` (Wave S7): answers the form suggested from the résumé and the candidate left as they were are read as
+            // the résumé's, never as the candidate's own words.
+            applicationAnswers: { eligibility: (app.answers.eligibility ?? {}) as Record<string, unknown>, noResumeSummary: app.answers.noResume?.summary, ...(app.answers.fromCv?.length ? { fromCv: app.answers.fromCv } : {}) },
             eligibility: app.eligibility,
             // An application read with a failed eligibility answer on record got here only because a person kept them in
             // ("Keep them in", or "Review anyway" after an eligibility decline): the reading is told so (known bug 30).
@@ -390,6 +397,18 @@ export const applicationIntake: WorkflowDefinition<State> = {
     },
   },
 };
+
+/**
+ * The apply form's own reading of a résumé (Wave S7, apps/api/src/services/apply-details.ts), tied to this document when
+ * the application was created: a `resume.extract` run that succeeded, was made for the form, and names this document.
+ * Its output is checked against the extraction schema again; anything else is not reused.
+ */
+async function formReadingOf(q: Tx, input: { aiRunId: string; documentId: string }): Promise<{ runId: string; model: string; output: ResumeExtraction } | null> {
+  const [run] = await q.select({ id: aiRuns.id, task: aiRuns.task, status: aiRuns.status, model: aiRuns.model, inputRef: aiRuns.inputRef, structuredOutput: aiRuns.structuredOutput }).from(aiRuns).where(eq(aiRuns.id, input.aiRunId)).limit(1);
+  if (!run || run.task !== "resume.extract" || run.status !== "ok" || run.inputRef.purpose !== "apply_form" || run.inputRef.documentId !== input.documentId) return null;
+  const parsed = ResumeExtraction.safeParse(run.structuredOutput);
+  return parsed.success ? { runId: run.id, model: run.model, output: parsed.data } : null;
+}
 
 /** Stages the apply page may leave an application at when it offered the conversation in the same visit (plan E1). */
 const ONE_VISIT_STAGES: readonly string[] = ["received", "eligible", "screen_invited", "screening", "screen_complete", "triaged"];

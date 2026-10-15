@@ -82,6 +82,10 @@ test.describe("candidate journey on a phone", () => {
 
     // the form: the job's facts on top, the transparency block and the privacy link on the page; the acknowledgment starts unchecked
     await expect(page.getByRole("heading", { level: 1, name: /^Apply: / })).toBeVisible();
+    // Wave S7: the steps header (Details is the step), the résumé first, and the company's questions numbered under their own heading
+    await expect(page.getByRole("navigation", { name: "Your application" }).locator('[aria-current="step"]')).toHaveText("Details");
+    await expect(page.getByRole("heading", { name: "Start with your resume" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /^Questions from / })).toBeVisible();
     await expect(page.getByText("$45–$55 an hour").first()).toBeVisible();
     await expect(page.getByRole("heading", { name: "Before you send" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Read how we handle your information" }).first()).toHaveAttribute("href", "/privacy");
@@ -145,31 +149,31 @@ test.describe("candidate journey on a phone", () => {
     await noHorizontalOverflow(page, "person choice");
     await page.getByRole("link", { name: "Back to the conversation" }).click();
 
-    // Start, from the keyboard: the first question at once, in large type, with "Question 1 of N" and the quiet skip
+    // Start, from the keyboard: the chat at once (Wave S7), the message to answer in large type, the counter in the
+    // steps header (never the questions themselves), and the quiet skip
     await page.getByRole("button", { name: "Start" }).focus();
     await page.keyboard.press("Enter");
-    // the progress bar's label (the bar repeats the words inside it for browsers that cannot draw one)
-    await expect(page.locator('label[for="progress"]')).toHaveText(/^Question 1 of \d+$/);
+    await expect(page.getByRole("heading", { level: 1, name: /^Your chat about the / })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Your application" })).toContainText(/\d+ of \d+ required · /);
+    await expect(page.getByRole("list", { name: "Your chat" }).locator("li.msg.assistant.now")).toBeVisible();
     await expect(page.getByRole("button", { name: "Skip this question" }).first()).toBeVisible();
     await expect(page.getByRole("link", { name: "I'd rather talk to a person" })).toBeVisible();
     await expectAccessible(page, "first question");
     await noHorizontalOverflow(page, "first question");
     // every question: a tap where one is offered (E12), words otherwise, and the example question skipped (E11)
-    for (let i = 0; i < 20; i++) {
-      if (await page.getByRole("heading", { level: 1, name: "Check your answers" }).isVisible()) break;
-      // "Earlier in the conversation" holds Maria's own answers beside the assistant's lines (polish list), from the keyboard
+    const chatEnd = page.getByRole("button", { name: "Review and send" });
+    for (let i = 0; i < 24; i++) {
+      if (await chatEnd.isVisible()) break;
+      // the whole chat is one thread: Maria's own replies beside the assistant's lines (polish list)
       if (i === 2) {
-        await page.locator("details.earlier > summary").focus();
-        await page.keyboard.press("Enter");
-        const earlier = page.getByRole("list", { name: "Earlier questions and your answers" });
-        await expect(earlier).toBeVisible();
-        await expect(earlier.locator("li.msg.assistant").first()).toBeVisible();
-        expect(await earlier.locator("li.msg.candidate").count()).toBeGreaterThanOrEqual(1);
-        await expectAccessible(page, "earlier in the conversation");
-        await noHorizontalOverflow(page, "earlier in the conversation");
+        const thread = page.getByRole("list", { name: "Your chat" });
+        await expect(thread.locator("li.msg.assistant").first()).toBeVisible();
+        expect(await thread.locator("li.msg.candidate").count()).toBeGreaterThanOrEqual(1);
+        await expectAccessible(page, "the chat so far");
+        await noHorizontalOverflow(page, "the chat so far");
       }
-      const heading = (await page.getByRole("heading", { level: 1 }).textContent()) ?? "";
-      if (/difficult moment/i.test(heading)) {
+      const asked = (await page.locator("li.msg.assistant.now").textContent()) ?? "";
+      if (/difficult moment/i.test(asked)) {
         await page.getByRole("button", { name: "Skip this question" }).first().click();
       } else if (await page.getByRole("button", { name: "Yes", exact: true }).isVisible()) {
         await page.getByRole("button", { name: "Yes", exact: true }).click();
@@ -184,21 +188,25 @@ test.describe("candidate journey on a phone", () => {
         await page.getByLabel("Monday").check();
         await page.getByRole("button", { name: "Send", exact: true }).first().click();
       } else {
-        await page.getByLabel(/^Your answer/).fill("I have been a hygienist for six years, see about nine patients a day in Dentrix, and hold an active California RDH license.");
+        await page.getByLabel(/^Your reply/).fill("I have been a hygienist for six years, see about nine patients a day in Dentrix, and hold an active California RDH license.");
         await page.getByRole("button", { name: "Send", exact: true }).click();
       }
       if (i === 1) await expectAccessible(page, "a later question");
     }
-    // check your answers (E10): the skipped one is marked; answer it from here, then send
-    await expect(page.getByRole("heading", { level: 1, name: "Check your answers" })).toBeVisible();
-    await expect(page.getByText("Skipped", { exact: true })).toBeVisible();
-    await expectAccessible(page, "check your answers");
-    await noHorizontalOverflow(page, "check your answers");
+    // the chat's end, then Review & send (Wave S7): the answers written up from her replies, the skipped one marked;
+    // answer it from here, then send
+    await expect(page.getByText("Your chat is complete.")).toBeVisible();
+    await expectAccessible(page, "the chat's end");
+    await chatEnd.click();
+    await expect(page.getByRole("heading", { level: 1, name: "Check what you're sending" })).toBeVisible({ timeout: 60_000 });
+    await expect(page.locator("li.answer .pill", { hasText: /^Skipped$/ }).first()).toBeVisible();
+    await expectAccessible(page, "check what you're sending");
+    await noHorizontalOverflow(page, "check what you're sending");
     await page.getByRole("link", { name: /^Answer it/ }).first().click();
     await page.getByLabel(/^Your answer/).fill("A nervous patient wanted to stop, so I slowed down and explained each step; she rebooked with me.");
     await page.getByRole("button", { name: "Save this answer" }).click();
     await expect(page.getByText("Your answer is changed.")).toBeVisible();
-    await expect(page.getByText("Changed", { exact: true })).toBeVisible();
+    await expect(page.locator("li.answer .pill", { hasText: /^Changed$/ }).first()).toBeVisible();
     await page.getByRole("button", { name: "Send my answers" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Thanks, your answers are sent" })).toBeVisible();
     await expectAccessible(page, "answers sent");
@@ -292,5 +300,27 @@ test.describe("candidate journey on a phone", () => {
     await noHorizontalOverflow(page, "interview cancelled");
     await page.reload();
     await expect(page.getByRole("heading", { level: 1, name: "Your interview is cancelled" })).toBeVisible();
+  });
+
+  // Wave S7 (spec steps 2 to 4): choosing the résumé reads it at once (the worker checks it, scans it and reads it), and
+  // the same form comes back as "Check your details", every filled value marked for checking, on a phone.
+  test("the résumé first: choosing it reads it, and the form comes back as Check your details with each filled value marked", async ({ page, browser, baseURL }) => {
+    test.setTimeout(180_000);
+    await signIn(page, { email: `owner+cv${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
+    await createCompanyThroughTheForm(page, `Brightline Resume ${run}`);
+    const companyId = ((await (await page.request.get(`${baseURL}/api/v1/companies/current`)).json()) as { id: string }).id;
+    await useOneVisitFlow(browser, baseURL!, companyId);
+    const seeded = await seedOpenRole(page.request, baseURL!);
+    await page.goto(`/careers/${seeded.slug}/jobs/${seeded.roleId}/apply`);
+    await expect(page.getByRole("heading", { name: "Start with your resume" })).toBeVisible();
+    await page.locator('input[name="resume"]').setInputFiles({ name: "maria-reyes.txt", mimeType: "text/plain", buffer: Buffer.from(`Maria Reyes\nmaria.reyes.cv+${run}@example.com\n(949) 555-0123\nRegistered Dental Hygienist at Coastal Family Dentistry 2019 - present\nActive CA RDH license 554433\nBLS certified\nDentrix, periodontal charting\n`) });
+    await expect(page.getByRole("heading", { name: "Check your details" })).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText(/We read maria-reyes\.txt and filled in your details below\./)).toBeVisible();
+    await expect(page.getByLabel("First name")).toHaveValue("Maria");
+    await expect(page.getByLabel("Last name")).toHaveValue("Reyes");
+    await expect(page.getByText("From your resume — check it").first()).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Your application" }).locator('[aria-current="step"]')).toHaveText("Details");
+    await expectAccessible(page, "check your details");
+    await noHorizontalOverflow(page, "check your details");
   });
 });

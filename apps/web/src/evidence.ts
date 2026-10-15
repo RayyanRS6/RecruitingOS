@@ -95,9 +95,12 @@ export function openScreenOf(a: ApplicationDetail): ApplicationDetail["screens"]
   return a.screens.find((s) => OPEN_SCREEN_STATUSES.includes(s.status)) ?? null;
 }
 
-/** The text of a screening question by key: the packet's own, or one of the open questions a focused screen started with. */
-export function screenQuestionText(a: ApplicationDetail, key: string): string | null {
-  return a.packetLabels.questions.find((q) => q.key === key)?.question ?? a.screens.flatMap((s) => s.progress.focusQuestions ?? []).find((f) => f.key === key)?.question ?? null;
+/**
+ * The text of a screening question by key: the packet's own, one of the company's written questions the chat asks (Wave
+ * S7), or one of the open questions a focused screen started with.
+ */
+export function screenQuestionText(a: Pick<ApplicationDetail, "packetLabels" | "screens">, key: string): string | null {
+  return a.packetLabels.questions.find((q) => q.key === key)?.question ?? a.packetLabels.written?.find((w) => w.key === key)?.question ?? a.screens.flatMap((s) => s.progress.focusQuestions ?? []).find((f) => f.key === key)?.question ?? null;
 }
 
 /**

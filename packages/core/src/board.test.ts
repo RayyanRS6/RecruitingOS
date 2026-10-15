@@ -121,6 +121,16 @@ describe("boardPlacement", () => {
     expect(place({ stage: "screen_invited", latest: unsure, match: score(30) })).toMatchObject({ column: "longlist", confident: false, needsYourEye: "The assistant could not say enough from the application to go on." });
   });
 
+  it("asks for more instead of the Shortlist when a must-have is only partly shown and cost nothing (Wave S7)", () => {
+    // the rest of the evidence is all met, so the partly shown must-have counted at 100 and the score is 100
+    const partly = score(100, { breakdown: [{ key: "perio", label: "Perio charting", mustHave: true, importance: null, weightPct: 40, pctMet: 50, countedPct: 100, pointsLost: 0, finding: "Partly shown", source: "resume", quote: "some perio", unquoted: false }] });
+    expect(place({ match: partly })).toMatchObject({ column: "longlist", confident: true, needsYourEye: null, suggestedAction: "longlist", reason: "Match score 100: Perio charting partly shown.", nextStep: { kind: "ask_more", reason: "Their application only partly shows Perio charting." } });
+    // a skill partly shown at the rest's level keeps the Shortlist; the line still names it
+    const skill = score(100, { breakdown: [{ ...partly.breakdown[0]!, mustHave: false, importance: "helpful" }] });
+    expect(place({ match: skill })).toMatchObject({ column: "shortlist", reason: "Match score 100: Perio charting partly shown." });
+    expect(place({ match: score(100, { breakdown: [] }) }).reason).toBe("Match score 100: every requirement judged so far is met.");
+  });
+
   it("holds an eligibility answer for a person, with nothing to apply", () => {
     expect(place({ stage: "ineligible" })).toMatchObject({ column: "longlist", confident: false, suggestedAction: null, nextStep: { kind: "check_eligibility", label: "Check eligibility" } });
   });

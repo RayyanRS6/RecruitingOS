@@ -30,4 +30,6 @@ regexes = [
   '''wh-secret-for-notification-tests-123''',
   '''AbCdEfGh1234567890abcdefghijk''',
   '''example\.(com|test|invalid)''',
+  # must-have keys in role packets and tests (mh_1_license and the like): names, not credentials
+  '''^mh_\d+_[a-z_]+$''',
 ]

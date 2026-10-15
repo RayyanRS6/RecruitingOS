@@ -306,6 +306,30 @@ describe("the customer drawer", () => {
     expect(html.match(/<div class="stat-row">/g)).toHaveLength(2);
   });
 
+  it("S7-1: the Overview says whether applicants see their match score (on unless ITS turned it off), and How people apply holds the switch with its reason", async () => {
+    const { candidateScoreOn, candidateScoreToast, candidateScoreWords } = await import("@ros/web/src/pages/admin/customers");
+    const rows = three().map((c) => (c.id === "co3" ? { ...c, candidateScoreShown: false, settings: { candidateScoreSetBy: { at: "2026-10-15T09:00:00.000Z", by: { id: "s1", name: "Ada Admin" }, reason: "Waiting for counsel" } } } : c));
+    const qc = client([[["admin", "customers"], rows], [["admin", "alerts"], []], [["admin", "customer-report", "co3"], { roles: [] }]], admin);
+    // absent from an older answer reads as on
+    expect(text(render(qc, Customers("open=co1")))).toContain("Applicants' match score Shown to applicants after they send Change");
+    expect(render(qc, Customers("open=co1"))).toContain('aria-label="Change whether applicants see their match score"');
+    expect(text(render(qc, Customers("open=co3")))).toContain("Applicants' match score Not shown to applicants Change");
+    const apply = render(qc, Customers("open=co3&tab=apply"));
+    const words = text(apply);
+    expect(words).toContain("Applicants' match score");
+    expect(words).toContain("Other requirements fold into one line; the team's private notes never show.");
+    expect(words).toContain("A lawyer reviews this before it is used with real applicants in New York City, Illinois, California or Colorado.");
+    expect(words).toContain("by Ada Admin: Waiting for counsel");
+    expect(apply).toContain('aria-label="Applicants&#x27; match score"');
+    // no reason box until the choice changes
+    expect(apply).not.toContain('id="candidate-score-why"');
+    expect(candidateScoreOn({})).toBe(true);
+    expect(candidateScoreOn({ candidateScoreShown: false })).toBe(false);
+    expect(candidateScoreWords(false)).toBe("Not shown to applicants");
+    expect(candidateScoreToast("Avon Dental", false, true).title).toBe("Avon Dental's applicants no longer see their match score.");
+    expect(candidateScoreToast("Avon Dental", true, false).title).toBe("Nothing changed for Avon Dental.");
+  });
+
   it("opens nothing for a customer it does not know", () => {
     const html = render(client(data(), admin), Customers("open=nobody"));
     expect(html).not.toContain('role="dialog"');

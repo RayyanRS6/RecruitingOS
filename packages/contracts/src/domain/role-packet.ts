@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { Actor, Evidence, ISODate, Location } from "./common";
+import { CompanyQuestions } from "./apply-questions";
 import { Importance } from "./match";
 
 /**
@@ -272,14 +273,20 @@ export const RolePacket = z.object({
   sourcing: SourcingStrategy,
   preferences: HiringManagerPreferences,
   provenance: PacketProvenance,
+  /**
+   * "Questions every applicant answers" (Wave S7): the company's quick questions on the form and its written questions
+   * in the chat. Optional: a packet without it has none of either (its eligibility questions are still asked).
+   */
+  companyQuestions: CompanyQuestions.optional(),
 });
 export type RolePacket = z.infer<typeof RolePacket>;
 
 /**
  * The draft written beside the conversation before the role exists (C7). Pay is optional: a draft carries a range only
- * once a person set or confirmed it; until then the panel says "not set yet" and nothing invents one.
+ * once a person set or confirmed it; until then the panel says "not set yet" and nothing invents one. The company's
+ * questions are not part of the draft the model writes (`intake.compile`): a person sets them on the saved job.
  */
-export const DraftRolePacket = RolePacket.extend({ compensation: CompensationGuidance.optional() });
+export const DraftRolePacket = RolePacket.omit({ companyQuestions: true }).extend({ compensation: CompensationGuidance.optional() });
 export type DraftRolePacket = z.infer<typeof DraftRolePacket>;
 
 /**
@@ -326,6 +333,8 @@ export const PACKET_VISIBILITY: Readonly<Record<string, PacketVisibility>> = {
   sourcing: "internal",
   preferences: "internal",
   provenance: "internal",
+  companyQuestions: "asked",
+  "companyQuestions.written.lookFor": "reviewed",
 };
 
 /** The plain label for each visibility, as the draft panel shows it. */

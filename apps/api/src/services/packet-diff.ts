@@ -1,4 +1,7 @@
-import { REVISABLE_SECTION_LABEL, formatPayRange, packetVisibility, type DraftRolePacket, type Location, type PacketDiff, type PacketDiffChange, type PacketDiffSection } from "@ros/contracts";
+import {
+  COMPANY_QUESTIONS_LABEL, REVISABLE_SECTION_LABEL, formatPayRange, packetVisibility,
+  type CompanyQuestions, type DraftRolePacket, type Location, type PacketDiff, type PacketDiffChange, type PacketDiffSection, type QuickQuestion, type WrittenQuestion,
+} from "@ros/contracts";
 import { EMPLOYMENT_LABEL, WORK_MODEL_LABEL } from "./job-preview";
 
 /**
@@ -20,7 +23,11 @@ const place = (l: Location) => [l.label, [l.city, l.region].filter(Boolean).join
 const dollars = (n: number) => `$${n.toLocaleString("en-US")}`;
 const text = (v: string | null | undefined) => (v === undefined || v === null || v.trim() === "" ? null : v.trim());
 
-type Field = { path: string; label: string; get: (p: DraftRolePacket) => string | null };
+/**
+ * `order`: the field is the order of a keyed list, listed only when the same items moved (additions and removals are
+ * listed one by one with the list), and then read as the items' words.
+ */
+type Field = { path: string; label: string; get: (p: DraftRolePacket) => string | null; order?: (p: DraftRolePacket) => Array<{ key: string; value: string }> };
 type KeyedList = { path: string; label: string; items: (p: DraftRolePacket) => Array<{ key: string; value: string }> };
 type PlainList = { path: string; label: string; items: (p: DraftRolePacket) => string[] };
 type Section = { section: string; label: string; fields?: Field[]; keyed?: KeyedList[]; lists?: PlainList[] };
@@ -144,6 +151,20 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    // Wave S7: the company's own questions. What a good answer shows is listed apart, because only the team sees it.
+    section: "companyQuestions",
+    label: COMPANY_QUESTIONS_LABEL,
+    fields: [
+      { path: "companyQuestions.quick", label: "Order of the quick questions", get: (p) => questionsOf(p).quick.map((q) => q.key).join(" "), order: (p) => questionsOf(p).quick.map((q) => ({ key: q.key, value: q.question })) },
+      { path: "companyQuestions.written", label: "Order of the written questions", get: (p) => questionsOf(p).written.map((q) => q.key).join(" "), order: (p) => questionsOf(p).written.map((q) => ({ key: q.key, value: q.question })) },
+    ],
+    keyed: [
+      { path: "companyQuestions.quick", label: "Quick question", items: (p) => questionsOf(p).quick.map((q) => ({ key: q.key, value: quickWords(q) })) },
+      { path: "companyQuestions.written", label: "Written question", items: (p) => questionsOf(p).written.map((q) => ({ key: q.key, value: `${q.question}${q.required ? "" : " (they may skip it)"}` })) },
+      { path: "companyQuestions.written.lookFor", label: "What a good answer shows", items: (p) => questionsOf(p).written.filter((q) => text(q.lookFor)).map((q) => ({ key: q.key, value: text(q.lookFor) ?? "" })) },
+    ],
+  },
+  {
     section: "compliance",
     label: "Legal notices",
     lists: [{ path: "compliance.notices", label: "Notice shown to candidates", items: (p) => p.compliance.notices.map((n) => NOTICE[n] ?? n) }],
@@ -151,6 +172,20 @@ const SECTIONS: Section[] = [
 ];
 
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+
+/** The packet's own questions every applicant answers (a draft has none; neither has a packet from before Wave S7). */
+function questionsOf(p: DraftRolePacket): { quick: QuickQuestion[]; written: WrittenQuestion[] } {
+  const cq = (p as DraftRolePacket & { companyQuestions?: CompanyQuestions | null }).companyQuestions;
+  return { quick: cq?.quick ?? [], written: cq?.written ?? [] };
+}
+
+/** A quick question in one line: the question, what may be answered, and whether it may be left out. */
+function quickWords(q: QuickQuestion): string {
+  const answers = q.kind === "choice"
+    ? `choose one: ${q.options.join(", ")}`
+    : `a number${q.unit ? ` (${q.unit})` : ""}${q.min !== undefined || q.max !== undefined ? `, ${q.min ?? "any"} to ${q.max ?? "any"}` : ""}`;
+  return `${q.question} (${answers}${q.required ? "" : "; they may skip it"})`;
+}
 
 function change(path: string, label: string, before: string | null, after: string | null, visibilityPath = path): PacketDiffChange | null {
   if (before === after) return null;
@@ -175,6 +210,13 @@ export function diffPackets(before: DraftRolePacket | null, after: DraftRolePack
         const now = new Set(after.screening.questions.map((q) => q.key));
         if (!before || was.size !== now.size || [...now].some((k) => !was.has(k))) continue;
         changes.push({ ...c, before: before.screening.questions.map((q) => q.question).join(" / "), after: after.screening.questions.map((q) => q.question).join(" / ") });
+        continue;
+      }
+      if (c && f.order) {
+        const was = before ? f.order(before) : [];
+        const now = f.order(after);
+        if (!before || was.length !== now.length || now.some((n) => !was.some((w) => w.key === n.key))) continue;
+        changes.push({ ...c, before: was.map((x) => x.value).join(" / "), after: now.map((x) => x.value).join(" / ") });
         continue;
       }
       if (c) changes.push(c);

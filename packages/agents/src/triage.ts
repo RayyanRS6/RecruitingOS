@@ -1,7 +1,7 @@
 import { inArray, eq } from "drizzle-orm";
-import type { Confidence, EligibilityResult, Evidence, EvidenceAssessment, EvidenceSource, ResumeExtraction, RolePacket } from "@ros/contracts";
+import { importanceOf, type CompanyQuestions, type Confidence, type EligibilityResult, type Evidence, type EvidenceAssessment, type EvidenceSource, type Overall, type ResumeExtraction, type RolePacket } from "@ros/contracts";
 import { resumeExtractPrompt, runPromptDetached, triageAssessPrompt, type AiRuntime, type RunOutcome, type TriageInput } from "@ros/ai";
-import { scoredSkill } from "@ros/core";
+import { applicationAnswerSentences, matchScore, quickQuestionsOf, scoredSkill } from "@ros/core";
 import { aiRuns, withTenant, type Db, type Queryable } from "@ros/db";
 import { SCORING_VIEW_VERSION, restoreQuotes, scoringView, withoutPlaceholders, type ScoringIdentity, type ScoringView } from "./scoring-view";
 
@@ -45,7 +45,12 @@ export type AssessInput = {
   packet: RolePacket;
   extraction: ResumeExtraction | null;
   resumeText: string | null;
-  applicationAnswers: { eligibility: Record<string, unknown>; noResumeSummary?: string };
+  /**
+   * `quick`: the answers to the company's quick questions (`applications.answers.quick`, Wave S7), when there are any.
+   * `fromCv`: the form fields whose answer the form suggested from the résumé and the candidate left as it was
+   * (`applications.answers.fromCv`): never read as the candidate's own words (`SUGGESTED_FROM_RESUME`).
+   */
+  applicationAnswers: { eligibility: Record<string, unknown>; quick?: Record<string, string> | null; noResumeSummary?: string; fromCv?: readonly string[] | null };
   eligibility: EligibilityResult | null;
   identity: ScoringIdentity;
   /**
@@ -73,23 +78,66 @@ export function jobWords(packet: Partial<Pick<RolePacket, "identity" | "requirem
 }
 
 /**
- * What the résumé reading is given (D-04 = C): the résumé, the written answer, the eligibility answers and the extraction
+ * What the résumé reading is given (D-04 = C): the résumé, the written answer, the answers on the form and the extraction
  * as the scoring view shows them (name, email, phone, street address and links replaced by placeholders), with the
- * scoring view itself, which maps a quote back to the original words and counts what was hidden.
+ * scoring view itself, which maps a quote back to the original words and counts what was hidden. Since Wave S7 the
+ * answers on the form go to the model as plain sentences, the question and the candidate's answer
+ * (`formAnswerLines`), never as the form's field names: the fairness run of 15 Oct 2026 found a reading quoting
+ * '"rdh_license":"yes"'. The sentences are the candidate's own words for the evidence rules (`assessmentSources`).
  */
 export function scoringInput(input: Pick<AssessInput, "packet" | "extraction" | "resumeText" | "applicationAnswers" | "eligibility" | "identity" | "eligibilityKeptIn">): { promptInput: TriageInput; view: ScoringView } {
   const view = scoringView({ ...input.identity, fullName: input.identity.fullName ?? input.extraction?.fullName ?? null, keep: [...(input.identity.keep ?? []), ...jobWords(input.packet, input.extraction)] });
   const { noResumeSummary } = input.applicationAnswers;
   const kept = keptInView(input);
+  const answers = view.deep(kept.answers);
   const promptInput: TriageInput = {
     packet: input.packet,
     extraction: input.extraction ? view.deep(input.extraction) : null,
     resumeText: input.resumeText === null ? null : view.text(input.resumeText),
-    applicationAnswers: { eligibility: view.deep(kept.answers), ...(noResumeSummary === undefined ? {} : { noResumeSummary: view.text(noResumeSummary) }) },
+    applicationAnswers: { eligibility: answers, ...(noResumeSummary === undefined ? {} : { noResumeSummary: view.text(noResumeSummary) }) },
+    // the questions are the company's words; the answers go through the scoring view once, above
+    answerSentences: formAnswerLines(input.packet, { eligibility: answers, quick: input.applicationAnswers.quick ? view.deep(input.applicationAnswers.quick) : null, fromCv: input.applicationAnswers.fromCv }),
     eligibility: kept.eligibility,
     ...(kept.keptIn ? { eligibilityKeptIn: true } : {}),
   };
   return { promptInput, view };
+}
+
+/** How a form answer suggested from the résumé, and left as it was, is put to the reading: never the candidate's own words. */
+export const SUGGESTED_FROM_RESUME = "Suggested from the résumé, left as is (not the candidate's own words): ";
+
+/** What `formAnswerLines` reads of the role: its eligibility questions and the company's quick questions. */
+type QuestionsOf = { requirements: { eligibility?: RolePacket["requirements"]["eligibility"] }; companyQuestions?: CompanyQuestions | null };
+
+/** An answer on its own, in plain words: free text as written, ticked days joined; null for a bare yes or no, or nothing. */
+function ownAnswer(value: unknown): string | null {
+  const text = Array.isArray(value) ? value.filter((v): v is string => typeof v === "string").join(", ") : typeof value === "string" ? value : typeof value === "number" && Number.isFinite(value) ? String(value) : "";
+  const t = text.trim();
+  return !t || /^(yes|y|no|n|true|false)$/i.test(t) ? null : t;
+}
+
+/**
+ * The candidate's answers on the form as the résumé reading reads them, one line each (Wave S7): every answered
+ * question of "Questions from <Company>" as a sentence ("Do you hold an active CA RDH license? Yes.", `answerSentence`
+ * in @ros/core, the same wording the chat and Review & send use, so a quote of one is always found again); then any
+ * answer to a question the role no longer asks, as the candidate wrote it, when it says more than a bare yes or no.
+ * Never a field name. An answer the form suggested from the résumé and the candidate left as it was (`fromCv`) is
+ * marked so (`SUGGESTED_FROM_RESUME`): the reading weighs it as the résumé's, with the résumé's evidence rules, and the
+ * quote check never finds it as the candidate's own words (`assessmentSources`).
+ */
+export function formAnswerLines(packet: QuestionsOf | null | undefined, answers: { eligibility?: Record<string, unknown> | null; quick?: Record<string, string> | null; fromCv?: readonly string[] | null }): string[] {
+  const role = { requirements: { eligibility: packet?.requirements?.eligibility ?? [] }, companyQuestions: packet?.companyQuestions ?? null };
+  const suggested = new Set(answers.fromCv ?? []);
+  const fieldOf = (s: { key: string; source: string }) => (s.source === "eligibility" ? `elig_${s.key}` : `q_${s.key}`);
+  const sentences = applicationAnswerSentences(role, answers).map((s) => (suggested.has(fieldOf(s)) ? `${SUGGESTED_FROM_RESUME}${s.sentence}` : s.sentence));
+  const asked = new Set(quickQuestionsOf(role).map((q) => `${q.source}:${q.key}`));
+  const others = [
+    ...Object.entries(answers.eligibility ?? {}).filter(([k]) => !asked.has(`eligibility:${k}`)),
+    ...Object.entries(answers.quick ?? {}).filter(([k]) => !asked.has(`company:${k}`)),
+  ]
+    .map(([, v]) => ownAnswer(v))
+    .filter((v): v is string => v !== null);
+  return [...sentences, ...others];
 }
 
 /**
@@ -115,16 +163,27 @@ function keptInView(input: Pick<AssessInput, "applicationAnswers" | "eligibility
  */
 export const TRIAGE_READINGS = 3;
 
+/** What `assessmentSources` may be given beyond the texts: the role and the eligibility side, or the reading's own input. */
+type SourcesInput = Pick<AssessInput, "resumeText" | "applicationAnswers"> & { packet?: QuestionsOf | null; answerSentences?: readonly string[] } & Partial<Pick<AssessInput, "eligibility" | "eligibilityKeptIn">>;
+
 /**
  * The texts a résumé reading may quote, by source, for the quote check. The application side is the candidate's own
  * answers only, one per line: never the form's field names or JSON around them, so a quote such as
- * `rdh_license":"yes` (a self-reported box, whose key supplies the words) is not found and is no evidence.
+ * `rdh_license":"yes` (a self-reported box, whose key supplies the words) is not found and is no evidence. With the
+ * role (or the reading's input, which carries the sentences it was sent) the answers are the sentences the reading was
+ * given (`formAnswerLines`, Wave S7), so a quote of one ("Do you hold an active CA RDH license? Yes.") is the candidate's
+ * own words; an answer a person set aside ("keep them in") is not among them.
  */
-export function assessmentSources(input: Pick<AssessInput, "resumeText" | "applicationAnswers">): Partial<Record<EvidenceSource, string>> {
-  const answers = Object.values(input.applicationAnswers.eligibility ?? {}).map((v) => (typeof v === "string" ? v : v === null || v === undefined ? "" : JSON.stringify(v)));
+export function assessmentSources(input: SourcesInput): Partial<Record<EvidenceSource, string>> {
+  const answers = input.answerSentences
+    ? [...input.answerSentences]
+    : input.packet
+      ? formAnswerLines(input.packet, { eligibility: keptInView({ applicationAnswers: input.applicationAnswers, eligibility: input.eligibility ?? null, eligibilityKeptIn: input.eligibilityKeptIn }).answers, quick: input.applicationAnswers.quick, fromCv: input.applicationAnswers.fromCv })
+      : Object.values(input.applicationAnswers.eligibility ?? {}).map((v) => (typeof v === "string" ? v : v === null || v === undefined ? "" : JSON.stringify(v)));
   return {
     resume: input.resumeText ?? "",
-    application: [input.applicationAnswers.noResumeSummary ?? "", ...answers].join("\n"),
+    // an answer suggested from the résumé and left as it was is the résumé's evidence, never a quote of the candidate's own
+    application: [input.applicationAnswers.noResumeSummary ?? "", ...answers.filter((a) => !a.startsWith(SUGGESTED_FROM_RESUME))].join("\n"),
     candidate_statement: input.applicationAnswers.noResumeSummary ?? "",
   };
 }
@@ -158,9 +217,80 @@ export async function assessApplication(db: Db, ai: AiRuntime, input: AssessInpu
  * reading (the prompt does not list it; a finding the model wrote anyway is dropped). Shared with the fairness evals
  * (packages/evals), so they check exactly what the app does after the model has answered.
  */
-export function readingsOutcome(readings: ReadonlyArray<RunOutcome<Reading>>, view: Pick<ScoringView, "restore">, input: Pick<AssessInput, "resumeText" | "applicationAnswers" | "packet">): RunOutcome<Reading> {
+export function readingsOutcome(readings: ReadonlyArray<RunOutcome<Reading>>, view: Pick<ScoringView, "restore">, input: Pick<AssessInput, "resumeText" | "applicationAnswers" | "packet"> & Partial<Pick<AssessInput, "eligibility" | "eligibilityKeptIn">>): RunOutcome<Reading> {
   const sources = assessmentSources(input);
-  return combineOutcomes(readings.map((r) => (r.ok ? { ...r, output: withoutInterviewSkills(withoutPlaceholders(restoreReadingQuotes(r.output, view, sources)), input.packet) } : r)), sources, credentialMustHaves(input.packet), findingSubjects(input.packet));
+  return combineOutcomes(readings.map((r) => (r.ok ? { ...r, output: withoutInterviewSkills(withoutPlaceholders(restoreReadingQuotes(r.output, view, sources)), input.packet) } : r)), sources, credentialMustHaves(input.packet), findingSubjects(input.packet), triageSettlement(input.packet, input));
+}
+
+/**
+ * The overall reading of a résumé reading, worked out in code from its settled findings (Wave S7), so it can never
+ * move on its own between readings of the same application: the fairness run of 15 Oct 2026 found the licence finding
+ * steady but the overall reading "potential" in one reading and "unknown" in the next. It reads the findings exactly as
+ * the match score does (`matchScore` in @ros/core: a "yes" with nothing quoted is partly shown, a "no" only on a
+ * checked quote, a skill for the interviews left out), by the prompt's own definitions:
+ * - "unknown" when there is nothing to read the work from (no résumé text and no written description of their work);
+ * - "weak" when the candidate's own words show a must-have is not met;
+ * - "strong" when every must-have is shown, at least half of the skills (and at least one) are shown, and no essential
+ *   skill goes against them;
+ * - "potential" when something relevant is shown, in full or in part;
+ * - when the findings say nothing either way (every requirement not known, or only a skill against them), the
+ *   readings' own judgement of the work is all there is ("thin but relevant" is potential, "not this kind of work" is
+ *   weak): the middle of what the readings said (`said`), "unknown" when most said so, never "strong" on no findings.
+ *   Without `said`, "unknown".
+ * Never "weak" for a skill alone, a gap, a career change or a missing degree: those are not findings against a must-have.
+ */
+export function settledOverall(reading: Pick<EvidenceAssessment, "requirementFindings" | "competencyFindings">, packet: Pick<RolePacket, "requirements" | "competencies">, opts: { hasWork: boolean; said?: readonly Overall[] }): Overall {
+  if (!opts.hasWork) return "unknown";
+  const score = matchScore({ resume: { kind: "triage", result: reading }, screen: null }, packet);
+  const judged = (): Overall => {
+    const said = opts.said?.length ? middleOverall(opts.said) : "unknown";
+    return said === "strong" ? "potential" : said;
+  };
+  if (!score) return judged();
+  if (score.missingMustHave.length) return "weak";
+  const musts = score.breakdown.filter((c) => c.mustHave);
+  const mustUnknown = score.unknown.some((u) => u.mustHave);
+  const skills = packet.competencies.filter(scoredSkill);
+  const shownSkills = score.breakdown.filter((c) => !c.mustHave && c.pctMet === 100).length;
+  const essential = new Set(skills.filter((c) => importanceOf(c) === "essential").map((c) => c.key));
+  const essentialAgainst = score.breakdown.some((c) => !c.mustHave && c.pctMet === 0 && essential.has(c.key));
+  const everyMust = !mustUnknown && musts.every((c) => c.pctMet === 100);
+  const enoughSkills = skills.length === 0 || shownSkills >= Math.max(1, Math.ceil(skills.length / 2));
+  if (everyMust && enoughSkills && !essentialAgainst && (musts.length > 0 || shownSkills > 0)) return "strong";
+  return score.breakdown.some((c) => c.pctMet > 0) ? "potential" : judged();
+}
+
+/**
+ * The recommendation that goes with the overall reading worked out in code, by the prompt's own rule, so it moves only
+ * when a finding moves: "review_manually" when the reading is "unknown" or an eligibility answer did not match (and no
+ * person kept them in); "hold" when it is "weak"; "screen" when it is "strong" or "potential" and they are eligible.
+ * "hold" never declines anyone: a person decides (no automatic rejection).
+ */
+export function settledRecommendation(overall: Overall, opts: { eligible: boolean }): EvidenceAssessment["recommendation"] {
+  if (overall === "unknown") return "review_manually";
+  if (overall === "weak") return "hold";
+  return opts.eligible ? "screen" : "review_manually";
+}
+
+/** How a combined reading is settled after the middle answers are taken (`combineRunOutcomes`). */
+export type ReadingSettlement<R extends Combinable> = {
+  /** The overall reading from the combined findings, and what each reading said overall (`said`). */
+  overallOf: (findings: Pick<Combinable, "requirementFindings" | "competencyFindings">, said: readonly Combinable["overall"][]) => Combinable["overall"];
+  /** Anything that follows from it (the résumé reading: its recommendation). */
+  finish?: (reading: R) => R;
+};
+
+/**
+ * The résumé reading's settlement: the overall reading from its findings, and the recommendation that goes with it.
+ * Eligible unless the eligibility answers were checked and did not match, with no person keeping them in.
+ */
+export function triageSettlement(packet: Pick<RolePacket, "requirements" | "competencies">, input: Pick<AssessInput, "resumeText" | "applicationAnswers"> & Partial<Pick<AssessInput, "eligibility" | "eligibilityKeptIn">>): ReadingSettlement<Reading> {
+  const hasWork = !!input.resumeText?.trim() || !!input.applicationAnswers.noResumeSummary?.trim();
+  const eligible = !!input.eligibilityKeptIn || input.eligibility?.passed !== false;
+  return {
+    overallOf: (findings, said) => settledOverall(findings, packet, { hasWork, said }),
+    finish: (r) => ({ ...r, recommendation: settledRecommendation(r.overall, { eligible }) }),
+  };
 }
 
 /** A reading without findings on skills the role checks in the interviews only (`scoredSkill` in @ros/core). */
@@ -255,23 +385,25 @@ type Combinable = Pick<EvidenceAssessment, "overall" | "confidence" | "confidenc
  * three (a reading refused or unusable) the first is used, and its confidence reasons say it was read fewer times. With
  * none, the failure: an outage when any reading had one, so the step is retried.
  */
-export function combineOutcomes(runs: ReadonlyArray<RunOutcome<Reading>>, sources: Partial<Record<EvidenceSource, string>>, credentials?: ReadonlySet<string>, subjects?: ReadonlyMap<string, string>): RunOutcome<Reading> {
-  return combineRunOutcomes(runs, (r) => verifyAssessmentQuotes(r, sources, credentials, subjects), "this application");
+export function combineOutcomes(runs: ReadonlyArray<RunOutcome<Reading>>, sources: Partial<Record<EvidenceSource, string>>, credentials?: ReadonlySet<string>, subjects?: ReadonlyMap<string, string>, settle?: ReadingSettlement<Reading>): RunOutcome<Reading> {
+  return combineRunOutcomes(runs, (r) => verifyAssessmentQuotes(r, sources, credentials, subjects), "this application", TRIAGE_READINGS, settle);
 }
 
 /**
  * `combineOutcomes` for any kind of reading (the résumé reading, the screening scorecard): `check` puts each reading
  * through its evidence rules first; `what` names what was read, for the reason given when fewer readings came back.
- * The run kept is the first usable one; `linkReadingRuns` ties the others to it.
+ * The run kept is the first usable one; `linkReadingRuns` ties the others to it. With `settle` (the résumé reading,
+ * Wave S7) the overall reading is worked out from the combined findings, also when fewer readings came back.
  */
-export function combineRunOutcomes<R extends Combinable>(runs: ReadonlyArray<RunOutcome<R>>, check: (r: R) => R, what: string, count = TRIAGE_READINGS): RunOutcome<R> {
+export function combineRunOutcomes<R extends Combinable>(runs: ReadonlyArray<RunOutcome<R>>, check: (r: R) => R, what: string, count = TRIAGE_READINGS, settle?: ReadingSettlement<R>): RunOutcome<R> {
   const ok = runs.filter((r): r is Extract<RunOutcome<R>, { ok: true }> => r.ok);
   if (!ok.length) return runs.find((r): r is Extract<RunOutcome<R>, { ok: false }> => !r.ok && r.reason === "error") ?? runs[0]!;
   const readings = ok.map((r) => check(r.output));
-  if (readings.length >= count) return { ...ok[0]!, output: combineReadings(readings) };
+  const finish = settle?.finish ?? ((r: R) => r);
+  if (readings.length >= count) return { ...ok[0]!, output: finish(combineReadings(readings, settle ? { overallOf: settle.overallOf } : {})) };
   const one = readings[0]!;
   const reason = `the assistant could read ${what} ${readings.length === 1 ? "once" : `${readings.length} times`} instead of ${count}`;
-  return { ...ok[0]!, output: { ...one, confidenceReasons: [...(one.confidenceReasons ?? []), reason].slice(-6) } };
+  return { ...ok[0]!, output: finish({ ...one, ...(settle ? { overall: settle.overallOf(one, [one.overall]) } : {}), confidenceReasons: [...(one.confidenceReasons ?? []), reason].slice(-6) }) };
 }
 
 const MET_ORDER = ["no", "unknown", "partially", "yes"] as const;
@@ -302,27 +434,39 @@ function middleOverall(values: readonly Combinable["overall"][]): Combinable["ov
  *   partially, yes; competencies contradicted, not evidenced, partially, evidenced), with the evidence of a reading that
  *   gave it;
  * - the overall reading and the confidence are the middle on their own order ("unknown" only when most readings say so);
+ *   with `overallOf` (the résumé reading, Wave S7) the overall reading is worked out from the combined findings
+ *   instead (`settledOverall`), so it moves only when a finding moves;
  * - the recommendation, the confidence reasons and the words (summary, strengths, concerns, questions) all come from one
  *   reading, the closest to that result, so they never contradict each other (for a scorecard also the answers, the pay
  *   and availability it recorded, and the eligibility confirmations).
  */
-export function combineReadings<R extends Combinable>(readings: readonly R[]): R {
+export function combineReadings<R extends Combinable>(readings: readonly R[], opts: { overallOf?: ReadingSettlement<R>["overallOf"] } = {}): R {
   const reqKeys = [...new Set(readings.flatMap((r) => r.requirementFindings.map((f) => f.requirementKey)))].sort();
   const compKeys = [...new Set(readings.flatMap((r) => r.competencyFindings.map((f) => f.competencyKey)))].sort();
   const reqOf = (r: R, k: string) => r.requirementFindings.find((f) => f.requirementKey === k);
   const compOf = (r: R, k: string) => r.competencyFindings.find((f) => f.competencyKey === k);
   const met = new Map(reqKeys.map((k) => [k, middle(readings.map((r) => reqOf(r, k)?.met ?? "unknown"), MET_ORDER)]));
   const found = new Map(compKeys.map((k) => [k, middle(readings.map((r) => compOf(r, k)?.finding ?? "not_evidenced"), FINDING_ORDER)]));
-  const overall = middleOverall(readings.map((r) => r.overall));
   const confidence = middle(readings.map((r) => r.confidence), CONFIDENCE_ORDER);
-  // the closest reading: the same overall, then the same confidence, then the most findings; a tie is settled by the
-  // reading's own content, never by the order the readings came back in
-  const agreement = (r: R) => (r.overall === overall ? 1000 : 0) + (r.confidence === confidence ? 500 : 0) + reqKeys.filter((k) => reqOf(r, k)?.met === met.get(k)).length * 10 + compKeys.filter((k) => compOf(r, k)?.finding === found.get(k)).length;
-  const ranked = [...readings].sort((a, b) => agreement(b) - agreement(a) || JSON.stringify(a).localeCompare(JSON.stringify(b)));
-  const closest = ranked[0]!;
-  const requirementFindings = reqKeys.map((k) => ranked.map((r) => reqOf(r, k)).find((f) => f?.met === met.get(k)) ?? { requirementKey: k, met: met.get(k)! });
-  const competencyFindings = compKeys.map((k) => ranked.map((r) => compOf(r, k)).find((f) => f?.finding === found.get(k)) ?? { competencyKey: k, finding: found.get(k)! });
-  return { ...closest, overall, confidence, requirementFindings, competencyFindings };
+  // the closest reading to an overall reading: the same overall (when one is given), then the same confidence, then the
+  // most findings; a tie is settled by the reading's own content, never by the order the readings came back in
+  const closestTo = (overall: Combinable["overall"] | null) => {
+    const agreement = (r: R) => (overall !== null && r.overall === overall ? 1000 : 0) + (r.confidence === confidence ? 500 : 0) + reqKeys.filter((k) => reqOf(r, k)?.met === met.get(k)).length * 10 + compKeys.filter((k) => compOf(r, k)?.finding === found.get(k)).length;
+    const ranked = [...readings].sort((a, b) => agreement(b) - agreement(a) || JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    const requirementFindings = reqKeys.map((k) => ranked.map((r) => reqOf(r, k)).find((f) => f?.met === met.get(k)) ?? { requirementKey: k, met: met.get(k)! });
+    const competencyFindings = compKeys.map((k) => ranked.map((r) => compOf(r, k)).find((f) => f?.finding === found.get(k)) ?? { competencyKey: k, finding: found.get(k)! });
+    return { closest: ranked[0]!, requirementFindings, competencyFindings };
+  };
+  if (!opts.overallOf) {
+    const overall = middleOverall(readings.map((r) => r.overall));
+    const chosen = closestTo(overall);
+    return { ...chosen.closest, overall, confidence, requirementFindings: chosen.requirementFindings, competencyFindings: chosen.competencyFindings };
+  }
+  // Settled in code: the findings (with their evidence) are picked without looking at what each reading said overall, the
+  // overall reading is worked out from them, and the words come from the reading closest to it.
+  const settled = closestTo(null);
+  const overall = opts.overallOf(settled, readings.map((r) => r.overall));
+  return { ...closestTo(overall).closest, overall, confidence, requirementFindings: settled.requirementFindings, competencyFindings: settled.competencyFindings };
 }
 
 /**
@@ -336,9 +480,12 @@ export function verifyAssessmentQuotes(a: EvidenceAssessment, sources: Partial<R
   const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
   const normalized = new Map<string, string>();
   for (const [k, v] of Object.entries(sources)) normalized.set(k, norm(v ?? ""));
-  // the line a checked quote sits on, in the source it names (or the first source holding it)
+  // the line a checked quote sits on, in the source it names (or the first source holding it); an answer on the form
+  // ("Do you hold an active CA RDH license? No.") is read as the statement it makes ("I do not hold ...")
   const lineOf = (e: Evidence): string | null => {
     const quote = e.quote ?? "";
+    const answer = e.source === "application" ? formAnswerAround(quote, sources.application ?? "") : null;
+    if (answer) return answer;
     const own = sources[e.source];
     const texts = own !== undefined ? [own] : Object.values(sources).filter((s): s is string => !!s);
     for (const t of texts) {
@@ -357,6 +504,25 @@ export function verifyAssessmentQuotes(a: EvidenceAssessment, sources: Partial<R
     },
     { credentials, lineOf, ...(subjects ? { subjects } : {}) },
   );
+}
+
+/**
+ * The answer on the form a quote sits in (`formAnswerLines`: one line each, the question then the answer), read as the
+ * statement it makes, with the question (`answerInContext`): "Do you hold an active CA RDH license? No." reads "I do not
+ * hold an active CA RDH license", so the licence rule reads it as plainly as the same words in a résumé. Null when the
+ * quote is not in a line of that shape.
+ */
+export function formAnswerAround(quote: string, application: string): string | null {
+  const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+  const q = norm(quote);
+  if (!q) return null;
+  for (const raw of application.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!norm(line).includes(q)) continue;
+    const asked = line.match(/^(.+\?)\s+(\S.*)$/);
+    if (asked) return answerInContext(asked[1] ?? "", asked[2] ?? "") ?? line;
+  }
+  return null;
 }
 
 /** The candidate's own record or words: a claim citing one of these must quote it, and the quote is checked. */

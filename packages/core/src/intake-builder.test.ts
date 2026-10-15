@@ -284,6 +284,28 @@ describe("tapped answers and panel edits (plan C6, C15)", () => {
     expect(() => applyFactsPatch(facts, { set: { remotePolicy: "sometimes" } }, team)).toThrow(/work model/);
   });
 
+  it("a question for applicants that asks about a protected characteristic is refused, on the form or in the chat (Wave S7)", () => {
+    const edit = applyFactsPatch(empty(), {
+      add: [
+        { field: "screeningQuestions", value: "Which practice software have you used?" },
+        { field: "screeningQuestions", value: "Do you have children?" },
+        { field: "eligibilityNotes", value: "Are you legally authorized to work in the United States for any employer?" },
+        { field: "eligibilityNotes", value: "Are you a US citizen?" },
+        // the same words as a must-have are read by the phrase list, as before: a must-have is not a question
+        { field: "mustHaves", value: "Experience caring for patients with disabilities" },
+      ],
+    }, team);
+    expect(edit.facts.screeningQuestions).toEqual(["Which practice software have you used?"]);
+    expect(edit.facts.eligibilityNotes).toEqual(["Are you legally authorized to work in the United States for any employer?"]);
+    expect(edit.facts.mustHaves).toEqual(["Experience caring for patients with disabilities"]);
+    expect(edit.refused).toEqual([
+      expect.objectContaining({ field: "screeningQuestions", text: "Do you have children?", reason: expect.stringMatching(/children/) }),
+      expect.objectContaining({ field: "eligibilityNotes", text: "Are you a US citizen?", alternative: expect.stringMatching(/authorized to work/) }),
+    ]);
+    // recorded as told, so no later version brings it back
+    expect(edit.facts.declinedCriteria.map((d) => d.requested)).toEqual(["Do you have children?", "Are you a US citizen?"]);
+  });
+
   it("the summary of a panel edit goes into the conversation in plain words: no field names, no stored codes", () => {
     const edit = applyFactsPatch({ ...empty(), mustHaves: ["Dentrix"] }, { set: { locationText: "Irvine, CA", employmentType: "full_time", remotePolicy: "onsite", reason: "new_position", targetStartDate: "2026-11-03" }, add: [{ field: "mustHaves", value: "Active RDH license" }], remove: [{ field: "mustHaves", value: "Dentrix" }], clear: ["decisionMaker"] }, team);
     expect(edit.summary).toEqual([

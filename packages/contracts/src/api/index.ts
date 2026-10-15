@@ -361,6 +361,12 @@ export const ApplyRequest = z.object({
   smsConsent: z.boolean().default(false),
   answers: z.record(z.string(), z.unknown()).default({}),
   noResumeAnswers: z.record(z.string(), z.string()).optional(),
+  /** Wave S7: answers to the company's quick questions (choice and number), by question key; the option's words or the number as typed. */
+  quickAnswers: z.record(z.string(), z.string().max(200)).optional(),
+  /** Wave S7: the short summary of their work the résumé reading filled in and the candidate checked. */
+  workSummary: z.string().max(1500).optional(),
+  /** Wave S7: the form fields whose value the résumé filled in (or suggested) and the candidate kept ("From your resume — check it"). */
+  fromCv: z.array(z.string().max(80)).max(40).optional(),
   /** Honeypot: must be empty. */
   website: z.string().max(0).optional(),
   noticeVersionsShown: z.array(z.string()).default([]),

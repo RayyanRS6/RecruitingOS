@@ -10,7 +10,7 @@ import { AskRecruiter } from "../../components/AskRecruiter";
 import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, NO_QUOTE_LABEL, RESUME_UNREADABLE_TEXT, SCORECARD_UNAVAILABLE_TEXT, closerLook, competencyUnquoted, isUnquoted, openScreenOf, requirementUnquoted, resumeUnreadable, scorecardUnavailable, screenQuestionText } from "../../evidence";
 import { APPLIED_IN_ONE_VISIT, DECLINED_WORDS, EDITED_WORDS, SCREEN_STATUS_LABEL, TAPPED_WORDS, answerLines, generalNotes, hiddenAnswersLine, isRecruiterNote, recruiterNoteLabel, screenOrigin, transcriptBubble, unansweredWords } from "../../screen-view";
 import { actionToast } from "../../talent-actions";
-import { REC_LABEL } from "./helpers";
+import { ASSISTANT_NOTE_LABEL, REC_LABEL, chatGapLines, writeupLines, writeupSummary, type PanelQuestion, type WriteupLine } from "./helpers";
 import { competencyChip, importanceTag, orderCompetencyFindings, orderRequirementFindings, requirementChip, skillLabels } from "./match-view";
 import { Why } from "./why";
 
@@ -263,15 +263,23 @@ export function AssessmentCard({ assessment, detail, roleId, labels, title }: { 
  * sending, picked it from the choices), a recruiter's call notes labelled as theirs, and the whole transcript. Until the
  * candidate sends their answers, and for good if they never did, none of that is here (founder decision of 9 October
  * 2026): a calm line says why (`hiddenAnswersLine`), and a recruiter's call notes still show.
+ *
+ * A chat sent in Wave S7's flow comes first as "Answers to your questions": each company question with the answer
+ * written up from the candidate's replies, the assistant's note labelled as its own, and that question's part of the
+ * chat one click away (`WriteupAnswers`); then the must-haves the résumé did not show that the chat asked about. Any
+ * other answer follows as before, and the whole chat stays at the bottom.
  */
-export function ScreenCard({ screen, open, action, questions = [], timeline = [] }: { screen: Screen; open?: boolean; action?: ReactNode; questions?: ReadonlyArray<{ key: string; question: string }>; timeline?: ApplicationDetail["timeline"] }) {
+export function ScreenCard({ screen, open, action, questions = [], mustHaves = [], timeline = [] }: { screen: Screen; open?: boolean; action?: ReactNode; questions?: readonly PanelQuestion[]; mustHaves?: ReadonlyArray<{ key: string; text: string }>; timeline?: ApplicationDetail["timeline"] }) {
   // A screen that opened with the open questions keeps their answers beside the questions; they count, and they are shown first.
   const focusAnswered = (screen.progress.focusQuestions ?? []).filter((f) => f.answer);
   const answered = Object.keys(screen.answers).length + focusAnswered.length;
   const asked = screen.progress.askedKeys.length;
   const skipped = screen.progress.declined?.length ?? 0;
   const origin = screenOrigin(screen, timeline);
-  const lines = answerLines(screen, questions);
+  const written = writeupLines(screen, questions);
+  const gaps = chatGapLines(screen, mustHaves);
+  const writtenKeys = new Set(written.map((w) => w.key));
+  const lines = answerLines(screen, questions).filter((l) => !writtenKeys.has(l.key));
   const general = generalNotes(screen, questions);
   const hidden = hiddenAnswersLine(screen, timeline);
   const notes = screen.transcript.filter(isRecruiterNote).map((t) => ({ text: t.content, by: t.by ?? null, question: t.questionKey ? questions.find((q) => q.key === t.questionKey)?.question ?? null : null }));
@@ -289,6 +297,13 @@ export function ScreenCard({ screen, open, action, questions = [], timeline = []
           </div>
         ) : null
       ) : <>
+      <WriteupAnswers lines={written} />
+      {gaps.length ? (
+        <div style={{ marginTop: 8 }}>
+          <p className="small muted">Must-haves the résumé did not show, asked about in the chat:</p>
+          <dl className="kv small" style={{ marginTop: 4 }}>{gaps.map((g) => <div key={g.key}><dt>{g.text}</dt><dd>{g.words}</dd></div>)}</dl>
+        </div>
+      ) : null}
       {focusAnswered.length ? (
         <div style={{ marginTop: 8 }}>
           <p className="small muted">What they said about the open questions:</p>
@@ -297,7 +312,7 @@ export function ScreenCard({ screen, open, action, questions = [], timeline = []
       ) : null}
       {lines.length ? (
         <div style={{ marginTop: 8 }}>
-          <p className="small muted">Their answers{lines.some((l) => l.declined) ? `. "${DECLINED_WORDS}" is never held against them; it counts as not known yet.` : ""}</p>
+          <p className="small muted">{written.length ? "Their other answers" : "Their answers"}{lines.some((l) => l.declined) ? `. "${DECLINED_WORDS}" is never held against them; it counts as not known yet.` : ""}</p>
           <dl className="kv small" style={{ marginTop: 4 }}>
             {lines.map((l) => (
               <div key={l.key}>
@@ -331,5 +346,46 @@ export function ScreenCard({ screen, open, action, questions = [], timeline = []
       ) : <p className="small muted" style={{ marginTop: 6 }}>They have not opened it yet.</p>}
       </>}
     </Card>
+  );
+}
+
+/**
+ * "Answers to your questions" (Wave S7): each company question, numbered, with the answer written up from the
+ * candidate's replies and where its words come from, what became of the question, the pieces of their own messages it
+ * rests on, the assistant's note in its own labelled box (never inside the answer), a recruiter's call notes, and that
+ * question's part of the chat one click away. Nothing when the chat has no write-up.
+ */
+export function WriteupAnswers({ lines }: { lines: readonly WriteupLine[] }) {
+  if (!lines.length) return null;
+  return (
+    <section className="match-section" aria-label="Answers to your questions">
+      <h3>Answers to your questions</h3>
+      <p className="small muted" style={{ margin: 0 }}>{writeupSummary(lines)}. Each answer is drafted from their own replies; the part of the chat behind it is one click away, and the whole chat is below.</p>
+      <ol className="small" style={{ margin: "8px 0 0", paddingLeft: 18, display: "grid", gap: 12 }}>
+        {lines.map((l) => (
+          <li key={l.key}>
+            <p style={{ margin: 0 }}><strong>{l.question}</strong>{l.required ? null : <span className="muted"> (optional)</span>} <Chip tone={l.tone}>{l.statusWords}</Chip></p>
+            {l.answer ? <p style={{ margin: "4px 0 0", whiteSpace: "pre-wrap" }}>{l.answer}</p> : <p className="muted" style={{ margin: "4px 0 0" }}><em>{l.statusWords}</em></p>}
+            {l.answer ? <p className="muted" style={{ margin: "2px 0 0" }}>{l.byWords}</p> : null}
+            {l.note ? <div className="bubble assistant" style={{ marginTop: 6 }}><span className="bubble-label">{ASSISTANT_NOTE_LABEL}</span>{l.note}</div> : null}
+            {l.notes.map((n, i) => <div key={i} className="bubble recruiter" style={{ marginTop: 6, whiteSpace: "pre-wrap" }}><span className="bubble-label">{recruiterNoteLabel(n.by)}</span>{n.text}</div>)}
+            {l.quotes.length ? (
+              <details className="more">
+                <summary>Their words it rests on ({l.quotes.length})</summary>
+                <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>{l.quotes.map((q) => <li key={q} className="muted">"{q}"</li>)}</ul>
+              </details>
+            ) : null}
+            {l.chat.length ? (
+              <details className="more">
+                <summary>Read this part of the chat ({l.chat.length} {l.chat.length === 1 ? "message" : "messages"})</summary>
+                <div className="stack" style={{ gap: 6, marginTop: 6 }}>
+                  {l.chat.map((b, i) => <div key={i} className={`bubble ${b.kind}`} style={{ whiteSpace: "pre-wrap" }}>{b.label ? <span className="bubble-label">{b.label}</span> : null}{b.text}</div>)}
+                </div>
+              </details>
+            ) : null}
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }

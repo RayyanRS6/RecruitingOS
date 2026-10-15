@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import type { ZodError } from "zod";
 import {
-  ApplyRequirementFixes, DraftRolePacket as DraftRolePacketSchema, KeepPacketFlag, PacketFieldEdit, PacketRevisionRequest, RequestRoleApproval, RolePacket as RolePacketSchema, SetClosingDate, UpdateInterviewPlan,
+  ApplyRequirementFixes, CompanyQuestionsEdit, DraftRolePacket as DraftRolePacketSchema, KeepPacketFlag, PacketFieldEdit, PacketRevisionRequest, RequestRoleApproval, RolePacket as RolePacketSchema, SetClosingDate, UpdateInterviewPlan,
   type Actor, type DeclinedCriterion, type DraftRolePacket, type Location, type PacketFlag, type PacketRevisionProposal, type RequirementsCheck, type RolePacket,
 } from "@ros/contracts";
 import {
@@ -16,7 +16,7 @@ import { actorOf, requireTenant, roleScopeGuard, type Vars } from "../middleware
 import { applyFlowOf, jobPreview } from "../services/job-preview";
 import { diffPackets } from "../services/packet-diff";
 import { eventTargets, inStaffScope, staffScopeOf } from "../services/staff-scope";
-import { applyFieldEdit } from "../services/packet-fields";
+import { applyCompanyQuestionsEdit, applyFieldEdit } from "../services/packet-fields";
 import { withoutUnsentChats } from "../services/screen-visibility";
 import { CLOSED_ROLE_MESSAGE, cancelPendingPacketApprovals, createPacketVersion, currentVersionOf, materialChanges, mayApproveRoles, startPacketApproval, type PacketRow, type RoleRow } from "../services/packet-versions";
 import type { Container } from "../container";
@@ -489,6 +489,35 @@ rolePacketRoutes.patch("/:id/packet", requireTenant, async (c) => {
     if (!edit.fields.length) throw new HttpError(400, "nothing_changed", "Nothing was changed.");
     const made = await createPacketVersion(tx, container, { tenant: t, actor, role, packet: edit.packet, changeSummary: body.changeSummary ?? edit.summary });
     return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId, guardChanges: made.guardChanges, needsApproval: made.needsApproval, boardsShowingOldVersion: made.boardsShowingOldVersion, ...(made.paused ? { paused: true } : {}), fields: edit.fields, notes: edit.notes, diff: diffPackets(base.packet, made.version.packet, { from: base.version, to: made.version.version }) };
+  });
+  await container.kick();
+  return c.json(result);
+});
+
+/**
+ * "Questions every applicant answers" (Wave S7, the job's Scoring tab): the company's quick questions on the form and its
+ * written questions in the chat, each list sent whole, in order. Every question passes the fairness check first: one
+ * that asks about a protected characteristic is refused (422 `question_not_allowed`, each refused part in
+ * `details.problems`); wording the phrase list flags is saved with the flag, so approval waits for a person. Starts from
+ * `baseVersion`, which must still be the newest, and saves a new version like any edit. These questions never hold or
+ * decline anyone, so on a live job an approver's change takes effect at once (not on the Q10 list).
+ */
+rolePacketRoutes.put("/:id/company-questions", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  assertCan(t.role, "packet.edit");
+  const body = CompanyQuestionsEdit.parse(await c.req.json());
+  const container = c.get("container");
+  const actor = actorOf(c);
+  const result = await withTenant(container.db, t.companyId, async (tx) => {
+    const { role, versions } = await loadRolePackets(tx, c.req.param("id") ?? "", { forWrite: true });
+    refuseClosed(role);
+    const base = versions[0];
+    if (body.baseVersion !== base.version) throw new HttpError(409, "stale_version", `Someone saved a newer version of this role (version ${base.version}) since you opened it. Reload to see it, then make your change again.`);
+    const edit = applyCompanyQuestionsEdit(base.packet, body);
+    if (!edit.fields.length) throw new HttpError(400, "nothing_changed", "Nothing was changed.");
+    const made = await createPacketVersion(tx, container, { tenant: t, actor, role, packet: edit.packet, changeSummary: body.changeSummary ?? edit.summary });
+    // Recorded like every edit: `role_packet.edited`, with the summary ("Edited: quick questions, written questions").
+    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId, guardChanges: made.guardChanges, needsApproval: made.needsApproval, boardsShowingOldVersion: made.boardsShowingOldVersion, ...(made.paused ? { paused: true } : {}), fields: edit.fields, flags: unresolvedFlags(made.version.packet).filter((f) => f.path.startsWith("companyQuestions")), diff: diffPackets(base.packet, made.version.packet, { from: base.version, to: made.version.version }) };
   });
   await container.kick();
   return c.json(result);

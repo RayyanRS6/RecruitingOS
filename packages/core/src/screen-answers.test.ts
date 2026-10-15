@@ -158,6 +158,17 @@ describe("the ITS operations console", () => {
     expect(withoutUnsentRunOutput(run("triage.read", null), screens)).toEqual(run("triage.read", null));
     expect(withoutUnsentRunOutput(run("screen.turn", "s-unknown"), screens)).toEqual(run("screen.turn", "s-unknown"));
   });
+
+  it("withholds a repeat submission's turns and write-up until the address owner confirmed them (review of Wave S7)", () => {
+    const detachedRun = (task: string) => ({ id: "r2", task, inputRef: { unconfirmedScreenId: "u1", turn: 1 }, structuredOutput: { answers: [{ answer: "I chart perio in Dentrix." }] }, status: "ok" });
+    const rows = (confirmation: string | null) => [{ id: "u1", confirmation }];
+    for (const task of ["screen.writeup", "screen.turn"]) {
+      for (const confirmation of [null, "sent", "not_added", "discarded"]) expect(withoutUnsentRunOutput(detachedRun(task), screens, rows(confirmation)).structuredOutput, `${task} ${confirmation}`).toEqual(WITHHELD_RUN_OUTPUT);
+      // not found: withheld too
+      expect(withoutUnsentRunOutput(detachedRun(task), screens).structuredOutput).toEqual(WITHHELD_RUN_OUTPUT);
+      expect(withoutUnsentRunOutput(detachedRun(task), screens, rows("confirmed"))).toEqual(detachedRun(task));
+    }
+  });
 });
 
 describe("a recruiter's captured context", () => {

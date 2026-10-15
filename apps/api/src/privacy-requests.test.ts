@@ -106,11 +106,15 @@ describe("candidate privacy requests", () => {
       { companyId, candidateId, applicationId, direction: "outbound", channel: "email", subject: "Your application (taken back)", bodyText: "The team has decided not to move forward (taken back).", templateKey: "disposition:v1", status: "cancelled", error: "undone by the team before it was sent", sentBy },
       { companyId, candidateId, applicationId, direction: "outbound", channel: "email", subject: "Your application (sent)", bodyText: "A note that went out.", templateKey: "still_reviewing", status: "sent", sentBy },
     ]);
+    // what her record learned from a chat she sent (Wave S7, S7-F) is part of her information, and in the copy
+    const [withFacts] = await container.db.select().from(applications).where(eq(applications.id, applicationId));
+    await container.db.update(applications).set({ answers: { ...withFacts.answers, learned: [{ id: "lf_privacy", kind: "skill", text: "I chart perio exams in Dentrix every day.", quote: "I chart perio exams in Dentrix every day.", from: { applicationId, screenId: null, roleTitle: "Registered Dental Hygienist", at: new Date().toISOString() } }] } }).where(eq(applications.id, applicationId));
     const exp = await json(admin, "GET", `/api/v1/admin/data-requests/${req.id}/export`);
     expect(exp.status).toBe(200);
-    const bundle = (await exp.json()) as { person: { email: string }; applications: Array<{ eligibility: unknown }>; documents: Array<{ textExtracted: string | null }>; messagesWeSent: Array<{ subject: string | null }>; messagesWeDidNotSend: Array<{ subject: string | null; whatHappened: string }> };
+    const bundle = (await exp.json()) as { person: { email: string }; applications: Array<{ eligibility: unknown; answers?: { learned?: Array<{ text: string }> } }>; documents: Array<{ textExtracted: string | null }>; messagesWeSent: Array<{ subject: string | null }>; messagesWeDidNotSend: Array<{ subject: string | null; whatHappened: string }> };
     expect(bundle.person.email).toBe("maria.reyes@example.com");
     expect(bundle.applications).toHaveLength(1);
+    expect(bundle.applications[0].answers?.learned?.map((f) => f.text)).toEqual(["I chart perio exams in Dentrix every day."]);
     expect(JSON.stringify(bundle)).not.toMatch(/rationale|strengths|concerns/);
     // only what left us is listed as sent; what never left is apart, with what happened to it
     expect(bundle.messagesWeSent.map((m) => m.subject)).toContain("Your application (sent)");
@@ -213,6 +217,9 @@ describe("candidate privacy requests", () => {
     const wfStepsBefore = await wfStepsOf(wfBefore.map((r) => r.id));
     expect(JSON.stringify(wfBefore)).toContain("Maria Reyes");
     expect(JSON.stringify(wfStepsBefore)).toContain("Coastal Family Dentistry");
+    // a repeat submission's chat waiting for her to confirm it, with what that visit typed for the chat (Wave S7)
+    const [appRow] = await container.db.select({ roleId: applications.roleId, packetVersion: applications.packetVersion }).from(applications).where(eq(applications.id, applicationId));
+    const [typedRow] = await container.db.insert(unconfirmedScreens).values({ companyId, roleId: appRow.roleId, applicationId, packetVersion: appRow.packetVersion, firstName: "Maria", token: "privacy-test-typed", status: "completed", confirmation: "sent", progress: { askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0, typedFacts: { cv: ["Registered Dental Hygienist at Coastal Family Dentistry"], formAnswers: ["Licensed in California: yes."] }, focusQuestions: [{ key: "unknown_1", question: "Is your licence active?", answer: "Yes, Coastal Family Dentistry renewed it" }] }, expiresAt: new Date(Date.now() + 86_400_000).toISOString() }).returning({ id: unconfirmedScreens.id });
     // the "your data was deleted" email leaves only once the deletion committed: when it is sent, the record is already anonymized
     // (the adapter sits behind the do-not-send guard, whose `send` calls the adapter's own: the probe calls the class's)
     const email = container.integrations.email as FakeEmailAdapter;
@@ -293,9 +300,18 @@ describe("candidate privacy requests", () => {
     expect(doc.textExtracted).toBeNull();
     expect(storage.has(docBefore.storageKey)).toBe(false);
     for (const s of await container.db.select().from(screens).where(eq(screens.applicationId, applicationId))) { expect(s.transcript).toEqual([]); expect(s.answers).toEqual({}); }
+    // nothing she typed is left on the repeat submission's row, and it is discarded for good
+    const [typedAfter] = await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.id, typedRow.id));
+    expect(typedAfter.progress.typedFacts).toBeUndefined();
+    expect(typedAfter.progress.focusQuestions).toEqual([{ key: "unknown_1", question: "Is your licence active?" }]);
+    expect(JSON.stringify(typedAfter)).not.toMatch(/Coastal Family Dentistry|Licensed in California|Maria/);
+    expect(typedAfter).toMatchObject({ confirmation: "discarded", discardedAt: expect.any(String) });
     for (const m of await container.db.select().from(communications).where(eq(communications.candidateId, candidateId))) expect(m.bodyText).not.toContain("Maria");
     const [a] = await container.db.select().from(applications).where(eq(applications.id, applicationId));
     expect(a.stage).toBeTruthy(); // the stage history stays
+    // what her chats taught her record (Wave S7, S7-F) goes with the rest of her answers
+    expect(a.answers.learned).toBeUndefined();
+    expect(JSON.stringify(a.answers)).not.toContain("perio");
     expect((await container.db.select().from(events).where(eq(events.type, "candidate.anonymized"))).length).toBe(1);
     expect((await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "data.anonymized")))).length).toBe(1);
     const confirmation = outbox().find((m) => m.to === "maria.reyes@example.com" && /Your request is complete/.test(m.subject) && /identified you has been removed/.test(m.text));

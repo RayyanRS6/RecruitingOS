@@ -12,3 +12,4 @@ export * from "./prompts/resume";
 export { FakeProvider, type FakeHandler } from "./providers/fake";
 export * from "./prompts/triage";
 export * from "./prompts/screen";
+export * from "./prompts/writeup";

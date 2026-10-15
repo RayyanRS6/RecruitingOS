@@ -3,14 +3,14 @@ import { z } from "zod";
 import { createHash } from "node:crypto";
 import { desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, servedSummary, suppressAddress, describeHours, unsentScreenReadings, withoutUnsentRunOutput, withoutUnsentScreenEvents, zonedToUtc, APPLY_FLOW_FALLBACK } from "@ros/core";
-import { ApplyFlowDefaultChange, BreakGlass, BusinessCalendarInput, CompanyVerificationChange, JobBoardAccessChange, PlanChange, RecalculateDeadlines, companyOnboarding, companyVerifiedAt, type Actor } from "@ros/contracts";
+import { ApplyFlowDefaultChange, BreakGlass, BusinessCalendarInput, CandidateScoreSwitchChange, CompanyVerificationChange, JobBoardAccessChange, PlanChange, RecalculateDeadlines, candidateScoreShown, companyOnboarding, companyVerifiedAt, type Actor } from "@ros/contracts";
 import { HELD_STATUS } from "@ros/agents";
 import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, integrations, jobs, plans, recruiterEscalations, roles, screens, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
 import { requirePlatformAdmin, type Vars } from "../middleware/session";
 import { OUTCOME_STATEMENT, OutcomeError, PlatformRoleError, raiseAlert, resolveAlert, correctOutcome, countActiveAdmins, grantPlatformRole, listPlatformRoleGrants, revokeAllSessions, revokePlatformRole, type PlatformRole } from "@ros/core";
 import { CorrectOutcome } from "@ros/contracts";
 import { listCspReports, reviewCspReport } from "@ros/core";
-import { hiringOutcomes } from "@ros/db";
+import { hiringOutcomes, unconfirmedScreens } from "@ros/db";
 import { adminAlerts } from "@ros/db";
 import { and } from "drizzle-orm";
 import { HttpError } from "../middleware/errors";
@@ -66,6 +66,9 @@ adminRoutes.get("/customers", async (c) => {
     // How new roles meet the screening conversation (plan E1): "form now, conversation later" until ITS switches the
     // one-visit flow on for the company (pilot roles first, founder decision B1) with POST /customers/:id/apply-flow.
     applyFlowDefault: co.settings.applyFlowDefault ?? APPLY_FLOW_FALLBACK,
+    // Whether its candidates see their match score after sending (founder decision S7-1): on unless ITS turned it off
+    // with POST /customers/:id/candidate-score.
+    candidateScoreShown: candidateScoreShown(co.settings),
   })));
 });
 
@@ -139,6 +142,36 @@ adminRoutes.post("/customers/:id/apply-flow", async (c) => {
 });
 
 /**
+ * Whether the company's candidates see their match score on their application record after sending (founder decision
+ * S7-1; Wave S7, S7-E): on unless ITS turns it off for the company. ITS only, with a reason; the change is audited (the
+ * customer sees it, with the reason, in their own history) and kept with who made it. A customer cannot set it
+ * (routes/company-settings.ts). Counsel items 1 and 21: a lawyer reviews it before real candidates in NYC, IL, CA or CO.
+ */
+adminRoutes.post("/customers/:id/candidate-score", async (c) => {
+  const s = c.get("session")!;
+  const container = c.get("container");
+  const companyId = c.req.param("id") ?? "";
+  if (!UUID.test(companyId)) throw new HttpError(404, "not_found", "Company not found.");
+  const body = CandidateScoreSwitchChange.parse(await c.req.json().catch(() => ({})));
+  const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
+  const result = await withPlatform(container.db, async (tx) => {
+    const [co] = await tx.select({ id: companies.id, settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1);
+    if (!co) return null;
+    const from = candidateScoreShown(co.settings);
+    if (from === body.shown && co.settings.candidateScoreSetBy) return { shown: body.shown, changed: false };
+    const setBy = { at: container.engine.clock().toISOString(), by: actor, reason: body.reason };
+    await tx.update(companies).set({ settings: sql`coalesce(${companies.settings}, '{}'::jsonb) || jsonb_build_object('candidateScoreShown', ${body.shown}::boolean, 'candidateScoreSetBy', ${JSON.stringify(setBy)}::jsonb)` }).where(eq(companies.id, companyId));
+    // Recorded as a change to the company's settings (the action and event the customer's own history already lists),
+    // naming the one setting, before and after.
+    await audit(tx, { companyId, actor, action: "company.updated", target: { type: "company", id: companyId }, reason: body.reason, details: { fields: ["candidateScoreShown"], candidateScoreShown: { from, to: body.shown } } });
+    await emit(tx, { type: "company.updated", companyId, actor, subject: { type: "company", id: companyId }, payload: { fields: ["candidateScoreShown"], candidateScoreShown: { from, to: body.shown } } });
+    return { shown: body.shown, changed: from !== body.shown };
+  });
+  if (!result) throw new HttpError(404, "not_found", "Company not found.");
+  return c.json({ ok: true, companyId, shown: result.shown, changed: result.changed });
+});
+
+/**
  * The customer's report (docs/spec/21 section 7, P1): the ten figures of the role report over every role of the
  * company, plus one line per role. Counts only; never a candidate's name. The reason header is audited by the
  * middleware above, like every other read here.
@@ -176,9 +209,12 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  */
 async function withoutUnsentAnswers<R extends typeof aiRuns.$inferSelect, E extends typeof events.$inferSelect>(db: Container["db"], input: { runs: R[]; events: E[] }): Promise<{ runs: R[]; events: E[] }> {
   const ids = [...new Set([...input.runs.map((r) => r.inputRef?.screenId), ...input.events.filter((e) => e.subjectType === "screen").map((e) => e.subjectId)].filter((x): x is string => typeof x === "string" && UUID.test(x)))];
-  if (!ids.length) return input;
-  const scr = await withPlatform(db, (tx) => tx.select({ id: screens.id, status: screens.status, progress: screens.progress, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.id, ids)));
-  return { runs: input.runs.map((r) => withoutUnsentRunOutput(r, scr)), events: withoutUnsentScreenEvents(input.events, scr, unsentScreenReadings(scr)) };
+  // a repeat submission's detached conversation (its turns and its write-up): withheld until the address owner confirms it
+  const detachedIds = [...new Set(input.runs.map((r) => r.inputRef?.unconfirmedScreenId).filter((x): x is string => typeof x === "string" && UUID.test(x)))];
+  if (!ids.length && !detachedIds.length && !input.runs.some((r) => typeof r.inputRef?.unconfirmedScreenId === "string")) return input;
+  const scr = ids.length ? await withPlatform(db, (tx) => tx.select({ id: screens.id, status: screens.status, progress: screens.progress, assessmentId: screens.assessmentId }).from(screens).where(inArray(screens.id, ids))) : [];
+  const detached = detachedIds.length ? await withPlatform(db, (tx) => tx.select({ id: unconfirmedScreens.id, confirmation: unconfirmedScreens.confirmation }).from(unconfirmedScreens).where(inArray(unconfirmedScreens.id, detachedIds))) : [];
+  return { runs: input.runs.map((r) => withoutUnsentRunOutput(r, scr, detached)), events: withoutUnsentScreenEvents(input.events, scr, unsentScreenReadings(scr)) };
 }
 
 adminRoutes.get("/runs/:id", async (c) => {

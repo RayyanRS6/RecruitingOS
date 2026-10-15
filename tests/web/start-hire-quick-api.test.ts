@@ -88,4 +88,31 @@ describe("the quick start hands its answers to the job builder", () => {
     expect(draftMusts).toContain("Cannot work Saturdays");
     expect(draftMusts).not.toContain("No recent grads");
   });
+
+  it("a question for every applicant that asks about a protected characteristic is refused on the questions step (Wave S7)", async () => {
+    const a: QuickAnswers = {
+      ...emptyQuickAnswers(),
+      title: "Dental Hygienist",
+      employmentType: "full_time",
+      remotePolicy: "onsite",
+      place: "Irvine, CA",
+      experience: "none",
+      pay: { basis: "hourly", min: "45", max: "55", ceiling: "" },
+      noClosingDate: true,
+      mustHaves: ["Active CA RDH license"],
+      noDealBreakers: true,
+      ownQuestions: ["Which practice software have you used?", "Are you married?", "Is English your first language?"],
+    };
+    const started = (await (await json("POST", "/api/v1/intake/sessions", { initialMessage: firstMessage(a) })).json()) as { session: IntakeSessionView };
+    const edited = await json("POST", `/api/v1/intake/sessions/${started.session.id}/answers`, { answers: skippedAnswers(started.session.questions), patch: quickStartPatch(a, "dental", started.session.facts), reply: false });
+    expect(edited.status).toBe(200);
+    const body = (await edited.json()) as { session: IntakeSessionView; refused: Array<{ text: string; reason: string; alternative: string }> };
+    expect(body.refused.map((r) => r.text)).toEqual(["Are you married?", "Is English your first language?"]);
+    expect(body.refused[1].alternative).toMatch(/level of a language the job needs/);
+    // the job's own question stays, and so do the guide's yes/no questions on the form
+    expect(body.session.facts.screeningQuestions).toEqual(["Which practice software have you used?"]);
+    expect(body.session.facts.eligibilityNotes.length).toBeGreaterThan(0);
+    const echo = body.session.messages.filter((m) => m.kind === "answers").map((m) => m.content).join("\n");
+    expect(echo).toMatch(/Not used: "Are you married\?"/);
+  });
 });

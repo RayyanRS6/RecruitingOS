@@ -18,7 +18,7 @@ describe("which model each task runs on", () => {
   it("gives Sonnet 5.5 the whole job draft alone, and every other task to Haiku 5.5", () => {
     const table = modelTableFromEnv({});
     expect(TASKS.filter((t) => modelForTask(t, table) === "claude-sonnet-5-5")).toEqual(["intake.compile"]);
-    for (const task of ["intake.turn", "intake.extract", "intake.suggest", "packet.revise", "company.about", "resume.extract", "triage.assess", "screen.turn", "screen.assess", "message.freeform"] as const) {
+    for (const task of ["intake.turn", "intake.extract", "intake.suggest", "packet.revise", "company.about", "resume.extract", "triage.assess", "screen.turn", "screen.assess", "screen.writeup", "message.freeform"] as const) {
       expect(modelForTask(task, table)).toBe("claude-haiku-5-5");
     }
   });
@@ -55,5 +55,7 @@ describe("how hard each task thinks", () => {
     expect(effortForTask("screen.assess")).toBe("high");
     // the quick start's suggestions (Wave S3, G3): a short list to tick, on Haiku 5.5 at low
     expect(effortForTask("intake.suggest")).toBe("low");
+    // Wave S7: the write-up on Review & send, checked in code and edited by the candidate, at Haiku 5.5's default
+    expect(effortForTask("screen.writeup")).toBe("medium");
   });
 });

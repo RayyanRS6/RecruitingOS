@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, type Actor, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreenChannel, type ScreeningQuestion, type ScreenInvitedVia, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
-import { runPromptDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type RunOutcome, type ScreenContext } from "@ros/ai";
-import { HANDED_TO_A_PERSON, createEscalation, emit, entitlements, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, screeningStoppedSummary, tapAnswerText, tapFormatFor, teamScreenView, transition } from "@ros/core";
+import { CHAT_SECTION_LABEL, SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, type Actor, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreenChannel, type ScreeningQuestion, type ScreenInvitedVia, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
+import { runPromptDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type ChatPromptContext, type RunOutcome, type ScreenContext } from "@ros/ai";
+import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSentences, buildChatPlan, chatMoveStays, chatNextMove, createEscalation, emit, entitlements, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, saysNotDone, screeningStoppedSummary, syncChatPlan, tapAnswerText, tapFormatFor, teamScreenView, transition, writtenQuestionsOf, type ChatMove } from "@ros/core";
 import { applications, assessments, candidates, companies, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { deliverSms, recordInbound, sendPersonRequestedNote } from "./coordinator";
@@ -76,8 +76,9 @@ export function modelTurnsUsed(transcript: readonly ScreenTranscriptEntry[]): nu
  * A candidate answering normally stays well under it; a conversation that only ever chats never reaches the end of
  * the questions, so without a cap it would call the model for as long as the link lasts.
  */
-export function modelTurnCap(packet: Pick<RolePacket, "screening">): number {
-  return 3 * packet.screening.questions.length + 5;
+export function modelTurnCap(packet: Pick<RolePacket, "screening">, progress?: Pick<ScreenProgress, "chat"> | null): number {
+  // A Kanvis-style chat's item can take four replies (the ask, one push, the analog, the smaller version).
+  return (progress?.chat ? 4 : 3) * packet.screening.questions.length + 5;
 }
 
 /** What the conversation says when it reaches that cap on the web in the one-visit flow: the candidate checks their answers next (E10). */
@@ -125,16 +126,23 @@ export async function loadApplicationBundle(q: Queryable, applicationId: string)
   if (!candidate || !role || !company || !pv) return null;
   const triage = app.latestAssessmentId ? (await q.select().from(assessments).where(eq(assessments.id, app.latestAssessmentId)).limit(1))[0] : undefined;
   // The reading's open questions steer the chat's follow-ups: only those that pass the code's fairness check (`unfairQuestion`).
-  return { app, candidate, role, company, packet: pv.packet, triageUnknowns: triage?.result.unknowns.map((u) => u.question).filter((q) => !unfairQuestion(q)) ?? [] };
+  // Wave S7: what the reading found for each must-have (the chat asks about the ones the CV does not show) and the
+  // candidate's own CV lines and form answers (the chat names the CV and never asks again what the form asked).
+  const triageMet = triage ? Object.fromEntries(triage.result.requirementFindings.map((f) => [f.requirementKey, f.met])) : null;
+  return { app, candidate, role, company, packet: pv.packet, triageUnknowns: triage?.result.unknowns.map((u) => u.question).filter((q) => !unfairQuestion(q)) ?? [], triageMet, chatFacts: chatFactsOf(pv.packet, app) };
 }
 type ApplicationBundle = NonNullable<Awaited<ReturnType<typeof loadApplicationBundle>>>;
 
+/**
+ * `packet`: the questions as this conversation asks them (`chatPacket`: the résumé reading's open questions first, or,
+ * in a Kanvis-style chat, its plan's items and the closing question). `rolePacket`: the job's own packet version.
+ */
 export async function loadScreenBundle(q: Queryable, screenId: string) {
   const [screen] = await q.select().from(screens).where(eq(screens.id, screenId)).limit(1);
   if (!screen) return null;
   const b = await loadApplicationBundle(q, screen.applicationId);
   // A screen that opens with the assessment's open questions sees them as its first questions everywhere the packet is read.
-  return b ? { ...b, packet: focusedPacket(b.packet, screen.progress), screen } : null;
+  return b ? { ...b, packet: chatPacket(b.packet, screen.progress), rolePacket: b.packet, screen } : null;
 }
 export type ScreenBundle = NonNullable<Awaited<ReturnType<typeof loadScreenBundle>>>;
 
@@ -143,8 +151,13 @@ type ConversationState = Pick<ScreenRow, "channel" | "progress" | "answers" | "t
 /** The model's view of the conversation. Exported for a repeat submission's detached conversation, which has no application of its own. */
 type CompanyRow = typeof companies.$inferSelect;
 
-export function screenContextOf(input: { companyName: string; companyLocations: CompanyRow["locations"]; noticeOverrides: CompanyRow["settings"]["notices"]; packet: RolePacket; firstName: string; focusUnknowns: string[] }, screen: ConversationState, latest: string | null): ScreenContext {
+/**
+ * `facts` (Wave S7): the candidate's CV lines and form answers, for a Kanvis-style chat (`progress.chat`); none for a
+ * repeat submission's detached chat, where nothing about the person on file reaches the model.
+ */
+export function screenContextOf(input: { companyName: string; companyLocations: CompanyRow["locations"]; noticeOverrides: CompanyRow["settings"]["notices"]; packet: RolePacket; firstName: string; focusUnknowns: string[]; facts?: ChatFacts | null }, screen: ConversationState, latest: string | null): ScreenContext {
   return {
+    chat: screen.progress.chat ? chatPromptOf(input.packet, screen.progress, input.facts ?? null) : null,
     company: { name: input.companyName },
     packet: input.packet,
     candidate: { firstName: input.firstName },
@@ -159,15 +172,37 @@ export function screenContextOf(input: { companyName: string; companyLocations: 
   };
 }
 
-function contextOf(b: ApplicationBundle, screen: ConversationState, latest: string | null): ScreenContext {
-  return screenContextOf({ companyName: b.company.name, companyLocations: b.company.locations, noticeOverrides: b.company.settings.notices, packet: b.packet, firstName: b.candidate.firstName, focusUnknowns: b.triageUnknowns }, screen, latest);
+function contextOf(b: ApplicationBundle & { screen?: Pick<ScreenRow, "invitedVia"> }, screen: ConversationState, latest: string | null): ScreenContext {
+  return screenContextOf({ companyName: b.company.name, companyLocations: b.company.locations, noticeOverrides: b.company.settings.notices, packet: b.packet, firstName: b.candidate.firstName, focusUnknowns: b.triageUnknowns, facts: chatFactsFor(b.chatFacts, screen.progress, b.screen?.invitedVia ?? null) }, screen, latest);
+}
+
+/**
+ * What a chat may name about the candidate (Wave S7). A repeat submission's detached chat: only what was typed in its
+ * visit (`typedFacts`). A chat offered with the application: the application's own CV and form answers only when the
+ * visit passed what was typed (`ownFacts`), so that, given the same typing, the two read alike and a chat never shows
+ * whether an address applied before. Any other chat (its link was emailed to the address on file): the application's.
+ */
+export function chatFactsFor(appFacts: ChatFacts | null, progress: Pick<ScreenProgress, "typedFacts" | "ownFacts">, invitedVia: string | null): ChatFacts | null {
+  if (progress.typedFacts) return progress.typedFacts;
+  // The form's answers are what this visit typed either way (a repeat submission's chat gets the same from its form).
+  if (invitedVia === "apply" && !progress.ownFacts) return appFacts ? { cv: [], formAnswers: appFacts.formAnswers } : null;
+  return appFacts;
 }
 
 /** Screening stays within the job. Anything about a protected characteristic the candidate volunteers is kept out of recorded answers (the transcript itself is the record). */
 export function redactProtected(text: string): string {
   const sentences = text.split(/(?<=[.!?])\s+/);
-  const protectedPattern = /\b(i am|i'm|im)\s+\d{2}\b|\b\d{2}\s+years? old\b|\bmy (kids?|children|son|daughter|husband|wife|spouse)\b|\bpregnan|\bmaternity\b|\bchurch\b|\bmosque\b|\bsynagogue\b|\breligio|\bdisabilit|\bwheelchair\b|\bmy (illness|condition|diagnosis)\b|\bimmigra|\bcitizen(ship)?\b|\bvisa\b|\bnational(ity)?\b|\bdivorc|\bmarried\b|\bsingle mom\b|\bsingle dad\b/i;
-  const kept = sentences.filter((s) => !protectedPattern.test(s));
+  const protectedPattern = /\b(i am|i'm|im)\s+\d{2}\b|\b\d{2}\s+years? old\b|\bmy (kids?|children|son|daughter|husband|wife|spouse)\b|\bi(?: have|'ve) (?:a |an |one |two |three |four |five |\d+ )?(?:little |young |small )?(kids?|children|sons?|daughters?|baby|toddlers?)\b|\bpregnan|\bmaternity\b|\bpaternity\b|\bchurch\b|\bmosque\b|\bsynagogue\b|\breligio|\bdisabilit|\bwheelchair\b|\bmy (illness|condition|diagnosis)\b|\bimmigra|\bcitizen(ship)?\b|\bvisa\b|\bnational(ity)?\b|\bdivorc|\bmarried\b|\bsingle (?:mom|mum|dad|mother|father|parent)\b/i;
+  // Parenthood, military service, national origin and faith in the ways people mention them ("As a mom of three", "I'm
+  // a veteran", "I moved here from Mexico"), kept apart so each list stays readable.
+  const familyPattern = /\b(?:mom|mum|mother|dad|father) of (?:one|two|three|four|five|six|\d+|twins)\b|\bas a (?:working |stay[- ]at[- ]home |new |young )?(?:mom|mum|mother|dad|father|parent|grandparent|grandmother|grandfather)\b|\bi(?:'m| am) a (?:working |new |young )?(?:mom|mum|mother|dad|father|parent|grandparent)\b|\bmy (?:kid|kiddo|grandchild|grandchildren|grandkids|baby|newborn|toddler|family planning)s?\b/i;
+  const servicePattern = /\bveterans?\b|\b(?:served|serving|enlisted|deployed) (?:in|with) the (?:military|army|navy|air force|marines|marine corps|armed forces|national guard|coast guard)\b|\bmy (?:military|army|navy|air force|marine corps) (?:service|days|years|career|time)\b|\b(?:honorable|dishonorable|medical) discharge\b/i;
+  // "moved here from <Place>": the place is a capitalised name, so this one reads case as written ("from a clinic" is work)
+  const movedFrom = /\b[Mm]oved (?:[Hh]ere|to (?:the )?(?:US|U\.S\.|USA|United States|States|America|this country)) from (?!(?:A|An|The|My|Our|Another)\b)\p{Lu}[\p{L}'’-]+/u;
+  const originPattern = /\bborn (?:and raised )?in\b|\bmy (?:home ?country|accent|visa|green card|native (?:language|country|tongue)|first language|mother tongue)\b|\bgreen card\b|\b(?:i|we) (?:came|emigrated|immigrated) (?:here |to (?:the )?(?:us|u\.s\.|usa|united states|america) )?from\b/i;
+  const faithPattern = /\bmy (?:faith|religion|temple|parish|congregation|pastor|imam|rabbi)\b|\b(?:i|we) (?:pray|worship)\b/i;
+  const touches = (s: string) => protectedPattern.test(s) || familyPattern.test(s) || servicePattern.test(s) || movedFrom.test(s) || originPattern.test(s) || faithPattern.test(s);
+  const kept = sentences.filter((s) => !touches(s));
   return kept.length ? kept.join(" ") : "(answer recorded; personal details omitted)";
 }
 
@@ -210,19 +245,375 @@ export type ScreenIntro = { title: string; disclosure: string; aiNotice: { versi
  * `focus`: the conversation starts with the résumé reading's open questions ("Ask about this in a screen"), and the
  * introduction says so. The packet is the one the screen reads (`loadScreenBundle`), with those questions counted.
  */
-export function screenIntro(input: { companyName: string; firstName: string; packet: RolePacket; noticeOverrides?: CompanyRow["settings"]["notices"]; focus?: boolean }): ScreenIntro {
+export function screenIntro(input: { companyName: string; firstName: string; packet: RolePacket; noticeOverrides?: CompanyRow["settings"]["notices"]; focus?: boolean; /** The chat runs in sections (`withChatPlan`): it asks the company's written questions. */ chat?: boolean }): ScreenIntro {
   const { packet, companyName } = input;
-  const n = packet.screening.questions.length;
+  // A Kanvis-style chat whose company wrote its own questions (Wave S7) asks those; every other conversation asks the
+  // questions of the packet it reads (the job's screening questions, with the résumé reading's open questions first).
+  const written = input.chat ? packet.companyQuestions?.written?.length ?? 0 : 0;
+  const n = written ? written + packet.screening.questions.filter((q) => isFocusKey(q.key)).length : packet.screening.questions.length;
   const notice = noticesFor(["*"], input.noticeOverrides).find((x) => x.key === "ai_use");
   return {
     title: `A few questions about the ${packet.identity.title} role`,
-    disclosure: `Hi ${input.firstName}, this is ${companyName}'s hiring assistant, a software program. It will ask you ${n} short questions about the ${packet.identity.title} role, one at a time.${input.focus ? ` ${FOCUS_INTRO}` : ""} Your answers go to the hiring team, and people on the team make every decision. You can ask for a person at any time.`,
+    disclosure: `Hi ${input.firstName}, this is ${companyName}'s hiring assistant, a software program. It will ask you ${n} short questions about the ${packet.identity.title} role, one at a time.${input.focus ? ` ${FOCUS_INTRO}` : ""} Your answers go to the hiring team once you send them, and people on the team make every decision. You can ask for a person at any time.`,
     aiNotice: notice ? { version: notice.version, text: notice.text } : null,
     packetDisclosure: packet.communication.disclosureText,
     humanAlternative: packet.communication.humanAlternativeText,
     questions: n,
     minutes: packet.screening.maxMinutes,
   };
+}
+
+/* ------------------------------------------------------------------------------------------------------------ */
+/* The Kanvis-style chat (Wave S7; spec-s7-apply-flow.md step 6, the contracts in s7-contracts.md section 2b)       */
+/* ------------------------------------------------------------------------------------------------------------ */
+
+/**
+ * The chat offered with the application on the web runs in sections (founder decision S7-3): "About your experience"
+ * (the job's must-haves the CV does not show, and the résumé reading's open questions the team asked for), "Required
+ * questions" (the company's written questions, or a job's own screening questions when it set none) and "Wrapping
+ * up" (one closing question). Its plan (`progress.chat`) is fixed in code when the chat starts and moved on in code after
+ * each turn; the model reads each reply (`reading`) and writes the words, and the code holds every turn to the rules:
+ * one neutral restatement and one question, one push for specifics, the analog and the smaller version, "No" settled as
+ * not known with a calm line, no filler, no inference, the closing question, and the fairness check on every question.
+ * Every other conversation (by email later, by text, or one from before) runs exactly as it did.
+ */
+
+type ApplicationRow = typeof applications.$inferSelect;
+
+/** What the chat may know about the candidate: their own CV lines, and their form answers as sentences. */
+export type ChatFacts = { cv: string[]; formAnswers: string[] };
+
+const line = (s: string, max = 200) => s.replace(/\s+/g, " ").trim().slice(0, max);
+
+/**
+ * The CV's positions, licences, certificates and skills as a few plain lines (the candidate's own information: the chat
+ * names it). Shared by the application's chat (`chatFactsOf`) and the apply form's reading of the CV in the same visit
+ * (apps/api services/apply-details.ts, `ResumeReading.cvLines`), so both read alike.
+ */
+export function cvLinesOf(x: ApplicationRow["extraction"] | null | undefined): string[] {
+  const cv: string[] = [];
+  for (const p of (x?.positions ?? []).slice(0, 4)) cv.push(line(`${p.title}${p.employer ? ` at ${p.employer}` : ""}${p.startDate ? ` (${p.startDate}${p.current ? " to now" : p.endDate ? ` to ${p.endDate}` : ""})` : ""}${p.summary ? `: ${p.summary}` : ""}`));
+  for (const l of (x?.licenses ?? []).slice(0, 3)) cv.push(line(`Licence: ${l.name}${l.jurisdiction ? ` (${l.jurisdiction})` : ""}`));
+  for (const c of (x?.certifications ?? []).slice(0, 3)) cv.push(line(`Certification: ${c.name}`));
+  if (x?.skills?.length) cv.push(line(`Skills: ${x.skills.slice(0, 12).join(", ")}`, 300));
+  return cv;
+}
+
+/** The form's own words about their work as CV lines: the summary they checked, and the no-résumé answers. */
+export function answerCvLines(answers: { workSummary?: string | null; noResume?: Record<string, unknown> | null } | null | undefined): string[] {
+  const cv: string[] = [];
+  if (answers?.workSummary) cv.push(line(`Summary of their work: ${answers.workSummary}`, 400));
+  for (const v of Object.values(answers?.noResume ?? {}).slice(0, 4)) if (typeof v === "string" && v.trim()) cv.push(line(`Their own words about their work: ${v}`, 300));
+  return cv;
+}
+
+/** The candidate's CV as a few plain lines (their own information: the chat names it), and the form's answers as sentences. */
+export function chatFactsOf(packet: RolePacket, app: Pick<ApplicationRow, "extraction" | "answers">): ChatFacts {
+  const answers = app.answers ?? {};
+  return { cv: [...cvLinesOf(app.extraction), ...answerCvLines(answers)], formAnswers: applicationAnswerSentences(packet, answers).map((s) => s.sentence) };
+}
+
+/** The closing question, in code's words (the model may say it its own way, with the first name). */
+export const CHAT_WRAP_QUESTION = "Is there anything else you would like the hiring team to know before we finish?";
+/** Said when "No" settles an item as not known: calm, and never a guess about what they can do. */
+export const CHAT_CALM_LINE = "Understood, thanks for saying so.";
+/** The question the code asks when the model's follow-up has none: one push, the analog, the smaller version. */
+export const CHAT_LADDER_QUESTION: Readonly<Record<"push" | "analog" | "smaller", string>> = {
+  push: "Could you tell me about one specific time: what you did, and what came of it?",
+  analog: "Not done that exactly? Tell me about something similar from your own work.",
+  smaller: "Even a small moment counts: was there a time, even with just a few people, when you did something like it?",
+};
+
+/** What the chat says about a must-have the CV does not show: always true, whether or not it is on the CV in other words. */
+export function gapQuestion(text: string): string {
+  return `This is one of the things the job needs: ${text.trim().replace(/[.!?]+$/, "")}. What can you tell me about it from your own work?`;
+}
+
+/** What the chat says at its end, after the close: what happens next, and that nothing is sent before Send. */
+export function chatNextLine(companyName: string): string {
+  return `Next, check what you are sending and change anything you like, then press Send. Nothing goes to ${companyName} until you do.`;
+}
+
+/** The chat's last message: its close (one concrete thing from the chat, or a plain thank-you) and what happens next. */
+export function chatClosingMessage(closing: string | null | undefined, companyName: string): string {
+  const said = closing?.trim();
+  return said ? `${said}\n\n${chatNextLine(companyName)}` : chatNextLine(companyName);
+}
+
+/**
+ * The questions as a Kanvis-style chat asks them, for every reader of the packet (the turn rules, the page, the
+ * scorecard): the plan's items in order (an open question from the résumé reading as it was; a must-have as
+ * `gapQuestion`; a company question as written, its private note given to the models as the model answer; a job's own
+ * screening question as it is), then the closing question. Without a plan: the résumé reading's open questions first,
+ * then the packet's (`focusedPacket`), as before. Reading it twice gives the same.
+ */
+export function chatPacket(packet: RolePacket, progress: Pick<ScreenProgress, "focusQuestions" | "chat"> | null | undefined): RolePacket {
+  const focused = focusedPacket(packet, progress);
+  const plan = progress?.chat;
+  if (!plan) return focused;
+  const own = new Map(focused.screening.questions.filter((q) => q.key !== CHAT_WRAP_KEY).map((q) => [q.key, q]));
+  const written = new Map((packet.companyQuestions?.written ?? []).map((w) => [w.key, w]));
+  const must = new Map((packet.requirements?.mustHaves ?? []).map((m) => [m.key, m]));
+  const questions: ScreeningQuestion[] = [];
+  for (const item of plan.items) {
+    const w = item.kind === "written" ? written.get(item.key) : undefined;
+    const m = item.kind === "gap" && !isFocusKey(item.key) ? must.get(item.key) : undefined;
+    const q = w ? { key: w.key, question: w.question, kind: "behavioral" as const, ...(w.lookFor ? { modelAnswer: w.lookFor } : {}) } : m ? { key: m.key, question: gapQuestion(m.text), kind: "skills" as const } : own.get(item.key);
+    if (q) questions.push(q);
+  }
+  questions.push({ key: CHAT_WRAP_KEY, question: CHAT_WRAP_QUESTION, kind: "motivation" });
+  return { ...packet, screening: { ...packet.screening, questions } };
+}
+
+/** Whether "No" climbs the ladder for an item: a gap, or an open question; a yes-or-no question takes "No" as its answer. */
+function ladderApplies(kind: "gap" | "written", q: Pick<ScreeningQuestion, "kind"> | undefined): boolean {
+  return kind === "gap" || (!!q && (q.kind === "skills" || q.kind === "behavioral"));
+}
+
+/** Words that say what a line is about ("Do you have experience with...?" says nothing): the same list the scorecard uses. */
+function sameTopic(a: string, b: string): boolean {
+  const wa = new Set(topicWords(a));
+  const wb = new Set(topicWords(b));
+  if (!wa.size || !wb.size) return false;
+  const shared = [...wa].filter((w) => wb.has(w)).length;
+  return shared >= Math.min(2, wa.size);
+}
+
+/**
+ * "About your experience": the résumé reading's open questions the team asked for (`focusQuestions`), then the job's
+ * must-haves the CV does not show, at most `CHAT_GAP_LIMIT`. With a reading: those it found partly or not at all (a
+ * must-have the candidate's own words already settle, either way, is left alone); before the reading has run (the
+ * one-visit flow can start first), those whose words are not in the CV; with no CV to read, none (the chat starts at
+ * the required questions). Never one checked in the interviews only, one the form already asked about, or one that is
+ * also a written question.
+ */
+export function chatGaps(input: { packet: RolePacket; progress: Pick<ScreenProgress, "focusQuestions">; triageMet: Record<string, string> | null; facts: ChatFacts | null; written: string[] }): string[] {
+  const focus = (input.progress.focusQuestions ?? []).map((f) => f.key);
+  const asked = input.facts?.formAnswers ?? [];
+  const cv = (input.facts?.cv ?? []).join("\n").toLowerCase();
+  const gaps = (input.packet.requirements?.mustHaves ?? []).filter((m) => {
+    if (input.written.includes(m.key) || focus.includes(m.key)) return false;
+    if (!m.evidencedBy.some((e) => e !== "interview")) return false;
+    if (asked.some((a) => sameTopic(m.text, a))) return false;
+    if (input.triageMet) {
+      const met = input.triageMet[m.key];
+      return met === undefined || met === "unknown" || met === "partially";
+    }
+    const words = topicWords(m.text);
+    return !!cv && words.filter((w) => cv.includes(w)).length < Math.ceil(words.length / 2);
+  });
+  return [...focus, ...gaps.map((m) => m.key)].slice(0, CHAT_GAP_LIMIT);
+}
+
+/**
+ * The plan for a chat that starts now (the chat offered with the application, on the web), on the progress it starts
+ * from; the progress as it was for any other conversation, or one that has a plan already.
+ */
+export function withChatPlan(rolePacket: RolePacket, progress: ScreenProgress, input: { channel: string; gaps: string[]; at: string }): ScreenProgress {
+  if (progress.chat || input.channel !== "web" || !isOneVisitFlow(progress)) return progress;
+  const written = writtenQuestionsOf(rolePacket).map((w) => ({ key: w.key, required: w.required }));
+  return { ...progress, chat: buildChatPlan({ gaps: input.gaps, written, at: input.at }) };
+}
+
+/**
+ * The chat's first message, in code (no model at Start, plan E2): the first name, one line from the CV when there is
+ * one, then the first item's question word for word. A repeat submission's detached chat greets the typed name only.
+ */
+export function chatOpening(input: { firstName: string; cv: string[]; question: string }): string {
+  const first = input.firstName.trim() || "there";
+  const work = input.cv[0]?.split(":")[0]?.trim().replace(/[.!?]+$/, "");
+  // Only a position from the résumé is named; the form's own words about their work are not a résumé line.
+  const said = work && !/^(licence|certification|skills|summary|their own words)/i.test(work) ? `Your resume shows your work as ${work}.` : "Thanks for applying.";
+  return `Hi ${first}. ${said}\n\n${input.question}`;
+}
+
+/** The chat's state as the model sees it: the plan, each item's question and ladder, the private notes, the CV and the form. */
+function chatPromptOf(packet: RolePacket, progress: ScreenProgress, facts: ChatFacts | null): ChatPromptContext | null {
+  const plan = progress.chat;
+  if (!plan) return null;
+  const qs = new Map(packet.screening.questions.map((q) => [q.key, q]));
+  const lookFor = new Map((packet.companyQuestions?.written ?? []).flatMap((w) => (w.lookFor ? [[w.key, w.lookFor] as const] : [])));
+  return {
+    section: plan.section,
+    sectionLabel: CHAT_SECTION_LABEL[plan.section],
+    current: progress.currentQuestionKey,
+    items: plan.items.map((i) => {
+      const q = qs.get(i.key);
+      const note = lookFor.get(i.key);
+      return { key: i.key, kind: i.kind, required: i.required, state: i.state, step: i.step, pushes: i.pushes, question: q?.question ?? i.key, ladder: ladderApplies(i.kind, q), ...(note ? { lookFor: note } : {}) };
+    }),
+    wrap: { key: CHAT_WRAP_KEY, question: CHAT_WRAP_QUESTION },
+    cv: facts?.cv ?? [],
+    formAnswers: facts?.formAnswers ?? [],
+  };
+}
+
+const FILLER = /^(?:(?:ok(?:ay)?|great|good|excellent|awesome|perfect|wonderful|fantastic|amazing|nice|cool|brilliant|lovely|thanks?|thank you|got it|i see|noted|sure|understood|right|alright)(?: so much| very much| for (?:sharing|that|explaining|telling me)(?: that)?)?|that['’]?s (?:great|good|helpful|really helpful|very helpful|good to know|wonderful|impressive|excellent|fantastic|amazing|interesting|clear)|good to know|that helps|love (?:that|it))[.!]*$/i;
+const PRAISE = /\b(?:great|excellent|impressive|amazing|fantastic|wonderful|brilliant|outstanding|strong|solid|clear(?:ly)?|well done|nicely|good job|good work)\b/i;
+const INFERENCE = /^(?:it sounds like|it seems|it looks like|that suggests|this suggests|clearly|obviously|you must|you clearly|you obviously|i can tell|that shows|this shows|so it was|so that was|it must have)\b|\b(?:which|that|this) (?:shows|proves|demonstrates)\b|\byou(?:'re| are) clearly\b/i;
+
+function sentencesOf(text: string): string[] {
+  return text.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * One neutral restatement and one question (spec step 6): the first question the model wrote, and before it at most one
+ * sentence (two when the candidate asked something and it is being answered), with filler, inference and, in "About
+ * your experience", praise left out. `calm`: the restatement is the calm line instead (an item settled as not known).
+ * `question`: asked when the model wrote none. Never adds words of the model's.
+ */
+export function shapeChatMessage(text: string, opts: { experience: boolean; calm: boolean; question: string | null; answering: boolean }): string {
+  const question = firstQuestion(text) ?? opts.question;
+  const lead = chatLead(text, opts);
+  if (!question) return lead || text.trim();
+  return lead ? `${lead}\n\n${question}` : question;
+}
+
+const ASKS = /\?["”’)]*$/;
+/** A request that asks as a question does ("Tell me about…", "Walk me through…"). */
+const REQUEST = /^(?:please\s+)?(?:tell me|describe|walk me through|talk me through|share|give me|explain)\b/i;
+const asksAt = (sentences: string[]) => sentences.findIndex((s) => ASKS.test(s) || REQUEST.test(s));
+
+/**
+ * The first question the model wrote ("Not done that exactly? Tell me about something similar." is one: a question
+ * with the request that follows it), or null. Anything after it is left out.
+ */
+function firstQuestion(text: string): string | null {
+  const sentences = sentencesOf(text);
+  const at = asksAt(sentences);
+  if (at < 0) return null;
+  let end = at + 1;
+  if (ASKS.test(sentences[at])) while (end < sentences.length && REQUEST.test(sentences[end]) && !/\?/.test(sentences[end])) end += 1;
+  return sentences.slice(at, end).join(" ");
+}
+
+/** The restatement: at most one sentence before the first question (two while answering the candidate), without filler, inference or (in "About your experience") praise; the calm line instead when `calm`. */
+function chatLead(text: string, opts: { experience: boolean; calm: boolean; answering: boolean }): string {
+  if (opts.calm) return CHAT_CALM_LINE;
+  const sentences = sentencesOf(text);
+  const at = asksAt(sentences);
+  // A restatement never repeats anything personal the candidate volunteered (their kids, their age…): it is not recorded either.
+  const before = (at >= 0 ? sentences.slice(0, at) : sentences).filter((s) => !FILLER.test(s) && !INFERENCE.test(s) && !(opts.experience && PRAISE.test(s)) && !/\?/.test(s) && redactProtected(s) === s);
+  return before.slice(0, opts.answering ? 2 : 1).join(" ");
+}
+
+/**
+ * A close: the model's sentences that are not questions, at most two, without inference, filler, anything personal,
+ * what happens next (the code says it) or any time (decisions are private with no deadline, founder decision B6); null
+ * when none are left.
+ */
+function shapeClosing(text: string): string | null {
+  const kept = sentencesOf(text).filter((s) => !/\?/.test(s) && !INFERENCE.test(s) && !FILLER.test(s) && redactProtected(s) === s && !/\b(?:press send|next screen|review your answers|check your answers|what happens next|hear back|within|few days|next week|soon|shortly)\b/i.test(s));
+  return kept.length ? kept.slice(0, 2).join(" ") : null;
+}
+
+/** Whether the words share a run of five with a private note: a note is never said to a candidate, even in part. */
+function echoesNote(text: string, note: string | undefined): boolean {
+  if (!note) return false;
+  const words = (s: string) => s.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
+  const n = words(note);
+  if (n.length < 5) return false;
+  const grams = new Set(n.slice(0, -4).map((_, i) => n.slice(i, i + 5).join(" ")));
+  const t = words(text);
+  return t.slice(0, -4).some((_, i) => grams.has(t.slice(i, i + 5).join(" ")));
+}
+
+/**
+ * The candidate's replies about an item since it was asked: their words, in order, for the answer recorded when it
+ * settles. A keyword command ("WITHDRAW", "HUMAN", a "CONFIRM" to a withdrawal) is not an answer.
+ */
+function repliesSince(transcript: ReadonlyArray<ScreenTranscriptEntry>, key: string): string {
+  let at = -1;
+  for (let i = transcript.length - 1; i >= 0 && at < 0; i--) if (transcript[i].role === "assistant" && transcript[i].questionKey === key) at = i;
+  const words: string[] = [];
+  let pending = false;
+  for (const t of transcript.slice(at + 1)) {
+    if (t.role === "assistant") pending = t.questionKey === WITHDRAW_CONFIRM_KEY;
+    if (t.role !== "candidate" || t.source === "edit" || !t.content.trim() || screenCommand(t.content, pending) !== null) continue;
+    words.push(t.content.trim());
+  }
+  return words.join(" ");
+}
+
+/**
+ * The code's rules for a turn of a Kanvis-style chat, after the model answered (on top of `enforceTurnRules`: known
+ * keys, skips, the fairness check). The ladder: how the latest reply reads (a plain "No" climbs the ladder whatever the
+ * model read), and what comes next (`chatNextMove`): a follow-up the ladder allows passes, one it does not is replaced
+ * by the next question; moving on early is fine (less pressing, never more). When the item settles, the candidate's
+ * replies about it are its answer, except a gap settled as not known, which records nothing (never a "no" for a
+ * skill). The closing question is followed by the close; a close before the end goes on to what is left. Every message
+ * is one restatement and one question (`shapeChatMessage`), and never echoes a private note. Returns the turn and the
+ * step taken on the item, for the plan (`advanceProgress`).
+ */
+export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: ScreenProgress, answers: Record<string, string>, input: { transcript: ReadonlyArray<ScreenTranscriptEntry>; latest: string | null }): { turn: ScreenTurn; move: { key: string; move: ChatMove } | null } {
+  const plan = progress.chat;
+  let t = enforceTurnRules(raw, packet, progress, answers, { chat: true });
+  if (!plan || t.humanRequested) return { turn: t, move: null };
+  const current = progress.currentQuestionKey;
+  const item = plan.items.find((i) => i.key === current) ?? null;
+  const q = (key: string | null | undefined) => (key ? packet.screening.questions.find((x) => x.key === key) : undefined);
+  const lookFor = new Map((packet.companyQuestions?.written ?? []).flatMap((w) => (w.lookFor ? [[w.key, w.lookFor] as const] : [])));
+  const declined = new Set(progress.declined ?? []);
+  const remaining = packet.screening.questions.filter((x) => x.key !== current && !progress.askedKeys.includes(x.key) && !(x.key in answers) && !declined.has(x.key));
+  // A message the code put together here (the model's restatement, then the next question in code's words) is final.
+  let composed = false;
+  const moveOn = (lead: string, recorded: ScreenTurn["answerRecorded"]): ScreenTurn => {
+    const next = remaining[0];
+    composed = true;
+    return next ? { ...t, questionKey: next.key, followUpReason: null, done: false, answerRecorded: recorded, messageToCandidate: lead ? `${lead}\n\n${next.question}` : next.question } : { ...t, questionKey: null, followUpReason: null, done: true, answerRecorded: recorded, messageToCandidate: lead };
+  };
+  const replied = input.latest !== null && !t.candidateAskedAbout && t.sentiment !== "confused";
+  let move: { key: string; move: ChatMove } | null = null;
+  let calm = false;
+  let ladderQuestion: string | null = null;
+
+  if (current === CHAT_WRAP_KEY && replied) {
+    // The closing question was answered: the close follows, whatever the model wanted to ask next.
+    const own = (input.latest ?? "").trim();
+    t = { ...t, done: true, questionKey: null, followUpReason: null, answerRecorded: t.answerRecorded ?? (own ? { questionKey: CHAT_WRAP_KEY, answer: own, complete: true } : null) };
+  } else if (item && replied) {
+    const ladder = ladderApplies(item.kind, q(item.key));
+    const modelStays = !!t.followUpReason && !t.questionKey && !t.done;
+    const reading = ladder && saysNotDone(input.latest) ? "not_done" : t.reading === "not_done" && !ladder ? "concrete" : (t.reading ?? (modelStays ? "vague" : "concrete"));
+    const expected = chatNextMove(item, reading, ladder);
+    const said = repliesSince(input.transcript, item.key);
+    const answerFor = (m: ChatMove): ScreenTurn["answerRecorded"] => (m === "unknown" && item.kind === "gap" ? null : t.answerRecorded ?? (said ? { questionKey: item.key, answer: said, complete: m === "covered" } : null));
+    if (chatMoveStays(expected) && modelStays) {
+      move = { key: item.key, move: expected };
+      ladderQuestion = CHAT_LADDER_QUESTION[expected as "push" | "analog" | "smaller"];
+    } else if (chatMoveStays(expected)) {
+      // The model moved on early: fine, the item settles as it stands.
+      const settled: ChatMove = reading === "not_done" ? "unknown" : "covered";
+      move = { key: item.key, move: settled };
+      calm = settled === "unknown";
+      t = { ...t, answerRecorded: answerFor(settled) };
+    } else {
+      move = { key: item.key, move: expected };
+      calm = expected === "unknown";
+      if (modelStays || (!t.questionKey && !t.done)) t = moveOn(chatLead(t.messageToCandidate, { experience: plan.section === "experience", calm, answering: false }), answerFor(expected));
+      else t = { ...t, answerRecorded: answerFor(expected) };
+    }
+    if (move.move === "unknown" && item.kind === "gap" && t.answerRecorded?.questionKey === item.key) t = { ...t, answerRecorded: null };
+  }
+
+  // A close before the end goes on to what is left: the plan is the code's (and the model's words saying it was the end are not said).
+  if (t.done && current !== CHAT_WRAP_KEY && remaining.length) {
+    const next = remaining[0];
+    composed = true;
+    t = { ...t, done: false, questionKey: next.key, followUpReason: null, messageToCandidate: calm ? `${CHAT_CALM_LINE}\n\n${next.question}` : next.question };
+  }
+  // A private note is never said, even in part, whichever question it belongs to: the model is given every note.
+  const notes = [...lookFor.values()];
+  const echoesAny = (text: string) => notes.some((n) => echoesNote(text, n));
+  if (t.done) {
+    const closing = shapeClosing(t.messageToCandidate) ?? "";
+    return { turn: { ...t, messageToCandidate: echoesAny(closing) ? "" : closing }, move };
+  }
+  const asking = t.questionKey ? q(t.questionKey) : undefined;
+  let message = composed ? t.messageToCandidate : shapeChatMessage(t.messageToCandidate, { experience: plan.section === "experience", calm, question: ladderQuestion ?? asking?.question ?? (item ? q(item.key)?.question ?? null : null), answering: !!t.candidateAskedAbout });
+  // The question goes back to its own words (the packet's, which never carry a note).
+  if (echoesAny(message)) message = shapeChatMessage("", { experience: false, calm, question: asking?.question ?? q(current)?.question ?? CHAT_WRAP_QUESTION, answering: false });
+  return { turn: { ...t, messageToCandidate: message }, move };
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */
@@ -273,20 +664,27 @@ export async function applyScreenOpening(q: Queryable, input: { companyId: strin
 export async function startScreenConversation(q: Queryable, deps: ScreenDeps, input: { screenId: string; actor: Actor }): Promise<{ ok: boolean; message: string | null }> {
   const b = await loadScreenBundle(q, input.screenId);
   if (!b || !ACTIVE_STATUSES.has(b.screen.status)) return { ok: false, message: null };
-  const { screen, app, company, packet, candidate } = b;
+  const { screen, app, company, candidate } = b;
   const opened = screen.transcript.find((t) => t.role === "assistant");
   if (opened) return { ok: true, message: opened.content };
-  const first = nextQuestion(packet, screen.progress, answersOf(screen));
-  if (!first) return { ok: false, message: null };
   const now = nowOf(deps).toISOString();
-  const entry: ScreenTranscriptEntry = { role: "assistant", content: first.question, at: now, questionKey: first.key, channel: screen.channel as ScreenChannel, source: "system" };
-  const progress = advanceProgress(screen.progress, { ...SILENT_TURN, messageToCandidate: first.question, questionKey: first.key });
+  // Wave S7: the chat offered with the application gets its plan now. Its gaps come from the CV the visit typed, read in
+  // code, as a repeat submission's do (`chatFactsFor`); one whose link was emailed later reads the résumé reading.
+  const facts = chatFactsFor(b.chatFacts, screen.progress, screen.invitedVia);
+  const triageMet = screen.invitedVia === "apply" ? null : b.triageMet;
+  const planned = withChatPlan(b.rolePacket, screen.progress, { channel: screen.channel, at: now, gaps: chatGaps({ packet: b.rolePacket, progress: screen.progress, triageMet, facts, written: writtenQuestionsOf(b.rolePacket).map((w) => w.key) }) });
+  const packet = planned.chat ? chatPacket(b.rolePacket, planned) : b.packet;
+  const first = nextQuestion(packet, planned, answersOf(screen));
+  if (!first) return { ok: false, message: null };
+  const content = planned.chat ? chatOpening({ firstName: candidate.firstName, cv: facts?.cv ?? [], question: first.question }) : first.question;
+  const entry: ScreenTranscriptEntry = { role: "assistant", content, at: now, questionKey: first.key, channel: screen.channel as ScreenChannel, source: "system" };
+  const progress = advanceProgress(planned, { ...SILENT_TURN, messageToCandidate: content, questionKey: first.key });
   await q.update(screens).set({ status: "in_progress", startedAt: screen.startedAt ?? now, lastCandidateMessageAt: now, transcript: [...screen.transcript, entry], progress }).where(eq(screens.id, screen.id));
   await emit(q, { type: "screen.started", companyId: company.id, actor: { kind: "candidate", id: candidate.id }, subject: { type: "screen", id: screen.id }, payload: { channel: screen.channel, via: "start_button" }, correlationId: screen.workflowRunId });
   const [cur] = await q.select({ stage: applications.stage }).from(applications).where(eq(applications.id, app.id)).limit(1);
   if (cur?.stage === "screen_invited") await transition(q, { applicationId: app.id, companyId: company.id, to: "screening", by: "system", actor: input.actor, correlationId: screen.workflowRunId });
   await deps.signal?.(q, { companyId: company.id, key: `screen:${screen.id}:started` });
-  return { ok: true, message: first.question };
+  return { ok: true, message: content };
 }
 
 /** A turn with nothing in it, for the steps code takes on its own (the first question, a skip, a tap). */
@@ -438,7 +836,7 @@ export async function beginScreenTurn(q: Queryable, deps: ScreenDeps, input: Tur
     return { kind: "done", result, allowance };
   }
   // A conversation cannot call the model for ever (`modelTurnCap`): at the cap it ends without another call.
-  if (modelTurnsUsed(transcript) >= modelTurnCap(packet)) {
+  if (modelTurnsUsed(transcript) >= modelTurnCap(packet, progress)) {
     const result = await endAtTurnCap(q, deps, { ...b, screen: { ...screen, transcript, progress } }, { channel: input.channel, actor: input.actor });
     return { kind: "done", result, allowance };
   }
@@ -457,8 +855,8 @@ async function answerInCode(q: Queryable, deps: ScreenDeps, b: ScreenBundle, inp
   const { screen, company, packet, candidate } = b;
   const answers = { ...screen.answers };
   let progress: ScreenProgress = screen.progress;
+  const kept = input.words === null && answersOf({ answers, progress })[input.key] !== undefined;
   if (input.words === null) {
-    const kept = answersOf({ answers, progress })[input.key] !== undefined;
     if (!kept) progress = { ...progress, declined: [...new Set([...(progress.declined ?? []), input.key])] };
     await emit(q, { type: "screen.question_skipped", companyId: company.id, actor: { kind: "candidate", id: candidate.id }, subject: { type: "screen", id: screen.id }, payload: { questionKey: input.key, answerKept: kept }, correlationId: screen.workflowRunId });
   } else {
@@ -470,13 +868,23 @@ async function answerInCode(q: Queryable, deps: ScreenDeps, b: ScreenBundle, inp
   const next = nextQuestion(packet, progress, answersOf({ answers, progress }));
   const lead = input.words === null ? "No problem." : "Thanks.";
   if (next) {
-    const message = `${lead} Next: ${next.question}`;
+    // The Kanvis-style chat says it in its own shape: one line, then the next question.
+    const message = progress.chat ? `${chatCodeLead(input.words, kept)}\n\n${next.question}` : `${lead} Next: ${next.question}`;
     progress = advanceProgress(progress, { ...SILENT_TURN, messageToCandidate: message, questionKey: next.key });
     return writeReply(q, deps, b, { channel: input.channel, actor: input.actor, transcript: screen.transcript, answers, progress, message, questionKey: next.key, done: false });
   }
   progress = advanceProgress(progress, { ...SILENT_TURN, done: true });
   const message = `${lead} That is everything I needed. ${SCREEN_NEXT_LINE} Reply HUMAN at any time to reach a person.`;
-  return writeReply(q, deps, b, { channel: input.channel, actor: input.actor, transcript: screen.transcript, answers, progress, message, questionKey: null, done: true });
+  return writeReply(q, deps, b, { channel: input.channel, actor: input.actor, transcript: screen.transcript, answers, progress, message, questionKey: null, done: true, closing: `Thank you, ${candidate.firstName}.` });
+}
+
+/**
+ * The chat's line before the next question when a skip or a tap moved it on, in code: neutral, never praise. `kept`: the
+ * skip ended a follow-up on an answer already given, which stays.
+ */
+export function chatCodeLead(tapped: string | null, kept = false): string {
+  if (tapped !== null) return `Noted: ${tapped.replace(/[.!?]+$/, "")}.`;
+  return kept ? "No problem, your answer is kept." : "No problem, we can leave that one.";
 }
 
 /**
@@ -490,19 +898,25 @@ async function endAtTurnCap(q: Queryable, deps: ScreenDeps, b: ScreenBundle, inp
   const { screen, company, packet } = b;
   const progress = advanceProgress(screen.progress, { ...SILENT_TURN, done: true });
   const review = isOneVisitFlow(progress) && input.channel === "web";
-  await emit(q, { type: "screen.turn_cap_reached", companyId: company.id, actor: { kind: "system", id: "screening" }, subject: { type: "screen", id: screen.id }, payload: { modelTurns: modelTurnsUsed(screen.transcript), cap: modelTurnCap(packet), ending: review ? "review" : "closed", channel: input.channel }, correlationId: screen.workflowRunId });
-  return writeReply(q, deps, b, { channel: input.channel, actor: input.actor, transcript: screen.transcript, answers: screen.answers, progress, message: TURN_CAP_CLOSE_MESSAGE, reviewMessage: TURN_CAP_REVIEW_MESSAGE, questionKey: null, done: true });
+  await emit(q, { type: "screen.turn_cap_reached", companyId: company.id, actor: { kind: "system", id: "screening" }, subject: { type: "screen", id: screen.id }, payload: { modelTurns: modelTurnsUsed(screen.transcript), cap: modelTurnCap(packet, progress), ending: review ? "review" : "closed", channel: input.channel }, correlationId: screen.workflowRunId });
+  return writeReply(q, deps, b, { channel: input.channel, actor: input.actor, transcript: screen.transcript, answers: screen.answers, progress, message: TURN_CAP_CLOSE_MESSAGE, reviewMessage: TURN_CAP_REVIEW_MESSAGE, questionKey: null, done: true, closing: CHAT_CAP_CLOSING });
 }
+
+/** The Kanvis-style chat's close when it reached `modelTurnCap` (what happens next follows it, `chatClosingMessage`). */
+export const CHAT_CAP_CLOSING = "We have covered as much as we can in this chat.";
 
 /**
  * Writes the assistant's reply and the recorded answers, sends it by text on that channel, and settles the end of the
  * questions: a conversation offered with the application goes to "check your answers" (E10), saying `reviewMessage`
- * (REVIEW_MESSAGE unless given); any other closes.
+ * (REVIEW_MESSAGE unless given); any other closes. A Kanvis-style chat ends on its close (`closing`: one concrete thing
+ * from the chat, or a thank-you) and what happens next, and the page offers "Review and send".
  */
-async function writeReply(q: Queryable, deps: ScreenDeps, b: ScreenBundle, s: { channel: ScreenChannel; actor: Actor; transcript: ScreenTranscriptEntry[]; answers: Record<string, string>; progress: ScreenProgress; message: string; questionKey: string | null; done: boolean; aiRunId?: string; reviewMessage?: string }): Promise<TurnResult> {
+async function writeReply(q: Queryable, deps: ScreenDeps, b: ScreenBundle, s: { channel: ScreenChannel; actor: Actor; transcript: ScreenTranscriptEntry[]; answers: Record<string, string>; progress: ScreenProgress; message: string; questionKey: string | null; done: boolean; aiRunId?: string; reviewMessage?: string; closing?: string | null }): Promise<TurnResult> {
   const { screen, app, candidate, company, packet } = b;
   const review = s.done && isOneVisitFlow(s.progress) && s.channel === "web";
-  const message = review ? s.reviewMessage ?? REVIEW_MESSAGE : s.message;
+  // A chat that ends off the web (the candidate went on by text) closes with what happens next in the usual words.
+  const closedByText = s.done && !!s.progress.chat && s.closing !== undefined;
+  const message = review ? (s.progress.chat ? chatClosingMessage(s.closing, company.name) : s.reviewMessage ?? REVIEW_MESSAGE) : closedByText ? `${s.closing ?? ""} ${SCREEN_NEXT_LINE} Reply HUMAN at any time to reach a person.`.trim() : s.message;
   const progress: ScreenProgress = review ? { ...s.progress, phase: "review", currentQuestionKey: null } : s.progress;
   const reply: ScreenTranscriptEntry = { role: "assistant", content: message, at: nowOf(deps).toISOString(), questionKey: s.questionKey ?? undefined, channel: s.channel, aiRunId: s.aiRunId };
   const transcript = [...s.transcript, reply];
@@ -620,11 +1034,13 @@ export async function finishScreenTurn(q: Queryable, deps: ScreenDeps, input: Tu
     return { kind: "error", message: holding };
   }
 
-  let turn = enforceTurnRules(out.output, packet, fresh.progress, answersOf(fresh));
+  // A Kanvis-style chat is held to its own rules too (Wave S7), and the step it took moves its plan on.
+  const enforced = fresh.progress.chat ? enforceChatTurn(out.output, packet, fresh.progress, answersOf(fresh), { transcript: fresh.transcript, latest: input.message }) : { turn: enforceTurnRules(out.output, packet, fresh.progress, answersOf(fresh)), move: null };
+  let turn = enforced.turn;
   // The model never states a response time; the accurate business-hours expectation is appended in code (founder decision F12).
   if (turn.humanRequested && !/business/i.test(turn.messageToCandidate)) turn = { ...turn, messageToCandidate: `${turn.messageToCandidate} You can expect to hear from a person ${humanResponseExpectation(nowOf(deps), await loadBusinessCalendar(q))}.` };
   const answers = { ...fresh.answers };
-  let progress = advanceProgress(fresh.progress, turn);
+  let progress = advanceProgress(fresh.progress, turn, enforced.move);
   if (turn.answerRecorded) {
     const recorded = redactProtected(turn.answerRecorded.answer);
     // An answer to one of the open questions the screen started with is kept beside that question; the packet's own answers stay in `answers`.
@@ -648,7 +1064,7 @@ export async function finishScreenTurn(q: Queryable, deps: ScreenDeps, input: Tu
     await requestHuman(q, deps, { screenId: screen.id, reason: HANDED_TO_A_PERSON, actor: input.actor, reply: null, replyChannel: input.channel, confirmByEmail: fresh.status !== "paused" });
     return { kind: "reply", message: turn.messageToCandidate, done: false, humanRequested: true };
   }
-  return writeReply(q, deps, b, { channel: input.channel, actor: input.actor, transcript: fresh.transcript, answers, progress, message: turn.messageToCandidate, questionKey: turn.questionKey, done: turn.done, aiRunId: out.runId });
+  return writeReply(q, deps, b, { channel: input.channel, actor: input.actor, transcript: fresh.transcript, answers, progress, message: turn.messageToCandidate, questionKey: turn.questionKey, done: turn.done, aiRunId: out.runId, closing: turn.done ? turn.messageToCandidate : null });
 }
 
 /**
@@ -736,12 +1152,20 @@ export async function declineConversation(q: Queryable, deps: ScreenDeps, input:
 /* Check your answers (E10)                                                                                      */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-/** The "check your answers" page: every question in order with its answer, and how it came to be. */
+/**
+ * The "check your answers" page: every question in order with its answer, and how it came to be. A Kanvis-style chat's
+ * page lists its written questions (the company's own, or the job's screening questions), and every other answer the
+ * chat recorded and will send (about the CV, and the closing question), so the candidate can check and change all of
+ * what goes to the team; an item about the CV settled as not known recorded nothing and is not listed.
+ */
 export function reviewItems(screen: Pick<ScreenRow, "answers" | "progress">, packet: RolePacket): ReviewItem[] {
   const answers = answersOf(screen);
   const declined = new Set(screen.progress.declined ?? []);
   const edits = screen.progress.edits ?? {};
-  return focusedPacket(packet, screen.progress).screening.questions.map((q) => {
+  const plan = screen.progress.chat;
+  const written = new Set((plan?.items ?? []).filter((i) => i.kind === "written").map((i) => i.key));
+  const questions = chatPacket(packet, screen.progress).screening.questions.filter((q) => !plan || written.has(q.key) || answers[q.key] !== undefined);
+  return questions.map((q) => {
     const answer = answers[q.key] ?? null;
     const status = answer !== null ? ((edits[q.key] ?? 0) > 0 ? "edited" : "answered") : declined.has(q.key) ? "declined" : "unanswered";
     return { key: q.key, question: q.question, answer, status, tap: tapFormatFor(q, packet.compensation) };
@@ -801,9 +1225,11 @@ export async function submitScreenAnswers(q: Queryable, deps: ScreenDeps, input:
 /**
  * The rules the packet sets that the model must not break: one question at a time, two follow-ups at most, a bounded
  * conversation, skipped questions left alone, and every packet question asked in the packet's own words (the model
- * writes the acknowledgment; the question is added here when it did not write it word for word).
+ * writes the acknowledgment; the question is added here when it did not write it word for word). `chat` (a Kanvis-style
+ * chat, Wave S7): the follow-ups, the end of the questions and the shape of each message are `enforceChatTurn`'s, and
+ * the model asks each item in its own words.
  */
-export function enforceTurnRules(turn: ScreenTurn, packet: RolePacket, progress: ScreenProgress, answers: Record<string, string>): ScreenTurn {
+export function enforceTurnRules(turn: ScreenTurn, packet: RolePacket, progress: ScreenProgress, answers: Record<string, string>, opts: { chat?: boolean } = {}): ScreenTurn {
   const keys = packet.screening.questions.map((q) => q.key);
   let t: ScreenTurn = { ...turn };
   // How an answer was recorded is the code's to say (E10): the model only ever answers.
@@ -817,7 +1243,7 @@ export function enforceTurnRules(turn: ScreenTurn, packet: RolePacket, progress:
   const remaining = keys.filter((k) => !asked.has(k) && !(k in answers) && !declined.has(k) && k !== t.answerRecorded?.questionKey);
   const current = progress.currentQuestionKey;
   const isFollowUp = !!t.followUpReason && !t.questionKey && !t.done && !t.humanRequested;
-  if (isFollowUp && current && (progress.followUps[current] ?? 0) >= MAX_FOLLOW_UPS) {
+  if (!opts.chat && isFollowUp && current && (progress.followUps[current] ?? 0) >= MAX_FOLLOW_UPS) {
     // Enough follow-ups: move on with the next packet question, or close.
     const next = remaining[0];
     if (next) {
@@ -830,7 +1256,7 @@ export function enforceTurnRules(turn: ScreenTurn, packet: RolePacket, progress:
   // Every question answered, skipped or asked, and the model asked nothing more: close politely. (How many times a
   // conversation may call the model at all is `modelTurnCap`, checked before each call.)
   const candidateTurns = Object.keys(answers).length + declined.size + (t.answerRecorded ? 1 : 0);
-  if (!t.done && !t.humanRequested && candidateTurns >= keys.length && remaining.length === 0 && !t.questionKey) {
+  if (!opts.chat && !t.done && !t.humanRequested && candidateTurns >= keys.length && remaining.length === 0 && !t.questionKey) {
     t = { ...t, done: true, followUpReason: null };
   }
   // The code's fairness check on what the model wrote to the candidate (known bug 29): a follow-up or an acknowledgment
@@ -850,26 +1276,38 @@ export function enforceTurnRules(turn: ScreenTurn, packet: RolePacket, progress:
   }
   if (t.answerRecorded && !t.answerRecorded.answer.trim()) t = { ...t, answerRecorded: null };
   // The packet's question in the packet's own words (plan E2): added after the model's acknowledgment when it is not there.
-  if (t.questionKey && !t.done && !t.humanRequested) {
+  // (A Kanvis-style chat asks in the model's words; `enforceChatTurn` adds the item's question only when there is none.)
+  if (!opts.chat && t.questionKey && !t.done && !t.humanRequested) {
     const q = packet.screening.questions.find((x) => x.key === t.questionKey)!;
     if (!t.messageToCandidate.includes(q.question)) t = { ...t, messageToCandidate: `${t.messageToCandidate.trim()} ${q.question}`.trim() };
   }
   return t;
 }
 
-export function advanceProgress(progress: ScreenProgress, turn: ScreenTurn): ScreenProgress {
+/**
+ * The progress after a turn. A Kanvis-style chat's plan moves on with it (`syncChatPlan`): `move` is the step the turn
+ * took on the item it was about (`enforceChatTurn`).
+ */
+export function advanceProgress(progress: ScreenProgress, turn: ScreenTurn, move?: { key: string; move: ChatMove } | null): ScreenProgress {
   const askedKeys = turn.questionKey && !progress.askedKeys.includes(turn.questionKey) ? [...progress.askedKeys, turn.questionKey] : progress.askedKeys;
   const followUps = { ...progress.followUps };
   if (turn.followUpReason && !turn.questionKey && progress.currentQuestionKey) followUps[progress.currentQuestionKey] = (followUps[progress.currentQuestionKey] ?? 0) + 1;
+  const currentQuestionKey = turn.done || turn.humanRequested ? null : turn.questionKey ?? progress.currentQuestionKey;
   return {
     // What the turn does not touch (the flow, skips, edits, the allowance count, a pause) carries over.
     ...progress,
     askedKeys,
-    currentQuestionKey: turn.done || turn.humanRequested ? null : turn.questionKey ?? progress.currentQuestionKey,
+    currentQuestionKey,
     followUps,
     confusedTurns: turn.sentiment === "confused" ? progress.confusedTurns + 1 : 0,
     failures: 0,
+    ...(progress.chat ? { chat: syncChatPlan(progress.chat, { askedKeys, currentQuestionKey, declined: progress.declined }, move) } : {}),
   };
+}
+
+/** A chat's plan after something done in code (a skip, an answer changed): in step with the progress as it is now. */
+export function syncedChat(progress: ScreenProgress): ScreenProgress {
+  return progress.chat ? { ...progress, chat: syncChatPlan(progress.chat, progress) } : progress;
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */

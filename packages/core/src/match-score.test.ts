@@ -38,14 +38,83 @@ describe("matchScore", () => {
 
   it("weighs must-haves most and skills by importance, and lists the costliest first with the points each lost", () => {
     // must-haves 4 each, chairside (5 = Essential) 3, patients (4 = Important) 2, software (2 = Helpful) 1: 14 in all
-    const s = matchScore(pair(reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "partially", "some perio")], [skill("chairside", "partially_evidenced", "assisted"), skill("patients", "evidenced", "calm"), skill("software", "contradicted", "never used dental software")])), packet)!;
-    // lost: perio 4/14*50 = 14.29, chairside 3/14*50 = 10.71, software 1/14*100 = 7.14 → 100 - 32.14 = 68
-    expect(s.score).toBe(68);
-    expect(s.band).toBe("medium");
-    expect(s.breakdown.map((c) => [c.key, c.weightPct, c.pctMet, c.pointsLost])).toEqual([["perio", 29, 50, 14], ["chairside", 21, 50, 11], ["software", 7, 0, 7], ["rdh_license", 29, 100, 0], ["patients", 14, 100, 0]]);
-    expect(s.breakdown[0]).toMatchObject({ label: "Perio charting experience", mustHave: true, importance: null, finding: "Partly shown", quote: "some perio", source: "resume" });
+    const s = matchScore(pair(reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "partially", "some perio")], [skill("chairside", "contradicted", "I never work chairside"), skill("patients", "contradicted", "I avoid patients"), skill("software", "contradicted", "never used dental software")])), packet)!;
+    // the rest (met or not met) is at 4/10 = 40%, under half: perio counts half
+    // lost: chairside 3/14 = 21.43, perio 4/14*50 = 14.29, patients 2/14 = 14.29, software 1/14 = 7.14 → 100 - 57.14 = 43
+    expect(s.score).toBe(43);
+    expect(s.band).toBe("low");
+    expect(s.breakdown.map((c) => [c.key, c.weightPct, c.pctMet, c.pointsLost])).toEqual([["chairside", 21, 0, 21], ["perio", 29, 50, 14], ["patients", 14, 0, 14], ["software", 7, 0, 7], ["rdh_license", 29, 100, 0]]);
+    expect(s.breakdown[1]).toMatchObject({ label: "Perio charting experience", mustHave: true, importance: null, finding: "Partly shown", quote: "some perio", source: "resume" });
+    expect(s.breakdown[1]).not.toHaveProperty("countedPct");
     expect(s.breakdown.find((c) => c.key === "software")).toMatchObject({ finding: "Goes against it", importance: "helpful" });
-    expect(s.fullMarks).toBe(2);
+    expect(s.fullMarks).toBe(1);
+  });
+
+  it("counts a partly shown requirement at the rest's level when that is above half, so it never pulls the score down (Wave S7)", () => {
+    const s = matchScore(pair(reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "partially", "some perio")], [skill("chairside", "partially_evidenced", "assisted"), skill("patients", "evidenced", "calm"), skill("software", "contradicted", "never used dental software")])), packet)!;
+    // the rest: rdh 4 met, patients 2 met, software 1 not met = 6/7 = 85.7%; perio and chairside count at 85.7% too
+    expect(s.score).toBe(86);
+    expect(s.score).toBe(matchScore(pair(reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "unknown")], [skill("chairside", "not_evidenced"), skill("patients", "evidenced", "calm"), skill("software", "contradicted", "never used dental software")])), packet)!.score);
+    expect(s.breakdown.map((c) => [c.key, c.weightPct, c.pctMet, c.pointsLost])).toEqual([["software", 7, 0, 7], ["perio", 29, 50, 4], ["chairside", 21, 50, 3], ["rdh_license", 29, 100, 0], ["patients", 14, 100, 0]]);
+    // still "Partly shown" at 50%, with the share the score counted
+    expect(s.breakdown.find((c) => c.key === "perio")).toMatchObject({ finding: "Partly shown", pctMet: 50, countedPct: 86 });
+    expect(s.coverage.known).toBe(5);
+  });
+
+  /**
+   * The fairness run of 15 Oct 2026 (triage.bias_pairs zip_code and earlier_rejection): twin résumés whose readings
+   * differed only in one skill, "not evidenced" in one and "partially evidenced" in the other from the same quote,
+   * scored 94 and 83. The twin with some evidence must never score below the twin with none.
+   */
+  it("never scores a twin with some evidence below the twin with none (fairness run, 15 Oct 2026)", () => {
+    const musts = [must("rdh_license", "yes", "RDH license CA active"), must("perio", "yes", "Periodontal charting, scaling and root planing")];
+    const others = [skill("patients", "evidenced", "Patient education"), skill("software", "contradicted", "I have never used dental software")];
+    const none = matchScore(pair(reading("triage", musts, [skill("chairside", "not_evidenced"), ...others])), packet)!;
+    const some = matchScore(pair(reading("triage", musts, [skill("chairside", "partially_evidenced", "Periodontal charting, scaling and root planing"), ...others])), packet)!;
+    // the rest: 10 of 11 = 90.9%; before Wave S7 the partly shown skill counted half and took the twin to 82
+    expect(none.score).toBe(91);
+    expect(some.score).toBe(91);
+    expect(some.band).toBe(none.band);
+  });
+
+  it("is monotonic: moving any one requirement up (not met, not known, partly, met) never lowers the score", () => {
+    // a small fixed-seed generator, so every run checks the same cases
+    let seed = 20261015;
+    const rand = () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)] as T;
+    type Level = "no" | "unknown" | "partly" | "yes" | "yes_unquoted";
+    const ORDER: Level[] = ["no", "unknown", "partly", "yes"];
+    const MUST: Record<Level, (k: string) => Req> = { no: (k) => must(k, "no", `I have never done ${k}`), unknown: (k) => must(k, "unknown"), partly: (k) => must(k, "partially", `some ${k} work`), yes: (k) => must(k, "yes", `${k} every day`), yes_unquoted: (k) => must(k, "yes") };
+    const SKILL: Record<Level, (k: string) => Comp> = { no: (k) => skill(k, "contradicted", `I avoid ${k}`), unknown: (k) => skill(k, "not_evidenced"), partly: (k) => skill(k, "partially_evidenced", `some ${k}`), yes: (k) => skill(k, "evidenced", `${k} daily`), yes_unquoted: (k) => skill(k, "evidenced") };
+    let checked = 0;
+    for (let n = 0; n < 400; n++) {
+      const mustKeys = Array.from({ length: Math.floor(rand() * 4) }, (_, i) => `m${i}`);
+      const skillKeys = Array.from({ length: Math.floor(rand() * 5) }, (_, i) => `s${i}`);
+      const role = {
+        requirements: { mustHaves: mustKeys.map((key) => ({ key, text: `Must ${key}`, rationale: "r", evidencedBy: ["resume"] })) },
+        competencies: skillKeys.map((key) => ({ key, name: `Skill ${key}`, definition: "d", weight: 1 + Math.floor(rand() * 5), evaluatedIn: "both", indicators: ["x"] })),
+      } as unknown as Pick<RolePacket, "requirements" | "competencies">;
+      const levels = new Map<string, Level>([...mustKeys, ...skillKeys].map((k) => [k, pick<Level>(["no", "unknown", "partly", "yes", "yes_unquoted"])]));
+      const scoreOf = (ls: Map<string, Level>) => matchScore(pair(reading("triage", mustKeys.map((k) => MUST[ls.get(k)!](k)), skillKeys.map((k) => SKILL[ls.get(k)!](k)))), role)!.score;
+      const before = scoreOf(levels);
+      for (const key of levels.keys()) {
+        const at = levels.get(key)!;
+        const from = at === "yes_unquoted" ? ORDER.indexOf("partly") : ORDER.indexOf(at);
+        for (const up of ORDER.slice(from + 1)) {
+          const after = scoreOf(new Map(levels).set(key, up));
+          if (before !== null && after !== null) {
+            expect(after, `${JSON.stringify([...levels])}: ${key} ${at} → ${up}`).toBeGreaterThanOrEqual(before);
+            checked += 1;
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(500);
   });
 
   it("sets missing information aside: unknown requirements and not-evidenced skills are left out and shown as coverage", () => {
@@ -109,16 +178,23 @@ describe("matchScore", () => {
     expect(matchScore(pair(reading("triage", [must("rdh_license", "unknown")]), bare), one)!.breakdown[0]).toMatchObject({ source: "screen", pctMet: 50, unquoted: true });
   });
 
-  it("counts a 'yes' with nothing quoted as partly met, never in full, and says 'no quote' (known bug 32)", () => {
+  it("counts a 'yes' with nothing quoted as partly met, never above the checked evidence, and says 'no quote' (known bug 32)", () => {
     const all = [skill("chairside", "evidenced", "x"), skill("patients", "evidenced", "y"), skill("software", "evidenced", "z")];
     const quoted = matchScore(pair(reading("triage", [must("rdh_license", "yes", "RDH license CA active"), must("perio", "yes", "Perio charting daily")], all)), packet)!;
     expect(quoted.score).toBe(100);
     const bare = matchScore(pair(reading("triage", [must("rdh_license", "yes"), { requirementKey: "perio", met: "yes", evidence: { source: "resume", unquoted: true } }], [skill("chairside", "evidenced"), skill("patients", "evidenced", "y"), skill("software", "evidenced", "z")])), packet)!;
-    // rdh 4/14 and perio 4/14 at half, chairside 3/14 at half: 100 - 28.57 - 10.71 = 61
-    expect(bare.score).toBe(61);
     expect(bare.breakdown.find((c) => c.key === "rdh_license")).toMatchObject({ pctMet: 50, finding: "Partly shown", unquoted: true, quote: null });
     expect(bare.breakdown.find((c) => c.key === "chairside")).toMatchObject({ pctMet: 50, unquoted: true });
     expect(bare.fullMarks).toBe(2);
+    // the unquoted claims score as if nothing were said: the score is what the checked evidence shows, no more
+    const silent = matchScore(pair(reading("triage", [must("rdh_license", "unknown"), must("perio", "unknown")], [skill("chairside", "not_evidenced"), skill("patients", "evidenced", "y"), skill("software", "evidenced", "z")])), packet)!;
+    expect(bare.score).toBe(silent.score);
+    // with weaker checked evidence an unquoted claim counts half, and still below the same claim quoted
+    const against = [skill("chairside", "contradicted", "I never work chairside"), skill("patients", "contradicted", "I avoid patients"), skill("software", "contradicted", "never used dental software")];
+    const scoreWith = (rdh: Req) => matchScore(pair(reading("triage", [rdh, must("perio", "yes", "Perio charting daily")], against)), packet)!.score!;
+    expect([scoreWith(must("rdh_license", "unknown")), scoreWith(must("rdh_license", "yes")), scoreWith(must("rdh_license", "yes", "RDH license CA active"))]).toEqual([40, 43, 57]);
+    // nothing checked at all: unquoted claims alone are half
+    expect(matchScore(pair(reading("triage", [must("rdh_license", "yes"), must("perio", "yes")])), packet)!.score).toBe(50);
     expect(mustHaveSummary(pair(reading("triage", [must("rdh_license", "yes"), must("perio", "yes", "Perio charting daily")])), packet)!.words).toBe("Must-haves: 1 of 2 shown, 1 partly");
   });
 

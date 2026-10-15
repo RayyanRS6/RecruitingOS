@@ -7,6 +7,7 @@ import { applications, candidates, companies, documents, events, interviews, low
 import type { Integrations } from "@ros/integrations";
 import type { Container } from "../container";
 import { quarantineKey } from "../uploads";
+import { linkResumeReading } from "./apply-details";
 
 type Application = typeof applications.$inferSelect;
 type Candidate = typeof candidates.$inferSelect;
@@ -32,6 +33,17 @@ export type NewApplication = {
   acknowledgment?: ApplicationAcknowledgment | null;
   eligibilityAnswers: Record<string, unknown>;
   noResumeAnswers?: Record<string, string>;
+  /** Wave S7: the company's quick questions (choice and number) as answered on the form, by question key. */
+  quickAnswers?: Record<string, string>;
+  /** Wave S7: the checked summary of their work that the résumé reading filled in. */
+  workSummary?: string | null;
+  /** Wave S7: the form fields the résumé filled in (or suggested) and the candidate kept. */
+  fromCv?: string[];
+  /**
+   * Wave S7: the form read this résumé before it was sent (services/apply-details.ts). The reading's AI run is tied to
+   * the new document so the intake workflow reuses it once the file is checked; only for the very upload it read.
+   */
+  formReading?: { aiRunId: string; uploadId: string; storageKey: string } | null;
   resume?: ResumeInput | null;
   ip?: string;
   note?: string;
@@ -44,7 +56,7 @@ export type NewApplication = {
  */
 export type ResumeInput =
   | { kind: "bytes"; filename: string; mime: string; bytes: Uint8Array; via: "server" | "email" }
-  | { kind: "stored"; filename: string; mime: string; storageKey: string; sizeBytes: number; via: "direct" };
+  | { kind: "stored"; filename: string; mime: string; storageKey: string; sizeBytes: number; via: "direct" | "server" };
 
 /**
  * Creates the candidate (when the address is new) and the application, stores the resume, records consent, emits
@@ -110,7 +122,16 @@ export async function createApplication(tx: Tx, container: Container, input: New
       sourceDetail: input.sourceDetail ?? null,
       linkId: input.linkId ?? null,
       stage: "applied",
-      answers: { eligibility: input.eligibilityAnswers, noResume: input.noResumeAnswers, noticeVersionsShown: input.noticeVersionsShown, ...(input.acknowledgment ? { acknowledgment: input.acknowledgment } : {}) },
+      answers: {
+        eligibility: input.eligibilityAnswers,
+        noResume: input.noResumeAnswers,
+        noticeVersionsShown: input.noticeVersionsShown,
+        ...(input.acknowledgment ? { acknowledgment: input.acknowledgment } : {}),
+        // Wave S7 (additive): kept only when there is something to keep, so an application from an older form reads as before.
+        ...(input.quickAnswers && Object.keys(input.quickAnswers).length ? { quick: input.quickAnswers } : {}),
+        ...(input.workSummary ? { workSummary: input.workSummary } : {}),
+        ...(input.fromCv?.length ? { fromCv: input.fromCv } : {}),
+      },
       statusToken: randomToken(24),
       // The reply address's token (F12): its own random value, never the status token, lowercase because it travels in an email address.
       replyToken: lowercaseToken(16),
@@ -151,6 +172,9 @@ export async function createApplication(tx: Tx, container: Container, input: New
         .returning();
       await tx.update(applications).set({ resumeDocumentId: doc.id }).where(eq(applications.id, application.id));
       application = { ...application, resumeDocumentId: doc.id };
+      // The form read this very file first (Wave S7): its reading belongs to the application from now on.
+      const read = input.formReading;
+      if (read && r.kind === "stored" && r.storageKey === read.storageKey) await linkResumeReading(tx, { aiRunId: read.aiRunId, uploadId: read.uploadId, applicationId: application.id, documentId: doc.id });
       await emit(tx, { type: "document.uploaded", companyId: input.companyId, actor, subject: { type: "application", id: application.id }, payload: { documentId: doc.id, via: r.via, sizeBytes: stored.sizeBytes, mime: stored.mime } });
       await audit(tx, { companyId: input.companyId, actor, action: "document.uploaded", target: { type: "document", id: doc.id }, ip: input.ip, details: { applicationId: application.id, via: r.via, sizeBytes: stored.sizeBytes, mime: stored.mime } });
     }
