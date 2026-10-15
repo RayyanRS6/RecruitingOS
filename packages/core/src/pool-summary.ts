@@ -168,7 +168,9 @@ export function answerPoolQuestion(kind: Exclude<PoolQuestionKind, "compare">, p
     const days = daysSince(p.waitingSince, opts.now);
     const good = !!p.match && (p.match.band === "very_high" || p.match.band === "high" || (!!p.mustHaves && p.mustHaves.total > 0 && p.mustHaves.shown === p.mustHaves.total));
     const reasons: string[] = [];
-    if (good && p.placement.column !== "shortlist") reasons.push(`Good evidence, but on the ${p.placement.column === "longlist" ? "Longlist" : "Not moving forward list"}${p.placement.needsYourEye ? `: ${p.placement.needsYourEye}` : "."}`);
+    // why they are not on the shortlist: what needs a person's eye, or what to ask (a must-have only partly shown)
+    const why = p.placement.needsYourEye ?? (p.placement.nextStep?.kind === "ask_more" ? p.placement.nextStep.reason : null);
+    if (good && p.placement.column !== "shortlist") reasons.push(`Good evidence, but on the ${p.placement.column === "longlist" ? "Longlist" : "Not moving forward list"}${why ? `: ${why}` : "."}`);
     if (days >= OVERLOOKED_AFTER_DAYS) reasons.push(`Waiting ${plural(days, "day", "days")} with nothing decided.`);
     return { p, days, reasons };
   }).filter((x) => x.reasons.length);

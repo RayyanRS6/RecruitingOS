@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RunOutcome } from "@ros/ai";
 import type { EvidenceAssessment } from "@ros/contracts";
-import { applyEvidenceRules, assessmentSources, combineOutcomes, combineReadings, credentialFinding, credentialMustHaves, findingSubjects, plainlyNotHeld, shownNotHeld, verifyAssessmentQuotes } from "./triage";
+import { applyEvidenceRules, assessmentSources, combineOutcomes, combineReadings, credentialFinding, credentialMustHaves, findingSubjects, plainlyNotHeld, readingsOutcome, settledOverall, settledRecommendation, shownNotHeld, verifyAssessmentQuotes } from "./triage";
 
 /**
  * The fairness run on Haiku 5.5 (14 Oct 2026): one résumé read three times scored 83, 71 and 67, and an expired licence
@@ -92,6 +92,118 @@ describe("three readings of the same application", () => {
     }
     expect(combineOutcomes([invalid, outage, invalid], sources)).toBe(outage);
     expect(combineOutcomes([invalid, invalid, invalid], sources)).toBe(invalid);
+  });
+});
+
+/**
+ * Wave S7 (fairness run of 15 Oct 2026, triage.consistency assistant_not_yet_hygienist and triage.credentials lapsed):
+ * the licence finding was steady, but the overall reading moved between "potential" and "unknown" from one set of
+ * readings to the next. The résumé reading's overall is now worked out in code from its settled findings.
+ */
+describe("the overall reading, worked out from the settled findings (Wave S7)", () => {
+  const PACKET = {
+    requirements: { mustHaves: [{ key: "licence", text: "Active CA RDH license", rationale: "law", evidencedBy: ["resume" as const] }, { key: "perio", text: "Periodontal therapy", rationale: "work", evidencedBy: ["resume" as const] }], niceToHaves: [], eligibility: [] },
+    competencies: [{ key: "chairside", name: "Chairside skill", definition: "d", weight: 5, evaluatedIn: "both" as const, indicators: ["x"] }],
+  } as unknown as Parameters<typeof settledOverall>[1];
+  const ASSISTANT = "Riley Chen\nCosta Mesa, CA\nDental Assistant at Sunrise Family Dentistry 2020 - present\nChairside assisting, sterilization, X-rays, Dentrix scheduling\nEnrolled in a dental hygiene program, graduating 2027";
+  const ok = (out: EvidenceAssessment, runId: string): RunOutcome<EvidenceAssessment> => ({ ok: true, output: out, runId, model: "m" });
+  const view = { restore: (s: string) => s };
+  const assistantReading = (overall: EvidenceAssessment["overall"], recommendation: EvidenceAssessment["recommendation"]): EvidenceAssessment =>
+    reading(null, "unknown", "partially_evidenced", {
+      overall,
+      recommendation,
+      requirementFindings: [{ requirementKey: "licence", met: "yes", evidence: { source: "resume", quote: "Enrolled in a dental hygiene program, graduating 2027" } }, { requirementKey: "perio", met: "unknown" }],
+      competencyFindings: [{ competencyKey: "chairside", finding: "partially_evidenced", evidence: { source: "resume", quote: "Chairside assisting, sterilization, X-rays" } }],
+    });
+  const read = (overalls: Array<[EvidenceAssessment["overall"], EvidenceAssessment["recommendation"]]>) => {
+    const out = readingsOutcome(overalls.map(([o, r], i) => ok(assistantReading(o, r), `r${i}`)), view, { packet: PACKET as never, resumeText: ASSISTANT, applicationAnswers: { eligibility: {} } });
+    if (!out.ok) throw new Error("expected readings");
+    return out.output;
+  };
+
+  it("gives the same overall reading and recommendation whatever each reading said overall", () => {
+    const first = read([["potential", "screen"], ["unknown", "review_manually"], ["unknown", "review_manually"]]);
+    const second = read([["potential", "screen"], ["potential", "screen"], ["unknown", "review_manually"]]);
+    const third = read([["strong", "screen"], ["weak", "hold"], ["unknown", "review_manually"]]);
+    // the licence is in training (the licence rule: unknown), perio unknown, chairside partly shown: potential
+    for (const out of [first, second, third]) {
+      expect(out.requirementFindings.map((f) => `${f.requirementKey}:${f.met}`)).toEqual(["licence:unknown", "perio:unknown"]);
+      expect(out.overall).toBe("potential");
+    }
+    // the recommendation goes with it (the prompt's rule), and the words come from a reading that said the same
+    for (const out of [first, second, third]) expect(out.recommendation).toBe("screen");
+    expect(first.summary).toBe(assistantReading("potential", "screen").summary);
+    expect(read([["weak", "hold"], ["weak", "hold"], ["weak", "hold"]])).toMatchObject({ overall: "potential", recommendation: "screen" });
+  });
+
+  it("asks a person to look, never a screening chat, when an eligibility answer did not match and no one kept them in", () => {
+    const failed = { evaluatedAt: "2026-10-15T10:00:00Z", passed: false, failedRules: [{ key: "schedule", question: "Can you work Saturdays?", answer: "no", reason: "answered no" }], unverifiable: [] };
+    const input = { packet: PACKET as never, resumeText: ASSISTANT, applicationAnswers: { eligibility: {} }, eligibility: failed };
+    const runs = [ok(assistantReading("potential", "screen"), "r1"), ok(assistantReading("potential", "screen"), "r2"), ok(assistantReading("potential", "screen"), "r3")];
+    const held = readingsOutcome(runs, view, input);
+    expect(held.ok && held.output.recommendation).toBe("review_manually");
+    const kept = readingsOutcome(runs, view, { ...input, eligibilityKeptIn: true });
+    expect(kept.ok && kept.output.recommendation).toBe("screen");
+  });
+
+  it("is the same whatever order the readings come back in, and with fewer readings", () => {
+    const a = assistantReading("potential", "screen");
+    const b = assistantReading("unknown", "review_manually");
+    const c = assistantReading("strong", "screen");
+    const orders = [[a, b, c], [c, b, a], [b, a, c]].map((o) => readingsOutcome(o.map((x, i) => ok(x, `r${i}`)), view, { packet: PACKET as never, resumeText: ASSISTANT, applicationAnswers: { eligibility: {} } }));
+    const decidedOf = (r: RunOutcome<EvidenceAssessment>) => (r.ok ? decided(r.output) : null);
+    for (const o of orders) expect(decidedOf(o)).toEqual(decidedOf(orders[0]!));
+    const invalid: RunOutcome<EvidenceAssessment> = { ok: false, runId: "rx", model: "m", reason: "invalid", error: "no valid output" };
+    const one = readingsOutcome([invalid, ok(b, "r1"), invalid], view, { packet: PACKET as never, resumeText: ASSISTANT, applicationAnswers: { eligibility: {} } });
+    expect(one.ok && one.output.overall).toBe("potential");
+  });
+
+  it("follows the prompt's own definitions, read from the findings as the match score reads them", () => {
+    const f = (licence: Met, perio: Met, chairside: Found, quoted = true) => ({
+      requirementFindings: [
+        { requirementKey: "licence", met: licence, ...(quoted && licence !== "unknown" ? { evidence: { source: "resume" as const, quote: licence === "no" ? "I do not hold a CA RDH license" : "RDH license CA active" } } : {}) },
+        { requirementKey: "perio", met: perio, ...(perio !== "unknown" ? { evidence: { source: "resume" as const, quote: "Periodontal therapy daily" } } : {}) },
+      ],
+      competencyFindings: [{ competencyKey: "chairside", finding: chairside, ...(chairside !== "not_evidenced" ? { evidence: { source: "resume" as const, quote: "Chairside assisting daily" } } : {}) }],
+    });
+    const work = { hasWork: true };
+    expect(settledOverall(f("yes", "yes", "evidenced"), PACKET, work)).toBe("strong");
+    // a "yes" with nothing quoted is partly shown, as in the score: potential, never strong
+    expect(settledOverall(f("yes", "yes", "evidenced", false), PACKET, work)).toBe("potential");
+    expect(settledOverall(f("yes", "partially", "evidenced"), PACKET, work)).toBe("potential");
+    expect(settledOverall(f("yes", "unknown", "evidenced"), PACKET, work)).toBe("potential");
+    // too few skills shown, or an essential one against them: potential
+    expect(settledOverall(f("yes", "yes", "partially_evidenced"), PACKET, work)).toBe("potential");
+    expect(settledOverall(f("yes", "yes", "contradicted"), PACKET, work)).toBe("potential");
+    // weak only on a must-have their own words show is not met
+    expect(settledOverall(f("no", "yes", "evidenced"), PACKET, work)).toBe("weak");
+    expect(settledOverall(f("no", "yes", "evidenced", false), PACKET, work)).toBe("potential");
+    // nothing either way, or a skill against them alone: the readings' own judgement of the work is all there is
+    // ("thin but relevant", or not this kind of work), as its middle; never strong on no findings
+    expect(settledOverall(f("unknown", "unknown", "not_evidenced"), PACKET, work)).toBe("unknown");
+    expect(settledOverall(f("unknown", "unknown", "contradicted"), PACKET, work)).toBe("unknown");
+    const silent = f("unknown", "unknown", "not_evidenced");
+    expect(settledOverall(silent, PACKET, { hasWork: true, said: ["potential", "potential", "unknown"] })).toBe("potential");
+    expect(settledOverall(silent, PACKET, { hasWork: true, said: ["potential", "unknown", "unknown"] })).toBe("unknown");
+    expect(settledOverall(silent, PACKET, { hasWork: true, said: ["strong", "strong", "strong"] })).toBe("potential");
+    expect(settledOverall(f("unknown", "unknown", "contradicted"), PACKET, { hasWork: true, said: ["weak", "weak", "potential"] })).toBe("weak");
+    // the findings decide whenever they say anything: what the readings said makes no difference then
+    expect(settledOverall(f("yes", "unknown", "evidenced"), PACKET, { hasWork: true, said: ["unknown", "unknown", "weak"] })).toBe("potential");
+    // no résumé text and no written description: unknown, whatever an answer on the form shows
+    expect(settledOverall(f("yes", "yes", "evidenced"), PACKET, { hasWork: false })).toBe("unknown");
+  });
+
+  it("gives the recommendation that goes with it, by the prompt's rule", () => {
+    expect(settledRecommendation("unknown", { eligible: true })).toBe("review_manually");
+    expect(settledRecommendation("weak", { eligible: true })).toBe("hold");
+    expect(settledRecommendation("potential", { eligible: true })).toBe("screen");
+    expect(settledRecommendation("strong", { eligible: true })).toBe("screen");
+    expect(settledRecommendation("strong", { eligible: false })).toBe("review_manually");
+    expect(settledRecommendation("weak", { eligible: false })).toBe("hold");
+  });
+
+  it("leaves the scorecard's overall reading as the middle of its readings (no settlement given)", () => {
+    expect(combineReadings([reading("no", "yes", "evidenced", { overall: "weak" }), reading("no", "yes", "evidenced", { overall: "strong" }), reading("no", "yes", "evidenced", { overall: "strong" })]).overall).toBe("strong");
   });
 });
 

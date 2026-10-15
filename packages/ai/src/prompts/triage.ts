@@ -10,7 +10,13 @@ export type TriageInput = {
   packet: RolePacket;
   extraction: ResumeExtraction | null;
   resumeText: string | null;
-  applicationAnswers: { eligibility: Record<string, unknown>; noResumeSummary?: string };
+  applicationAnswers: { eligibility: Record<string, unknown>; quick?: Record<string, string> | null; noResumeSummary?: string };
+  /**
+   * The candidate's answers on the form as plain sentences, one per line, the question then their answer ("Do you hold
+   * an active CA RDH license? Yes."), built by `formAnswerLines` in packages/agents (Wave S7). The reading is shown these,
+   * never the form's field names; without them (an older caller) it is shown the answers alone.
+   */
+  answerSentences?: string[];
   eligibility: EligibilityResult | null;
   /**
    * A person on the hiring team checked an eligibility answer that did not match and kept the candidate in ("Keep them
@@ -31,6 +37,24 @@ export function eligibilityLine(input: Pick<TriageInput, "eligibility" | "eligib
   return input.eligibility.passed ? "passed" : `failed ${input.eligibility.failedRules.map((f) => f.key).join(", ")}`;
 }
 
+/**
+ * The answers on the form as the reading is shown them: the sentences when the caller built them, else each answer
+ * alone (never its field name), one per line. A bare yes or no without its question says nothing and is left out.
+ */
+export function triageAnswerLines(input: Pick<TriageInput, "applicationAnswers" | "answerSentences">): string[] {
+  if (input.answerSentences) return input.answerSentences.filter((s) => s.trim() !== "");
+  const plain = (v: unknown): string => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").join(", ") : typeof v === "string" || typeof v === "number" ? String(v) : "").trim();
+  return Object.values(input.applicationAnswers.eligibility ?? {})
+    .map(plain)
+    .filter((s) => s !== "" && !/^(yes|y|no|n|true|false)$/i.test(s));
+}
+
+/** The answers' part of the application block: one sentence a line, as the quote check reads them. */
+function answersBlock(input: Pick<TriageInput, "applicationAnswers" | "answerSentences">): string {
+  const lines = triageAnswerLines(input);
+  return lines.length ? `Their answers to the company's questions (their own words, one per line):\n${lines.map((l) => triageDataText(l)).join("\n")}` : "Their answers to the company's questions: none";
+}
+
 /** The data tags of the reading's message: candidate text never carries one, so it cannot end its block early. */
 const DATA_TAGS = ["resume", "extraction", "application"] as const;
 /** Candidate-provided text as it goes between the data tags (`withoutTag`, for every tag of the message). */
@@ -42,6 +66,7 @@ const TRIAGE_SYSTEM = `You are the triage specialist of a recruiting department.
 
 How to assess:
 - Read the resume text and the application. Every strength and concern must cite evidence: source "resume" or "application" with a verbatim quote (a contiguous excerpt of the source text). Quotes are verified in code; a quote that is not in the source is removed and the claim is discarded, so quote exactly. A claim with no quote is shown to the owner marked "no quote" and lowers what they can rely on.
+- The candidate's answers to the company's questions are their own words, one per line: the question as it was asked, then their answer. To use one as evidence, quote the whole line exactly (question and answer) with source "application". A self-reported answer is what the candidate says, not a checked fact: it never outweighs what their resume or written description shows.
 - requirementFindings: one entry per must-have (use the requirement key), decided by the definitions below; when one is unknown, add the question to unknowns.
 - competencyFindings: one entry per competency key, decided by the definitions below.
 - overall: "strong" when the must-haves are evidenced and several competencies are evidenced; "potential" when most must-haves are evidenced or the evidence is thin but relevant; "weak" ONLY when the evidence contradicts a must-have or shows the candidate does not do this kind of work; "unknown" only when there is too little to say: no resume text and no written description of their work, an unreadable file, or contradictions. A written description of their work in the application is evidence: assess it like a short resume, quoting it with source "application".
@@ -85,9 +110,13 @@ function packetBlock(p: RolePacket): string {
 // Version 5 (Wave S5, 15 Oct 2026): a credential is "no" only when the candidate says plainly they do not hold it (a
 // lapsed, expired, pending or unclear one is "unknown"), a lone "yes" or one word is no quote, skills checked in the
 // interviews only are not listed, and a person's "keep them in" on an eligibility answer reads as eligible.
+// Version 6 (Wave S7, fairness run of 15 Oct 2026): the answers on the form are shown as plain sentences, the question
+// then the candidate's answer, never as the form's field names in JSON (a reading had quoted '"rdh_license":"yes"');
+// a whole line may be quoted as the candidate's own words. The overall reading is worked out again in code from the
+// findings (`settledOverall` in packages/agents), so it no longer moves between readings on its own.
 export const triageAssessPrompt: PromptDef<TriageInput, EvidenceAssessment> = {
   key: "triage.assess",
-  version: 5,
+  version: 6,
   task: "triage.assess",
   agent: "triage",
   schema: TriageModelOutput,
@@ -101,7 +130,7 @@ export const triageAssessPrompt: PromptDef<TriageInput, EvidenceAssessment> = {
       content: [
         input.resumeText ? `<resume>\n${triageDataText(input.resumeText.slice(0, 40_000))}\n</resume>` : "<resume>(no resume text available)</resume>",
         input.extraction ? `<extraction>\n${triageDataText(JSON.stringify({ positions: input.extraction.positions, licenses: input.extraction.licenses, certifications: input.extraction.certifications, skills: input.extraction.skills, yearsOfExperienceEstimate: input.extraction.yearsOfExperienceEstimate, anomalies: input.extraction.anomalies }))}\n</extraction>` : "",
-        `<application>\n${input.applicationAnswers.noResumeSummary ? `About their recent work (in their words): ${triageDataText(input.applicationAnswers.noResumeSummary)}\n` : ""}Eligibility answers: ${triageDataText(JSON.stringify(input.applicationAnswers.eligibility))}\nEligibility result: ${eligibilityLine(input)}\n</application>`,
+        `<application>\n${input.applicationAnswers.noResumeSummary ? `About their recent work (in their words): ${triageDataText(input.applicationAnswers.noResumeSummary)}\n` : ""}${answersBlock(input)}\nEligibility result: ${eligibilityLine(input)}\n</application>`,
         "Assess this application against the Role Packet.",
       ].filter(Boolean).join("\n\n"),
     },

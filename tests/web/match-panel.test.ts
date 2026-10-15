@@ -110,11 +110,12 @@ describe("the match card", () => {
   it("lists the requirements that cost points first, costliest first, and folds the rest under 'N more at full marks'", () => {
     const m = score(reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "partially", "some perio")], [skill("chairside", "partially_evidenced", "assisted"), skill("patients", "evidenced", "calm"), skill("software", "contradicted", "never used dental software")]));
     const bars = matchBars(m);
-    expect(bars.costly.map((b) => [b.label, b.tag, b.pctMet, b.pointsLost])).toEqual([["Perio charting experience", "Must-have", 50, 14], ["Chairside skill", "Essential", 50, 11], ["Dental software", "Helpful", 0, 7]]);
+    // Wave S7: the partly shown ones count at the level of the rest (6 of 7), never below it, so they cost less
+    expect(bars.costly.map((b) => [b.label, b.tag, b.pctMet, b.pointsLost])).toEqual([["Dental software", "Helpful", 0, 7], ["Perio charting experience", "Must-have", 50, 4], ["Chairside skill", "Essential", 50, 3]]);
     expect(bars.full.map((b) => b.label)).toEqual(["Active CA RDH license", "Patient care"]);
     expect(bars.foldedLabel).toBe("2 more at full marks");
-    expect(quoteSummary(bars.costly[0])).toBe("Partly shown, from the AI review of the résumé · see their words");
-    expect(bars.costly[0].quote).toBe("some perio");
+    expect(quoteSummary(bars.costly[1])).toBe("Partly shown, from the AI review of the résumé · see their words");
+    expect(bars.costly[1].quote).toBe("some perio");
   });
 
   it("says when everything judged is at full marks, and says 'no quote' when nothing of theirs backs a finding", () => {
@@ -209,6 +210,17 @@ describe("the panel's wiring", () => {
     const panel = read("../../apps/web/src/pages/candidate-panel/CandidatePanel.tsx");
     expect(panel).toContain("const score = a ? matchOf(a)?.score ?? null : null;");
     expect(panel).toContain('<ScoreBadge score={score} size="sm" />');
+  });
+
+  it("shows the answers to the form's questions as sentences, marks the ones suggested from the résumé, and the summary they checked (Wave S7)", () => {
+    const sections = read("../../apps/web/src/pages/candidate-panel/sections.tsx");
+    expect(sections).toContain("<FormAnswers a={a} />");
+    expect(sections.indexOf("<EligibilityAnswers a={a} />")).toBeLessThan(sections.indexOf("<FormAnswers a={a} />"));
+    expect(sections).toContain('<Card title="Questions from the form">');
+    expect(sections).toContain('export const SUGGESTED_FROM_RESUME_KEPT = "Suggested from the résumé, kept by the candidate";');
+    expect(sections).toContain('export const WORK_SUMMARY_LABEL = "Their summary of their work (checked by them)";');
+    const client = read("../../apps/web/src/api/client.ts");
+    expect(client).toContain('formAnswers?: Array<{ key: string; source: "eligibility" | "company"; sentence: string; fromCv: boolean }>');
   });
 
   it("lists each reading's must-haves and skills most serious first, skills with their quotes, notes and importance", () => {

@@ -1,5 +1,5 @@
-import type { CompanyAboutInput, MessageLineInput } from "@ros/ai";
-import { checkPersonalLine, credentialMustHaves, saidByCandidate, screenCriterion, type MergedRevision, type ScoringIdentity } from "@ros/agents";
+import { triageAssessPrompt, type CompanyAboutInput, type MessageLineInput } from "@ros/ai";
+import { assessmentSources, checkPersonalLine, credentialMustHaves, readingsOutcome, saidByCandidate, scoringInput, screenCriterion, type MergedRevision, type ScoringIdentity } from "@ros/agents";
 import type { BoardColumn, EvidenceAssessment, IntakeFacts, IntakeTurn, MatchBand, PacketRevision, ResumeExtraction, RolePacket, ScreenAssessment, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
 // The score and the board's placement are pure functions over the stored findings; this package does not depend on
 // @ros/core (its database code), so the eval reads the very same modules by path.
@@ -656,10 +656,32 @@ export function interviewSkillFailures(key: string | null, asked: string, readin
  */
 export const KEPT_IN_ANSWER = { key: "rdh_license", answer: "no" } as const;
 
-/** What the kept-in reading's input got wrong: the answer set aside still sent, or no word that a person kept them in. */
-export function keptInInputFailures(modelInput: string): string[] {
+/**
+ * The answers on the form of an applicant who meets the role's own eligibility questions (Wave S7: the reading is shown
+ * them as sentences, so they answer the role's real questions): "yes", or the days a schedule question lists. With
+ * `keptIn`, the licence question is answered "no" and a person kept them in; `setAside` is that question. A role with no
+ * eligibility questions gets the two answers the suites used before.
+ */
+export function formAnswers(role: Pick<RolePacket, "requirements">, keptIn: boolean): { answered: Record<string, unknown>; setAside: { key: string; question: string } } {
+  const rules = role.requirements.eligibility ?? [];
+  const licence = rules.find((r) => r.type === "license") ?? null;
+  const setAside = { key: licence?.key ?? KEPT_IN_ANSWER.key, question: licence?.question ?? "Do you hold an active California RDH license?" };
+  const meets = (r: (typeof rules)[number]): unknown => {
+    const days = (r.expectation as { days?: unknown } | null | undefined)?.days;
+    return r.type === "schedule_availability" && Array.isArray(days) && days.length ? days : "yes";
+  };
+  const answered: Record<string, unknown> = rules.length ? Object.fromEntries(rules.map((r) => [r.key, meets(r)])) : { rdh_license: "yes", schedule: "yes" };
+  if (keptIn) answered[setAside.key] = KEPT_IN_ANSWER.answer;
+  return { answered, setAside };
+}
+
+/**
+ * What the kept-in reading's input got wrong: the answer set aside still sent (as the form's JSON, or since Wave S7 as
+ * the sentence of its question, `setAsideQuestion`), or no word that a person kept them in.
+ */
+export function keptInInputFailures(modelInput: string, setAsideQuestion?: string): string[] {
   const f: string[] = [];
-  if (modelInput.includes(`"${KEPT_IN_ANSWER.key}":"${KEPT_IN_ANSWER.answer}"`)) f.push("the model was sent the eligibility answer a person set aside");
+  if (modelInput.includes(`"${KEPT_IN_ANSWER.key}":"${KEPT_IN_ANSWER.answer}"`) || (!!setAsideQuestion && modelInput.includes(setAsideQuestion))) f.push("the model was sent the eligibility answer a person set aside");
   if (!/kept the candidate in/.test(modelInput)) f.push("the model was not told a person kept the candidate in");
   if (/Eligibility result: failed/.test(modelInput)) f.push("the model was told the candidate failed eligibility");
   return f;
@@ -765,9 +787,14 @@ export const boardCases: BoardCase[] = [
   { id: "a_suggested_screen_is_not_a_decline", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "partially", "RDH license held in Nevada"), mustHaveFinding("perio", "partially", "some charting")], allSkills("partially_evidenced")), expect: { score: 50, band: "low", column: "longlist", confident: false, missing: [] } },
   { id: "a_suggested_hold_is_not_a_shortlist", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "yes", "RDH license CA active"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced"), "medium", weakHold), expect: { score: 100, band: "very_high", column: "longlist", confident: false, missing: [] } },
   { id: "unknown_is_set_aside", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "yes", "RDH license CA active"), mustHaveFinding("perio", "unknown")], allSkills("not_evidenced")), expect: { score: 100, band: "very_high", column: "longlist", confident: false, missing: [] } },
-  { id: "partly_shown_is_the_middle", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "partially", "RDH license held in Nevada"), mustHaveFinding("perio", "partially", "some charting")], [skillFinding("chairside", "partially_evidenced"), skillFinding("patients", "evidenced"), skillFinding("infection", "evidenced")]), expect: { score: 61, band: "medium", column: "longlist", confident: true, missing: [] } },
-  // known bug 32: a "yes" with nothing quoted counts half, never in full (86, not 100), and the breakdown says "no quote"
-  { id: "unquoted_yes_is_partly", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "yes"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced")), expect: { score: 86, band: "very_high", column: "shortlist", confident: true, missing: [] } },
+  // Wave S7 (fairness run of 15 Oct 2026): partly shown never scores below saying nothing, so with every other
+  // requirement met it costs nothing; the board then asks for more instead of suggesting the Shortlist on it.
+  { id: "partly_shown_costs_nothing_but_asks_for_more", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "partially", "RDH license held in Nevada"), mustHaveFinding("perio", "partially", "some charting")], [skillFinding("chairside", "partially_evidenced"), skillFinding("patients", "evidenced"), skillFinding("infection", "evidenced")]), expect: { score: 100, band: "very_high", column: "longlist", confident: true, missing: [] } },
+  // and with weaker evidence around it, partly shown counts half: the middle
+  { id: "partly_shown_is_the_middle_when_the_rest_is_weaker", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "partially", "RDH license held in Nevada"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], [skillFinding("chairside", "contradicted"), skillFinding("patients", "contradicted"), skillFinding("infection", "evidenced")]), expect: { score: 50, band: "low", column: "longlist", confident: false, missing: [] } },
+  // known bug 32: a "yes" with nothing quoted counts as partly shown and never raises the score above the checked
+  // evidence; the breakdown says "no quote", and the board asks for more before the Shortlist
+  { id: "unquoted_yes_is_partly", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "yes"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced")), expect: { score: 100, band: "very_high", column: "longlist", confident: true, missing: [] } },
   { id: "unquoted_no_is_unknown", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "no"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced")), expect: { score: 100, band: "very_high", column: "longlist", confident: false, missing: [] } },
   { id: "low_confidence_is_never_at_either_end", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "no", "I do not hold a CA RDH license"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced"), "low"), expect: { score: 54, band: "low", column: "longlist", confident: false, missing: ["rdh_license"] } },
 ];
@@ -795,6 +822,138 @@ export function boardCaseFailures(bc: BoardCase): string[] {
   if (JSON.stringify(shuffled) !== JSON.stringify(got)) f.push("the answer changed with the order of the findings");
   return f;
 }
+
+/* ---------------------------------------------------- the fairness rules in code (Wave S7) ---------------------------------------------------- */
+
+/**
+ * The fixes for the real-model fairness run of 15 Oct 2026 (packages/evals results; fairness-findings), checked with no
+ * model call ("triage.fairness_rules"), so they hold for any provider and run with the unit tests too. Candidates now
+ * see their score after sending (founder decision S7-1), so each is a rule the code keeps whatever the model answers:
+ * - the match score is monotonic: showing some evidence never scores below showing none (the zip-code and
+ *   earlier-rejection twins were 94 and 83 when one reading said "partly evidenced" and the other "not evidenced");
+ * - the overall reading is worked out from the settled findings, so it cannot move on its own between readings (the
+ *   "assistant not yet a hygienist" and "lapsed licence" cases moved between "potential" and "unknown");
+ * - an answer on the form reaches the reading as a sentence, the question then the answer, which is the candidate's own
+ *   words for the quote check, and never as the form's field names (a reading had quoted '"rdh_license":"yes"').
+ */
+export type FairnessRuleCase = { id: string; provenance: "synthetic"; failures: () => string[] };
+
+type Level = "no" | "unknown" | "partly" | "yes";
+const LEVELS: readonly Level[] = ["no", "unknown", "partly", "yes"];
+const MUST_AT: Record<Level, ReqF["met"]> = { no: "no", unknown: "unknown", partly: "partially", yes: "yes" };
+const SKILL_AT: Record<Level, CompF["finding"]> = { no: "contradicted", unknown: "not_evidenced", partly: "partially_evidenced", yes: "evidenced" };
+
+/** Every combination of findings on the board's role, each moved up one requirement at a time: the score must never drop. */
+function monotonicFailures(): string[] {
+  const mustKeys = BOARD_PACKET.requirements.mustHaves.map((m) => m.key);
+  const skillKeys = BOARD_PACKET.competencies.map((c) => c.key);
+  const keys = [...mustKeys, ...skillKeys];
+  const readingAt = (levels: readonly Level[]) =>
+    boardReading(
+      mustKeys.map((k, i) => mustHaveFinding(k, MUST_AT[levels[i] ?? "unknown"], levels[i] === "unknown" ? undefined : `${k} in their own words`)),
+      skillKeys.map((k, i) => skillFinding(k, SKILL_AT[levels[mustKeys.length + i] ?? "unknown"])),
+    );
+  const scoreAt = (levels: readonly Level[]) => matchScore({ resume: { kind: "triage", result: readingAt(levels) }, screen: null }, BOARD_PACKET)?.score ?? null;
+  const f: string[] = [];
+  const total = LEVELS.length ** keys.length;
+  for (let n = 0; n < total && f.length < 5; n++) {
+    const levels = keys.map((_, i) => LEVELS[Math.floor(n / LEVELS.length ** i) % LEVELS.length] ?? "unknown");
+    const before = scoreAt(levels);
+    keys.forEach((key, i) => {
+      for (const up of LEVELS.slice(LEVELS.indexOf(levels[i] ?? "unknown") + 1)) {
+        const after = scoreAt(levels.map((l, j) => (j === i ? up : l)));
+        if (before !== null && after !== null && after < before) f.push(`${levels.join(",")}: ${key} ${levels[i]} → ${up} lowered the score ${before} → ${after}`);
+      }
+    });
+  }
+  return f;
+}
+
+/** Three scripted readings of one CV that agree on every finding, each with its own overall reading and recommendation. */
+function scriptedReadings(base: EvidenceAssessment, overalls: ReadonlyArray<[EvidenceAssessment["overall"], EvidenceAssessment["recommendation"]]>) {
+  return overalls.map(([overall, recommendation], i) => ({ ok: true as const, output: { ...base, overall, recommendation, summary: `reading ${i + 1}` }, runId: `scripted_${i + 1}`, model: "scripted" }));
+}
+
+const ASSISTANT_CV = consistencyCases.find((c) => c.id === "assistant_not_yet_hygienist")?.resume ?? "";
+const LAPSED_CV = consistencyCases.find((c) => c.id === "lapsed_license")?.resume ?? "";
+const asIs = { restore: (s: string) => s };
+
+/** The overall reading and recommendation of each set of scripted readings, through what the app does (`readingsOutcome`). */
+function settledAcross(resume: string, base: EvidenceAssessment, sets: ReadonlyArray<ReadonlyArray<[EvidenceAssessment["overall"], EvidenceAssessment["recommendation"]]>>): string[] {
+  const outs = sets.map((s) => readingsOutcome(scriptedReadings(base, s), asIs, { resumeText: resume, applicationAnswers: { eligibility: {} }, packet: BOARD_PACKET as unknown as RolePacket }));
+  const ok = outs.flatMap((o) => (o.ok ? [o.output] : []));
+  if (ok.length !== outs.length) return ["a set of scripted readings gave no reading"];
+  return consistencyDifferences(ok, BOARD_PACKET).map((x) => x.replace(/^reading (\d+)/, "set $1").replace(/reading 1/, "set 1"));
+}
+
+/** A role with two questions on the form, for the answer sentences. */
+const FORM_ROLE = { ...BOARD_PACKET, requirements: { ...BOARD_PACKET.requirements, eligibility: [{ key: "rdh_license", type: "license", question: "Do you hold a California RDH license?", expectation: {}, rationale: "Required by law.", knockout: true }, { key: "schedule", type: "schedule_availability", question: "Can you work the posted schedule?", expectation: {}, rationale: "Coverage.", knockout: true }] } } as unknown as RolePacket;
+
+export const fairnessRuleCases: FairnessRuleCase[] = [
+  {
+    id: "twins_partly_vs_not_evidenced_score_the_same",
+    provenance: "synthetic",
+    failures: () => {
+      // the zip-code twins of the run: one reading said a skill was partly evidenced, the other not, from the same quote
+      const musts = [mustHaveFinding("rdh_license", "yes", "RDH license CA active"), mustHaveFinding("perio", "yes", "Periodontal charting, scaling and root planing")];
+      const others = [skillFinding("patients", "evidenced"), skillFinding("infection", "contradicted")];
+      const none = boardReading(musts, [skillFinding("chairside", "not_evidenced"), ...others]);
+      const some = boardReading(musts, [{ competencyKey: "chairside", finding: "partially_evidenced", evidence: { source: "resume", quote: "Periodontal charting, scaling and root planing" } }, ...others]);
+      const pair = biasPairs.find((p) => p.id === "zip_code");
+      return pair ? biasPairDifferences(pair, none, some, BOARD_PACKET) : ["the zip-code pair is missing"];
+    },
+  },
+  { id: "showing_more_never_lowers_the_score", provenance: "synthetic", failures: monotonicFailures },
+  {
+    id: "overall_settled_from_findings_assistant_not_yet_hygienist",
+    provenance: "synthetic",
+    failures: () =>
+      settledAcross(
+        ASSISTANT_CV,
+        boardReading([mustHaveFinding("rdh_license", "yes", "Enrolled in a dental hygiene program, graduating 2027"), mustHaveFinding("perio", "unknown")], [{ competencyKey: "chairside", finding: "partially_evidenced", evidence: { source: "resume", quote: "Chairside assisting, sterilization, X-rays" } }, skillFinding("patients", "not_evidenced"), skillFinding("infection", "not_evidenced")]),
+        [
+          [["potential", "screen"], ["unknown", "review_manually"], ["unknown", "review_manually"]],
+          [["potential", "screen"], ["potential", "screen"], ["unknown", "review_manually"]],
+          [["unknown", "review_manually"], ["unknown", "review_manually"], ["unknown", "review_manually"]],
+        ],
+      ),
+  },
+  {
+    id: "overall_settled_from_findings_lapsed_licence",
+    provenance: "synthetic",
+    failures: () =>
+      settledAcross(
+        LAPSED_CV,
+        boardReading([mustHaveFinding("rdh_license", "no", "RDH license CA expired in 2021; renewal not started"), mustHaveFinding("perio", "partially", "Scaling and root planing, patient education")], [skillFinding("chairside", "not_evidenced"), skillFinding("patients", "not_evidenced"), skillFinding("infection", "not_evidenced")]),
+        [
+          [["potential", "screen"], ["unknown", "review_manually"], ["potential", "screen"]],
+          [["unknown", "review_manually"], ["unknown", "review_manually"], ["weak", "hold"]],
+        ],
+      ),
+  },
+  {
+    id: "answers_on_the_form_are_the_candidates_own_words",
+    provenance: "synthetic",
+    failures: () => {
+      const f: string[] = [];
+      const { promptInput } = scoringInput({ packet: FORM_ROLE, extraction: null, resumeText: null, applicationAnswers: { eligibility: { rdh_license: "yes", schedule: "yes" } }, eligibility: null, identity: {} });
+      const sentence = "Do you hold a California RDH license? Yes.";
+      if (!promptInput.answerSentences?.includes(sentence)) f.push(`the reading was not given "${sentence}"`);
+      const sent = triageAssessPrompt.messages(promptInput).map((m) => m.content).join("\n");
+      for (const raw of ['"rdh_license"', "rdh_license:", '":"']) if (sent.includes(raw)) f.push(`the reading was sent the field name or JSON: ${raw}`);
+      // the hallucination suite's own check, against what the reading was given
+      const seen = assessmentSources(promptInput);
+      const asApplication = (quote: string) => assessmentQuotesGrounded({ ...boardReading([], []), requirementFindings: [{ requirementKey: "rdh_license", met: "yes", evidence: { source: "application", quote } }] }, { resume: seen.resume ?? "", application: seen.application ?? "" });
+      if (asApplication(sentence).length) f.push(`a quote of the answer sentence was called ungrounded: ${asApplication(sentence).join("; ")}`);
+      if (!asApplication('"rdh_license":"yes"').length) f.push("a quote of the raw JSON was called grounded");
+      // and the app keeps it as evidence, read as the statement it makes
+      const out = readingsOutcome(scriptedReadings({ ...boardReading([], []), requirementFindings: [{ requirementKey: "rdh_license", met: "yes", evidence: { source: "application", quote: sentence } }] }, [["potential", "screen"], ["potential", "screen"], ["potential", "screen"]]), asIs, { resumeText: null, applicationAnswers: { eligibility: { rdh_license: "yes", schedule: "yes" } }, packet: FORM_ROLE });
+      const kept = out.ok ? out.output.requirementFindings.find((x) => x.requirementKey === "rdh_license") : null;
+      if (kept?.met !== "yes" || kept.evidence?.quote !== sentence || kept.evidence.unquoted) f.push(`the app did not keep the answer sentence as evidence: ${JSON.stringify(kept)}`);
+      return f;
+    },
+  },
+];
 
 export type ScreenPersona = {
   id: string;

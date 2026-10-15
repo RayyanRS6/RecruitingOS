@@ -378,8 +378,11 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       const where = (id: string) => [...b.columns.shortlist, ...b.columns.longlist, ...b.columns.not_moving_forward].find((c) => c.applicationId === id)!;
       expect(where(strong).placement.column).toBe("shortlist");
       expect(where(strong).score?.band).toMatch(/high/);
-      expect(where(possible).placement).toMatchObject({ column: "longlist", confident: true });
-      expect(where(possible).score?.band).toBe("medium");
+      // "possible" shows a must-have only in part: since Wave S7 that costs the score nothing against its other evidence
+      // (showing some never scores below showing none), so the board asks for more instead of the Shortlist
+      expect(where(possible).placement).toMatchObject({ column: "longlist", confident: true, nextStep: { kind: "ask_more" } });
+      expect(where(possible).placement.nextStep?.reason).toMatch(/^Their application only partly shows /);
+      expect(where(possible).score?.breakdown.some((c) => c.mustHave && c.pctMet === 50 && c.countedPct !== undefined)).toBe(true);
       expect(where(weak).placement.column).toBe("not_moving_forward");
       expect(where(weak).score?.missingMustHave.map((m) => m.quote)).toEqual(["I do not hold a CA RDH license"]);
       expect(where(weak).reading).toBe("Weak match");

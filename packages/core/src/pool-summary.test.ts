@@ -131,7 +131,8 @@ describe("one-click questions", () => {
   it("answers who might be overlooked: good evidence off the shortlist, or a long wait", () => {
     const a = answerPoolQuestion("overlooked", people, packet, { now: NOW, open });
     expect(a.people.map((p) => p.name)).toEqual(["Ben Ortiz", "Eve Kim"]);
-    expect(a.people[0].why).toBe("Waiting 9 days with nothing decided.");
+    // Ben shows both must-haves in part: they cost his score nothing (Wave S7), so the board asks for more instead
+    expect(a.people[0].why).toBe("Good evidence, but on the Longlist: Their application only partly shows Active CA RDH license, Perio charting. Waiting 9 days with nothing decided.");
     expect(a.people[1].why).toContain("Good evidence, but on the Longlist: A must-have is not yet known: Perio charting.");
   });
 });

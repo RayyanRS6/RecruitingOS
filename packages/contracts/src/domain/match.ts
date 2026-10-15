@@ -41,6 +41,11 @@ export const MATCH_SCORE_BANDS: ReadonlyArray<{ band: MatchBand; min: number; la
 export const MISSING_MUST_HAVE_CAP = 54;
 /** How much each kind of requirement counts: must-haves most, then the skills by their importance. */
 export const MATCH_WEIGHT = { must_have: 4, essential: 3, important: 2, helpful: 1 } as const;
+/**
+ * The rule for a partly shown requirement, in the words a person (and, after sending, the candidate) reads (Wave S7,
+ * fairness run of 15 Oct 2026): showing part of something never scores lower than saying nothing about it.
+ */
+export const PARTLY_SHOWN_RULE = "A requirement partly shown counts half, or as much as the rest of the evidence when that is higher, so showing part of something never scores lower than saying nothing about it.";
 
 /** One requirement the score counted: what it is, how much of the score it carries, how much of it was met, and the quote. */
 export type MatchCriterion = {
@@ -53,6 +58,12 @@ export type MatchCriterion = {
   weightPct: number;
   /** 100 met, 50 partly, 0 not met. */
   pctMet: number;
+  /**
+   * Set on a partly shown requirement counted above half (`PARTLY_SHOWN_RULE`): the share of it the score counted, the
+   * level of the rest of the evidence, so it never pulls the score below what leaving it out would give. `pointsLost`
+   * is worked out from this; `pctMet` stays 50.
+   */
+  countedPct?: number;
   pointsLost: number;
   /** The finding in plain words: "Shown", "Partly shown", "Not met" (a must-have), "Shown", "Partly shown", "Goes against it" (a skill). */
   finding: string;

@@ -9,10 +9,18 @@ import { MATCH_WEIGHT, MISSING_MUST_HAVE_CAP, importanceOf, matchBand, type Conf
  *   (Essential, Important, Helpful; plan F3).
  * - A requirement the evidence says nothing about is set aside, not penalised: it is left out of the score and shown as
  *   coverage ("based on 5 of 7 requirements") and as an open question.
- * - Met counts in full, partly met counts half, not met counts nothing. A must-have counts as not met, and a skill as
- *   going against the candidate, only on a verified quote from their own words; anything else is "not known".
+ * - Met counts in full, not met counts nothing. A must-have counts as not met, and a skill as going against the
+ *   candidate, only on a verified quote from their own words; anything else is "not known".
+ * - Partly met counts half, or as much as the rest of the evidence when that is higher (`PARTLY_SHOWN_RULE`, Wave S7):
+ *   the score is monotonic, so showing some evidence never scores below showing none. The fairness run of 15 Oct 2026
+ *   found two twin résumés 11 points apart because one reading said a skill was "partly evidenced" and the other "not
+ *   evidenced" from the same quote: set aside, the skill left the twin at 94; counted at half, it took the other to 83.
+ *   Now both are 94. A partly shown requirement still shows in the breakdown at 50% ("Partly shown"), with the share the
+ *   score counted (`countedPct`) when that was more. Monotonic: moving any one requirement up the order not met, not
+ *   known, partly, met never lowers the score (match-score.test.ts checks it over many random cases).
  * - Met with nothing quoted (no quote at all, or one the evidence rules marked `unquoted`: not found, or too short to
- *   show anything) counts as partly met, never in full, and the breakdown says "no quote" (Wave S5, 15 Oct 2026).
+ *   show anything) counts as partly met, never on its own in full, and the breakdown says "no quote" (Wave S5, 15 Oct
+ *   2026): it never raises the score above what the checked evidence shows.
  * - A must-have shown not met holds the score at 54 at most and is named ("Missing must-have: ...").
  * - A skill the role checks in the interviews only (`evaluatedIn: "interview"`) is not part of the score: the owner
  *   was told it is judged there, so no reading of a résumé or a screening chat moves the number with it.
@@ -123,6 +131,20 @@ const confidenceOf = (r: ScoredReading | null): Confidence | null => {
 };
 
 /**
+ * How much of a partly shown requirement the score counts (`PARTLY_SHOWN_RULE`): half, or the level of the rest of
+ * the evidence (the requirements met or not met, by their weights) when that is higher. Counted at that level, the
+ * partly shown ones leave the score where leaving them out would put it; counted at half when the rest is lower, they
+ * raise it. So a partly shown requirement never scores below one nothing was said about.
+ */
+function partlyCredit(known: readonly Requirement[]): number {
+  const decided = known.filter((r) => r.found.status === "yes" || r.found.status === "no");
+  const weight = decided.reduce((n, r) => n + r.weight, 0);
+  if (!weight) return PCT.partly;
+  const rest = decided.reduce((n, r) => n + r.weight * PCT[r.found.status as "yes" | "no"], 0) / weight;
+  return Math.max(PCT.partly, rest);
+}
+
+/**
  * The match score of one application from its readings, against the version of the role they were read against.
  * Null when there is no reading at all; `score` null when no requirement could be judged yet.
  */
@@ -131,18 +153,22 @@ export function matchScore(pair: ReadingPair, packet: Pick<RolePacket, "requirem
   const all = requirementsOf(pair, packet);
   const known = all.filter((r) => r.found.status !== "unknown");
   const total = known.reduce((n, r) => n + r.weight, 0);
+  const partlyAt = partlyCredit(known);
   let lost = 0;
   const breakdown: MatchCriterion[] = known.map((r) => {
     const status = r.found.status as Exclude<Status, "unknown">;
     const share = (100 * r.weight) / total;
-    const exactLost = share * (1 - PCT[status] / 100);
+    const counted = status === "partly" ? partlyAt : PCT[status];
+    const exactLost = share * (1 - counted / 100);
     lost += exactLost;
-    return { key: r.key, label: r.label, mustHave: r.mustHave, importance: r.importance, weightPct: Math.round(share), pctMet: PCT[status], pointsLost: Math.round(exactLost), finding: (r.mustHave ? MUST_HAVE_WORDS : SKILL_WORDS)[status], source: r.found.source, quote: r.found.quote, unquoted: r.found.unquoted };
+    return { key: r.key, label: r.label, mustHave: r.mustHave, importance: r.importance, weightPct: Math.round(share), pctMet: PCT[status], ...(status === "partly" && counted > PCT.partly ? { countedPct: Math.round(counted) } : {}), pointsLost: Math.round(exactLost), finding: (r.mustHave ? MUST_HAVE_WORDS : SKILL_WORDS)[status], source: r.found.source, quote: r.found.quote, unquoted: r.found.unquoted };
   });
   // The costliest first; then must-haves, the heavier, and by name, so the order never depends on the input's.
   breakdown.sort((a, b) => b.pointsLost - a.pointsLost || Number(b.mustHave) - Number(a.mustHave) || b.weightPct - a.weightPct || a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
   const missingMustHave = known.filter((r) => r.mustHave && r.found.status === "no").map((r) => ({ key: r.key, label: r.label, quote: r.found.quote ?? "" }));
-  const raw = known.length ? Math.round(100 - lost) : null;
+  // to six places first, so the same sum reached in another order (with a partly shown requirement at the rest's level,
+  // or left out) rounds the same way at a half point
+  const raw = known.length ? Math.round(Number((100 - lost).toFixed(6))) : null;
   const capped = raw !== null && missingMustHave.length > 0 && raw > MISSING_MUST_HAVE_CAP;
   const score = raw === null ? null : Math.min(100, Math.max(0, capped ? MISSING_MUST_HAVE_CAP : raw));
   const band = matchBand(score);

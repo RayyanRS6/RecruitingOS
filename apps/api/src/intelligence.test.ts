@@ -4,7 +4,7 @@ import { and, eq } from "drizzle-orm";
 import type { RolePacket } from "@ros/contracts";
 import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, RESUME_UNREADABLE_TEXT, anonymizeCandidate, buildEscalationContext, exportCandidateData } from "@ros/core";
 import { TRIAGE_READINGS, composeInterviewerBrief } from "@ros/agents";
-import { applications, assessments, auditRecords, candidates, events, screens, withTenant } from "@ros/db";
+import { applications, assessments, candidates, events, screens, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -286,7 +286,14 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     void taylorId;
   });
 
-  it("a reading that disagrees with its own must-have findings holds the screen for a person, with the reason (plan A8)", async () => {
+  /**
+   * Plan A8 held a reading that disagreed with its own must-have findings. Since Wave S7 the résumé reading's overall
+   * and recommendation are worked out in code from its settled findings (`settledOverall` in packages/agents), so the
+   * readings can say "potential" and "screen" all they like: a must-have their own words show is not met makes the
+   * reading Weak, nothing is sent, and a person reviews it. (The A8 check still guards every stored reading and the
+   * screening scorecard: packages/core/src/evidence.test.ts.)
+   */
+  it("a reading whose own finding shows a must-have is not met is Weak, whatever the model said overall, and nothing is sent (plan A8, Wave S7)", async () => {
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: RolePacket } };
     const licence = role.currentPacket.packet.requirements.mustHaves.find((m) => /licen/i.test(m.text))!;
     // said plainly: under the licence rule (15 Oct 2026) only that is a "no"; a lapsed licence would be "not known yet"
@@ -299,19 +306,18 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     expect(a.stage).toBe("triaged");
     expect(await container.db.select().from(screens).where(eq(screens.applicationId, a.id))).toHaveLength(0);
     expect(emailOutbox().filter((m) => m.to === "uma@example.com" && /screening conversation/.test(m.subject))).toHaveLength(0);
+    const [stored] = await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id));
+    expect(stored).toMatchObject({ overall: "weak" });
+    expect((stored?.result as { recommendation?: string }).recommendation).toBe("hold");
     const note = (await notes()).find((n) => n.kind === "application.needs_review" && /Uma Patel/.test(n.title))!;
-    expect(note.title).toBe("Uma Patel needs a closer look");
-    expect(note.body).toContain(`a must-have is not met (${licence.text}): "${lapsed}"`);
-    expect(note.body).toMatch(/No screening invitation was sent\.$/);
-    const flagged = await container.db.select().from(auditRecords).where(eq(auditRecords.action, "assessment.flagged"));
-    expect(flagged.some((r) => (r.target as { id: string } | null)?.id === a.id && (r.details as { held: string }).held === "application.invite_screen")).toBe(true);
-    // the list says the same, read off the same assessment
+    expect(note.title).toBe("Uma Patel needs your review");
+    expect(note.body).toContain("Relevant hygiene work; no licence.");
+    // the list reads the same assessment: it agrees with its findings, and the 'Missing a must-have' filter catches her
+    // on the checked quote (plan A3)
     const row = (await list()).find((r) => r.id === a.id)!;
     expect(row.group).toBe("waiting_on_you");
-    expect(row.stageLabel).toBe(CLOSER_LOOK_LABEL);
-    // and the 'Missing a must-have' filter catches her, on the same checked quote (plan A3)
-    expect(row.evidence).toMatchObject({ needsCloserLook: true, inconsistent: true, lowConfidence: false, hasProvenMiss: true });
-    expect(row.evidence.reason).toContain(`"${lapsed}"`);
+    expect(row.evidence).toMatchObject({ inconsistent: false, lowConfidence: false, hasProvenMiss: true });
+    expect(row.stageLabel).not.toBe(CLOSER_LOOK_LABEL);
   });
 
   it("the answers to the open questions are what a person reads, what an access request exports, and what an anonymization removes", async () => {
