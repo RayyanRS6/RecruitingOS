@@ -1,0 +1,26 @@
+/*
+ * The ITS console's own pieces (redesign spec 3.2-3.4), imported once by app/(app)/admin/layout.tsx: a list of rows
+ * (an icon, one sentence with a quieter second line, one button), used by Overview's "Needs attention" and its cards and
+ * free for any console section that lists rows instead of a table; the money figure; and the System line. Built only
+ * from the design tokens, so both themes and their checked contrast carry over. No motion. console-css.test.ts guards it.
+ */
+.console-list { list-style: none; margin: 0; padding: 0; }
+.console-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line); color: var(--ink); font-size: 15px; }
+.console-row:first-child { border-top: 0; }
+.console-row-icon { flex: none; display: inline-flex; color: var(--ink-3); }
+.console-row-icon.urgent { color: var(--caution); }
+.console-row-icon.clear { color: var(--good); }
+.console-row-text { flex: 1; min-width: 0; display: grid; gap: 2px; overflow-wrap: anywhere; }
+.console-row-sub { color: var(--ink-3); font-size: 13px; }
+.console-row > .btn, .console-amount { flex: none; }
+.console-amount { font-variant-numeric: tabular-nums; }
+.console-figure { margin: 2px 0 0; font: 600 var(--text-2xl)/1.15 var(--display); font-variant-numeric: tabular-nums; }
+.console-more { display: inline-block; margin-top: 10px; font-size: 14px; }
+.console-system { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0; color: var(--ink-2); font-size: 14px; }
+.console-system strong { color: var(--ink); }
+/* A phone: the button drops under the sentence, so the sentence keeps the width. */
+@media (max-width: 600px) {
+  .console-row { flex-wrap: wrap; }
+  .console-row-text { flex-basis: calc(100% - 40px); }
+  .console-row > .btn { margin-left: 32px; }
+}

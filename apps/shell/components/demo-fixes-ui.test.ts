@@ -8,7 +8,8 @@ import { describe, expect, it, vi } from "vitest";
  * What live testing on staging found on the team's pages (13 Oct 2026), as the shell first draws them from answers
  * shaped like the API's: the approval card while the worker catches up (after sending a role back too), Setup's calendar
  * line when calendars are not switched on, the interview approval's meeting link with and without a working calendar,
- * an interview's Link line, and the admin console's alerts, Queue and Business calendar tabs.
+ * and an interview's Link line. The admin console's alerts, Queue and Business calendar are in admin-problems-ui.test.ts
+ * and admin-system-ui.test.ts, and its plan words in admin-customers-ui.test.ts.
  */
 vi.mock("next/navigation", () => ({
   usePathname: () => "/roles/r1",
@@ -23,14 +24,11 @@ const { CatchingUpCard, PacketApprovalCard } = await import("@ros/web/src/pages/
 const { Interviews, noLinkText } = await import("@ros/web/src/pages/Interviews");
 const { CALENDAR_OFF_LINE, Setup } = await import("@ros/web/src/pages/Setup");
 const { CandidatePanel } = await import("@ros/web/src/pages/candidate-panel/CandidatePanel");
-const { dayKey } = await import("@ros/web/src/pages/candidate-panel/helpers");
-const { ACK_FOR_ANOTHER, CalendarAdmin, Failures, Queue, RESOLVED_TOAST, planChangedToast, planLimitsLine, screeningLine } = await import("@ros/web/src/pages/Admin");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
 const owner = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } };
-const admin = { ...owner, user: { ...owner.user, id: "s1", email: "ada@its.test", name: "Ada Admin", platformRole: "platform_admin" }, memberships: [], activeCompanyId: null };
 
 function client(data: Array<[unknown[], unknown]> = [], me: unknown = owner) {
   // A query that failed stays failed while the page is drawn (nothing is fetched on the server).
@@ -38,10 +36,6 @@ function client(data: Array<[unknown[], unknown]> = [], me: unknown = owner) {
   qc.setQueryData(["me"], me);
   qc.setQueryData(["company"], { settings: { verifiedAt: "2026-10-01T00:00:00.000Z" } });
   for (const [key, value] of data) qc.setQueryData(key, value);
-  return qc;
-}
-function failed(qc: QueryClient, queryKey: unknown[]) {
-  qc.getQueryCache().build(qc, { queryKey }).setState({ status: "error", error: new Error("The server did not answer."), fetchStatus: "idle" });
   return qc;
 }
 
@@ -163,58 +157,5 @@ describe("the interview approval's meeting link", () => {
     expect(words).toContain("I'll paste a link");
     expect(words).not.toContain("Meeting link (optional)");
     expect(words).not.toContain("This round is a video call");
-  });
-});
-
-describe("the admin console", () => {
-  const alert = (id: string, kind: string, title: string, details: Record<string, unknown> = {}) => ({ id, kind, severity: "critical", title, body: "Details.", status: "open", companyId: null, target: null, details, createdAt: daysAgo(0) });
-  const failures = (alerts: unknown[]) => render(client([
-    [["admin", "failures"], { failedRuns: [], failedJobs: [], failedAi: [], alerts, pendingDeletions: [] }],
-    [["admin", "suppressions"], []],
-    [["admin", "csp"], { mode: "report-only", reports: [] }],
-  ], admin), createElement(Failures));
-
-  it("offers no Acknowledge on a platform-role alert about the signed-in administrator, and says who acknowledges it", () => {
-    const html = failures([alert("al1", "platform_role.granted", "Platform role granted", { actorId: "s1" }), alert("al2", "secret.delete_failed", "A credential could not be deleted")]);
-    const own = html.slice(html.indexOf("Platform role granted"), html.indexOf("A credential could not be deleted"));
-    expect(text(own)).toContain(ACK_FOR_ANOTHER);
-    expect(own).not.toContain(">Acknowledge</button>");
-    // another alert keeps its button
-    expect(html.slice(html.indexOf("A credential could not be deleted"))).toContain("Acknowledge");
-    // nor a Resolve on one's own platform-role alert
-    expect(own).not.toContain(">Resolve</button>");
-  });
-
-  it("offers Resolve on every alert, open or acknowledged; Acknowledge only while it is open (Wave S2 F1)", () => {
-    const html = failures([alert("al3", "worker.stale", "The background worker has stopped polling"), { ...alert("al4", "queue.stale", "Queued work is not being picked up"), status: "acknowledged" }]);
-    const open = html.slice(html.indexOf("The background worker has stopped polling"), html.indexOf("Queued work is not being picked up"));
-    const seen = html.slice(html.indexOf("Queued work is not being picked up"));
-    expect(open).toContain(">Acknowledge</button>");
-    expect(open).toContain(">Resolve</button>");
-    expect(seen).not.toContain(">Acknowledge</button>");
-    expect(seen).toContain(">Resolve</button>");
-    expect(RESOLVED_TOAST).toEqual({ title: "Resolved.", detail: "If it happens again, a new alert is raised." });
-  });
-
-  it("says what a plan includes and when the screening chats start again", () => {
-    expect(planLimitsLine({ active_roles: 3, text_screens: 300, voice_minutes: 0, sourcing_contacts: 0, recruiter_asks: 10, seats: null })).toBe("3 active jobs · 300 screening chats a month · 10 recruiter requests a month · unlimited seats");
-    expect(screeningLine({ used: 25, limit: 25, resetsAt: "2026-10-30T12:00:00.000Z" })).toBe("25 of 25 screening chats this month, resets October 30");
-    expect(screeningLine({ used: 4, limit: null })).toBe("4 screening chats this month");
-    expect(planChangedToast("Bright Dental", "Design Partner")).toEqual({ title: "Bright Dental is on Design Partner now.", detail: "The new limits apply at once. This month's usage stays; the reset date does not move." });
-  });
-
-  it("shows an error with a way to try again when the Queue or the Business calendar cannot load", () => {
-    const queue = render(failed(client([], admin), ["admin", "queue"]), createElement(Queue));
-    expect(text(queue)).toContain("Could not load the queue.");
-    expect(queue).not.toContain('aria-busy="true"');
-    const calendar = render(failed(client([], admin), ["admin", "calendar"]), createElement(CalendarAdmin));
-    expect(text(calendar)).toContain("Could not load the business calendar.");
-    expect(calendar).not.toContain('aria-busy="true"');
-  });
-
-  it("starts a new calendar version on today's date in the administrator's own calendar", () => {
-    const dto = { current: { timeZone: "America/Los_Angeles", hours: {}, holidays: [], closures: [], coverageChanges: [] }, version: null, effectiveFrom: null, description: "Monday to Friday, 9 to 5", upcoming: [], versions: [], preview: [] };
-    const html = render(client([[["admin", "calendar"], dto]], admin), createElement(CalendarAdmin));
-    expect(html).toContain(`<input id="cal-eff" class="input" type="date" value="${dayKey(new Date())}"/>`);
   });
 });

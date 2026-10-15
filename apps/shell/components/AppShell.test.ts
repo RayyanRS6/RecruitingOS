@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import * as React from "react";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -22,7 +23,7 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 
 // The shell's tsconfig leaves JSX to Next.js ("preserve"), so under the test runner it compiles to React.createElement.
 (globalThis as { React?: typeof React }).React = React;
-const { AppShell } = await import("./AppShell");
+const { AppShell, RAIL_COLLAPSED_KEY, railCollapsedIn, rememberRailCollapsed } = await import("./AppShell");
 
 const company = { companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental" };
 function meAs(role: string | null, extra: Partial<Me> = {}): Me {
@@ -84,7 +85,7 @@ describe("the rail", () => {
     expect(html).toContain("All jobs");
     // the plain words, in this order; the routes keep their names
     const order = [["Home", "/"], ["Jobs", "/roles"], ["Candidates", "/talent"], ["Interviews", "/interviews"], ["Settings", "/setup"]];
-    for (const [link, href] of order) expect(html, link).toMatch(new RegExp(`<a href="${href}"[^>]*>(<svg[^]*?</svg>)${link}</a>`));
+    for (const [link, href] of order) expect(html, link).toMatch(new RegExp(`<a href="${href}"[^>]*>(<svg[\\s\\S]*?</svg>)${link}</a>`));
     const at = order.map(([link]) => html.indexOf(`</svg>${link}</a>`));
     expect(at).toEqual([...at].sort((a, b) => a - b));
     for (const old of ["Today", "Talent", "Setup", "All roles"]) expect(html, old).not.toContain(`>${old}<`);
@@ -185,5 +186,65 @@ describe("the rail", () => {
     expect(html).not.toContain('aria-label="Start a hire"');
     expect(html).toContain('href="/recruiter/queue"');
     expect(html).toContain(">Sign out</button>");
+    // an ITS recruiter has the queue, never the console or its sections
+    expect(html).not.toContain('href="/admin');
+    expect(html).not.toContain("Console sections");
+  });
+
+  it("lists the console's five sections under Console for a platform administrator, marking the one open", () => {
+    const admin = meAs(null, { user: { id: "a1", email: "ada@identifiedtalent.com", name: "Ada Admin", platformRole: "platform_admin" } });
+    nav.path = "/admin";
+    let html = render(admin);
+    expect(html).toContain('<ul class="rail-sub console-sub" aria-label="Console sections">');
+    const links = [["Overview", "/admin"], ["Customers", "/admin/customers"], ["Privacy requests", "/admin/privacy"], ["Problems", "/admin/problems"], ["System and settings", "/admin/system"]];
+    // each with an icon, so the folded rail still shows all five (spec 3.6: every section one click away)
+    for (const [label, href] of links) expect(html, label).toMatch(new RegExp(`<a href="${href}"[^>]*><svg[^>]*>[\\s\\S]*?</svg><span class="rail-sub-title">${label}</span></a>`));
+    const at = links.map(([label]) => html.indexOf(`>${label}</span>`));
+    expect(at).toEqual([...at].sort((a, b) => a - b));
+    // on /admin: Console and Overview are marked, no other section
+    expect(html).toMatch(/<a href="\/admin" class="active" aria-current="page"><svg[\s\S]*?<\/svg>Console<\/a>/);
+    expect(html).toMatch(/<a href="\/admin" class="active" aria-current="page"><svg[^>]*>[\s\S]*?<\/svg><span class="rail-sub-title">Overview<\/span><\/a>/);
+    expect(html.match(/aria-current="page"/g)).toHaveLength(2);
+    // on a section: Console stays marked, the section is marked, Overview is not (it matches /admin only)
+    nav.path = "/admin/problems";
+    html = render(admin);
+    expect(html).toMatch(/<a href="\/admin" class="active" aria-current="page"><svg[\s\S]*?<\/svg>Console<\/a>/);
+    expect(html).toMatch(/<a href="\/admin\/problems" class="active" aria-current="page"><svg[^>]*>[\s\S]*?<\/svg><span class="rail-sub-title">Problems<\/span><\/a>/);
+    expect(html).toMatch(/<a href="\/admin"><svg[^>]*>[\s\S]*?<\/svg><span class="rail-sub-title">Overview<\/span><\/a>/);
+    expect(html.match(/aria-current="page"/g)).toHaveLength(2);
+    // a company member who is not a platform administrator never sees them
+    expect(render(meAs("owner"))).not.toContain("Console sections");
+  });
+
+  it("offers a button that folds the rail to icons, except on a job's pages where it is folded already (F3)", () => {
+    nav.path = "/roles";
+    const html = render(meAs("owner"), { roles });
+    // drawn open first (the server keeps no choice), with the button to fold it
+    // one name, and whether it is on is said by aria-pressed
+    expect(html).toMatch(/<button type="button" class="icon-btn rail-collapse" aria-label="Fold the menu to icons" aria-pressed="false" title="Fold the menu to icons">/);
+    expect(html).not.toContain("data-collapsed");
+    // folded, the console's sections stay in the rail as icons (they are hidden in the folded rail otherwise)
+    const css = readFileSync(new URL("./app-shell.css", import.meta.url), "utf8");
+    expect(css).toContain('.shell[data-rail="compact"] .rail .console-sub { display: grid;');
+    nav.path = "/roles/r-open/talent";
+    expect(render(meAs("owner"), { roles })).not.toContain("rail-collapse");
+  });
+
+  it("remembers the folded rail on this browser, and never fails where storage cannot be read or written", () => {
+    const store = new Map<string, string>();
+    const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) } as unknown as Storage;
+    expect(railCollapsedIn(storage)).toBe(false);
+    rememberRailCollapsed(storage, true);
+    expect(store.get(RAIL_COLLAPSED_KEY)).toBe("1");
+    expect(railCollapsedIn(storage)).toBe(true);
+    rememberRailCollapsed(storage, false);
+    expect(store.has(RAIL_COLLAPSED_KEY)).toBe(false);
+    expect(railCollapsedIn(storage)).toBe(false);
+    // blocked site data: reading says "open", writing does nothing, neither throws
+    const blocked = { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); }, removeItem: () => { throw new Error("blocked"); } } as unknown as Storage;
+    expect(railCollapsedIn(blocked)).toBe(false);
+    expect(() => rememberRailCollapsed(blocked, true)).not.toThrow();
+    expect(railCollapsedIn(null)).toBe(false);
+    expect(() => rememberRailCollapsed(null, true)).not.toThrow();
   });
 });

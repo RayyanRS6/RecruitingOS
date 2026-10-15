@@ -134,10 +134,55 @@ describe("the Candidates page", () => {
     // the stage button on the row, and the match score's badge (founder decision B2)
     expect(html).toContain('aria-label="Stage: New. Move to another stage"');
     expect(html).toMatch(/<span class="score-slot"><span class="score good sm" title="Match score 91 out of 100">/);
-    // the list sorts by the score too, and the strip above it offers to sort the pool onto the board
-    expect(html).toContain('<option value="score">Score</option>');
+    // Match and the order are dropdown chips naming the choice in force (Wave S6): the people waiting longest first here
+    expect(html).toContain('class="toggle-chip" aria-haspopup="menu" aria-expanded="false">Match: All matches<svg');
+    expect(html).toContain('class="toggle-chip" aria-haspopup="menu" aria-expanded="false">Sort: Waiting longest<svg');
+    expect(html).not.toContain("<select");
+    // the filter in force is a chip that removes it, with Clear all beside it
+    expect(text(html)).toContain("Filters on");
+    expect(html).toContain('<button type="button" class="toggle-chip"><span class="sr-only">Remove the filter: </span>Waiting on you<svg');
+    expect(text(html)).toContain("Clear all");
+    // the strip above the list offers to sort the pool onto the board
     expect(text(html)).toContain("Sort the pool");
     expect(html).toMatch(/<button type="button" class="on" aria-pressed="true">List<\/button>/);
+  });
+
+  it("sorts by the score from the address, and switches jobs from a dropdown chip once the page is the browser's", () => {
+    nav.search = "order=score";
+    drawn.byBrowser = true;
+    try {
+      const qc = client([]);
+      qc.setQueryData(["roles"], [
+        { id: "r1", title: "Dental Hygienist", status: "open", openedAt: daysAgo(7), counts: { total: 2, waiting_on_you: 1, not_moving_forward: 1 }, stageCounts: counts.byOwnerStage, needsYou: 1, daysOpen: 7 },
+        { id: "r2", title: "Office Manager", status: "paused", openedAt: daysAgo(9), counts: { total: 0 }, needsYou: 0, daysOpen: 9 },
+      ]);
+      const html = render(qc, createElement(People));
+      expect(html).toContain('aria-expanded="false">Sort: Score<svg');
+      expect(html).toContain('<button type="button" class="btn secondary sm" aria-haspopup="menu" aria-expanded="false">Switch job<svg');
+      expect(html).not.toContain("<select");
+    } finally {
+      drawn.byBrowser = false;
+    }
+  });
+
+  it("shows every filter in force as a chip; filters that leave nobody say so once, with one Clear filters", () => {
+    // a link to the Offer column and to one step (?stage=): nobody is at both
+    nav.search = "ownerStage=offer&stage=rejected";
+    const html = render(client([]), createElement(People));
+    expect(html).toContain('<ul class="own-items" aria-labelledby="talent-filters-on">');
+    expect(html).toContain('<span class="sr-only">Remove the filter: </span>Stage: Offer<svg');
+    expect(html).toMatch(/<span class="sr-only">Remove the filter: <\/span>Only: [^<]+<svg/);
+    expect(text(html)).toContain("Clear all");
+    expect(text(html)).toContain("Nothing matches these filters");
+    expect(text(html).match(/Clear filters/g)).toHaveLength(1);
+    expect(text(html)).not.toContain("Show everyone");
+    // an empty view with closer words of its own keeps them, with the same one way out
+    nav.search = "";
+    const qc = client([]);
+    qc.setQueryData(["applications", "r1"], { applications: [luis], counts });
+    const none = text(render(qc, createElement(People)));
+    expect(none).toContain("Nobody is waiting on you");
+    expect(none.match(/Clear filters/g)).toHaveLength(1);
   });
 
   it("shows 'No score yet' on a row nothing could be judged for", () => {
@@ -335,7 +380,9 @@ describe("the Jobs page (Wave S1; Wave S2: the Kanvis dashboard)", () => {
     expect(text(all)).toMatch(/All 3 Live 1 Drafts 2 Paused 0 Closed 0/);
     expect(all).toContain('aria-pressed="true">All <span class="count">3</span>');
     expect(all).toContain('aria-label="Search jobs by title"');
-    expect(text(all)).toContain("Recent activity Newest first Oldest first Title A to Z");
+    // the order is a dropdown chip naming the one in force (Wave S6); its list, with the tick, opens on a press
+    expect(all).toContain('class="toggle-chip" aria-haspopup="menu" aria-expanded="false">Sort: Recent activity<svg');
+    expect(all).not.toContain("<select");
     // recent activity first: the live job, then the one waiting for approval, then the draft
     expect(all.indexOf("Dental Hygienist")).toBeLessThan(all.indexOf("Office Manager"));
     expect(all.indexOf("Office Manager")).toBeLessThan(all.indexOf("Assistant"));
@@ -358,7 +405,7 @@ describe("the Jobs page (Wave S1; Wave S2: the Kanvis dashboard)", () => {
     nav.search = "sort=title";
     const az = render(jobsClient(), createElement(Roles));
     expect(az.indexOf("Assistant")).toBeLessThan(az.indexOf("Dental Hygienist"));
-    expect(az).toMatch(/<option value="title" selected="">Title A to Z<\/option>/);
+    expect(az).toContain('aria-expanded="false">Sort: Title A to Z<svg');
     nav.search = "";
   });
 

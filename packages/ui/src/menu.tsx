@@ -29,11 +29,43 @@ export function menuSide(preferred: "start" | "end", button: { left: number; rig
   return past(preferred) > past(other) ? other : preferred;
 }
 
+/** The space between an open menu and its button. */
+const GAP = 6;
+
+/**
+ * Where a menu opens when it is placed against the window (position: fixed) instead of under its button in the page: a
+ * menu inside a table's scrolling box, which would otherwise cut off whatever runs past the box's edge (Wave S6). It
+ * opens below the button on `side`, kept inside the window; above the button when it does not fit below and there is
+ * more room above.
+ */
+export function menuFixedAt(side: "start" | "end", button: { top: number; bottom: number; left: number; right: number }, size: { width: number; height: number }, win: { width: number; height: number }): { top: number; left: number } {
+  const wanted = side === "start" ? button.left : button.right - size.width;
+  const x = Math.max(EDGE, Math.min(wanted, win.width - EDGE - size.width));
+  const below = button.bottom + GAP;
+  const roomBelow = win.height - EDGE - below;
+  const roomAbove = button.top - GAP - EDGE;
+  const y = size.height > roomBelow && roomAbove > roomBelow ? Math.max(EDGE, button.top - GAP - size.height) : below;
+  return { top: y, left: x };
+}
+
+/**
+ * The small mark before an item's words: a tick on the current choice of a one-of-many menu (so the current sort or
+ * job can be seen, not only heard as "checked"), else the item's coloured dot or its icon, else an empty slot.
+ */
+export function MenuLead(props: { item: MenuItem }) {
+  const { item } = props;
+  if (item.current) return <Icon name="check" size={16} />;
+  if (item.tone) return <span className={cx("dot", item.tone)} aria-hidden="true" />;
+  if (item.icon) return <Icon name={item.icon} size={16} />;
+  return <span aria-hidden="true" />;
+}
+
 /**
  * A button that opens a list of choices (docs/07), such as "Move to stage". Keyboard: Enter, Space or the down arrow
  * opens it on the current choice; the arrows, Home and End move; a letter jumps to the next choice starting with it;
  * Enter chooses; Escape closes and returns to the button; Tab closes and moves on. A click outside closes it too.
- * When any item has `current` set, the items act as a one-of-many choice and the current one is announced as checked.
+ * When any item has `current` set, the items act as a one-of-many choice and the current one is announced as checked
+ * and shows a tick. Inside a table's scrolling box the open menu is placed against the window, so the box never cuts it.
  */
 export function Menu(props: { label: ReactNode; items: MenuItem[]; onSelect: (id: string) => void; heading?: string; ariaLabel?: string; title?: string; buttonClassName?: string; align?: "start" | "end"; disabled?: boolean; currentLabel?: string }) {
   const [open, setOpen] = useState(false);
@@ -47,15 +79,42 @@ export function Menu(props: { label: ReactNode; items: MenuItem[]; onSelect: (id
   const oneOfMany = props.items.some((i) => i.current !== undefined);
   const preferred = props.align ?? "start";
   const [side, setSide] = useState<"start" | "end">(preferred);
+  const [fixedAt, setFixedAt] = useState<{ top: number; left: number } | null>(null);
 
   // The menu opens on its preferred side unless that would run past the edge of the window where the other side would
-  // not (a button that wrapped to the left of a phone screen): nothing past the edge can be scrolled to.
+  // not (a button that wrapped to the left of a phone screen): nothing past the edge can be scrolled to. Inside a
+  // table's scrolling box (.table-wrap scrolls sideways, which clips everything past its edges) the menu is placed
+  // against the window instead, and follows its button while the page or the box scrolls.
   useLayoutEffect(() => {
     if (!open) return;
-    const at = wrap.current?.getBoundingClientRect();
-    const width = panel.current?.offsetWidth ?? 0;
-    if (!at || !width) return setSide(preferred);
-    setSide(menuSide(preferred, { left: at.left, right: at.right }, width, document.documentElement.clientWidth || window.innerWidth));
+    const scroller = wrap.current?.closest(".table-wrap") ?? null;
+    const place = () => {
+      const at = wrap.current?.getBoundingClientRect();
+      const width = panel.current?.offsetWidth ?? 0;
+      if (!at || !width) {
+        setSide(preferred);
+        setFixedAt(null);
+        return;
+      }
+      // A button scrolled out of its table's box takes its menu with it, so the menu never floats over other rows.
+      const box = scroller?.getBoundingClientRect();
+      if (box && (at.bottom <= box.top || at.top >= box.bottom || at.right <= box.left || at.left >= box.right)) {
+        setOpen(false);
+        return;
+      }
+      const win = { width: document.documentElement.clientWidth || window.innerWidth, height: document.documentElement.clientHeight || window.innerHeight };
+      const chosen = menuSide(preferred, { left: at.left, right: at.right }, width, win.width);
+      setSide(chosen);
+      setFixedAt(scroller ? menuFixedAt(chosen, at, { width, height: panel.current?.offsetHeight ?? 0 }, win) : null);
+    };
+    place();
+    if (!scroller) return;
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
   }, [open, preferred]);
   useEffect(() => {
     if (open && active >= 0) items.current[active]?.focus();
@@ -129,7 +188,7 @@ export function Menu(props: { label: ReactNode; items: MenuItem[]; onSelect: (id
         <Icon name="chevron-down" size={14} />
       </button>
       {open ? (
-        <div ref={panel} className="menu" data-align={side}>
+        <div ref={panel} className="menu" data-align={side} style={fixedAt ? { position: "fixed", top: fixedAt.top, left: fixedAt.left, right: "auto" } : undefined}>
           {props.heading ? (
             <div className="menu-heading" aria-hidden="true">
               {props.heading}
@@ -150,7 +209,7 @@ export function Menu(props: { label: ReactNode; items: MenuItem[]; onSelect: (id
                 onClick={() => choose(item)}
                 onKeyDown={(e) => onItemKey(e, i)}
               >
-                {item.tone ? <span className={cx("dot", item.tone)} aria-hidden="true" /> : item.icon ? <Icon name={item.icon} size={16} /> : <span aria-hidden="true" />}
+                <MenuLead item={item} />
                 <span>{item.label}</span>
                 {item.current ? <span className="menu-hint">{props.currentLabel ?? "Current"}</span> : item.hint ? <span className="menu-hint">{item.hint}</span> : <span />}
                 {item.disabled && item.reason ? <span className="menu-reason">{item.reason}</span> : null}

@@ -169,8 +169,7 @@ describe("reopening and the recruiter-request allowance", () => {
     expect(recruiterAsksLine({ used: 4, limit: null, over: false })).toBe("Recruiter requests: 4");
     expect(recruiterAsksLine(undefined)).toBe("Recruiter requests: none recorded");
     expect(RECRUITER_ASKS_OVER_CHIP).toBe("Past its recruiter requests: talk about billing");
-    const admin = readFileSync(new URL("../../apps/web/src/pages/Admin.tsx", import.meta.url), "utf8");
-    expect(admin).toContain("c.recruiterAsks?.over ? <Chip tone=\"caution\">{RECRUITER_ASKS_OVER_CHIP}</Chip>");
+    // the chip on the console's customers is checked in apps/shell/components/admin-customers-ui.test.ts
   });
 
   it("a card's request to ITS opens the form filled in, so the access shows before anything is sent", () => {

@@ -12,6 +12,13 @@ async function noHorizontalOverflow(page: Page, name: string) {
   expect(scrollWidth, `${name} scrolls sideways on this viewport`).toBeLessThanOrEqual(innerWidth + 1);
 }
 
+/** No table scrolls sideways inside its own box either (redesign spec 3.8: five columns at most, fitting 1280 px and up). */
+async function noTableOverflow(page: Page, name: string) {
+  if ((page.viewportSize()?.width ?? 0) < 1280) return; // on a phone a table may scroll inside its box; the page may not
+  const wide = await page.evaluate(() => [...document.querySelectorAll(".table-wrap")].filter((t) => t.scrollWidth > t.clientWidth + 1).length);
+  expect(wide, `${name}: a table scrolls sideways`).toBe(0);
+}
+
 test.describe("route inventory", () => {
   test("every application page and every candidate page answers with one content-security policy and a nonce", async ({ page, baseURL }) => {
     // Report-only by default, blocking with CSP_MODE=enforce (a deployed address may run either): one of the two headers, never both.
@@ -137,15 +144,47 @@ test.describe("route inventory", () => {
     await expect(page.getByRole("heading", { name: "Recruiter queue" })).toBeVisible({ timeout: 30_000 });
     await expectAccessible(page, "recruiter queue");
     await noHorizontalOverflow(page, "recruiter queue");
+    // The console (Wave S6): /admin lands on Overview; the rail lists the five sections under Console and marks the one
+    // open; each section's parts are tabs. Every section and part passes axe and never scrolls sideways, the page or a table.
     await gotoSettled(page, "/admin");
-    await expect(page.getByRole("heading", { name: "Admin console" })).toBeVisible({ timeout: 30_000 });
-    await expectAccessible(page, "admin console");
-    await noHorizontalOverflow(page, "admin console");
-    for (const tab of ["Failures", "Business calendar", "Administrators", "Outcomes", "Queue"]) {
-      await page.getByRole("tab", { name: tab }).click();
-      await expectAccessible(page, `admin ${tab}`);
-      await noHorizontalOverflow(page, `admin ${tab}`);
+    await expect(page.getByRole("heading", { level: 1 })).toContainText(/Good (morning|afternoon|evening)/, { timeout: 30_000 });
+    await expect(page.getByRole("heading", { name: /Needs attention/ })).toBeVisible({ timeout: 30_000 });
+    await expectAccessible(page, "console overview");
+    await noHorizontalOverflow(page, "console overview");
+    await noTableOverflow(page, "console overview");
+    const rail = page.getByRole("navigation", { name: "Main" });
+    const wide = (page.viewportSize()?.width ?? 0) > 900;
+    const sections: Array<[string, string, string[]]> = [
+      ["Overview", "/admin", []],
+      ["Customers", "/admin/customers", ["All customers", "Hiring outcomes"]],
+      ["Privacy requests", "/admin/privacy", ["Open", "Closed"]],
+      ["Problems", "/admin/problems", ["Alerts", "Failed work", "Email", "Security reports"]],
+      ["System and settings", "/admin/system", ["Costs", "Workflows", "AI runs", "Queue health", "Business calendar", "Administrators"]],
+    ];
+    for (const [label, path, parts] of sections) {
+      // on a phone the sections sit in the rail's Menu (still open after a link to the page already shown, Overview on /admin)
+      if (!wide) {
+        const menu = rail.getByRole("button", { name: "Menu" });
+        if ((await menu.getAttribute("aria-expanded")) !== "true") await menu.click();
+      }
+      await rail.getByRole("list", { name: "Console sections" }).getByRole("link", { name: label, exact: true }).click();
+      await expect(page).toHaveURL(new RegExp(`${path}(\\?|$)`), { timeout: 30_000 });
+      // (on a phone the Menu closes once the link is followed, so the mark is read from the closed menu)
+      await expect(rail.getByRole("list", { name: "Console sections", includeHidden: true }).getByRole("link", { name: label, exact: true, includeHidden: true })).toHaveAttribute("aria-current", "page");
+      if (label !== "Overview") await expect(page.getByRole("heading", { level: 1, name: label })).toBeVisible({ timeout: 30_000 });
+      await expectAccessible(page, `console ${label}`);
+      await noHorizontalOverflow(page, `console ${label}`);
+      await noTableOverflow(page, `console ${label}`);
+      for (const part of parts) {
+        await page.getByRole("tab", { name: new RegExp(`^${part}\\b`) }).click();
+        await expectAccessible(page, `console ${label} › ${part}`);
+        await noHorizontalOverflow(page, `console ${label} › ${part}`);
+        await noTableOverflow(page, `console ${label} › ${part}`);
+      }
     }
+    // a part is in the address: a reload lands on it
+    await gotoSettled(page, "/admin/system?view=calendar");
+    await expect(page.getByRole("tab", { name: /^Business calendar\b/ })).toHaveAttribute("aria-selected", "true", { timeout: 30_000 });
     await page.goto("/setup");
     await expect(page).toHaveURL(/recruiter\/queue/); // no company: owner routes are not for staff
   });

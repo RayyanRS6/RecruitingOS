@@ -67,6 +67,19 @@ describe("candidate pages: design tokens and fonts", () => {
     expect(pageCss).toContain("@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }");
   });
 
+  // Wave S6 (15 October 2026): in dark mode on Windows a dropdown's open list showed near-white words on a light list.
+  it("colours every dropdown's open list with the same rule as the application, and leaves the native arrow alone", () => {
+    const rule = "select, option, optgroup { background-color: var(--surface); color: var(--ink); }";
+    expect(uiCss).toContain(rule);
+    expect(pageCss).toContain(rule);
+    // the page's own select rule (the closed control) still sets the same two colours
+    expect(pageCss).toMatch(/textarea, select \{[^}]*background: var\(--surface\); color: var\(--ink\);/);
+    expect(pageCss).not.toMatch(/appearance\s*:\s*none/);
+    // the dark list reads: the page turns color-scheme with its tokens
+    expect(pageCss).toMatch(/:root \{[^}]*color-scheme: light;/);
+    expect(pageCss.slice(pageCss.indexOf("@media (prefers-color-scheme: dark)"))).toMatch(/:root \{[^}]*color-scheme: dark;/);
+  });
+
   it("declares IBM Plex Sans and Bricolage Grotesque from this deployment's own /fonts/ folder, and the policy still names no outside host", () => {
     for (const [family, weight] of [["IBM Plex Sans", 400], ["IBM Plex Sans", 600], ["Bricolage Grotesque", 700]] as const) {
       const faces = [...CSS.matchAll(/@font-face \{([^}]*)\}/g)].map((m) => m[1]).filter((f) => f.includes(`font-family: "${family}"`) && f.includes(`font-weight: ${weight};`));

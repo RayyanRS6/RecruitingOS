@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { getMe, isAdmin } from "../../../lib/session";
+import "../../../components/console.css";
 
 /** Platform administrators only; every read inside is audited by the API with a reason. */
 export default async function AdminLayout({ children }: { children: ReactNode }) {

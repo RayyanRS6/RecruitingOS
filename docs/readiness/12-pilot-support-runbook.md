@@ -13,7 +13,7 @@ Status: **Built with mocks** (the product surfaces exist); the human process sta
 
 ## Daily (business days)
 
-1. Open the admin console: Failures tab (operator alerts: credential deletions, suppressions, spam complaints), Queue health, Privacy requests (due dates).
+1. Open the console (`/admin`): the Overview's Needs attention lists everything open. Then Console › Problems › Alerts / Failed work / Email / Security reports (operator alerts, credential deletions, suppressions and spam complaints), Console › System and settings › Queue health, Console › Privacy requests (due dates).
 2. Recruiter queue: accept what is due; every acceptance opens scoped access that ends on resolution.
 3. Check the ITS queue mailbox for escalations that arrived by email.
 

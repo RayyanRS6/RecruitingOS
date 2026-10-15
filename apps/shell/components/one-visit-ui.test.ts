@@ -30,7 +30,7 @@ const { CandidatePanel } = await import("@ros/web/src/pages/candidate-panel/Cand
 const { ScreeningCard } = await import("@ros/web/src/pages/RoleReport");
 const { RoleApplyMode } = await import("@ros/web/src/components/ApplyMode");
 const { Home } = await import("@ros/web/src/pages/Home");
-const { Admin } = await import("@ros/web/src/pages/Admin");
+const { CustomersSection } = await import("@ros/web/src/pages/admin/customers");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
@@ -204,16 +204,17 @@ describe("the role report and the ITS controls", () => {
 
   it("shows ITS who is running low, and how each company's people apply", () => {
     const qc = client({ ...itsRecruiter, user: { ...itsRecruiter.user, platformRole: "platform_admin" }, staffAccess: null });
-    qc.setQueryData(["admin", "customers"], [{ id: "co1", name: "Bright Dental", slug: "bright", vertical: "dental", sizeBand: "20-49", planKey: "starter", status: "active", roles: 1, applications: 3, aiCostUsd: 0, lastActivityAt: daysAgo(0), escalations: 0, createdAt: daysAgo(30), settings: {}, verifiedAt: daysAgo(29), verifiedBy: null, heldMessages: 0, jobBoardsConfirmedAt: null, applyFlowDefault: "form_then_screen" }]);
+    qc.setQueryData(["admin", "customers"], [{ id: "co1", name: "Bright Dental", slug: "bright", vertical: "dental", sizeBand: "20-49", planKey: "starter", status: "active", roles: 1, applications: 3, aiCostUsd: 0, lastActivityAt: daysAgo(0), escalations: 0, createdAt: daysAgo(30), settings: {}, verifiedAt: daysAgo(29), verifiedBy: null, heldMessages: 0, jobBoardsConfirmedAt: null, applyFlowDefault: "form_then_screen", screeningConversations: { used: 122, limit: 150 } }]);
     qc.setQueryData(["admin", "alerts"], [{ id: "al1", kind: "billing.screens_warning", severity: "info", title: "", body: "", status: "open", companyId: "co1", target: null, details: { used: 122, limit: 150 }, createdAt: daysAgo(1) }]);
-    const words = text(render(qc, createElement(Admin)));
+    // the Customers section under its "Running low" pill, with the company's drawer open on its Overview (Wave S6)
+    nav.search = "show=low&open=co1";
+    const words = text(render(qc, createElement(CustomersSection, { view: null, onView: () => undefined })));
+    nav.search = "";
     expect(words).toContain("Screening chats running low");
     expect(words).toContain("Bright Dental : 80% of screening chats used (122 of 150), since");
-    // and on the company's row, beside its plan
-    expect(words).toContain("starter · active 80% of screening chats used (122 of 150)");
-    // the Plan control sits with the plan (Wave S2 F1)
-    expect(words).toContain("(122 of 150) Change plan");
-    expect(words).toContain("How people apply");
-    expect(words).toContain("Form now, conversation later Change");
+    // and on the drawer's Overview, beside its plan and this month's chats
+    expect(words).toContain("Starter · Active Change plan 122 of 150 screening chats this month 80% of screening chats used (122 of 150)");
+    // how the company's people apply, with the way to change it on its own tab
+    expect(words).toContain("How people apply Form now, conversation later Change");
   });
 });

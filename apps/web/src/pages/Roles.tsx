@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "../nav";
-import { Alert, Button, EmptyState, ErrorState, Icon, PageHeader, Pill, Skeleton } from "@ros/ui";
+import { Alert, Button, EmptyState, ErrorState, Icon, Menu, PageHeader, Pill, Skeleton } from "@ros/ui";
 import { api, type IntakeSessionSummary, type Me, type RoleSummary } from "../api/client";
 import { activeCompanyOf, jobHref } from "../rail";
 import { canSeeTalent, canShareJob, canStartHire } from "../roles";
@@ -19,7 +19,7 @@ import { useStartDraft } from "./new-role/use-start-draft";
 
 /**
  * Jobs (Wave S2: the Kanvis dashboard). Status chips with counts (All, Live, Drafts, Paused, Closed), a search by title
- * and four orders, all kept in the address (?status=&sort=&q=) so a link opens the same view. One row per job with
+ * and four orders (a dropdown chip with the current one ticked, Wave S6), all kept in the address (?status=&sort=&q=) so a link opens the same view. One row per job with
  * small badges (how many to review, how many new, a draft's age, "Not live", "No applicants yet"). A row opens the
  * job's candidates once it has gone live, otherwise the job itself; the other view is one small link away, and a live
  * job offers "Post on LinkedIn" (the Share tab's LinkedIn card) once ITS has checked the company. The jobs still being
@@ -107,9 +107,16 @@ export function Roles() {
             ))}
           </fieldset>
           <input className="input talent-search" type="search" value={view.q} onChange={(e) => setView({ q: e.target.value })} placeholder="Search by title" maxLength={200} aria-label="Search jobs by title" />
-          <select className="select" aria-label="Sort jobs" value={view.sort} onChange={(e) => setView({ sort: e.target.value as JobSort })}>
-            {JOB_SORTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
-          </select>
+          {/* The order as a dropdown chip (Wave S6): the current order is written on it and ticked in its list. */}
+          <Menu
+            label={`Sort: ${JOB_SORTS.find((s) => s.id === view.sort)?.label ?? JOB_SORTS[0].label}`}
+            heading="Sort jobs by"
+            buttonClassName="toggle-chip"
+            currentLabel="Now"
+            align="end"
+            items={JOB_SORTS.map((s) => ({ id: s.id, label: s.label, current: s.id === view.sort }))}
+            onSelect={(id) => setView({ sort: id as JobSort })}
+          />
         </div>
       ) : null}
       {!isClient || roles.isLoading ? <Skeleton lines={4} /> : roles.error || !list ? <ErrorState message="Could not load your jobs." onRetry={() => roles.refetch()} /> : list.length === 0 ? (
