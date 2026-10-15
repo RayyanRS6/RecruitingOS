@@ -1,8 +1,49 @@
-# Phase Five design: implementation plan (DRAFT)
+# Phase Five design: implementation plan (updated 15 October 2026)
 
-> **Draft. Parts that depend on decisions D-01..D-05 show each option's design; nothing decision-dependent will be built until the founder answers.**
+> **Updated 15 October 2026.** D-01 to D-05 are answered, and Waves S1 to S8 built most of this plan. Read **Progress** just below first: what is built, and what is left, in order. The rest is the 14 October plan, with a short **Status** line added where something changed.
 
-*Prepared 14 October 2026 on branch `kanvis-reaudit` (the same code as `origin/main` at `dafb730`). For Nadine (founder), Paul, the ITS team, and the engineers (or Claude Code) who will build it. Nothing here has been built. The repository was only read; the test suite was not re-run for this document.*
+*Prepared 14 October 2026 on branch `kanvis-reaudit` (the same code as `origin/main` at `dafb730`). For Nadine (founder), Paul, the ITS team, and the engineers (or Claude Code) who will build it. When this was written, nothing here had been built. The repository was only read; the test suite was not re-run for this document.*
+
+*Updated 15 October 2026 on branch `docs-refresh` (`main` at `c990949` plus the first two commits of PR #45), from git history, the code and the pull request notes. No tests were re-run for this update.*
+
+---
+
+## Progress (15 October 2026)
+
+**In plain words.** You handed the first batch of decisions to Claude on 14 October: D-01 A (revised by you on 15 October), D-02 not now, D-03 A, D-04 C, D-05 not now. Eight waves were built on 14 and 15 October. None needed a database migration.
+
+| Wave | Pull request | Status | What users get |
+|---|---|---|---|
+| S1 | #39 | Merged 15 Oct | Simpler staff screens. The menu is Home, Jobs, Candidates, Interviews, Settings. A job opens on its candidates, and the candidate panel leads with the score and a one-line verdict. Every decline screen says the standard message goes by itself after 5 working days (D-03 A). |
+| S2 | #39 | Merged 15 Oct | A Kanvis-like Jobs list, a ten-step quick start and a LinkedIn post to copy. Fixes: allowances reset monthly, ITS changes plans in the console, alerts can be resolved, scheduling recovers, deleting a candidate also deletes their AI data. The AI scores résumés without the name, contact details or earlier applications (D-04 C). |
+| S3 | #39 | Merged 15 Oct | The quick start suggests must-haves and questions for any job. Deletion also clears the workflow copies. The fairness tests check exactly what the scoring sees. |
+| S4 | #39 | Merged 15 Oct | Interviewers and one-candidate ITS grants see only their own jobs and candidates. HR cannot sign out an owner or admin. Owners and admins get a "Sign out everywhere" button. |
+| S5 | #42 | Merged 15 Oct | Steadier, fairer scoring. Short AI or email outages lose no work, and ITS hears of every request. Candidates get "Get a new link". Teams get a company switcher, "Leave this company" (L-10) and a second approver for flagged wording (L-01). Interviews got polish, and "same round again" comes first after our interviewer's no-show (L-12). |
+| S6 | #43 | Merged 15 Oct | The ITS console rebuilt as five plain pages. Dropdowns are readable in dark mode. Sort and filter menus. The staff menu folds to icons. |
+| S7 | #44 | Merged 15 Oct | The Kanvis-style application. The résumé fills the form. Then come the company's own questions, a chat with a counter, and Review & send. Afterwards a record shows the match score with its breakdown (ITS switch, on by default). |
+| S8 | #45 | In review, merging 15 Oct | Chats by text or from an emailed link ask the company's written questions. A returning candidate can keep facts from earlier chats at that company with tick boxes. The same pull request also adds a light/dark theme button beside Sign out. |
+
+Side pull requests, both merged 15 Oct: #40 (the ITS queue says who raised each request and why) and #41 (`railway.json` removed; the worker's settings live in the Railway dashboard).
+
+**Checks.** After S8's code: 249 test files, 2,849 passed, 6 skipped, 0 failed. TypeScript is clean in 15 projects, and the build passes. 37 browser journeys passed at S7; they were not re-run for S8. The real-model fairness run after S7 (run 38717936154, 15 Oct, $0.42) passed all 11 of its suites (résumé reading and scoring), including bias pairs 4/4 and redaction 2/2. The run after S5 had failed two bias pairs; S7 fixed that. The screening-chat and scorecard suites have run only on the stand-in AI.
+
+### What is left, in order
+
+Items 2 to 4 block real candidates. The rest can follow.
+
+| # | What | What it needs |
+|---|---|---|
+| 1 | Merge PR #45 (S8) and re-run the browser journeys. Then press Deploy on the Railway worker, as for earlier waves | Engineering, then your click |
+| 2 | Real email both ways: a Postmark account, the sender domain and the inbound mail domain. Until then staging uses a fake sender, and no email really goes out | An account you (the client) set up |
+| 3 | A lawyer reviews counsel items 21 and 26 before real candidates in NYC, IL, CA or CO. Also items 1, 10 and 22 to 25, the pay-transparency list, the talent-pool wording and S1's reworded apply tick box. No counsel answers are recorded yet | A lawyer |
+| 4 | The other production switches (F-30): the real malware scanner, the real board-link checker, Google Calendar, error reporting and the enforced content rules. Texting stays off | Accounts you set up, then engineering |
+| 5 | A "never say the private note" line in the chat prompt for emailed and text chats (the code already removes any echo). Then a real-model run of the screening-chat and scorecard tests, which have run only on the stand-in AI; the fairness button runs only the résumé and scoring suites today | Engineering, then a real-model run |
+| 6 | Staging tidy-up: clear the leftover test alerts. On phones, the menu stays open after a link to the same page. The job's Scoring tab still says emailed and text chats ask the screening questions instead of the written ones (`web/pages/role/applicant-questions.ts:29`; S8 changed that) | Engineering |
+| 7 | Candidate links stored hashed and expiring (bug 48, F-20). The sign-out gap across companies (migration 0040, put off as "not now") | Engineering, with a database migration |
+| 8 | Smaller open bugs (each item's Status line in section 11): console screens for break-glass, the staff-access list, signing a person out, adding a suppression and re-queuing a failed job; confirming text-message withdrawals; each company's own business days; emailing non-critical alerts; hardening the extraction prompt and chat turns; keeping fairness results in the repository; type-checking `tests/web`; one person opening many companies by API; wording and bookkeeping | Engineering |
+| 9 | Later decisions not yet made: L-02, L-04 to L-09, L-11, L-13, L-15 and L-17 (the **Still to decide** table in `docs/workflow-decisions.md`) | A decision |
+| 10 | Put off as "not now", can be asked again: D-02, D-05, L-03, L-14, L-16 and migration 0040 | A decision, when you want to revisit |
+| 11 | Kanvis's recruiter side is still waitlist-only, so recruiter behaviour stays INFERRED. CMP-019, CMP-043, CMP-098, CMP-123, CMP-124 and CMP-148 are unverified | Recruiter access to Kanvis |
 
 ---
 
@@ -12,19 +53,19 @@
 
 **What you already decided is not asked again.** Your Kanvis choices of 7 October (B1 to B7, Q2 to Q33), the Cancelled interviews decisions (1A to 4A, 9-10 October), the clean look (10 October), the two-model rule (13 October) and the fairness rules (13 October) are built and merged (PR #26 on 11 October, then PRs #27, #28, #36 to #38). This plan builds on top of them. Where two of your recorded answers pull against each other, this plan says so as a follow-up; D-03 is that kind of follow-up.
 
-**Five open questions (the first batch): four new decisions and one follow-up on answers you already gave (D-03).** Everything else in this plan can be built without waiting for you.
+**Five questions (the first batch): four new decisions and one follow-up on answers you already gave (D-03).** All five were answered on 14 October: you handed them to Claude, who decided. The last column now also says what was decided and built.
 
-| Id | The question, in plain words | Options | Recommended | What waits for your answer |
+| Id | The question, in plain words | Options | Recommended | What waited for your answer, and status (15 Oct) |
 |---|---|---|---|---|
-| **D-01** | Should candidates get accounts and a reusable profile, like on Kanvis? Kanvis is two-sided: candidate accounts, a profile built from a CV by chat, public profiles, an AI "twin", résumé, cover-letter and outreach tools, a job board across companies with match filters, an application tracker. Our candidates have no account: one application per job, a private status link, four simple steps. Your founder context leaves a "broad marketplace" out of scope and asks for a simple status timeline. | **A** keep (no accounts) / **B** adopt Kanvis's candidate side / **C** a middle way without accounts: "apply for another role here with these details" from the private status page (same company only), and one ITS page listing every checked customer's live jobs / **D** configurable per company / **E** other | **A now**, with C's two small pieces as later options | Wave D1 |
-| **D-02** | How do people who did not apply get in: referrals, walk-ins, CVs you already hold, a pile of CVs? Kanvis imports CVs as "Sourced", flags duplicates and sends each a private apply link (read from Kanvis's code and changelog, never seen working). We have no manual add at all. In September you deferred sourcing and talent rediscovery on purpose. A keeps that deferral; C stays inside it, because it handles only people the company already has in hand and nobody is read by the AI before they apply; B partly revisits it, because it reads and scores people who never applied. | **A** keep (no manual add) / **B** Kanvis-style import that creates applications at once and runs the same AI reading and score / **C** the team (owner, hiring manager, HR or an ITS recruiter) uploads CVs or enters a person; the app sends each person an invitation to apply with their details filled in; they become an applicant only when they accept, so consent, the AI notice and the eligibility questions are the same as for everyone / **D** configurable / **E** other | **C** | Wave D2 |
-| **D-03** | Follow-up on two recorded answers that pull against each other. B6 says decisions are always private and telling is a separate later act by a person. Q27 A says an untold declined candidate gets the standard message by itself after 5 working days. As built, under the default setting, every private "not moving forward" (also a batch filed in Review and apply, and role closings) is emailed by itself on day 5, and the decline confirmation, Review and apply, the eligibility notices and the hire sheet do not say so (a confirmed bug, 19 and 82; the role-closing toast and the board's filing note already do). On 7 October you chose Q27 A with B ("never send anything automatically") on the table, so A stands unless you want to change it; what is new is the batch and role-closing case (C) and the honest wording. | **A** keep the day-5 message as the default and make every decline screen say so, with the date / **B** Kanvis-strict: never send by itself; remind the owner, then bring in an ITS recruiter (Q27 B) / **C** automatic only for decisions a person made one at a time; batch decisions and role closings wait for a person / **D** a per-company setting (exists today as policy levels) and you choose the default / **E** other | **A** | Wave D3 (the interim honest wording, F-13, does not wait) |
-| **D-04** | What may the AI see when it reads and scores a résumé? Today the scoring reading receives the whole résumé (name, contact details, address, school and graduation years) and the candidate's earlier applications to the same company with their stage or outcome. Bias is measured only for name, graduation year and zip code. | **A** keep / **B** remove earlier applications and outcomes from the AI's input only (the team still sees them) / **C** B, plus hide name, email, phone, street address and web links from the scoring reading (the extraction still reads them to fill in the record; city and state stay; photos never reach the AI today) / **D** configurable / **E** other | **C**, then re-run the fairness tests | Wave D4 (measuring today's behaviour does not wait) |
-| **D-05** | When an owner changes a live role's must-haves or skills after people applied, what happens to their readings? Kanvis re-scores everyone after structural changes and has a "Re-score all" button limited to 5 an hour (read from Kanvis's code, not seen working). We keep each applicant's old reading and show "Read against version N of the role"; nothing re-reads. | **A** keep the label only / **B** re-read everyone automatically on every such change / **C** a "Re-read N applicants against the new version" button that shows the approximate cost; new applicants are always read against the latest version / **D** configurable / **E** other | **C** | Wave D5 |
+| **D-01** | Should candidates get accounts and a reusable profile, like on Kanvis? Kanvis is two-sided: candidate accounts, a profile built from a CV by chat, public profiles, an AI "twin", résumé, cover-letter and outreach tools, a job board across companies with match filters, an application tracker. Our candidates have no account: one application per job, a private status link, four simple steps. Your founder context leaves a "broad marketplace" out of scope and asks for a simple status timeline. | **A** keep (no accounts) / **B** adopt Kanvis's candidate side / **C** a middle way without accounts: "apply for another role here with these details" from the private status page (same company only), and one ITS page listing every checked customer's live jobs / **D** configurable per company / **E** other | **A now**, with C's two small pieces as later options | Wave D1. **A on 14 Oct. Revised by you on 15 Oct, after watching Kanvis: a reusable record per company, built from the CV and the chats a candidate sends. No account across companies, no public profile, no AI twin. Built in S7; earlier chat facts reused in S8 (PR #45, in review).** |
+| **D-02** | How do people who did not apply get in: referrals, walk-ins, CVs you already hold, a pile of CVs? Kanvis imports CVs as "Sourced", flags duplicates and sends each a private apply link (read from Kanvis's code and changelog, never seen working). We have no manual add at all. In September you deferred sourcing and talent rediscovery on purpose. A keeps that deferral; C stays inside it, because it handles only people the company already has in hand and nobody is read by the AI before they apply; B partly revisits it, because it reads and scores people who never applied. | **A** keep (no manual add) / **B** Kanvis-style import that creates applications at once and runs the same AI reading and score / **C** the team (owner, hiring manager, HR or an ITS recruiter) uploads CVs or enters a person; the app sends each person an invitation to apply with their details filled in; they become an applicant only when they accept, so consent, the AI notice and the eligibility questions are the same as for everyone / **D** configurable / **E** other | **C** | Wave D2. **Not now (14 Oct). Referrals keep using the job link or the email-in address. Not built.** |
+| **D-03** | Follow-up on two recorded answers that pull against each other. B6 says decisions are always private and telling is a separate later act by a person. Q27 A says an untold declined candidate gets the standard message by itself after 5 working days. As built, under the default setting, every private "not moving forward" (also a batch filed in Review and apply, and role closings) is emailed by itself on day 5, and the decline confirmation, Review and apply, the eligibility notices and the hire sheet do not say so (a confirmed bug, 19 and 82; the role-closing toast and the board's filing note already do). On 7 October you chose Q27 A with B ("never send anything automatically") on the table, so A stands unless you want to change it; what is new is the batch and role-closing case (C) and the honest wording. | **A** keep the day-5 message as the default and make every decline screen say so, with the date / **B** Kanvis-strict: never send by itself; remind the owner, then bring in an ITS recruiter (Q27 B) / **C** automatic only for decisions a person made one at a time; batch decisions and role closings wait for a person / **D** a per-company setting (exists today as policy levels) and you choose the default / **E** other | **A** | Wave D3 (the interim honest wording, F-13, does not wait). **A (14 Oct). Built in S1.** |
+| **D-04** | What may the AI see when it reads and scores a résumé? Today the scoring reading receives the whole résumé (name, contact details, address, school and graduation years) and the candidate's earlier applications to the same company with their stage or outcome. Bias is measured only for name, graduation year and zip code. | **A** keep / **B** remove earlier applications and outcomes from the AI's input only (the team still sees them) / **C** B, plus hide name, email, phone, street address and web links from the scoring reading (the extraction still reads them to fill in the record; city and state stay; photos never reach the AI today) / **D** configurable / **E** other | **C**, then re-run the fairness tests | Wave D4 (measuring today's behaviour does not wait). **C (14 Oct). Built in S2 (zip codes hidden too); fairness tests added in S3; the real-model run after S7 passed.** |
+| **D-05** | When an owner changes a live role's must-haves or skills after people applied, what happens to their readings? Kanvis re-scores everyone after structural changes and has a "Re-score all" button limited to 5 an hour (read from Kanvis's code, not seen working). We keep each applicant's old reading and show "Read against version N of the role"; nothing re-reads. | **A** keep the label only / **B** re-read everyone automatically on every such change / **C** a "Re-read N applicants against the new version" button that shows the approximate cost; new applicants are always read against the latest version / **D** configurable / **E** other | **C** | Wave D5. **Not now (14 Oct). The "read against version N" label stays; nothing re-reads. Not built.** |
 
-**Kanvis evidence labels** (used exactly as in `docs/feature-comparison.md`): **OBSERVED** = seen on 14 October (read-only browser session on the public demo and your own Kanvis candidate account, or a fresh fetch of public pages); **OBSERVED-EARLIER** = seen on 7 October and not re-checked; **INFERRED** = read from Kanvis's shipped code strings, changelog or marketing; **UNKNOWN** = no evidence. Kanvis has shipped no new build since 7 October (same deployment, byte-identical code files). Recruiter access is still waitlist-only, so no recruiter account was used, and Apply was never pressed on a Kanvis job. Nothing in this plan copies Kanvis code, look or wording.
+**Kanvis evidence labels** (used exactly as in `docs/feature-comparison.md`): **OBSERVED** = seen on 14 or 15 October (read-only browser session on the public demo and your own Kanvis candidate account, a fresh fetch of public pages, or the one application of 15 October); **OBSERVED-EARLIER** = seen on 7 October and not re-checked; **INFERRED** = read from Kanvis's shipped code strings, changelog or marketing; **UNKNOWN** = no evidence. Kanvis has shipped no new build since 7 October (same deployment, byte-identical code files). Recruiter access is still waitlist-only, so no recruiter account was used. **Update, 15 October:** the candidate side was OBSERVED live in one complete application to a real employer's job: the employer's questions, the AI interview, Review & send, then the score. It was your own candidate account, with you answering. The recruiter side is still waitlist-only, so recruiter behaviour stays INFERRED. Nothing in this plan copies Kanvis code, look or wording.
 
-**Starting point (14 October 2026, `dafb730`).** vitest: 204 files, 2,148 tests passed, 6 skipped, 0 failed (about 16 minutes on this machine). TypeScript clean in all 15 packages CI checks; `tests/web` has 26 type errors and is not type-checked in CI. Playwright and Biome were not run in the audit. Migrations run from `0000` to `0035`, so **the next migration number is 0036**.
+**Starting point (14 October 2026, `dafb730`).** vitest: 204 files, 2,148 tests passed, 6 skipped, 0 failed (about 16 minutes on this machine). TypeScript clean in all 15 packages CI checks; `tests/web` has 26 type errors and is not type-checked in CI. Playwright and Biome were not run in the audit. Migrations run from `0000` to `0035`, so **the next migration number is 0036**. **Now (15 October, after S8's code):** 249 files, 2,849 tests passed, 6 skipped, 0 failed. No wave added a migration, so the next number is still 0036.
 
 **Path short forms** in tables: `api/` = `apps/api/src/`, `web/` = `apps/web/src/`, `shell/` = `apps/shell/`, `core/` = `packages/core/src/`, `agents/` = `packages/agents/src/`, `workflows/` = `packages/workflows/src/`, `ai/` = `packages/ai/src/`, `contracts/` = `packages/contracts/src/`, `integrations/` = `packages/integrations/src/`, `db/` = `packages/db/`, `evals/` = `packages/evals/`. Feature ids (`APPLY-50`, `PIPELINE-26`...) are from `docs/audit/feature-inventory.md`; bug numbers ("bug 19") are rows of `docs/audit/known-bugs.md`; `CMP-nnn` rows are from `docs/feature-comparison.md`.
 
@@ -37,7 +78,7 @@ These rules are already in the product. Every Phase Five item must keep them. A 
 | # | Principle, in plain words | Where it lives today (evidence) | What it means for Phase Five |
 |---|---|---|---|
 | 1 | **Additive only.** Phase Five adds. Nothing an owner, a team member, a candidate or ITS uses today is removed or weakened. Our 36 strengths over Kanvis (ITS recruiter on demand, scheduling, approvals, compliance rules, privacy requests, audit history...) stay. | `docs/feature-comparison.md` section 4; `docs/regression-checklist.md` section 0 | Every backlog item names the existing features it touches and the regression-checklist sections to run. A behaviour change that existing tests assert is named in the item, never slipped in. |
-| 2 | **Decisions are private.** Marks, stage moves and decisions are the team's; candidates only ever see four simple steps (Received, Under review, Interview, Decision), and a decision only once they were told (B3, B4, B6). | `core/stages.ts` (`candidateStep` :351-361, `DECISION_STAGES`, told state :172); migration `0026_marks_and_told_state.sql`; `api/pages/candidate.tsx:594,747` | No addition shows a candidate a mark, score, reading or decision before a person told them. D-03 settles the one place where an automatic message follows a private decision. |
+| 2 | **Decisions are private.** Marks, stage moves and decisions are the team's; candidates only ever see four simple steps (Received, Under review, Interview, Decision), and a decision only once they were told (B3, B4, B6). | `core/stages.ts` (`candidateStep` :351-361, `DECISION_STAGES`, told state :172); migration `0026_marks_and_told_state.sql`; `api/pages/candidate.tsx:594,747` | No addition shows a candidate a mark, score, reading or decision before a person told them. D-03 settles the one place where an automatic message follows a private decision. *(Changed 15 Oct by your decision S7-1: after Send, candidates see their own match score with a breakdown, behind an ITS switch. Marks and decisions are still shown only once a person told them.)* |
 | 3 | **A person approves what is said to a candidate about them.** Decision messages are sent by a person (preview, then Send, then a 30-second Undo); AI-suggested lines are disclosed and never used for declines (Q28); every candidate email goes through the outbox and is held until ITS has checked the company (B7). Exceptions you already decided: the screening conversation itself (B1, disclosed as AI), automatic new interview times (3A), the "interview is off" note (Q25) and the day-5 standard message (Q27; see D-03). | `agents/outbox.ts`; `api/services/application-actions.ts` `sendDecisionMessage` :369-382; `core/policy.ts` `DEFAULT_POLICIES` :53-114; `agents/personal-line.ts` | New messages in Phase Five (an invitation to apply, an email when a recruiter request is overdue) are either sent by a person's click after a preview, or go only to the team or ITS. **No new automatic message to candidates.** |
 | 4 | **Only Claude Haiku 5.5 and Claude Sonnet 5.5.** Haiku 5.5 for every task; Sonnet 5.5 only for the whole job draft (`intake.compile`). Moving another task to Sonnet 5.5 needs evidence and a plain explanation first. | `ai/routing.ts:8-12` (allow-list), `:21-42` (task tiers), `:72-75`; `ai/runner.ts:51-54` (refused at call time); `ai/routing.test.ts` | Every new AI step runs on Haiku 5.5: re-reading after a role change (D-05), import parsing if D-02 B is chosen, profile tasks if D-01 B is chosen. |
 | 5 | **Migrations only add (expand-only).** New tables, columns and indexes; never drop, rename or narrow in this phase. Every data migration has its own test. Rollback means switching the feature off and leaving the columns in place. | `db/migrations/0000`-`0035`; `db/src/cli/validate.ts` (numbering, destructive statements, row-level security); `db/src/marks-told-migration.test.ts`, `company-verification-migration.test.ts`, `followups-migration.test.ts` | Section 5. Numbers in this plan are provisional; whoever merges later takes the next free number. |
@@ -240,6 +281,8 @@ flowchart TD
 
 "Wave" points to section 11. Routes not listed do not change. Decision "none" means the change is a fix that needs no answer from you.
 
+**Status (15 Oct).** Built: most "none" rows (see each item's Status line in section 11), including `POST /c/status/:token/new-link`, alert Resolve, the Plan screen, the company switcher, rank-checked sign-out, and failed email-in applications (as `/admin/failed-email-applications`). For D-01, S7 built `GET /c/status/:token/apply-another` ("Apply for another role at <Company> with these details"), which emails a link rather than using a sealed token. Not built: `GET /careers` (the ITS jobs page), the invitation, import and re-read routes, the ITS switch routes, `/escalations/mine/:id/cancel`, `/admin/jobs/:id/requeue`, and `/me/*`. The new S7 and S8 routes are listed in `docs/12-api-contracts.md`.
+
 | Route | Who uses it | Today | Proposed change | Decision | Wave / item |
 |---|---|---|---|---|---|
 | `GET /careers` | job seekers | not served (only `/careers/:slug`; the shell already forwards `/careers` to the API) | The ITS jobs page: every open, accepting job of companies ITS checked and switched on | D-01 C | D1-C-2 |
@@ -298,6 +341,8 @@ flowchart TD
 6. **Rollback.** Switch the feature off (Wave S switch, per role, company or platform-wide). Tables and columns stay. Nothing is dropped.
 
 ### 5.2 Provisional migrations
+
+**Status (15 Oct).** None of these was added; Waves S1 to S8 needed no migration, so the next free number is still 0036. Not needed for what was built: 0036 (allowances are worked out when read), 0037 (a daily clean-up scrubs everyone deleted so far), 0039 (alert emails and overdue alerts work without new columns) and 0041's first half (S5 links the three runs through the existing `ai_runs.final_outcome`; storing cache-write tokens is still open). Still needed: 0040 (sign-out per company; put off as "not now") and 0038 (hashed status links, bug 48). Not built: 0042 (the switch table; nothing has needed it yet) and 0043 to 0047+ (options not chosen).
 
 | # | File | Wave / item | Kind | Content | Test |
 |---|---|---|---|---|---|
@@ -464,6 +509,8 @@ What it never does: move anyone, send anything to a candidate, start a screening
 
 ### 7.4 Evaluations and fairness runs to add
 
+**Status (15 Oct).** Added in S3 to S7: the earlier-rejection bias pair, `triage.redaction`, `screen.redaction`, `screen.consistency`, `triage.credentials`, `triage.interview_skills`, `triage.kept_in`, `screen.question_fairness` and `triage.fairness_rules`. Not added: `triage.injection`, `screen.injection_and_protected` and `reread.determinism` (D-05 is not now). Real-model runs: 38622128192 (14 Oct) found readings disagreeing on lapsed licences, fixed in S5. 38663206648 (after S5) found that showing some evidence could lower a score, and that the overall verdict could flip; S7 fixed both before candidates could see the score. 38717936154 (after S7) passed all 11 suites it ran. Results are still kept as GitHub files, not in the repository (bug 132).
+
 | Suite | New or changed | What it checks | Fake (CI) | Real model (button) | Needed by |
 |---|---|---|---|---|---|
 | `triage.bias_pairs` | changed | Adds pairs that differ only by an earlier rejection at the same company, the pairs `docs/spec/08-ai-architecture-and-evals.md:51` lists but the suite lacks (gendered hobbies, nationality cues such as languages; only name, graduation year and zip code exist today), and a new disability-cue pair (an accommodation mention) that the spec does not yet list | yes | yes | D4-0-1 (all options) |
@@ -548,7 +595,7 @@ Added to the matrix in `core/permissions.ts:44-74`. The ITS column means an ITS 
 
 ### 9.2 The pass rule for every pull request
 
-1. vitest: no test that passed on 14 October fails (204 files, 2,148 passed, 6 skipped, 0 failed), plus the new tests. On this Windows machine use `node_modules\.bin\vitest.cmd run` (pnpm and Biome are blocked here; CI runs them).
+1. vitest: no test that passed on 14 October fails (204 files, 2,148 passed, 6 skipped, 0 failed), plus the new tests. (Baseline after S8's code: 249 files, 2,849 passed, 6 skipped, 0 failed.) On this Windows machine use `node_modules\.bin\vitest.cmd run` (pnpm and Biome are blocked here; CI runs them).
 2. TypeScript clean in all 15 packages, and in `tests/web` once F-29 has made it checked.
 3. Playwright journeys green in CI (or locally with Microsoft Edge as in `docs/regression-checklist.md` section 1.4), with axe.
 4. The sections of `docs/regression-checklist.md` that the change touches are ticked, and its "Record of this check" block is copied into the pull request. Always section 0 (your recorded rules) and section 1 (the baseline); sections 4.6, 4.7 and 7 for anything touching readings or the score; 4.8 for decisions and telling; 4.4 and 6 for candidate pages and email; 3 for permissions; 5 for migrations.
@@ -572,6 +619,8 @@ Added to the matrix in `core/permissions.ts:44-74`. The ITS column means an ITS 
 
 **In plain words.** Nothing new is switched on for everyone at once. Each addition is built switched off, tried on your test company with made-up data, then switched on by ITS for one role of one pilot customer, watched, and only then widened. Switching it off again is one click in the console and loses nothing.
 
+**Status (15 Oct).** The switch table below was not built (Wave S). D-04 C applies to every company, with no switch. The only new switch is S7's "score candidates see", a company setting ITS changes in the console with a reason (on by default), like the apply-flow switch. Real candidates still wait for the counsel items and the production setup (section 12).
+
 ### 10.1 Stages for every switch
 
 1. **Built, switched off.** Merged with the platform default off. Production behaves exactly as before.
@@ -586,7 +635,7 @@ Added to the matrix in `core/permissions.ts:44-74`. The ITS column means an ITS 
 
 | Switch key | Values | Default | What to watch | Switching off |
 |---|---|---|---|---|
-| `scoring_view` (D-04 C or D) | `full`, `no_history`, `redacted` | `full` until you answer (C would make the platform default `redacted` after the pilot) | readings marked "could not assess"; quote failures; the fairness run | New readings use the full text again; existing readings keep their label. |
+| `scoring_view` (D-04 C or D) | `full`, `no_history`, `redacted` | `full` until you answer (C would make the platform default `redacted` after the pilot). **Not built: D-04 C applies to every company.** | readings marked "could not assess"; quote failures; the fairness run | New readings use the full text again; existing readings keep their label. |
 | `reread` (D-05) | `off`, `button`, `automatic` | `off` | `reading.refresh_*` events; cost per batch; owners' use | Queued batches are cancelled; finished re-reads stay. The "read against version N" label still shows. |
 | `apply_invitations` (D-02 C) | `off`, `on` (+ daily cap) | `off` | invitations sent, opened, applied, not interested; bounces and spam complaints | No new invitations. Links already sent keep working until they expire (the person was promised them). |
 | `imports` (D-02 B) | `off`, `on` | `off` | as above plus readings of imported people | No new imports; imported records stay visible and marked. |
@@ -603,6 +652,8 @@ Migrations first (`migrate.yml`), then the worker on Railway (so new workflows e
 ---
 
 ## 11. Ordered backlog
+
+**Status (15 Oct).** Wave 0 was built in S1 to S5, except where an item's Status line says otherwise. Wave S was not built. D-01 was built a different way in S7 and S8. D-03 A and D-04 C were built. D-02 and D-05 are "not now". What is left, in order, is in **Progress** at the top.
 
 **Order.** Wave 0 first (the four high items lead; medium and low items can run in parallel by area). Wave S next. Then one wave per decision, each starting only after your answer. Within Wave 0, three items unblock later waves and go early: F-13 (honest wording now), F-10 (needed before D-04), F-29's `tests/web` type check (needed before Phase Five web tests).
 
@@ -627,6 +678,7 @@ Each item lists: **outcome** (what changes, for whom), **affected** existing fea
 These make the app do what it already promises. They come from `docs/feature-comparison.md` section 7 and `docs/audit/known-bugs.md`. Every bug they fix survived a second, sceptical reader, but four were judged plausible rather than shown to happen (bug 52 in F-05, 83 in F-05, 101 in F-23, 113 in F-17); for those, the first step is a test that proves the problem before the fix.
 
 #### F-01 (high) New customers stuck on Trial
+- **Status (15 Oct).** Done in S2. Allowances reset each month (worked out when read, so no job or migration), Settings says when, and **Change plan** is in the console. Seats and trial end wait for L-02.
 - **Outcome.** Owners of new companies get their monthly allowances back each month, and Setup tells them truthfully when. The platform admin moves a customer to another plan (for example Design Partner) from the console.
 - **Affected.** JOBS-06, OPS-22, OPS-29, ROUTES-37, APPLY-28 (bugs 1, 2, 6; CMP-014, CMP-015, CMP-141).
 - **Files.** `core/entitlements.ts` (`record` :46-57, `applyPlan` :67-82); `api/maintenance.ts` (new reset job); `api/routes/admin.ts:390`; `web/pages/Admin.tsx`; `web/pages/Setup.tsx:506`; `web/allowance.ts:48`; `workflows/definitions/screen.ts:121-145`; `api/services/apply-conversation.ts:98-119`.
@@ -636,6 +688,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing. (Seats and trial end are a later decision, L-02.)
 
 #### F-02 (high) Interview scheduling cannot recover
+- **Status (15 Oct).** Done in S2 (bugs 3, 21 to 24, 26, 27). Live calendars still need F-30.
 - **Outcome.** Candidates, owners and interviewers can always get back to a bookable time after a reschedule, a "none of these work", or late availability.
 - **Affected.** INTERVIEWS-03, -06, -08, -12, -13, -15, -16 (bugs 3, 21, 22, 23, 24, 26, 27; CMP-125).
 - **Files.** `api/routes/interviews.ts` (L90-102, L260-266, L471); `api/pages/schedule.tsx` (L161-162, L350, L413); `workflows/definitions/schedule-interview.ts` (L25, L64-67, L141-163, L176, L205, L245-251); `core/scheduling.ts` (L43, L69, L110, L133); `agents/interview-messages.ts` (L70, L84, L101); `agents/interview-calendar.ts` (L21); `workflows/new-times-reopen.ts` (L62-63, L68); `api/services/interview-cancel.ts` (L54); `workflows/engine.ts` (L421 wait keys); `web/pages/Setup.tsx` (L316); `web/pages/candidate-panel/needs-you.tsx` (L226); `web/pages/Interviews.tsx` (L194).
@@ -645,6 +698,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing. Live calendars need F-30.
 
 #### F-03 (high) Deleted candidates stay in AI readings and the AI log
+- **Status (15 Oct).** Done in S2 and S3. AI readings, the AI log and the workflow copies are scrubbed. A daily clean-up also covers people deleted earlier, so migration 0037 was not needed.
 - **Outcome.** A candidate who asked to be deleted no longer appears, by name, contact details or résumé words, in the owner's readings or the ITS console.
 - **Affected.** APPLY-41, OPS-33, AI-33 (bugs 4, 14; CMP-142, CMP-164).
 - **Files.** `core/privacy-requests.ts` (`anonymizeCandidate` :233-270); `ai/runner.ts:111`; `api/routes/admin.ts` :200-213; `api/routes/roles.ts` :432, :607-609; `contracts/domain/assessment.ts:5-28`.
@@ -654,6 +708,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Counsel item 9 note: only deletions that were already approved and fulfilled.
 
 #### F-04 (high) Alerts silenced for good, and reaching nobody
+- **Status (15 Oct).** Mostly done in S2. Alerts can be resolved and are never silenced for good, and critical ones are emailed to platform admins. Open: other alerts are not emailed (bug 39), and a long batch can still look like a stopped worker (bug 117). Real delivery needs F-30.
 - **Outcome.** ITS hears about a stopped worker or other critical problem by email, every time it happens, and can mark alerts resolved.
 - **Affected.** OPS-15, OPS-16, OPS-41 (bugs 5, 39, 117; CMP-141, CMP-144).
 - **Files.** `core/alerts.ts:21`; `api/routes/admin.ts` :244-254; `web/pages/Admin.tsx:377`; `api/maintenance.ts` :75-89; `api/worker.ts` :26-27; `api/worker-health.ts:12`; `api/env.ts` (new `ITS_OPS_ALERT_EMAIL`).
@@ -663,6 +718,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** F-30 (real email) for delivery.
 
 #### F-05 (medium) Interviewers and one-candidate ITS grants reach too much
+- **Status (15 Oct).** Done in S4 (one guard on every `/roles/:id` route).
 - **Outcome.** Interviewers see only their own roles and interviews; an ITS recruiter given one candidate sees only that candidate. Nothing changes on any screen.
 - **Affected.** PLATFORM-15, PLATFORM-21, INTERVIEWS-23, ROUTES-41, PIPELINE-36 (bugs 7, 10, 25, 40, 52, 55, 66, 83; CMP-010, CMP-011, CMP-027, CMP-134).
 - **Files.** New `core/role-access.ts`, new `api/middleware/role-access.ts`; `api/routes/interviews.ts` :434-450; `api/routes/roles.ts` :91-135 and the role sub-routes, which also live in `api/routes/postings.ts` (`/postings` :212, `/links` :604, `/volume` :694) and `api/routes/role-packets.ts` (`/interview-plan` :58, `/packets/diff` :340, `/requirements-check` :379); `api/middleware/session.ts` :97-117; `core/staff-access.ts:89`; `api/routes/approvals-escalations-events.ts` :36-99; `api/routes/reports.ts` :29-38; `api/services/role-report.ts:408`.
@@ -672,6 +728,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing.
 
 #### F-06 (medium) HR over owners; invitations visible to interviewers
+- **Status (15 Oct).** Done in S4, without a migration, with one gap: a session left open in another company can switch back in while the person is a member. Closing it needs migration 0040, put off as "not now".
 - **Outcome.** Owners and admins stay in control of who signs them out and who joins as owner or admin; owners get a "Sign out everywhere" button for a lost device.
 - **Affected.** PLATFORM-16, -17, -18, OPS-25, OPS-26, ROUTES-36 (bugs 8, 43, 44, 56, 129; CMP-009, CMP-012).
 - **Files.** `api/routes/company-settings.ts` :495-516; `api/services/team.ts` :129, :138-144, :237-241; `api/routes/companies.ts` :55-60, :91-95; `web/pages/TeamCard.tsx` :144-158; `web/pages/Setup.tsx:88`; `api/middleware/session.ts` (company sign-out check).
@@ -681,6 +738,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing.
 
 #### F-07 (medium) No company switcher
+- **Status (15 Oct).** Done in S5: a "Switch company" menu. Still open: one person can open several companies of their own by API (bug 65; L-17).
 - **Outcome.** A person invited by two customers (an HR helper, a hiring manager, an owner of two businesses) moves between them in the app.
 - **Affected.** PLATFORM-26, ROUTES-02 (bugs 9, 49; CMP-008).
 - **Files.** `shell/components/AppShell.tsx` (:31); `api/routes/auth.ts` :304-315; `core/identity.ts` :75-76; `core/invitations.ts` :164-178; the pattern in `web/pages/RecruiterQueue.tsx:193`.
@@ -690,6 +748,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** F-06 (company sign-out marker).
 
 #### F-08 (medium) Edits during a pause lost; closed roles editable
+- **Status (15 Oct).** Done in S5.
 - **Outcome.** An owner's edits made while a role is paused are live after Resume; closed roles cannot be edited.
 - **Affected.** JOBS-17, JOBS-32, JOBS-42 (bugs 12, 64; CMP-037).
 - **Files.** `api/services/packet-versions.ts` :142-184; `api/routes/role-packets.ts` :78-104, :116, :269; `api/routes/roles.ts` :152-168, :224; `web/publishing.ts:255`; `web/pages/RoleDetail.tsx` :143-149, :201.
@@ -699,6 +758,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing.
 
 #### F-09 (medium) One-visit flow reveals a first name; simultaneous first applications fail
+- **Status (15 Oct).** Done in S5. Accepted on purpose: a form typed with an address already on file joins that person's record at once; only chat answers wait for the address owner (bug 17 in part).
 - **Outcome.** Nobody learns that another person applied by typing their email; candidates applying to two roles at once both succeed.
 - **Affected.** APPLY-13, APPLY-19, APPLY-29 (bugs 17, 78; CMP-058).
 - **Files.** `api/services/apply-conversation.ts` :105, :655; `agents/screening.ts:217`; `api/services/applications.ts` :76-100.
@@ -708,6 +768,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing.
 
 #### F-10 (medium) Candidate text not cleaned before AI prompts
+- **Status (15 Oct).** Partly done in S2: candidate text can no longer close the reading's or the scorecard's blocks. Open: the résumé extraction prompt and the chat's own turns, and an adversarial eval (bug 15 in part).
 - **Outcome.** Hidden instructions in a résumé or conversation cannot steer a reading or the automatic screening invitation.
 - **Affected.** APPLY-48, AI-22 (bugs 15, 31; CMP-106).
 - **Files.** `ai/prompts/registry.ts:26` (`withoutTag`); `ai/prompts/triage.ts` :67-70; `ai/prompts/resume.ts:19`; `ai/prompts/screen.ts` :94-99, :134; `agents/fake-handlers.ts`; `evals/src/suites.ts`.
@@ -717,6 +778,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing. Needed before D-04.
 
 #### F-11 (medium) Emailed-in applicants recorded as consenting; failed emailed applications lost
+- **Status (15 Oct).** Done in S5: honest email-in records, and failed email-in applications on the console's Problems page (since S6) with "Try again". Live use needs the inbound mail domain (F-30).
 - **Outcome.** Consent records are true for people who applied by email through a job board, and ITS sees every emailed application that failed.
 - **Affected.** APPLY-43, OPS-37, JOBS-29 (bugs 16, 120; CMP-051, CMP-062).
 - **Files.** `api/services/applications.ts` :83-87; `api/webhooks/postmark.ts` :76-78, :98-100; `api/routes/admin.ts` (new list); `web/pages/Admin.tsx`.
@@ -726,6 +788,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** F-30 (inbound mail domain) for live use.
 
 #### F-12 (medium) A skill "judged in the interviews" still counts
+- **Status (15 Oct).** Done in S5.
 - **Outcome.** What the owner was told is true: a skill set to be judged in the interviews is not read from résumés and not in the score.
 - **Affected.** JOBS-13, JOBS-18, PIPELINE-07, PIPELINE-11, PIPELINE-37, AI-30 (bug 18; CMP-026).
 - **Files.** `ai/prompts/triage.ts:43`; `core/match-score.ts` :80-90; `agents/requirements-check.ts` :262, :270; `web/skills-form.ts` :24-28; `web/pages/RoleEditor.tsx:122`; `agents/interviewer-brief.ts`.
@@ -735,6 +798,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing. Needed before D-05.
 
 #### F-13 (medium) Honest words about the day-5 message (interim)
+- **Status (15 Oct).** Done in S1, as the final words of D-03 A (with the date where it is known).
 - **Outcome.** Owners, hiring managers and ITS recruiters are told, wherever they file a decision, what happens on day 5 under their company's current setting. This matches what the app does today; the final words follow D-03.
 - **Affected.** PIPELINE-16, -21, -26, -27, -28, -34 (bugs 19, 82; CMP-109, CMP-112, CMP-132).
 - **Files.** `web/talent-actions.ts` :213-229 (`declineConfirmText` never calls `safetyNetPromise`, which the same file already uses in the role-closing toast, :289-296); `web/telling.ts:146`; `web/pages/candidate-panel/needs-you.tsx` :128, :304, :507, :544; `workflows/definitions/application-intake.ts` :162, :186; `web/pages/board/board-model.ts` :329, :351; `api/services/review-apply.ts:25`; `api/services/hire-sheet.ts` :54-56; `docs/customer/01-what-you-get-and-what-is-not-included.md` line 53; `docs/customer/06-hiring-manager-guide.md` lines 159, 252, 301.
@@ -744,6 +808,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing. Do it first in Wave 0.
 
 #### F-14 (medium) Screening scorecard read once, yet it overrides the résumé
+- **Status (15 Oct).** Done in S5 (read three times, the licence rule applied, only the candidate's own sent words count).
 - **Outcome.** A candidate's score after the conversation is as stable as before it.
 - **Affected.** APPLY-32, AI-19, PIPELINE-11 (bugs 13, 20, 106; CMP-066, CMP-070).
 - **Files.** `agents/screening.ts` :627, :863-865, :880-926; `agents/triage.ts` (`combineReadings` :134-151, credential rule :257); `core/match-score.ts` :60-67.
@@ -753,6 +818,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing. Costs three scorecard calls instead of one (Haiku 5.5).
 
 #### F-15 (medium) Evidence rules
+- **Status (15 Oct).** Done in S5, with one change from acceptance (1): an unquoted "yes" scores half and shows "no quote", instead of being left out. S7 then made the score monotonic (more evidence never lowers it).
 - **Outcome.** The score rests only on checked evidence, as the customer guide says.
 - **Affected.** PIPELINE-08, PIPELINE-11, PIPELINE-28, AI-16 (bugs 30, 32, 34, 112; CMP-074, CMP-057).
 - **Files.** `agents/triage.ts` :51-57, :158-167, :248-259; `core/match-score.ts` :46-57; `api/services/application-actions.ts` :545-552; `workflows/definitions/application-intake.ts:217`; `ai/prompts/triage.ts:69`.
@@ -762,6 +828,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing. Needed before D-04.
 
 #### F-16 (medium) AI-written questions skip the fairness check
+- **Status (15 Oct).** Done in S5. Since S7 the company's own questions pass the same check.
 - **Outcome.** No question the AI writes for a candidate touches a protected trait.
 - **Affected.** AI-18, AI-20 (bug 29; CMP-065).
 - **Files.** `agents/screen-focus.ts` :26-36; `agents/screening.ts` :804-841; `core/packet-guard.ts:132` (`screenCriterion`).
@@ -771,6 +838,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing.
 
 #### F-17 (medium) Short outages do lasting damage
+- **Status (15 Oct).** Done in S5 (held runs resume by themselves; sends retry for about an hour; 30-second timeouts; lease renewal).
 - **Outcome.** Candidates and owners are not hurt by a short model or email outage; nothing is sent twice.
 - **Affected.** AI-27, OPS-01, APPLY-27 (bugs 33, 35, 37, 113, 121; CMP-068, CMP-118).
 - **Files.** `workflows/engine.ts` :51, :145-150, :177, :238-244, :327-341; `workflows/definitions/application-intake.ts:31`; `workflows/definitions/screen.ts:72`; `agents/outbox.ts` :29, :31, :377-388; `api/maintenance.ts:53`; `integrations/email/postmark.ts:18`; `integrations/sms/twilio.ts:24`.
@@ -780,6 +848,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** F-04 (alert delivery).
 
 #### F-18 (medium) ITS not told about system-raised recruiter requests
+- **Status (15 Oct).** Done in S5, without migration 0039. Real delivery needs F-30.
 - **Outcome.** A candidate promised a person within four business hours gets one: ITS is told of every request, and of every request that passes its reply-by time.
 - **Affected.** OPS-12, OPS-13, OPS-44, APPLY-24 (bugs 36, 38, 125; CMP-067, CMP-133).
 - **Files.** `core/escalations.ts` :18-68; `api/services/escalation-queue.ts` :22-31; the silent callers (`api/services/replies.ts:175`, `agents/screening.ts:696`, `workflows/engine.ts:377`, `workflows/definitions/application-intake.ts:189`, `core/privacy-requests.ts:432`, `workflows/definitions/schedule-interview.ts:249`, `workflows/new-times-reopen.ts:192`, `agents/decision-messages.ts:304`); `api/routes/companies.ts:172`; `api/routes/approvals-escalations-events.ts` :339-346; `api/maintenance.ts` (overdue check).
@@ -789,6 +858,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** F-04, F-30.
 
 #### F-19 (medium) Console gaps beyond the plan screen
+- **Status (15 Oct).** Partly. AI-run detail is on screen in the rebuilt console (S6). Still API only: break-glass, the staff-access list, signing a person out and adding a suppression. Failed jobs cannot be re-queued (bug 127).
 - **Outcome.** The platform admin does every routine and emergency job from the console instead of hand-made API calls.
 - **Affected.** PLATFORM-23, PLATFORM-25, OPS-23, OPS-40, AI-05, ROUTES-18, ROUTES-38 (bugs 1, 46, 57, 127; CMP-141).
 - **Files.** `api/routes/admin.ts` (:190, :206, :227, :356-374, :377, :494; new re-queue); `web/pages/Admin.tsx`; `core/auth.ts` :144-146 (re-authentication refreshes the second-factor time); `workflows/engine.ts:196`.
@@ -798,6 +868,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** F-01 (same console work), F-28 (withheld outputs).
 
 #### F-20 (low) Candidate status links stored in plain form
+- **Status (15 Oct).** Partly done in S5: "Get a new link" replaces the status, chat and interview links and emails the new one. Open: links are still stored plain and never expire (bug 48; needs migration 0038).
 - **Outcome.** A candidate who forwarded their link can replace it, and a database copy holds no working links.
 - **Affected.** PLATFORM-28, PLATFORM-30, APPLY-15, APPLY-45, OPS-43 (bug 48; CMP-059).
 - **Files.** `db/src/schema/hiring.ts:295`; `api/services/applications.ts` :113, :211-239; `api/pages/candidate.tsx` :558-575, :713-716; `core/auth.ts` (hash helper); `docs/readiness/14-candidate-link-trust-boundary.md`.
@@ -807,6 +878,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing.
 
 #### F-21 (low) Words that are not true
+- **Status (15 Oct).** Partly: bugs 50 (S4) and 67 (S5) fixed. Open: 85 (unreachable stages), 86 ("the system learns") and 89 ("Not a fit for now").
 - **Outcome.** Owners and interviewers are never told something the app does not do.
 - **Affected.** PIPELINE-05, PIPELINE-38, PIPELINE-41, JOBS-16, ROUTES-13 (bugs 50, 67, 85, 86, 89; CMP-017, CMP-036, CMP-082, CMP-083, CMP-084).
 - **Files.** `api/services/role-report.ts:327`; `web/pages/candidate-panel/needs-you.tsx:535`; `api/services/application-actions.ts:547`; `core/stages.ts` :37-51 (labels); `workflows/definitions/role-approval.ts:69`; `api/routes/policies.ts` :33-36, :95-96; `web/pages/People.tsx:258`.
@@ -816,6 +888,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing.
 
 #### F-22 (low) Publishing loose ends
+- **Status (15 Oct).** Partly done in S5: bugs 58, 61 and 63 fixed. Open: 53 (no on-screen version compare) and 62 (the fake board-link checker outside production).
 - **Outcome.** Candidates never land on dead links, and owners' closing dates and version history work as shown.
 - **Affected.** JOBS-02, JOBS-27, JOBS-31, JOBS-42, ROUTES-40, APPLY-16 (bugs 53, 58, 61, 62, 63; CMP-002, CMP-024, CMP-039, CMP-042, CMP-045, CMP-047).
 - **Files.** `api/services/company-trust.ts` :60-76; `api/pages/links.tsx` :59-62, :70; `workflows/definitions/role-approval.ts` :154, :204-210; `workflows/definitions/publish-role.ts:66`; `web/pages/new-role/Builder.tsx` :84-86, :167-174; `integrations/registry.ts:74`; `integrations/jobboards/verify.ts` :280-303; `GET /roles/:id/packets/diff` and `POST /integrations/:id/disconnect` (screens).
@@ -825,6 +898,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing.
 
 #### F-23 (low) Scheduling polish
+- **Status (15 Oct).** Done in S2, S4 and S5, with L-12 for bug 95. Open: each company's own business days are not used for holidays (bug 104 in part).
 - **Outcome.** Interviews feel dependable for candidates and interviewers once Google Calendar is live.
 - **Affected.** INTERVIEWS-04, -06, -09, -10, -12, -15, -17, -19, -22, -34 (bugs 91-94, 96, 98-105; CMP-125, CMP-126, CMP-128, CMP-101).
 - **Files.** `agents/interview-calendar.ts` (L30, L97, L115-143); `integrations/calendar/google.ts` (L66, L97); `agents/interview-messages.ts` (L140-141); `core/ics.ts` (L26, L63-64); `core/scheduling.ts` (L71, L120); `workflows/definitions/schedule-interview.ts` (L157-159, L178-195); `api/pages/schedule.tsx` (L335-341); `api/routes/interviews.ts` (L140-153, L217, L265, L374-406); `web/pages/Interviews.tsx` (L30).
@@ -834,6 +908,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** F-02.
 
 #### F-24 (low) Privacy loose ends
+- **Status (15 Oct).** Partly: the deletion email and file removal after the commit, and bug 126 (S2); bugs 68, 71 and 80 (S5). Open: 76 (abandoned uploads), 115 (human-review request not closed) and 118 (retention gaps).
 - **Outcome.** Candidates' privacy requests are completed truthfully and nothing about them is kept by accident.
 - **Affected.** APPLY-06, APPLY-39, APPLY-41, OPS-18, OPS-33 (bugs 68, 71, 76, 80, 115, 118, 126; CMP-142, CMP-056).
 - **Files.** `agents/privacy-messages.ts` :51-56; `api/routes/privacy-requests.ts` :134-137; `core/privacy-requests.ts` :129, :420; `api/pages/candidate.tsx` :326-342; `api/maintenance.ts` (orphan sweep); `api/pages/privacy-request.tsx:109`; `api/services/applications.ts` :221-224; `contracts/security/redact.ts` :26-27; `api/webhooks/postmark.ts:43`.
@@ -843,6 +918,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Counsel item 9 for the time limit.
 
 #### F-25 (low) Email suppression
+- **Status (15 Oct).** Not started (bugs 119, 122 and 130 open).
 - **Outcome.** A person who reported spam or opted out is never emailed again by mistake.
 - **Affected.** OPS-06 (bugs 119, 122, 130; CMP-118, CMP-119).
 - **Files.** `core/email-suppression.ts` :51-61; `api/routes/admin.ts` :234-241; `api/container.ts` :118, :286; `agents/email-failures.ts:49`; `api/services/email-subscriptions.ts:29`; `web/telling.ts` :282-298.
@@ -852,6 +928,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing.
 
 #### F-26 (low) Access housekeeping
+- **Status (15 Oct).** Not started (bugs 41, 42, 45, 65, 123 and 124 open). Side PR #40 made the ITS queue say who raised each request and why, which this item did not cover.
 - **Outcome.** ITS recruiters keep access to every request they hold; ITS staff stay outside customer companies; customers can withdraw their own requests.
 - **Affected.** PLATFORM-21, PLATFORM-27, OPS-10, OPS-11 (bugs 41, 42, 45, 65, 123, 124; CMP-001, CMP-002, CMP-133, CMP-134).
 - **Files.** `core/staff-access.ts` :62-68; `api/routes/approvals-escalations-events.ts` :454, :456-461; `api/routes/companies.ts` :18-29; `api/services/companies.ts:38`; `integrations/identity/claims.ts:9`; `core/identity.ts:30`; `web/components/RecruiterRequests.tsx`; `web/pages/RecruiterQueue.tsx:274`.
@@ -861,6 +938,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** F-30 (Supabase check).
 
 #### F-27 (low) Candidate-page details
+- **Status (15 Oct).** Partly done in S5: bugs 72, 73 and 74 (web chat only) fixed. Open: 69, 75, 77, 79, and withdrawals by text message.
 - **Outcome.** Candidates see correct errors, dates and confirmations.
 - **Affected.** APPLY-04, APPLY-15, APPLY-25, APPLY-31, APPLY-33, APPLY-34, APPLY-37 (bugs 69, 72-75, 77, 79; CMP-116, CMP-122, CMP-162).
 - **Files.** `api/pages/candidate.tsx` :401, :762-763; `contracts/api/index.ts:359`; `agents/screening.ts` :165-170, :560-584; `agents/apply-messages.ts:37`; `agents/candidate-links.ts:132`; `api/pages/thread.tsx:27`; `api/webhooks/twilio.ts:63`.
@@ -870,6 +948,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing.
 
 #### F-28 (low) Reading bookkeeping
+- **Status (15 Oct).** Partly done in S5: bug 87, and bug 109 in part (all three runs linked and flagged). Open: 88, 90, 107, 108, 110 and 111.
 - **Outcome.** Every place that shows a reading agrees, and ITS's records of AI work are complete and correctly priced.
 - **Affected.** PIPELINE-09, PIPELINE-20, AI-05, AI-25, AI-26 (bugs 87, 88, 90, 107-111; CMP-078, CMP-092, CMP-104, CMP-158, CMP-164).
 - **Files.** `web/evidence.ts` :72-76; `api/routes/compare.ts` :91-99; `web/pages/compare/ComparePanel.tsx:115`; `api/routes/roles.ts` :568, :809; `agents/triage.ts:97`; `workflows/definitions/application-intake.ts:252`; `core/screen-answers.ts` :200-207; `api/services/apply-conversation.ts` :415, :708; `ai/pricing.ts:15`; `ai/runner.ts` :73, :105-108; `ai/prompts/screen.ts:135`; `agents/screening.ts:885`; `evals/src/suites.ts` :817-830.
@@ -879,6 +958,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing.
 
 #### F-29 (low) Safety nets
+- **Status (15 Oct).** Not started. Fairness results are still kept only as GitHub files (bug 132), and `tests/web` is not type-checked (bug 135).
 - **Outcome.** The automatic checks that protect every customer catch what they claim to catch.
 - **Affected.** PLATFORM-12, TESTS-04, -06, -10, -13, OPS-19, OPS-20, OPS-32 (bugs 47, 51, 54, 97, 114, 116, 131, 132, 134, 135; CMP-018, CMP-137, CMP-140, CMP-144, CMP-145, CMP-160).
 - **Files.** `tests/policy/raw-db-access.test.ts:15`; new `tests/web/tsconfig.json` and the typecheck script; `.gitignore:66` and `.github/workflows/fairness.yml` :72-79; a worker crash-recovery test (`workflows/engine.ts` :145-156); `api/app.ts` :97-113; `shell/middleware.ts:25`; `api/webhooks/postmark.ts` :31-39; `api/webhooks/twilio.ts` :23-29; `api/routes/integrations.ts:141`; `core/events.ts` :50-56; `api/services/audit-history.ts` :8-18.
@@ -888,6 +968,7 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Nothing. The `tests/web` type check goes early.
 
 #### F-30 (setup) Production configuration before real candidates
+- **Status (15 Oct).** Not done. Staging still uses the fake email sender until a Postmark account is set up. Needs your account steps (section 12.2).
 - **Outcome.** The live app sends real email, receives emailed applications and replies, scans uploads, checks board links, books Google Calendar, reports errors and enforces its content rules. Texting stays off.
 - **Affected.** OPS-04, OPS-19, OPS-35, OPS-37, APPLY-08, INTERVIEWS-04, JOBS-27 (bug 81 and audit unknowns; CMP-051, CMP-056, CMP-120, CMP-126, CMP-144).
 - **Files.** Environment only: `api/env.ts` settings (`EMAIL_PROVIDER`, inbound domain, scanner, `LINK_VERIFIER=real`, calendar provider, Sentry, `CSP_MODE=enforce`); `integrations/registry.ts:148`; `api/scanner-gate.ts` :10-20.
@@ -897,6 +978,8 @@ These make the app do what it already promises. They come from `docs/feature-com
 - **Depends on.** Founder and ITS account steps (section 12.2).
 
 ### Wave S: ITS switches (no decision needed)
+
+**Status (15 Oct).** Not built (S-01 and S-02), and nothing waits for it yet: D-02 and D-05 are "not now", and D-04 C applies to every company. S7's switch for the score candidates see is a company setting ITS changes in the console (`POST /admin/customers/:id/candidate-score`, with a reason, audited), like the apply-flow switch.
 
 #### S-01 The switch table and resolver
 - **Outcome.** ITS can turn any Phase Five feature on or off for one role, one company or everyone, with a reason, without a deploy.
@@ -920,11 +1003,17 @@ These make the app do what it already promises. They come from `docs/feature-com
 
 Kanvis evidence: profile editor with the chat beside it, public profile page with a "show in search" toggle and no unpublish, an AI twin dock (not messaged), a job board with 8 filters, résumé, cover-letter and outreach tool entry screens, an empty applications workspace: OBSERVED on 14 October in your own candidate account. Founder context: a broad marketplace is out of scope (`docs/FOUNDER-CONTEXT.md` lines 1020 and 1032); a candidate portal shows a simple status timeline (line 482); "never force résumé re-entry after upload" (line 466). Affected comparison rows: CMP-052, CMP-055, CMP-146 to CMP-157.
 
+**Status (15 Oct).** A was chosen on 14 Oct, then revised by you on 15 Oct after you watched Kanvis's application live (OBSERVED: one complete application with the AI interview and the score). Built instead of the items below:
+- **S7:** the CV fills the form; the company's questions and a chat; the record learns facts from sent chats, and the candidate can edit them; the match score with a breakdown after Send. The emailed "Applied here before?" link refills contact details and the summary. The status page offers "Apply for another role at <Company> with these details", which emails a link rather than using a 24-hour sealed token (close to D1-C-1). Other applications at the same company are listed.
+- **S8 (PR #45, in review):** facts from earlier chats at that company can be kept with tick boxes on the next application.
+- **Not built:** the ITS jobs page (D1-C-2) and candidate accounts (D1-B). Public profiles and an AI twin stay out (CMP-149, CMP-150 not adopted).
+
 **Common to all options:** nothing. (F-09 and F-20 in Wave 0 already improve the candidate's links.)
 
-**If A (recommended now):** nothing is built. Public profiles, an AI twin and fit scores shown to candidates stay out (class 5 conflicts CMP-149, CMP-150, CMP-152). D1-C-1 and D1-C-2 move to the later-batch list.
+**If A (recommended now):** nothing is built. Public profiles, an AI twin and fit scores shown to candidates stay out (class 5 conflicts CMP-149, CMP-150, CMP-152). D1-C-1 and D1-C-2 move to the later-batch list. *(Changed on 15 Oct: by your decision S7-1, candidates now see their own match score after Send, behind an ITS switch that is on by default. There is still no fit score before applying.)*
 
 #### D1-C-1 "Apply for another role here with these details" (if C or D)
+- **Status (15 Oct).** Built in S7 in a different form: the status page lists the company's other open roles, and the details come by an emailed link to the address on file. No ITS switch.
 - **Outcome.** A candidate who applied once to a company applies to its other roles without typing everything again.
 - **Affected.** APPLY-04, APPLY-06, APPLY-12, APPLY-13, APPLY-14, APPLY-33.
 - **Files.** `api/pages/candidate.tsx` (status page :713-830, apply form :313-476); `api/pages/job-page.tsx` (`ApplyFields` :307-381); `api/services/applications.ts` (`createApplication` :69-113); `core/sealed.ts`; `workflows/documents.ts` (copy a clean file within the company).
@@ -934,6 +1023,7 @@ Kanvis evidence: profile editor with the chat beside it, public profile page wit
 - **Depends on.** S-01, F-09, F-20; counsel item P5-5.
 
 #### D1-C-2 One ITS page of live jobs (if C or D)
+- **Status (15 Oct).** Not built.
 - **Outcome.** Job seekers find every checked, listed customer's live jobs on one page, with no account and no matching.
 - **Affected.** APPLY-01, JOBS-33, JOBS-34, ROUTES-27.
 - **Files.** New `api/pages/its-jobs.tsx`; `api/pages/public-feeds.ts` (listing query, sitemap :119); `api/pages/candidate.tsx` (`loadPublicCompany` :126); `api/pages/links.tsx` (tracked source); `shell/lib/hono.test.ts` (mount check).
@@ -943,6 +1033,8 @@ Kanvis evidence: profile editor with the chat beside it, public profile page wit
 - **Depends on.** S-01; counsel item P5-6 (pilot agreement).
 
 #### D1-B Kanvis's candidate side (only if B)
+**Status (15 Oct).** Not chosen and not built.
+
 Outline only; detailed when chosen. It is the largest piece of work in this plan.
 - **B-1 Candidate identity.** A third kind of sign-in (candidates), platform-level account tables with their own row-level security, sessions. Opens a new question: Q2 (Google or Microsoft only) was answered for the team, not for candidates.
 - **B-2 Profile from a CV by chat.** New prompts on Haiku 5.5, disclosed as AI; quotes kept to the CV.
@@ -959,6 +1051,8 @@ Outline only; detailed when chosen. It is the largest piece of work in this plan
 ### Wave D2: people who did not apply (D-02)
 
 Kanvis evidence: bulk CV import (50 a batch) shown as "Sourced", scored beside applicants, duplicates flagged and merged, a private apply link sent with a merge-field composer, the real application replacing the import: INFERRED (7 October catalogue, from Kanvis's changelog and shipped code; never used, no recruiter account). Our side: no manual add (APPLY-50, planned only; `POST /applications` exists only in `docs/12-api-contracts.md:146`); email-in applications per role exist (JOBS-29). Founder context: referrals are a "V2" item and the system "should start with data already owned by the customer" (`docs/FOUNDER-CONTEXT.md` lines 1050 and 116). Affected rows: CMP-096, CMP-097.
+
+**Status (15 Oct).** Not now (D-02, 14 Oct). Nothing in this wave was built. Can be asked again.
 
 **Common to all options:** nothing before your answer.
 
@@ -1044,6 +1138,8 @@ Kanvis evidence: bulk CV import (50 a batch) shown as "Sourced", scored beside a
 
 Kanvis evidence: the candidate's email settings promise that decisions always reach them: OBSERVED on 14 October (Settings, Emails). Recruiters' emails are drafted and sent by a person, nothing is sent automatically, and a 45-day "no decision yet" notice goes to the candidate automatically: INFERRED (Kanvis's terms, code and changelog; 7 October catalogue and 14 October public re-check). Our side: `agents/decision-messages.ts` `runUntoldSafetyNet` :251-314 under `disposition.send` default "auto" (`core/policy.ts:97`). Affected rows: CMP-109, CMP-112, CMP-132. Prerequisite: F-13 (honest interim words), which already matches option A.
 
+**Status (15 Oct).** A chosen (14 Oct). Built in S1: every screen and toast that says a decision is private also says the standard message goes by itself after 5 working days if nobody sends one, with the date when it is known, and so does the hire sheet. Counsel item 23(c) is still open. B, C and D were not built.
+
 #### D3-A-1 The date, everywhere a decision is filed (if A, recommended)
 - **Outcome.** Owners, hiring managers and ITS recruiters see the exact day the standard message will go if nobody tells the person first.
 - **Affected.** PIPELINE-16, -21, -22, -23, -26, -27, -28, -34, -43.
@@ -1094,6 +1190,12 @@ Kanvis evidence: the candidate's email settings promise that decisions always re
 
 Kanvis evidence: identity details are stored apart and sent only when a form asks: OBSERVED on 14 October (Settings, Your data). Equal-opportunity answers are kept out of scores and prompts: INFERRED (Kanvis's privacy policy, 7 October catalogue). Whether Kanvis's scoring sees past outcomes: UNKNOWN. Affected rows: CMP-159 (bugs 28, 84, 136). Prerequisites: F-10, F-15; F-29's committed fairness results.
 
+**Status (15 Oct).** C chosen (14 Oct).
+- **D4-B-1 and D4-C-1:** built in S2. The view lives in `packages/agents/src/scoring-view.ts`, not `core/`, and also hides zip codes. Quotes shown to the team are mapped back to the candidate's own words.
+- **D4-0-1:** the evals and an earlier-rejection pair were added in S3. Real-model runs: 38622128192 (14 Oct) and 38663206648 (after S5) found problems fixed in S5 and S7 (section 7.4). 38717936154 (15 Oct, after S7) passed all 11 résumé-reading and scoring suites it ran, including bias pairs 4/4 and redaction 2/2. The screening-chat suites have not run on the real model. The results are not committed (bug 132).
+- **D4-D-1:** not built. There is no switch; the hidden view applies to every company.
+- S8 keeps the rule: a returning candidate's earlier application is never told to the scoring.
+
 #### D4-0-1 Measure today's behaviour (common to all options; may start before your answer)
 - **Outcome.** You see, from the real model, whether an earlier rejection or a name changes a reading today.
 - **Affected.** AI-21, AI-24, TESTS-10.
@@ -1133,6 +1235,8 @@ Kanvis evidence: identity details are stored apart and sent only when a form ask
 ### Wave D5: re-reading after a role change (D-05)
 
 Kanvis evidence: weight-only edits apply at once, structural edits re-score everyone, "Re-score all" limited to 5 an hour: INFERRED (7 October catalogue, rubric code). Our side: only the label (PIPELINE-13, AI-37; `core/match-score.ts:180-186`). Affected row: CMP-080. Prerequisites: F-12, F-14, F-17; D-04 if chosen (re-reads use the current scoring view).
+
+**Status (15 Oct).** Not now (D-05, 14 Oct). Nothing in this wave was built; the "read against version N" label stays. Its prerequisites F-12, F-14 and F-17 are done (S5), if you ask again later.
 
 #### D5-C-1 The rules (if B, C or D)
 - **Outcome.** One shared answer to "did the role change in a way that matters", "who would be re-read" and "about how much would it cost".
@@ -1200,26 +1304,28 @@ Kanvis evidence: weight-only edits apply at once, structural edits re-score ever
 
 ### Later-batch candidates (not scheduled; for your next batches)
 
+**Status (15 Oct).** L-01, L-10 and L-12 were decided and built in S5. L-03 and L-14 are "not now". The others are not decided yet. `docs/workflow-decisions.md` adds L-16 (not now) and L-17 (one person in several companies: the switcher was built as a fix, the question is still open).
+
 | Id | What | Why it needs you (or why later) |
 |---|---|---|
-| L-01 | Who may keep a phrase the fairness check flagged on a live job; must the named decision maker see wording edits (bugs 11, 59) | One approver can keep their own flag today |
+| L-01 | Who may keep a phrase the fairness check flagged on a live job; must the named decision maker see wording edits (bugs 11, 59) | One approver can keep their own flag today. **Decided 15 Oct: a second approver (a sole owner may decide alone); the decision maker is told of wording edits. Built in S5.** |
 | L-02 | Enforce seats and a trial end, or drop both lines from Setup (bugs 60, 128) | A pricing choice |
-| L-03 | Hiring managers see only the roles they manage (PLATFORM-35) | Spec says release 2 |
+| L-03 | Hiring managers see only the roles they manage (PLATFORM-35) | Spec says release 2. **Not now (15 Oct).** |
 | L-04 | HR can file someone into the talent pool but cannot tell them: intended? | Tied to D-03 |
 | L-05 | A reason on every stage move | Adds a click to every move |
 | L-06 | Select many people on Talent and move them together (declines stay in Review and apply) | Must not bypass per-person decline reasons |
 | L-07 | Try different weights and watch the list re-order before saving | Changes what the score means unless kept a preview |
 | L-08 | Tell the team when a résumé contains hidden instructions | The notice could bias a reader |
 | L-09 | Share a shortlist outside the app | Moves candidate data outside our access rules |
-| L-10 | A member leaves a company; an owner closes the company account (PLATFORM-37) | Retention rules for the company's candidates |
+| L-10 | A member leaves a company; an owner closes the company account (PLATFORM-37) | Retention rules for the company's candidates. **Decided 15 Oct: "Leave this company" (an owner only while another owner remains); closing a company stays a request to ITS. Built in S5.** |
 | L-11 | Customers handle their own candidates' privacy requests (PLATFORM-34) | Who answers for the 45-day deadline |
-| L-12 | After our interviewer misses an interview, offer the same round again automatically or let the owner choose (bug 95) | The spec and the code differ |
+| L-12 | After our interviewer misses an interview, offer the same round again automatically or let the owner choose (bug 95) | The spec and the code differ. **Decided 15 Oct: the same round is offered first, with an apology; the owner can still pick another. Built in S5.** |
 | L-13 | Voluntary equal-opportunity questions, kept apart from every AI input | Enables bias monitoring; adds sensitive data |
-| L-14 | An invisible bot check on the apply form (bug 70) | A little friction for real candidates |
+| L-14 | An invisible bot check on the apply form (bug 70) | A little friction for real candidates. **Not now (15 Oct): it would add a third-party service.** |
 | L-15 | The job drafter learns a company's tone and reference documents (text only) | Means keeping company documents (Q7 avoided it for role files) |
-| D-01 C | "Use my details" and the ITS jobs page, if you keep A now | Recommended as later options |
+| D-01 C | "Use my details" and the ITS jobs page, if you keep A now | Recommended as later options. **"Use my details" built another way in S7 and S8 (Wave D1 status); the ITS jobs page is not built.** |
 | B5 later | Free-text "Ask AI" about the pool | Already decided as later, after real-model testing (B5); not a new question |
-| Other | Review-and-apply extras already in the API (On hold, invite to screen, ask a recruiter; PIPELINE-17); keyboard next and previous; a visit-to-application funnel and conversion by source; second factor for customer owners and admins (PLATFORM-08); hashing screening and scheduling links; an AI spending cap (AI-06); AI monitoring alerts (AI-34); a live-model release gate (AI-35); the AI data retention schedule (AI-33, counsel item 9) | Engineering or later product work |
+| Other | Review-and-apply extras already in the API (On hold, invite to screen, ask a recruiter; PIPELINE-17); keyboard next and previous; a visit-to-application funnel and conversion by source; second factor for customer owners and admins (PLATFORM-08); hashing screening and scheduling links; an AI spending cap (AI-06); AI monitoring alerts (AI-34); a live-model release gate (AI-35); the AI data retention schedule (AI-33, counsel item 9) | Engineering or later product work. **The second factor for customers was put off on 15 Oct (L-16, not now: the pilot relies on Google's or Microsoft's two-step sign-in).** |
 
 ---
 
@@ -1227,9 +1333,9 @@ Kanvis evidence: weight-only edits apply at once, structural edits re-score ever
 
 ### 12.1 Decisions only you can make
 
-1. **Answer D-01 to D-05** (table at the top). Until then, Waves D1 to D5 are not built; Wave 0, Wave S and D4-0-1 go ahead.
-2. **Follow-ups to keep in view, not new questions.** D-03 is itself the follow-up on B6 against Q27. The same pull exists between Q30 ("one courteous closing message, approved once") and Q27 (the closing message also goes by itself on day 5 under the default); whichever option you pick for D-03 settles both. L-04 (HR's talent-pool decisions) depends on the D-03 answer.
-3. **Choose the pilot customer and role** for each switch you approve, and whether new companies should later get it by default.
+1. **Answer D-01 to D-05** (table at the top). Until then, Waves D1 to D5 are not built; Wave 0, Wave S and D4-0-1 go ahead. **Done 14 Oct** (handed to Claude; D-01 revised by you on 15 Oct). Your own answers of 15 Oct (S7-1 to S7-4, F4) are built too.
+2. **Follow-ups to keep in view, not new questions.** D-03 is itself the follow-up on B6 against Q27. The same pull exists between Q30 ("one courteous closing message, approved once") and Q27 (the closing message also goes by itself on day 5 under the default); whichever option you pick for D-03 settles both. L-04 (HR's talent-pool decisions) depends on the D-03 answer. **Settled:** D-03 A (14 Oct) settles both; L-04 is still open.
+3. **Choose the pilot customer and role** for each switch you approve, and whether new companies should later get it by default. **Status (15 Oct): no switches were built; only S7's candidate-score switch exists (ITS only, on by default).**
 
 ### 12.2 Account and setup steps only you (or ITS) can do
 
@@ -1237,16 +1343,16 @@ Done together, step by step: Claude checks the current state and gives the click
 
 | Step | Where | Why | Blocks |
 |---|---|---|---|
-| Real outbound email: sender domain and its DNS records | Postmark and the domain registrar | Candidates must receive real emails | F-30, all live messaging, D2-C |
-| Inbound mail domain (MX records) | Postmark and the registrar | Emailed applications and candidate replies | F-11, F-30 |
+| Real outbound email: sender domain and its DNS records. **Not done (15 Oct): no Postmark account yet; staging uses the fake sender.** | Postmark and the domain registrar | Candidates must receive real emails | F-30, all live messaging, D2-C |
+| Inbound mail domain (MX records). **Not done (15 Oct).** | Postmark and the registrar | Emailed applications and candidate replies | F-11, F-30 |
 | Real malware scanner (ClamAV service) | Railway | Uploaded résumés and invited people's CVs are scanned for real | F-30, D2-C-3 |
 | Google Calendar OAuth client | the client's Google Cloud console | Interview invitations with Meet links | F-02, F-23, F-30 |
 | Error reporting (Sentry) and enforced content rules (`CSP_MODE=enforce`) | Sentry; Vercel and Railway settings | Errors reach ITS; pages are protected | F-30 |
 | Check Supabase sign-in settings (providers, identity linking, authenticator codes) | Supabase dashboard | Confirms the staff "Microsoft only" rule | F-26 |
-| `ANTHROPIC_API_KEY` repository secret, then press "Run fairness tests" | GitHub | Real-model fairness evidence before and after D-04 and D-05 | D4, D5, F-29 |
-| Apply the Design Partner plan to the pilot customer | the new console Plan screen (after F-01) | The pilot agreement promises it | pilot |
+| `ANTHROPIC_API_KEY` repository secret, then press "Run fairness tests". **Done: real-model runs on 14 and 15 Oct; the latest (38717936154) passed all 11 résumé-reading and scoring suites. The screening-chat suites are not in the button's run yet.** | GitHub | Real-model fairness evidence before and after D-04 and D-05 | D4, D5, F-29 |
+| Apply the Design Partner plan to the pilot customer | the new console Plan screen (after F-01; **Change plan has been in the console since S2**) | The pilot agreement promises it | pilot |
 | Sign the pilot agreement (counsel item 14), including permission to list the customer's jobs on the ITS page (if D-01 C) and to invite people (if D-02 C) | with the customer | Legal basis for the pilot | every pilot step |
-| Engage counsel and send the register | email to counsel | Nothing touches real candidates until the relevant items are answered | everything live |
+| Engage counsel and send the register. **15 Oct: the register records no counsel answers yet. Items 21 and 26 must be reviewed before real candidates in NYC, IL, CA or CO.** | email to counsel | Nothing touches real candidates until the relevant items are answered | everything live |
 
 Texting (SMS) stays off. Hosting stays Vercel, Supabase and Railway.
 
@@ -1267,11 +1373,12 @@ The register's rule (`docs/spec/11-counsel-register.md`): a feature whose review
 | 9 | Retention and deletion periods | F-03 (already-approved deletions only), F-24 time limits, D2-C-6 periods, D-05 superseded readings |
 | 14, 16, 19 | Pilot agreement, privacy notice, subprocessors | every pilot step; D1-C-2 listing |
 | 20 | Same-visit conversation | unchanged; invited applicants follow it like everyone |
-| 21 | NYC bias audit for a visible score | D-04 (does hiding identity change the analysis?), D-05 (re-scored lists), D2-B |
+| 21 | NYC bias audit for a visible score | D-04 (does hiding identity change the analysis?), D-05 (re-scored lists), D2-B. **Since S7 also the score candidates see (S7-1).** |
 | 22 | Batch decline | D-03 (batch path) |
 | 23 | Decision wording and timing (23c: the day-5 net) | D-03 (all options), F-13 wording |
 | 24 | Colorado adverse-decision line | unchanged |
 | 25 | Team notes in requests | unchanged |
+| 26 (added 15 Oct) | The Kanvis-style application (S7): the résumé read before Send, answers suggested from it, the written-up answers, facts kept from chats, the company's own questions | real candidates in NYC, IL, CA or CO (with item 21) |
 
 **New items to add to the register** (proposed here; the register file itself is not edited by this draft)
 
@@ -1300,3 +1407,4 @@ The register's rule (`docs/spec/11-counsel-register.md`): a feature whose review
 - Kanvis research (session scratchpad, not in the repository): the 7 October catalogue, routes, browser notes and earlier comparison and plan; the 14 October public-site re-check and read-only browser session.
 - Code read directly for this plan: `packages/ai/src/prompts/triage.ts`, `packages/workflows/src/definitions/application-intake.ts` (:195-394), `packages/core/src/match-score.ts`, `packages/core/src/policy.ts`, `packages/core/src/stages.ts` (`transition`), `packages/agents/src/decision-messages.ts` (`runUntoldSafetyNet`), `packages/db/src/schema/hiring.ts` (candidates, applications, assessments, screens), `packages/db/src/schema/platform.ts`, `packages/db/src/schema/tenancy.ts`, `packages/db/migrations/0033_one_visit_apply.sql`, `apps/api/src/services/pool.ts`, `apps/api/src/routes/admin.ts` and `apps/api/src/pages/*` route lists.
 - Not done: no tests run, no code changed, no Kanvis account used, nothing sent to Kanvis.
+- Update of 15 October: the git history of `main` (PRs #39 to #44) and of PR #45's branch; the fixed sections of `docs/audit/known-bugs.md`; `docs/workflow-decisions.md`; `docs/spec/11-counsel-register.md`; the code where a status mattered; the real-model fairness result files and the 15 October Kanvis candidate-side notes (session scratchpad). No tests were run for this update.

@@ -2,6 +2,8 @@
 
 *14 October 2026. The code was read at `origin/main` commit `dafb730` (merge of PR #38), on branch `kanvis-reaudit`. Nothing in the app was changed.*
 
+*Update, 15 October 2026: many of the problems below have since been fixed. See [Since this audit](#since-this-audit-to-15-oct-2026), just after the summary.*
+
 This page is the hub of the Phase One baseline. It says, in plain words, what Recruiting OS does today, who can do what, where it breaks, and what still needs a decision or live access to settle. The detail is in eleven files under [`docs/audit/`](audit/). This page links to them and does not repeat them.
 
 | File | What it holds |
@@ -51,6 +53,51 @@ How to read this page:
    - Requests for a person that the system raises itself (a candidate's HUMAN reply, a screening hand-off, a failed workflow and others) are never emailed to ITS; only the stuck-role nudges are. Nothing alerts when a request goes past its reply-by time.
 10. **Documents.** `docs/STATUS.md` and several specs are out of date (section 10).
 
+## Since this audit (to 15 Oct 2026)
+
+The rest of this page still describes the code as it was on 14 October. Since then, the founder handed product decisions to Claude ("keep my app basic with kanvis.me like flow", "complete my product"), and eight waves of work changed the app. Nothing was removed, and no database migration was added.
+
+| Wave | Pull request | What changed |
+|---|---|---|
+| S1 | #39, merged 15 Oct | Simpler staff screens (Home, Jobs, Candidates, Interviews, Settings) and shorter candidate pages. Every screen that says a decision is private now says the standard message goes by itself after 5 working days (D-03 A). |
+| S2 | #39 | A Kanvis-like jobs list, a ten-step quick start and a ready-made LinkedIn post. Fixes for plans and monthly allowances, alerts, interview scheduling and deleting AI data. The AI scores résumés without the name, contact details or earlier applications (D-04 C). |
+| S3 | #39 | Quick-start suggestions for jobs our guides do not cover. Deleting a candidate also clears the workflow engine's copies. Fairness tests check exactly what the scoring sees. |
+| S4 | #39 | Interviewers, and a recruiter given one candidate, see only their own. HR can no longer sign out an owner or admin. |
+| S5 | #42, merged 15 Oct | Steadier, fairer scoring: the licence rule, and the scorecard read three times. AI and email outages no longer lose work, and ITS is emailed the requests the system raises. "Get a new link" for candidates. A company switcher, "Leave this company" (L-10), a second approver for flagged wording (L-01), and the same round offered first after our interviewer misses one (L-12). |
+| S6 | #43, merged 15 Oct | The ITS console was rebuilt: Overview, Customers, Privacy requests, Problems, System. Dropdowns are readable in dark mode, and the staff menu folds to icons. |
+| S7 | #44, merged 15 Oct | The Kanvis-style application: résumé first, the company's own questions, a chat with a counter, and answers written up for the candidate to check and send. Afterwards the candidate sees their match score with a breakdown (founder decision S7-1). |
+| S8 | #45, in review, merging 15 Oct | Chats by emailed link or text ask the company's written questions. A returning candidate can keep facts from earlier chats at the same company, by tick box. The scoring never learns about the earlier application. The same PR adds a light/dark switch beside Sign out. |
+
+Two small PRs were also merged: #40 (the ITS queue says who raised each request and why) and #41 (the Railway worker's settings moved to its dashboard).
+
+**The summary above, point by point, on 15 October**
+
+| Point | Now |
+|---|---|
+| 1. Tests | 2,849 passed, 6 skipped, none failed after S8 (2,148 at the audit). The latest real-model fairness run (15 Oct, after S7, run 38717936154, about $0.42) passed all 11 résumé-reading and scoring suites it ran. The run after S5 had failed two bias pairs; S7 fixed that. The screening-chat tests have run only on the stand-in AI so far. |
+| 2. No email on staging | Still open: needs a Postmark account |
+| 3. Plans and allowances | Fixed (S2) |
+| 4. Privacy | AI copies are deleted (S2, S3). The stranger greeting is fixed (S5). A form sent with someone else's address still joins their record; this was accepted by decision (workflow-decisions.md, S5 table). |
+| 5. Permissions | Fixed (S4). Still open: a session left open in another company can switch back in (needs a database change). |
+| 6. Interviews | Fixed (S2), with more polish in S5 |
+| 7. Decline wording | Fixed (S1) |
+| 8. AI | Candidate text is fenced off in part (S2). The scorecard is read three times, an unquoted claim scores half, and outages are held and resumed (S5). |
+| 9. Operations | Alerts can be resolved, and critical ones are emailed (S2). ITS is emailed the requests the system raises, and a late one raises an alert (S5). Other alerts still show only in the console. |
+| 10. Documents | Being brought up to date on 15 October; start at [README.md](README.md) |
+
+**Where to read more**
+- Decisions and who made them: [workflow-decisions.md](workflow-decisions.md) (the dated sections at the top).
+- Each wave, its test totals and what is left, in order: the **Progress** section of [implementation-plan.md](implementation-plan.md). ([STATUS.md](STATUS.md) has notes on Waves S1 to S3 only.)
+- Which bug rows are fixed: the lists at the top of [audit/known-bugs.md](audit/known-bugs.md).
+- Kanvis: the candidate side was OBSERVED live on 15 October (one full application, with the AI interview and the score). The recruiter side is still waiting-list only, so it stays INFERRED. See [kanvis-reverse-engineering.md](kanvis-reverse-engineering.md) and [feature-comparison.md](feature-comparison.md).
+- What must keep working: [regression-checklist.md](regression-checklist.md).
+
+**Still open:**
+- Real email on staging (a Postmark account).
+- Before real candidates: a lawyer's review of counsel items 21 and 26 (the match score, and the new application) for NYC, IL, CA and CO, the other counsel items in section 11.4, and the production switches.
+- A real-model run of the screening-chat tests, which have run only on the stand-in AI.
+- Decisions not yet made: L-02, L-04 to L-09, L-11, L-13, L-15 and L-17 ([workflow-decisions.md](workflow-decisions.md#still-to-decide), Still to decide). Put off and open to asking again: D-02, D-05, L-03, L-14, L-16 and migration 0040.
+
 ---
 
 ## 0. How this audit was done
@@ -77,7 +124,7 @@ How to read this page:
 - **INFERRED:** read from shipped code strings or marketing copy.
 - **UNKNOWN:** not checked.
 
-Kanvis has shipped no new build since 7 October, so the 14 October findings re-confirm the earlier ones and add newly read code. Kanvis recruiter access is still by waiting list only, so no recruiter account was available, and Apply was never pressed. The "Reverse Engineer Anything" toolkit was assessed and not used.
+Kanvis has shipped no new build since 7 October, so the 14 October findings re-confirm the earlier ones and add newly read code. Kanvis recruiter access is still by waiting list only, so no recruiter account was available, and Apply was never pressed (until 15 October; see [Since this audit](#since-this-audit-to-15-oct-2026)). The "Reverse Engineer Anything" toolkit was assessed and not used.
 
 **Working files.** The raw test output, the per-area working data and the Kanvis notes are in the audit session's working folder, not in the repository.
 
@@ -1022,7 +1069,7 @@ Kanvis evidence is labelled as in section 0.
 | 5 | **Interview scheduling.** Times from interviewers' hours or Google Calendar, self-booking in the candidate's time zone, reminders, reschedule and cancel, the Cancelled column with automatic new times, an interviewer brief with pay hidden | Candidate, interviewer, owner | INTERVIEWS-01 to 04, 06 to 34, 40, 41 (INTERVIEWS-05, the Microsoft calendar, is not built) | No scheduling, calendar or booking anywhere in the code; interview rounds are stage labels moved by hand | INFERRED (absence, 14 October sweep) |
 | 6 | **Distribution to real job boards.** Indeed, LinkedIn and ZipRecruiter posted from the company's own accounts (by ITS by default) with live link checks; tracked links per board; public feeds; email-in applications | Owner; candidate | JOBS-22 to 30, 34 | Publishes to its own jobs board with Google structured data; LinkedIn through a copy-and-open composer | OBSERVED (job pages and structured data); INFERRED (LinkedIn composer) |
 | 7 | **Closing a role cleanly.** One closing message to everyone still in; a list of boards still showing the job; closed roles drop out of the careers page and feeds | Candidate; owner | JOBS-37; PIPELINE-27; JOBS-34 | A closed role stays on the public jobs board and in "More roles" lists, looking open | OBSERVED (14 October) |
-| 8 | **Candidates never see a score or the AI's reading.** A decision appears only once a person has told them, in four plain steps | Candidate | PIPELINE-40; APPLY-33 | The candidate's Applications page promises "Live status, scores, and your own answers"; a fit score is shown after applying | OBSERVED (page text); INFERRED (post-apply screen) |
+| 8 | **Candidates never see a score or the AI's reading.** A decision appears only once a person has told them, in four plain steps. *Changed 15 Oct (founder decision S7-1, built in S7): candidates now see their match score with a breakdown after Send, so this is no longer a difference. The decision still appears only once they have been told.* | Candidate | PIPELINE-40; APPLY-33 | The candidate's Applications page promises "Live status, scores, and your own answers"; a fit score is shown after applying | OBSERVED (page text); post-apply score OBSERVED 15 October (was INFERRED) |
 | 9 | **Applying needs no account.** Private link tokens; the candidate pages work without JavaScript | Candidate | PLATFORM-28; APPLY-01 to 04 | Applying needs a Kanvis sign-in (Google or an emailed 6-digit code) and a profile | INFERRED (code); parts OBSERVED-EARLIER |
 | 10 | **"What the AI may do on its own".** Per-action rules with locked "always a person" rows; nothing ever declines automatically; eligibility "no" only holds | Owner; candidate | JOBS-19; PIPELINE-10, 28; APPLY-11 | No equivalent settings were found; the AI drafts and a person commits | INFERRED (7 October comparison) |
 

@@ -1,5 +1,17 @@
 # Recruiting OS documentation
 
+> **Where we are (15 Oct 2026)**
+>
+> - **Done:** eight waves of work since the 14 Oct audit. S1 to S4 (simpler screens, fixes, permissions), S5 (complete the product), S6 (the ITS console) and S7 (the Kanvis-style application) are merged. S8 (the S7 follow-ups) is in review, merging 15 Oct. In short: [product-audit.md, "Since this audit"](product-audit.md#since-this-audit-to-15-oct-2026).
+> - **The six mission documents** (the audit, the Kanvis study, the comparison, the decisions, the plan and the regression checklist; table below) were written 14 Oct as the baseline. This 15 Oct refresh adds to each what has changed since.
+> - **Next:** merge S8. Small known fixes after that: the phone menu that stays open after a same-page link, one prompt line about the private note, one line on the job's Scoring tab that still says emailed and text chats ask other questions, and leftover test alerts on staging. Then a real-model run of the screening-chat tests (so far only the résumé-reading and scoring tests have run on the real model, and they pass).
+> - **Needs you:**
+>   1. Click **Deploy** for the Railway worker after each merge (S8 next).
+>   2. Set up a Postmark account, so staging sends real email.
+>   3. A lawyer for counsel items 21 and 26 before any real candidate in NYC, IL, CA or CO.
+>   4. The open decisions (L-02, L-04 to L-09, L-11, L-13, L-15 and L-17), in the **Still to decide** table of [workflow-decisions.md](workflow-decisions.md#still-to-decide). Put off and open to asking again: D-02, D-05, L-03, L-14, L-16 and migration 0040.
+>   5. The other production accounts (the real malware scanner, Google Calendar, error reporting): see [implementation-plan.md](implementation-plan.md), Progress, item 4.
+
 Governing context: [FOUNDER-CONTEXT.md](FOUNDER-CONTEXT.md) (the consultant-completed founder intake, 14 September 2026) and [17-founder-context-reconciliation.md](17-founder-context-reconciliation.md) (what it changed and what remains sequenced).
 
 The product requirements document is the set of documents below, read in order. They are kept in sync with the code; a pull request that changes behavior updates the matching document.
@@ -24,7 +36,7 @@ The product requirements document is the set of documents below, read in order. 
 | 15 | [Integrations](15-integrations.md) | Every adapter and its status |
 | 16 | [Admin](16-admin.md) | The internal console and the six questions |
 
-The current state of the product (what is built, what tests prove, what needs a CI run, what only the founder can do before a deploy, and the decisions still open) is in [STATUS.md](STATUS.md), updated 30 September 2026, followed by the history by slice. A developer joining the team starts with [handoff/developer-onboarding.md](handoff/developer-onboarding.md).
+The current state of the product (what is built, what tests prove, what needs a CI run, what only the founder can do before a deploy, and the decisions still open) is in [STATUS.md](STATUS.md): dated notes on Waves S1 to S3 at the top, then the history by slice. For Waves S4 to S8, their test totals and what is left, read the **Progress** section of [implementation-plan.md](implementation-plan.md). A developer joining the team starts with [handoff/developer-onboarding.md](handoff/developer-onboarding.md).
 
 Release-1 production specification (14 September 2026, awaiting founder approval): [spec/README.md](spec/README.md). It begins with a decisions register of contradictions, open decisions, security risks, compliance questions, and simulated behavior; the ten documents that follow are the build contract for the first release.
 
@@ -37,9 +49,9 @@ A code-verified baseline of everything the product does today, a study of Kanvis
 | [product-audit.md](product-audit.md) | Architecture, routes, feature inventory, roles and permissions, journeys, data, integrations and AI, tests, known bugs, unknowns; detail in [audit/](audit/) (nine area files, the 364-row [feature inventory](audit/feature-inventory.md) and the [known bugs](audit/known-bugs.md)) |
 | [kanvis-reverse-engineering.md](kanvis-reverse-engineering.md) | What Kanvis does, recruiter and candidate journeys, interaction patterns, each claim labelled observed, inferred or unknown; the REA toolkit assessment |
 | [feature-comparison.md](feature-comparison.md) | Feature-by-feature matrix (164 rows), our strengths to preserve, conflicts, fix-first list |
-| [workflow-decisions.md](workflow-decisions.md) | Decisions waiting for the founder (batch 1: D-01 to D-05), later batches, and every decision already made |
-| [implementation-plan.md](implementation-plan.md) | Draft design and ordered backlog; decision-dependent parts wait for answers |
-| [regression-checklist.md](regression-checklist.md) | What must still work before any change is called done, with the 14 October test baseline |
+| [workflow-decisions.md](workflow-decisions.md) | Every decision made (batch 1, D-01 to D-05, decided 14 Oct; the S5, S7 and S8 decisions 15 Oct), the later batches still open, and who decided each |
+| [implementation-plan.md](implementation-plan.md) | Starts with **Progress** (15 Oct): what each wave built and what is left, in order; then the 14 October design and backlog |
+| [regression-checklist.md](regression-checklist.md) | What must still work before any change is called done, with the 14 October test baseline; checks for S7 and S8 added 15 October |
 
 ## Runbooks (`runbooks/`)
 
