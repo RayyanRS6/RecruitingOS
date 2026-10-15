@@ -468,6 +468,13 @@ describe("Slice 1 API", () => {
     expect(detail.events.length).toBeGreaterThan(0);
     const costs = (await (await asAdmin("GET", "/api/v1/admin/costs")).json()) as Array<{ task: string }>;
     expect(costs.some((c) => c.task === "intake.turn")).toBe(true);
+    // ?since= (the console's "this month", Wave S6): only the runs from that day on; a day before every run gives the
+    // same answer as no filter, a day after them none, and anything but a real date is refused
+    const sorted = (rows: unknown[]) => rows.map((r) => JSON.stringify(r)).sort();
+    const sinceLongAgo = (await (await asAdmin("GET", "/api/v1/admin/costs?since=2000-01-01")).json()) as unknown[];
+    expect(sorted(sinceLongAgo)).toEqual(sorted(costs));
+    expect(await (await asAdmin("GET", "/api/v1/admin/costs?since=2999-01-01")).json()).toEqual([]);
+    for (const bad of ["October", "2026-02-30", "2026-10-1"]) expect((await asAdmin("GET", `/api/v1/admin/costs?since=${bad}`)).status, bad).toBe(400);
   });
 
   it("keeps postings and approvals consistent", async () => {

@@ -65,7 +65,7 @@ describe("the first draw matches the server's", () => {
     expect(server).toContain("Job · Bright Dental");
     // nothing from the jobs list: no job title, no job picker, no Live pill, no More menu waiting on the job's status
     expect(browser).not.toContain("Dental Hygienist");
-    expect(browser).not.toContain('aria-label="Job"');
+    expect(browser).not.toContain("Switch job");
     expect(browser).not.toContain('class="dot pulse"');
     expect(browser).not.toContain('aria-label="More for this job"');
     // the job's tab strip is there on both sides (its id is in the address)

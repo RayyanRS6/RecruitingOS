@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import NextLink from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { Alert, Avatar, Button, Icon, Kbd, Menu } from "@ros/ui";
+import { Alert, Avatar, Button, Icon, type IconName, Kbd, Menu } from "@ros/ui";
 import { ApiError, api, type RoleSummary } from "@ros/web/src/api/client";
 import { NavLink } from "@ros/web/src/nav";
 import { otherCompanies, railCompact, railListsRoles, railRoles, teamRoleWord } from "@ros/web/src/rail";
@@ -15,15 +15,51 @@ import type { Me } from "../lib/session";
 import "./app-shell.css";
 
 /**
+ * The ITS console's sections under Console in the rail, each its own address (redesign spec 3.1). Each has an icon, so
+ * the rail folded to icons still shows all five and every section stays one click away (spec 3.6).
+ */
+export const CONSOLE_LINKS: ReadonlyArray<{ to: string; label: string; icon: IconName }> = [
+  { to: "/admin", label: "Overview", icon: "home" },
+  { to: "/admin/customers", label: "Customers", icon: "building" },
+  { to: "/admin/privacy", label: "Privacy requests", icon: "lock" },
+  { to: "/admin/problems", label: "Problems", icon: "alert" },
+  { to: "/admin/system", label: "System and settings", icon: "settings" },
+];
+
+/** Where this browser remembers that the rail was folded to icons (founder answer F3). */
+export const RAIL_COLLAPSED_KEY = "ros.rail.collapsed";
+
+/** Whether the rail was folded on this browser; false where nothing can be read (blocked site data, a private window). */
+export function railCollapsedIn(storage: Storage | null): boolean {
+  try {
+    return storage?.getItem(RAIL_COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Remembers the choice; where the browser keeps nothing, the rail still folds for this visit. */
+export function rememberRailCollapsed(storage: Storage | null, collapsed: boolean): void {
+  try {
+    if (collapsed) storage?.setItem(RAIL_COLLAPSED_KEY, "1");
+    else storage?.removeItem(RAIL_COLLAPSED_KEY);
+  } catch {
+    // nothing to do: the choice holds until the page is left
+  }
+}
+
+/**
  * The signed-in frame (docs/07): the rail, the staff-access notice, the development-mode notice, and the page.
  *
  * The rail, top to bottom: the company chip (your role, a "Switch company" menu for someone in more than one company,
  * and a cog to Settings), "Start a hire" for the people who may
  * start one (N opens it from anywhere outside a text field, on a page with nothing changed), Home, Jobs with the jobs
  * being worked on listed underneath (for members only; a live job opens on its Candidates), Candidates, Interviews,
- * Settings (Queue and Console for ITS staff), and who is signed in with Sign out. On a job's own pages it folds to a
- * column of icons. Under 900px it becomes a top bar: Start a hire and Sign out stay in it, and the links fold behind a
- * Menu button. (The routes keep their old names: /, /roles, /talent, /setup.)
+ * Settings (Queue and Console for ITS staff, the console's five sections listed under Console for platform
+ * administrators), and who is signed in with Sign out. On a job's own pages it folds to a column of icons; on every other
+ * page the button at its top folds it the same way (founder answer F3), and this browser remembers the choice. Under 900px
+ * it becomes a top bar: Start a hire and Sign out stay in it, and the links fold behind a Menu button. (The routes keep
+ * their old names: /, /roles, /talent, /setup.)
  */
 export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
   const qc = useQueryClient();
@@ -91,6 +127,23 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [mayStartHire, shortcutOn, unsavedWork, router]);
 
+  // The rail folded to icons by choice (F3): read after the first render (the server has no storage, so both first draws
+  // show it open), saved on every change; where the browser keeps nothing, it still folds for this visit. A job's pages
+  // fold it whatever was chosen, so the button is not offered there. A full page load therefore draws the rail open and
+  // folds it just after; that brief jump is accepted rather than adding an inline script before paint. The button keeps
+  // one name and says whether it is on (aria-pressed).
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    setCollapsed(railCollapsedIn(browserStorage()));
+  }, []);
+  const foldedByPage = railCompact(pathname);
+  const foldedByChoice = collapsed && !foldedByPage;
+  const toggleRail = () => {
+    const next = !collapsed;
+    setCollapsed(next);
+    rememberRailCollapsed(browserStorage(), next);
+  };
+
   // The phone menu belongs to the page it was opened on: following a link closes it. Escape closes it too.
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const menuOpen = menuFor === pathname;
@@ -135,12 +188,17 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
   const who = me.user.name ?? me.user.email;
   const roleWord = teamRoleWord(myRole, !!me.staffAccess);
   return (
-    <div className="shell" data-rail={railCompact(pathname) ? "compact" : undefined}>
+    <div className="shell" data-rail={foldedByPage || foldedByChoice ? "compact" : undefined} data-collapsed={foldedByChoice ? "true" : undefined}>
       <nav className="rail" aria-label="Main">
         <div className={companyName ? "brand with-org" : "brand"}>
           Recruiting OS
           <small>{companyName ? (active ? companyName : `${companyName} (recruiter access)`) : isStaff ? "ITS staff" : "No company"}</small>
         </div>
+        {foldedByPage ? null : (
+          <button type="button" className="icon-btn rail-collapse" aria-label="Fold the menu to icons" aria-pressed={collapsed} title={collapsed ? "Show the full menu" : "Fold the menu to icons"} onClick={toggleRail}>
+            <Icon name={collapsed ? "chevron-right" : "chevron-left"} />
+          </button>
+        )}
         {companyName ? (
           <div className="rail-org">
             <Avatar name={companyName} tone="ink" shape="square" letters={1} />
@@ -213,6 +271,15 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
             <>
               <div className="section">Admin</div>
               <NavLink to="/admin"><Icon name="lock" />Console</NavLink>
+              {/* The console's sections (Wave S6): Console stays marked on all of them, the section itself too. Folded,
+                  the rail still shows them, as icons with their word (app-shell.css). */}
+              <ul className="rail-sub console-sub" aria-label="Console sections">
+                {CONSOLE_LINKS.map((l) => (
+                  <li key={l.to}>
+                    <NavLink to={l.to} end={l.to === "/admin"}><Icon name={l.icon} /><span className="rail-sub-title">{l.label}</span></NavLink>
+                  </li>
+                ))}
+              </ul>
             </>
           ) : null}
         </div>

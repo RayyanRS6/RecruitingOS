@@ -18,7 +18,7 @@ import { LOW_CONFIDENCE_LABEL } from "../evidence";
 import { focusLost, rowFocusAfterMove } from "../focus-after";
 import { activeCompanyOf } from "../rail";
 import { canDecline, canManageInterviews, canSeeTalent, canShareJob } from "../roles";
-import { jobTabs } from "../role-status";
+import { jobTabs, roleStatus } from "../role-status";
 import { actionToast, batches, bulkSendToast, holdDay, mergeDecisionResults, newTimesToast, noticeText, panelStepFrom, stageBlocked, stageIntent, type PanelStep } from "../talent-actions";
 import { InlineUndo } from "../components/InlineUndo";
 import { useBulkTakeBack, useBulkUndoToast } from "../components/use-undo";
@@ -42,8 +42,19 @@ import { useStartDraft } from "./new-role/use-start-draft";
 /** Where the candidate panel stands: who, which section, a step a stage choice opened, and the list it was opened from. */
 type PanelState = { id: string; tab: PanelTab; step: PanelStep | null; roundKey?: string; ids: string[] | null; compose: boolean };
 
-/** The link filters (`?ownerStage=`, `?stage=`, `?told=`, `?applying=`, `?cancelled=`) as one key: when a link changes them, the view starts again from it. */
-const linkKey = (p: URLSearchParams) => ["ownerStage", "stage", "told", "applying", "cancelled"].map((k) => p.get(k) ?? "").join("|");
+/** The filters a link can set: `?ownerStage=`, `?stage=`, `?told=`, `?applying=`, `?cancelled=`. */
+const LINK_FILTERS = ["ownerStage", "stage", "told", "applying", "cancelled"] as const;
+/** The link filters as one key: when a link changes them, the view starts again from it. */
+const linkKey = (p: URLSearchParams) => LINK_FILTERS.map((k) => p.get(k) ?? "").join("|");
+
+/** One filter in force, shown as a removable chip above the list. */
+type ActiveFilter = { id: string; label: string; remove: () => void };
+
+/** The words of a Match choice, as its dropdown chip shows them. */
+const readingLabel = (id: ReadingFilter) => READING_FILTERS.find((f) => f.id === id)?.label ?? READING_FILTERS[0].label;
+
+/** What an empty list says when the filters in force leave nobody (Wave S6); "Clear filters" sits under it. */
+const NO_MATCH = { title: "Nothing matches these filters", body: "Nobody here fits every filter that is on. Remove one above, or clear them all." };
 
 /** What a row's "Still applying" chip and toggle say on hover. */
 const STILL_APPLYING_TITLE = "Sent the form and answering the screening questions now";
@@ -54,6 +65,10 @@ const STILL_APPLYING_TITLE = "Sent the form and answering the screening question
  * click; the stages nobody is at wait under "More stages". Each row has the person's initials, name, when they
  * applied, how long they have waited on you, at most two chips, the match score and the stage button. A row opens the
  * candidate panel, whose place is kept in the address (`?open=<id>&tab=…`).
+ *
+ * Above the list (Wave S6, as on Kanvis): Match, the order and the job switcher are dropdown chips with the choice in
+ * force ticked; every filter in force shows as a chip that removes it, with "Clear all"; a list the filters leave empty
+ * says "Nothing matches these filters" with one "Clear filters".
  *
  * Beside the strip, "Still applying" (plan E6) counts the people still in the visit that sent their application (the
  * screening chat offered with it, not finished yet) and shows only them on a click. They are never counted or shown as
@@ -210,11 +225,33 @@ export function People() {
   };
 
   const total = counts?.total ?? rows.length;
-  const empty = emptyText(view, total);
-  const filtersOn = view.reading !== "any" || view.query.trim() !== "" || view.waiting || view.applying || view.stage !== "all" || !!view.internalStage || !!view.told || !!view.cancelledReason;
   const headline = [`${total} ${total === 1 ? "applicant" : "applicants"}`, waitingCount ? `${waitingCount} waiting on you` : "", applyingCount ? `${applyingCount} still applying` : ""].filter(Boolean).join(" · ");
   const strip = stripParts(counts, view.stage);
   const pickStage = (stage: TalentView["stage"]) => setView({ stage, waiting: false, cancelledReason: null });
+  // Every filter that narrows the list, as a removable chip above it (Wave S6, as on Kanvis), so a short list always
+  // says why. The order is not a filter and stays.
+  const activeFilters: ActiveFilter[] = [];
+  if (view.stage !== "all") activeFilters.push({ id: "stage", label: `Stage: ${[...strip.shown, ...strip.more].find((s) => s.id === view.stage)?.label ?? view.stage}`, remove: () => setView({ stage: "all", cancelledReason: null }) });
+  if (view.cancelledReason) activeFilters.push({ id: "cancelled", label: cancelledChips(counts?.cancelled, rows).find((c) => c.id === view.cancelledReason)?.label ?? view.cancelledReason, remove: () => setView({ cancelledReason: null }) });
+  if (view.waiting) activeFilters.push({ id: "waiting", label: "Waiting on you", remove: () => setView({ waiting: false }) });
+  if (view.applying) activeFilters.push({ id: "applying", label: STILL_APPLYING_LABEL, remove: () => setView({ applying: false }) });
+  if (view.told) activeFilters.push({ id: "told", label: "Not told yet", remove: () => setView({ told: null }) });
+  if (view.internalStage) activeFilters.push({ id: "internal-stage", label: `Only: ${STAGE_LABEL[view.internalStage] ?? view.internalStage.replace(/_/g, " ")}`, remove: clearStageLink });
+  if (view.reading !== "any") activeFilters.push({ id: "reading", label: readingLabel(view.reading), remove: () => setView({ reading: "any" }) });
+  if (view.query.trim()) activeFilters.push({ id: "query", label: `Search: ${view.query.trim()}`, remove: () => setView({ query: "" }) });
+  const filtersOn = activeFilters.length > 0;
+  /** Every filter off, the order kept; the link's filters leave the address too, so a reload does not bring them back. */
+  const clearFilters = () => {
+    const next = new URLSearchParams(search);
+    for (const k of LINK_FILTERS) next.delete(k);
+    setViewState({ key: linkKey(next), view: { ...defaultView(next, null), order: view.order } });
+    const qs = next.toString();
+    if (qs !== search.toString()) nav(`${window.location.pathname}${qs ? `?${qs}` : ""}`, { replace: true });
+  };
+  // When filters leave nobody and no closer reason fits, emptyText's plain answer ("Nobody here") becomes the one
+  // no-match state, with "Clear filters" under it.
+  const said = emptyText(view, total);
+  const empty = filtersOn && total > 0 && said.title === "Nobody here" ? NO_MATCH : said;
   const job = detail.data ?? null;
   const status = job?.status ?? role?.status ?? null;
   // The shared header's one line (place · type · pay), as on the job's other tabs; the counts are also on the Candidates
@@ -245,10 +282,16 @@ export function People() {
         sub={sub}
         actions={
           <>
+            {/* Another job's candidates: a dropdown with this job ticked and each job's status beside its title (Wave S6). */}
             {jobList && jobList.length > 1 ? (
-              <select className="select" style={{ width: "auto" }} value={roleId ?? ""} onChange={(e) => nav(`/roles/${e.target.value}/talent`)} aria-label="Job">
-                {jobList.map((r) => <option key={r.id} value={r.id}>{r.title}</option>)}
-              </select>
+              <Menu
+                label="Switch job"
+                heading="Jobs"
+                currentLabel="Showing"
+                align="end"
+                items={jobList.map((r) => ({ id: r.id, label: r.title, hint: roleStatus(r.status).label, current: r.id === roleId }))}
+                onSelect={(id) => nav(`/roles/${id}/talent`)}
+              />
             ) : null}
             {/* On the board, "Have a recruiter check this" sits in the board's own header. */}
             {roleId && mode === "list" ? <AskRecruiter roleId={roleId} /> : null}
@@ -302,15 +345,45 @@ export function People() {
             {mayTell && (counts?.notTold ?? 0) > 0 ? <button type="button" className="toggle-chip" aria-pressed={view.told === "not_told"} onClick={() => setView(view.told === "not_told" ? { told: null } : { told: "not_told", stage: "not_moving_forward", waiting: false, applying: false, cancelledReason: null })}>Not told yet <span className="count">{counts?.notTold}</span></button> : null}
             {/* under Cancelled: what each person chose, or that they did not come (founder decision 2A) */}
             {view.stage === "cancelled" ? cancelledChips(counts?.cancelled, rows).map((c) => <button key={c.id} type="button" className="toggle-chip" aria-pressed={view.cancelledReason === c.id} onClick={() => setView({ cancelledReason: view.cancelledReason === c.id ? null : c.id })}>{c.label} <span className="count">{c.count}</span></button>) : null}
-            {view.internalStage ? <button type="button" className="toggle-chip" aria-pressed="true" aria-label={`Showing only: ${STAGE_LABEL[view.internalStage] ?? view.internalStage}. Remove this filter`} onClick={clearStageLink}>{STAGE_LABEL[view.internalStage] ?? view.internalStage.replace(/_/g, " ")} <Icon name="x" size={14} /></button> : null}
             <input className="input talent-search" type="search" value={view.query} onChange={(e) => setView({ query: e.target.value })} placeholder="Search name, email or source" aria-label="Search candidates" />
-            <select className="select" aria-label="Match" value={view.reading} onChange={(e) => setView({ reading: e.target.value as ReadingFilter })}>
-              {READING_FILTERS.filter((f) => f.id !== "missing_must_have" || provenMissKnown).map((f) => <option key={f.id} value={f.id}>{f.label}{f.id === "any" ? "" : ` (${byReading[f.id]})`}</option>)}
-            </select>
-            <select className="select" aria-label="Sort by" value={view.order} onChange={(e) => setView({ order: e.target.value as Order })}>
-              {ORDERS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-            </select>
+            {/* Match and the order as dropdown chips (Wave S6): the choice in force is written on the chip and ticked in its list. */}
+            <Menu
+              label={`Match: ${readingLabel(view.reading)}`}
+              heading="Match"
+              buttonClassName="toggle-chip"
+              currentLabel="Now"
+              align="end"
+              items={READING_FILTERS.filter((f) => f.id !== "missing_must_have" || provenMissKnown).map((f) => ({ id: f.id, label: f.id === "any" ? f.label : `${f.label} (${byReading[f.id]})`, current: f.id === view.reading }))}
+              onSelect={(id) => setView({ reading: id as ReadingFilter })}
+            />
+            <Menu
+              label={`Sort: ${ORDERS.find((o) => o.id === view.order)?.label ?? ORDERS[0].label}`}
+              heading="Sort by"
+              buttonClassName="toggle-chip"
+              currentLabel="Now"
+              align="end"
+              items={ORDERS.map((o) => ({ id: o.id, label: o.label, current: o.id === view.order }))}
+              onSelect={(id) => setView({ order: id as Order })}
+            />
           </div>
+          {/* What narrows the list, each removable, and one way to clear them all (Wave S6, as on Kanvis). */}
+          {activeFilters.length ? (
+            <div className="talent-toolbar" style={{ gap: 8 }}>
+              <span className="small muted" id="talent-filters-on">Filters on</span>
+              <ul className="own-items" aria-labelledby="talent-filters-on">
+                {activeFilters.map((f) => (
+                  <li key={f.id}>
+                    <button type="button" className="toggle-chip" onClick={f.remove}>
+                      <span className="sr-only">Remove the filter: </span>
+                      {f.label}
+                      <Icon name="x" size={14} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <Button size="sm" variant="ghost" onClick={clearFilters}>Clear all</Button>
+            </div>
+          ) : null}
           {view.applying ? <Alert tone="info">{STILL_APPLYING_TEXT}</Alert> : null}
           {mayTell && notTold.length && (view.told === "not_told" || view.stage === "not_moving_forward") ? (
             <Alert tone="info">
@@ -345,7 +418,7 @@ export function People() {
                 <ShareJob roleId={roleId} roleTitle={role?.title ?? job?.title ?? ""} companyName={company.name} compact />
               </div>
             ) : shown.length === 0 ? (
-              <EmptyState icon="talent" title={empty.title} body={empty.body} action={filtersOn && total > 0 ? <Button size="sm" onClick={() => setViewState({ key, view: { ...defaultView(new URLSearchParams(), null), waiting: false } })}>Show everyone</Button> : undefined} />
+              <EmptyState icon="talent" title={empty.title} body={empty.body} action={filtersOn && total > 0 ? <Button size="sm" onClick={clearFilters}>Clear filters</Button> : undefined} />
             ) : (
               <div className="talent-list">
                 {shown.map((a) => <TalentRow key={a.id} a={a} busy={rowAct.isPending && rowAct.variables?.id === a.id} onOpen={() => openPanel(a.id)} onMove={(to) => onRowMove(a, to)} />)}

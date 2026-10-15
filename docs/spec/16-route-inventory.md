@@ -23,7 +23,8 @@ Legend for states: L = loading (`(app)/loading.tsx` skeleton plus each page's ow
 | `/setup` | Setup (company, team, availability, services, policies) | session | active company; `company.read`; edits need `company.update` / `policy.manage` | yes | yes (no members) | yes | yes, phone | axe | journey, routes |
 | `/recruiter/queue` | Recruiter queue | session | platform role its_recruiter or platform_admin (others → home) | yes | yes | yes | yes, phone | axe | routes, journey (staff) |
 | `/recruiter/queue/[id]` | Queue item | session | as above; full context only under a grant | yes | n/a | yes | yes | axe | (API-tested; queue page axe) |
-| `/admin` | Admin console (tabs: customers, workflows, AI runs, failures, costs, queue, business calendar) | session | platform_admin (others → home or queue) | yes | yes | yes | yes, phone | axe per tab | routes |
+| `/admin` | Console Overview (Needs attention, Customers card, Costs this month, System line) | session | platform_admin (others → home or queue) | yes | yes | yes | yes, phone | axe | routes |
+| `/admin/customers`, `/admin/privacy`, `/admin/problems`, `/admin/system` | Console sections, each with its part tabs (`?view=`) and drawers (`?open=`) | session | as above | yes | yes | yes | yes, phone | axe per part | routes, company-check, one-visit-owner |
 | any other path | Not found | session | — | — | — | — | yes | axe | routes |
 
 ## Hono-served routes mounted by the shell

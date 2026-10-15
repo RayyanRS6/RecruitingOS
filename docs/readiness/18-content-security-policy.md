@@ -60,7 +60,7 @@ host. This is the documented secure approach in place of a nonce on every attrib
 Browsers post violations to `POST /api/csp-report` (both report formats). The server keeps the document path with the
 candidate token removed, the violated directive, the blocked origin (origin only), the source origin, a line number, and
 a truncated user agent; never a query string, a token, or candidate data. Identical violations are counted, not repeated.
-Administrators see them in the console (Failures → Content-security violations) and mark each reviewed with a
+Administrators see them in the console (Console › Problems › Security reports) and mark each reviewed with a
 disposition. A violation that recurs after its review shows up again for another look and keeps the earlier note.
 Fields are bounded and the endpoint is rate-limited per address; identical reports arriving together become one row.
 

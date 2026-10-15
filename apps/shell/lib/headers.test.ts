@@ -36,6 +36,8 @@ describe("framing of the application's pages", () => {
     expect(mounts).toContainEqual({ path: "/api", catchAll: true });
     expect(mounts).toContainEqual({ path: "/healthz", catchAll: false });
     expect(pages).toEqual(expect.arrayContaining(["/", "/login", "/roles/123", "/admin", "/recruiter/queue/123", "/setup/company"]));
+    // the console's sections, each its own page (Wave S6); /admin/privacy is the console's, not the mounted /privacy
+    expect(pages).toEqual(expect.arrayContaining(["/admin/customers", "/admin/privacy", "/admin/problems", "/admin/system"]));
 
     for (const m of mounts) {
       for (const path of m.catchAll ? [m.path, `${m.path}/`, `${m.path}/v1/x`] : [m.path]) expect(framed.test(path), path).toBe(false);

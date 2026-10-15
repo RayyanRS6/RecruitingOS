@@ -125,6 +125,34 @@ describe("design tokens", () => {
     }
   });
 
+  // Wave S6 (15 October 2026): in dark mode on Windows a dropdown's open list showed near-white words on a light list.
+  it("colours every dropdown's open list itself, readable in both themes, and leaves the native arrow alone", () => {
+    expect(css).toContain("select, option, optgroup { background-color: var(--surface); color: var(--ink); }");
+    // an element rule, so a select without a class is covered; the .select class rule still dresses the closed control
+    expect(css.indexOf("select, option, optgroup {")).toBeLessThan(css.indexOf(".input, .textarea, .select {"));
+    expect(css).toMatch(/\.input, \.textarea, \.select \{[^}]*background: var\(--surface\); color: var\(--ink\);/);
+    for (const theme of [light, darkByPreference, darkByChoice]) {
+      const ratio = contrast(colour(theme, "--ink"), colour(theme, "--surface"));
+      expect(ratio, `an option's words on its list are ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(7);
+    }
+    // no drawn arrow: the native one follows color-scheme in both themes
+    expect(css).not.toMatch(/appearance\s*:\s*none/);
+    expect(css).toMatch(/:root \{[^}]*color-scheme: light;/);
+    expect(css).toMatch(/:root:not\(\[data-theme="light"\]\) \{[^}]*color-scheme: dark;/);
+    expect(css).toMatch(/:root\[data-theme="dark"\] \{[^}]*color-scheme: dark;/);
+  });
+
+  it("edges an open menu with the stronger hairline, so it shows against the page in dark mode", () => {
+    expect(css).toMatch(/\.menu \{[^}]*border: 1px solid var\(--line-2\);/);
+    for (const theme of [light, darkByPreference]) expect(luminance(colour(theme, "--line-2"))).not.toBe(luminance(colour(theme, "--surface")));
+  });
+
+  it("keeps a pressed filter chip and the chosen tab visible under forced colours (Windows High Contrast)", () => {
+    const forced = css.match(/@media \(forced-colors: active\) \{([\s\S]*?\})\s*\}/)?.[1] ?? "";
+    expect(forced).toMatch(/\.toggle-chip\[aria-pressed="true"\] \{[^}]*forced-color-adjust: none;[^}]*background: Highlight;[^}]*color: HighlightText;/);
+    expect(forced).toMatch(/\.tab\[aria-selected="true"\]::after \{[^}]*background: Highlight;/);
+  });
+
   it("keeps the warm paper in the light theme and a cool, neutral grey in the dark one (founder decision Q1, 10 October 2026)", () => {
     const rgb = (hex: string) => [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16));
     for (const name of ["--ground", "--surface-2", "--surface-3", "--surface-rail", "--tint", "--line", "--line-2", "--line-strong", "--ink", "--ink-2", "--ink-3"]) {

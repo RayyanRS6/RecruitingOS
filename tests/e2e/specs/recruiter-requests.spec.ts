@@ -45,6 +45,12 @@ test("ask, read the full answer on Today, and reopen it when it did not solve th
   const staffPage = await staff.newPage();
   await signIn(staffPage, { email: "admin-e2e@identifiedtalent.com", name: "Admin", provider: "azure", aal2: true });
   expect((await staffPage.request.post(`${baseURL}/api/v1/escalations/${mine.id}/claim`)).ok()).toBeTruthy();
+  // the queue page (Wave S6): the "Yours" pill from the address, the actions at the top, and the console link for an administrator
+  await staffPage.goto(`/recruiter/queue/${mine.id}?show=yours`);
+  await expect(staffPage.getByRole("button", { name: /^Yours \d+$/ })).toHaveAttribute("aria-pressed", "true", { timeout: 30_000 });
+  await expect(staffPage.getByRole("button", { name: "Release" })).toBeVisible();
+  await expect(staffPage.getByRole("link", { name: "See this customer in the console" })).toHaveAttribute("href", /^\/admin\/customers\?open=/);
+  await expectAccessible(staffPage, "recruiter queue request");
   const answer = `Yes. ${"Her evening clinic experience fits this role well. ".repeat(8)}Interview her this week.`;
   expect((await staffPage.request.post(`${baseURL}/api/v1/escalations/${mine.id}/resolve`, { data: { resolution: answer, minutesSpent: 15 } })).ok()).toBeTruthy();
 

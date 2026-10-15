@@ -28,6 +28,15 @@ export function useTableSort<K extends string>(initial: { key: K; dir: SortDir }
         },
       };
     },
+    /**
+     * For a "Sort" menu beside the table: puts it in a column's useful order, as that heading's first press would.
+     * Choosing the order already in force keeps it (a heading press flips it instead).
+     */
+    choose(key: K, label: string, kind: SortKind, first?: SortDir): void {
+      const next = nextSort(null, key, kind, first);
+      setSort(next);
+      setAnnounce(sortAnnouncement(label, kind, next.dir));
+    },
     apply<T>(rows: readonly T[], by: Record<K, (row: T) => SortValue>): T[] {
       return sort ? sortRows(rows, by[sort.key], sort.dir) : [...rows];
     },

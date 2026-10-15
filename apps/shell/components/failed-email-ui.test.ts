@@ -6,11 +6,11 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Known-bugs row 120 (Wave S5, C3): an email application that could not be imported is listed on the ITS console's
- * Failures tab with who sent it, the job, why it failed, the email itself one click away, and "Try again" once the job
- * takes applications again.
+ * Problems › Email part (redesign spec 3.2, Wave S6 S6-D) with who sent it, the job, why it failed, the email itself one
+ * click away, and "Try again" once the job takes applications again.
  */
 (globalThis as { React?: typeof React }).React = React;
-const { Failures, failedEmailLine } = await import("@ros/web/src/pages/Admin");
+const { failedEmailLine, PROBLEMS_EMPTY, ProblemsSection } = await import("@ros/web/src/pages/admin/problems");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const now = new Date().toISOString();
@@ -25,12 +25,13 @@ function render(rows: unknown[]): string {
   qc.setQueryData(["admin", "suppressions"], []);
   qc.setQueryData(["admin", "csp"], { mode: "report-only", reports: [] });
   qc.setQueryData(["admin", "failed-email-applications"], rows);
-  return text(renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, createElement(Failures) as ReactNode)));
+  return text(renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, createElement(ProblemsSection, { view: "email", onView: () => undefined }) as ReactNode)));
 }
 
-describe("failed email applications on the console's Failures tab", () => {
+describe("failed email applications on the console's Problems › Email part", () => {
   it("lists each one with its job, the reason, the email behind Show the email, and Try again when the job takes applications", () => {
     const words = render([ready, waiting]);
+    expect(words).toContain("Email 2");
     expect(words).toContain("Email applications that could not be imported (2)");
     expect(words).toContain("New applicant: Ezra Lind");
     expect(words).toContain("noreply@indeed.com · Dental Assistant at Bright Dental · résumé attached");
@@ -42,7 +43,7 @@ describe("failed email applications on the console's Failures tab", () => {
   });
 
   it("says None when nothing failed", () => {
-    expect(render([])).toContain("Email applications that could not be imported (0) None.");
+    expect(render([])).toContain(`Email applications that could not be imported (0) ${PROBLEMS_EMPTY}`);
   });
 
   it("words the line for each kind of row", () => {

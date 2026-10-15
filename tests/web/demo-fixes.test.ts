@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { tookPlaceCard } from "../../apps/web/src/interview-defaults";
 import { eligibilityAnswerWords, notReadYetWords } from "../../apps/web/src/pages/candidate-panel/helpers";
-import { ACK_FOR_ANOTHER, ackIsForAnother, retryDeletionToast } from "../../apps/web/src/pages/Admin";
+import { ACK_FOR_ANOTHER, ackIsForAnother, retryDeletionToast } from "../../apps/web/src/pages/admin/problems";
 import { meetingLinkFor } from "../../apps/web/src/pages/candidate-panel/needs-you";
 import { CATCH_UP_EVERY_MS, CATCH_UP_FOR_MS, catchUpInterval, waitingOnWorker } from "../../apps/web/src/pages/RolePlan";
 import { CALENDAR_OFF_LINE, calendarConnectOffered } from "../../apps/web/src/pages/Setup";
@@ -128,17 +128,8 @@ describe("the admin console's alerts and retries", () => {
     expect(retryDeletionToast({ queued: true, deleted: false }).title).not.toMatch(/deleted/i);
     expect(retryDeletionToast({ queued: false, deleted: true }).title).toBe("Credential deleted.");
   });
-
-  it("tells the administrator when Acknowledge, Retry or Retry deletion did not work", () => {
-    const admin = read("../../apps/web/src/pages/Admin.tsx");
-    expect(admin).toContain('onError: (e) => toast(e instanceof ApiError ? e.message : "Could not acknowledge the alert. Try again in a moment.")');
-    expect(admin).toContain('onError: (e) => toast(e instanceof ApiError ? e.message : "Could not retry the run. Try again in a moment.")');
-    expect(admin).toContain('onError: (e) => toast(e instanceof ApiError ? e.message : "Could not retry the deletion. Try again in a moment.")');
-    expect(admin).not.toContain('toast("Credential deleted.")');
-    // the business calendar starts on today's date in the administrator's own calendar, never the UTC date
-    expect(admin).toContain("const todayKey = () => dayKey(new Date());");
-    expect(admin).not.toContain("toISOString().slice(0, 10)");
-  });
+  // That Acknowledge, Retry and Retry deletion say when they did not work, and the calendar's local start date, are
+  // checked beside the section files: apps/shell/components/admin-problems-ui.test.ts and admin-system-ui.test.ts.
 });
 
 describe("an interview booked for tomorrow", () => {

@@ -7,9 +7,9 @@ import { describe, expect, it, vi } from "vitest";
 /**
  * The tables on the signed-in pages after the clean-table work (the Obsidian-look decisions of 10 October 2026, Q3),
  * as the server first draws them from answers shaped like the API's: figures right-aligned under right-aligned
- * headings; headings that sort on the admin console, the Setup audit history and Interviews, and nowhere on the Report;
- * the companies waiting for the ITS check kept on top whatever the order (founder decision B7); headings kept while
+ * headings; headings that sort on the Setup audit history and Interviews, and nowhere on the Report; headings kept while
  * rows load or when there are none; the first column pinned on wide tables; and the Report's figure tiles and day bars.
+ * The admin console's tables are in admin-customers-ui, admin-problems-ui, admin-system-ui and admin-privacy-ui.test.ts.
  */
 const nav = vi.hoisted(() => ({ search: "", params: { id: "r1" } as Record<string, string> }));
 vi.mock("next/navigation", () => ({
@@ -22,11 +22,8 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 
 (globalThis as { React?: typeof React }).React = React;
 const { MustHavesCard, ReportFigures, ScreeningCard } = await import("@ros/web/src/pages/RoleReport");
-const { CustomerReportSheet } = await import("@ros/web/src/pages/AdminCustomerReport");
 const { BoardSnapshotCard } = await import("@ros/web/src/pages/board/BoardSnapshot");
 const { CompareTable } = await import("@ros/web/src/pages/compare/ComparePanel");
-const { Admin, AiRuns, Costs, CUSTOMER_SORT, customerAnnouncement, customerOrder, Failures, Outcomes, PrivacyRequests, Runs, waitingCustomers } = await import("@ros/web/src/pages/Admin");
-const { sortRows } = await import("@ros/ui");
 const { Interviews } = await import("@ros/web/src/pages/Interviews");
 const { Setup } = await import("@ros/web/src/pages/Setup");
 const { PostingTab } = await import("@ros/web/src/pages/RolePosting");
@@ -41,7 +38,6 @@ const from = (html: string, start: string | RegExp) => {
 };
 
 const owner = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } };
-const admin = { ...owner, user: { ...owner.user, id: "s1", email: "ada@its.test", name: "Ada Admin", platformRole: "platform_admin" }, memberships: [], activeCompanyId: null };
 
 function client(data: Array<[unknown[], unknown]> = [], me: unknown = owner) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
@@ -155,16 +151,6 @@ describe("the Report: figures right-aligned, figure tiles and day bars, and noth
     expect(html).not.toContain("aria-sort");
     expect(html).not.toContain('role="status"');
   });
-
-  it("gives the administrator's view of a customer's report the same figures, and right-aligns the roles' counts", () => {
-    const customer = { company: { id: "co1", name: "Bright Dental", status: "active", planKey: "starter" }, roles: [{ id: "r1", title: "Dental Hygienist", status: "open", openedAt: daysAgo(7), closedAt: null, applicants: 3, waitingOnYou: 2, hired: 0 }], report };
-    const html = render(client([[["admin", "customer-report", "co1"], customer]], admin), createElement(CustomerReportSheet, { companyId: "co1", companyName: "Bright Dental", onClose: () => undefined }));
-    expect(html).toContain('<th scope="col" class="num">Waiting on them</th>');
-    expect(html).toMatch(/<td>Dental Hygienist<\/td><td><span class="pill good sm">.*?open<\/span><\/td><td class="num">3<\/td><td class="num">2<\/td><td class="num">0<\/td>/);
-    expect(html).toContain('<div class="daybars" role="img"');
-    expect(html.match(/<div class="stat-row">/g)).toHaveLength(2);
-    expect(html).not.toContain("th-sort");
-  });
 });
 
 describe("tables elsewhere on a role", () => {
@@ -209,146 +195,6 @@ describe("tables elsewhere on a role", () => {
     expect(html).toContain('<td class="num">5</td>');
     expect(html).toContain('<th scope="col" class="num">Last 14 days</th>');
     expect(html).toContain('<td>Careers page</td><td class="num">3</td><td class="num">2</td><td class="num">1</td>');
-  });
-});
-
-const company = (id: string, name: string, over: Record<string, unknown> = {}) => ({
-  id, name, slug: id, vertical: "dental", sizeBand: "20-49", planKey: "starter", status: "active", roles: 1, applications: 0, aiCostUsd: 0, lastActivityAt: daysAgo(1), escalations: 0, createdAt: daysAgo(30),
-  settings: {}, verifiedAt: daysAgo(29), verifiedBy: null, heldMessages: 0, jobBoardsConfirmedAt: null, applyFlowDefault: "form_then_screen", ...over,
-});
-
-describe("the admin console's tables", () => {
-  it("keeps the companies waiting for the ITS check on top (B7), with sortable headings and right-aligned figures", () => {
-    // Cara Dental waits for the check but comes second in the answer: only the B7 rule can put it first
-    const customers = [company("co1", "Bright Dental", { roles: 2, applications: 3, aiCostUsd: 0.04 }), company("co2", "Cara Dental", { verifiedAt: null, createdAt: daysAgo(2), roles: 0 }), company("co3", "Avon Dental", { applications: 7, aiCostUsd: 0.1 })];
-    const html = render(client([[["admin", "customers"], customers], [["admin", "alerts"], []]], admin), createElement(Admin));
-    expect(html).toMatch(/<section class="table-wrap scroll pin-first"/);
-    expect(html).toContain('<th scope="col"><button type="button" class="th-sort">Company');
-    expect(html).toContain('<th scope="col" class="num"><button type="button" class="th-sort">Applicants');
-    expect(html).toContain('<th scope="col" class="num"><button type="button" class="th-sort">AI cost');
-    expect(html).toContain('<th scope="col"><button type="button" class="th-sort">Last activity');
-    expect(html).toContain('<th scope="col" class="num">Roles</th>');
-    // nothing is sorted until someone presses a heading, and nothing is said yet
-    expect(html).not.toContain("aria-sort");
-    expect(html).toContain('<span class="sr-only" role="status"></span>');
-    // the caution alert above the table names Cara Dental too, so the order is read from the table on
-    const table = from(html, '<section class="table-wrap scroll pin-first"');
-    expect(table.indexOf("Cara Dental")).toBeGreaterThan(-1);
-    expect(table.indexOf("Cara Dental")).toBeLessThan(table.indexOf("Bright Dental"));
-    // the confirmed companies below keep the order they came in until someone sorts
-    expect(table.indexOf("Bright Dental")).toBeLessThan(table.indexOf("Avon Dental"));
-    expect(html).toMatch(/<td class="num">3<\/td>/);
-    expect(html).toContain('<td class="num">2</td><td class="num">3</td><td class="num">$0.0400</td>');
-  });
-
-  it("keeps the waiting companies on top, the longest waiting first, under every order a heading can give (B7), and says so after a sort", () => {
-    type Row = Parameters<typeof CUSTOMER_SORT.company>[0];
-    const rows = [
-      company("co1", "Bright Dental", { applications: 3, aiCostUsd: 0.04, lastActivityAt: daysAgo(3) }),
-      company("co2", "Cara Dental", { verifiedAt: null, createdAt: daysAgo(2), applications: 9, aiCostUsd: 0.5, lastActivityAt: daysAgo(0) }),
-      company("co3", "Avon Dental", { applications: 7, aiCostUsd: 0.1, lastActivityAt: daysAgo(1) }),
-      company("co4", "Zeta Dental", { verifiedAt: null, createdAt: daysAgo(5), applications: 0, aiCostUsd: 0, lastActivityAt: null }),
-      company("co5", "Dove Dental", { applications: 1, aiCostUsd: 0.2, lastActivityAt: daysAgo(9) }),
-    ] as unknown as Row[];
-    const names = (list: Row[]) => list.map((c) => c.name);
-    const confirmed = rows.filter((c) => c.verifiedAt);
-    expect(names(waitingCustomers(rows))).toEqual(["Zeta Dental", "Cara Dental"]);
-    // before anyone sorts, the confirmed companies keep the order they came in
-    expect(names(customerOrder(rows, (list) => list))).toEqual(["Zeta Dental", "Cara Dental", "Bright Dental", "Avon Dental", "Dove Dental"]);
-    let moved = 0;
-    for (const key of Object.keys(CUSTOMER_SORT) as Array<keyof typeof CUSTOMER_SORT>) {
-      for (const dir of ["ascending", "descending"] as const) {
-        const order = names(customerOrder(rows, (list) => sortRows(list, CUSTOMER_SORT[key], dir)));
-        expect(order.slice(0, 2), `${key} ${dir}`).toEqual(["Zeta Dental", "Cara Dental"]);
-        expect(order.slice(2), `${key} ${dir}`).toEqual(names(sortRows(confirmed, CUSTOMER_SORT[key], dir)));
-        // the fixture bites: sorting every company together would move a waiting one down under each of these orders
-        if (names(sortRows(rows, CUSTOMER_SORT[key], dir)).slice(0, 2).join() !== "Zeta Dental,Cara Dental") moved++;
-      }
-    }
-    expect(moved).toBe(8);
-    expect(customerAnnouncement("Sorted by AI cost, highest first.", 2)).toBe("Sorted by AI cost, highest first. Companies waiting for the ITS check stay at the top.");
-    expect(customerAnnouncement("Sorted by AI cost, highest first.", 0)).toBe("Sorted by AI cost, highest first.");
-    expect(customerAnnouncement("", 2)).toBe("");
-  });
-
-  it("keeps the headings and says so in a row when there are no customers", () => {
-    const html = render(client([[["admin", "customers"], []], [["admin", "alerts"], []]], admin), createElement(Admin));
-    expect(html).toMatch(/<td colspan="12" class="table-empty">No customers yet\.<\/td>/i);
-    expect(html).toContain('<span class="sr-only" role="status">No customers yet.</span>');
-    expect(html).toContain('<th scope="col" class="num">Roles</th>');
-  });
-
-  it("keeps the workflow headings while the runs load, with quiet rows instead of a skeleton block", () => {
-    const html = render(client([], admin), createElement(Runs));
-    expect(html).toMatch(/<section class="table-wrap scroll"/);
-    expect(html).toContain('<th scope="col" class="num">Attempts</th>');
-    expect(html).toContain('<tbody aria-busy="true">');
-    expect(html.match(/<tr aria-hidden="true">/g)).toHaveLength(4);
-    expect(html).toContain('<span class="sr-only" role="status">Loading…</span>');
-    expect(html).not.toContain('aria-label="Loading"');
-    // the status filter stays above the table
-    expect(html).toContain('<button type="button" class="on" aria-pressed="true">All</button>');
-  });
-
-  it("says when there are no workflow runs, and right-aligns the attempts", () => {
-    expect(render(client([[["admin", "runs", ""], []]], admin), createElement(Runs))).toMatch(/<td colspan="9" class="table-empty">No workflow runs yet\.<\/td>/i);
-    const run = { id: "run1", companyId: "co1", workflowKey: "triage", status: "failed", currentStep: "score", wait: null, attempts: 2, lastError: "timeout", updatedAt: daysAgo(0), subject: { type: "application", id: "a1aaaaaaaa" } };
-    const html = render(client([[["admin", "runs", ""], [run]]], admin), createElement(Runs));
-    expect(html).toContain('<td class="num">2</td>');
-    expect(html).not.toContain("table-empty");
-  });
-
-  it("opens the AI runs latest first, with Cost and Latency sortable and every figure right-aligned", () => {
-    const ai = (id: string, task: string, createdAt: string, costUsd: string, latencyMs: number) => ({ id, companyId: "co1", agent: "screening", task, model: "fake-1", promptKey: "screen", promptVersion: 3, status: "ok", inputTokens: 10, outputTokens: 20, costUsd, latencyMs, confidence: null, createdAt });
-    // the older run comes first in the answer
-    const html = render(client([[["admin", "ai"], [ai("ai1", "older_task", daysAgo(2), "0.00100", 900), ai("ai2", "newer_task", daysAgo(0), "0.02000", 1500)]]], admin), createElement(AiRuns));
-    expect(html).toContain('<th scope="col" aria-sort="descending"><button type="button" class="th-sort">When');
-    expect(html.match(/aria-sort=/g)).toHaveLength(1);
-    expect(html).toContain('<th scope="col" class="num"><button type="button" class="th-sort">Cost');
-    expect(html).toContain('<th scope="col" class="num"><button type="button" class="th-sort">Latency');
-    expect(html).toContain('<th scope="col" class="num">Tokens in/out</th>');
-    expect(html).toContain('<td class="num">10/20</td><td class="num">$0.02000</td><td class="num">1500 ms</td>');
-    expect(html.indexOf("newer_task")).toBeLessThan(html.indexOf("older_task"));
-    expect(html).toMatch(/<section class="table-wrap scroll"/);
-    expect(render(client([[["admin", "ai"], []]], admin), createElement(AiRuns))).toMatch(/<td colspan="10" class="table-empty">No AI runs recorded yet\.<\/td>/i);
-  });
-
-  it("right-aligns the model spend, keeping its headings when nothing was spent", () => {
-    const html = render(client([[["admin", "costs"], [{ companyId: "co1aaaaaaaa", task: "triage", model: "fake-1", runs: 4, inputTokens: 1000, outputTokens: 200, costUsd: 0.0123 }]]], admin), createElement(Costs));
-    expect(html).toContain('<th scope="col" class="num">Tokens in</th>');
-    expect(html).toContain('<th scope="col" class="num">Cost</th>');
-    expect(html).toContain('<td class="num">4</td><td class="num">1000</td><td class="num">200</td><td class="num">$0.01230</td>');
-    expect(html).toMatch(/<section class="table-wrap scroll"/);
-    expect(render(client([[["admin", "costs"], []]], admin), createElement(Costs))).toMatch(/<td colspan="7" class="table-empty">No model spend recorded yet\.<\/td>/i);
-  });
-
-  it("right-aligns how many times an address bounced", () => {
-    const failures = { failedRuns: [], failedJobs: [], failedAi: [], alerts: [], pendingDeletions: [] };
-    const suppression = { id: "sp1", address: "old@example.com", reason: "hard_bounce", source: "provider", active: true, count: 2, firstAt: daysAgo(3), lastAt: daysAgo(1), details: {} };
-    const html = render(client([[["admin", "failures"], failures], [["admin", "suppressions"], [suppression]], [["admin", "csp"], { mode: "report-only", reports: [] }]], admin), createElement(Failures));
-    expect(html).toContain('<th scope="col" class="num">Times</th>');
-    expect(html).toContain('<td>provider</td><td class="num">2</td>');
-  });
-
-  it("lets ITS sort the open privacy requests by when they came in or when they are due, in the order they came until then", () => {
-    const request = (id: string, companyName: string, createdAt: string, slaDueAt: string, status = "received") => ({ id, companyId: "co1", companyName, candidateId: null, applicationId: null, kind: "access", details: null, requesterEmail: "maria@example.com", channel: "email", verificationStatus: "pending", verificationNote: null, status, slaDueAt, assignedTo: null, notes: [], counselEscalatedAt: null, counselDecision: null, counselNote: null, resolution: null, resolvedAt: status === "fulfilled" ? daysAgo(1) : null, confirmationSentAt: null, escalationId: null, createdAt });
-    const data = [request("d1", "Avon Dental", daysAgo(5), daysAgo(-10)), request("d2", "Cara Dental", daysAgo(40), daysAgo(1)), request("d3", "Bright Dental", daysAgo(9), daysAgo(-3), "fulfilled")];
-    const html = render(client([[["admin", "privacy"], data], [["admin", "customers"], []]], admin), createElement(PrivacyRequests));
-    const open = from(html, /<section class="table-wrap scroll"/);
-    expect(open).toContain('<th scope="col"><button type="button" class="th-sort">Received');
-    expect(open).toContain('<th scope="col"><button type="button" class="th-sort">Due');
-    expect(html).not.toContain("aria-sort");
-    expect(open.indexOf("Avon Dental")).toBeLessThan(open.indexOf("Cara Dental"));
-    expect(open).toContain('<span class="sr-only" role="status"></span>');
-    // the closed requests stay a plain table
-    expect(html.match(/class="th-sort"/g)).toHaveLength(2);
-    expect(html).toContain('<th scope="col">Resolved</th>');
-  });
-
-  it("keeps the outcome headings and says so in a row when none is recorded", () => {
-    const html = render(client([[["admin", "outcomes"], { statement: "People record outcomes.", outcomes: [] }]], admin), createElement(Outcomes));
-    expect(html).toMatch(/<td colspan="7" class="table-empty">No outcomes recorded yet\.<\/td>/i);
-    expect(html).toContain('<th scope="col">Hire date</th>');
   });
 });
 

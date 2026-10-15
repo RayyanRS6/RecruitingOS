@@ -64,12 +64,14 @@ test("still applying on the list, the panel and the report; ITS switches the com
   const staff = await browser.newContext();
   const admin = await staff.newPage();
   await signIn(admin, { email: "admin-e2e@identifiedtalent.com", name: "Admin", provider: "azure", aal2: true });
-  await gotoSettled(admin, "/admin");
+  // the console's Customers: open the company's drawer; its Overview says how people apply, and "Change" opens that tab
+  await gotoSettled(admin, "/admin/customers");
   const company = admin.getByRole("row", { name: new RegExp(`One Visit Dental ${run}`) });
-  await expect(company.getByText("Apply and talk in one visit")).toBeVisible({ timeout: 30_000 });
-  // exact: the row also has "Change plan" since Wave S2 (F1)
-  await company.getByRole("button", { name: "Change", exact: true }).click();
-  const sheet = admin.getByRole("dialog", { name: `How people apply: One Visit Dental ${run}` });
+  await company.getByRole("button", { name: `Open One Visit Dental ${run}` }).click({ timeout: 30_000 });
+  const sheet = admin.getByRole("dialog", { name: `One Visit Dental ${run}` });
+  await expect(sheet.getByText("Apply and talk in one visit")).toBeVisible({ timeout: 30_000 });
+  await sheet.getByRole("button", { name: "Change how people apply" }).click();
+  await expect(sheet.getByRole("tab", { name: "How people apply", selected: true })).toBeVisible();
   await sheet.getByRole("button", { name: "Form now, conversation later" }).click();
   const saveDefault = sheet.getByRole("button", { name: "Save the default" });
   await expect(saveDefault).toBeDisabled();

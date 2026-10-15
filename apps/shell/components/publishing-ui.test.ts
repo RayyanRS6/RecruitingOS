@@ -11,11 +11,13 @@ import { Dialog } from "@ros/ui";
  * with the preview, the boards, the legal check and what starts on its own, the Posting tab when ITS posts, and the
  * empty applicant list that offers to share the job.
  */
+// The address the pages read: the recruiter queue's tests change it (a request open or not, `?show=`, `?q=`).
+const address = vi.hoisted(() => ({ id: "r1" as string | undefined, search: "" }));
 vi.mock("next/navigation", () => ({
   usePathname: () => "/roles/r1",
   useRouter: () => ({ push: () => undefined, replace: () => undefined, refresh: () => undefined }),
-  useParams: () => ({ id: "r1" }),
-  useSearchParams: () => new URLSearchParams(""),
+  useParams: () => (address.id ? { id: address.id } : {}),
+  useSearchParams: () => new URLSearchParams(address.search),
 }));
 vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactNode } & Record<string, unknown>) => createElement("a", props, props.children) }));
 // The pages as the browser shows them once they are its own: Candidates reads the job's status from the rail's jobs
@@ -27,7 +29,7 @@ const { AfterApproval, StatusPill } = await import("@ros/web/src/pages/AfterAppr
 const { PacketApprovalCard } = await import("@ros/web/src/pages/RolePlan");
 const { PostingTab, acceptingMode, postingNeedsTeam } = await import("@ros/web/src/pages/RolePosting");
 const { People } = await import("@ros/web/src/pages/People");
-const { RecruiterQueue } = await import("@ros/web/src/pages/RecruiterQueue");
+const { RecruiterQueue, queueCounts, queueSearch, queueShown, queueViewFrom } = await import("@ros/web/src/pages/RecruiterQueue");
 const { Setup } = await import("@ros/web/src/pages/Setup");
 const { NoResumeAnswers } = await import("@ros/web/src/pages/candidate-panel/sections");
 
@@ -379,6 +381,116 @@ describe("an ITS posting task in the recruiter queue (D3)", () => {
     const words = text(render(qc, createElement(RecruiterQueue)));
     expect(words).toContain("Accept this task");
     expect(words).toContain("A posting task never opens the customer's candidates");
+  });
+});
+
+describe("the recruiter queue's pills, search and request (Wave S6, 2.3)", () => {
+  const row = (over: Record<string, unknown>) => ({ id: "x", status: "open", kind: "ask", urgency: "normal", requiredExpertise: "dental hiring", summary: "A question about a role.", companyName: "Bright Dental", roleTitle: null, slaDueAt: "2026-10-16T17:00:00.000Z", slaRemainingMinutes: 600, businessMinutesRemaining: 300, overdue: false, createdAt: "2026-10-15T10:00:00.000Z", claimedByMe: false, claimed: false, ...over });
+  const rows = [
+    row({ id: "a", urgency: "critical", companyName: "Avon Dental" }),
+    row({ id: "b", status: "claimed", claimed: true, claimedByMe: true, companyName: "Bright Dental" }),
+    row({ id: "c", status: "in_progress", claimed: true, companyName: "Cara Dental", overdue: true, businessMinutesRemaining: -90, urgency: "low" }),
+  ];
+  const at = (id: string | undefined, search: string, run: () => void) => {
+    const before = { ...address };
+    address.id = id;
+    address.search = search;
+    try {
+      run();
+    } finally {
+      address.id = before.id;
+      address.search = before.search;
+    }
+  };
+  const queue = (extra?: (qc: QueryClient) => void) => {
+    const qc = client();
+    qc.setQueryData(["escalations"], rows);
+    extra?.(qc);
+    return render(qc, createElement(RecruiterQueue));
+  };
+
+  it("counts each pill from the list and keeps the view in the address", () => {
+    const view = queueViewFrom(new URLSearchParams("show=overdue&q=cara"));
+    expect(view).toEqual({ show: "overdue", q: "cara" });
+    expect(queueSearch(view)).toBe("?show=overdue&q=cara");
+    expect(queueSearch({ show: "all", q: "" })).toBe("");
+    expect(queueViewFrom(new URLSearchParams("show=nonsense")).show).toBe("all");
+    expect(queueCounts(rows as never, null, "")).toEqual({ all: 3, waiting: 1, yours: 1, overdue: 1, done: null });
+    expect(queueCounts(rows as never, [row({ id: "d", status: "resolved" })] as never, "bright")).toEqual({ all: 1, waiting: 0, yours: 1, overdue: 0, done: 1 });
+    expect(queueShown(rows as never, null, { show: "waiting", q: "" }).map((e) => e.id)).toEqual(["a"]);
+  });
+
+  it("shows the pills with counts, a search by company, and plain words for urgency and status", () => {
+    at(undefined, "", () => {
+      const html = queue();
+      const words = text(html);
+      expect(html).toContain('<fieldset aria-label="Show requests"');
+      expect(html).toMatch(/<button type="button" class="toggle-chip" aria-pressed="true">All <span class="count">3<\/span><\/button>/);
+      expect(words).toContain("Waiting for someone 1");
+      expect(words).toContain("Yours 1");
+      expect(words).toContain("Overdue 1");
+      // Done is read only when someone asks for it, so it has no count yet
+      expect(html).toMatch(/aria-pressed="false">Done<\/button>/);
+      expect(html).toContain('aria-label="Search requests by company"');
+      expect(words).toContain("Urgent");
+      expect(words).toContain("Another recruiter has it");
+      expect(words).toContain("overdue by 1h 30m of business time");
+      expect(words).not.toMatch(/\bcritical\b|\bin_progress\b/);
+      // the longer explanation is one click away, word for word
+      expect(words).toContain("How the queue works Urgency changes the order, never the reply-by time.");
+    });
+  });
+
+  it("opens on the pill in the address, keeps it on the link into a request, and offers the way back when it is empty", () => {
+    at(undefined, "show=overdue", () => {
+      const html = queue();
+      expect(html).toContain('href="/recruiter/queue/c?show=overdue"');
+      expect(html).not.toContain('href="/recruiter/queue/a');
+      expect(html).toMatch(/aria-pressed="true">Overdue <span class="count">1<\/span>/);
+    });
+    at(undefined, "show=overdue", () => {
+      const words = text(render((() => { const qc = client(); qc.setQueryData(["escalations"], [rows[0]]); return qc; })(), createElement(RecruiterQueue)));
+      expect(words).toContain("Nothing overdue");
+      expect(words).toContain("Show all requests");
+    });
+    at(undefined, "q=zeta", () => {
+      const words = text(queue());
+      expect(words).toContain("No requests from a company by that name");
+      expect(words).toContain("Clear search");
+    });
+    at(undefined, "", () => {
+      const qc = client();
+      qc.setQueryData(["escalations"], []);
+      const words = text(render(qc, createElement(RecruiterQueue)));
+      expect(words).toContain("Queue is empty");
+      expect(words).not.toContain("Show all requests");
+    });
+  });
+
+  it("puts the actions at the top, folds what the request is about, and groups the answer", () => {
+    const accepted = { ...rows[1], id: "b", accessGranted: true, why: null, companyId: "co1", roleId: "r1", applicationId: null, question: "Should we interview Maria?", contextSnapshot: { company: { name: "Bright Dental", vertical: "dental", sizeBand: "20-49" } }, thread: [], grant: { id: "g1", purpose: "escalation", expiresAt: "2026-10-16T10:00:00.000Z", scope: { roleId: "r1", applicationId: null } } };
+    at("b", "", () => {
+      const html = queue((qc) => qc.setQueryData(["escalation", "b"], accepted));
+      const words = text(html);
+      // one strip: Open in the customer's workspace and Release, before the summary
+      expect(html.indexOf("Open in the customer&#x27;s workspace")).toBeGreaterThan(-1);
+      expect(html.indexOf("Open in the customer&#x27;s workspace")).toBeLessThan(html.indexOf("<p>A question about a role.</p>"));
+      expect(words).toContain("Release");
+      expect(words).toContain("Your access covers this role and ends");
+      expect(html).toContain('<details class="more"><summary>What the request is about (1)</summary>');
+      expect(words).toContain("Your answer Write to the customer");
+      expect(words).toContain("Resolve What you did or advised (the customer reads this in full)");
+      // ITS recruiters cannot open the console, so the link is not there
+      expect(words).not.toContain("See this customer in the console");
+    });
+    at("b", "", () => {
+      const html = queue((qc) => {
+        qc.setQueryData(["escalation", "b"], accepted);
+        qc.setQueryData(["me"], { user: { id: "u9", email: "ada@its.test", name: "Ada", platformRole: "platform_admin" }, memberships: [], activeCompanyId: null });
+      });
+      expect(html).toContain('href="/admin/customers?open=co1"');
+      expect(text(html)).toContain("See this customer in the console");
+    });
   });
 });
 

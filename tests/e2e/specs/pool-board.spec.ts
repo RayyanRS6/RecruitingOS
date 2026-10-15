@@ -62,7 +62,11 @@ test.describe("the pool board", () => {
     await page.goto(`/roles/${roleId}/talent`);
     await expect(page.getByRole("region", { name: "Sort the pool" })).toContainText("Nothing moves until you apply it, and nothing is sent to anyone.", { timeout: 30_000 });
     await expect(page.locator(".talent-row .score-slot .score").first()).toBeVisible({ timeout: 30_000 });
-    await page.getByRole("combobox", { name: "Sort by" }).selectOption("score");
+    // the order is a dropdown chip (Wave S6): its list ticks the order in force, and choosing Score sorts by it
+    await page.getByRole("button", { name: /^Sort: / }).click();
+    await expect(page.locator('[role="menuitemradio"][aria-checked="true"] svg')).toHaveCount(1);
+    await page.getByRole("menuitemradio", { name: /^Score/ }).click();
+    await expect(page.getByRole("button", { name: "Sort: Score" })).toBeVisible();
     await expectAccessible(page, "talent list with the sort strip");
 
     // The board: three columns in our words, the summary, a card per person with the reason

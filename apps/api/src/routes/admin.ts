@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { createHash } from "node:crypto";
-import { desc, eq, inArray, sql } from "drizzle-orm";
-import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, suppressAddress, describeHours, unsentScreenReadings, withoutUnsentRunOutput, withoutUnsentScreenEvents, APPLY_FLOW_FALLBACK } from "@ros/core";
+import { desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, suppressAddress, describeHours, unsentScreenReadings, withoutUnsentRunOutput, withoutUnsentScreenEvents, zonedToUtc, APPLY_FLOW_FALLBACK } from "@ros/core";
 import { ApplyFlowDefaultChange, BreakGlass, BusinessCalendarInput, CompanyVerificationChange, JobBoardAccessChange, PlanChange, RecalculateDeadlines, companyOnboarding, companyVerifiedAt, type Actor } from "@ros/contracts";
 import { HELD_STATUS } from "@ros/agents";
 import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, integrations, jobs, plans, recruiterEscalations, roles, screens, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
@@ -324,11 +324,27 @@ adminRoutes.post("/integrations/:id/retry-deletion", async (c) => {
   return c.json({ ok: true, queued: true, deleted: !after?.secretRef, status: after?.status ?? row.status, lastError: after?.lastError ?? null });
 });
 
+/**
+ * Model spend by customer, task and model. `?since=YYYY-MM-DD` (optional; the console's Overview asks for "this month")
+ * counts only the runs from that day on, the day starting at midnight in the ITS business calendar's time zone. Without
+ * it, every run, as before.
+ */
 adminRoutes.get("/costs", async (c) => {
   const db = c.get("container").db;
+  const since = c.req.query("since");
+  let from: string | null = null;
+  if (since !== undefined) {
+    const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(since);
+    const [y, m, d] = day ? [Number(day[1]), Number(day[2]), Number(day[3])] : [0, 0, 0];
+    const real = new Date(Date.UTC(y, m - 1, d));
+    if (!day || real.getUTCFullYear() !== y || real.getUTCMonth() !== m - 1 || real.getUTCDate() !== d) throw new HttpError(400, "invalid_date", "since must be a date written like 2026-10-01.");
+    const calendar = await loadBusinessCalendar(db, new Date());
+    from = zonedToUtc(y, m, d, 0, 0, calendar.current.timeZone).toISOString();
+  }
   const rows = await db
     .select({ companyId: aiRuns.companyId, task: aiRuns.task, model: aiRuns.model, runs: sql<number>`count(*)`, inputTokens: sql<number>`sum(input_tokens)`, outputTokens: sql<number>`sum(output_tokens)`, costUsd: sql<string>`sum(cost_usd)` })
     .from(aiRuns)
+    .where(from ? gte(aiRuns.createdAt, from) : undefined)
     .groupBy(aiRuns.companyId, aiRuns.task, aiRuns.model);
   return c.json(rows.map((r) => ({ ...r, runs: Number(r.runs), inputTokens: Number(r.inputTokens), outputTokens: Number(r.outputTokens), costUsd: Number(r.costUsd) })));
 });

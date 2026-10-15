@@ -39,15 +39,32 @@ test("getting started guides a new owner; taking the ITS confirmation back puts 
   const seeded = await seedRoleAndApplicant(page.request, baseURL!, "Rosa", "Diaz");
   expect((await page.request.get(`${baseURL}/careers/${seeded.slug}`)).status()).toBe(200);
 
-  // an ITS administrator takes the confirmation back from the console: a reason, then a second press
+  // an ITS administrator takes the confirmation back from the console's Customers: open the company, its ITS check tab,
+  // a reason, then a second press (Wave S6: the customer drawer, named by the company)
   const staff = await browser.newContext();
   const admin = await staff.newPage();
   await signIn(admin, { email: "admin-e2e@identifiedtalent.com", name: "Admin", provider: "azure", aal2: true });
-  await gotoSettled(admin, "/admin");
+  await gotoSettled(admin, "/admin/customers");
   const row = admin.getByRole("row", { name: new RegExp(`Checked Dental ${run}`) });
-  await expect(row.getByText("confirmed", { exact: true })).toBeVisible({ timeout: 30_000 });
-  await row.getByRole("button", { name: "Check", exact: true }).click();
-  const sheet = admin.getByRole("dialog", { name: `ITS check: Checked Dental ${run}` });
+  await expect(row.getByText("Confirmed", { exact: true })).toBeVisible({ timeout: 30_000 });
+  // five columns: nothing in the console's list scrolls sideways
+  expect(await admin.locator(".table-wrap").evaluateAll((boxes) => boxes.filter((b) => b.scrollWidth > b.clientWidth).length)).toBe(0);
+  const opener = row.getByRole("button", { name: `Open Checked Dental ${run}` });
+  await opener.click();
+  const sheet = admin.getByRole("dialog", { name: `Checked Dental ${run}` });
+  await expect(sheet.getByRole("tab", { name: "Overview", selected: true })).toBeVisible();
+  await expect(sheet.getByText(/^Confirmed [A-Z][a-z]{2} \d/)).toBeVisible();
+  await expectAccessible(admin, "customer drawer overview");
+  // Escape closes the drawer and puts focus back on the button that opened it
+  await admin.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  await expect(opener).toBeFocused();
+  await opener.click();
+  await sheet.getByRole("tab", { name: "ITS check" }).click();
+  // the drawer and its tab are in the address: a reload opens the same place
+  await expect(admin).toHaveURL(/[?&]open=[^&]+&tab=check/);
+  await admin.reload();
+  await expect(sheet.getByRole("tab", { name: "ITS check", selected: true })).toBeVisible({ timeout: 30_000 });
   const takeBack = sheet.getByRole("button", { name: "Take back the confirmation" });
   await expect(takeBack).toBeDisabled();
   await sheet.getByLabel("Why you are taking it back").fill("The website does not match the company.");

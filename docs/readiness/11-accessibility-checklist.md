@@ -4,7 +4,7 @@ Target: WCAG 2.1 AA on every candidate page and every signed-in page. Automated:
 
 ## Automated (Built with mocks: passing locally)
 
-- [x] No axe violations (WCAG 2.1 A/AA + best practice) on: login, company setup, Today, Roles, Role, Talent, candidate sheet, Interviews, interview sheet, Setup, Recruiter queue, Admin console (every tab), not found, job page, application form, status page, pick-a-time, confirmed.
+- [x] No axe violations (WCAG 2.1 A/AA + best practice) on: login, company setup, Today, Roles, Role, Talent, candidate sheet, Interviews, interview sheet, Setup, Recruiter queue, Console (Overview, each section and each part; tests/e2e/specs/routes.spec.ts), not found, job page, application form, status page, pick-a-time, confirmed.
 - [x] No horizontal scrolling on an iPhone 13 viewport on the routes above.
 - [x] Keyboard-only path through the candidate scheduling page (radio group, note, submit).
 - [x] Every page has one `h1`, a `main` landmark, and heading levels that do not skip.

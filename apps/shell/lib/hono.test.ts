@@ -50,6 +50,8 @@ describe("the Next.js shell mounts the Hono application", () => {
     const covered = new RegExp(`^${config.matcher[0]}$`);
     for (const path of ["/a/abcdefghijkl", "/sitemap.xml", "/robots.txt", "/files/put/x", "/careers/brightline", "/c/status/x", "/api/v1/auth/me", "/feeds/jobs.xml", "/webhooks/postmark/inbound", "/healthz", "/privacy", "/fonts/ibm-plex-sans-latin-400-normal.woff2"]) expect(covered.test(path), path).toBe(false);
     for (const path of ["/", "/roles/123", "/admin", "/about", "/setup", "/fontsize"]) expect(covered.test(path), path).toBe(true);
+    // the console's sections (Wave S6): /admin/privacy is a page of the application, not the mounted /privacy
+    for (const path of ["/admin/customers", "/admin/privacy", "/admin/problems", "/admin/system"]) expect(covered.test(path), path).toBe(true);
   });
 
   it("serves the self-hosted font files with a year-long cache", async () => {

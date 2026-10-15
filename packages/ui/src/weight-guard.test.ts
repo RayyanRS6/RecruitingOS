@@ -151,7 +151,8 @@ describe("nothing heavier on old devices", () => {
   it("keeps the stylesheets within their byte budgets (gzip level 9; app sheets without comments, as the build ships them)", () => {
     const gz = (s: string) => gzipSync(Buffer.from(s), { level: 9 }).length;
     // 10 October 2026, before → after the Obsidian-look slices P and A: tokens 11,029 → 11,735; board 2,023 → 2,045;
-    // app-shell 759 → 782; candidate 4,522 → 5,022 (with comments, as shipped).
+    // app-shell 759 → 782; candidate 4,522 → 5,022 (with comments, as shipped). 15 October 2026, Wave S6 (the dropdown
+    // list's colours and the menu's edge), ceilings unchanged: tokens 11,772 → 11,800; candidate 5,062 → 5,084.
     expect(gz(strip(tokens))).toBeLessThanOrEqual(12_000);
     expect(gz(strip(board))).toBeLessThanOrEqual(2_100);
     expect(gz(strip(shell))).toBeLessThanOrEqual(820);
