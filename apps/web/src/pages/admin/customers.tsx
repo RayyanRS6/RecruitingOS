@@ -366,6 +366,10 @@ function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAle
         <dd>
           <Fact action={<Button size="sm" variant="quiet" ariaLabel="Change how people apply" onClick={() => onTab("apply")}>Change</Button>}>{APPLY_MODE_LABEL[c.applyFlowDefault ?? "form_then_screen"]}</Fact>
         </dd>
+        <dt>Applicants' match score</dt>
+        <dd>
+          <Fact action={<Button size="sm" variant="quiet" ariaLabel="Change whether applicants see their match score" onClick={() => onTab("apply")}>Change</Button>}>{candidateScoreWords(candidateScoreOn(c))}</Fact>
+        </dd>
         <dt>Jobs</dt>
         <dd>{plural(c.roles, "job", "jobs")} · {plural(c.applications, "applicant", "applicants")}</dd>
         <dt>Recruiter requests</dt>
@@ -510,7 +514,67 @@ function ApplyFlowPanel({ company }: { company: CustomerRow }) {
           </div>
         ) : <p className="small muted">No open or draft roles.</p>}
       </Card>
+      <CandidateScorePanel company={company} />
     </div>
+  );
+}
+
+/** Whether a customer's applicants see their match score after sending (founder decision S7-1): on unless ITS turned it off. */
+export function candidateScoreOn(c: Pick<CustomerRow, "candidateScoreShown">): boolean {
+  return c.candidateScoreShown !== false;
+}
+
+/** The Overview's words for the switch. */
+export function candidateScoreWords(on: boolean): string {
+  return on ? "Shown to applicants after they send" : "Not shown to applicants";
+}
+
+/** The toast after the switch was saved. */
+export function candidateScoreToast(company: string, shown: boolean, changed: boolean): { title: string; detail: string } {
+  if (!changed) return { title: `Nothing changed for ${company}.`, detail: shown ? "Applicants already see their match score after they send." : "Applicants already do not see their match score." };
+  return shown
+    ? { title: `${company}'s applicants see their match score now.`, detail: "It shows on each application record once the application is sent, with the breakdown. The customer sees the change in their activity history." }
+    : { title: `${company}'s applicants no longer see their match score.`, detail: "Their application records stop showing it at once. The team still sees every score. The customer sees the change in their activity history." };
+}
+
+type ScoreChoice = "shown" | "hidden";
+
+/**
+ * The ITS switch for the match score applicants see (founder decision S7-1; Wave S7, S7-E): on by default, per
+ * company. Every change needs a reason, which is audited and kept with who made it (POST
+ * /admin/customers/:id/candidate-score). Counsel items 1 and 21: a lawyer reviews it before real candidates in NYC, IL,
+ * CA or CO.
+ */
+function CandidateScorePanel({ company }: { company: CustomerRow }) {
+  const qc = useQueryClient();
+  const current: ScoreChoice = candidateScoreOn(company) ? "shown" : "hidden";
+  const [choice, setChoice] = useState<ScoreChoice>(current);
+  const [why, setWhy] = useState("");
+  const setBy = company.settings.candidateScoreSetBy;
+  const save = useMutation({
+    mutationFn: () => api.post<{ shown: boolean; changed: boolean }>(`/api/v1/admin/customers/${company.id}/candidate-score`, { shown: choice === "shown", reason: why.trim() }, reason),
+    onSuccess: (r) => {
+      const t = candidateScoreToast(company.name, r.shown, r.changed);
+      toast(t.title, t.detail);
+      setWhy("");
+      qc.invalidateQueries({ queryKey: ["admin", "customers"] });
+    },
+    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not save the switch."),
+  });
+  return (
+    <Card title="Applicants' match score">
+      <p className="small muted">After sending, each applicant of {company.name} sees their match score on their application record: the number, and how it breaks down against the requirements on the job page. Other requirements fold into one line; the team's private notes never show. A lawyer reviews this before it is used with real applicants in New York City, Illinois, California or Colorado.</p>
+      {setBy ? <p className="small muted">Last set {exactWhen(setBy.at)}{setBy.by.name ? ` by ${setBy.by.name}` : ""}: {setBy.reason}</p> : null}
+      <div className="stack" style={{ gap: 8, marginTop: 8 }}>
+        <Segmented value={choice} onChange={setChoice} ariaLabel="Applicants' match score" options={[{ value: "shown", label: "Show it" }, { value: "hidden", label: "Don't show it" }]} />
+        {choice !== current ? (
+          <>
+            <Field label="Why (required, kept with the change)" htmlFor="candidate-score-why" hint={`At least ${REASON_MIN} characters. The customer sees it in their activity history.`}><input id="candidate-score-why" className="input" value={why} onChange={(e) => setWhy(e.target.value)} /></Field>
+            <div className="row"><Button variant="primary" disabled={!reasonReady(why)} loading={save.isPending} onClick={() => save.mutate()}>Save</Button><Button variant="quiet" onClick={() => { setChoice(current); setWhy(""); }}>Cancel</Button></div>
+          </>
+        ) : null}
+      </div>
+    </Card>
   );
 }
 

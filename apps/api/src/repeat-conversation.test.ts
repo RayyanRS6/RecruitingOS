@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { RolePacket } from "@ros/contracts";
-import { REVIEW_MESSAGE, TURN_CAP_REVIEW_MESSAGE, modelTurnCap } from "@ros/agents";
+import { CHAT_CAP_CLOSING, REVIEW_MESSAGE, TURN_CAP_REVIEW_MESSAGE, chatClosingMessage, chatNextLine, chatPacket, modelTurnCap } from "@ros/agents";
 import { applications, assessments, communications, companies, events, recruiterEscalations, rolePackets, roles, screens, unconfirmedScreens, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
@@ -117,7 +117,15 @@ describe("a repeat submission's conversation is detached until the address owner
     await conversationStart(container, ref);
     const view = await answerAll(ref);
     expect(view.phase).toBe("review");
-    expect(view.transcript.at(-1)?.content).toBe(REVIEW_MESSAGE);
+    // the chat's close, as a first application's: the typed name, one thing said, what happens next
+    expect(view.transcript.at(-1)?.content).toMatch(/^Thank you, Rosa\. You told me "[^"]+"\.\n\n/);
+    expect(view.transcript.at(-1)?.content.endsWith(chatNextLine("Repeat Dental"))).toBe(true);
+    expect(view.transcript.at(-1)?.content).not.toBe(REVIEW_MESSAGE);
+    // its chat names only what was typed in that visit: the form's answers, never anything on file
+    const [typed] = await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.id, ref.id));
+    expect(typed.progress.typedFacts?.cv).toEqual([]);
+    expect(typed.progress.typedFacts?.formAnswers.length).toBe(elig.length);
+    expect(typed.progress.chat?.items.every((i) => i.kind === "written")).toBe(true);
     expect(await conversationSubmit(container, ref)).toBe(true);
     // the real application still has its own untouched invitation, and nobody on the team heard anything
     expect((await screensOf(rosaId)).find((s) => s.id === rosaRealScreenId)?.status).toBe("invited");
@@ -135,15 +143,24 @@ describe("a repeat submission's conversation is detached until the address owner
     // opening the link changes nothing; pressing the button adds the answers
     expect(await repeatConfirmationView(container.db, token!, container.engine.clock())).toMatchObject({ state: "ready", intent: "answers", companyName: "Repeat Dental" });
     expect((await screensOf(rosaId)).find((s) => s.id === rosaRealScreenId)?.status).toBe("invited");
+    // Review & send's write-up of her words rides on the copy until she confirms
+    const writeup = { v: 1 as const, writtenAt: new Date(BASE).toISOString(), aiRunId: null, promptVersion: null, answers: [{ questionKey: "wq_x", answer: "I chart perio in Dentrix.", status: "answered" as const, quotes: [], note: null, by: "writeup" as const }] };
+    await container.db.update(unconfirmedScreens).set({ progress: { ...row.progress, writeup } }).where(eq(unconfirmedScreens.id, row.id));
     expect(await confirmRepeat(container, token!)).toMatchObject({ state: "added" });
     await container.drain();
     const merged = (await screensOf(rosaId)).find((s) => s.id === rosaRealScreenId)!;
+    // the merged screen holds the write-up; the copy keeps none of her words, condensed or not
+    expect(merged.progress.writeup?.answers[0].answer).toBe("I chart perio in Dentrix.");
     expect(merged.status).toBe("completed");
     expect(merged.transcript.filter((t) => t.role === "candidate").length).toBeGreaterThan(0);
     expect((await container.db.select().from(assessments).where(and(eq(assessments.applicationId, rosaId), eq(assessments.kind, "screen"))))).toHaveLength(1);
     expect(["screen_complete", "interview_recommended"]).toContain((await reload(rosaId)).stage);
     const [after] = await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.id, row.id));
     expect(after).toMatchObject({ confirmation: "confirmed", transcript: [], answers: {}, mergedScreenId: rosaRealScreenId });
+    // what was typed in that visit goes with the words, and never joins the real conversation
+    expect(after.progress.typedFacts).toBeUndefined();
+    expect(after.progress.writeup).toBeUndefined();
+    expect(merged.progress.typedFacts).toBeUndefined();
     // a second press is the same answer, and adds nothing more
     expect(await confirmRepeat(container, token!)).toMatchObject({ state: "added" });
     expect((await container.db.select().from(assessments).where(and(eq(assessments.applicationId, rosaId), eq(assessments.kind, "screen"))))).toHaveLength(1);
@@ -158,9 +175,16 @@ describe("a repeat submission's conversation is detached until the address owner
     await conversationSubmit(container, ref);
     const token = confirmLink("rosa@repeat.test")!;
     const stage = (await reload(rosaId)).stage;
+    const [copyRow] = await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.id, ref.id));
+    await container.db.update(unconfirmedScreens).set({ progress: { ...copyRow.progress, writeup: { v: 1, writtenAt: new Date(BASE).toISOString(), aiRunId: null, promptVersion: null, answers: [{ questionKey: "wq_x", answer: "Words that joined nothing.", status: "answered", quotes: [], note: null, by: "writeup" }] } } }).where(eq(unconfirmedScreens.id, ref.id));
     expect(await confirmRepeat(container, token)).toMatchObject({ state: "not_added" });
     expect((await reload(rosaId)).stage).toBe(stage);
     expect((await screensOf(rosaId))).toHaveLength(1);
+    // answers that were not added never joined any application: nothing of them is kept on the copy
+    const [notAdded] = await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.id, ref.id));
+    expect(notAdded.progress.writeup).toBeUndefined();
+    expect(notAdded.progress.typedFacts).toBeUndefined();
+    expect(JSON.stringify(notAdded.progress)).not.toContain("Words that joined nothing.");
   });
 
   it("WITHDRAW says the same as in a first application, but withdraws nothing: the address owner is pointed to their own status page", async () => {
@@ -281,7 +305,10 @@ describe("a repeat submission's conversation is detached until the address owner
     expect(ref.kind).toBe("detached");
     await conversationStart(container, ref);
     const packet = ((await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: RolePacket } }).currentPacket.packet;
-    const cap = modelTurnCap(packet);
+    // the same cap as a first application's chat (Wave S7): its questions and the closing question, four replies each
+    const [row] = await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.id, ref.id));
+    const cap = modelTurnCap(chatPacket(packet, row.progress), row.progress);
+    expect(cap).toBe(4 * (packet.screening.questions.length + 1) + 5);
     const chat = { messageToCandidate: "The hiring team can tell you more about that.", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: "company", sentiment: "fine", done: false, humanRequested: false };
     for (let i = 0; i < cap + 2; i++) container.fake!.scriptNext("screen.turn", chat);
     const turns = () => container.fake!.calls.filter((c) => c.task === "screen.turn").length;
@@ -290,7 +317,8 @@ describe("a repeat submission's conversation is detached until the address owner
     expect(turns()).toBe(before + cap);
     const view = (await conversationView(container.db, ref))!;
     expect(view.phase).toBe("review");
-    expect(view.transcript.some((t) => t.role === "assistant" && t.content === TURN_CAP_REVIEW_MESSAGE)).toBe(true);
+    expect(view.transcript.some((t) => t.role === "assistant" && t.content === chatClosingMessage(CHAT_CAP_CLOSING, "Repeat Dental"))).toBe(true);
+    expect(view.transcript.some((t) => t.content === TURN_CAP_REVIEW_MESSAGE)).toBe(false);
     const [capped] = await container.db.select().from(events).where(and(eq(events.type, "screen.turn_cap_reached"), eq(events.subjectId, ref.id)));
     expect(capped.payload).toMatchObject({ detached: true, ending: "review", cap });
     container.fake!.clearScripts();

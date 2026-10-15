@@ -225,9 +225,9 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(html).toContain('value="Irvine, CA"');
     expect(html).toContain("Registered Dental Hygienist at Coastal Family Dentistry since 2019");
     // the eligibility answers survive the round trip, including the "no"
-    const selectHtml = html.match(new RegExp(`<select id="elig_${select.key}"[\\s\\S]*?</select>`))![0];
-    expect(selectHtml).toContain('<option value="no" selected');
-    expect(selectHtml).not.toContain('<option value="yes" selected');
+    // (Wave S7: a yes-or-no question is two big Yes and No buttons, radio inputs, no longer a select)
+    expect(html).toMatch(new RegExp(`<input type="radio" name="elig_${select.key}" value="no"[^>]*checked`));
+    expect(html).not.toMatch(new RegExp(`<input type="radio" name="elig_${select.key}" value="yes"[^>]*checked`));
     // the missing field is marked for assistive technology and the box is still unchecked
     const box = html.match(/<input id="acknowledged"[^>]*>/)![0];
     expect(box).toContain('aria-invalid="true"');

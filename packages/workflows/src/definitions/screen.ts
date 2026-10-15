@@ -5,7 +5,7 @@ import { runPromptDetached, screenTurnPrompt } from "@ros/ai";
 import { audit, emit, entitlements, gate, humanResponseExpectation, isOneVisitFlow, loadBusinessCalendar, nextContactWindow, notify, readingConsistency, transition } from "@ros/core";
 import { applications, assessments, candidates, companies, rolePackets, roles, screens, withPlatform, type Tx } from "@ros/db";
 import {
-  answersOf, applyScreenOpening, assessScreen, createScreen, finishScreenTurn, focusQuestionsFrom, loadScreenBundle, packetForFocusedInvite, prepareScreenOpening, requestHuman, screenContextOf, sendConversationHandedOver, sendConversationIdleReminder,
+  answersOf, applyScreenOpening, assessScreen, chatFactsFor, createScreen, finishScreenTurn, focusQuestionsFrom, loadScreenBundle, packetForFocusedInvite, prepareScreenOpening, requestHuman, screenContextOf, sendConversationHandedOver, sendConversationIdleReminder,
   sendConversationNotOfferedNote, sendConversationNotStartedNote, sendConversationNotStartedReminder, sendConversationResume, sendConversationReviewReminder, sendConversationUnfinishedNote, sendScreenExpiredNote, sendScreenInvite, sendScreenReminder, type FocusQuestion, type ScreenDeps,
 } from "@ros/agents";
 import { twoPhase, type StepContext, type WorkflowDefinition } from "../types";
@@ -310,7 +310,7 @@ export const screen: WorkflowDefinition<State> = {
           // The model sees the conversation up to the message it never answered, not the holding notes after it.
           const transcript = b.screen.transcript.slice(0, lastCandidate + 1);
           const latest = transcript[lastCandidate].content;
-          return { screenId: b.screen.id, latest, ctx: screenContextOf({ companyName: b.company.name, companyLocations: b.company.locations, noticeOverrides: b.company.settings.notices, packet: b.packet, firstName: b.candidate.firstName, focusUnknowns: b.triageUnknowns }, { ...b.screen, transcript }, latest) };
+          return { screenId: b.screen.id, latest, ctx: screenContextOf({ companyName: b.company.name, companyLocations: b.company.locations, noticeOverrides: b.company.settings.notices, packet: b.packet, firstName: b.candidate.firstName, focusUnknowns: b.triageUnknowns, facts: chatFactsFor(b.chatFacts, b.screen.progress, b.screen.invitedVia) }, { ...b.screen, transcript }, latest) };
         });
         if (!plan) return null;
         const out = await runPromptDetached(ctx.db, ctx.services.ai, screenTurnPrompt, plan.ctx, { companyId: ctx.companyId, workflowRunId: ctx.run.id, inputRef: { screenId: plan.screenId, retry: true } });
@@ -340,7 +340,7 @@ export const screen: WorkflowDefinition<State> = {
           return { kind: "wait", wait: { kind: "event", eventTypes: ["human", "completed"], subjectId: `screen:${scr.id}`, until: retryAt, reason: "the assistant is not answering; trying again" }, resumeStep: "retry_paused" };
         }
         const transcript = scr.transcript;
-        const ctxModel = screenContextOf({ companyName: b.company.name, companyLocations: b.company.locations, noticeOverrides: b.company.settings.notices, packet: b.packet, firstName: b.candidate.firstName, focusUnknowns: b.triageUnknowns }, scr, prepared.latest);
+        const ctxModel = screenContextOf({ companyName: b.company.name, companyLocations: b.company.locations, noticeOverrides: b.company.settings.notices, packet: b.packet, firstName: b.candidate.firstName, focusUnknowns: b.triageUnknowns, facts: chatFactsFor(b.chatFacts, scr.progress, scr.invitedVia) }, scr, prepared.latest);
         await finishScreenTurn(ctx.q, deps, { screenId: scr.id, message: prepared.latest, channel: "web", actor: ctx.actor }, { kind: "pending", b, transcript, ctx: ctxModel }, prepared.out);
         // Open again: the candidate is emailed to finish. Handed to a person by the retried answer: told so instead.
         const [after] = await ctx.q.select({ status: screens.status }).from(screens).where(eq(screens.id, scr.id)).limit(1);

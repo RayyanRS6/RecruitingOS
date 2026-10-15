@@ -6,6 +6,7 @@ import { approvalRequests, companies, rolePackets, roles, workflowRuns, type Tx 
 import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
 import type { Tenant } from "../middleware/session";
+import { refuseCompanyQuestions } from "./packet-fields";
 
 /**
  * Packet versions and their approval (docs/spec/21 section 7, B2, B3, B9, B10, B13). Every edit is a new version;
@@ -138,6 +139,9 @@ export async function guardPacketVersion(tx: Tx, input: { companyId: string; act
     if (before.provenance.payConfirmedBy) incoming.provenance.payConfirmedBy = before.provenance.payConfirmedBy;
     if (before.provenance.payOrigin) incoming.provenance.payOrigin = before.provenance.payOrigin;
   }
+  // The questions every applicant answers (Wave S7): one that asks about a protected characteristic is refused, whichever
+  // route the version came by (the questions card, the full-packet editor), never saved with a flag to keep.
+  refuseCompanyQuestions(incoming.companyQuestions);
   const guarded = guardPacket(incoming, { companyName: company?.name ?? "", companyLocations: company?.locations ?? [], declined: before?.provenance.declinedCriteria ?? [], previousFlags, actor: input.actor });
   const newlyKept = guarded.flags.filter((f) => f.kept && !previousFlags.some((p) => p.id === f.id && p.kept?.reason === f.kept?.reason));
   return { packet: RolePacketSchema.parse(guarded.packet), newlyKept, changes: guarded.changes };

@@ -1,6 +1,7 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { SCREEN_BUSY_JS } from "./pages/candidate";
+import { CHAT_BUSY_NOTE } from "./pages/conversation-frame";
 
 /**
  * The screening conversation's one script (SCREEN_BUSY_JS): a typed answer waits for the assistant inside the request,
@@ -24,11 +25,24 @@ class FakeButton {
   removeAttribute(name: string) { this.attrs.delete(name); }
 }
 
-/** A conversation page in miniature: its buttons, the status line, and the document and window the script listens on. */
-function pageWith(labels: string[], opts: { note?: boolean; preDisabled?: string[] } = {}) {
+/** The reply box (Wave S7: the chat locks it while the assistant reads the reply). */
+class FakeBox {
+  readOnly = false;
+  private attrs = new Map<string, string>();
+  setAttribute(name: string, value: string) { this.attrs.set(name, value); }
+  hasAttribute(name: string) { return this.attrs.has(name); }
+  removeAttribute(name: string) { this.attrs.delete(name); }
+}
+
+/**
+ * A conversation page in miniature: its buttons, its reply box, the status line (with the chat's own words for it,
+ * `wait`), and the document and window the script listens on.
+ */
+function pageWith(labels: string[], opts: { note?: boolean; preDisabled?: string[]; wait?: string; boxes?: number } = {}) {
   const buttons = labels.map((l) => new FakeButton(l));
   for (const b of buttons) if (opts.preDisabled?.includes(b.textContent)) b.disabled = true;
-  const note = opts.note === false ? null : { textContent: "" };
+  const boxes = Array.from({ length: opts.boxes ?? 1 }, () => new FakeBox());
+  const note = opts.note === false ? null : { textContent: "", getAttribute: (name: string) => (name === "data-wait" ? opts.wait ?? null : null) };
   const on: Record<string, Handler[]> = {};
   const timers: Array<() => void> = [];
   const listen = (type: string, fn: Handler) => { on[type] = [...(on[type] ?? []), fn]; };
@@ -38,6 +52,8 @@ function pageWith(labels: string[], opts: { note?: boolean; preDisabled?: string
     querySelectorAll: (selector: string) => {
       if (selector === "main button") return buttons;
       if (selector === "main button[data-busy]") return buttons.filter((b) => b.hasAttribute("data-busy"));
+      if (selector === "main textarea") return boxes;
+      if (selector === "main textarea[data-busy]") return boxes.filter((b) => b.hasAttribute("data-busy"));
       throw new Error(`unexpected selector ${selector}`);
     },
   };
@@ -50,6 +66,7 @@ function pageWith(labels: string[], opts: { note?: boolean; preDisabled?: string
   };
   return {
     buttons,
+    boxes,
     note,
     /** A press of `label`: the submit event the browser fires before it builds what the form sends. */
     press: (label: string) => fire("submit", { submitter: buttons.find((b) => b.textContent === label) ?? null }),
@@ -116,6 +133,29 @@ describe("the screening conversation: one press at a time", () => {
     expect(old.buttons.every((b) => b.disabled)).toBe(true);
     expect(old.buttons.map((b) => b.textContent)).toEqual(["Send", "Skip this question"]);
     expect(old.press("Send").defaultPrevented).toBe(true);
+  });
+
+  it("Wave S7: in the chat the line says 'Reading your reply…' and the reply box is locked (read-only, so the reply still goes); Back unlocks both", () => {
+    const page = pageWith(["Send", "Skip this question"], { wait: CHAT_BUSY_NOTE });
+    page.press("Send");
+    // the box is still open while the browser builds what the form sends
+    expect(page.boxes[0].readOnly).toBe(false);
+    page.afterSubmit();
+    expect(page.note?.textContent).toBe("Reading your reply… This can take up to a minute, so please keep this page open.");
+    expect(page.boxes[0].readOnly).toBe(true);
+    expect(page.buttons.every((b) => b.disabled)).toBe(true);
+    page.back(true);
+    expect(page.boxes[0].readOnly).toBe(false);
+    expect(page.boxes[0].hasAttribute("data-busy")).toBe(false);
+    expect(page.note?.textContent).toBe("");
+    // a page without its own words keeps saying "Sending…", and a box already read-only is left as it was
+    const plain = pageWith(["Send"], { boxes: 2 });
+    plain.boxes[1].readOnly = true;
+    plain.press("Send");
+    plain.afterSubmit();
+    expect(plain.note?.textContent).toBe("Sending… This can take up to a minute, so please keep this page open.");
+    plain.back(true);
+    expect(plain.boxes.map((b) => b.readOnly)).toEqual([false, true]);
   });
 
   it("is plain ES5 with no inline handler and nothing that leaves the page", () => {

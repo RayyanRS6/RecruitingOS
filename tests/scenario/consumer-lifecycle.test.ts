@@ -113,12 +113,18 @@ describe("End-to-end hiring scenario: Glow Theory (beauty brand, 60 people) hire
       const res = await post(`/c/screen/${scr.token}`, { message: answerFor(s.progress.currentQuestionKey ?? "") });
       expect(res.status).toBe(302);
     }
-    expect(await (await app.request(`/c/screen/${scr.token}`)).text()).toContain("<h1>Check your answers</h1>");
+    // Wave S7: the chat ends with "Review and send", which writes the answers up from Dev's own replies; then
+    // "Check what you're sending" and Send, as before
+    expect(await (await app.request(`/c/screen/${scr.token}`)).text()).toContain(`<form method="post" action="/c/screen/${scr.token}/review">`);
+    expect((await post(`/c/screen/${scr.token}/review`)).headers.get("location")).toBe(`/c/screen/${scr.token}`);
+    expect(await (await app.request(`/c/screen/${scr.token}`)).text()).toMatch(/<h1>Check what you(&#39;|')re sending<\/h1>/);
     expect((await post(`/c/screen/${scr.token}/submit`)).status).toBe(302);
     await container.drain();
     const [done] = await container.db.select().from(screens).where(eq(screens.id, scr.id));
     expect(done.status).toBe("completed");
-    expect(Object.keys(done.answers).length).toBe(questions.length);
+    // every one of the job's screening questions is answered (the chat also keeps its closing answer and any must-have
+    // the CV did not show under their own keys)
+    expect(Object.keys(done.answers)).toEqual(expect.arrayContaining(questions.map((q) => q.key)));
     const after = (await container.db.select().from(applications).where(eq(applications.id, a.id)))[0];
     expect(after.stage).toBe("interview_recommended");
     const screenAsmt = (await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id))).find((x) => x.kind === "screen")!;

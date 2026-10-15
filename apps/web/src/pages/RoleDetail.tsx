@@ -25,6 +25,7 @@ import { ClosedBanner, PostingTab, StillUpAlert } from "./RolePosting";
 import { ActivityTab, CandidatesSeeThis, InterviewPlanTab, PacketApprovalCard, PreferencesCard, RequirementList, catchUpInterval, waitingOnWorker, workModelLabel } from "./RolePlan";
 import { EditPacket } from "./RoleEditor";
 import { ReportTab } from "./RoleReport";
+import { ApplicantQuestions } from "./role/ApplicantQuestions";
 import { CandidatePreview } from "./new-role/CandidatePreview";
 import { RoleRefine } from "./new-role/RoleRefine";
 import { RoomAlert } from "./new-role/StartView";
@@ -55,7 +56,8 @@ const REFINABLE = ["draft", "pending_approval", "open", "paused"];
 
 /**
  * The job page (Wave S1: simple, Kanvis-like): the job's header and its one tab strip, shared with its Candidates page.
- * Job (the description and the basics), Scoring (must-haves and what we look for), Interview plan, Share (where it is
+ * Job (the description and the basics), Scoring (must-haves, what we look for and, since Wave S7, the questions every
+ * applicant answers), Interview plan, Share (where it is
  * posted), Report and Activity. `?tab=` opens a tab; older names (`posting`, `overview`, `requirements`, `evaluation`,
  * `history`) open the tab that now holds them, so every link in a notification or an email still lands. Approving the
  * job as one thing, the close card and the closing message sit under the tab strip, on every tab.
@@ -280,6 +282,14 @@ export function RoleDetail() {
                   <ol style={{ paddingLeft: 18, margin: 0 }}>{p.screening.questions.map((q) => <li key={q.key}>{q.question} <Chip>{q.kind}</Chip></li>)}</ol>
                 </Card>
               </div>
+              {/* Wave S7: the quick questions on the form and the written questions in the chat, changed here. */}
+              <ApplicantQuestions
+                roleId={r.id}
+                packet={p}
+                editBase={editPacket && editSource && r.status !== "closed" ? { version: editSource.version, packet: editSource.packet } : null}
+                whoPosts={r.whoPosts}
+                onEditEligibility={editPacket && editSource && r.status !== "closed" ? () => openEditor() : undefined}
+              />
               <details className="more">
                 <summary>Eligibility questions, interview rounds, messages and notices</summary>
                 <div className="grid-2">

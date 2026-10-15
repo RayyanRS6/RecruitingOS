@@ -37,7 +37,11 @@ export function quarantineKey(companyId: string, roleId: string, uploadId: strin
   return `quarantine/${companyId}/${roleId}/${uploadId}.${extension}`;
 }
 
-export type UploadGrantPayload = { v: 1; companyId: string; roleId: string; uploadId: string; key: string; filename: string; mime: string; size: number; exp: number };
+/**
+ * `via` "server": the file came inside the form to be read (Wave S7, the résumé read first), and the app put it in
+ * quarantine itself; the grant then carries it through the rest of the form like a direct upload. Absent: a direct upload.
+ */
+export type UploadGrantPayload = { v: 1; companyId: string; roleId: string; uploadId: string; key: string; filename: string; mime: string; size: number; exp: number; via?: "server" };
 
 /** Seals and opens upload grants with a key derived from the session secret. The payload is signed, not encrypted: it holds no secret. */
 export class UploadGrants {

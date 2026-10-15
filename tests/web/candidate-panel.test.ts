@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { TimelineEvent } from "../../apps/web/src/api/client";
-import { DECLINE_REASONS, NO_COMPOSE, activeInterviews, composeFor, dayKey, hasUnsent, historyItem, historyItems, holdDateBounds, latestByTab, markSeen, neighbours, panelSearch, panelTabFrom, recruiterEventsFor, suggestionAndDecision, unreadTabs, whoDid } from "../../apps/web/src/pages/candidate-panel/helpers";
+import type { ApplicationDetail, Screen, TimelineEvent } from "../../apps/web/src/api/client";
+import { screenQuestionText } from "../../apps/web/src/evidence";
+import { ASSISTANT_NOTE_LABEL, DECLINE_REASONS, DRAFTED_WORDS, NO_COMPOSE, OWN_WORDS, activeInterviews, chatGapLines, composeFor, dayKey, hasUnsent, historyItem, historyItems, holdDateBounds, latestByTab, markSeen, neighbours, panelQuestions, panelSearch, panelTabFrom, recruiterEventsFor, suggestionAndDecision, unreadTabs, whoDid, writeupLines, writeupOverviewLine, writeupSummary } from "../../apps/web/src/pages/candidate-panel/helpers";
 
 /**
  * The candidate panel's rules (plan A10): its address, next and previous, the unread markers, the hold's dates, the
@@ -279,5 +280,110 @@ describe("History: who did what, why, and what the candidate was told", () => {
     expect(suggestionAndDecision(timeline)).toEqual({ suggested: "Worth a screening chat", decided: "Shortlist", decidedBy: "Dana Whitfield" });
     expect(suggestionAndDecision(timeline.slice(0, 2))).toEqual({ suggested: "Worth a screening chat", decided: null, decidedBy: null });
     expect(suggestionAndDecision([])).toEqual({ suggested: null, decided: null, decidedBy: null });
+  });
+});
+
+/* Wave S7: the answers to the company's questions, written up from the chat, as the team reads them. */
+const sentAt = "2026-10-15T10:00:00.000Z";
+const written = [
+  { key: "wq_patient", question: "Tell us about a time you calmed a nervous patient.", required: true, source: "company" as const },
+  { key: "wq_why", question: "Why this practice?", required: false, source: "company" as const },
+  { key: "wq_tools", question: "Which charting software have you used?", required: true, source: "company" as const },
+];
+function sentScreen(over: Partial<Screen> = {}): Screen {
+  return {
+    id: "s1", channel: "web", status: "completed", invitedAt: sentAt, startedAt: sentAt, completedAt: sentAt, remindedAt: null, assessmentId: null, answersShared: true,
+    answers: { wq_patient: "A boy was scared of the scaler, so I let him hold the mirror and counted down with him.", wq_tools: "I have not used any." },
+    transcript: [
+      { role: "assistant", content: "Tell us about a time you calmed a nervous patient.", at: sentAt, questionKey: "wq_patient" },
+      { role: "candidate", content: "A boy was scared of the scaler, so I let him hold the mirror and counted down with him.", at: sentAt, questionKey: "wq_patient" },
+      { role: "recruiter", content: "Said the same on the phone.", at: sentAt, questionKey: "wq_patient", source: "recruiter_call", by: "Rae Recruiter" },
+      { role: "system", content: "Skipped this question.", at: sentAt, questionKey: "wq_why", source: "skip" },
+      { role: "assistant", content: "Which charting software have you used?", at: sentAt, questionKey: "wq_tools" },
+      { role: "candidate", content: "I have not used any.", at: sentAt, questionKey: "wq_tools" },
+    ],
+    progress: {
+      askedKeys: ["wq_patient", "wq_why", "wq_tools"], currentQuestionKey: null, declined: ["wq_why"], submittedAt: sentAt,
+      chat: { v: 1, section: "wrapping_up", current: null, builtAt: sentAt, items: [
+        { key: "mh_1_license", kind: "gap", required: false, state: "unknown", step: "smaller", pushes: 1 },
+        { key: "mh_2_pediatric", kind: "gap", required: false, state: "covered", step: "direct", pushes: 0 },
+        { key: "wq_patient", kind: "written", required: true, state: "covered", step: "direct", pushes: 0 },
+      ] },
+      writeup: { v: 1, writtenAt: sentAt, aiRunId: "run1", promptVersion: 1, answers: [
+        { questionKey: "wq_patient", answer: "I calmed a scared boy by letting him hold the mirror and counting down with him.", status: "answered", quotes: ["let him hold the mirror", "  let him hold the mirror ", ""], note: null, by: "writeup" },
+        { questionKey: "wq_why", answer: "", status: "skipped", quotes: [], note: null, by: "writeup" },
+        { questionKey: "wq_tools", answer: "I have not used any charting software yet.", status: "partly", quotes: ["I have not used any."], note: "No example of charting work was given.", by: "candidate", editedAt: sentAt },
+      ] },
+    },
+    ...over,
+  };
+}
+const labels: ApplicationDetail["packetLabels"] = { mustHaves: [{ key: "mh_1_license", text: "An active CA RDH license" }, { key: "mh_2_pediatric", text: "Experience with children" }], competencies: [], questions: [{ key: "q_sat", question: "Can you work Saturdays?" }, { key: "wq_patient", question: "An old wording" }], written };
+
+describe("the company's questions on the panel (Wave S7)", () => {
+  it("names answers by the written questions first, then the screening questions not among them", () => {
+    expect(panelQuestions(labels)).toEqual([
+      { key: "wq_patient", question: "Tell us about a time you calmed a nervous patient.", required: true },
+      { key: "wq_why", question: "Why this practice?", required: false },
+      { key: "wq_tools", question: "Which charting software have you used?", required: true },
+      { key: "q_sat", question: "Can you work Saturdays?" },
+    ]);
+    // an older answer from the API, without `written`: the screening questions alone, as before
+    expect(panelQuestions({ questions: labels.questions })).toEqual(labels.questions);
+  });
+
+  it("shows each answer as written up, where its words come from, its quotes, and its part of the chat", () => {
+    const lines = writeupLines(sentScreen(), panelQuestions(labels));
+    expect(lines.map((l) => l.key)).toEqual(["wq_patient", "wq_why", "wq_tools"]);
+    const [patient, why, tools] = lines;
+    expect(patient).toMatchObject({ question: "Tell us about a time you calmed a nervous patient.", required: true, answer: "I calmed a scared boy by letting him hold the mirror and counting down with him.", statusWords: "Answered", tone: "good", byCandidate: false, byWords: DRAFTED_WORDS, note: null });
+    // quotes trimmed, empty ones and repeats dropped
+    expect(patient.quotes).toEqual(["let him hold the mirror"]);
+    // the chat about this question, without the recruiter's call notes, which are kept apart and labelled as theirs
+    expect(patient.chat.map((b) => b.kind)).toEqual(["assistant", "user"]);
+    expect(patient.notes).toEqual([{ text: "Said the same on the phone.", by: "Rae Recruiter" }]);
+    // a question they chose not to answer: no answer, never held against them
+    expect(why).toMatchObject({ required: false, answer: null, statusWords: "Chose not to answer", tone: "neutral" });
+    expect(why.chat).toEqual([{ kind: "system", label: null, text: "Chose not to answer this question." }]);
+    // changed on Review & send: their own words; the assistant's note stays its own, never inside the answer
+    expect(tools).toMatchObject({ answer: "I have not used any charting software yet.", statusWords: "Partly answered", byCandidate: true, byWords: OWN_WORDS, note: "No example of charting work was given." });
+    expect(tools.answer).not.toContain(tools.note ?? "-");
+    expect(tools.quotes).toEqual(["I have not used any."]);
+    expect(ASSISTANT_NOTE_LABEL).toBe("Note from the assistant. Not the candidate's own words.");
+  });
+
+  it("names a question the labels no longer carry by its key, and counts it as required", () => {
+    const [line] = writeupLines(sentScreen({ progress: { askedKeys: [], currentQuestionKey: null, writeup: { v: 1, writtenAt: sentAt, aiRunId: null, promptVersion: null, answers: [{ questionKey: "wq_shift_swaps", answer: "Yes, happily.", status: "answered", quotes: [], note: null, by: "writeup" }] } } }), []);
+    expect(line).toMatchObject({ question: "Shift swaps", required: true, chat: [], notes: [] });
+  });
+
+  it("shows nothing while the answers are hidden, nor for a chat without a write-up", () => {
+    expect(writeupLines(sentScreen({ answersShared: false }), panelQuestions(labels))).toEqual([]);
+    expect(writeupLines(sentScreen({ progress: { askedKeys: [], currentQuestionKey: null } }), panelQuestions(labels))).toEqual([]);
+    expect(chatGapLines(sentScreen({ answersShared: false }), labels.mustHaves)).toEqual([]);
+    expect(chatGapLines(sentScreen({ progress: { askedKeys: [], currentQuestionKey: null } }), labels.mustHaves)).toEqual([]);
+  });
+
+  it("counts the answers, partial ones included and said, and says so on the Overview", () => {
+    const lines = writeupLines(sentScreen(), panelQuestions(labels));
+    expect(writeupSummary(lines)).toBe("2 of 3 answered (1 partly)");
+    expect(writeupSummary([{ status: "answered" }, { status: "not_given" }])).toBe("1 of 2 answered");
+    expect(writeupOverviewLine(lines)).toBe("Answers to your questions: 2 of 3 answered (1 partly), 1 with a note from the assistant. Read them on the Screening chat tab.");
+    expect(writeupOverviewLine([{ status: "answered", note: null }])).toBe("Answers to your questions: 1 of 1 answered. Read them on the Screening chat tab.");
+  });
+
+  it("lists the must-haves the résumé did not show, with where the chat left each, never a no", () => {
+    expect(chatGapLines(sentScreen(), labels.mustHaves)).toEqual([
+      { key: "mh_1_license", text: "An active CA RDH license", state: "unknown", words: "Not known yet: never counted as a no" },
+      { key: "mh_2_pediatric", text: "Experience with children", state: "covered", words: "They gave an answer or an example" },
+    ]);
+    expect(chatGapLines(sentScreen(), [])[0].text).toBe("license");
+  });
+
+  it("names a written question in the AI review's answers too", () => {
+    const a = { packetLabels: labels, screens: [sentScreen()] } as Pick<ApplicationDetail, "packetLabels" | "screens">;
+    expect(screenQuestionText(a, "wq_why")).toBe("Why this practice?");
+    expect(screenQuestionText(a, "q_sat")).toBe("Can you work Saturdays?");
+    expect(screenQuestionText({ ...a, packetLabels: { ...labels, written: undefined } }, "wq_why")).toBeNull();
   });
 });

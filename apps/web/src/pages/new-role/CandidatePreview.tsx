@@ -85,10 +85,23 @@ export function JobPreviewBody({ p }: { p: JobPreview }) {
         {p.pay.note ? <p className="small muted">{p.pay.note}</p> : null}
         {p.job.notices.map((n) => <p key={n.key} className="small muted">{n.text}</p>)}
       </article>
-      {p.apply.questions.length ? (
+      {p.apply.questions.length || p.apply.quickQuestions?.length || p.apply.writtenQuestions ? (
         <section className="job-preview" aria-label="The application form">
-          <h2>A few quick questions when they apply</h2>
-          <ul>{p.apply.questions.map((a) => <li key={a.key}>{a.question}{a.help ? <span className="small muted"> {a.help}</span> : null}</li>)}</ul>
+          <h2>Questions from {p.company.name}</h2>
+          {p.apply.questions.length || p.apply.quickQuestions?.length ? (
+            <ul>
+              {p.apply.questions.map((a) => <li key={a.key}>{a.question}{a.help ? <span className="small muted"> {a.help}</span> : null}</li>)}
+              {(p.apply.quickQuestions ?? []).map((q) => (
+                <li key={q.key}>
+                  {q.question}{q.required ? null : <span className="small muted"> (optional)</span>}
+                  {q.kind === "choice" && q.options.length ? <span className="small muted"> {q.options.join(" · ")}</span> : null}
+                  {q.kind === "number" && q.unit ? <span className="small muted"> A number ({q.unit})</span> : null}
+                  {q.help ? <span className="small muted"> {q.help}</span> : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {p.apply.writtenQuestions ? <p className="small">{p.apply.writtenQuestions} written {p.apply.writtenQuestions === 1 ? "question" : "questions"} in the chat.</p> : null}
           <p className="small muted">{p.apply.disclosure} {p.apply.humanAlternative}</p>
         </section>
       ) : null}

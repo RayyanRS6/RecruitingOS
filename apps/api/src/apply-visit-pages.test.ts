@@ -5,7 +5,10 @@ import { aiRuns, applications, candidates, entitlements, notifications, screens,
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { CHAT_WRAP_QUESTION } from "@ros/agents";
+import { CHAT_WRAP_KEY } from "@ros/core";
 import { SCREEN_BUSY_JS } from "./pages/candidate";
+import { CHAT_BUSY_NOTE } from "./pages/conversation-frame";
 import { statusTokenFor, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
@@ -43,7 +46,12 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
   const mail = () => (container.integrations.email as FakeEmailAdapter).sent;
   const screenOf = async (token: string) => (await container.db.select().from(screens).where(eq(screens.token, token)))[0];
   const question = (key: string) => packet.screening.questions.find((q) => q.key === key)!;
-  const keyOf = (html: string) => packet.screening.questions.find((q) => html.includes(`<h1 class="question" id="question">${q.question}</h1>`))?.key ?? null;
+  /** The chat's latest message, the one to answer now (Wave S7). */
+  const nowLine = (html: string) => html.match(/<li class="msg assistant now" id="question">([\s\S]*?)<\/li>/)?.[1] ?? "";
+  /** The question the chat is asking now: the job's own questions (no CV was passed, so no gaps), then the closing question. */
+  const keyOf = (html: string) => [...packet.screening.questions, { key: CHAT_WRAP_KEY, question: CHAT_WRAP_QUESTION }].find((q) => nowLine(html).includes(q.question))?.key ?? null;
+  /** The chat's end: "Review and send" in place of the reply box. */
+  const chatEnd = (token: string) => `<form method="post" action="/c/screen/${token}/review"><button class="btn" type="submit">Review and send</button></form>`;
 
   /** The apply form as a browser posts it. */
   async function apply(p: { first: string; last: string; email: string; eligibility?: "yes" | "no" }) {
@@ -63,11 +71,11 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     return to.slice("/c/screen/".length);
   };
 
-  /** Answers every question over HTTP: taps where the page offers them, a skip where asked, words otherwise; ends on "check your answers". */
+  /** Answers every question over HTTP: taps where the page offers them, a skip where asked, words otherwise; ends at the chat's end. */
   async function answerAll(token: string, skip: string[] = []) {
-    for (let i = 0; i < 24; i++) {
+    for (let i = 0; i < 30; i++) {
       const html = await page(`/c/screen/${token}`);
-      if (html.includes("<h1>Check your answers</h1>")) return html;
+      if (html.includes(chatEnd(token))) return html;
       const key = keyOf(html);
       const r = key && skip.includes(key)
         ? await post(`/c/screen/${token}`, { action: "skip" })
@@ -79,7 +87,7 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
       expect(r.status).toBe(302);
       expect(r.headers.get("location")).toBe(`/c/screen/${token}`);
     }
-    throw new Error("the conversation did not reach check your answers");
+    throw new Error("the conversation did not reach the chat's end");
   }
 
   beforeAll(async () => {
@@ -151,32 +159,46 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     expect(status).toMatch(/<span>Status<\/span><strong>Screening chat<\/strong>/);
   });
 
-  it("E2, E12, E14: Start shows the first question at once in large type, with Yes and No to tap, the own-words box labelled with the question, and the quiet skip; a tap is recorded word for word", async () => {
+  it("E2, E12, E14, Wave S7: Start opens the chat at once: the steps with the counter, where the replies go, the first question word for word as the latest message, Yes and No to tap, the reply box named after the question, and the quiet skip; a tap is recorded word for word", async () => {
     expect((await post(`/c/screen/${mariaToken}/start`)).headers.get("location")).toBe(`/c/screen/${mariaToken}`);
     const q1 = question("license_confirm");
+    const q2 = packet.screening.questions[1];
+    const total = packet.screening.questions.length;
     let html = await page(`/c/screen/${mariaToken}`);
-    expect(html).toContain(`<h1 class="question" id="question">${q1.question}</h1>`);
-    expect(html).toContain(`<label for="progress">Question 1 of ${packet.screening.questions.length}</label>`);
+    // the AI line stays first; the steps come right under it: Chat now, the counter (never the questions in advance), "Saved" and "Finish later"
+    const main = html.slice(html.indexOf("<main>") + "<main>".length);
+    expect(main).toMatch(/^<p class="ai-line">.*?<\/p><nav class="journey" aria-label="Your application">/);
+    expect(html).toMatch(/aria-current="step">Chat</);
+    expect(html).toContain(`>0 of ${total} required · Required questions<`);
+    expect(html).toMatch(new RegExp(`<form method="post" action="/c/screen/${mariaToken}/later"[^>]*>(<span>Saved</span>)?<button class="link-action" type="submit">Finish later</button></form>`));
+    expect(html).toContain(`<h1 class="chat-title">Your chat about the ${packet.identity.title} role</h1>`);
+    expect(html).toContain("<span>Your replies go to Visit Dental only when you press Send my answers at the end.</span>");
+    expect(html).not.toMatch(/Question \d of/);
+    // the opening, in code: her first name, then the first question word for word; it is the message to answer now
+    expect(nowLine(html)).toBe(`<span class="sr-only">The assistant said: </span>Hi Maria. Thanks for applying.\n\n${q1.question}`);
     expect(html).toContain(`<input type="hidden" name="tap" value="yes_no"/><fieldset class="actions" aria-label="Your answer to: ${q1.question}"><button class="btn secondary" type="submit" name="choice" value="yes">Yes</button><button class="btn secondary" type="submit" name="choice" value="no">No</button><button class="link-action" type="submit" name="action" value="skip" formnovalidate="">Skip this question</button></fieldset>`);
     expect(html).toContain("<summary>Answer in your own words instead</summary>");
-    expect(html).toContain(`<label for="message">Your answer<span class="sr-only"> to: ${q1.question}</span></label>`);
+    expect(html).toContain(`<label for="message">Your reply<span class="sr-only"> to: ${q1.question}</span></label>`);
     expect(html).toContain(`<a class="link-action" href="/c/screen/${mariaToken}/person">I'd rather talk to a person</a>`);
     expect(html).toContain(`<form method="post" action="/c/screen/${mariaToken}/later"><button class="link-action" type="submit">Finish later: email me the link</button></form>`);
+    // while the assistant reads a reply the page says so (the script reads it from here)
+    expect(html).toContain(`<p class="sending" id="sending" role="status" data-wait="${CHAT_BUSY_NOTE}"></p>`);
     // a second press of Start changes nothing
     await post(`/c/screen/${mariaToken}/start`);
     expect((await screenOf(mariaToken)).transcript.filter((t) => t.role === "assistant")).toHaveLength(1);
-    // the tap: recorded as fixed words, and the next question follows in the packet's words
+    // the tap: recorded as fixed words; the next question follows word for word, after one neutral line
     expect((await post(`/c/screen/${mariaToken}`, { tap: "yes_no", choice: "yes" })).headers.get("location")).toBe(`/c/screen/${mariaToken}`);
     const scr = await screenOf(mariaToken);
     expect(scr.answers[q1.key]).toBe("Yes");
     expect(scr.transcript.find((t) => t.source === "tap")).toMatchObject({ role: "candidate", content: "Yes", questionKey: q1.key });
     html = await page(`/c/screen/${mariaToken}`);
-    expect(html).toContain('<p class="lead-in"><span class="sr-only">The assistant said: </span>Thanks.</p>');
-    expect(html).toContain(`<label for="progress">Question 2 of ${packet.screening.questions.length}</label>`);
-    // the first question and Maria's own answer are folded away above the second
-    const earlier = html.slice(html.indexOf('<details class="earlier">'), html.indexOf("</details>"));
-    expect(earlier).toContain(q1.question);
-    expect(earlier).toContain('<li class="msg candidate"><span class="sr-only">You said: </span>Yes</li>');
+    expect(nowLine(html)).toBe(`<span class="sr-only">The assistant said: </span>Noted: Yes.\n\n${q2.question}`);
+    expect(html).toContain(`>1 of ${total} required · Required questions<`);
+    // the whole chat is one thread: the opening, her own answer on the right, the next question
+    const thread = html.slice(html.indexOf('<ol class="thread" aria-label="Your chat">'), html.indexOf("</ol>", html.indexOf('<ol class="thread" aria-label="Your chat">')));
+    expect(thread).toContain(q1.question);
+    expect(thread).toContain('<li class="msg candidate"><span class="sr-only">You said: </span>Yes</li>');
+    expect(thread.indexOf(q1.question)).toBeLessThan(thread.indexOf("You said: </span>Yes"));
   });
 
   it("E11, E12: an empty answer and a tap that does not fit are refused plainly; a skip is noted for what it is; the pay range is tapped", async () => {
@@ -184,8 +206,8 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     expect(await page(`/c/screen/${mariaToken}?error=empty`)).toContain('<div class="err" role="alert">Please type an answer first, or press Skip this question.</div>');
     expect((await post(`/c/screen/${mariaToken}`, { tap: "pay_range", min: "" })).headers.get("location")).toBe(`/c/screen/${mariaToken}?error=tap`);
     expect(await page(`/c/screen/${mariaToken}?error=tap`)).toContain("That answer does not fit this question.");
-    const review = await answerAll(mariaToken, ["hard_moment"]);
-    expect(review).toContain("<h1>Check your answers</h1>");
+    const end = await answerAll(mariaToken, ["hard_moment"]);
+    expect(end).toContain(chatEnd(mariaToken));
     const scr = await screenOf(mariaToken);
     expect(scr.progress.declined).toEqual(["hard_moment"]);
     expect(scr.transcript.find((t) => t.source === "skip")).toMatchObject({ role: "system", questionKey: "hard_moment" });
@@ -194,48 +216,35 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     expect((await container.db.select().from(notifications).where(eq(notifications.companyId, companyId))).filter((n) => n.title.includes("Maria"))).toHaveLength(0);
   });
 
-  it("E10: check your answers lists every answer with Change, marks the skipped one with Answer it, marks a change, and Send ends it; only then does the team hear", async () => {
+  it("Wave S7, E10: the chat ends on its close (one thing she said, what happens next) and 'Review and send' in place of the reply box; Send ends it; only then does the team hear", async () => {
     const base = `/c/screen/${mariaToken}`;
     let html = await page(base);
-    // honest about both things: the team sees the answers only once she sends them, and nothing sends them for her:
-    // without Send the conversation closes a few days later and the application goes on without them (founder decision
-    // of 9 October 2026, "hide them until they send")
-    expect(html).toContain('<p class="lead">The hiring team sees your answers only once you send them. Change any answer you like, then press Send.</p>');
-    expect(html).not.toContain("can see your answers as you give them");
-    // what happens without Send stays in the page, word for word, one click away (founder brief, 14 October 2026)
-    expect(html).toContain("<details class=\"more\"><summary>What if I don't press Send?</summary><p>If you do not press Send, the conversation closes a few days after your last answer or change, and your application goes to the hiring team without these answers. If we have not reminded you yet, we email you once before then.</p></details>");
-    expect(html).not.toContain("we send your answers as they are");
-    expect(html).not.toContain("Nothing is sent until you do");
-    for (const q of packet.screening.questions) expect(html).toContain(`<p class="answer-q">${packet.screening.questions.indexOf(q) + 1}. ${q.question}</p>`);
-    const skipped = html.slice(html.indexOf('<li class="answer" id="a-hard_moment">'));
-    expect(skipped.slice(0, skipped.indexOf("</li>"))).toContain('<span class="pill">Skipped</span></div><p class="pre">You skipped this question.</p><a href="/c/screen/');
-    expect(skipped.slice(0, skipped.indexOf("</li>"))).toContain("Answer it");
-    expect(html).toContain(`<form method="post" action="${base}/submit"><button class="btn" type="submit">Send my answers</button></form>`);
-    // answer the skipped one, in words
-    const edit = await page(`${base}/answers/hard_moment`);
-    expect(edit).toContain(`<h1 class="question" id="question">${question("hard_moment").question}</h1>`);
-    expect(edit).toContain(`<a href="${base}#a-hard_moment">`);
-    const saved = await post(`${base}/answers/hard_moment`, { message: "A nervous patient wanted to stop, so I slowed down and explained each step; she rebooked with me." });
-    expect(saved.headers.get("location")).toBe(`${base}?changed=hard_moment#a-hard_moment`);
-    // change a tapped one by tapping again
-    expect(await page(`${base}/answers/license_confirm`)).toContain('<input type="hidden" name="tap" value="yes_no"/>');
-    expect((await post(`${base}/answers/license_confirm`, { tap: "yes_no", choice: "no" })).headers.get("location")).toBe(`${base}?changed=license_confirm#a-license_confirm`);
-    html = await page(`${base}?changed=license_confirm`);
-    expect(html).toContain('<div class="card" role="status"><strong>Your answer is changed.</strong></div>');
-    for (const key of ["hard_moment", "license_confirm"]) {
-      const item = html.slice(html.indexOf(`<li class="answer" id="a-${key}">`));
-      expect(item.slice(0, item.indexOf("</li>"))).toContain('<span class="pill">Changed</span>');
-    }
-    expect((await screenOf(mariaToken)).answers.license_confirm).toBe("No");
-    // an unknown question is not found; an empty change says so
-    expect((await app.request(`${base}/answers/not_a_question`)).status).toBe(404);
-    expect((await post(`${base}/answers/why`, { message: "" })).headers.get("location")).toBe(`${base}/answers/why?error=empty`);
+    const total = packet.screening.questions.length;
+    expect(html).toContain(`<div class="chat-end"><p>Your chat is complete.</p>${chatEnd(mariaToken)}</div>`);
+    expect(html).not.toContain("<textarea");
+    // the close names one concrete thing she said, in her own words, then what happens next: never a time, nothing sent before Send
+    expect(nowLine(html)).toMatch(/^<span class="sr-only">The assistant said: <\/span>Thank you, Maria\. You told me "[^"]+"\.\n\nNext, check what you are sending and change anything you like, then press Send\. Nothing goes to Visit Dental until you do\.$/);
+    expect(html).toContain(`>${total} of ${total} required · Wrapping up<`);
+    expect(html).toContain("<span>Your replies go to Visit Dental only when you press Send my answers at the end.</span>");
+    // pressing it writes the answers up (slice S7-D): the page says so while it does
+    expect(html).toContain('data-wait="Writing up your answers from your replies… This can take up to a minute, so please keep this page open."');
+    // the whole chat stays on the page; the closing question was asked and answered
+    expect(html).toContain(CHAT_WRAP_QUESTION);
+    const scr = await screenOf(mariaToken);
+    expect(scr.progress.phase).toBe("review");
+    expect(scr.status).toBe("in_progress");
+    // nobody on the team has heard yet
+    expect((await container.db.select().from(notifications).where(eq(notifications.companyId, companyId))).some((n) => n.title.includes("Maria") || n.body.includes("Maria"))).toBe(false);
     // Send: the conversation is complete, the scorecard follows, and the team hears now
     expect((await post(`${base}/submit`)).headers.get("location")).toBe(base);
     await container.drain();
     html = await page(base);
     expect(html).toContain("<h1>Thanks, your answers are sent</h1>");
     expect(html).toContain("The hiring team at Visit Dental reads them with your application.");
+    // where the score and what she sent can be seen, and her link again by email: never the record's link itself
+    expect(html).toContain("<p>Your match score and everything you sent will be on your application page. Its link is in the email we sent you when you applied.</p>");
+    expect(html).toContain('<a class="btn secondary" href="/c/link-request">Email me my link again</a>');
+    expect(html).not.toMatch(/href="\/c\/status\//);
     expect(html).not.toContain("<textarea");
     expect((await screenOf(mariaToken)).status).toBe("completed");
     // on her status page the screening chat is behind her, ticked, and the team's review is where she is now
@@ -372,7 +381,7 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     expect((await app.request("/c/confirm-answers/not-a-real-link")).status).toBe(404);
   });
 
-  it("polish list: 'Earlier in the conversation' holds the candidate's own answers, typed or tapped, beside the assistant's lines; email wording reads as the page's own way to a person", async () => {
+  it("polish list, Wave S7: the chat is one thread holding the candidate's own answers, typed or tapped, beside the assistant's lines, in order; email wording reads as the page's own way to a person", async () => {
     const token = tokenOf(await apply({ first: "Ina", last: "Park", email: "ina.park@example.com" }));
     await post(`/c/screen/${token}/start`);
     const typed = "At Smile Bright I see nine patients a day and chart every visit in Dentrix; 6 years so far.";
@@ -386,16 +395,19 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
       else await post(`/c/screen/${token}`, { message: typed });
     }
     const html = await page(`/c/screen/${token}`);
-    const earlier = html.slice(html.indexOf('<details class="earlier">'), html.indexOf("</details>"));
-    expect(earlier).toContain('<ol class="thread" aria-label="Earlier questions and your answers">');
+    const at = html.indexOf('<ol class="thread" aria-label="Your chat">');
+    const thread = html.slice(at, html.indexOf("</ol>", at));
+    expect(at).toBeGreaterThan(0);
     // both questions asked (on the left) and both answers (on the right, in the candidate's own words), in order
-    const mine = [...earlier.matchAll(/<li class="msg candidate"><span class="sr-only">You said: <\/span>([^<]*)<\/li>/g)].map((m) => m[1]);
+    const mine = [...thread.matchAll(/<li class="msg candidate"><span class="sr-only">You said: <\/span>([^<]*)<\/li>/g)].map((m) => m[1]);
     expect(mine).toHaveLength(2);
     expect(mine).toEqual(expect.arrayContaining([typed]));
-    for (const q of answered) expect(earlier).toMatch(new RegExp(`<li class="msg assistant"><span class="sr-only">The assistant said: </span>[^<]*${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-    expect(earlier.indexOf(answered[0])).toBeLessThan(earlier.indexOf(mine[0]));
-    expect(earlier.indexOf(mine[0])).toBeLessThan(earlier.indexOf(answered[1]));
-    expect(earlier.indexOf(answered[1])).toBeLessThan(earlier.indexOf(mine[1]));
+    for (const q of answered) expect(thread).toMatch(new RegExp(`<li class="msg assistant"><span class="sr-only">The assistant said: </span>[^<]*${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    expect(thread.indexOf(answered[0])).toBeLessThan(thread.indexOf(mine[0]));
+    expect(thread.indexOf(mine[0])).toBeLessThan(thread.indexOf(answered[1]));
+    expect(thread.indexOf(answered[1])).toBeLessThan(thread.indexOf(mine[1]));
+    // every message is one restatement and one question
+    for (const m of thread.matchAll(/<li class="msg assistant[^"]*"[^>]*><span class="sr-only">The assistant said: <\/span>([^<]*)<\/li>/g)) expect((m[1].match(/\?/g) ?? []).length, m[1]).toBeLessThanOrEqual(1);
 
     // a line the assistant wrote for email or text ("Reply HUMAN…") reads as the button on this page, and by email once it closed; the transcript keeps its words
     const scr = await screenOf(token);
@@ -424,8 +436,14 @@ describe("Wave E pages: applying and the conversation in one visit", () => {
     await post(`/c/screen/${token}/start`);
     const html = await page(`/c/screen/${token}`);
     expect(scriptsOf(html)).toEqual([SCREEN_BUSY_JS]);
-    // the line that says an answer is on its way is there, empty, before anything is pressed
-    expect(html).toContain('<p class="sending" id="sending" role="status"></p>');
+    // the line that says an answer is on its way is there, empty, before anything is pressed (with what it will say)
+    expect(html).toContain(`<p class="sending" id="sending" role="status" data-wait="${CHAT_BUSY_NOTE}"></p>`);
     expect(html).not.toMatch(/ style="/);
+    // the chat's end works without script too: "Review and send" is a plain form
+    await answerAll(token);
+    const end = await page(`/c/screen/${token}`);
+    expect(scriptsOf(end)).toEqual([SCREEN_BUSY_JS]);
+    expect(end).not.toMatch(/ on[a-z]+="/);
+    for (const m of end.matchAll(/<form\b([^>]*)>/g)) expect(m[1]).toContain('method="post"');
   });
 });

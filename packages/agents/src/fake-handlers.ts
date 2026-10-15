@@ -2,6 +2,7 @@ import type { DraftRolePacket, EvidenceAssessment, IntakeExtraction, IntakeFacts
 import type { FakeProvider, IntakeContext, StructuredRequest } from "@ros/ai";
 import { marketPlace, normalizeCriterion, screenCriterion } from "@ros/core";
 import { redactProtected } from "./screening";
+import { fakeScreenWriteup } from "./fake-writeup";
 import { FOCUS_INTRO, isFocusKey } from "./screen-focus";
 import { plainlyNotHeld } from "./triage";
 
@@ -18,6 +19,7 @@ export function registerFakeHandlers(fake: FakeProvider): void {
   fake.register("triage.assess", (req) => fakeTriageAssess(req));
   fake.register("screen.turn", (req) => fakeScreenTurn(req));
   fake.register("screen.assess", (req) => fakeScreenAssess(req));
+  fake.register("screen.writeup", (req) => fakeScreenWriteup(req));
   fake.register("packet.revise", (req) => fakeRevise(req));
   fake.register("company.about", (req) => fakeCompanyAbout(req));
   fake.register("message.freeform", (req) => fakeMessageLine(req));
@@ -704,6 +706,9 @@ function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
     return { ...base, messageToCandidate: `${answer} ${currentQ ? `Back to my question: ${currentQ.question}` : ""}`.trim(), candidateAskedAbout: "pay", questionKey: null };
   }
   const confused = /\?{2,}|confus|what do you mean|huh\b|don't understand|dont understand/i.test(latest);
+  // screen.turn v6 (Wave S7): a Kanvis-style chat, when the system gives its plan.
+  const chat = chatPlanOf(req);
+  if (chat && !confused) return fakeChatTurn(s, chat, latest, user);
   let answerRecorded: ScreenTurn["answerRecorded"] = null;
   let followUpReason: string | null = null;
   if (currentQ) {
@@ -745,6 +750,60 @@ function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
   }
   // Only the acknowledgment: the code adds the next question in the packet's own words.
   return { ...base, answerRecorded, questionKey: next.key, messageToCandidate: "Thanks." };
+}
+
+type FakeChatItem = { key: string; kind: "gap" | "written"; step: "direct" | "analog" | "smaller"; pushes: number; ladder: boolean; question: string };
+
+/** The Kanvis-style chat's plan, as the system block gives it (`Chat plan (JSON): {...}`), or null for any other conversation. */
+function chatPlanOf(req: StructuredRequest<unknown>): { current: string | null; items: FakeChatItem[] } | null {
+  const sys = req.system.map((b) => b.text).join("\n");
+  const raw = sys.match(/^Chat plan \(JSON\): (.*)$/m)?.[1];
+  if (!raw) return null;
+  try {
+    const plan = JSON.parse(raw) as { current?: string | null; items?: FakeChatItem[] };
+    return { current: plan.current ?? null, items: plan.items ?? [] };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * screen.turn v6 (Wave S7): the chat the way the model is asked to run it, by plain rules, so tests and local runs show
+ * it. One neutral restatement of the reply (the code adds the next question); a short reply with nothing specific in
+ * it gets one push; "No" climbs the ladder on an open question (the analog, then for a gap the smaller version, then
+ * the item is settled with the calm line); every reply is read (`reading`). The closing question's answer brings the
+ * close, naming the longest thing the candidate said, in their own words.
+ */
+function fakeChatTurn(s: ReturnType<typeof parseScreenSystem>, plan: { current: string | null; items: FakeChatItem[] }, latest: string, user: string): ScreenTurn {
+  const base: ScreenTurn = { messageToCandidate: "", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
+  const current = s.progress.currentQuestionKey;
+  const asked = new Set(s.progress.askedKeys);
+  const declined = new Set(s.progress.declined ?? []);
+  const next = s.questions.find((q) => q.key !== current && !asked.has(q.key) && !declined.has(q.key)) ?? null;
+  const said = latest.trim();
+  if (current === "wrap_up") {
+    const replies = [...user.matchAll(/^candidate: (.*)$/gm)].map((m) => m[1].trim()).filter((x) => x.length >= 25 && redactProtected(x) === x);
+    const longest = replies.sort((a, b) => b.length - a.length)[0];
+    return { ...base, done: true, answerRecorded: said ? { questionKey: "wrap_up", answer: redactProtected(said), complete: true } : null, messageToCandidate: longest ? `Thank you, ${s.name}. You told me "${quoteOf(longest)}".` : `Thank you, ${s.name}.` };
+  }
+  const item = plan.items.find((i) => i.key === current);
+  if (!item) return { ...base, questionKey: next?.key ?? null, done: !next, messageToCandidate: "Noted." };
+  const vague = said.length < 25 && !/\d/.test(said);
+  const moveOn = (reading: "concrete" | "vague" | "not_done"): ScreenTurn => {
+    // Their words about this item since it was asked, verbatim and in order.
+    const at = user.lastIndexOf(item.question);
+    // a keyword command is not an answer
+    const replies = [...(at >= 0 ? user.slice(at) : user).matchAll(/^candidate: (.*)$/gm)].map((m) => m[1].trim()).filter((x) => x && !/^(?:human|person|a person|a human|agent|representative|withdraw(?: my application)?|confirm)[.!]?$/i.test(x)).join(" ");
+    const recorded = reading === "not_done" && item.kind === "gap" ? null : { questionKey: item.key, answer: redactProtected(replies || said), complete: reading === "concrete" };
+    return { ...base, reading, questionKey: next?.key ?? null, done: !next, answerRecorded: recorded, messageToCandidate: reading === "not_done" ? "Understood, thanks for saying so." : `You said "${quoteOf(said)}".` };
+  };
+  if (item.ladder && said.length < 60 && /^(no|nope|not really|never|i haven'?t|i have not)\b/i.test(said) && !/\bbut\b/i.test(said)) {
+    if (item.step === "direct") return { ...base, reading: "not_done", followUpReason: "the analog", messageToCandidate: "Not done that exactly? Tell me about something similar from your own work." };
+    if (item.step === "analog" && item.kind === "gap") return { ...base, reading: "not_done", followUpReason: "the smaller version", messageToCandidate: "Even a small moment counts: was there a time, even with just a few people, when you did something like it?" };
+    return moveOn("not_done");
+  }
+  if (item.ladder && vague && item.pushes === 0) return { ...base, reading: "vague", followUpReason: "nothing specific yet", messageToCandidate: `You said "${quoteOf(said)}".\n\nCould you tell me about one specific time: what you did, and what came of it?` };
+  return moveOn(item.ladder && vague ? "vague" : "concrete");
 }
 
 const trimDot = (t: string) => t.trim().replace(/[.!]+$/, "");

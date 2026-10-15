@@ -114,6 +114,11 @@ describe("the job-page preview (plan D1)", () => {
     expect(html).not.toContain('name="formOpened"');
     expect(html).not.toContain('name="uploadGrant"');
     expect(html).toContain("<summary>No resume? Answer four short questions instead</summary>");
+    // Wave S7: the résumé first, its reading button doing nothing here, the company's questions as candidates see them, no reuse form
+    expect(html).toContain('<h2 id="resume-title">Start with your resume</h2>');
+    expect(html).toContain('<button class="btn secondary" type="button" disabled="">Read my resume</button>');
+    expect(html).toMatch(/<h2 id="questions-title">Questions from [^<]+<\/h2>/);
+    expect(html).not.toContain("<form");
     expect(html).toMatch(/<p class="back"><a href="\/api\/v1\/roles\/[^"]+\/preview\?version=1">/);
     // the line under each yes/no question is the live form's plain one, never the team's words ("... in the packet")
     expect(html).not.toMatch(/packet|intake|playbook/i);

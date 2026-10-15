@@ -13,7 +13,8 @@ import { approvedAbout, contactLineFor, logoMemberPath, profileOf } from "../ser
 import { applyFlowOf, jobPreview, type ApplyFlowView, type PreviewSource } from "../services/job-preview";
 import { jobUrls } from "../services/job-urls";
 import { currentVersionOf } from "../services/packet-versions";
-import { ApplyFormPage, JobPage, type JobPageCompany, type JobPageRole, type PreviewInfo } from "./job-page";
+import { ApplyFormPage } from "./apply-form";
+import { JobPage, type JobPageCompany, type JobPageRole, type PreviewInfo } from "./job-page";
 import { Layout } from "./layout";
 import { withPlainQuestionHelp } from "./question-help";
 

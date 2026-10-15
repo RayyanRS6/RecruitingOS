@@ -1,5 +1,5 @@
 import type { EvidenceAssessment, RolePacket, ScreenProgress } from "@ros/contracts";
-import { PROXY_RULES, screenAnswersOf } from "@ros/core";
+import { PROTECTED_QUESTION_RULES, PROXY_RULES, screenAnswersOf } from "@ros/core";
 
 /**
  * "Ask about this in a screen" (docs/spec/21 section 7, P1): the owner turns the résumé assessment's open questions
@@ -70,18 +70,20 @@ const PROTECTED_QUESTION = new RegExp(
 /**
  * The code's fairness check for words the AI wrote that a candidate will read as a question (an open question from the
  * résumé reading, a follow-up in the screening chat): the phrase list every job is checked against (`PROXY_RULES`, as
- * `screenCriterion` applies it) and the protected-question words above. The rule broken, in plain words, or null.
+ * `screenCriterion` applies it), the questions a company may never set (`PROTECTED_QUESTION_RULES`, as `questionCheck`
+ * applies them: "Are you over 40?", "Are you a green card holder?") and the protected-question words above. The rule
+ * broken, in plain words, or null.
  */
 export function unfairQuestion(text: string): string | null {
   // the rules `screenCriterion` applies, but a long minimum of years: that one is for job ads, and a question may repeat
   // the candidate's own "12 years of experience"
-  for (const rule of PROXY_RULES) {
+  for (const rule of [...PROXY_RULES, ...PROTECTED_QUESTION_RULES]) {
     if (rule.rule === "experience_floor") continue;
     const hit = rule.find(text);
     if (!hit) continue;
     // pay history is asked of the candidate ("your current pay", "how much do you make"); "the current pay range for this
     // role" is the job's own
-    if (rule.rule === "pay_history" && !aboutTheCandidate(text, hit)) continue;
+    if ((rule.rule === "pay_history" || rule.rule === "asks_pay_history") && !aboutTheCandidate(text, hit)) continue;
     return rule.reason;
   }
   return PROTECTED_QUESTION.test(text) ? "It asks about a protected characteristic, which is never part of hiring." : null;

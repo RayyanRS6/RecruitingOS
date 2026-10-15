@@ -497,6 +497,17 @@ describe("change it by asking", () => {
 describe("the role editor's plain fields", () => {
   const packet = samplePacket() as unknown as WebRolePacket;
 
+  it("keeps the questions every applicant answers (Wave S7), which it does not show, through any save", () => {
+    const withQuestions = samplePacket((p) => {
+      p.companyQuestions = { quick: [{ kind: "choice", key: "cq_transport", question: "How will you get to work?", required: true, options: ["My own car", "Public transport"] }], written: [{ key: "wq_calm", question: "Tell us about a time you calmed a nervous patient.", required: true, lookFor: "A real example" }] };
+    }) as unknown as WebRolePacket;
+    const form = packetFormFrom(withQuestions);
+    form.title = "Registered Dental Assistant";
+    const next = RolePacketSchema.parse(applyPacketForm(withQuestions, form));
+    expect(next.identity.title).toBe("Registered Dental Assistant");
+    expect(next.companyQuestions).toEqual((withQuestions as unknown as { companyQuestions: unknown }).companyQuestions);
+  });
+
   it("saves a valid packet that keeps everything the form does not show", () => {
     const form = packetFormFrom(packet);
     expect(packetFormProblem(form)).toBeNull();

@@ -22,6 +22,8 @@ import { jobFailureReport, stepFailureReport } from "./failure-reports";
 import { DAILY_MS, recurring } from "./recurring-jobs";
 import { LINK_REQUEST_JOB_KIND, emailStatusLinks } from "./services/applications";
 import { registerApplyConversationJobs } from "./services/apply-conversation";
+import { registerApplyDetailsJobs } from "./services/apply-details";
+import { registerProfileJobs } from "./services/profile-facts";
 import { PUBLISHING_BACKFILL_JOB_KIND, backfillPublishing } from "./services/publishing-backfill";
 
 const PRIVACY_DEADLINE_JOB_KIND = "privacy.deadline_check";
@@ -240,6 +242,10 @@ export async function createContainer(opts: { env?: Record<string, string | unde
 
     // A repeat submission's conversation (plan E1): wiped after seven days unconfirmed, and tried again after an outage.
     registerApplyConversationJobs(engine, { db: handle.db, ai, integrations, engine, jobsBaseUrl: env.JOBS_BASE_URL });
+    // Reading a résumé for the apply form (Wave S7, S7-B) and the "use your saved details" email (S7-F): registered in
+    // every process, so the web process can queue them and the worker runs them.
+    registerApplyDetailsJobs(engine, { db: handle.db, ai, integrations });
+    registerProfileJobs(engine, { db: handle.db, integrations, jobsBaseUrl: env.JOBS_BASE_URL, secret: env.SESSION_SECRET });
 
     engine.registerJob("email.retry", async (payload, ctx) => {
       await withPlatform(handle.db, (tx) => retryCommunication(tx, integrations, { communicationId: String(payload.communicationId ?? ""), attempt: Number(payload.attempt ?? 1), now: ctx.now }));

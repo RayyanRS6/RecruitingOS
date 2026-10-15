@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { RolePacket, ScreenAssessment, ScreenProgress, ScreenTurn } from "@ros/contracts";
+import type { RolePacket, ScreenAssessment, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
 import { FakeProvider, screenAssessPrompt, screenTurnPrompt, type RunOutcome, type ScreenContext } from "@ros/ai";
-import { EMPTY_SCREEN_PROGRESS, SCORECARD_READINGS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, candidateWordsOf, enforceTurnRules, nextQuestion, recruiterNotesOf, reviewItems, saidByCandidate, scorecardReadings, screenAnswerOf, screenCommand, screenIntro, verifyScreenQuotes, withdrawPending } from "./screening";
+import { CHAT_WRAP_KEY, chatCounter } from "@ros/core";
+import {
+  CHAT_CALM_LINE, CHAT_LADDER_QUESTION, CHAT_WRAP_QUESTION, EMPTY_SCREEN_PROGRESS, SCORECARD_READINGS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, candidateWordsOf, chatClosingMessage, chatFactsFor, chatGaps, chatNextLine, chatOpening, chatPacket, enforceChatTurn, enforceTurnRules, gapQuestion,
+  nextQuestion, recruiterNotesOf, redactProtected, reviewItems, saidByCandidate, scorecardReadings, screenAnswerOf, screenCommand, screenContextOf, screenIntro, verifyScreenQuotes, withChatPlan, withdrawPending, type ChatFacts,
+} from "./screening";
 import { answerInContext } from "./triage";
 import { focusQuestionsFrom, unfairQuestion } from "./screen-focus";
 import { registerFakeHandlers } from "./fake-handlers";
@@ -359,6 +363,271 @@ describe("AI-written questions pass the code's fairness check before a candidate
       { question: "Can you tell me about your perio charting?", whyItMatters: "must-have" },
     ]);
     expect(qs.map((q) => [q.key, q.question])).toEqual([["unknown_1", "Is your CA RDH license active?"], ["unknown_2", "Can you tell me about your perio charting?"]]);
+  });
+});
+
+/**
+ * Wave S7, the Kanvis-style chat (scratchpad kanvis-2/spec-s7-apply-flow.md step 6): the plan built in code, the gaps
+ * between the CV and the must-haves, the company's written questions, and the rules every turn is held to after the
+ * model answered: one neutral restatement and one question, one push, the analog and the smaller version, "No" settled
+ * as not known with a calm line, no filler or inference, the closing question, and no private note ever said.
+ */
+describe("the Kanvis-style chat", () => {
+  const role = {
+    identity: { title: "Robotics Trainer", employmentType: "full_time", locations: [{ city: "Lahore", region: "PB" }] },
+    compensation: { basis: "salary", min: 50000, max: 70000, currency: "USD", discloseRange: false },
+    requirements: {
+      eligibility: [{ key: "laptop", type: "physical_requirement_bona_fide", question: "Do you have your own laptop for teaching?", expectation: {}, rationale: "Classes run on it.", knockout: false }],
+      mustHaves: [
+        { key: "arduino", text: "Hands-on Arduino or robotics hardware work", rationale: "r", evidencedBy: ["resume", "screen"] },
+        { key: "english", text: "Explaining technical ideas in English", rationale: "r", evidencedBy: ["screen"] },
+        { key: "own_laptop", text: "Own laptop for teaching", rationale: "r", evidencedBy: ["application"] },
+        { key: "panel", text: "A strong teaching demo", rationale: "r", evidencedBy: ["interview"] },
+      ],
+      niceToHaves: [],
+    },
+    companyQuestions: { quick: [], written: [
+      { key: "wq_explain", question: "How would you explain what a sensor is to six-year-olds?", required: true, lookFor: "uses a concrete everyday analogy and checks understanding with the children" },
+      { key: "wq_room", question: "Several kits fail at once in a class of twenty. How do you handle the room?", required: true },
+    ] },
+    screening: { questions: [{ key: "pay", question: "What pay range are you looking for?", kind: "compensation" }], maxMinutes: 10 },
+    competencies: [],
+    communication: { candidateMayBeTold: [], tone: "warm", humanAlternativeText: "Reply HUMAN.", disclosureText: "" },
+    interviews: { plan: [] },
+  } as unknown as RolePacket;
+  const facts: ChatFacts = { cv: ["Software engineer at CallsFlow (2023 to now): WebRTC calls platform", "Skills: TypeScript, WebRTC, IoT"], formAnswers: ["Do you have your own laptop for teaching? Yes."] };
+  const at = "2026-10-15T10:00:00.000Z";
+  const start = (gaps: string[]) => withChatPlan(role, { ...EMPTY_SCREEN_PROGRESS, flow: "one_visit" }, { channel: "web", gaps, at });
+  const turnOf = (over: Partial<ScreenTurn>): ScreenTurn => ({ messageToCandidate: "", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false, ...over });
+  /** The progress with the chat asking `key`, with the item's ladder where given. */
+  const askingNow = (progress: ScreenProgress, key: string, asked: string[], item: Partial<{ step: "direct" | "analog" | "smaller"; pushes: number }> = {}): ScreenProgress => {
+    const p = advanceProgress({ ...progress, askedKeys: asked.slice(0, -1) }, turnOf({ questionKey: key, messageToCandidate: "x" }));
+    return { ...p, chat: p.chat ? { ...p.chat, items: p.chat.items.map((i) => (i.key === key ? { ...i, ...item } : i)) } : p.chat };
+  };
+  const said = (question: string, ...replies: string[]): ScreenTranscriptEntry[] => [{ role: "assistant", content: question, at, questionKey: "q" }, ...replies.map((r) => ({ role: "candidate" as const, content: r, at }))];
+
+  it("finds the gaps in code: must-haves the CV does not show, never one checked in the interviews only, one the form asked, or one the reading settled", () => {
+    const written = ["wq_explain", "wq_room"];
+    expect(chatGaps({ packet: role, progress: EMPTY_SCREEN_PROGRESS, triageMet: null, facts, written })).toEqual(["arduino", "english"]);
+    // with the résumé reading: what it found partly or not at all; a must-have their own words settled either way is left alone
+    expect(chatGaps({ packet: role, progress: EMPTY_SCREEN_PROGRESS, triageMet: { arduino: "unknown", english: "yes" }, facts, written })).toEqual(["arduino"]);
+    expect(chatGaps({ packet: role, progress: EMPTY_SCREEN_PROGRESS, triageMet: { arduino: "no", english: "partially" }, facts, written })).toEqual(["english"]);
+    // the CV shows it: not a gap
+    expect(chatGaps({ packet: role, progress: EMPTY_SCREEN_PROGRESS, triageMet: null, facts: { ...facts, cv: [...facts.cv, "Built Arduino robotics hardware kits for a school club"] }, written })).toEqual(["english"]);
+    // the résumé reading's open questions the team asked for come first
+    expect(chatGaps({ packet: role, progress: { focusQuestions: [{ key: "unknown_1", question: "Is your teaching certificate current?" }] }, triageMet: null, facts, written })[0]).toBe("unknown_1");
+    // no CV to read and no reading yet: no gaps; the chat starts at the required questions
+    expect(chatGaps({ packet: role, progress: EMPTY_SCREEN_PROGRESS, triageMet: null, facts: { cv: [], formAnswers: [] }, written })).toEqual([]);
+    expect(chatGaps({ packet: role, progress: EMPTY_SCREEN_PROGRESS, triageMet: null, facts: null, written })).toEqual([]);
+  });
+
+  it("is planned only for the chat offered with the application on the web; its questions are the plan's items, then the closing question; reading it twice gives the same", () => {
+    expect(withChatPlan(role, EMPTY_SCREEN_PROGRESS, { channel: "web", gaps: [], at }).chat).toBeUndefined();
+    expect(withChatPlan(role, { ...EMPTY_SCREEN_PROGRESS, flow: "one_visit" }, { channel: "sms", gaps: [], at }).chat).toBeUndefined();
+    const p = start(["arduino", "english"]);
+    expect(p.chat?.items.map((i) => [i.key, i.kind, i.required])).toEqual([["arduino", "gap", false], ["english", "gap", false], ["wq_explain", "written", true], ["wq_room", "written", true]]);
+    const asked = chatPacket(role, p).screening.questions;
+    expect(asked.map((q) => q.key)).toEqual(["arduino", "english", "wq_explain", "wq_room", CHAT_WRAP_KEY]);
+    expect(asked[0].question).toBe(gapQuestion("Hands-on Arduino or robotics hardware work"));
+    expect(asked[0].question).toBe("This is one of the things the job needs: Hands-on Arduino or robotics hardware work. What can you tell me about it from your own work?");
+    // the private note goes to the models as the model answer, never into the question
+    expect(asked[2]).toMatchObject({ question: "How would you explain what a sensor is to six-year-olds?", modelAnswer: "uses a concrete everyday analogy and checks understanding with the children" });
+    expect(asked[4].question).toBe(CHAT_WRAP_QUESTION);
+    expect(chatPacket(chatPacket(role, p), p).screening.questions).toEqual(asked);
+    // a job saved before Wave S7 asks its own screening questions, under their own keys
+    const old = { ...role, companyQuestions: undefined } as unknown as RolePacket;
+    expect(chatPacket(old, withChatPlan(old, { ...EMPTY_SCREEN_PROGRESS, flow: "one_visit" }, { channel: "web", gaps: [], at })).screening.questions.map((q) => [q.key, q.kind])).toEqual([["pay", "compensation"], [CHAT_WRAP_KEY, "motivation"]]);
+    // Review & send lists the written questions, and every other answer the chat will send (about the CV, the closing
+    // question), so all of it can be checked and changed; an item that recorded nothing is not listed
+    expect(reviewItems({ answers: { arduino: "x", wq_explain: "y" }, progress: p }, role).map((i) => i.key)).toEqual(["arduino", "wq_explain", "wq_room"]);
+    expect(reviewItems({ answers: { wq_explain: "y", [CHAT_WRAP_KEY]: "Nothing more." }, progress: p }, role).map((i) => i.key)).toEqual(["wq_explain", "wq_room", CHAT_WRAP_KEY]);
+  });
+
+  it("opens personal, in code: the first name, one line from the CV, then the first question word for word", () => {
+    expect(chatOpening({ firstName: "Meerub", cv: facts.cv, question: "Q?" })).toBe("Hi Meerub. Your resume shows your work as Software engineer at CallsFlow (2023 to now).\n\nQ?");
+    // the form's own words about their work are never named as a résumé line
+    expect(chatOpening({ firstName: "Kai", cv: ["Their own words about their work: Hygienist for five years."], question: "Q?" })).toBe("Hi Kai. Thanks for applying.\n\nQ?");
+    expect(chatOpening({ firstName: "Kai", cv: [], question: "Q?" })).toBe("Hi Kai. Thanks for applying.\n\nQ?");
+    expect(chatOpening({ firstName: "Kai", cv: ["Skills: TypeScript"], question: "Q?" })).toBe("Hi Kai. Thanks for applying.\n\nQ?");
+  });
+
+  it("names only what was typed in the visit for a chat offered with the application, so a repeat submission's reads the same", () => {
+    // without what the visit typed, its form answers only (a repeat submission's chat has the same from its form)
+    expect(chatFactsFor(facts, {}, "apply")).toEqual({ cv: [], formAnswers: facts.formAnswers });
+    expect(chatFactsFor(null, {}, "apply")).toBeNull();
+    expect(chatFactsFor(facts, { ownFacts: true }, "apply")).toBe(facts);
+    expect(chatFactsFor(null, { typedFacts: facts }, "apply")).toBe(facts);
+    expect(chatFactsFor(facts, {}, null)).toBe(facts);
+  });
+
+  it("each message is one neutral restatement and one question: no filler, no praise about their experience, no inference, nothing after the first question", () => {
+    const p = askingNow(start(["arduino", "english"]), "arduino", ["arduino"]);
+    const { turn, move } = enforceChatTurn(turnOf({ reading: "vague", followUpReason: "no detail", messageToCandidate: "Great! So you built a pump with an Arduino. That's impressive. What did the sensor trigger? And which board did you use?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "I built a pump"), latest: "I built a pump" });
+    expect(turn.messageToCandidate).toBe("So you built a pump with an Arduino.\n\nWhat did the sensor trigger?");
+    expect(move).toEqual({ key: "arduino", move: "push" });
+    expect(advanceProgress(p, turn, move).chat?.items[0]).toMatchObject({ state: "asking", pushes: 1 });
+    // an inference never reaches the candidate
+    const guessed = enforceChatTurn(turnOf({ reading: "vague", followUpReason: "no detail", messageToCandidate: "It sounds like the build was straightforward for you. What was hardest about it?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "It went fine"), latest: "It went fine" });
+    expect(guessed.turn.messageToCandidate).toBe("What was hardest about it?");
+    // a follow-up the model wrote without a question gets the push in code's words
+    const flat = enforceChatTurn(turnOf({ reading: "vague", followUpReason: "no detail", messageToCandidate: "You said you built a pump." }), chatPacket(role, p), p, {}, { transcript: said("Q", "I built a pump"), latest: "I built a pump" });
+    expect(flat.turn.messageToCandidate).toBe(`You said you built a pump.\n\n${CHAT_LADDER_QUESTION.push}`);
+  });
+
+  it("one push only: a second push moves on to the next item, the candidate's own words recorded as the answer", () => {
+    const p = askingNow(start(["arduino", "english"]), "arduino", ["arduino"], { pushes: 1 });
+    const { turn, move } = enforceChatTurn(turnOf({ reading: "vague", followUpReason: "still vague", messageToCandidate: "You handled the wiring. Can you say more?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "Yes", "I handled it well"), latest: "I handled it well" });
+    expect(move).toEqual({ key: "arduino", move: "covered" });
+    expect(turn).toMatchObject({ questionKey: "english", followUpReason: null, done: false, answerRecorded: { questionKey: "arduino", answer: "Yes I handled it well", complete: true } });
+    expect(turn.messageToCandidate).toBe(`You handled the wiring.\n\n${gapQuestion("Explaining technical ideas in English")}`);
+    const next = advanceProgress(p, turn, move);
+    expect(next.chat?.items.slice(0, 2).map((i) => i.state)).toEqual(["covered", "asking"]);
+  });
+
+  it("'No' climbs the ladder whatever the model read: the analog, the smaller version, then not known with a calm line, recording nothing for a skill", () => {
+    let p = askingNow(start(["arduino", "english"]), "english", ["arduino", "english"]);
+    const pk = chatPacket(role, p);
+    // the model read "No" as an answer and moved on: the code holds it to the analog
+    const a = enforceChatTurn(turnOf({ reading: "concrete", questionKey: "wq_explain", messageToCandidate: "Understood. How would you explain a sensor?" }), pk, p, {}, { transcript: said("Q", "No"), latest: "No" });
+    // moving on early is fine (less pressing): settled as not known, with the calm line, nothing recorded
+    expect(a.move).toEqual({ key: "english", move: "unknown" });
+    expect(a.turn.messageToCandidate).toBe(`${CHAT_CALM_LINE}\n\nHow would you explain a sensor?`);
+    expect(a.turn.answerRecorded).toBeNull();
+    // a follow-up with no question: the analog in code's words
+    const b = enforceChatTurn(turnOf({ followUpReason: "ladder", messageToCandidate: "Understood." }), pk, p, {}, { transcript: said("Q", "No, I haven't"), latest: "No, I haven't" });
+    expect(b.move).toEqual({ key: "english", move: "analog" });
+    expect(b.turn.messageToCandidate).toBe(CHAT_LADDER_QUESTION.analog);
+    p = advanceProgress(p, b.turn, b.move);
+    expect(p.chat?.items[1]).toMatchObject({ state: "asking", step: "analog" });
+    const c = enforceChatTurn(turnOf({ followUpReason: "ladder", reading: "not_done", messageToCandidate: "Got it. Even a small moment?" }), pk, p, {}, { transcript: said("Q", "No", "Not really"), latest: "Not really" });
+    expect(c.move).toEqual({ key: "english", move: "smaller" });
+    expect(c.turn.messageToCandidate).toBe("Even a small moment?");
+    p = advanceProgress(p, c.turn, c.move);
+    // at the smaller version a third "No" settles it, even if the model asks again, and a recorded "No" is dropped
+    const d = enforceChatTurn(turnOf({ followUpReason: "again", reading: "not_done", answerRecorded: { questionKey: "english", answer: "No", complete: true }, messageToCandidate: "It seems you lack English experience. Are you sure?" }), pk, p, {}, { transcript: said("Q", "No", "Not really", "No"), latest: "No" });
+    expect(d.move).toEqual({ key: "english", move: "unknown" });
+    expect(d.turn).toMatchObject({ questionKey: "wq_explain", answerRecorded: null, followUpReason: null });
+    expect(d.turn.messageToCandidate).toBe(`${CHAT_CALM_LINE}\n\nHow would you explain what a sensor is to six-year-olds?`);
+    p = advanceProgress(p, d.turn, d.move);
+    expect(p.chat?.items[1].state).toBe("unknown");
+    expect(p.chat?.section).toBe("required");
+    expect(chatCounter(p.chat)?.label).toBe("0 of 2 required · Required questions");
+  });
+
+  it("a written question: the analog, then not known, keeping their own words; a yes-or-no question takes 'No' as its answer", () => {
+    const p = askingNow(start([]), "wq_room", ["wq_explain", "wq_room"], { step: "analog" });
+    const r = enforceChatTurn(turnOf({ followUpReason: "again", reading: "not_done", messageToCandidate: "Could you try once more?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "No", "No"), latest: "No" });
+    expect(r.move).toEqual({ key: "wq_room", move: "unknown" });
+    expect(r.turn).toMatchObject({ questionKey: CHAT_WRAP_KEY, answerRecorded: { questionKey: "wq_room", answer: "No No", complete: false } });
+    const old = { ...role, companyQuestions: undefined, screening: { questions: [{ key: "weekends", question: "Can you work weekends?", kind: "availability" }, { key: "pay", question: "What pay range are you looking for?", kind: "compensation" }], maxMinutes: 10 } } as unknown as RolePacket;
+    const q = askingNow(withChatPlan(old, { ...EMPTY_SCREEN_PROGRESS, flow: "one_visit" }, { channel: "web", gaps: [], at }), "weekends", ["weekends"]);
+    const yn = enforceChatTurn(turnOf({ questionKey: "pay", reading: "not_done", answerRecorded: { questionKey: "weekends", answer: "No", complete: true }, messageToCandidate: "Noted, weekends are out." }), chatPacket(old, q), q, {}, { transcript: said("Q", "No"), latest: "No" });
+    expect(yn.move).toEqual({ key: "weekends", move: "covered" });
+    expect(yn.turn.answerRecorded).toEqual({ questionKey: "weekends", answer: "No", complete: true });
+    expect(yn.turn.messageToCandidate).toBe("Noted, weekends are out.\n\nWhat pay range are you looking for?");
+  });
+
+  it("the closing question's answer brings the close (one concrete thing, never a question); a close before the end goes on to what is left", () => {
+    const p = askingNow(start([]), CHAT_WRAP_KEY, ["wq_explain", "wq_room", CHAT_WRAP_KEY]);
+    const end = enforceChatTurn(turnOf({ questionKey: null, messageToCandidate: "Thank you, Meerub. You explained sensors as a thirsty finger. It sounds like you would be a great teacher. Anything else?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "No, nothing else"), latest: "No, nothing else" });
+    expect(end.turn).toMatchObject({ done: true, questionKey: null, answerRecorded: { questionKey: CHAT_WRAP_KEY, answer: "No, nothing else" } });
+    expect(end.turn.messageToCandidate).toBe("Thank you, Meerub. You explained sensors as a thirsty finger.");
+    expect(chatClosingMessage(end.turn.messageToCandidate, "Robotronics")).toBe(`Thank you, Meerub. You explained sensors as a thirsty finger.\n\n${chatNextLine("Robotronics")}`);
+    expect(chatNextLine("Robotronics")).toBe("Next, check what you are sending and change anything you like, then press Send. Nothing goes to Robotronics until you do.");
+    // done too early: the code's plan goes on
+    const early = askingNow(start([]), "wq_explain", ["wq_explain"]);
+    const r = enforceChatTurn(turnOf({ done: true, reading: "concrete", messageToCandidate: "Thanks, that's everything." }), chatPacket(role, early), early, {}, { transcript: said("Q", "Like a thirsty finger that feels the water"), latest: "Like a thirsty finger that feels the water" });
+    expect(r.turn).toMatchObject({ done: false, questionKey: "wq_room" });
+    expect(r.turn.messageToCandidate).toBe("Several kits fail at once in a class of twenty. How do you handle the room?");
+  });
+
+  it("never says the team's private note, even in part, and still runs the fairness check on every question", () => {
+    const p = askingNow(start([]), "wq_explain", ["wq_explain"]);
+    const leak = enforceChatTurn(turnOf({ followUpReason: "push", reading: "vague", messageToCandidate: "Thanks. Would you use a concrete everyday analogy and checks understanding with the children?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "I'd explain it"), latest: "I'd explain it" });
+    expect(leak.turn.messageToCandidate).toBe("How would you explain what a sensor is to six-year-olds?");
+    expect(leak.turn.messageToCandidate).not.toMatch(/analogy|checks understanding/);
+    const unfair = enforceChatTurn(turnOf({ followUpReason: "push", reading: "vague", messageToCandidate: "You mentioned school runs. How old are your kids?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "After school runs"), latest: "After school runs" });
+    expect(unfair.turn.messageToCandidate).not.toMatch(/kids|old/);
+    expect(unfair.turn.questionKey).toBe("wq_room");
+    expect(unfair.turn.messageToCandidate).toBe("Several kits fail at once in a class of twenty. How do you handle the room?");
+  });
+
+  it("never says any question's note: not another question's while asking this one, and not in the close (review of Wave S7)", () => {
+    // asking wq_room while quoting wq_explain's note
+    const p = askingNow(start([]), "wq_room", ["wq_explain", "wq_room"]);
+    const other = enforceChatTurn(turnOf({ followUpReason: "push", reading: "vague", messageToCandidate: "Good. Did you use a concrete everyday analogy and check understanding with the children? What did you do first?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "I'd calm the room"), latest: "I'd calm the room" });
+    expect(other.turn.messageToCandidate).not.toMatch(/everyday analogy|checks? understanding/);
+    // a close that repeats a note says only what happens next
+    const w = askingNow(start([]), CHAT_WRAP_KEY, ["wq_explain", "wq_room", CHAT_WRAP_KEY]);
+    const end = enforceChatTurn(turnOf({ questionKey: null, messageToCandidate: "Thank you. You uses a concrete everyday analogy and checks understanding with the children." }), chatPacket(role, w), w, {}, { transcript: said("Q", "No, nothing else"), latest: "No, nothing else" });
+    expect(end.turn.done).toBe(true);
+    expect(end.turn.messageToCandidate).toBe("");
+    expect(chatClosingMessage(end.turn.messageToCandidate, "Robotronics")).toBe(chatNextLine("Robotronics"));
+  });
+
+  it("holds the chat's own questions to the questions a company may never set (review of Wave S7)", () => {
+    for (const unfair of ["Are you over 40?", "Are you a green card holder?", "Where did you grow up?", "Are you a veteran?", "Do you have any physical limitations?"]) expect(unfairQuestion(unfair), unfair).not.toBeNull();
+    const p = askingNow(start([]), "wq_explain", ["wq_explain"]);
+    const turned = enforceChatTurn(turnOf({ followUpReason: "push", reading: "vague", messageToCandidate: "Thanks. Where did you grow up?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "I'd explain it"), latest: "I'd explain it" });
+    expect(turned.turn.messageToCandidate).not.toMatch(/grow up/);
+  });
+
+  it("leaves out of what is recorded the ways people mention parenthood, military service and where they come from (review of Wave S7)", () => {
+    for (const s of ["As a mom of three I know scheduling.", "I'm a veteran and I led a squad of 8.", "I moved here from Mexico in 2010 and have worked in dental since."]) {
+      expect(redactProtected(s), s).toBe("(answer recorded; personal details omitted)");
+      expect(redactProtected(`I chart in Dentrix every day. ${s}`), s).toBe("I chart in Dentrix every day.");
+    }
+    // work stays: a move between practices, and talking about patients' parents
+    expect(redactProtected("I moved from Smile Bright to Coastal Dental last year.")).toBe("I moved from Smile Bright to Coastal Dental last year.");
+    expect(redactProtected("I calm the parents of a nervous child.")).toBe("I calm the parents of a nervous child.");
+  });
+
+  it("the local stand-in runs the chat end to end: the push, the ladder, the counter, the close", async () => {
+    const fake = new FakeProvider();
+    registerFakeHandlers(fake);
+    const rt = { provider: fake, models: { judgment: "fake", standard: "fake", fast: "fake" } };
+    const { callPrompt } = await import("@ros/ai");
+    let progress = start(["arduino", "english"]);
+    let pk = chatPacket(role, progress);
+    const first = nextQuestion(pk, progress, {})!;
+    const opening = chatOpening({ firstName: "Meerub", cv: facts.cv, question: first.question });
+    progress = advanceProgress(progress, turnOf({ questionKey: first.key, messageToCandidate: opening }));
+    const transcript: ScreenTranscriptEntry[] = [{ role: "assistant", content: opening, at, questionKey: first.key }];
+    const answers: Record<string, string> = {};
+    const labels: string[] = [chatCounter(progress.chat)!.label];
+    const replies = ["Yes", "I built a water pump with an Arduino and moisture sensors at CUST", "No", "No", "No", "Like a thirsty finger that feels when the soil is dry", "No", "Once three builds failed at once and I fixed the one blocking the most people first", "No, nothing else"];
+    let last: ScreenTurn | null = null;
+    for (const reply of replies) {
+      transcript.push({ role: "candidate", content: reply, at });
+      const ctx = screenContextOf({ companyName: "Robotronics", companyLocations: [], noticeOverrides: undefined, packet: pk, firstName: "Meerub", focusUnknowns: [], facts }, { channel: "web", progress, answers, transcript }, reply);
+      expect(ctx.chat?.formAnswers).toEqual(facts.formAnswers);
+      const r = await callPrompt(rt, screenTurnPrompt, ctx, { companyId: null });
+      if (r.result.kind !== "ok") throw new Error(r.result.kind);
+      const { turn, move } = enforceChatTurn(r.result.output, pk, progress, answers, { transcript, latest: reply });
+      progress = advanceProgress(progress, turn, move);
+      if (turn.answerRecorded) answers[turn.answerRecorded.questionKey] = turn.answerRecorded.answer;
+      transcript.push({ role: "assistant", content: turn.messageToCandidate, at, questionKey: turn.questionKey ?? undefined });
+      pk = chatPacket(role, progress);
+      labels.push(chatCounter(progress.chat)!.label);
+      last = turn;
+      // one question at most, and never the private note
+      expect((turn.messageToCandidate.match(/\?/g) ?? []).length, turn.messageToCandidate).toBeLessThanOrEqual(1);
+      expect(turn.messageToCandidate).not.toMatch(/everyday analogy/);
+    }
+    expect(last?.done).toBe(true);
+    expect(last?.messageToCandidate).toBe('Thank you, Meerub. You told me "Once three builds failed at once and I fixed the one blocking…".');
+    // the analog is the question and its request, nothing cut
+    expect(transcript[6].content).toBe("Not done that exactly? Tell me about something similar from your own work.");
+    // the push on a bare "yes", then a concrete answer; three "No"s settle English as not known; the room question takes the analog
+    expect(transcript[2].content).toMatch(/^You said "Yes"\.\n\nCould you tell me about one specific time/);
+    expect(progress.chat?.items.map((i) => [i.key, i.state])).toEqual([["arduino", "covered"], ["english", "unknown"], ["wq_explain", "covered"], ["wq_room", "covered"]]);
+    expect(answers.arduino).toBe("Yes I built a water pump with an Arduino and moisture sensors at CUST");
+    expect(answers.english).toBeUndefined();
+    expect(answers.wq_room).toBe("No Once three builds failed at once and I fixed the one blocking the most people first");
+    expect(labels).toEqual([
+      "0 of 2 required · About your experience", "0 of 2 required · About your experience", "0 of 2 required · About your experience", "0 of 2 required · About your experience", "0 of 2 required · About your experience",
+      "0 of 2 required · Required questions", "1 of 2 required · Required questions", "1 of 2 required · Required questions", "2 of 2 required · Wrapping up", "2 of 2 required · Wrapping up",
+    ]);
   });
 });
 

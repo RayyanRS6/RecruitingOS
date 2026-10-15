@@ -18,7 +18,7 @@ import { AssessmentCard, NoAssessmentCard, ScorecardUnavailableCard, ScreenCard,
 import { CallNotesCard } from "./call-notes";
 import { MatchVerdict, NextStepLine, ScoreBreakdown } from "./match";
 import type { NextStepAction } from "./match-view";
-import { eligibilityAnswerWords, historyItems, recruiterEventsFor, resumeToShow, resumeView, suggestionAndDecision, type Compose, type HistoryItem } from "./helpers";
+import { eligibilityAnswerWords, historyItems, panelQuestions, recruiterEventsFor, resumeToShow, resumeView, suggestionAndDecision, writeupLines, writeupOverviewLine, type Compose, type HistoryItem } from "./helpers";
 import { Why } from "./why";
 
 export type { Compose } from "./helpers";
@@ -51,6 +51,7 @@ export function OverviewTab({ a, roleId, onHistory, onNext }: { a: ApplicationDe
           {/* Without an AI review yet, the verdict above already says why (`notReadYetWords`, or the card that says it could not be made). */}
           {latest ? <AssessmentCard assessment={latest} detail={a} roleId={roleId} labels={a.packetLabels} title={latest.kind === "screen" ? "AI review: the screening chat" : "AI review: the résumé"} /> : null}
           <EligibilityAnswers a={a} />
+          <FormAnswers a={a} />
         </div>
       </details>
       <ContactLine a={a} />
@@ -65,7 +66,8 @@ export function OverviewTab({ a, roleId, onHistory, onNext }: { a: ApplicationDe
 /**
  * One line on where things stand: the mark and its note, a hold's date, interviews, a recorded outcome, whether a
  * decision was told, and the screening conversation when it says something ("Applied and talked in one visit", still
- * applying, sent without it, asked for a person; plan Wave E).
+ * applying, sent without it, asked for a person; plan Wave E), and once a sent chat was written up, how many of the
+ * company's questions it answered (Wave S7).
  */
 function WhereTheyAre({ a }: { a: ApplicationDetail }) {
   const outcomes = useQuery({ queryKey: ["outcomes", a.id], queryFn: () => api.get<{ statement: string; outcomes: OutcomeRecord[] }>(`/api/v1/applications/${a.id}/outcomes`), enabled: ["hired", "withdrawn", "rejected", "talent_pool", "declined"].includes(a.stage) });
@@ -73,6 +75,8 @@ function WhereTheyAre({ a }: { a: ApplicationDetail }) {
   const lines: string[] = [];
   const screenLine = overviewScreenLine(a);
   if (screenLine) lines.push(screenLine);
+  const written = a.screens[0] ? writeupLines(a.screens[0], panelQuestions(a.packetLabels)) : [];
+  if (written.length) lines.push(writeupOverviewLine(written));
   if (a.mark) lines.push(`${a.mark.mark === "on_hold" && a.mark.remindAt ? `On hold until ${holdDay(a.mark.remindAt)}` : a.mark.label}${a.mark.setBy.name ? `, set by ${a.mark.setBy.name}` : ""}${a.mark.note ? `: "${a.mark.note}"` : ""}. Private.`);
   if (a.toldState === "sent") lines.push(`Told the decision by message${a.candidateToldAt ? ` on ${new Date(a.candidateToldAt).toLocaleDateString()}` : ""}.`);
   if (a.toldState === "told_in_person") lines.push(`Told the decision in person${a.candidateToldAt ? ` (recorded ${new Date(a.candidateToldAt).toLocaleDateString()})` : ""}.`);
@@ -108,6 +112,36 @@ function EligibilityAnswers({ a }: { a: ApplicationDetail }) {
           {a.eligibility.unverifiable.map((u) => <p key={u.key} className="muted">{u.question}: not answered</p>)}
         </div>
       ) : <p className="muted small">Not checked yet.</p>}
+    </Card>
+  );
+}
+
+/** Said next to an answer the form suggested from the résumé and the candidate left as it was. */
+export const SUGGESTED_FROM_RESUME_KEPT = "Suggested from the résumé, kept by the candidate";
+export const WORK_SUMMARY_LABEL = "Their summary of their work (checked by them)";
+
+/**
+ * "Questions from the form" (Wave S7): every answer to the form's questions, the eligibility ones and the company's own
+ * quick questions, in the same sentence the candidate's record and the AI read, each marked when it was suggested from
+ * the résumé and kept; then the summary of their work they checked. Nothing for an application without any.
+ */
+export function FormAnswers({ a }: { a: Pick<ApplicationDetail, "formAnswers" | "workSummary"> }) {
+  const answers = a.formAnswers ?? [];
+  const summary = a.workSummary ?? null;
+  if (!answers.length && !summary) return null;
+  return (
+    <Card title="Questions from the form">
+      {answers.length ? (
+        <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+          {answers.map((s) => <li key={`${s.source}:${s.key}`}>{s.sentence}{s.fromCv ? <span className="muted"> ({SUGGESTED_FROM_RESUME_KEPT})</span> : null}</li>)}
+        </ul>
+      ) : null}
+      {summary ? (
+        <div className="small" style={{ marginTop: answers.length ? 10 : 0 }}>
+          <p className="muted" style={{ margin: "0 0 4px" }}>{WORK_SUMMARY_LABEL}</p>
+          <p style={{ margin: 0, whiteSpace: "pre-line" }}>{summary.text}</p>
+        </div>
+      ) : null}
     </Card>
   );
 }
@@ -188,7 +222,8 @@ export function ScreenTab({ a, roleId, myRole = null }: { a: ApplicationDetail; 
   }
   return (
     <div className="stack" style={{ gap: 14 }}>
-      {a.screens.map((s, i) => <ScreenCard key={s.id} screen={s} open={i === 0} questions={a.packetLabels.questions} timeline={a.timeline} action={i === 0 ? <StopScreen a={a} roleId={roleId} /> : undefined} />)}
+      {/* The company's written questions name the answers too (Wave S7), with each one written up from the chat. */}
+      {a.screens.map((s, i) => <ScreenCard key={s.id} screen={s} open={i === 0} questions={panelQuestions(a.packetLabels)} mustHaves={a.packetLabels.mustHaves} timeline={a.timeline} action={i === 0 ? <StopScreen a={a} roleId={roleId} /> : undefined} />)}
       {notesCard}
       <ScorecardUnavailableCard detail={a} roleId={roleId} />
       {scorecards.slice(a.assessments[0]?.kind === "screen" ? 1 : 0).map((s) => <AssessmentCard key={s.id} assessment={s} detail={a} roleId={roleId} labels={a.packetLabels} />)}

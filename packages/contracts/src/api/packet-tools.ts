@@ -86,6 +86,13 @@ export type JobPreview = {
   pay: { shown: boolean; text: string; requiredByLaw: boolean; note: string | null };
   apply: {
     questions: Array<{ key: string; question: string; help: string; answer: "yes_no" | "days" }>;
+    /**
+     * Wave S7 (additive): the company's own quick questions as the form shows them (the help line the owner wrote, the
+     * answers offered; never what a good answer shows), and how many written questions the chat asks. Older answers
+     * leave them out.
+     */
+    quickQuestions?: Array<{ key: string; question: string; help: string | null; kind: "yes_no" | "choice" | "number"; options: string[]; unit: string | null; required: boolean }>;
+    writtenQuestions?: number;
     notices: Array<{ key: string; text: string }>;
     disclosure: string;
     humanAlternative: string;

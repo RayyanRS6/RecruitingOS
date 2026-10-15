@@ -379,12 +379,14 @@ describe("candidate pages: the look, page by page", () => {
     expect(html).toContain(`<a class="btn secondary" href="/c/screen/${screenToken}/person">I&#39;d rather talk to a person</a>`);
   });
 
-  it("a question page: the question in large type, a thin native progress bar with its words, the quiet skip and the person always there, and no inline style", async () => {
+  it("a question page: the chat in one thread with the question to answer as its latest message, the steps with the counter, the quiet skip and the person always there, and no inline style", async () => {
     expect((await app.request(`/c/screen/${screenToken}/start`, { method: "POST" })).status).toBe(302);
     const html = await page(`/c/screen/${screenToken}`);
     expect(html.match(/<h1[\s>]/g)).toHaveLength(1);
-    expect(html).toMatch(/<h1 class="question" id="question">[^<]+<\/h1>/);
-    expect(html).toMatch(/<div class="progress"><label for="progress">Question 1 of (\d+)<\/label><progress id="progress" max="\1" value="1">Question 1 of \1<\/progress><\/div>/);
+    // the chat offered with the application (Wave S7): the chat's title, the thread, the latest message the one to answer
+    expect(html).toMatch(/<h1 class="chat-title">Your chat about the [^<]+ role<\/h1>/);
+    expect(html).toMatch(/<li class="msg assistant now" id="question">[\s\S]+?<\/li>/);
+    expect(html).toMatch(/>\d+ of \d+ required · [^<]+</);
     expect(html).toContain('<button class="link-action" type="submit" name="action" value="skip" formnovalidate="">Skip this question</button>');
     expect(html).toContain(`<a class="link-action" href="/c/screen/${screenToken}/person">I&#39;d rather talk to a person</a>`);
     expect(html).not.toMatch(/ style="/);

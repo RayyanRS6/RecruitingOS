@@ -1,6 +1,7 @@
 import { MARK_LABEL, type MarkKind } from "@ros/contracts";
-import type { ApplicationDetail, TimelineEvent } from "../../api/client";
+import type { ApplicationDetail, Screen, TimelineEvent } from "../../api/client";
 import { notSentReasonText } from "../../cancelled";
+import { DECLINED_WORDS, isRecruiterNote, transcriptBubble, type TranscriptBubble } from "../../screen-view";
 import { abbreviationBefore } from "../../today";
 
 /**
@@ -196,6 +197,135 @@ export const NO_COMPOSE: Compose = { open: false, subject: "", text: "" };
  */
 export function composeFor(state: Compose & { id: string }, id: string): Compose {
   return state.id === id ? { open: state.open, subject: state.subject, text: state.text } : NO_COMPOSE;
+}
+
+/* ------------------------------------------------------------------------------------------------------------ */
+/* The answers to the company's questions, written up from the chat (Wave S7).                                  */
+/* ------------------------------------------------------------------------------------------------------------ */
+
+type PacketLabels = ApplicationDetail["packetLabels"];
+/** A question the panel names a screen's answers by; `required` only for the company's written questions. */
+export type PanelQuestion = { key: string; question: string; required?: boolean };
+
+/**
+ * The questions a screen's answers are named by: the written questions the chat asks (Wave S7; the company's own, or
+ * the screening questions under their own keys for a job saved before), then any screening question not among them. An
+ * older answer without `written` gives the screening questions alone, as before.
+ */
+export function panelQuestions(labels: Pick<PacketLabels, "questions" | "written">): PanelQuestion[] {
+  const written: PanelQuestion[] = (labels.written ?? []).map((w) => ({ key: w.key, question: w.question, required: w.required }));
+  const keys = new Set(written.map((w) => w.key));
+  return [...written, ...labels.questions.filter((q) => !keys.has(q.key)).map((q) => ({ key: q.key, question: q.question }))];
+}
+
+type WriteupAnswerView = NonNullable<Screen["progress"]["writeup"]>["answers"][number];
+type Tone = "good" | "accent" | "neutral" | "caution";
+
+/** What became of a written question, in the panel's words. Not answering is never held against anyone. */
+export const WRITEUP_STATUS: Readonly<Record<WriteupAnswerView["status"], { words: string; tone: Tone }>> = {
+  answered: { words: "Answered", tone: "good" },
+  partly: { words: "Partly answered", tone: "accent" },
+  not_given: { words: "No answer given", tone: "neutral" },
+  skipped: { words: DECLINED_WORDS, tone: "neutral" },
+};
+/** The label over the assistant's own note on an answer: kept apart from the answer, and never the candidate's words. */
+export const ASSISTANT_NOTE_LABEL = "Note from the assistant. Not the candidate's own words.";
+/** Where a written-up answer's words come from. */
+export const DRAFTED_WORDS = "Drafted by the assistant from their replies; they could change it before sending.";
+export const OWN_WORDS = "Their own words: they changed this before sending.";
+
+/**
+ * One company question as the panel shows it once the chat was sent: the answer written up from the candidate's replies
+ * (or exactly what they typed, when they changed it on Review & send), what became of the question, the pieces of their
+ * own messages it rests on, the assistant's note when something was missing (labelled as the assistant's, never mixed
+ * into the answer), a recruiter's call notes about it, and the chat's own messages about it, one click away.
+ */
+export type WriteupLine = {
+  key: string;
+  question: string;
+  required: boolean;
+  answer: string | null;
+  status: WriteupAnswerView["status"];
+  statusWords: string;
+  tone: Tone;
+  byCandidate: boolean;
+  byWords: string;
+  quotes: string[];
+  note: string | null;
+  notes: Array<{ text: string; by: string | null }>;
+  chat: TranscriptBubble[];
+};
+
+/** "wq_why_this_job" → "Why this job": a question the labels no longer name (an older version of the job). */
+function keyWords(key: string): string {
+  const words = key.replace(/^(wq|q|sq)_/, "").replace(/_/g, " ").trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : key;
+}
+
+/**
+ * The write-up of a sent chat, one line per company question in the write-up's order. Empty while the answers are
+ * hidden ("hide them until they send": the API sends no write-up then either) and for a chat without one.
+ */
+export function writeupLines(s: Pick<Screen, "progress" | "transcript" | "answersShared">, questions: readonly PanelQuestion[]): WriteupLine[] {
+  if (s.answersShared === false) return [];
+  const answers = s.progress.writeup?.answers ?? [];
+  return answers.map((a) => {
+    const q = questions.find((x) => x.key === a.questionKey);
+    const answer = a.answer.trim() || null;
+    const status = WRITEUP_STATUS[a.status] ?? WRITEUP_STATUS.not_given;
+    const quotes = [...new Set((a.quotes ?? []).map((x) => x.trim()).filter((x) => x && x !== answer))];
+    const about = s.transcript.filter((t) => t.questionKey === a.questionKey);
+    const byCandidate = a.by === "candidate";
+    return {
+      key: a.questionKey,
+      question: q?.question ?? keyWords(a.questionKey),
+      required: q?.required ?? true,
+      answer,
+      status: a.status,
+      statusWords: status.words,
+      tone: status.tone,
+      byCandidate,
+      byWords: byCandidate ? OWN_WORDS : DRAFTED_WORDS,
+      quotes,
+      note: a.note?.trim() || null,
+      notes: about.filter(isRecruiterNote).map((t) => ({ text: t.content, by: t.by ?? null })),
+      chat: about.filter((t) => !isRecruiterNote(t)).map(transcriptBubble),
+    };
+  });
+}
+
+/** "3 of 4 answered (1 partly)": a partial answer counts as answered, and the line says how many were partial. */
+export function writeupSummary(lines: readonly Pick<WriteupLine, "status">[]): string {
+  const partly = lines.filter((l) => l.status === "partly").length;
+  const given = lines.filter((l) => l.status === "answered").length + partly;
+  return `${given} of ${lines.length} answered${partly ? ` (${partly} partly)` : ""}`;
+}
+
+/** The Overview's one line about the write-up: how many were answered, how many carry the assistant's note, and where to read them. */
+export function writeupOverviewLine(lines: readonly Pick<WriteupLine, "status" | "note">[]): string {
+  const noted = lines.filter((l) => l.note).length;
+  return `Answers to your questions: ${writeupSummary(lines)}${noted ? `, ${noted} with a note from the assistant` : ""}. Read them on the Screening chat tab.`;
+}
+
+type ChatItemView = NonNullable<Screen["progress"]["chat"]>["items"][number];
+/** Where a must-have the résumé did not show was left by the chat. "Not known" is never a no. */
+export const GAP_STATE_WORDS: Readonly<Record<ChatItemView["state"], string>> = {
+  covered: "They gave an answer or an example",
+  unknown: "Not known yet: never counted as a no",
+  skipped: DECLINED_WORDS,
+  open: "Not reached in the chat",
+  asking: "Not reached in the chat",
+};
+
+/**
+ * The must-haves the résumé did not show that the chat asked about ("About your experience"), each with where it was
+ * left, in the plan's order. Empty while the answers are hidden and for a chat without a plan or without such gaps.
+ */
+export function chatGapLines(s: Pick<Screen, "progress" | "answersShared">, mustHaves: ReadonlyArray<{ key: string; text: string }>): Array<{ key: string; text: string; state: ChatItemView["state"]; words: string }> {
+  if (s.answersShared === false) return [];
+  return (s.progress.chat?.items ?? [])
+    .filter((i) => i.kind === "gap")
+    .map((i) => ({ key: i.key, text: mustHaves.find((m) => m.key === i.key)?.text ?? i.key.replace(/^mh_\d+_/, "").replace(/_/g, " "), state: i.state, words: GAP_STATE_WORDS[i.state] ?? GAP_STATE_WORDS.open }));
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */

@@ -421,6 +421,93 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       await container.drain();
     });
 
+    it("the questions every applicant answers are set on the job, through the fairness check, as a new version (Wave S7)", async () => {
+      type Saved = { version: number; outcome: string; fields: string[]; changeSummary: string; packet: RolePacket; diff: PacketDiff; flags: Array<{ path: string; rule: string }> };
+      const put = (cookie: string, body: unknown) => json(cookie, "PUT", `/api/v1/roles/${roleId}/company-questions`, body);
+      const base = await newest();
+      expect(base.packet.companyQuestions).toBeUndefined();
+      const quick = [
+        { kind: "choice", question: "How will you get to work?", help: "We open at 7am.", options: ["My own car", "Public transport", "Bike or on foot", "my own car"] },
+        { kind: "number", question: "How many years have you used Dentrix?", unit: "years", min: 0, max: 40, required: false },
+        { kind: "choice", question: "Can you work one Saturday a month?", options: ["Yes", "No"] },
+      ];
+      const written = [{ question: "Tell us about a time you calmed a nervous patient.", lookFor: "A real patient: what they noticed, what they did, how it ended." }];
+
+      // who may change them, and from which version
+      // (an interviewer is not on this job: it is not found for them, as every role route answers)
+      expect([403, 404]).toContain((await put(interviewer, { baseVersion: base.version, quick })).status);      expect((await errorOf(await put(owner, { baseVersion: base.version - 1, quick }))).code).toBe("stale_version");
+      // the packet's limits, in plain words
+      const nine = Array.from({ length: 9 }, (_, i) => ({ kind: "number", question: `How many patients a day, case ${i + 1}?` }));
+      expect(await errorOf(await put(owner, { baseVersion: base.version, quick: nine }))).toMatchObject({ code: "too_many_questions", message: "Keep at most 8 quick questions. This list has 9." });
+      expect(await errorOf(await put(owner, { baseVersion: base.version, quick: [{ kind: "choice", question: "Which shift?", options: ["Morning", "morning"] }] }))).toMatchObject({ code: "choice_options", message: expect.stringMatching(/between 2 and 8 different answers/) });
+      expect((await errorOf(await put(owner, { baseVersion: base.version, quick: [{ kind: "number", question: "How many years?", min: 5, max: 1 }] }))).code).toBe("number_range");
+      expect((await errorOf(await put(owner, { baseVersion: base.version, written: Array.from({ length: 6 }, (_, i) => ({ question: `Tell us about project number ${i + 1}.` })) }))).code).toBe("too_many_questions");
+      expect((await put(owner, { baseVersion: base.version, quick: [{ kind: "choice", key: "not_a_key", question: "Which shift?", options: ["A", "B"] }] })).status).toBe(400);
+
+      // a question about a protected characteristic is refused, each part said beside its row; nothing is saved
+      const refused = await put(owner, { baseVersion: base.version, quick: [...quick, { kind: "choice", question: "Which describes you?", options: ["Male", "Female"] }], written: [...written, { question: "Do you have children at home?" }] });
+      expect(refused.status).toBe(422);
+      const why = await read<{ error: { code: string; message: string; details: { problems: Array<{ list: string; index: number; part: string; rule: string; words: string }> } } }>(refused);
+      expect(why.error.code).toBe("question_not_allowed");
+      expect(why.error.message).toMatch(/^Quick question 4, the answer "Male": .* 1 more question needs the same change\. Nothing was saved\.$/);
+      expect(why.error.details.problems.map((p) => [p.list, p.index, p.part, p.rule])).toEqual([["quick", 3, "option", "asks_trait_option"], ["quick", 3, "option", "asks_trait_option"], ["written", 1, "question", "asks_family"]]);
+      expect((await newest()).version).toBe(base.version);
+
+      // saved: new keys, required by default, the duplicate answer once; an approver's change to the live job takes effect now
+      const r = await put(owner, { baseVersion: base.version, quick, written });
+      expect(r.status).toBe(200);
+      const v = await read<Saved>(r);
+      expect(v).toMatchObject({ version: base.version + 1, outcome: "approved_current", fields: ["quick", "written"], changeSummary: "Edited: quick questions, written questions", flags: [] });
+      expect(v.packet.companyQuestions?.quick).toEqual([
+        { kind: "choice", key: "cq_how_will_you_get_to_work", question: "How will you get to work?", help: "We open at 7am.", required: true, options: ["My own car", "Public transport", "Bike or on foot"] },
+        { kind: "number", key: expect.stringMatching(/^cq_how_many_years_have_you_used/), question: "How many years have you used Dentrix?", required: false, unit: "years", min: 0, max: 40 },
+        { kind: "choice", key: expect.stringMatching(/^cq_can_you_work_one_saturday/), question: "Can you work one Saturday a month?", required: true, options: ["Yes", "No"] },
+      ]);
+      expect(v.packet.companyQuestions?.written).toEqual([{ key: expect.stringMatching(/^wq_tell_us_about_a_time/), question: "Tell us about a time you calmed a nervous patient.", required: true, lookFor: "A real patient: what they noticed, what they did, how it ended." }]);
+      // the eligibility questions and the screening questions are as they were
+      expect(v.packet.requirements.eligibility).toEqual(base.packet.requirements.eligibility);
+      expect(v.packet.screening.questions).toEqual(base.packet.screening.questions);
+      // the diff names each one; what a good answer shows is marked as for the team only
+      const section = v.diff.sections.find((s) => s.section === "companyQuestions")!;
+      expect(section.label).toBe("Questions every applicant answers");
+      expect(section.changes).toEqual(expect.arrayContaining([
+        expect.objectContaining({ label: "Quick question", kind: "added", after: "How will you get to work? (choose one: My own car, Public transport, Bike or on foot)", visibility: "asked" }),
+        expect.objectContaining({ label: "Quick question", kind: "added", after: "How many years have you used Dentrix? (a number (years), 0 to 40; they may skip it)" }),
+        expect.objectContaining({ label: "Written question", kind: "added", after: "Tell us about a time you calmed a nervous patient.", visibility: "asked" }),
+        expect.objectContaining({ label: "What a good answer shows", kind: "added", visibility: "reviewed" }),
+      ]));
+      expect(section.changes).toHaveLength(5);
+
+      // the same questions sent again change nothing; a list left out stays; a kept key keeps the question's answers
+      const same = v.packet.companyQuestions!;
+      expect((await errorOf(await put(owner, { baseVersion: v.version, quick: same.quick, written: same.written }))).code).toBe("nothing_changed");
+      const reordered = await read<Saved>(await put(owner, { baseVersion: v.version, written: [{ key: same.written[0].key, question: "Tell us about a time you calmed a worried patient.", required: false }] }));
+      expect(reordered.fields).toEqual(["written"]);
+      expect(reordered.packet.companyQuestions?.quick).toEqual(same.quick);
+      expect(reordered.packet.companyQuestions?.written).toEqual([{ key: same.written[0].key, question: "Tell us about a time you calmed a worried patient.", required: false }]);
+      const turned = await read<Saved>(await put(owner, { baseVersion: reordered.version, quick: [...same.quick].reverse() }));
+      expect(turned.diff.sections).toEqual([{ section: "companyQuestions", label: "Questions every applicant answers", changes: [expect.objectContaining({ label: "Order of the quick questions", kind: "changed" })] }]);
+      expect((await errorOf(await put(owner, { baseVersion: turned.version, quick: [{ kind: "choice", key: "cq_gone", question: "Which shift?", options: ["A", "B"] }] }))).code).toBe("unknown_question");
+
+      // phrase-list wording is saved with a flag, as everywhere: on a live job it waits for a person to decide
+      const flagged = await read<Saved>(await put(owner, { baseVersion: turned.version, written: [{ question: "Walk us through your last two jobs.", lookFor: "No employment gaps" }] }));
+      expect(flagged.outcome).toBe("proposed_pending_approval");
+      expect(flagged.flags).toEqual([expect.objectContaining({ path: "companyQuestions.written[0].lookFor", rule: "employment_gaps" })]);
+      // taking every question out leaves the packet as before Wave S7
+      const cleared = await read<Saved>(await put(owner, { baseVersion: flagged.version, quick: [], written: [] }));
+      expect(cleared.outcome).toBe("approved_current");
+      expect(cleared.packet.companyQuestions).toBeUndefined();
+
+      // the full-packet editor is refused the same way
+      const forged = structuredClone(cleared.packet);
+      forged.companyQuestions = { quick: [], written: [{ key: "wq_age", question: "How old are you, roughly?", required: true }] };
+      const viaJson = await json(owner, "POST", `/api/v1/roles/${roleId}/packets`, { packet: forged, changeSummary: "Added a question" });
+      expect(viaJson.status).toBe(422);
+      expect((await errorOf(viaJson)).code).toBe("question_not_allowed");
+      expect((await newest()).version).toBe(cleared.version);
+      await container.drain();
+    });
+
     it("a closed role is not changed any more", async () => {
       expect((await json(owner, "POST", `/api/v1/roles/${roleId}/outcome`, { outcome: "role_cancelled", confirm: true })).status).toBe(200);
       const r = await json(owner, "POST", `/api/v1/roles/${roleId}/revisions`, { message: "Add a must-have: Dentrix experience" });

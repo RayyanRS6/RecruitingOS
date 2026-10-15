@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RolePacket, type Actor, type DraftRolePacket } from "@ros/contracts";
-import { guardPacket, normalizeCriterion, screenCriterion, unresolvedFlags } from "./packet-guard";
+import { companyQuestionProblemWords, companyQuestionProblems, guardPacket, normalizeCriterion, questionCheck, screenCriterion, unresolvedFlags } from "./packet-guard";
 
 /** A small valid packet; each test changes what it is about. */
 function packet(over: (p: RolePacket) => void = () => {}): RolePacket {
@@ -190,5 +190,121 @@ describe("wording that stands in for a protected trait is flagged anywhere a per
 
   it("reads rewordings the same way", () => {
     expect(normalizeCriterion("Recent  GRADS!")).toBe(normalizeCriterion("recent grads"));
+  });
+});
+
+describe("the questions every applicant answers pass the fairness check (Wave S7)", () => {
+  const refused = [
+    ["What is your gender?", "asks_sex"],
+    ["What are your pronouns?", "asks_sex"],
+    ["How old are you?", "asks_age"],
+    ["What is your date of birth?", "asks_age"],
+    ["What year did you graduate from high school?", "asks_age"],
+    ["What is your ethnicity?", "asks_race"],
+    ["Are you a US citizen?", "asks_origin"],
+    ["What is your nationality?", "asks_origin"],
+    ["Where were you born?", "asks_origin"],
+    ["Is English your first language?", "asks_origin"],
+    ["What religion are you?", "asks_religion"],
+    ["Which holidays do you observe?", "asks_religion"],
+    ["Are you married?", "asks_family"],
+    ["Do you have children?", "asks_family"],
+    ["How many kids do you have?", "asks_family"],
+    ["Are you planning to start a family soon?", "asks_family"],
+    ["Do you have any disabilities?", "asks_health"],
+    ["Do you take any medication?", "asks_health"],
+    ["Have you ever filed a workers' comp claim?", "asks_health"],
+    ["Have you ever been convicted of a crime?", "asks_record"],
+    ["Do you have a criminal record?", "asks_record"],
+    ["What is your current salary?", "asks_pay_history"],
+    // the real-model probes of the Wave S7 review: each one was allowed before
+    ["Are you over 40?", "asks_age"],
+    ["Are you under 30?", "asks_age"],
+    ["Are you a veteran?", "asks_veteran"],
+    ["Have you served in the military?", "asks_veteran"],
+    ["Are you a parent?", "asks_family"],
+    ["Are you a mother?", "asks_family"],
+    ["Do you have childcare arrangements?", "asks_family"],
+    ["Are you a green card holder?", "asks_origin"],
+    ["Do you have any physical limitations?", "asks_health"],
+    ["What were you paid at your last job?", "asks_pay_history"],
+    ["Where did you grow up?", "asks_origin"],
+    ["What languages do you speak natively?", "asks_origin"],
+  ] as const;
+  for (const [question, rule] of refused) {
+    it(`refuses "${question}" (${rule})`, () => {
+      expect(questionCheck(question)?.rule).toBe(rule);
+      expect(companyQuestionProblems({ quick: [{ key: "cq_x", question, options: ["A", "B"] }] })[0]).toMatchObject({ list: "quick", index: 0, key: "cq_x", part: "question", rule });
+    });
+  }
+
+  it("lets the work's own questions through, the lawful ones included", () => {
+    const fine = [
+      "Are you legally authorized to work in the United States for any employer?",
+      "Are you at least 18 years old?",
+      "Can you lift 25 pounds, with or without a reasonable accommodation?",
+      "Do you have experience caring for patients with disabilities?",
+      "Do you have experience working with children?",
+      "How many children do you look after at once in your current role?",
+      "How will you get to work?",
+      "How many years have you used Dentrix?",
+      "Tell us about a time you calmed a nervous patient.",
+      "Are you single-handedly running a front desk today?",
+      "Are you a manager now?",
+      "How do you keep your health and safety training current?",
+      "Do you hold current CPR/BLS certification?",
+      "What pay are you looking for?",
+      "Have you completed sexual harassment prevention training?",
+    ];
+    for (const q of fine) expect(questionCheck(q), q).toBeNull();
+  });
+
+  it("checks every part of a question: its help line, each answer offered and what a good answer shows", () => {
+    const problems = companyQuestionProblems({
+      quick: [
+        { key: "cq_shift", question: "Which shift suits you?", help: "Tell us how old are you too", options: ["Morning", "Evening"] },
+        { key: "cq_about", question: "Which describes you?", options: ["Male", "Female", "Prefer not to say"] },
+      ],
+      written: [{ key: "wq_story", question: "Tell us about a hard day at work.", lookFor: "Ideally married, with a stable home" }],
+    });
+    expect(problems.map((p) => [p.list, p.index, p.part, p.rule])).toEqual([
+      ["quick", 0, "help", "asks_age"],
+      ["quick", 1, "option", "asks_trait_option"],
+      ["quick", 1, "option", "asks_trait_option"],
+      ["written", 0, "lookFor", "asks_family"],
+    ]);
+    expect(companyQuestionProblemWords(problems[1])).toBe('Quick question 2, the answer "Male": An answer to choose from names a protected characteristic, so the question asks about it. Ask only about the work the job needs.');
+    // answers to choose from that are a protected trait, or an age bracket, are refused (the review's probes)
+    for (const options of [["U.S. citizen", "Green card holder", "Work visa"], ["Under 30", "30-49", "50 or over"], ["Mr", "Mrs", "Ms"], ["Mother", "Father"], ["Veteran", "Not a veteran"]]) {
+      const found = companyQuestionProblems({ quick: [{ key: "cq_which", question: "Which one are you?", options }] });
+      // every answer offered is refused, each with the rule it breaks
+      expect(found.map((p) => p.part), options.join(" / ")).toEqual(options.map(() => "option"));
+    }
+    // numbers that count something are not ages
+    expect(companyQuestionProblems({ quick: [{ key: "cq_n", question: "How many patients do you see a day?", options: ["Under 10", "10-20", "20 or more"] }] })).toEqual([]);
+    // the phrase list's protected-characteristic rules are refused in a question, not only flagged
+    expect(companyQuestionProblems({ written: [{ key: "wq_x", question: "Tell us about your work.", lookFor: "Native English speakers only" }] })[0]).toMatchObject({ part: "lookFor" });
+    expect(companyQuestionProblems({ quick: [], written: [] })).toEqual([]);
+    expect(companyQuestionProblems(null)).toEqual([]);
+  });
+
+  it("flags phrase-list wording in the company's questions like any other words, and still reads a protected question that got in", () => {
+    const p = packet((x) => {
+      x.companyQuestions = {
+        quick: [{ kind: "number", key: "cq_years", question: "How many years of experience do you have?", required: true }],
+        written: [
+          { key: "wq_gaps", question: "Walk us through your last job.", required: true, lookFor: "No employment gaps" },
+          { key: "wq_age", question: "How old are you?", required: true },
+        ],
+      };
+    });
+    const { flags } = guardPacket(p, ctx);
+    expect(flags.map((f) => [f.path, f.rule])).toEqual([
+      ["companyQuestions.written[0].lookFor", "employment_gaps"],
+      ["companyQuestions.written[1].question", "asks_age"],
+    ]);
+    expect(flags[0].id).toContain("companyQuestions.written[wq_gaps].lookFor");
+    // a packet without them is read as before
+    expect(guardPacket(packet(), ctx).flags).toEqual([]);
   });
 });

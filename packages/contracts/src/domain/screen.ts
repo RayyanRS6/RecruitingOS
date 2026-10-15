@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { Evidence } from "./common";
 import { EvidenceAssessment } from "./assessment";
+import { ChatPlan, ScreenWriteup } from "./apply-questions";
 
 /** Screening (docs/05 Screening Agent, docs/06 `screen` workflow). Text first: web chat or SMS. */
 
@@ -86,6 +87,26 @@ export const ScreenProgress = z.object({
    * own; readers merge the two through `screenAnswersOf` in @ros/core). Absent on an ordinary screen.
    */
   focusQuestions: z.array(z.object({ key: z.string().min(1), question: z.string().min(1), whyItMatters: z.string().optional(), answer: z.string().optional() })).optional(),
+  /** Wave S7: the chat's sections and what each item stands at (the header's "2 of 4 required"); absent on a chat from before. */
+  chat: ChatPlan.optional(),
+  /**
+   * Wave S7: what was typed in the visit that offered this chat (the CV's lines from the form's reading and the form's
+   * answers as sentences), the only details the chat may name. A repeat submission's detached chat never shows anything
+   * on file this way; a first application's chat has the same, so the two read alike. Wiped when a detached chat is
+   * discarded or confirmed, and erased with the candidate's other words (`withoutCandidateWords`).
+   */
+  typedFacts: z.object({ cv: z.array(z.string().max(500)).max(20), formAnswers: z.array(z.string().max(500)).max(20) }).optional(),
+  /**
+   * Wave S7, a chat offered with the application: the visit that sent it passed what was typed, so the chat may name the
+   * application's own CV and form answers (a repeat submission's chat then has the same, `typedFacts`). Absent: it
+   * names neither, exactly like a repeat submission's chat without them.
+   */
+  ownFacts: z.boolean().optional(),
+  /**
+   * Wave S7: the written-up answers shown on Review & send. Hidden from the team until Send with the rest of the chat
+   * (`teamScreenView`), erased with the candidate's words (`withoutCandidateWords` in @ros/core).
+   */
+  writeup: ScreenWriteup.optional(),
 });
 export type ScreenProgress = z.infer<typeof ScreenProgress>;
 
@@ -95,6 +116,16 @@ export type ScreenProgress = z.infer<typeof ScreenProgress>;
  */
 export const AnswerStatus = z.enum(["answered", "declined", "edited"]);
 export type AnswerStatus = z.infer<typeof AnswerStatus>;
+
+/**
+ * Wave S7, the Kanvis-style chat (`ScreenProgress.chat`): how the model read the candidate's latest reply to the item
+ * being asked. `concrete`: something specific (what they did, a figure, an example); `vague`: an answer with nothing
+ * specific in it yet (a bare "yes", "I handled it well"); `not_done`: "No", "I haven't". Only ever a reading for the
+ * chat's next step, worked out in code (`chatNextMove` in @ros/core): never a finding, and a "not_done" is never a "no"
+ * for a skill (it settles the item as not known).
+ */
+export const ChatReading = z.enum(["concrete", "vague", "not_done"]);
+export type ChatReading = z.infer<typeof ChatReading>;
 
 /** One assistant turn. Rules (enforced in the prompt and checked in code): disclose at the start, one question at a time, at most two follow-ups per question, never ask about protected characteristics. */
 export const ScreenTurn = z.object({
@@ -108,6 +139,8 @@ export const ScreenTurn = z.object({
   sentiment: z.enum(["fine", "confused", "frustrated", "distressed"]).default("fine"),
   done: z.boolean(),
   humanRequested: z.boolean(),
+  /** Wave S7 chat only: the model's reading of the latest reply to the item being asked (`ChatReading`); absent elsewhere. */
+  reading: ChatReading.nullable().optional(),
 });
 export type ScreenTurn = z.infer<typeof ScreenTurn>;
 

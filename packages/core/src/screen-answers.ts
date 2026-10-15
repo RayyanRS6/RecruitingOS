@@ -28,6 +28,19 @@ export function withoutFocusAnswers(progress: ScreenProgress): ScreenProgress {
   return { ...progress, focusQuestions: progress.focusQuestions.map((f) => ({ key: f.key, question: f.question, ...(f.whyItMatters ? { whyItMatters: f.whyItMatters } : {}) })) };
 }
 
+/**
+ * The progress with everything the candidate said taken out, for an anonymization and for a repeat submission's words
+ * wiped after seven days: the answers to the open questions (`withoutFocusAnswers`) and the written-up answers of Review
+ * & send (Wave S7, `writeup`), which are their words condensed, and what was typed in the visit for the chat to name
+ * (`typedFacts`: their CV lines and form answers). The chat's plan stays: keys and states, nothing they said.
+ */
+export function withoutCandidateWords(progress: ScreenProgress): ScreenProgress {
+  const out = withoutFocusAnswers(progress);
+  if (!out.writeup && !out.typedFacts) return out;
+  const { writeup: _writeup, typedFacts: _typedFacts, ...rest } = out;
+  return rest;
+}
+
 /* ------------------------------------------------------------------------------------------------------------ */
 /* "Hide them until they send" (founder decision, 9 October 2026; counsel register item 20)                      */
 /* ------------------------------------------------------------------------------------------------------------ */
@@ -195,9 +208,16 @@ export const WITHHELD_RUN_OUTPUT: Readonly<Record<string, string>> = { withheld:
  * An AI run as the ITS operations console shows it (founder decision of 9 October 2026: the console is not the hiring
  * team, but nobody at ITS reads answers the candidate never sent either): a run about a conversation that was not sent
  * (its `inputRef.screenId`) keeps its timings, tokens, status and error, and its output is withheld. The scorecard of a
- * conversation finished on a recruiter's call is read from the notes alone, and is shown.
+ * conversation finished on a recruiter's call is read from the notes alone, and is shown. A run about a repeat
+ * submission's detached conversation (`inputRef.unconfirmedScreenId`: its turns, its write-up) is withheld the same way
+ * until the address owner confirmed it (`unconfirmed`, read with the screens); one not found is withheld too.
  */
-export function withoutUnsentRunOutput<R extends { task: string; inputRef: Record<string, unknown> | null; structuredOutput: Record<string, unknown> | null }>(run: R, screens: ReadonlyArray<{ id: string; status: string; progress?: Pick<ScreenProgress, "completedBy"> | null }>): R {
+export function withoutUnsentRunOutput<R extends { task: string; inputRef: Record<string, unknown> | null; structuredOutput: Record<string, unknown> | null }>(run: R, screens: ReadonlyArray<{ id: string; status: string; progress?: Pick<ScreenProgress, "completedBy"> | null }>, unconfirmed: ReadonlyArray<{ id: string; confirmation: string | null }> = []): R {
+  const detachedId = run.inputRef?.unconfirmedScreenId;
+  if (typeof detachedId === "string" && run.structuredOutput) {
+    const row = unconfirmed.find((u) => u.id === detachedId);
+    return row?.confirmation === "confirmed" ? run : { ...run, structuredOutput: { ...WITHHELD_RUN_OUTPUT } };
+  }
   const screenId = run.inputRef?.screenId;
   if (typeof screenId !== "string" || !run.structuredOutput) return run;
   const s = screens.find((x) => x.id === screenId);

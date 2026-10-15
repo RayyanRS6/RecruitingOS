@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { QuickQuestionKey, WrittenQuestionKey } from "./apply-questions";
 import { RolePacket, type DraftRolePacket, type PacketFlag, type PacketVisibility } from "./role-packet";
 
 /**
@@ -95,6 +96,66 @@ export type PacketRevisionProposal = {
   takesEffect: "draft" | "now" | "after_approval" | "with_the_role";
   packet: DraftRolePacket;
 };
+
+/* ------------------------------------------------------------------------------------------------------------------ */
+/* "Questions every applicant answers" (Wave S7): the company's quick questions and written questions, set on a job.    */
+/* ------------------------------------------------------------------------------------------------------------------ */
+
+/** What the job's Scoring tab calls the company's questions, and its two lists. */
+export const COMPANY_QUESTIONS_LABEL = "Questions every applicant answers";
+export const QUICK_QUESTIONS_LABEL = "Quick questions, on the application form";
+export const WRITTEN_QUESTIONS_LABEL = "Written questions, asked in the chat";
+
+/** The packet's own limits (`CompanyQuestions`): eight quick questions, five written ones, two to eight choices each. */
+export const QUICK_QUESTIONS_MAX = 8;
+export const WRITTEN_QUESTIONS_MAX = 5;
+export const CHOICE_OPTIONS_MIN = 2;
+export const CHOICE_OPTIONS_MAX = 8;
+
+const EditedChoice = z.object({
+  kind: z.literal("choice"),
+  key: QuickQuestionKey.optional(),
+  question: z.string().trim().min(3, "Write the question (at least three letters).").max(200),
+  help: z.string().trim().max(200).optional(),
+  required: z.boolean().optional(),
+  options: z.array(z.string().trim().min(1).max(80)).max(20),
+}).strict();
+const EditedNumber = z.object({
+  kind: z.literal("number"),
+  key: QuickQuestionKey.optional(),
+  question: z.string().trim().min(3, "Write the question (at least three letters).").max(200),
+  help: z.string().trim().max(200).optional(),
+  required: z.boolean().optional(),
+  unit: z.string().trim().max(30).optional(),
+  min: z.number().finite().optional(),
+  max: z.number().finite().optional(),
+}).strict();
+
+/**
+ * PUT /roles/:id/company-questions: the questions every applicant answers, sent whole, in order (adding, removing and
+ * reordering are one list). `quick` are the form's choice and number questions (the yes/no questions that may hold an
+ * application stay the eligibility questions, changed in the editor); a yes-or-no question that holds nobody is a choice
+ * of "Yes" and "No". `written` are asked in the chat and written up from the candidate's own words; `lookFor` (what a
+ * good answer shows) is for the chat and the team only, never a candidate. A list left out stays as it is. A question
+ * keeps its `key` when it is the same question; a new one has none. Starts from `baseVersion`, which must still be the
+ * newest version. Counts and choices are checked on the server with plain words, and every question passes the fairness
+ * check first: one that asks about a protected characteristic is refused, with the reason and the lawful alternative.
+ */
+export const CompanyQuestionsEdit = z.object({
+  baseVersion: z.number().int().min(1),
+  quick: z.array(z.discriminatedUnion("kind", [EditedChoice, EditedNumber])).max(20).optional(),
+  written: z.array(z.object({
+    key: WrittenQuestionKey.optional(),
+    question: z.string().trim().min(5, "Write the question (at least five letters).").max(400),
+    required: z.boolean().optional(),
+    lookFor: z.string().trim().max(400).optional(),
+  }).strict()).max(20).optional(),
+  changeSummary: z.string().trim().min(1).max(500).optional(),
+}).strict();
+export type CompanyQuestionsEdit = z.infer<typeof CompanyQuestionsEdit>;
+
+/** One refused part of a question, as the 422 `question_not_allowed` answer lists them (`details.problems`). */
+export type CompanyQuestionRefusal = { list: "quick" | "written"; index: number; key: string | null; part: "question" | "help" | "option" | "lookFor"; rule: string; text: string; reason: string; alternative: string; words: string };
 
 /* ------------------------------------------------------------------------------------------------------------------ */
 /* The requirements check before approval (C16): suggestions only, never a score, nothing changes until a person taps. */

@@ -1,4 +1,4 @@
-import type { ApplyMode, PolicyLevel, RolePacket, ScreeningFunnel, ScreeningQuestion, ScreenProgress, ScreenTranscriptEntry, TapAnswer, TapFormat } from "@ros/contracts";
+import type { ApplyMode, ChatItem, ChatPlan, ChatReading, ChatSection, PolicyLevel, RolePacket, ScreeningFunnel, ScreeningQuestion, ScreenProgress, ScreenTranscriptEntry, TapAnswer, TapFormat } from "@ros/contracts";
 import { screenAnswersSent } from "./screen-answers";
 
 /**
@@ -39,6 +39,108 @@ export function isStillApplying(screen: { status: string; invitedVia?: string | 
 /** A conversation offered with the application (E1): the fixed introduction, check-your-answers, and pause on an outage. */
 export function isOneVisitFlow(progress: Pick<ScreenProgress, "flow"> | null | undefined): boolean {
   return progress?.flow === "one_visit";
+}
+
+/* ------------------------------------------------------------------------------------------------------------ */
+/* The Kanvis-style chat's plan (Wave S7; the contracts in s7-contracts.md, section 2b)                            */
+/* ------------------------------------------------------------------------------------------------------------ */
+
+/**
+ * The chat's closing question ("Wrapping up"): asked after every item, in code's words, and never an item of the plan
+ * (it is not counted). Its answer is the candidate's own words like any other.
+ */
+export const CHAT_WRAP_KEY = "wrap_up";
+/** At most this many "About your experience" items (the résumé reading's open questions first, then the gaps). */
+export const CHAT_GAP_LIMIT = 4;
+
+/**
+ * The plan when the chat starts (fixed in code; the model never writes it): the gaps first (`About your experience`),
+ * then the written questions (`Required questions`), in order. The chat begins in the first section that has an item;
+ * with neither it goes straight to "Wrapping up".
+ */
+export function buildChatPlan(input: { gaps: string[]; written: Array<{ key: string; required: boolean }>; at: string }): ChatPlan {
+  const seen = new Set<string>();
+  const items: ChatItem[] = [];
+  for (const key of input.gaps) {
+    if (seen.has(key) || key === CHAT_WRAP_KEY || items.length >= CHAT_GAP_LIMIT) continue;
+    seen.add(key);
+    items.push({ key, kind: "gap", required: false, state: "open", step: "direct", pushes: 0 });
+  }
+  for (const w of input.written) {
+    if (seen.has(w.key) || w.key === CHAT_WRAP_KEY || items.length >= 20) continue;
+    seen.add(w.key);
+    items.push({ key: w.key, kind: "written", required: w.required, state: "open", step: "direct", pushes: 0 });
+  }
+  const section: ChatSection = items.some((i) => i.kind === "gap") ? "experience" : items.length ? "required" : "wrapping_up";
+  return { v: 1, section, items, current: null, builtAt: input.at };
+}
+
+/** An item that needs nothing more: covered, settled as not known, or skipped. */
+export function chatItemSettled(item: Pick<ChatItem, "state">): boolean {
+  return item.state === "covered" || item.state === "unknown" || item.state === "skipped";
+}
+
+/**
+ * What the chat does next with the item being asked, from how the latest reply reads (`ChatReading`). A concrete reply
+ * covers it, and so does any reply to a yes-or-no question (`ladder` false). A vague one gets one push for specifics,
+ * then counts as covered (the team reads the words). "No" / "I haven't" climbs the ladder: the analog ("not done
+ * that? something similar from your own work"), then, for a gap, the smaller version ("even a small moment?"), then
+ * the item is settled as not known: never a "no" for a skill, and never held against anyone.
+ */
+export type ChatMove = "push" | "analog" | "smaller" | "covered" | "unknown";
+export function chatNextMove(item: Pick<ChatItem, "kind" | "step" | "pushes">, reading: ChatReading, ladder: boolean): ChatMove {
+  // A yes-or-no question (no ladder) takes its answer as it is, a bare "Yes" included.
+  if (reading === "concrete" || !ladder) return "covered";
+  if (reading === "vague") return item.pushes < 1 ? "push" : "covered";
+  if (item.step === "direct") return "analog";
+  if (item.step === "analog" && item.kind === "gap") return "smaller";
+  return "unknown";
+}
+
+/** Whether a move keeps asking about the same item (a follow-up) rather than moving on. */
+export function chatMoveStays(move: ChatMove): boolean {
+  return move === "push" || move === "analog" || move === "smaller";
+}
+
+const NOT_DONE = /^(?:no|nope|nah|not really|not yet|never|none|i haven['’]?t|i have not|i have never|i['’]?ve never|i don['’]?t|i do not|i didn['’]?t|i did not)\b[^.!?]{0,40}[.!]?$/i;
+/** Words that turn a "no" into an answer ("No, but at my last job I…"). */
+const BUT = /\b(?:but|however|though|although|similar|instead|except|once|when)\b/i;
+
+/** A plain "No" / "I haven't" (short, and nothing more): the reply that climbs the ladder, whatever the model read. */
+export function saysNotDone(text: string | null | undefined): boolean {
+  const t = (text ?? "").trim();
+  return t.length > 0 && t.length <= 60 && NOT_DONE.test(t) && !BUT.test(t);
+}
+
+/**
+ * The plan after a turn, kept in step with the progress the code already keeps: the item being asked is `asking`; one
+ * asked and passed is `covered` (or stays `unknown` when the ladder settled it so); a skipped one is `skipped`; the rest
+ * are `open`. `move`: the step the turn took on the item it was about (a push, the analog, the smaller version, or
+ * settling it). The section follows the item being asked; once every item is settled, or on the closing question, it
+ * is "Wrapping up".
+ */
+export function syncChatPlan(plan: ChatPlan, progress: Pick<ScreenProgress, "askedKeys" | "currentQuestionKey" | "declined">, move?: { key: string; move: ChatMove } | null): ChatPlan {
+  const asked = new Set(progress.askedKeys);
+  const declined = new Set(progress.declined ?? []);
+  const current = progress.currentQuestionKey;
+  const items = plan.items.map((item): ChatItem => {
+    let next: ChatItem = item;
+    if (move && move.key === item.key) {
+      if (move.move === "push") next = { ...next, pushes: 1 };
+      else if (move.move === "analog") next = { ...next, step: "analog" };
+      else if (move.move === "smaller") next = { ...next, step: "smaller" };
+      else if (move.move === "unknown") next = { ...next, state: "unknown" };
+      else next = { ...next, state: "covered" };
+    }
+    if (declined.has(item.key)) return { ...next, state: "skipped" };
+    if (current === item.key) return { ...next, state: next.state === "unknown" ? "unknown" : "asking" };
+    if (asked.has(item.key)) return { ...next, state: next.state === "unknown" ? "unknown" : "covered" };
+    return { ...next, state: next.state === "unknown" ? "unknown" : "open" };
+  });
+  // An item settled as not known while it is still the current question (the move came with this turn) stays so.
+  const at = items.find((i) => i.key === current) ?? null;
+  const section: ChatSection = at ? (at.kind === "gap" ? "experience" : "required") : current === CHAT_WRAP_KEY || items.every(chatItemSettled) ? "wrapping_up" : items.find((i) => !chatItemSettled(i))?.kind === "gap" ? "experience" : "required";
+  return { ...plan, items, section, current: at ? at.key : null };
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */

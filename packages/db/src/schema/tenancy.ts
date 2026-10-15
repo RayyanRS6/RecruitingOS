@@ -50,6 +50,12 @@ export type CompanySettings = {
   applyFlowSetBy?: { at: string; by: Actor; reason: string };
   /** Automatic new interview times for candidates who cancel and ask for them (founder decision 3A). Unset: on, after 3 working days. */
   newTimesAfterCancel?: { auto: boolean; workingDays: number };
+  /**
+   * Whether candidates see their match score after sending (founder decision S7-1): unset or true shows it; false, set by
+   * ITS from the admin console with who, when and why, hides it (`candidateScoreShown` in @ros/contracts).
+   */
+  candidateScoreShown?: boolean;
+  candidateScoreSetBy?: { at: string; by: Actor; reason: string };
 };
 
 export const companies = pgTable(

@@ -1,4 +1,4 @@
-import { IMPORTANCE_WEIGHT, type Actor, type DeclinedCriterion, type DraftRolePacket, type Location, type PacketFlag } from "@ros/contracts";
+import { IMPORTANCE_WEIGHT, type Actor, type CompanyQuestions, type DeclinedCriterion, type DraftRolePacket, type Location, type PacketFlag } from "@ros/contracts";
 import { DEFAULT_NOTICES, disclosureLine, resolveJurisdictions } from "./compliance";
 
 /**
@@ -13,6 +13,10 @@ import { DEFAULT_NOTICES, disclosureLine, resolveJurisdictions } from "./complia
  * the lists it appears in. Flagged: wording that stands in for a protected trait, anywhere a candidate or a reader of
  * applications would meet it (the phrase list below), what the owner was told could not be used, reworded or not, and a
  * pay figure in the job description that nobody set or that is not the advertised range.
+ *
+ * Wave S7: the questions every applicant answers (`companyQuestions`) are read like every other words, and for the
+ * protected-question list too (`PROTECTED_QUESTION_RULES`); a question that asks about a protected characteristic is
+ * refused where it is set (`companyQuestionProblems`, `questionCheck`), never kept with a reason.
  */
 
 export type ProxyRule = { rule: string; reason: string; alternative: string; find: (text: string) => string | null };
@@ -137,6 +141,158 @@ export function screenCriterion(text: string): CriterionCheck | null {
   return null;
 }
 
+/**
+ * Questions put to candidates that ask about a protected characteristic itself (Wave S7, "Questions every applicant
+ * answers"): a company's quick or written question, or a question typed in the quick start. The phrase list above reads
+ * requirements ("male only", "no kids"); these read questions ("What is your gender?", "Do you have children?"). A
+ * question that breaks one is refused when it is set, never kept with a reason: there is no lawful reason to ask it on an
+ * application. Each says why in plain words and offers the lawful way to the real need. The patterns ask about the
+ * candidate ("your age", "are you married"), so "Experience caring for patients with disabilities" or "Are you at least
+ * 18?" (a legal minimum age) pass.
+ */
+export const PROTECTED_QUESTION_RULES: readonly ProxyRule[] = [
+  {
+    rule: "asks_sex",
+    reason: "Questions about sex, gender or sexual orientation cannot be asked of applicants.",
+    alternative: "Ask only about the work: the skills, the schedule, the certifications the job needs.",
+    find: first(/\byour\s+(?:gender(?:\s+identity)?|sex|pronouns|sexual orientation)\b|\bgender\b|\bsexual orientation\b|\bare you (?:a\s+)?(?:male|female|man|woman|gay|lesbian|straight|bisexual|transgender|trans)\b|\b(?:ideally|preferably|must be|should be)\s+(?:a\s+)?(?:male|female|man|woman)\b/i),
+  },
+  {
+    rule: "asks_age",
+    reason: "Asking an applicant's age, birth date or graduation year can discriminate by age.",
+    alternative: "Where a law sets a minimum age, ask an eligibility question such as \"Are you at least 18?\".",
+    find: first(/\bhow old are you\b|\byour\s+(?:age|date of birth|birth\s?date|birthday|year of birth)\b|\bdate of birth\b|\bwhat year (?:were you born|did you (?:graduate|finish (?:high )?school))\b|\bwhen (?:were you born|did you graduate)\b|\bgraduation (?:year|date)\b|\bage (?:range|group|bracket)\b|\bare you (?:over|under|older than|younger than|above|below) (?!18\b|21\b)\d{2}\b/i),
+  },
+  {
+    rule: "asks_veteran",
+    reason: "Questions about military service or veteran status cannot be asked on an application.",
+    alternative: "Ask about the skills and experience the job needs, from any setting.",
+    find: first(/\bveterans?\b|\bveteran status\b|\bmilitary (?:service|background|history|record)\b|\b(?:have you |did you )?(?:ever )?serve[d]? in the (?:military|armed forces|army|navy|air force|marines|marine corps|coast guard|national guard)\b|\b(?:honorable|dishonorable|general|military) discharge\b|\bdischarged from the (?:military|armed forces|army|navy|air force|marines)\b/i),
+  },
+  {
+    rule: "asks_race",
+    reason: "Questions about race, colour or ethnicity cannot be asked of applicants.",
+    alternative: "Ask only about the work the job needs.",
+    find: first(/\byour\s+(?:race|ethnicity|ethnic (?:group|background|origin)|skin colou?r|heritage)\b|\bethnicity\b|\bracial\b|\bethnic (?:group|background|origin)\b/i),
+  },
+  {
+    rule: "asks_origin",
+    reason: "Questions about citizenship, nationality, birthplace or first language can discriminate by national origin.",
+    alternative: "Ask every applicant whether they are authorized to work in the United States, and for the level of a language the job needs.",
+    find: first(/\bnationality\b|\bcitizenship\b|\bare you (?:a\s+|an\s+)?(?:u\.?s\.?\s+|us\s+|american\s+)?citizen\b|\bcountry of (?:birth|origin)\b|\bwhere (?:were you|was your family) born\b|\bwhere are you (?:originally )?from\b|\bimmigration status\b|\byour\s+(?:native|first|mother) (?:language|tongue)\b|\bmother tongue\b|\byour\s+accent\b|\bgreen card\b|\bpermanent resident\b|\bwhere did you grow up\b|\bwhere (?:did|do) your (?:parents|family) (?:come|live)\b|\bspeak\s+(?:\w+\s+)?natively\b|\bnative speaker\b|\bwhat (?:is|was) your (?:first|native) (?:language|tongue)\b/i),
+  },
+  {
+    rule: "asks_religion",
+    reason: "Questions about religion cannot be asked of applicants.",
+    alternative: "If the real need is the schedule, ask every applicant whether they can work the posted days.",
+    find: first(/\byour\s+(?:religion|faith|church|religious (?:beliefs?|affiliation|holidays?))\b|\bwhat religion\b|\bare you religious\b|\bdo you (?:attend|go to) (?:church|mosque|synagogue|temple)\b|\bwhich (?:religious )?holidays do you (?:observe|celebrate)\b|\bobserve the sabbath\b/i),
+  },
+  {
+    rule: "asks_family",
+    reason: "Questions about marriage, children, pregnancy or family plans cannot be asked of applicants.",
+    alternative: "If the real need is availability, ask every applicant whether they can work the posted schedule.",
+    find: first(/\bare you (?:married|single|divorced|engaged|pregnant|expecting)(?![-\w])|\bmarital status\b|\byour\s+(?:spouse|husband|wife|marital|maiden name|pregnancy)\b|\bmaiden name\b|\b(?:do you have|have you got) (?:any\s+)?(?:kids|children|dependents)(?![-'’\w])(?!\s+(?:in (?:your|our|the) (?:care|class|classroom|program)|to (?:look after|care for|teach))\b)|\bhow many (?:kids|children|dependents) do you have\b|\b(?:get|getting|become|becoming) pregnant\b|\bplan(?:s|ning)? (?:to|on) (?:have|having|start|starting) (?:a family|kids|children)\b|\bwho (?:will )?looks? after your (?:kids|children)\b|\b(?:ideally|preferably|must be|should be)\s+(?:married|single|unmarried|childless|without (?:kids|children))\b|\bare you a (?:parent|mother|father|mom|mum|dad|single (?:parent|mother|father|mom|mum|dad))\b|\bchild ?care (?:arrangements?|plans?|cover|needs?|responsibilities)\b|\byour (?:kids|children|childcare|child care)\b/i),
+  },
+  {
+    rule: "asks_health",
+    reason: "Questions about health, disability, medication or medical history cannot be asked before an offer.",
+    alternative: "Ask whether they can do the job's tasks, with or without a reasonable accommodation, such as lifting 25 pounds.",
+    find: first(/\b(?:do|have) you (?:have|had|ever had|suffer from|live with)\s+(?:a\s+|any\s+)?(?:disabilit\w*|medical (?:conditions?|problems?|issues?)|health (?:conditions?|problems?|issues?)|chronic \w+|illness\w*|impairments?|mental health)\b|\bare you (?:disabled|handicapped|healthy|in good health)\b|\byour\s+(?:health(?!\s+(?:and|&)\s+safety)|disabilit\w*|medical (?:history|conditions?)|medications?|mental health|genetic \w+|height|weight)\b|\bdo you take (?:any\s+)?(?:medications?|medicine|prescriptions?)\b|\bhow many (?:sick days|days off sick)\b|\bworkers'? comp(?:ensation)? claims?\b|\bfamily (?:medical|health) history\b|\bhow (?:tall are you|much do you weigh)\b|\bphysical (?:limitations?|restrictions?|impairments?|conditions?)\b/i),
+  },
+  {
+    rule: "asks_record",
+    reason: "Asking about arrests or convictions on an application breaks fair-chance hiring laws in many places.",
+    alternative: "Leave any background check to the end of the process, after an offer, where the law allows it.",
+    find: first(/\bhave you (?:ever )?been (?:arrested|convicted|charged|in (?:jail|prison))\b|\b(?:your|any)\s+(?:criminal (?:record|history|background|convictions?)|arrests?|convictions?|felon(?:y|ies))\b|\bcriminal (?:record|history|background)\b|\bare you a felon\b/i),
+  },
+  {
+    rule: "asks_pay_history",
+    reason: "Asking about pay history is banned in many states.",
+    alternative: "Ask what pay they are looking for instead.",
+    find: first(/\b(?:salary|pay|wage|compensation|earnings)\s+history\b|\b(?:your\s+)?(?:current|previous|prior|last|present)\s+(?:salary|pay|wages?|compensation|hourly rate|rate of pay|earnings)\b|\b(?:how much|what) (?:do|did) you (?:currently )?(?:make|earn|get paid)\b|\bwhat (?:were|was) you(?:r)? (?:paid|pay|salary|wages?|hourly rate)\b|\bhow much (?:were|was) you(?:r)? (?:paid|pay|salary)\b/i),
+  },
+];
+
+/**
+ * A choice offered as an answer that is itself a protected trait ("Male", "Married", "Christian", "Green card holder",
+ * "Mrs", "Mother", "Veteran").
+ */
+const TRAIT_OPTION = /^\s*(?:male|female|man|woman|men|women|non[\s-]?binary|transgender|married|divorced|widowed|christian|muslim|jewish|catholic|hindu|buddhist|sikh|atheist|pregnant|(?:u\.?s\.?\s+|us\s+|american\s+)?citizen|(?:not\s+a\s+)?(?:u\.?s\.?\s+)?citizen|green\s+card(?:\s+holder)?|permanent\s+resident|(?:on\s+a\s+)?work\s+visa|immigrant|mr|mrs|ms|miss|mx|mother|father|mom|mum|dad|parent|single\s+parent|(?:not\s+a\s+)?veteran)\s*\.?\s*$/i;
+/** An answer to choose from that is an age bracket ("Under 30", "30-49", "50 or over"), read with the question it belongs to. */
+const AGE_BRACKET = /^\s*(?:(?:under|over|below|above)\s+\d{2}|\d{2}\s*(?:[-–]|to)\s*\d{2}|\d{2}\s*(?:\+|or (?:over|older|above|more)))\s*\.?\s*$/i;
+/** Words in a question that say its numbers are not ages ("How many patients a day?", "Years of experience?"). */
+const COUNTS_SOMETHING = /\b(?:patients?|people|hours?|minutes?|miles?|days?|weeks?|months?|years? of|clients?|customers?|students?|employees?|staff|team|calls?|appointments?|chairs?|beds?|rooms?|lbs?|pounds|words?|wpm|dollars|\$)/i;
+/** The phrase-list rules that are about a protected characteristic itself: refused in a question, never kept with a reason. */
+const REFUSED_PHRASE_RULES = new Set(["age", "sex", "language_origin", "citizenship", "family_status", "religion", "health_disability"]);
+const TRAIT_OPTION_RULE = { rule: "asks_trait_option", reason: "An answer to choose from names a protected characteristic, so the question asks about it.", alternative: "Ask only about the work the job needs." };
+
+/** The fairness check for one question put to candidates: the protected-question list first, then the phrase list. */
+export function questionCheck(text: string): CriterionCheck | null {
+  for (const r of PROTECTED_QUESTION_RULES) {
+    const hit = r.find(text);
+    if (hit) return { rule: r.rule, text: hit, reason: r.reason, alternative: r.alternative };
+  }
+  return screenCriterion(text);
+}
+
+/**
+ * One reason a company's question cannot be saved: which list ("quick" on the form, "written" in the chat), its place in
+ * that list, which part of it (the question, its help line, an option, or the private "what a good answer shows"), and
+ * the rule with its plain reason and the lawful alternative.
+ */
+export type CompanyQuestionProblem = { list: "quick" | "written"; index: number; key: string | null; part: "question" | "help" | "option" | "lookFor"; rule: string; text: string; reason: string; alternative: string };
+
+type QuestionWords = { key?: string | null; question: string; help?: string | null; options?: readonly string[]; lookFor?: string | null };
+
+/**
+ * The questions every applicant answers (Wave S7), checked before they are saved: any part that asks about a protected
+ * characteristic is refused (never kept with a reason, unlike a flagged phrase). Wording the phrase list flags elsewhere
+ * ("10+ years of experience") is not refused here; the packet guard flags it as everywhere else, and approval waits for
+ * a person to decide. Reads the shape the editor sends as well as the saved one.
+ */
+export function companyQuestionProblems(cq: { quick?: readonly QuestionWords[]; written?: readonly QuestionWords[] } | null | undefined): CompanyQuestionProblem[] {
+  const out: CompanyQuestionProblem[] = [];
+  const check = (list: "quick" | "written", index: number, key: string | null, part: CompanyQuestionProblem["part"], text: string | null | undefined, question = "") => {
+    if (!text?.trim()) return;
+    for (const r of PROTECTED_QUESTION_RULES) {
+      const hit = r.find(text);
+      if (hit) {
+        out.push({ list, index, key, part, rule: r.rule, text: hit, reason: r.reason, alternative: r.alternative });
+        return;
+      }
+    }
+    // the phrase list's protected-characteristic rules ("under 30", "male only", "native English") are refused here too
+    const phrase = screenCriterion(text);
+    if (phrase && REFUSED_PHRASE_RULES.has(phrase.rule)) {
+      out.push({ list, index, key, part, rule: phrase.rule, text: phrase.text, reason: phrase.reason, alternative: phrase.alternative });
+      return;
+    }
+    if (part === "option" && (TRAIT_OPTION.test(text) || (AGE_BRACKET.test(text) && !COUNTS_SOMETHING.test(question)))) out.push({ list, index, key, part, rule: TRAIT_OPTION_RULE.rule, text: text.trim(), reason: TRAIT_OPTION_RULE.reason, alternative: TRAIT_OPTION_RULE.alternative });
+  };
+  for (const [list, items] of [["quick", cq?.quick ?? []], ["written", cq?.written ?? []]] as const) {
+    for (const [i, q] of items.entries()) {
+      const key = q.key ?? null;
+      check(list, i, key, "question", q.question);
+      check(list, i, key, "help", q.help);
+      for (const o of q.options ?? []) check(list, i, key, "option", o, q.question);
+      check(list, i, key, "lookFor", q.lookFor);
+    }
+  }
+  return out;
+}
+
+/** What a person reads when a company question is refused: the question's place, the reason and the lawful alternative. */
+export function companyQuestionProblemWords(p: CompanyQuestionProblem): string {
+  const where = `${p.list === "quick" ? "Quick question" : "Written question"} ${p.index + 1}`;
+  const part = p.part === "option" ? `, the answer "${p.text}"` : p.part === "help" ? ", its help line" : p.part === "lookFor" ? ", what a good answer shows" : "";
+  return `${where}${part}: ${p.reason} ${p.alternative}`;
+}
+
+/** The packet's own questions every applicant answers, whatever kind of packet it is (a draft has none). */
+function companyQuestionsIn(p: DraftRolePacket): CompanyQuestions | null {
+  return (p as DraftRolePacket & { companyQuestions?: CompanyQuestions | null }).companyQuestions ?? null;
+}
+
 /** Lower case, punctuation as spaces, single spaces: "Recent grads!" and "recent  grads" read the same. */
 export function normalizeCriterion(s: string): string {
   return s.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
@@ -160,10 +316,14 @@ export function mentionsPhrase(text: string, requested: string): boolean {
  * place by something that does not move when items before it are taken out or reordered (the item's key, or its own
  * words), so a flag a person kept stays kept.
  */
-function readableText(p: DraftRolePacket): Array<{ path: string; at: string; text: string }> {
-  const out: Array<{ path: string; at: string; text: string }> = [];
+function readableText(p: DraftRolePacket): Array<{ path: string; at: string; text: string; asked?: true }> {
+  const out: Array<{ path: string; at: string; text: string; asked?: true }> = [];
   const add = (path: string, at: string, text: string | undefined) => {
     if (text?.trim()) out.push({ path, at, text });
+  };
+  // The questions every applicant answers (Wave S7) are read for the protected-question list too (`asked`).
+  const ask = (path: string, at: string, text: string | undefined) => {
+    if (text?.trim()) out.push({ path, at, text, asked: true });
   };
   const one = (path: string, text: string | undefined) => add(path, path, text);
   one("identity.title", p.identity.title);
@@ -181,6 +341,16 @@ function readableText(p: DraftRolePacket): Array<{ path: string; at: string; tex
   }
   for (const [i, d] of p.preferences.dealBreakersInTheirWords.entries()) add(`preferences.dealBreakersInTheirWords[${i}]`, `preferences.dealBreakersInTheirWords[${slug(d)}]`, d);
   one("communication.companyBlurb", p.communication.companyBlurb);
+  const cq = companyQuestionsIn(p);
+  for (const [i, q] of (cq?.quick ?? []).entries()) {
+    ask(`companyQuestions.quick[${i}].question`, `companyQuestions.quick[${q.key}].question`, q.question);
+    ask(`companyQuestions.quick[${i}].help`, `companyQuestions.quick[${q.key}].help`, q.help);
+    if (q.kind === "choice") for (const [j, o] of q.options.entries()) ask(`companyQuestions.quick[${i}].options[${j}]`, `companyQuestions.quick[${q.key}].options[${slug(o)}]`, o);
+  }
+  for (const [i, q] of (cq?.written ?? []).entries()) {
+    ask(`companyQuestions.written[${i}].question`, `companyQuestions.written[${q.key}].question`, q.question);
+    ask(`companyQuestions.written[${i}].lookFor`, `companyQuestions.written[${q.key}].lookFor`, q.lookFor);
+  }
   return out;
 }
 
@@ -267,7 +437,7 @@ export function guardPacket<T extends DraftRolePacket>(input: T, ctx: GuardConte
     flags.push({ id, ...f });
   };
   for (const target of readableText(packet)) {
-    for (const r of PROXY_RULES) {
+    for (const r of target.asked ? [...PROTECTED_QUESTION_RULES, ...PROXY_RULES] : PROXY_RULES) {
       const hit = r.find(target.text);
       if (hit) push(target.at, { path: target.path, rule: r.rule, text: hit, reason: r.reason, alternative: r.alternative, ...(declinedRules.has(r.rule) ? { declined: true } : {}) });
     }

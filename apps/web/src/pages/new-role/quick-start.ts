@@ -53,7 +53,7 @@ export const STEP_HINT: Readonly<Record<QuickStepId, string>> = {
   closing: "You can change it later.",
   musts: "Every applicant is checked against these.",
   dealbreakers: "Each one passes a fairness check first.",
-  questions: "Yes/no questions on the form. Ones you add are asked in the screening chat.",
+  questions: "Yes/no questions on the form. Ones you add are asked in the screening chat. Each passes a fairness check first.",
   review: "The assistant writes the job post from these.",
 };
 

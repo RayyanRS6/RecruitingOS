@@ -7,12 +7,12 @@ import { applySteps, applyTimeLine, type ApplyFlowView } from "../services/job-p
 import { Description } from "./description";
 import { Icon } from "./icons";
 import { JobFacts, publicPay } from "./job-facts";
-import { Layout, currentNonce, type ShareTags } from "./layout";
+import { Layout, type ShareTags } from "./layout";
 
 /**
- * The job page and the apply form, shared by the public pages (pages/candidate.tsx) and the authenticated preview
- * (pages/preview.tsx, plan D1): one component each, taking the packet, the company and, for a preview, what to say
- * about it. A preview carries no structured data, no share tags, no form that sends anything and no link to a public
+ * The job page, shared by the public pages (pages/careers-pages.tsx) and the authenticated preview (pages/preview.tsx,
+ * plan D1), taking the packet, the company and, for a preview, what to say about it; the apply form, shared the same way,
+ * is pages/apply-form.tsx (moved there as it was in Wave S7, S7-0). A preview carries no structured data, no share tags, no form that sends anything and no link to a public
  * address that may not exist yet; it is marked "not public yet" and kept out of search results.
  */
 
@@ -58,7 +58,7 @@ export function CompanyLine(props: { company: Pick<JobPageCompany, "name" | "log
 }
 
 /** The address a candidate writes to before applying, with the person's name when the company gave one. */
-function ContactLink(props: { contact: ContactLine }) {
+export function ContactLink(props: { contact: ContactLine }) {
   return <>{props.contact.name ? `${props.contact.name} at ` : ""}<a href={`mailto:${props.contact.email}`}>{props.contact.email}</a></>;
 }
 
@@ -240,267 +240,9 @@ export function JobPage(props: JobPageProps) {
           </div>
         ) : null}
       </div>
-      <p class="foot">{preview ? "On the public page: a link to get an application link again, and how we handle information." : <><a href="/c/link-request">Already applied? Get your application link again</a> · <a href="/privacy">How we handle your information</a></>}</p>
+      {/* Coming back to the job (spec-s7 step 9): the application record is where they see where things stand and the
+          decision once told; the link goes again to the address they applied with, never to this page. */}
+      <p class="foot">{preview ? "On the public page: a link to see an application again, and how we handle information." : <><a href="/c/link-request">Already applied? See your application</a> · <a href="/privacy">How we handle your information</a></>}</p>
     </Layout>
   );
 }
-
-/* ------------------------------------------------------------------------------------------------------------ */
-/* The apply form                                                                                                */
-/* ------------------------------------------------------------------------------------------------------------ */
-
-/**
- * Applying without a resume (plan D10): four short questions instead of one empty box. The answers are kept as they
- * were typed and also written into one `summary`, the key every reader of an application already uses (the triage, the
- * candidate panel, applications that arrive by email), so nothing downstream has to change.
- */
-export const NO_RESUME_QUESTIONS = [
-  { key: "recentWork", label: "Your most recent job or work", hint: "The job title, where it was, and about how long. Unpaid, volunteer and caring work count too.", summary: "Most recent work" },
-  { key: "dayToDay", label: "What you did day to day", hint: "A few lines is plenty.", summary: "Day to day" },
-  { key: "skills", label: "Skills, licenses or tools that fit this job", hint: "For example a license, a certificate, or software you use.", summary: "Skills, licenses or tools" },
-  { key: "lookingFor", label: "What you are looking for in your next job", hint: "The hours, the kind of work, or anything else that matters to you.", summary: "Looking for" },
-] as const;
-export type NoResumeKey = (typeof NO_RESUME_QUESTIONS)[number]["key"];
-export const NO_RESUME_ANSWER_MAX = 1000;
-const NO_RESUME_SUMMARY_MAX = 4000;
-
-/** The guided answers (and the one box of an older form) as stored: each answer, plus the summary everyone reads. */
-export function noResumeAnswersFrom(values: Partial<Record<NoResumeKey | "noResume", string>>): Record<string, string> | undefined {
-  const out: Record<string, string> = {};
-  const lines: string[] = [];
-  for (const q of NO_RESUME_QUESTIONS) {
-    const v = (values[q.key] ?? "").trim().slice(0, NO_RESUME_ANSWER_MAX);
-    if (!v) continue;
-    out[q.key] = v;
-    lines.push(`${q.summary}: ${v}`);
-  }
-  // A form opened before the questions existed sends one box, "noResume"; its words are the summary, as before.
-  const legacy = (values.noResume ?? "").trim();
-  if (legacy) lines.push(lines.length ? `In their words: ${legacy}` : legacy);
-  if (!lines.length) return undefined;
-  return { ...out, summary: lines.join("\n").slice(0, NO_RESUME_SUMMARY_MAX) };
-}
-
-/**
- * What a re-rendered form keeps (D12): every typed value, every eligibility answer, both checkboxes, which fields were
- * missing, and a resume the browser already uploaded directly (its sealed grant goes back into the form, so the file
- * stays attached). A file posted inside the form itself cannot be put back by any browser: `resumeLost` makes the page
- * say so instead of claiming everything is still there.
- */
-export type ApplyFormState = { values: Record<string, string>; answers: Record<string, string | string[]>; acknowledged: boolean; smsConsent: boolean; missing: string[]; resume: { grant: string; filename: string } | null; resumeLost: boolean };
-
-/** The sentence a re-shown form ends its error with: true about what is still on the page. */
-export function keptSentence(resumeLost: boolean): string {
-  return resumeLost ? "Everything you typed is still here, but please attach your resume again." : "Everything you entered is still here.";
-}
-
-/**
- * The notice versions recorded as shown (docs/readiness/20 section D): the notices the page renders as text, plus the
- * SMS consent text only when the checkbox was on the page. Computed by the server on every render and again on the
- * submission, never taken from the browser.
- */
-export function noticeVersionsFor(notices: Notice[], smsEnabled: boolean): string[] {
-  const shown = candidateNotices(notices);
-  const sms = smsEnabled ? notices.find((n) => n.key === "sms_consent") : undefined;
-  return [...shown, ...(sms ? [sms] : [])].map((n) => `${n.key}@${n.version}`);
-}
-
-export type ApplyFormProps = {
-  company: { slug: string; name: string; contact: ContactLine };
-  role: { id: string };
-  packet: DraftRolePacket;
-  /** Every notice for the jurisdictions; the form itself decides what is rendered (candidateNotices) and what is a checkbox. */
-  notices: Notice[];
-  smsEnabled: boolean;
-  privacyEmail: string;
-  /** The sealed "form opened at" value (services/closing-date.ts): a form opened before the closing date may still be sent. */
-  formOpened: string;
-  /** How applicants meet the screening conversation: the lead says how long applying takes (plan E8). */
-  flow: ApplyFlowView;
-  links: { job: string; uploadIntent: string };
-  error?: string;
-  state?: Partial<ApplyFormState>;
-  preview?: PreviewInfo;
-};
-
-/**
- * The transparency block (docs/readiness/20 section D, items 1 to 10) sits above the submit button: who runs the
- * process, what is collected and why, who may see it, how to exercise the candidate's rights, the privacy address, the
- * link to the notice, and the affirmative acknowledgment. Plain words, short sentences, nothing pre-checked.
- *
- * First view (founder brief, 14 October 2026): three short lines and the privacy link; the full notice, every word of it
- * as before (its own privacy link and the notices included), sits under "Read the full notice", above the box that says
- * the full notice was read (its words name the fold). A form sent back without that box ticked opens the notice.
- */
-function TransparencyBlock(props: { company: { name: string }; notices: Notice[]; privacyEmail: string; acknowledged: boolean; missing: boolean; resumeLost: boolean }) {
-  return (
-    <section class="card" aria-labelledby="before-you-send">
-      <h2 id="before-you-send">Before you send</h2>
-      <ul class="steps">
-        <li>People at {props.company.name} make every hiring decision.</li>
-        <li>Software helps organize applications and works out a match score.</li>
-        <li>You can ask for a person at any time.</li>
-      </ul>
-      <p><a href="/privacy">Read how we handle your information</a></p>
-      <details class="more" open={props.missing || undefined}>
-        <summary>Read the full notice</summary>
-        <p><strong>{props.company.name}</strong> runs this hiring process and is the employer. People at {props.company.name} make every hiring decision. Software helps organize and summarize applications, and works out a match score from what you send, checked against the job's requirements; the team sees what the score is based on, and a person always decides.</p>
-        <p><strong>What we collect:</strong> your name, your email, your phone number if you give one, where you are based, your resume or your answers about your work, and your answers to the questions above.</p>
-        <p><strong>Why:</strong> to consider you for this position and to contact you about it. Nothing else.</p>
-        <p><strong>Who can see it:</strong> the hiring team at {props.company.name}; an Identified Talent Solutions recruiter only if {props.company.name} brings one in to help; and the companies that run this service for us: hosting, file storage, email delivery, and the AI service that helps organize applications. Each does only its own job; the privacy page linked below says what each one does.</p>
-        <p><strong>Your choices:</strong> after you apply, we email you a link to your own status page, where you can ask for a copy of your information, correct it, withdraw your application, or delete your information. You can also email <a href={`mailto:${props.privacyEmail}`}>{props.privacyEmail}</a> at any time. A person handles every request.</p>
-        <p><a href="/privacy">Read how we handle your information</a></p>
-        {props.notices.map((n) => <p class="notice">{n.text}</p>)}
-      </details>
-      <label class="check" for="acknowledged">
-        <input id="acknowledged" type="checkbox" name="acknowledged" value="yes" required checked={props.acknowledged} aria-invalid={props.missing ? "true" : undefined} aria-describedby={props.missing ? "acknowledged-error" : undefined} />
-        <span>I have read the full notice above and I understand that people, not software, make the hiring decisions.</span>
-      </label>
-      {props.missing ? <p class="err" id="acknowledged-error">Please tick this box to send your application. {keptSentence(props.resumeLost)}</p> : null}
-    </section>
-  );
-}
-
-/** The fields themselves, shared by the real form and the preview's form that sends nothing. */
-function ApplyFields(props: ApplyFormProps) {
-  const v = props.state?.values ?? {};
-  const answers = props.state?.answers ?? {};
-  const missing = new Set(props.state?.missing ?? []);
-  const shown = candidateNotices(props.notices);
-  const smsNotice = props.smsEnabled ? props.notices.find((n) => n.key === "sms_consent") : undefined;
-  const eligibility = props.packet.requirements.eligibility;
-  const invalid = (field: string) => (missing.has(field) ? "true" : undefined);
-  const chosen = (key: string) => (typeof answers[key] === "string" ? (answers[key] as string) : "");
-  const chosenDays = (key: string) => (Array.isArray(answers[key]) ? (answers[key] as string[]) : []);
-  const kept = props.state?.resume ?? null;
-  // The words of an older one-box form go back into the first question, so nothing typed is lost.
-  const guided = (key: NoResumeKey) => v[`nr_${key}`] || (key === "recentWork" ? v.noResume ?? "" : "");
-  const noResumeOpen = missing.has("noResume") || NO_RESUME_QUESTIONS.some((q) => !!guided(q.key));
-  return (
-    <>
-      <label for="firstName">First name</label>
-      <input id="firstName" type="text" name="firstName" required autocomplete="given-name" value={v.firstName ?? ""} aria-invalid={invalid("firstName")} />
-      <label for="lastName">Last name</label>
-      <input id="lastName" type="text" name="lastName" required autocomplete="family-name" value={v.lastName ?? ""} aria-invalid={invalid("lastName")} />
-      <label for="email">Email</label>
-      <input id="email" type="email" name="email" required autocomplete="email" value={v.email ?? ""} aria-invalid={invalid("email")} />
-      <label for="phone">Mobile phone (optional)</label>
-      <input id="phone" type="tel" name="phone" autocomplete="tel" value={v.phone ?? ""} aria-invalid={invalid("phone")} />
-      {smsNotice ? <label class="check"><input type="checkbox" name="smsConsent" value="yes" checked={!!props.state?.smsConsent} /> <span>{smsNotice.text}</span></label> : null}
-      <label for="locationText">Where are you based? (city, state)</label>
-      <input id="locationText" type="text" name="locationText" value={v.locationText ?? ""} aria-invalid={invalid("locationText")} />
-      <label for="resume">Resume (PDF, Word, or text; up to 8 MB, or up to 4 MB without JavaScript)</label>
-      <input id="resume" type="file" name="resume" accept=".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" />
-      <small id="upload-note" aria-live="polite">{kept ? `Your resume ${kept.filename} is still attached. Choose a file only if you want to replace it.` : props.state?.resumeLost ? "Your resume is not attached any more. Please choose the file again." : ""}</small>
-      {/* Each of the four boxes is named by its own question and described by its hint, and the four are one named group,
-          so a screen reader and voice control find every box by its words (polish list). */}
-      <details class="no-resume" open={noResumeOpen}>
-        <summary>No resume? Answer four short questions instead</summary>
-        <fieldset aria-describedby="no-resume-note">
-          <legend class="sr-only">Four short questions about your work, instead of a resume</legend>
-          <p class="meta" id="no-resume-note">Answer what you can; one answer is enough to apply. Nobody expects a cover letter.</p>
-          {NO_RESUME_QUESTIONS.map((q) => (
-            <div>
-              <label id={`nr_${q.key}-label`} for={`nr_${q.key}`}>{q.label}</label>
-              <textarea id={`nr_${q.key}`} name={`nr_${q.key}`} rows={3} maxlength={NO_RESUME_ANSWER_MAX} aria-labelledby={`nr_${q.key}-label`} aria-describedby={`nr_${q.key}-hint`} aria-invalid={q.key === "recentWork" ? invalid("noResume") : undefined}>{guided(q.key)}</textarea>
-              <small id={`nr_${q.key}-hint`}>{q.hint}</small>
-            </div>
-          ))}
-        </fieldset>
-      </details>
-      {eligibility.length ? <h2>A few quick questions</h2> : null}
-      {/* A yes-or-no question is a labelled select; the days of a schedule question are one group named by the question. */}
-      {eligibility.map((rule) =>
-        rule.type === "schedule_availability" && Array.isArray((rule.expectation as { days?: string[] }).days) && ((rule.expectation as { days?: string[] }).days ?? []).length > 0 ? (
-          <fieldset class="card" aria-describedby={`elig_${rule.key}-why`}>
-            <legend class="question-legend">{rule.question}</legend>
-            <div>
-              {(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const).map((d) => (
-                <label class="check"><input type="checkbox" name={`elig_${rule.key}`} value={d} checked={chosenDays(rule.key).includes(d)} /> {d}</label>
-              ))}
-            </div>
-            <small id={`elig_${rule.key}-why`}>{rule.rationale}</small>
-          </fieldset>
-        ) : (
-          <div class="card">
-            <label for={`elig_${rule.key}`}>{rule.question}</label>
-            <select id={`elig_${rule.key}`} name={`elig_${rule.key}`} required aria-describedby={`elig_${rule.key}-why`}>
-              <option value="" selected={chosen(rule.key) === ""}>Choose…</option>
-              <option value="yes" selected={chosen(rule.key) === "yes"}>Yes</option>
-              <option value="no" selected={chosen(rule.key) === "no"}>No</option>
-            </select>
-            <small id={`elig_${rule.key}-why`}>{rule.rationale}</small>
-          </div>
-        ),
-      )}
-      <TransparencyBlock company={props.company} notices={shown} privacyEmail={props.privacyEmail} acknowledged={!!props.state?.acknowledged} missing={missing.has("acknowledged")} resumeLost={!!props.state?.resumeLost} />
-    </>
-  );
-}
-
-/** The apply form: the job's facts on top, the pre-apply help line, the fields, and (outside a preview) the upload script. */
-export function ApplyFormPage(props: ApplyFormProps) {
-  const { preview } = props;
-  return (
-    <Layout title={`${preview ? "Preview: apply" : "Apply"}: ${props.packet.identity.title} at ${props.company.name}`} noindex={!!preview}>
-      {preview ? <PreviewNote preview={preview} /> : null}
-      <p class="back"><a href={props.links.job}><Icon name="arrow-left" />Back to the job</a></p>
-      {/* The facts of the job stay in view while applying (Wave 0 item 0.8), pay included wherever the page must show it. */}
-      <p class="eyebrow">{props.company.name}</p>
-      <h1>Apply: {props.packet.identity.title}</h1>
-      <JobFacts packet={props.packet} pay={publicPay(props.packet, props.notices)} />
-      {/* One line on how long it takes (plan E8); the resume field and "No resume?" right below say what to send. */}
-      <p class="lead">{`${applyTimeLine(props.packet, { companyName: props.company.name, flow: props.flow })} ${props.flow === "one_visit" ? "First, this form; no" : "No"} cover letter needed.`}</p>
-      <HelpLine contact={props.company.contact} class="notice" />
-      {props.error ? <div class="err" role="alert">{props.error}</div> : null}
-      {preview ? (
-        <div class="form-preview">
-          <fieldset disabled>
-            <legend class="sr-only">The form as candidates see it; it sends nothing here</legend>
-            <ApplyFields {...props} />
-            <button class="btn" type="button" disabled>Send my application</button>
-            {props.flow === "one_visit" ? <p class="meta">Next comes the short written conversation with {props.company.name}'s AI assistant. You can start it straight away, do it later, or ask for a person instead.</p> : null}
-          </fieldset>
-        </div>
-      ) : (
-        <form method="post" enctype="multipart/form-data" data-upload-intent={props.links.uploadIntent}>
-          <input type="text" name="website" tabindex={-1} autocomplete="off" style="position:absolute;left:-10000px" aria-label="Leave this field empty" />
-          <input type="hidden" name="uploadGrant" value={props.state?.resume?.grant ?? ""} />
-          <input type="hidden" name="formOpened" value={props.formOpened} />
-          <ApplyFields {...props} />
-          <input type="hidden" name="noticeVersionsShown" value={noticeVersionsFor(props.notices, props.smsEnabled).join(",")} />
-          <button class="btn" type="submit">Send my application</button>
-          {props.flow === "one_visit" ? <p class="meta">Next comes the short written conversation with {props.company.name}'s AI assistant. You can start it straight away, do it later, or ask for a person instead.</p> : null}
-        </form>
-      )}
-      {preview ? null : <script nonce={currentNonce()} dangerouslySetInnerHTML={{ __html: APPLY_UPLOAD_JS }} />}
-    </Layout>
-  );
-}
-
-/**
- * Direct-to-storage upload (founder decision 2): with script, the résumé goes from the browser straight to storage
- * under a short-lived, single-object authorization and the form carries only a sealed grant; without script, or if
- * the upload fails, the form posts the file itself as before. Plain ES5, no inline handlers (the policy forbids them),
- * no third-party code, nothing about the person leaves the page except the file's name, size and type (and the form's
- * own sealed "opened at" value, so a form opened before a closing date can still upload).
- */
-export const APPLY_UPLOAD_JS = `(function(){
-var form=document.querySelector('form[data-upload-intent]');if(!form||!window.fetch||!window.FormData){return;}
-var input=form.querySelector('input[type=file][name=resume]');var grant=form.querySelector('input[name=uploadGrant]');var opened=form.querySelector('input[name=formOpened]');var note=document.getElementById('upload-note');var submit=form.querySelector('button[type=submit]');
-if(!input||!grant){return;}
-var busy=false;
-function say(t){if(note){note.textContent=t;}}
-input.addEventListener('change',function(){if(input.files&&input.files.length&&grant.value){grant.value='';say('');}});
-function fallback(file){form.removeAttribute('data-upload-intent');if(file.size>4*1024*1024){say('The direct upload did not work. Files over 4 MB can only be sent by the direct upload: please try again in a moment, or choose a smaller file.');busy=false;if(submit){submit.disabled=false;}return;}form.submit();}
-form.addEventListener('submit',function(ev){
-if(busy){ev.preventDefault();return;}
-var file=input.files&&input.files[0];if(!file||grant.value){return;}
-ev.preventDefault();busy=true;if(submit){submit.disabled=true;}say('Uploading your resume…');
-fetch(form.getAttribute('data-upload-intent'),{method:'POST',headers:{'content-type':'application/json'},credentials:'same-origin',body:JSON.stringify({filename:file.name,size:file.size,type:file.type,formOpened:opened?opened.value:''})})
-.then(function(r){return r.json().then(function(j){if(!r.ok){throw new Error((j&&j.error&&j.error.message)||'The upload was refused.');}return j;});})
-.then(function(j){return fetch(j.url,{method:j.method,headers:j.headers,body:file}).then(function(r){if(!r.ok){throw new Error('The upload did not complete.');}grant.value=j.grant;});})
-.then(function(){input.value='';say('Resume uploaded.');busy=false;if(submit){submit.disabled=false;}form.submit();})
-.catch(function(e){say((e&&e.message)||'The upload did not work.');fallback(file);});
-});
-})();`;

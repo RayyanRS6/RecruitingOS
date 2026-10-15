@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { RolePacket, TapAnswer } from "@ros/contracts";
-import { MOVED_ON_MESSAGE, REVIEW_MESSAGE, TURN_CAP_REVIEW_MESSAGE, answerWithdrawPrompt, conversationOverdue, detectStuckRoles, modelTurnCap } from "@ros/agents";
-import { entitlements as allowance, grantStaffAccess } from "@ros/core";
+import { CHAT_CAP_CLOSING, CHAT_WRAP_QUESTION, MOVED_ON_MESSAGE, REVIEW_MESSAGE, TURN_CAP_REVIEW_MESSAGE, answerWithdrawPrompt, chatClosingMessage, chatNextLine, conversationOverdue, detectStuckRoles, modelTurnCap } from "@ros/agents";
+import { CHAT_WRAP_KEY, entitlements as allowance, chatCounter, grantStaffAccess } from "@ros/core";
 import { adminAlerts, aiRuns, applications, assessments, candidates, companies, entitlements, events, notifications, recruiterEscalations, rolePackets, roles, screens, usageEvents, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
@@ -154,8 +154,15 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect(await conversationStart(container, mariaRef)).toBe(true); // a second press changes nothing
     view = (await conversationView(container.db, mariaRef))!;
     expect(view.phase).toBe("conversation");
-    expect(view.transcript).toEqual([{ role: "assistant", content: questions[0].question, questionKey: questions[0].key }]);
+    // Wave S7: the chat offered with the application opens personal, in code: her first name, then the first question
+    // word for word (the visit passed no CV here, so none is named and there are no gaps: it starts at the required
+    // questions, the job's own screening questions under their own keys)
+    expect(view.transcript).toEqual([{ role: "assistant", content: `Hi Maria. Thanks for applying.\n\n${questions[0].question}`, questionKey: questions[0].key }]);
     expect(view.current?.key).toBe(questions[0].key);
+    expect(view.written.map((q) => q.key)).toEqual(questions.map((q) => q.key));
+    expect(view.counter).toEqual({ done: 0, required: questions.length, section: "required", label: `0 of ${questions.length} required · Required questions` });
+    const plan = (await screenOf(mariaId)).progress.chat!;
+    expect(plan.items.map((i) => [i.key, i.kind, i.state])).toEqual(questions.map((q, i) => [q.key, "written", i === 0 ? "asking" : "open"]));
     expect(await turnsFor()).toBe(before);
     expect((await screenOf(mariaId)).status).toBe("in_progress");
     expect((await reload(mariaId)).stage).toBe("screening");
@@ -187,20 +194,28 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect(scr.progress.declined).toEqual([behavioral.key]);
     expect(scr.transcript.find((t) => t.source === "skip")).toMatchObject({ role: "system", questionKey: behavioral.key });
     expect(scr.answers[pay.key]).toBe("I'm looking for $50 to $54 an hour.");
-    expect(scr.transcript.some((t) => t.role === "assistant" && t.content.startsWith("No problem. Next: "))).toBe(true);
-    // only the typed answers went to the model, and the allowance did not count again
+    // the chat's own shape: one line, a blank line, the next question
+    expect(scr.transcript.some((t) => t.role === "assistant" && t.content.startsWith("No problem, we can leave that one.\n\n"))).toBe(true);
+    expect(scr.transcript.some((t) => t.role === "assistant" && t.content.startsWith("Noted: Yes.\n\n"))).toBe(true);
+    // only the typed answers went to the model (and the answer to the closing question), and the allowance did not count again
     const typed = questions.filter((q) => q.kind !== "behavioral" && q.kind !== "compensation" && q.kind !== "eligibility").length;
-    expect(await turnsFor()).toBe(before + typed);
+    expect(await turnsFor()).toBe(before + typed + 1);
     const [ent2] = await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, "text_screens")));
     expect(ent2.used).toBe(ent0.used + 1);
-    // every question asked in the packet's own words
+    // every question asked in the packet's own words, then the closing question
     for (const q of questions.filter((x) => x.key !== behavioral.key)) expect(scr.transcript.some((t) => t.role === "assistant" && t.content.includes(q.question))).toBe(true);
+    expect(scr.transcript.some((t) => t.role === "assistant" && t.content.includes(CHAT_WRAP_QUESTION))).toBe(true);
+    // the plan settled every item: the skipped one as skipped; the counter is full and the chat is wrapped up
+    expect(scr.progress.chat?.items.find((i) => i.key === behavioral.key)?.state).toBe("skipped");
+    expect(chatCounter(scr.progress.chat)?.label).toBe(`${questions.length} of ${questions.length} required · Wrapping up`);
   });
 
   it("E10: the candidate checks their answers, changes one, answers the skipped one, and sends; only then does the team hear", async () => {
     let view = (await conversationView(container.db, mariaRef))!;
     expect(view.phase).toBe("review");
-    expect(view.transcript.at(-1)?.content).toBe(REVIEW_MESSAGE);
+    // the chat's close: one concrete thing she said, in her own words, then what happens next (never a time)
+    expect(view.transcript.at(-1)?.content).toMatch(new RegExp(`^Thank you, Maria\\. You told me "[^"]+"\\.\\n\\n${chatNextLine("One Visit Dental").replace(/[.]/g, "\\.")}$`));
+    expect(view.transcript.at(-1)?.content).not.toBe(REVIEW_MESSAGE);
     expect((await screenOf(mariaId)).status).toBe("in_progress");
     const behavioral = questions.find((q) => q.kind === "behavioral")!;
     const last = questions.at(-1)!;
@@ -304,9 +319,12 @@ describe("Wave E: applying and the conversation in one visit", () => {
     const { outcome, applicationId } = await applyNow({ first: "Cora", last: "Lane", email: "cora@onevisit.test" });
     const ref = await refOf(outcome);
     await conversationStart(container, ref);
-    // the ask and two follow-ups for each question, and five more for the candidate's own questions
-    const cap = modelTurnCap({ screening: { questions } } as unknown as Pick<RolePacket, "screening">);
-    expect(cap).toBe(3 * questions.length + 5);
+    // the ask and two follow-ups for each question, and five more for the candidate's own questions; a Kanvis-style chat
+    // (Wave S7) allows the ask, one push, the analog and the smaller version, and counts its closing question
+    expect(modelTurnCap({ screening: { questions } } as unknown as Pick<RolePacket, "screening">)).toBe(3 * questions.length + 5);
+    const scr0 = await screenOf(applicationId);
+    const cap = modelTurnCap({ screening: { questions: [...questions, { key: CHAT_WRAP_KEY }] } } as unknown as Pick<RolePacket, "screening">, scr0.progress);
+    expect(cap).toBe(4 * (questions.length + 1) + 5);
     const chat = { messageToCandidate: "The hiring team can tell you more about that.", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: "company", sentiment: "fine", done: false, humanRequested: false };
     for (let i = 0; i < cap + 2; i++) container.fake!.scriptNext("screen.turn", chat);
     const before = await turnsFor();
@@ -314,7 +332,8 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect(await turnsFor()).toBe(before + cap);
     const view = (await conversationView(container.db, ref))!;
     expect(view.phase).toBe("review");
-    expect(view.transcript.some((t) => t.role === "assistant" && t.content === TURN_CAP_REVIEW_MESSAGE)).toBe(true);
+    expect(view.transcript.some((t) => t.role === "assistant" && t.content === chatClosingMessage(CHAT_CAP_CLOSING, "One Visit Dental"))).toBe(true);
+    expect(view.transcript.some((t) => t.content === TURN_CAP_REVIEW_MESSAGE)).toBe(false);
     expect(view.review!.every((i) => i.status === "unanswered")).toBe(true);
     // checking the answers calls nothing: she can still answer what is open and press Send
     expect(await conversationTurn(container, ref, { message: "One more question" })).toMatchObject({ kind: "reply", review: true });
@@ -563,7 +582,7 @@ describe("Wave E: applying and the conversation in one visit", () => {
     const page = await (await app.request(`/c/screen/${ref.token}`)).text();
     expect(page).toContain('<button class="link-action" type="submit" name="action" value="skip" formnovalidate="">Keep my answer and move on</button>');
     expect(page).not.toContain(">Skip this question</button>");
-    expect(await conversationTurn(container, ref, { skip: true })).toMatchObject({ kind: "reply", message: expect.stringMatching(/^No problem\. Next: /) });
+    expect(await conversationTurn(container, ref, { skip: true })).toMatchObject({ kind: "reply", message: expect.stringMatching(/^No problem, your answer is kept\.\n\n/) });
     expect(await (await app.request(`/c/screen/${ref.token}`)).text()).toContain("You moved on. Your answer is kept.");
     const scr = await screenOf(applicationId);
     expect(scr.answers[key]).toBe("Cleanings and charting");

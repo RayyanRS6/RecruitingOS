@@ -77,63 +77,56 @@ describe("screening rules: the follow-up cap and the web hand-off to a person", 
   });
   afterAll(async () => { await container.close(); });
 
-  it("a question gets two follow-ups at most: the third becomes the next question, and the transcript shows all of it", async () => {
+  it("Wave S7, the chat's follow-ups: a yes-or-no question takes its answer; an open one gets one push for specifics, then the chat moves on; the transcript shows all of it", async () => {
     const { application, token, screenId } = await apply({ first: "Maria", last: "Reyes", email: "maria.reyes@rules.test" });
     const opened = await screenOf(application.id);
     expect(opened.progress.currentQuestionKey).toBe(questions[0].key);
-    // The model keeps asking for more, three times running. The fake's own screen handler asks one follow-up at most, so the turns are scripted; each still has to satisfy the ScreenTurn schema.
-    for (let i = 0; i < 3; i++) {
+    expect(opened.progress.chat?.section).toBe("required");
+    // The model keeps asking for more every time. The fake's own screen handler would not, so the turns are scripted; each still has to satisfy the ScreenTurn schema.
+    const say = async (message: string) => {
       container.fake!.scriptNext("screen.turn", followUp);
-      const r = await form(`/c/screen/${token}`, { message: i === 2 ? "Yes." : "Yes" });
+      const r = await form(`/c/screen/${token}`, { message });
       expect(r.status).toBe(302);
       expect(r.headers.get("location")).toBe(`/c/screen/${token}`);
-      const scr = await screenOf(application.id);
-      expect(scr.status).toBe("in_progress");
-      if (i < 2) {
-        expect(scr.progress.followUps[questions[0].key]).toBe(i + 1);
-        expect(scr.progress.currentQuestionKey).toBe(questions[0].key);
-        expect(scr.transcript.at(-1)).toMatchObject({ role: "assistant", content: followUp.messageToCandidate });
-      }
-      if (i === 0) {
-        // the page: still the first question, in large type, with the candidate's own words and the follow-up beneath it; the answer box names the follow-up
-        const page = decodeEntities(await (await app.request(`/c/screen/${token}`)).text());
-        expect(page).toContain(`<h1 class="question" id="question">${questions[0].question}</h1>`);
-        expect(page).toContain(`Question 1 of ${questions.length}`);
-        expect(page).toContain('<li class="msg candidate"><span class="sr-only">You said: </span>Yes</li>');
-        expect(page).toContain(`<li class="msg assistant"><span class="sr-only">The assistant said: </span>${followUp.messageToCandidate}</li>`);
-        expect(page).toContain(`Your answer<span class="sr-only"> to: ${followUp.messageToCandidate}</span>`);
-      }
-    }
-    const scr = await screenOf(application.id);
-    const assistant = scr.transcript.filter((t) => t.role === "assistant");
-    expect(assistant).toHaveLength(4); // the first question, two follow-ups, then the next question
-    expect(assistant[1].content).toBe(followUp.messageToCandidate);
-    expect(assistant[2].content).toBe(followUp.messageToCandidate);
-    expect(assistant[1].questionKey).toBeUndefined();
-    expect(assistant[2].questionKey).toBeUndefined();
-    expect(assistant[3].content).toBe(`Thanks, that helps. Next: ${questions[1].question}`);
-    expect(assistant[3].questionKey).toBe(questions[1].key);
-    expect(scr.transcript.filter((t) => t.role === "candidate").map((t) => t.content)).toEqual(["Yes", "Yes", "Yes."]);
-    expect(scr.progress.followUps[questions[0].key]).toBe(2);
+      return screenOf(application.id);
+    };
+    // the licence question is a yes-or-no one: "Yes" is its answer, and the chat moves on without asking for more
+    let scr = await say("Yes");
+    expect(scr.answers[questions[0].key]).toBe("Yes");
     expect(scr.progress.currentQuestionKey).toBe(questions[1].key);
-    expect(scr.progress.askedKeys).toEqual([questions[0].key, questions[1].key]);
-    // nothing was invented as an answer to the first question
-    expect(scr.answers[questions[0].key]).toBeUndefined();
+    expect(scr.transcript.at(-1)).toMatchObject({ role: "assistant", content: questions[1].question, questionKey: questions[1].key });
+    // the open question: one push for specifics, in one question (the model's second sentence is left out)
+    scr = await say("Yes");
+    expect(scr.progress.currentQuestionKey).toBe(questions[1].key);
+    expect(scr.transcript.at(-1)).toMatchObject({ role: "assistant", content: "Could you say a bit more about that?" });
+    expect(scr.progress.chat?.items.find((i) => i.key === questions[1].key)).toMatchObject({ state: "asking", pushes: 1 });
+    // the page: the chat as a thread, the push the one to answer now, the reply box named after it, the counter in the header
+    const page = decodeEntities(await (await app.request(`/c/screen/${token}`)).text());
+    expect(page).toContain('<li class="msg candidate"><span class="sr-only">You said: </span>Yes</li>');
+    expect(page).toContain('<li class="msg assistant now" id="question"><span class="sr-only">The assistant said: </span>Could you say a bit more about that?</li>');
+    expect(page).toContain("Your reply<span class=\"sr-only\"> to: Could you say a bit more about that?</span>");
+    expect(page).toContain(`<p class="journey-count">1 of ${questions.length} required · Required questions</p>`);
+    // a second push is not asked: the chat moves on, with the candidate's own words as the answer
+    scr = await say("Yes.");
+    expect(scr.progress.currentQuestionKey).toBe(questions[2].key);
+    const assistant = scr.transcript.filter((t) => t.role === "assistant");
+    expect(assistant).toHaveLength(4); // the opening, the next question, one push, then the question after
+    expect(assistant[3]).toMatchObject({ content: questions[2].question, questionKey: questions[2].key });
+    expect(scr.transcript.filter((t) => t.role === "candidate").map((t) => t.content)).toEqual(["Yes", "Yes", "Yes."]);
+    expect(scr.answers[questions[1].key]).toBe("Yes Yes.");
+    expect(scr.progress.askedKeys).toEqual([questions[0].key, questions[1].key, questions[2].key]);
     // every turn went through the model runner and was recorded
     expect((await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.turn"))).filter((r) => (r.inputRef as { screenId?: string }).screenId === screenId)).toHaveLength(3);
-    // the page shows the conversation as recorded: the second question in large type, the first folded away above it
+    // the page counts both as done
     const html = decodeEntities(await (await app.request(`/c/screen/${token}`)).text());
-    expect(html).toContain('<p class="lead-in"><span class="sr-only">The assistant said: </span>Thanks, that helps.</p>');
-    expect(html).toContain(`<h1 class="question" id="question">${questions[1].question}</h1>`);
-    expect(html).toContain(`Question 2 of ${questions.length}`);
-    expect(html).toContain('<details class="earlier"><summary>Earlier in the conversation</summary>');
-    expect(html.slice(html.indexOf('<details class="earlier">'), html.indexOf("</details>"))).toContain(questions[0].question);
-    // a fourth turn answers the second question normally: the follow-up count of the first question is not carried over
-    const r = await form(`/c/screen/${token}`, { message: "At Smile Bright I see eight to ten patients a day, do full perio charting and radiographs, and chart everything in Dentrix." });
+    expect(html).toContain(`<p class="journey-count">2 of ${questions.length} required · Required questions</p>`);
+    expect(html).toContain(`<li class="msg assistant now" id="question"><span class="sr-only">The assistant said: </span>${questions[2].question}</li>`);
+    // the next answer is read afresh: the push count of the last question is not carried over
+    const r = await form(`/c/screen/${token}`, { message: "A nervous patient wanted to stop, so I slowed down and explained each step; she rebooked with me." });
     expect(r.status).toBe(302);
     const later = await screenOf(application.id);
-    expect(later.answers[questions[1].key]).toMatch(/Smile Bright/);
-    expect(later.progress.followUps[questions[1].key] ?? 0).toBe(0);
+    expect(later.answers[questions[2].key]).toMatch(/nervous patient/);
+    expect(later.progress.chat?.items.find((i) => i.key === questions[2].key)?.pushes).toBe(0);
   });
 
   it("'I'd rather talk to a person' offers two equal choices; 'Have a person contact me' opens a request for a person with the conversation, tells the candidate when to expect an answer, is idempotent, and is rate-limited per link", async () => {

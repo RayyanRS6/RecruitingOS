@@ -35,6 +35,10 @@ export const TASK_TIER: Record<TaskKey, Tier> = {
   "triage.assess": "standard",
   "screen.turn": "standard",
   "screen.assess": "standard",
+  // Wave S7: one answer per written question, in the candidate's own words, from a chat they are about to send; its
+  // quotes are checked in code against the transcript (the prompt is packages/ai/src/prompts/writeup.ts, the checks
+  // `settleWriteup` in packages/agents). Haiku 5.5 at its default effort: a short, checked rewrite the candidate edits.
+  "screen.writeup": "standard",
   "brief.compose": "standard",
   "owner.reply": "standard",
   "interview.brief": "standard",

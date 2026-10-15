@@ -44,6 +44,9 @@
   "triage.kept_in": {
     "minPassRate": 1
   },
+  "triage.fairness_rules": {
+    "minPassRate": 1
+  },
   "screen.redaction": {
     "minPassRate": 1
   },
@@ -69,6 +72,30 @@
     "minPassRate": 1
   },
   "message.suggest_line": {
+    "minPassRate": 1
+  },
+  "chat.shape": {
+    "minPassRate": 1
+  },
+  "chat.ladder": {
+    "minPassRate": 1
+  },
+  "chat.no_inference": {
+    "minPassRate": 1
+  },
+  "chat.no_reask": {
+    "minPassRate": 1
+  },
+  "chat.private_note": {
+    "minPassRate": 1
+  },
+  "chat.fairness": {
+    "minPassRate": 1
+  },
+  "chat.close": {
+    "minPassRate": 1
+  },
+  "screen.writeup": {
     "minPassRate": 1
   },
   "_note": "Thresholds gate prompt promotion (docs/11). The fake provider validates the harness; real thresholds are measured with AI_PROVIDER=anthropic."

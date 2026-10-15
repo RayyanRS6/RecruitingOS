@@ -5,6 +5,8 @@ export * from "./coordinator";
 export * from "./triage";
 export * from "./screening";
 export * from "./screen-focus";
+export * from "./screen-writeup";
+export { fakeScreenWriteup } from "./fake-writeup";
 export * from "./orchestrator";
 export * from "./documents";
 export * from "./fake-handlers";
