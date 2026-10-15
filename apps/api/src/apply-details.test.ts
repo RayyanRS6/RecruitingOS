@@ -151,7 +151,7 @@ describe("the apply form: résumé first, check your details, questions from the
     for (const [k, v] of Object.entries({ ...base, ...extra })) if (v !== null) fd.set(k, v);
     return fd;
   };
-  const valueOf = (html: string, name: string) => html.match(new RegExp(`name="${name}"[^>]*value="([^"]*)"`))?.[1] ?? html.match(new RegExp(`value="([^"]*)"[^>]*name="${name}"`))?.[1] ?? null;
+  const inputValue = (html: string, name: string) => html.match(new RegExp(`name="${name}"[^>]*value="([^"]*)"`))?.[1] ?? html.match(new RegExp(`value="([^"]*)"[^>]*name="${name}"`))?.[1] ?? null;
   const textareaOf = (html: string, name: string) => html.match(new RegExp(`<textarea[^>]*name="${name}"[^>]*>([^<]*)</textarea>`))?.[1] ?? null;
   const grantOf = (html: string) => html.match(/name="uploadGrant" value="([^"]*)"/)?.[1] ?? "";
 
@@ -232,9 +232,9 @@ describe("the apply form: résumé first, check your details, questions from the
     expect(html).toContain("We read dana-resume.txt and filled in your details below. It stays attached to your application.");
     expect(html).toContain('<h2 id="details-title">Check your details</h2>');
     // the empty fields are filled and marked; what the candidate typed stays as typed, unmarked
-    expect(valueOf(html, "firstName")).toBe("Dana");
-    expect(valueOf(html, "lastName")).toBe("Kept-Lopez");
-    expect(valueOf(html, "email")).toBe("dana.kept@example.com");
+    expect(inputValue(html, "firstName")).toBe("Dana");
+    expect(inputValue(html, "lastName")).toBe("Kept-Lopez");
+    expect(inputValue(html, "email")).toBe("dana.kept@example.com");
     expect(html).toContain(`<label for="firstName">First name</label><p class="tag" id="firstName-tag">${FROM_RESUME_TAG}</p><input id="firstName"`);
     expect(html).toContain('aria-describedby="firstName-tag"');
     expect(html).not.toContain('id="lastName-tag"');
@@ -268,7 +268,7 @@ describe("the apply form: résumé first, check your details, questions from the
     const grant = grantOf(read);
     const opened = container.uploadGrants.open(grant)!;
     const reading = (await readingFor(container.integrations.storage, opened))!;
-    const fd = fields({ firstName: "Lee", lastName: "Reuse", email: "lee.reuse@example.com", phone: "(949) 555-0199", locationText: "", workSummary: textareaOf(read, "workSummary")!, uploadGrant: grant, formOpened: valueOf(read, "formOpened")!, acknowledged: "yes", q_cq_software: "Dentrix", q_cq_years: "7" });
+    const fd = fields({ firstName: "Lee", lastName: "Reuse", email: "lee.reuse@example.com", phone: "(949) 555-0199", locationText: "", workSummary: textareaOf(read, "workSummary")!, uploadGrant: grant, formOpened: inputValue(read, "formOpened")!, acknowledged: "yes", q_cq_software: "Dentrix", q_cq_years: "7" });
     for (const e of eligibility) {
       if (e.days) { fd.append(`elig_${e.key}`, "Mon"); fd.append(`elig_${e.key}`, "Tue"); } else fd.set(`elig_${e.key}`, "yes");
     }
@@ -344,7 +344,7 @@ describe("the apply form: résumé first, check your details, questions from the
     expect(skipped).not.toContain(FROM_RESUME_TAG);
     // the browser's own path: the grant goes to Read my resume (no file in the form); the reading fills in the rest
     const read = decode(await (await post("/apply/read", fields({ uploadGrant: j.grant, lastName: "" }))).text());
-    expect(valueOf(read, "firstName")).toBe("Max");
+    expect(inputValue(read, "firstName")).toBe("Max");
     expect(read).toContain("We read max.txt and filled in your details below.");
     expect(await (await status(j.grant)).json()).toEqual({ state: "done" });
     // the grant the form carries from here lasts longer, for the same file
@@ -361,7 +361,7 @@ describe("the apply form: résumé first, check your details, questions from the
     expect(nothing.status).toBe(400);
     const a = decode(await nothing.text());
     expect(a).toContain("Please check the highlighted fields");
-    expect(valueOf(a, "firstName")).toBe("Nia");
+    expect(inputValue(a, "firstName")).toBe("Nia");
     const typed = fields({ firstName: "Nia", lastName: "Enter", email: "nia.enter@example.com", nr_recentWork: "Hygienist for six years.", acknowledged: "yes", q_cq_software: "Dentrix" });
     for (const e of eligibility) {
       if (e.days) { typed.append(`elig_${e.key}`, "Mon"); } else typed.set(`elig_${e.key}`, "yes");
@@ -414,7 +414,7 @@ describe("the apply form: résumé first, check your details, questions from the
     await container.db.update(rolePackets).set({ packet: { ...pv.packet, requirements: { ...pv.packet.requirements, mustHaves: [...pv.packet.requirements.mustHaves, nitrous] } } }).where(eq(rolePackets.id, pv.id));
     try {
       const read = decode(await (await post("/apply/read", fields({ resume: new File([RESUME.replace("Dana Kept", "Gia Gap").replace("dana.kept", "gia.gap")], "gia.txt", { type: "text/plain" }) }))).text());
-      const fd = fields({ firstName: "Gia", lastName: "Gap", email: "gia.gap@example.com", workSummary: textareaOf(read, "workSummary")!, uploadGrant: grantOf(read), formOpened: valueOf(read, "formOpened")!, acknowledged: "yes", q_cq_software: "Dentrix" });
+      const fd = fields({ firstName: "Gia", lastName: "Gap", email: "gia.gap@example.com", workSummary: textareaOf(read, "workSummary")!, uploadGrant: grantOf(read), formOpened: inputValue(read, "formOpened")!, acknowledged: "yes", q_cq_software: "Dentrix" });
       for (const e of eligibility) {
         if (e.days) { fd.append(`elig_${e.key}`, "Mon"); fd.append(`elig_${e.key}`, "Tue"); } else fd.set(`elig_${e.key}`, "yes");
       }

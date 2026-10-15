@@ -308,7 +308,7 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
     expect(emailOutbox().filter((m) => m.to === "uma@example.com" && /screening conversation/.test(m.subject))).toHaveLength(0);
     const [stored] = await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id));
     expect(stored).toMatchObject({ overall: "weak" });
-    expect((stored?.result as { recommendation?: string }).recommendation).toBe("hold");
+    expect((stored?.result as { recommendation?: string } | undefined)?.recommendation).toBe("hold");
     const note = (await notes()).find((n) => n.kind === "application.needs_review" && /Uma Patel/.test(n.title))!;
     expect(note.title).toBe("Uma Patel needs your review");
     expect(note.body).toContain("Relevant hygiene work; no licence.");

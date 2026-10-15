@@ -26,7 +26,7 @@ const progress = (extra: Partial<ScreenProgress> = {}): ScreenProgress => ({ ask
 const packetOf = (questions: Array<{ key: string; kind: string; question: string }>, written: Array<{ key: string; question: string }> = []) =>
   ({ screening: { questions }, companyQuestions: written.length ? { quick: [], written: written.map((w) => ({ ...w, required: true })) } : undefined }) as unknown as RolePacket;
 let ids = 0;
-const learn = (chat: SentChat, packet: RolePacket) => factsFromSentChat({ chat, packet, applicationId: "app-1", roleTitle: "Robotics Trainer", at, newId: () => `lf_test_${(ids += 1)}` });
+const learn = (chat: SentChat, packet: RolePacket) => factsFromSentChat({ chat, packet, applicationId: "app-1", roleTitle: "Robotics Trainer", at, newId: () => { ids += 1; return `lf_test_${ids}`; } });
 
 describe("what a sent chat teaches the record (in code, never by a model)", () => {
   const packet = packetOf(

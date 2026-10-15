@@ -11,7 +11,7 @@ import { UPLOAD_GRANT_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS, checkUploadIntent, qu
 import { clientIp, type Vars } from "../middleware/session";
 import type { Container } from "../container";
 import { POLICIES, checkRateLimits, rateLimit, type Policy } from "../middleware/rate-limit";
-import { createApplication, markUploadUsed, uploadAlreadyUsed, type ResumeInput } from "../services/applications";
+import { createApplication, markUploadUsed, uploadAlreadyUsed, type ResumeInput as ResumeUpload } from "../services/applications";
 import { READ_GRANT_TTL_SECONDS, READ_WAIT_MS, readingFor, startResumeReading, suggestQuickAnswer, waitForReading, type ResumeReading } from "../services/apply-details";
 import { startApplyConversation } from "../services/apply-conversation";
 import { lateApplicationAllowed, sealFormOpened } from "../services/closing-date";
@@ -1053,7 +1053,7 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
   // A quick answer the question does not take (a number outside its limits): the form comes back with it marked.
   if (posted.quickProblems.length) return again(`${quickProblemLine(posted.quickProblems)} ${keptSentence(resumeLost)}`, posted.quickProblems.map((p) => p.field), { resume: keptResume, resumeLost });
 
-  let resume: ResumeInput | null = null;
+  let resume: ResumeUpload | null = null;
   let usedUploadId: string | null = null;
   if (posted.grant) {
     // The browser uploaded straight to storage (or the form's reading put it there); the grant names the object. It must be for this company and role.
