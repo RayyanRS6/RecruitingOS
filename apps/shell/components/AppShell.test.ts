@@ -230,6 +230,15 @@ describe("the rail", () => {
     expect(render(meAs("owner"), { roles })).not.toContain("rail-collapse");
   });
 
+  it("offers the light/dark theme switch beside Sign out, on every page and in the folded rail too", () => {
+    for (const path of ["/", "/roles/r-open/talent"]) {
+      nav.path = path;
+      const html = render(meAs("owner"), { roles });
+      // drawn light first (only the browser knows the device's setting), one name, whether it is on said by aria-pressed
+      expect(html, path).toMatch(/<div class="foot-actions"><button[^>]*>Sign out<\/button><button type="button" class="icon-btn sm theme-switch" aria-label="Dark theme" aria-pressed="false" title="Switch to the dark theme">/);
+    }
+  });
+
   it("remembers the folded rail on this browser, and never fails where storage cannot be read or written", () => {
     const store = new Map<string, string>();
     const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) } as unknown as Storage;
