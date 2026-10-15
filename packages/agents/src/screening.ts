@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { CHAT_SECTION_LABEL, SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, type Actor, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreenChannel, type ScreeningQuestion, type ScreenInvitedVia, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
 import { runPromptDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type ChatPromptContext, type RunOutcome, type ScreenContext } from "@ros/ai";
-import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSentences, buildChatPlan, chatMoveStays, chatNextMove, createEscalation, emit, entitlements, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, saysNotDone, screeningStoppedSummary, syncChatPlan, tapAnswerText, tapFormatFor, teamScreenView, transition, writtenQuestionsOf, type ChatMove } from "@ros/core";
+import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSentences, buildChatPlan, chatMoveStays, chatNextMove, createEscalation, emit, entitlements, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, saysNotDone, scoredSkill, screeningStoppedSummary, syncChatPlan, tapAnswerText, tapFormatFor, teamScreenView, transition, writtenQuestionsOf, type ChatMove } from "@ros/core";
 import { applications, assessments, candidates, companies, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { deliverSms, recordInbound, sendPersonRequestedNote } from "./coordinator";
@@ -1628,27 +1628,37 @@ export async function assessScreen(db: Db, ai: AiRuntime, input: { companyId: st
 /** How many times a screening chat is read for its scorecard: as many as the résumé (`TRIAGE_READINGS`). */
 export const SCORECARD_READINGS = TRIAGE_READINGS;
 
+/** The role as the scorecard's checks read it: its must-haves and skills, and its screening questions when given. */
+type ScorecardPacket = Pick<RolePacket, "requirements" | "competencies"> & Partial<Pick<RolePacket, "screening">>;
+
 /**
  * The scorecard readings as the team sees them: each through `scorecardOutcome` (quotes mapped back and checked, the
- * licence rule), then the middle answer of each finding (`combineReadings`), with the words, answers, pay, availability
- * and recommendation of the reading closest to it. Fewer than three usable readings: the first, saying so.
+ * licence rule, skills read only from answers about them), then the middle answer of each finding (`combineReadings`),
+ * with the words, answers, pay, availability and recommendation of the reading closest to it. Fewer than three usable
+ * readings: the first, saying so. With the `packet`, an interview or a strong one is then settled from those findings in
+ * code (`settledScreenRecommendation`); `incomplete`: a conversation that was not finished, never a strong interview.
  */
-export function scorecardReadings(readings: ReadonlyArray<RunOutcome<ScreenAssessment>>, view: Pick<ScoringView, "restore">, screen: Pick<ScreenRow, "transcript" | "answers" | "progress">, packet?: Pick<RolePacket, "requirements" | "competencies"> | null): RunOutcome<ScreenAssessment> {
-  return combineRunOutcomes(readings.map((r) => (r.ok ? { ...r, output: scorecardOutcome(r.output, view, screen, packet) } : r)), (r) => r, "this screening chat", SCORECARD_READINGS);
+export function scorecardReadings(readings: ReadonlyArray<RunOutcome<ScreenAssessment>>, view: Pick<ScoringView, "restore">, screen: Pick<ScreenRow, "transcript" | "answers" | "progress">, packet?: ScorecardPacket | null, opts: { incomplete?: boolean } = {}): RunOutcome<ScreenAssessment> {
+  const checked = readings.map((r) => (r.ok ? { ...r, output: scorecardOutcome(r.output, view, screen, packet) } : r));
+  const out = combineRunOutcomes(checked, (r) => r, "this screening chat", SCORECARD_READINGS);
+  if (!out.ok || !packet) return out;
+  return { ...out, output: withSettledRecommendation(out.output, checked.flatMap((r) => (r.ok ? [r.output] : [])), packet, opts) };
 }
 
 /**
  * The scorecard as the team sees it, from the model's answer. Quotes are checked against the candidate's ORIGINAL words:
  * one written around a placeholder is mapped back first; and the model's own words (summary, claims) keep no
  * placeholder: "[name]" reads "the candidate". With the `packet`, the licence rule holds for its credential must-haves
- * (`credentialFinding`) and skills checked in the interviews only are left out. Shared with the fairness evals
- * (packages/evals), so they check exactly what the app does after the model has answered.
+ * (`credentialFinding`), skills checked in the interviews only are left out, and with its screening questions a skill the
+ * chat never asked about is not read from the answers to its other questions (`withAskedSkills`). Shared with the
+ * fairness evals (packages/evals), so they check exactly what the app does after the model has answered.
  */
-export function scorecardOutcome(output: ScreenAssessment, view: Pick<ScoringView, "restore">, screen: Pick<ScreenRow, "transcript" | "answers" | "progress">, packet?: Pick<RolePacket, "requirements" | "competencies"> | null): ScreenAssessment {
+export function scorecardOutcome(output: ScreenAssessment, view: Pick<ScoringView, "restore">, screen: Pick<ScreenRow, "transcript" | "answers" | "progress">, packet?: ScorecardPacket | null): ScreenAssessment {
   const candidateText = candidateWordsOf(screen);
   const recruiterNotes = recruiterNotesOf(screen);
   const restored = withoutPlaceholders(restoreQuotes(output, view, (source) => (source === "recruiter_note" ? [recruiterNotes, candidateText] : [candidateText, recruiterNotes])));
-  const checked = verifyScreenQuotes(packet ? withoutInterviewSkills(restored, packet) : restored, candidateText, { recruiterNotes, declined: screen.progress.declined ?? [], answered: Object.keys(answersOf(screen)), transcript: screen.transcript, ...(packet ? { credentials: credentialMustHaves(packet), subjects: findingSubjects(packet) } : {}) });
+  const verified = verifyScreenQuotes(packet ? withoutInterviewSkills(restored, packet) : restored, candidateText, { recruiterNotes, declined: screen.progress.declined ?? [], answered: Object.keys(answersOf(screen)), transcript: screen.transcript, ...(packet ? { credentials: credentialMustHaves(packet), subjects: findingSubjects(packet) } : {}) });
+  const checked = packet?.screening ? withAskedSkills(verified, packet.screening.questions, screen.transcript, new Set(packet.competencies.map((c) => c.key))) : verified;
   // "incomplete_screen" marks a reading of a conversation nobody sent, written before 9 October 2026, which stays hidden
   // (`isUnsentConversationReading` in @ros/core): never on a reading of a sent one, whatever the model wrote.
   return { ...checked, anomalies: checked.anomalies.filter((a) => a.kind !== "incomplete_screen") };
@@ -1878,6 +1888,95 @@ function withPlainCredentialAnswers(a: ScreenAssessment, plain: ReadonlyMap<stri
   if (!settled) return a;
   const reasons = [...(a.confidenceReasons ?? []), `${settled === 1 ? "a licence or certificate is" : `${settled} licences or certificates are`} read from the candidate's plain yes or no to the question about it`];
   return { ...a, requirementFindings, confidenceReasons: reasons.slice(-6) };
+}
+
+/** Kinds of screening question about pay, the schedule or eligibility: their answers are logistics, never a skill shown. */
+const LOGISTICS_KINDS: ReadonlySet<string> = new Set(["compensation", "availability", "eligibility", "logistics"]);
+/** What a skill's finding says when its only words answered another question (`withAskedSkills`). */
+export const NOT_ASKED_NOTE = "Not asked about in this chat: the words quoted for it answered another question, and are read for that question.";
+
+/**
+ * Each answer is read for the question it answers (Wave S9 round 3, real-model run 38784488452). A skill that no question
+ * asked in this chat is about (one the packet lists with it, other than a question about pay, the schedule or
+ * eligibility) is never read from the answers to questions about another skill, nor from answers about pay, the schedule
+ * or eligibility: a finding whose quote is found only there is "not evidenced", and its note says why. The same chat
+ * read twice gave reliability "partly evidenced" three readings out of three, then "not evidenced" three out of three,
+ * from "when I run behind I tell the front desk", the answer to the question about efficiency: a skill nobody asked
+ * about was scored on another question's answer half the time. Reading it that way goes beyond what the candidate was
+ * asked (no inference), and a borrowed "partly" would also replace the résumé's checked finding in the match score.
+ * Left as the model read it: a skill a question was asked about, a finding quoting nothing or a recruiter's notes, and
+ * a quote found in none of the candidate's messages. A reply goes with the question it names, or else with the last
+ * question the assistant asked (a follow-up stays on its question). With `skills` (the role's skill keys), a question
+ * naming a skill the role does not have (a job draft can rename its skills) is about no skill.
+ */
+export function withAskedSkills(a: ScreenAssessment, questions: ReadonlyArray<Pick<ScreeningQuestion, "key" | "kind" | "competencyKey">>, transcript: ReadonlyArray<ChatLine>, skills?: ReadonlySet<string>): ScreenAssessment {
+  type Question = (typeof questions)[number];
+  const byKey = new Map<string, Question>(questions.map((q) => [q.key, q]));
+  const skillOf = (q: Question | undefined) => (q?.competencyKey && (!skills || skills.has(q.competencyKey)) ? q.competencyKey : null);
+  const asked = new Set<string>();
+  const replies: Array<{ text: string; question: Question | undefined }> = [];
+  let current: string | undefined;
+  for (const t of transcript) {
+    if (t.role === "assistant" && t.questionKey) {
+      current = t.questionKey;
+      const q = byKey.get(t.questionKey);
+      const skill = skillOf(q);
+      if (q && skill && !LOGISTICS_KINDS.has(q.kind)) asked.add(skill);
+    } else if (t.role === "candidate") replies.push({ text: t.content, question: byKey.get(t.questionKey ?? current ?? "") });
+  }
+  const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+  const another = (q: Question | undefined, skill: string) => !!q && (LOGISTICS_KINDS.has(q.kind) || (skillOf(q) ?? skill) !== skill);
+  let changed = 0;
+  const competencyFindings = a.competencyFindings.map((f): ScreenAssessment["competencyFindings"][number] => {
+    const quote = f.evidence?.source === "screen" ? (f.evidence.quote ?? "") : "";
+    if (!norm(quote) || asked.has(f.competencyKey)) return f;
+    // the messages holding the quote, or a sentence of one the reading put together from several (its full stop aside)
+    const parts = [quote, ...quote.split(/(?<=[.!?])\s+/)].map((s) => norm(s).replace(/[.!?…]+$/, "")).filter(Boolean);
+    const from = replies.filter((r) => parts.some((p) => norm(r.text).includes(p)));
+    if (!from.length || !from.every((r) => another(r.question, f.competencyKey))) return f;
+    changed += 1;
+    return { competencyKey: f.competencyKey, finding: "not_evidenced", note: NOT_ASKED_NOTE };
+  });
+  return changed ? { ...a, competencyFindings } : a;
+}
+
+const shownByQuote = (e: { quote?: string; unquoted?: boolean } | undefined) => !!e?.quote?.trim() && !e.unquoted;
+
+/**
+ * The recommendation between an interview and a strong one, worked out in code from the scorecard's settled findings by
+ * the prompt's own rule (Wave S9 round 3), so it moves only when a finding moves, as the résumé reading's has since Wave
+ * S7: the same chat read twice was "strong_interview" in one read and "interview" in the other. "strong_interview" when
+ * every must-have the chat was to confirm is "yes" with a checked quote, none is shown not met, more than half of the
+ * skills it reads are evidenced with a checked quote, something is shown at all, the pay asked is not above the range
+ * and the availability fits the schedule; otherwise "interview". Never "strong_interview" for a conversation that was
+ * not finished (`incomplete`). "hold" and "decline_recommended" are the readings' own: a person decides either way.
+ */
+export function settledScreenRecommendation(reading: ScreenAssessment, packet: Pick<RolePacket, "requirements" | "competencies">, opts: { incomplete?: boolean } = {}): ScreenAssessment["recommendation"] {
+  if (reading.recommendation !== "strong_interview" && reading.recommendation !== "interview") return reading.recommendation;
+  if (opts.incomplete) return "interview";
+  const screened = packet.requirements.mustHaves.filter((m) => m.evidencedBy.includes("screen"));
+  const musts = screened.every((m) => reading.requirementFindings.some((f) => f.requirementKey === m.key && f.met === "yes" && shownByQuote(f.evidence)));
+  const notMet = reading.requirementFindings.some((f) => f.met === "no" && shownByQuote(f.evidence));
+  const skills = packet.competencies.filter(scoredSkill);
+  const shown = skills.filter((c) => reading.competencyFindings.some((f) => f.competencyKey === c.key && f.finding === "evidenced" && shownByQuote(f.evidence))).length;
+  const most = shown * 2 > skills.length;
+  const fits = reading.compensationExpectation.withinRange !== "above" && reading.availability.matchesSchedule !== "no" && reading.availability.matchesSchedule !== "partially";
+  return musts && !notMet && (skills.length === 0 || most) && (screened.length > 0 || shown > 0) && fits ? "strong_interview" : "interview";
+}
+
+/**
+ * The combined scorecard with its settled recommendation (`settledScreenRecommendation`). When that is not what the kept
+ * reading recommended, its words (summary, rationale, strengths, concerns, answers, pay and availability) come from the
+ * reading that recommended it and agrees most with the settled findings, so the words never argue with the label; the
+ * findings, the overall reading and the confidence stay the combined ones. With fewer readings than asked for, or none
+ * that recommended it, only the label changes.
+ */
+function withSettledRecommendation(kept: ScreenAssessment, readings: readonly ScreenAssessment[], packet: Pick<RolePacket, "requirements" | "competencies">, opts: { incomplete?: boolean }): ScreenAssessment {
+  const recommendation = settledScreenRecommendation(kept, packet, opts);
+  if (recommendation === kept.recommendation) return kept;
+  const agreement = (r: ScreenAssessment) => (r.overall === kept.overall ? 1000 : 0) + kept.requirementFindings.filter((k) => r.requirementFindings.some((f) => f.requirementKey === k.requirementKey && f.met === k.met)).length * 10 + kept.competencyFindings.filter((k) => r.competencyFindings.some((f) => f.competencyKey === k.competencyKey && f.finding === k.finding)).length;
+  const words = readings.length >= SCORECARD_READINGS ? readings.filter((r) => r.recommendation === recommendation).sort((x, y) => agreement(y) - agreement(x) || JSON.stringify(x).localeCompare(JSON.stringify(y)))[0] : undefined;
+  return { ...(words ?? kept), overall: kept.overall, confidence: kept.confidence, requirementFindings: kept.requirementFindings, competencyFindings: kept.competencyFindings, recommendation };
 }
 
 /** The most recent screen for an application, if any. */

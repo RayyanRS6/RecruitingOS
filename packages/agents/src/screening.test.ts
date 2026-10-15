@@ -3,8 +3,8 @@ import type { RolePacket, ScreenAssessment, ScreenProgress, ScreenTranscriptEntr
 import { FakeProvider, screenAssessPrompt, screenTurnPrompt, type RunOutcome, type ScreenContext } from "@ros/ai";
 import { CHAT_WRAP_KEY, chatCounter } from "@ros/core";
 import {
-  CHAT_CALM_LINE, CHAT_LADDER_QUESTION, CHAT_WRAP_QUESTION, CONFUSED_OFFER, EMPTY_SCREEN_PROGRESS, SCORECARD_READINGS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, candidateWordsOf, chatClosingMessage, chatFactsFor, chatGaps, chatNextLine, chatOpening, chatPacket, enforceChatTurn, enforceTurnRules, gapQuestion,
-  newScreenProgress, nextQuestion, onlyQuestions, plainCredentialAnswers, recruiterNotesOf, redactProtected, reviewItems, saidByCandidate, scorecardReadings, screenAnswerOf, screenCommand, screenContextOf, screenIntro, seemsConfused, verifyScreenQuotes, withChatPlan, withdrawPending, type ChatFacts,
+  CHAT_CALM_LINE, CHAT_LADDER_QUESTION, CHAT_WRAP_QUESTION, CONFUSED_OFFER, EMPTY_SCREEN_PROGRESS, NOT_ASKED_NOTE, SCORECARD_READINGS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, candidateWordsOf, chatClosingMessage, chatFactsFor, chatGaps, chatNextLine, chatOpening, chatPacket, enforceChatTurn, enforceTurnRules, gapQuestion,
+  newScreenProgress, nextQuestion, onlyQuestions, plainCredentialAnswers, recruiterNotesOf, redactProtected, reviewItems, saidByCandidate, scorecardReadings, screenAnswerOf, screenCommand, screenContextOf, screenIntro, seemsConfused, settledScreenRecommendation, verifyScreenQuotes, withAskedSkills, withChatPlan, withdrawPending, type ChatFacts,
 } from "./screening";
 import { answerInContext, credentialMustHaves } from "./triage";
 import { FOCUS_INTRO, focusQuestionsFrom, focusedPacket, packetForFocusedInvite, unfairQuestion } from "./screen-focus";
@@ -390,6 +390,152 @@ describe("the scorecard is read three times, like the résumé (known bugs 20 an
     expect(one).toMatchObject({ ok: true, runId: "r2" });
     if (one.ok) expect(one.output.confidenceReasons).toContain(`the assistant could read this screening chat once instead of ${SCORECARD_READINGS}`);
     expect(scorecardReadings([invalid, outage, invalid], view, screen, packet)).toBe(outage);
+  });
+});
+
+/**
+ * Wave S9 round 3 (real-model run 38784488452): the same cooperative chat read twice gave reliability, which no question
+ * asked about, "partly evidenced" from the answer to the question about efficiency in one read and "not evidenced" in
+ * the other, and the recommendation followed. Each answer is now read for the question it answers, and an interview or
+ * a strong one is settled from the findings in code.
+ */
+describe("the scorecard reads each answer for its own question, and settles a strong interview from its findings", () => {
+  const at = "2026-10-15T10:00:00.000Z";
+  const question = (key: string, kind: string, text: string, competencyKey?: string) => ({ key, kind, question: text, ...(competencyKey ? { competencyKey } : {}) });
+  const QUESTIONS = [
+    question("license_confirm", "eligibility", "Can you confirm your RDH license state and whether it is currently active?"),
+    question("perio_approach", "skills", "Walk me through how you handle a new patient with generalized moderate periodontitis.", "clinical_quality"),
+    question("anxious_patient", "behavioral", "Tell me about a time a patient was anxious or resistant. What did you do?", "patient_communication"),
+    question("appointment_length", "skills", "What appointment length are you used to for an adult prophy, and how do you handle running behind?", "efficiency_time"),
+    question("availability_start", "availability", "Which days and hours are you available, and when could you start?"),
+    question("pay_expectation", "compensation", "What hourly range are you looking for?"),
+  ] as Array<{ key: string; kind: "skills"; question: string; competencyKey?: string }>;
+  // the cooperative chat of the real-model run, word for word
+  const REPLIES = [
+    "Yes, my RDH license is active in California.",
+    "For moderate perio I do full perio charting and radiographs, go over the plan with the dentist, then scaling and root planing by quadrant and a re-evaluation.",
+    "A patient panicked at the ultrasonic scaler, so I slowed down and explained each step; she came back to me.",
+    "An adult prophy takes me 60 minutes; when I run behind I tell the front desk and keep the next patient informed.",
+    "Monday to Saturday, any hours, and I can start in two weeks.",
+    "I'm looking for $52 an hour.",
+  ];
+  const CHAT: ScreenTranscriptEntry[] = QUESTIONS.flatMap((x, i) => [{ role: "assistant" as const, content: x.question, at, questionKey: x.key }, { role: "candidate" as const, content: REPLIES[i]!, at }]);
+  const skill = (key: string) => ({ key, name: key, definition: "d", weight: 4, evaluatedIn: "both", indicators: [] });
+  const PACKET = {
+    requirements: { mustHaves: [{ key: "ca_rdh_license", text: "Active California RDH license", rationale: "law", evidencedBy: ["resume", "application", "screen"] }, { key: "perio_experience", text: "Experience with periodontal charting and therapy", rationale: "r", evidencedBy: ["resume", "screen", "interview"] }], niceToHaves: [], eligibility: [] },
+    competencies: [skill("clinical_quality"), skill("patient_communication"), skill("efficiency_time"), skill("reliability")],
+    screening: { questions: QUESTIONS, maxMinutes: 10 },
+  } as unknown as RolePacket;
+  type Finding = ScreenAssessment["competencyFindings"][number]["finding"];
+  const reading = (efficiency: Finding, reliability: Finding, recommendation: ScreenAssessment["recommendation"], over: Partial<ScreenAssessment> = {}): ScreenAssessment => ({
+    overall: "strong", confidence: "medium", summary: `efficiency ${efficiency}, reliability ${reliability}`, strengths: [], concerns: [], unknowns: [],
+    competencyFindings: [
+      { competencyKey: "clinical_quality", finding: "evidenced", evidence: { source: "screen", quote: "I do full perio charting and radiographs" } },
+      { competencyKey: "patient_communication", finding: "evidenced", evidence: { source: "screen", quote: "I slowed down and explained each step" } },
+      { competencyKey: "efficiency_time", finding: efficiency, evidence: { source: "screen", quote: "when I run behind I tell the front desk" } },
+      reliability === "not_evidenced" ? { competencyKey: "reliability", finding: reliability, note: "Punctuality and consistency are not described." } : { competencyKey: "reliability", finding: reliability, evidence: { source: "screen", quote: "when I run behind I tell the front desk and keep the next patient informed" } },
+    ],
+    requirementFindings: [{ requirementKey: "ca_rdh_license", met: "yes", evidence: { source: "screen", quote: "Yes, my RDH license is active in California." } }, { requirementKey: "perio_experience", met: "yes", evidence: { source: "screen", quote: "I do full perio charting and radiographs" } }],
+    anomalies: [], questionFindings: [], compensationExpectation: { stated: "I'm looking for $52 an hour.", withinRange: "yes" }, availability: { stated: "Monday to Saturday, any hours", matchesSchedule: "yes" }, eligibilityConfirmations: [], recommendation, rationale: `Recommend ${recommendation}.`, ...over,
+  });
+  const ok = (output: ScreenAssessment, runId: string): RunOutcome<ScreenAssessment> => ({ ok: true, output, runId, model: "m" });
+  const shown = (readings: ScreenAssessment[], transcript = CHAT, opts: { incomplete?: boolean } = {}) => {
+    const out = scorecardReadings(readings.map((r, i) => ok(r, `r${i + 1}`)), { restore: (s: string) => s }, { transcript, answers: {}, progress: EMPTY_SCREEN_PROGRESS }, PACKET, opts);
+    if (!out.ok) throw new Error("expected a scorecard");
+    return out.output;
+  };
+  const skills = (a: ScreenAssessment) => a.competencyFindings.map((f) => `${f.competencyKey}:${f.finding}`).sort().join(", ");
+  const relOf = (a: ScreenAssessment) => a.competencyFindings.find((f) => f.competencyKey === "reliability");
+
+  it("reads reliability, which no question asked about, the same in both reads of the real-model run: not from the answer about efficiency", () => {
+    const one = shown([reading("evidenced", "partially_evidenced", "strong_interview"), reading("evidenced", "partially_evidenced", "strong_interview", { summary: "b" }), reading("evidenced", "partially_evidenced", "strong_interview", { summary: "c" })]);
+    const two = shown([reading("partially_evidenced", "not_evidenced", "interview"), reading("evidenced", "not_evidenced", "strong_interview"), reading("partially_evidenced", "not_evidenced", "interview", { summary: "c" })]);
+    expect(relOf(one)).toEqual({ competencyKey: "reliability", finding: "not_evidenced", note: NOT_ASKED_NOTE });
+    expect(relOf(two)?.finding).toBe("not_evidenced");
+    // read 1: three skills of four evidenced; read 2: efficiency's middle reading was "partly", two of four
+    expect(one.recommendation).toBe("strong_interview");
+    expect(two.recommendation).toBe("interview");
+    // with efficiency read the same (screen.assess v10: an answer that gives what its own question asks shows the skill),
+    // the reads agree whatever each reading recommended, and the words come from a reading that recommended the same
+    const again = shown([reading("evidenced", "not_evidenced", "interview"), reading("evidenced", "not_evidenced", "interview", { summary: "b" }), reading("evidenced", "partially_evidenced", "strong_interview", { summary: "c" })]);
+    expect(skills(again)).toBe(skills(one));
+    expect(again.recommendation).toBe("strong_interview");
+    expect(again.rationale).toBe("Recommend strong_interview.");
+    expect(again.overall).toBe(one.overall);
+  });
+
+  it("never reads a skill nobody asked about from another skill's answer or from pay, availability or eligibility", () => {
+    const rel = (quote: string, finding: Finding = "partially_evidenced", source: "screen" | "recruiter_note" = "screen") => reading("evidenced", "not_evidenced", "interview", { competencyFindings: [{ competencyKey: "reliability", finding, evidence: { source, quote } }] });
+    const read = (a: ScreenAssessment, transcript = CHAT, questions = QUESTIONS) => withAskedSkills(a, questions, transcript).competencyFindings[0];
+    expect(read(rel("when I run behind I tell the front desk"))).toEqual({ competencyKey: "reliability", finding: "not_evidenced", note: NOT_ASKED_NOTE });
+    expect(read(rel("Monday to Saturday, any hours, and I can start in two weeks.", "evidenced"))).toMatchObject({ finding: "not_evidenced" });
+    expect(read(rel("my RDH license is active in California"))).toMatchObject({ finding: "not_evidenced" });
+    // a contradiction taken from another question's answer is not read either
+    expect(read(rel("when I run behind I tell the front desk", "contradicted"))).toMatchObject({ finding: "not_evidenced" });
+    // an availability question that names the skill is still about the schedule: its answer shows no skill
+    const tagged = QUESTIONS.map((x) => (x.key === "availability_start" ? { ...x, competencyKey: "reliability" } : x));
+    expect(read(rel("Monday to Saturday, any hours"), CHAT, tagged)).toMatchObject({ finding: "not_evidenced" });
+    // a follow-up stays on its question: the reply to it is read for that question
+    const followed: ScreenTranscriptEntry[] = [...CHAT.slice(0, 8), { role: "assistant", content: "You mentioned running behind: what do you tell the next patient?", at }, { role: "candidate", content: "That I am about ten minutes late and why.", at }];
+    expect(read(rel("I am about ten minutes late and why"), followed)).toMatchObject({ finding: "not_evidenced" });
+  });
+
+  it("leaves to the model a skill asked about, words said outside another question's answer, a recruiter's note, and a quote it cannot place", () => {
+    const rel = (quote: string, finding: Finding = "partially_evidenced", source: "screen" | "recruiter_note" = "screen") => reading("evidenced", "not_evidenced", "interview", { competencyFindings: [{ competencyKey: "reliability", finding, evidence: { source, quote } }] });
+    const read = (a: ScreenAssessment, transcript = CHAT, questions = QUESTIONS) => withAskedSkills(a, questions, transcript).competencyFindings[0];
+    // an open question listed with no skill (what they look for, a company's own written question, the closing one)
+    const withOpen = [...QUESTIONS, question("next_office", "motivation", "What are you looking for in your next office?")] as typeof QUESTIONS;
+    const said: ScreenTranscriptEntry[] = [...CHAT, { role: "assistant", content: "What are you looking for in your next office?", at, questionKey: "next_office" }, { role: "candidate", content: "A team that plans ahead. In eight years I have never missed a shift.", at }];
+    expect(read(rel("In eight years I have never missed a shift.", "evidenced"), said, withOpen)).toMatchObject({ finding: "evidenced", evidence: { quote: "In eight years I have never missed a shift." } });
+    // a quote put together from the efficiency answer and that open one is not only another question's answer
+    expect(read(rel("when I run behind I tell the front desk. In eight years I have never missed a shift."), said, withOpen)).toMatchObject({ finding: "partially_evidenced" });
+    // while the efficiency answer's own sentence, full stop and all, is that answer's
+    expect(read(rel("when I run behind I tell the front desk."), said, withOpen)).toMatchObject({ finding: "not_evidenced" });
+    // a skill a question asked about keeps whichever answer the reading quoted
+    const asked = [...QUESTIONS, question("schedule_change", "behavioral", "How do you handle a change to your schedule?", "reliability")] as typeof QUESTIONS;
+    const askedChat: ScreenTranscriptEntry[] = [...CHAT, { role: "assistant", content: "How do you handle a change to your schedule?", at, questionKey: "schedule_change" }, { role: "candidate", content: "I tell the office as soon as I know.", at }];
+    expect(read(rel("when I run behind I tell the front desk"), askedChat, asked)).toMatchObject({ finding: "partially_evidenced" });
+    // listed with the skill but never asked in this chat: not asked about
+    expect(read(rel("when I run behind I tell the front desk"), CHAT, asked)).toMatchObject({ finding: "not_evidenced" });
+    expect(read(rel("Called her: never late in two years", "evidenced", "recruiter_note"))).toMatchObject({ finding: "evidenced" });
+    expect(read(rel("Always on time at my last office", "evidenced"))).toMatchObject({ finding: "evidenced" });
+    // a chat whose questions the packet does not list (a Kanvis-style chat's own items): nothing to read it against
+    expect(read(rel("when I run behind I tell the front desk"), CHAT, [])).toMatchObject({ finding: "partially_evidenced" });
+    // a question naming a skill the role does not have (the draft renamed "efficiency") is about no skill: its own
+    // skill's answer is never lost through it, and nothing is taken from another skill on its account
+    const renamed = QUESTIONS.map((x) => (x.key === "appointment_length" ? { ...x, competencyKey: "efficiency" } : x));
+    const keys = new Set(["clinical_quality", "patient_communication", "efficiency_time", "reliability"]);
+    const own = reading("evidenced", "not_evidenced", "interview", { competencyFindings: [{ competencyKey: "efficiency_time", finding: "evidenced", evidence: { source: "screen", quote: "when I run behind I tell the front desk" } }] });
+    expect(withAskedSkills(own, renamed, CHAT, keys).competencyFindings[0]).toMatchObject({ finding: "evidenced" });
+    expect(withAskedSkills(rel("when I run behind I tell the front desk"), renamed, CHAT, keys).competencyFindings[0]).toMatchObject({ finding: "partially_evidenced" });
+    // while through the app's own path (scorecardOutcome, the role's skills given) the tagged question still counts
+    expect(relOf(shown([rel("when I run behind I tell the front desk"), rel("when I run behind I tell the front desk"), rel("when I run behind I tell the front desk")]))?.finding).toBe("not_evidenced");
+  });
+
+  it("settles an interview or a strong one by the prompt's own rule, and leaves hold and decline to the readings", () => {
+    const strong = reading("evidenced", "not_evidenced", "interview");
+    expect(settledScreenRecommendation(strong, PACKET)).toBe("strong_interview");
+    // two skills of four is not most
+    expect(settledScreenRecommendation(reading("partially_evidenced", "not_evidenced", "strong_interview"), PACKET)).toBe("interview");
+    // a must-have the chat was to confirm not shown in full, or shown with nothing quoted
+    expect(settledScreenRecommendation({ ...strong, requirementFindings: [strong.requirementFindings[0]!, { requirementKey: "perio_experience", met: "partially", evidence: { source: "screen", quote: "I do full perio charting and radiographs" } }] }, PACKET)).toBe("interview");
+    expect(settledScreenRecommendation({ ...strong, requirementFindings: [strong.requirementFindings[0]!, { requirementKey: "perio_experience", met: "yes", evidence: { source: "screen", unquoted: true } }] }, PACKET)).toBe("interview");
+    // logistics that do not fit
+    expect(settledScreenRecommendation({ ...strong, compensationExpectation: { withinRange: "above" } }, PACKET)).toBe("interview");
+    expect(settledScreenRecommendation({ ...strong, availability: { matchesSchedule: "partially" } }, PACKET)).toBe("interview");
+    // pay or availability not known yet do not hold it back
+    expect(settledScreenRecommendation({ ...strong, compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" } }, PACKET)).toBe("strong_interview");
+    // a conversation that was not finished is never a strong interview
+    const said = { ...strong, recommendation: "strong_interview" as const };
+    expect(settledScreenRecommendation(said, PACKET, { incomplete: true })).toBe("interview");
+    expect(shown([said, said, said], CHAT, { incomplete: true }).recommendation).toBe("interview");
+    expect(shown([said, said, said]).recommendation).toBe("strong_interview");
+    // hold and decline are the readings' own
+    expect(settledScreenRecommendation({ ...strong, recommendation: "hold" }, PACKET)).toBe("hold");
+    expect(settledScreenRecommendation({ ...strong, recommendation: "decline_recommended" }, PACKET)).toBe("decline_recommended");
+    // nothing shown at all is never a strong interview
+    const bare = { ...PACKET, requirements: { ...PACKET.requirements, mustHaves: [] }, competencies: [] } as unknown as RolePacket;
+    expect(settledScreenRecommendation(strong, bare)).toBe("interview");
   });
 });
 

@@ -457,8 +457,8 @@ async function main() {
     const ctx: ScreenContext = { company: { name: "Eval Dental" }, packet: role, candidate: { firstName: SCREEN_CANDIDATE.firstName ?? "Alex" }, channel: "web", progress: input.progress, answers: input.answers, transcript: input.transcript, focusUnknowns: [], latestCandidateMessage: null, incomplete: input.incomplete ?? null };
     const { ctx: seen, view } = scorecardModelInput(ctx, SCREEN_CANDIDATE);
     const readings = await Promise.all(Array.from({ length: SCORECARD_READINGS }, (_, i) => runPrompt(q, rt, screenAssessPrompt, seen, { companyId: null, inputRef: { eval: id, reading: i + 1, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() } })));
-    // what the app does once the model has answered, not a copy of it
-    const shown = scorecardReadings(readings, view, { transcript: input.transcript, answers: input.answers, progress: input.progress }, role);
+    // what the app does once the model has answered, not a copy of it (the app reads only a finished conversation)
+    const shown = scorecardReadings(readings, view, { transcript: input.transcript, answers: input.answers, progress: input.progress }, role, { incomplete: !!input.incomplete });
     return { shown, raws: readings.flatMap((r) => (r.ok ? [r.output] : [])), role, readings, view };
   };
 
@@ -475,6 +475,8 @@ async function main() {
     return [
       ...input.transcript.slice(0, 20).map((t) => `${t.role}: ${clip(t.content, 200)}`),
       `must-haves: ${chat.role.requirements.mustHaves.filter((m) => credentials.has(m.key) || m.evidencedBy.includes("screen")).map((m) => `${m.key} "${m.text}" [${m.evidencedBy.join(",")}]${credentials.has(m.key) ? " credential" : ""}`).join(" | ") || "none"}`,
+      // Wave S9 round 3: which question asks about which skill decides how its answers are read (`withAskedSkills`)
+      `skills: ${chat.role.competencies.map((c) => `${c.key} "${clip(c.definition, 120)}" [${c.evaluatedIn}] asked by ${chat.role.screening.questions.filter((x) => x.competencyKey === c.key).map((x) => `${x.key} (${x.kind})`).join(", ") || "no question"}`).join(" | ") || "none"}`,
       ...chat.readings.flatMap((r, i) =>
         r.ok
           ? [
@@ -489,10 +491,19 @@ async function main() {
   /** And the full record behind those lines (diagnostics.ts): the chat, each reading as the model wrote it, and what was shown; `chats`: each read of it. */
   const scorecardDiagnostics = (input: ReturnType<ScreenAssessCase["build"]>, chats: Array<Awaited<ReturnType<typeof scoreChat>>>): CaseDiagnostics => {
     const read = (n: number) => (chats.length > 1 ? `read ${n + 1}, ` : "");
+    const role = chats[0]?.role;
     return {
       transcript: traceTranscript(input.transcript),
       readings: chats.flatMap((chat, n) => chat.readings.map((r, i) => ({ label: `${read(n)}reading ${i + 1}`, ...traceOutcome(r) }))),
       shown: chats.map((chat, n) => ({ label: `${read(n)}shown`, ...traceOutcome(chat.shown) })),
+      ...(role
+        ? {
+            role: {
+              questions: role.screening.questions.map((x) => ({ key: x.key, kind: x.kind, ...(x.competencyKey ? { skill: x.competencyKey } : {}), text: clipText(x.question) })),
+              skills: role.competencies.map((c) => ({ key: c.key, name: c.name, definition: clipText(c.definition), evaluatedIn: c.evaluatedIn })),
+            },
+          }
+        : {}),
     };
   };
 

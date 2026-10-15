@@ -19,6 +19,11 @@ export type CaseDiagnostics = {
   readings?: Array<TraceOutput & { label: string }>;
   /** The scorecard the team would see: the readings through the code's checks, combined into the middle answer. */
   shown?: Array<TraceOutput & { label: string }>;
+  /**
+   * The role a scorecard was read against (Wave S9 round 3): the job draft is compiled afresh on each run, and which
+   * question is about which skill, and each skill's definition, decide how its answers are read.
+   */
+  role?: { questions: Array<{ key: string; kind: string; skill?: string; text: string }>; skills: Array<{ key: string; name: string; definition: string; evaluatedIn?: string }> };
   /** The write-up as the model wrote it, or why the call gave nothing usable. */
   writeup?: TraceOutput;
 };
