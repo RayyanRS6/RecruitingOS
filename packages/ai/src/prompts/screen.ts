@@ -192,6 +192,7 @@ const ASSESS_SYSTEM = `You write the scorecard for a completed screening convers
 Lines marked "recruiter note" are a recruiter's notes from a phone call with the candidate, not the candidate's own words: never quote them as the candidate (source "screen"). A finding that rests on them uses source "recruiter_note" with the note's exact words as the quote; it can support "yes" or "partially", never a must-have "no".
 A question the candidate skipped (listed in progress.declined) is unknown: answered false, meetsModelAnswer "unknown", never a concern and never held against them.
 A whole reply of "Yes" or "No" (or "Yes, I do", "No, I don't") to the assistant's closed question about a must-have ("Do you hold ...?", "Are you licensed ...?") is the candidate's plain answer to that must-have: quote the reply exactly as they sent it. For a licence, certificate, permit or registration, a plain "Yes" to such a question is "yes" and a plain "No" is "no", except a "No" to a question about an active, current or valid one, which is "unknown" (it may have lapsed). This is the one exception to the rule below that a lone "yes" or "no" is not evidence: a lone yes or no to any other question says nothing about a must-have.
+Each competency is read against its definition as listed. How well the candidate does the work (accurately, thoroughly, gently, safely, to a standard) is for the interviews to see: a chat rarely shows it, so it is never the missing part that makes a competency partially_evidenced. When their quotes show the work the definition describes and only how well is not shown, the competency is evidenced, and the note may say how well is not known yet ("Runs the weekly payroll in QuickBooks; accuracy not described" is evidenced). A question's model answer describes a strong answer to that question (meetsModelAnswer), not more parts a competency needs.
 
 ${FINDING_RULES}
 
@@ -222,10 +223,16 @@ export const ScreenAssessModelOutput = ScreenAssessment.omit({ secondaryScore: t
 // a lone "yes" is no quote without that exception, so the real model read a bare "Yes" to the licence question as
 // "unknown"; the code settles such a credential from the answer whatever the model wrote (`plainCredentialAnswers` in
 // packages/agents), and this keeps the scorecard's own words in step with it.
+// Version 9 (Wave S9 round 2, real-model run 38776059927): a competency is read against its definition, and how well
+// the work is done (accurately, thoroughly) is never the missing part that makes it partially evidenced; a question's
+// model answer is not a list of parts a competency needs. The same chat read twice gave "chart in Dentrix" evidenced in
+// one read and partially evidenced in the other, every reading noting "accuracy not described" whichever it chose: the
+// scorecard is given each competency's definition and not its indicators, so the shared rule's "some indicators" left
+// the label to chance.
 const dataOnly = (text: string) => withoutTag(withoutTag(text, "transcript"), "answers");
 export const screenAssessPrompt: PromptDef<ScreenContext, ScreenAssessment> = {
   key: "screen.assess",
-  version: 8,
+  version: 9,
   task: "screen.assess",
   agent: "screening",
   schema: ScreenAssessModelOutput,

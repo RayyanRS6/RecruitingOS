@@ -214,12 +214,45 @@ export async function assessApplication(db: Db, ai: AiRuntime, input: AssessInpu
  * and shown as the candidate wrote them: one the model wrote around a placeholder is mapped back first
  * (`restoreReadingQuotes`); one that cannot be fails the check. The model's own words (summary, claims, unknowns) keep no
  * placeholder either: "[name]" reads "the candidate". A skill the role checks in the interviews only is left out of the
- * reading (the prompt does not list it; a finding the model wrote anyway is dropped). Shared with the fairness evals
- * (packages/evals), so they check exactly what the app does after the model has answered.
+ * reading (the prompt does not list it; a finding the model wrote anyway is dropped). The flags about the résumé itself
+ * are the readings' and the extraction's, not only the kept reading's (`withResumeFlags`). Shared with the fairness
+ * evals (packages/evals), so they check exactly what the app does after the model has answered.
  */
-export function readingsOutcome(readings: ReadonlyArray<RunOutcome<Reading>>, view: Pick<ScoringView, "restore">, input: Pick<AssessInput, "resumeText" | "applicationAnswers" | "packet"> & Partial<Pick<AssessInput, "eligibility" | "eligibilityKeptIn">>): RunOutcome<Reading> {
+export function readingsOutcome(readings: ReadonlyArray<RunOutcome<Reading>>, view: Pick<ScoringView, "restore">, input: Pick<AssessInput, "resumeText" | "applicationAnswers" | "packet"> & Partial<Pick<AssessInput, "eligibility" | "eligibilityKeptIn" | "extraction">>): RunOutcome<Reading> {
   const sources = assessmentSources(input);
-  return combineOutcomes(readings.map((r) => (r.ok ? { ...r, output: withoutInterviewSkills(withoutPlaceholders(restoreReadingQuotes(r.output, view, sources)), input.packet) } : r)), sources, credentialMustHaves(input.packet), findingSubjects(input.packet), triageSettlement(input.packet, input));
+  const checked = readings.map((r) => (r.ok ? { ...r, output: withoutInterviewSkills(withoutPlaceholders(restoreReadingQuotes(r.output, view, sources)), input.packet) } : r));
+  const out = combineOutcomes(checked, sources, credentialMustHaves(input.packet), findingSubjects(input.packet), triageSettlement(input.packet, input));
+  return out.ok ? { ...out, output: withResumeFlags(out.output, checked.flatMap((r) => (r.ok ? [r.output] : [])), input.extraction ?? null) } : out;
+}
+
+/** The flags a reading or the résumé's extraction raises about the résumé itself, in a fixed order (the code adds others, such as "unverified_quote"). */
+const RESUME_FLAGS = ["possible_ai_generated", "date_inconsistency", "contradiction", "missing_dates"] as const;
+/** A flag the extraction raised, in the code's words: the extraction's own words can name the candidate, which a reading's never do. */
+const RESUME_FLAG_WORDS: Record<(typeof RESUME_FLAGS)[number], string> = {
+  possible_ai_generated: "parts of the résumé read like generated or template text (found when the résumé was read for its facts; the Résumé tab says more)",
+  date_inconsistency: "the dates in the résumé do not agree (found when the résumé was read for its facts; the Résumé tab says more)",
+  contradiction: "the résumé says two things that do not agree (found when the résumé was read for its facts; the Résumé tab says more)",
+  missing_dates: "the résumé leaves out dates (found when the résumé was read for its facts; the Résumé tab says more)",
+};
+
+/**
+ * The flags about the résumé itself on the reading the team sees (Wave S9 round 2): the kept reading's own, plus each
+ * kind that most of the readings raised or that the résumé's extraction raised (the reading is given the extraction's
+ * flags). The words of the kept reading come from one reading (`combineReadings`), so a flag two readings of three raised,
+ * or one the extraction found ("Lorem ipsum" in a résumé), was lost whenever that one reading left it out: the real-model
+ * run of 15 Oct 2026 (round 1) showed an AI-written résumé with no flag. A flag is for a person to look at and never
+ * moves the overall reading, the score or the recommendation (docs/11). The same whatever order the readings came in.
+ */
+export function withResumeFlags(kept: Reading, readings: readonly Pick<Reading, "anomalies">[], extraction: Pick<ResumeExtraction, "anomalies"> | null): Reading {
+  const listed = new Set(kept.anomalies.map((a) => a.kind));
+  const added: Reading["anomalies"] = [];
+  for (const kind of RESUME_FLAGS) {
+    if (listed.has(kind)) continue;
+    const raised = readings.flatMap((r) => r.anomalies.filter((a) => a.kind === kind).slice(0, 1)).sort((a, b) => a.detail.localeCompare(b.detail));
+    if (raised.length && raised.length * 2 > readings.length) added.push({ kind, detail: raised[0]!.detail });
+    else if (extraction?.anomalies.some((a) => a.kind === kind)) added.push({ kind, detail: RESUME_FLAG_WORDS[kind] });
+  }
+  return added.length ? { ...kept, anomalies: [...kept.anomalies, ...added] } : kept;
 }
 
 /**

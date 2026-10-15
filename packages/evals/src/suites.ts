@@ -976,26 +976,18 @@ export type ScreenPersona = {
 /** The cooperative candidate's pay answer, which must be recorded word for word under the pay question. */
 const COOPERATIVE_PAY = "I'm looking for $52 an hour.";
 
-/** A cooperative candidate's answers in the golden packet's usual order, for the scorecard's chats (screen.assess, screen.consistency). */
-const COOPERATIVE = [
-  "Yes, my RDH license is active in California.",
-  "I see nine patients a day, do full perio charting and radiographs, and chart in Dentrix.",
-  "A patient panicked at the ultrasonic scaler, so I slowed down and explained each step; she came back to me.",
-  "Monday to Friday, any hours, and I can start in two weeks.",
-  COOPERATIVE_PAY,
-  "A steady office that respects hygienists.",
-];
-
 /**
  * A cooperative hygienist's reply to each kind of packet question, and to a follow-up on it: each answers what it is
  * asked, fits the golden job (a California licence, Saturdays, the posted range of $45 to $55) and says nothing personal.
+ * The compiled licence question sometimes also asks when the licence was issued or renewed (round 1 of the S9 real-model
+ * runs): the reply then says when, and a follow-up on the licence always does.
  */
 function cooperativeReply(q: ScreeningQuestion, followUp: boolean): string {
   const text = q.question.toLowerCase();
   if (q.kind === "compensation") return followUp ? "Anywhere from $50 to $54 an hour works for me." : COOPERATIVE_PAY;
   if (q.kind === "availability") return followUp ? "Yes, Saturdays are fine too, and I can start two weeks after an offer." : "Monday to Saturday, any hours, and I can start in two weeks.";
   if (q.kind === "eligibility") {
-    if (/licen[cs]e|\brdh\b|registered|certif/.test(text)) return followUp ? "It is a California RDH license, active and in good standing." : "Yes, my RDH license is active in California.";
+    if (/licen[cs]e|\brdh\b|registered|certif/.test(text)) return followUp ? "It is a California RDH license, active and in good standing; I last renewed it in March 2025." : /\bwhen\b|renew|issued|expir/.test(text) ? "Yes, my RDH license is active in California; I last renewed it in March 2025." : "Yes, my RDH license is active in California.";
     if (/saturday|weekend/.test(text)) return "Yes, I can work Saturdays.";
     return followUp ? "Yes, that is right." : "Yes.";
   }
@@ -1007,6 +999,20 @@ function cooperativeReply(q: ScreeningQuestion, followUp: boolean): string {
   if (/software|systems?\b|dentrix|eaglesoft/.test(text)) return "I chart in Dentrix every day and have used Eaglesoft before.";
   if (/prophy|running behind|appointment length/.test(text)) return "An adult prophy takes me 60 minutes; when I run behind I tell the front desk and keep the next patient informed.";
   return "I see nine patients a day, do full perio charting and radiographs, and chart in Dentrix.";
+}
+
+/** A packet question about the candidate's own work: a skills or a behavioural one. */
+const isWorkQuestion = (q: Pick<ScreeningQuestion, "kind">): boolean => q.kind === "skills" || q.kind === "behavioral";
+
+/** The follow-ups of a chat without a plan, by the question each one stays on (the last question the chat moved to). */
+function followUpsByQuestion(turns: readonly ScreenTurn[]): Map<string, ScreenTurn[]> {
+  const out = new Map<string, ScreenTurn[]>();
+  let current: string | null = null;
+  for (const t of turns) {
+    if (t.questionKey) current = t.questionKey;
+    else if (current && t.followUpReason && !t.done && !t.humanRequested) out.set(current, [...(out.get(current) ?? []), t]);
+  }
+  return out;
 }
 
 /** docs/11 "Screening conversation tests". */
@@ -1085,16 +1091,36 @@ export const screenPersonas: ScreenPersona[] = [
   {
     id: "follows_up_on_their_words",
     provenance: "synthetic",
-    messages: ["Yes, my RDH license is active in California.", "Cleanings mostly", "I see 9 patients a day and chart perio maintenance in Dentrix."],
+    messages: [],
+    // Wave S9 round 2: the thin reply goes to the first question about the candidate's work, whatever comes before it.
+    // The fixed script ("Yes, my RDH license is active in California.", "Cleanings mostly", "I see 9 patients ...")
+    // assumed the licence question was settled by its first reply; on the real model (run 38776059927) the compiled
+    // licence question also asked when it was renewed, the follow-up on that took "Cleanings mostly", and no work
+    // question was ever asked. Before the work question the candidate answers what is asked (`cooperativeReply`); on it,
+    // "Cleanings mostly", then the fuller answer to the follow-up (and a third reply should a second follow-up come, so
+    // the question always settles); the run ends at the next question.
+    answer: ({ question, followUp, replied }) => {
+      const workReplies = replied.filter(isWorkQuestion);
+      if (workReplies.some((q) => q.key !== question.key) || (workReplies.length > 0 && !isWorkQuestion(question))) return null;
+      if (!isWorkQuestion(question)) return cooperativeReply(question, followUp);
+      return ["Cleanings mostly", "I see 9 patients a day and chart perio maintenance in Dentrix.", "Mostly adult cleanings and perio maintenance, about an hour each."][workReplies.length] ?? null;
+    },
     expect: (r) => {
       const f: string[] = [];
-      const followUps = r.turns.filter((t) => t.followUpReason && !t.questionKey && !t.done && !t.humanRequested);
-      if (!followUps.length) f.push("no follow-up after a thin answer about the candidate's work");
-      if (followUps.length && !followUps.some((t) => /cleanings/i.test(t.messageToCandidate))) f.push("the follow-up does not build on the candidate's own words");
-      for (const t of followUps) if ((t.messageToCandidate.match(/\?/g)?.length ?? 0) > 1) f.push(`a follow-up asks more than one thing: ${t.messageToCandidate}`);
-      if (followUps.length > 2) f.push("more than two follow-ups on one question");
-      const whole = Object.values(r.answers).find((a) => /9 patients/.test(a));
-      if (!whole) f.push("the answer after the follow-up was not recorded");
+      // Wave S9 round 2: the follow-ups on the work question itself (a follow-up on the licence's renewal date is no
+      // follow-up on their work), and the two-follow-up cap per question as the rule says (screen.turn v3); the count over
+      // the whole chat it replaces assumed only one question could have follow-ups.
+      const work = r.packet.screening.questions.find(isWorkQuestion);
+      if (!work) return ["the packet asks nothing about the candidate's work"];
+      const byQuestion = followUpsByQuestion(r.turns);
+      const onWork = byQuestion.get(work.key) ?? [];
+      if (!onWork.length) f.push("no follow-up after a thin answer about the candidate's work");
+      if (onWork.length && !onWork.some((t) => /cleanings/i.test(t.messageToCandidate))) f.push("the follow-up does not build on the candidate's own words");
+      for (const t of [...byQuestion.values()].flat()) if ((t.messageToCandidate.match(/\?/g)?.length ?? 0) > 1) f.push(`a follow-up asks more than one thing: ${t.messageToCandidate}`);
+      for (const [key, ts] of byQuestion) if (ts.length > 2) f.push(`more than two follow-ups on one question (${key})`);
+      // under the work question's own key (any answer holding the words passed before, under any question)
+      const whole = r.answers[work.key];
+      if (!whole || !/9 patients/.test(whole)) f.push("the answer after the follow-up was not recorded");
       else if (!/cleanings/i.test(whole)) f.push("the answer after the follow-up lost the candidate's first words");
       return f;
     },
@@ -1221,14 +1247,20 @@ function quotesNotSaid(shown: ScreenAssessment, transcript: ScreenTranscriptEntr
 
 const ASSESS_AT = "2026-10-08T10:00:00.000Z";
 const assessProgress = (over: Partial<ScreenProgress> = {}): ScreenProgress => ({ askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0, ...over });
-/** A conversation in which the candidate answered the packet's questions in order with the cooperative answers, but for `skip`. */
+/**
+ * A conversation in which the candidate answered the packet's questions in order, each with the cooperative reply to
+ * that question (`cooperativeReply`), but for `skip`. Wave S9 round 2: the replies went by position in a fixed list of
+ * six, which assumed the golden packet's usual order; the packet is compiled afresh on each run, and on the real model
+ * (run 38776059927) the software, availability and pay questions each carried the next question's answer, which the
+ * scorecard's readings pointed out and then read differently.
+ */
 function answered(packet: RolePacket, skip: (key: string, i: number) => boolean = () => false): { transcript: ScreenTranscriptEntry[]; answers: Record<string, string> } {
   const transcript: ScreenTranscriptEntry[] = [];
   const answers: Record<string, string> = {};
   packet.screening.questions.forEach((q, i) => {
     transcript.push({ role: "assistant", content: q.question, at: ASSESS_AT, questionKey: q.key });
     if (skip(q.key, i)) { transcript.push({ role: "system", content: "Skipped this question.", at: ASSESS_AT, questionKey: q.key, source: "skip" }); return; }
-    const words = COOPERATIVE[i % COOPERATIVE.length];
+    const words = cooperativeReply(q, false);
     transcript.push({ role: "candidate", content: words, at: ASSESS_AT });
     answers[q.key] = words;
   });
@@ -1244,13 +1276,14 @@ export const screenAssessCases: ScreenAssessCase[] = [
     provenance: "synthetic",
     build: (packet) => {
       const first = packet.screening.questions[0];
+      const reply = cooperativeReply(first, false);
       return {
         transcript: [
           { role: "assistant", content: first.question, at: ASSESS_AT, questionKey: first.key },
-          { role: "candidate", content: COOPERATIVE[0], at: ASSESS_AT },
+          { role: "candidate", content: reply, at: ASSESS_AT },
           { role: "recruiter", content: "Called her: no perio maintenance in the last two years, but six years before that. Prefers four-day weeks.", at: ASSESS_AT, source: "recruiter_call", by: "Recruiter" },
         ],
-        answers: { [first.key]: COOPERATIVE[0] },
+        answers: { [first.key]: reply },
         progress: assessProgress({ askedKeys: [first.key] }),
       };
     },

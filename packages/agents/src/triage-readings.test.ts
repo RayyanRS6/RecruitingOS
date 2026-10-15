@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RunOutcome } from "@ros/ai";
 import type { EvidenceAssessment } from "@ros/contracts";
-import { applyEvidenceRules, assessmentSources, combineOutcomes, combineReadings, credentialFinding, credentialMustHaves, findingSubjects, plainlyNotHeld, readingsOutcome, settledOverall, settledRecommendation, shownNotHeld, verifyAssessmentQuotes } from "./triage";
+import { applyEvidenceRules, assessmentSources, combineOutcomes, combineReadings, credentialFinding, credentialMustHaves, findingSubjects, plainlyNotHeld, readingsOutcome, settledOverall, settledRecommendation, shownNotHeld, verifyAssessmentQuotes, withResumeFlags } from "./triage";
 
 /**
  * The fairness run on Haiku 5.5 (14 Oct 2026): one résumé read three times scored 83, 71 and 67, and an expired licence
@@ -204,6 +204,53 @@ describe("the overall reading, worked out from the settled findings (Wave S7)", 
 
   it("leaves the scorecard's overall reading as the middle of its readings (no settlement given)", () => {
     expect(combineReadings([reading("no", "yes", "evidenced", { overall: "weak" }), reading("no", "yes", "evidenced", { overall: "strong" }), reading("no", "yes", "evidenced", { overall: "strong" })]).overall).toBe("strong");
+  });
+});
+
+/**
+ * Wave S9 round 2 (real-model run 38776059927, triage.edge_cases ai_generated_boilerplate): the words of the reading the
+ * team sees come from one reading, so a flag about the résumé itself that the other readings or the extraction raised
+ * was lost whenever that one reading left it out.
+ */
+describe("the flags about the résumé itself (Wave S9 round 2)", () => {
+  const PACKET = { requirements: { mustHaves: [], niceToHaves: [], eligibility: [] }, competencies: [] } as never;
+  const TEMPLATE = "Results-driven hygienist.\nRegistered Dental Hygienist at Harbor Dental 2020 - present\nScaling and root planing\nLorem ipsum dolor sit amet.";
+  const view = { restore: (s: string) => s };
+  const ok = (out: EvidenceAssessment, runId: string): RunOutcome<EvidenceAssessment> => ({ ok: true, output: out, runId, model: "m" });
+  const flagged = (flags: string[], perio: Met = "yes") => reading(null, perio, "evidenced", { anomalies: flags.map((kind) => ({ kind, detail: `${kind.replace(/_/g, " ")} seen` })) });
+  const EXTRACTION = { anomalies: [{ kind: "possible_ai_generated" as const, detail: "Taylor's résumé ends with Lorem ipsum" }] };
+  const read = (readings: EvidenceAssessment[], extraction: typeof EXTRACTION | null = null) => {
+    const out = readingsOutcome(readings.map((r, i) => ok(r, `r${i}`)), view, { packet: PACKET, resumeText: TEMPLATE, applicationAnswers: { eligibility: {} }, extraction: extraction as never });
+    if (!out.ok) throw new Error("expected readings");
+    return out.output;
+  };
+  const kinds = (a: EvidenceAssessment) => a.anomalies.map((x) => x.kind);
+
+  it("keeps a flag most readings raised, whichever reading's words are kept and in any order", () => {
+    const a = flagged(["possible_ai_generated"]);
+    const b = flagged(["possible_ai_generated"]);
+    const c = flagged([]);
+    for (const order of [[a, b, c], [c, a, b], [b, c, a]]) expect(kinds(read(order))).toEqual(["possible_ai_generated"]);
+    // the kept reading without it, two of three with it
+    expect(withResumeFlags(c, [a, b, c], null).anomalies).toEqual([{ kind: "possible_ai_generated", detail: "possible ai generated seen" }]);
+    expect(withResumeFlags(c, [a, c, c], null).anomalies).toEqual([]);
+    // one reading of three, and not the one kept: not on its own
+    expect(kinds(read([flagged(["date_inconsistency"], "partially"), flagged([]), flagged([])]))).toEqual([]);
+  });
+
+  it("adds a flag the résumé's extraction raised, in the code's words, and never twice", () => {
+    const out = read([flagged([]), flagged([]), flagged([])], EXTRACTION);
+    expect(out.anomalies).toEqual([{ kind: "possible_ai_generated", detail: expect.stringMatching(/generated or template text/) }]);
+    // never the extraction's own words, which can name the candidate
+    expect(JSON.stringify(out)).not.toContain("Taylor");
+    expect(kinds(read([flagged(["possible_ai_generated"]), flagged(["possible_ai_generated"]), flagged(["possible_ai_generated"])], EXTRACTION))).toEqual(["possible_ai_generated"]);
+  });
+
+  it("never moves the overall reading, the recommendation, the findings or the words", () => {
+    const plain = read([flagged([]), flagged([]), flagged([])]);
+    const withFlag = read([flagged([]), flagged([]), flagged([])], EXTRACTION);
+    expect(decided(withFlag)).toEqual(decided(plain));
+    expect({ ...withFlag, anomalies: [] }).toEqual(plain);
   });
 });
 

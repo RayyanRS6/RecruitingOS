@@ -201,8 +201,12 @@ describe("no number from the model", () => {
     // for what they have; version 4: the same definitions of each finding as the résumé reading; version 5 (D-04 = C):
     // the conversation through the scoring view; version 6: the answers and the progress in their own <answers> block;
     // version 7 (Wave S5): read three times, the licence rule, a lone "yes" is no quote; version 8 (Wave S9): a whole
-    // "Yes" or "No" to the closed question about a must-have is a plain answer to it.
-    expect(screenAssessPrompt.version).toBe(8);
+    // "Yes" or "No" to the closed question about a must-have is a plain answer to it; version 9 (Wave S9 round 2): how well
+    // the work is done never makes a competency partially evidenced on its own.
+    expect(screenAssessPrompt.version).toBe(9);
+    const screenPacket = { ...PACKET, screening: { questions: [], maxMinutes: 10 }, communication: { candidateMayBeTold: [], tone: "warm", humanAlternativeText: "Reply HUMAN." }, interviews: { plan: [] } };
+    const assessSystem = screenAssessPrompt.system({ company: { name: "Co" }, packet: screenPacket as never, candidate: { firstName: "A" }, channel: "web", progress: { askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0 }, answers: {}, transcript: [], focusUnknowns: [], latestCandidateMessage: null })[0]!.text;
+    expect(assessSystem).toMatch(/How well the candidate does the work .* is never the missing part that makes a competency partially_evidenced/);
     const input = { packet: PACKET as never, extraction: null, resumeText: RESUME, applicationAnswers: { eligibility: {} }, eligibility: null };
     expect(triageAssessPrompt.system(input).map((b) => b.text).join("\n")).not.toMatch(/secondaryScore|0 to 100/);
     fake.scriptNext("triage.assess", { ...reading(), secondaryScore: 87 });

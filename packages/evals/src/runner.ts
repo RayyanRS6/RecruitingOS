@@ -189,15 +189,31 @@ async function main() {
       const { promptInput, view, text: modelInput } = triageModelInput(app);
       const runs = await Promise.all(Array.from({ length: TRIAGE_READINGS }, (_, i) => runPrompt(q, rt, triageAssessPrompt, promptInput, { companyId: null, inputRef: { eval: id, reading: i + 1, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() } })));
       // what the app does once the model has answered (agents/src/triage.ts, readingsOutcome), not a copy of it
-      return { combined: readingsOutcome(runs, view, { resumeText: text, applicationAnswers, packet: role, eligibility, ...(who.keptIn ? { eligibilityKeptIn: true } : {}) }), raws: runs.flatMap((r) => (r.ok ? [r.output] : [])), seen: assessmentSources(promptInput), modelInput, app, setAside };
+      return { combined: readingsOutcome(runs, view, { resumeText: text, applicationAnswers, packet: role, eligibility, extraction, ...(who.keptIn ? { eligibilityKeptIn: true } : {}) }), raws: runs.flatMap((r) => (r.ok ? [r.output] : [])), runs, seen: assessmentSources(promptInput), modelInput, app, setAside };
+    };
+    /**
+     * Wave S9 round 2: what a failing edge case needs to be diagnosed next time (synthetic data): the flags the résumé's
+     * extraction raised, each reading's overall reading and flags as the model wrote them, and the reading the team sees.
+     */
+    const edgeRecord = (a: Awaited<ReturnType<typeof assess>>): { notes: string[]; diagnostics: CaseDiagnostics } => {
+      const flags = (xs: ReadonlyArray<{ kind: string; detail: string }>) => xs.map((x) => `${x.kind}: ${clipText(x.detail, 120)}`).join("; ") || "none";
+      return {
+        notes: [
+          `extraction flags: ${a.app.extraction ? flags(a.app.extraction.anomalies) : "no extraction"}`,
+          ...a.runs.map((r, i) => (r.ok ? `reading ${i + 1}: ${r.output.overall}, ${r.output.recommendation} | flags: ${flags(r.output.anomalies)}` : `reading ${i + 1}: none (${r.reason}: ${clipText(r.error, 200)})`)),
+          ...(a.combined.ok ? [`shown: ${a.combined.output.overall}, ${a.combined.output.recommendation} | flags: ${flags(a.combined.output.anomalies)}`] : []),
+        ],
+        diagnostics: { readings: a.runs.map((r, i) => ({ label: `reading ${i + 1}`, ...traceOutcome(r) })), shown: [{ label: "shown", ...traceOutcome(a.combined) }] },
+      };
     };
     /** A quote the model wrote is grounded when it is in what the model was given (the hidden view, placeholders and all). */
     const groundedIn = (raws: EvidenceAssessment[], seen: ReturnType<typeof assessmentSources>) => raws.flatMap((raw, i) => assessmentQuotesGrounded(raw, { resume: seen.resume ?? "", application: seen.application ?? "" }).map((x) => `reading ${i + 1}: ${x}`));
     for (const c of triageEdgeCases) {
-      const { combined: r, raws, seen } = await assess(c.id, c.resumeText, { candidate: c.candidate, noResumeSummary: c.noResumeSummary });
-      if (!r.ok) { edge.push({ id: c.id, pass: false, failures: [r.error] }); hall.push({ id: c.id, pass: false, failures: [r.error] }); continue; }
+      const read = await assess(c.id, c.resumeText, { candidate: c.candidate, noResumeSummary: c.noResumeSummary });
+      const { combined: r, raws, seen } = read;
+      if (!r.ok) { edge.push({ id: c.id, pass: false, failures: [r.error], ...edgeRecord(read) }); hall.push({ id: c.id, pass: false, failures: [r.error] }); continue; }
       const f = c.expect(r.output);
-      edge.push({ id: c.id, pass: f.length === 0, failures: f });
+      edge.push({ id: c.id, pass: f.length === 0, failures: f, ...(f.length ? edgeRecord(read) : {}) });
       const h = groundedIn(raws, seen);
       hall.push({ id: c.id, pass: h.length === 0, failures: h });
     }
