@@ -126,6 +126,15 @@ describe("the job-page preview (plan D1)", () => {
   it("needs the role and its pay: an interviewer, someone signed out, an unknown version or role each get a plain page", async () => {
     // a role they do not interview for answers as one that does not exist; one they do needs the pay as well
     expect((await json(interviewer, "GET", `/api/v1/roles/${roleId}/preview`)).status).toBe(404);
+    // opened in a tab, it is the preview's own plain page, never the API's JSON (Wave S5)
+    for (const path of [`/api/v1/roles/${roleId}/preview`, `/api/v1/roles/${roleId}/preview/page`]) {
+      const notOnIt = await tab(interviewer, path);
+      expect(notOnIt.status, path).toBe(404);
+      expect(notOnIt.headers.get("content-type"), path).toContain("text/html");
+      const html = decode(await notOnIt.text());
+      expect(html).toContain("This preview cannot be shown");
+      expect(html).toContain("Role not found.");
+    }
     const onIt = await putOnInterview(container, app, { cookie: interviewer, roleId });
     const asInterviewer = await tab(interviewer, `/api/v1/roles/${roleId}/preview`);
     expect(asInterviewer.status).toBe(403);

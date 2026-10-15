@@ -1,6 +1,6 @@
-import { and, eq, isNull, notInArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { SYSTEM_ACTOR, createEscalation, emit, raiseAlert, stoppedRunQuestion } from "@ros/core";
+import { SYSTEM_ACTOR, createEscalation, emit, raiseAlert, raiseAlertOnce, resolveAlertsOfKind, stoppedRunQuestion } from "@ros/core";
 import { jobs, randomToken, rowsOf, workflowRuns, workflowSteps, withTenant, type Queryable, type Tx, type WaitCondition } from "@ros/db";
 import type { EngineDeps, EngineOptions, PrepareContext, RunRow, StartInput, StepContext, StepResult, WakePayload, WorkflowDefinition } from "./types";
 
@@ -17,8 +17,89 @@ import type { EngineDeps, EngineOptions, PrepareContext, RunRow, StartInput, Ste
  * - Failures retry with exponential backoff; after `maxAttempts` the run fails, emits `workflow.failed`, and
  *   creates a recruiter escalation for the role or candidate involved (an alert for ITS administrators when the run
  *   names neither) so nothing dies silently.
+ * - An AI provider that is not answering is not a reason to give up (Wave S5 C2): such a failure is retried with
+ *   growing waits for at least `PROVIDER_OUTAGE_PATIENCE_MS`, then the run is held (not failed, no escalation), one
+ *   alert tells ITS, and a check every `AI_HOLD_CHECK_EVERY_MS` tries one held run; when it goes through, every held
+ *   run resumes by itself.
+ * - A job claimed by a worker keeps its lease while it runs (renewed every third of the lease), so a slow model step
+ *   is never picked up and repeated by a second worker.
  */
 export type JobHandler = (payload: Record<string, unknown>, ctx: { attempt: number; maxAttempts: number; now: Date }) => Promise<void>;
+
+/** How long a run keeps retrying while the AI provider is not answering, before it is held instead. */
+export const PROVIDER_OUTAGE_PATIENCE_MS = 60 * 60_000;
+/** The key a held run waits on (`wait.keys`); `signal` with it, or the hold check, wakes the run. */
+export const AI_HOLD_KEY = "ai.provider_available";
+/** The job that tries one held run and, when the provider answers, resumes all of them. Re-armed while runs are held. */
+export const AI_HOLD_CHECK_JOB_KIND = "workflow.ai_hold_check";
+export const AI_HOLD_CHECK_EVERY_MS = 15 * 60_000;
+/** The one alert a provider outage raises (not one escalation per application). */
+export const AI_OUTAGE_ALERT_KIND = "ai.provider_outage";
+/** How far apart held runs go again once the provider answers (each a few seconds after the one before). */
+export const HELD_RELEASE_SPACING_MS = 3000;
+
+/** The wait before a run's next try after its `attempts`-th failure: 2 s, 4 s, 8 s ... up to 10 minutes. */
+export function retryDelayMs(attempts: number): number {
+  return Math.min(10 * 60_000, 2000 * 2 ** (Math.max(1, attempts) - 1));
+}
+
+/** How many tries a run gets while the provider is out: enough that the waits between them add up to the patience. */
+export function outageAttempts(patienceMs = PROVIDER_OUTAGE_PATIENCE_MS): number {
+  let waited = 0;
+  let attempts = 1;
+  while (waited < patienceMs) {
+    waited += retryDelayMs(attempts);
+    attempts += 1;
+  }
+  return attempts;
+}
+
+/** Words a provider error carries when the provider did not answer: no connection, a timeout, an overload. */
+const UNAVAILABLE_WORDS = /connection|timed? ?out|timeout|did not finish|overloaded|outage|unavailable|bad gateway|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|socket hang up|fetch failed|network|terminated|aborted/i;
+
+/**
+ * What kind of provider trouble a step's error is, from the runner's "provider ..." error:
+ * - "outage": the provider did not answer (a 5xx or 529, a 408, 409 or 429, no connection, a timeout);
+ * - "account": a problem with the whole account that waiting alone will not fix but that hits every application the same
+ *   way (a 401 or 403, "credit balance is too low"): held like an outage, with an alert saying to check the key or billing;
+ * - null: anything else, such as a request the provider refused as malformed, or a local error the Anthropic adapter
+ *   wraps as "provider error: <message>" (a TypeError, a schema conversion): that fails like any other error, so a
+ *   fixed bug is not retried for an hour and held under an alert that says the provider is down.
+ * "provider threw" (a provider that threw instead of answering) counts as an outage unless it names a 4xx.
+ */
+export function providerProblem(error: string): "outage" | "account" | null {
+  const m = /^provider (error|threw|unavailable|account): (.*)$/s.exec(error.trim());
+  if (!m) return null;
+  const kind = m[1];
+  const rest = m[2] ?? "";
+  if (kind === "account") return "account";
+  if (kind === "unavailable") return "outage";
+  const status = /^(\d{3})\b/.exec(rest)?.[1];
+  if (status === "401" || status === "403" || /credit balance/i.test(rest)) return "account";
+  if (status) return status.startsWith("4") && !["408", "409", "429"].includes(status) ? null : "outage";
+  if (kind === "threw") return "outage";
+  return UNAVAILABLE_WORDS.test(rest) ? "outage" : null;
+}
+
+/** Whether a step's error is provider trouble that holds work instead of failing it (`providerProblem`). */
+export function isProviderOutage(error: string): boolean {
+  return providerProblem(error) !== null;
+}
+
+/** The longest a queued job waits between tries: long enough that a job given enough tries outlasts an hour's outage. */
+export const JOB_RETRY_CAP_MS = 15 * 60_000;
+/** The wait before a queued job's next try after its `attempts`-th failure: 2 s, 4 s, 8 s ... up to 15 minutes. */
+export function jobRetryDelayMs(attempts: number): number {
+  return Math.min(JOB_RETRY_CAP_MS, 1000 * 2 ** Math.max(1, attempts));
+}
+
+type HeldWait = WaitCondition & { keys: string[]; heldAt: string };
+type HeldRun = { id: string; companyId: string | null; token: string | null };
+
+/** The wake a held run gets when it goes again: its hold's own timer token, as a retry's timer carries. */
+function heldWake(run: HeldRun): WakePayload {
+  return run.token ? { kind: "timer", key: run.token } : { kind: "timer" };
+}
 
 /**
  * The request a stopped run raises, in plain words (packages/core/src/stopped-runs.ts, where the display sites also turn
@@ -38,6 +119,17 @@ export class WorkflowEngine {
     this.now = opts.now ?? (() => new Date());
     this.maxInlineSteps = opts.maxInlineSteps ?? 25;
     this.leaseMs = opts.leaseMs ?? 5 * 60_000;
+    // The engine's own job: runs held while the AI provider was out are tried again here (see `checkHeldRuns`).
+    // A check that falls over is armed again for later rather than retried to exhaustion: held runs are never left
+    // without one.
+    this.jobHandlers.set(AI_HOLD_CHECK_JOB_KIND, async () => {
+      try {
+        await this.checkHeldRuns();
+      } catch (err) {
+        console.error(`[queue] the AI hold check failed; it runs again in ${Math.round(AI_HOLD_CHECK_EVERY_MS / 60_000)} minutes: ${err instanceof Error ? err.message : String(err)}`);
+        await this.ensureQueued(this.deps.db, { kind: AI_HOLD_CHECK_JOB_KIND, runAt: new Date(this.now().getTime() + AI_HOLD_CHECK_EVERY_MS) });
+      }
+    });
   }
 
   register<S extends Record<string, unknown>>(def: WorkflowDefinition<S>): void {
@@ -143,32 +235,82 @@ export class WorkflowEngine {
       RETURNING id, kind, payload, attempts, max_attempts
     `));
     const rows = rowsOf<Record<string, unknown>>(claimed);
-    for (const job of rows) {
-      const id = Number(job.id);
-      const payload = (job.payload ?? {}) as { runId?: string; wake?: WakePayload };
-      try {
-        if (job.kind === "workflow.tick" && payload.runId) {
-          await this.tick(payload.runId, payload.wake ?? null);
-        } else if (job.kind !== "workflow.tick") {
-          const handler = this.jobHandlers.get(String(job.kind));
-          if (!handler) throw new Error(`no handler registered for job kind ${String(job.kind)}`);
-          await handler(job.payload as Record<string, unknown>, { attempt: Number(job.attempts), maxAttempts: Number(job.max_attempts), now: this.now() });
-        }
-        await this.deps.db.update(jobs).set({ status: "done" }).where(eq(jobs.id, id));
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const attempts = Number(job.attempts);
-        const max = Number(job.max_attempts);
-        if (attempts >= max) {
-          await this.deps.db.update(jobs).set({ status: "failed", lastError: message }).where(eq(jobs.id, id));
-          await this.jobFailedForGood({ kind: String(job.kind), jobId: id, attempts, error: message });
-        } else {
-          const delay = Math.min(60_000, 1000 * 2 ** attempts);
-          await this.deps.db.update(jobs).set({ lastError: message, lockedAt: null, lockedBy: null, runAt: new Date(this.now().getTime() + delay).toISOString() }).where(eq(jobs.id, id));
+    // Every claimed job keeps its lease from the moment it is claimed, not only from its turn: a batch of slow model steps
+    // run one after another would otherwise leave the later ones past the lease, for a second worker to claim and repeat.
+    const pending = new Set(rows.map((j) => Number(j.id)));
+    const releaseLease = this.keepLease(pending);
+    try {
+      for (const job of rows) {
+        const id = Number(job.id);
+        try {
+          // Still ours, right before it runs: a job another worker re-claimed (after a missed renewal) is theirs now.
+          if (!(await this.stillHolds(id))) continue;
+          await this.runClaimed(id, job);
+        } finally {
+          pending.delete(id);
         }
       }
+    } finally {
+      releaseLease();
     }
     return rows.length;
+  }
+
+  /** Re-takes this worker's lease on a claimed job right before running it; false when it is no longer this worker's. */
+  private async stillHolds(jobId: number): Promise<boolean> {
+    const mine = await this.deps.db
+      .update(jobs)
+      .set({ lockedAt: this.now().toISOString() })
+      .where(and(eq(jobs.id, jobId), eq(jobs.lockedBy, this.workerId), eq(jobs.status, "queued")))
+      .returning({ id: jobs.id });
+    return mine.length > 0;
+  }
+
+  /** Runs one claimed job and records how it ended: done, retried later with a growing wait, or failed for good. */
+  private async runClaimed(id: number, job: Record<string, unknown>): Promise<void> {
+    const payload = (job.payload ?? {}) as { runId?: string; wake?: WakePayload };
+    try {
+      if (job.kind === "workflow.tick" && payload.runId) {
+        await this.tick(payload.runId, payload.wake ?? null);
+      } else if (job.kind !== "workflow.tick") {
+        const handler = this.jobHandlers.get(String(job.kind));
+        if (!handler) throw new Error(`no handler registered for job kind ${String(job.kind)}`);
+        await handler(job.payload as Record<string, unknown>, { attempt: Number(job.attempts), maxAttempts: Number(job.max_attempts), now: this.now() });
+      }
+      await this.deps.db.update(jobs).set({ status: "done" }).where(eq(jobs.id, id));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const attempts = Number(job.attempts);
+      const max = Number(job.max_attempts);
+      if (attempts >= max) {
+        await this.deps.db.update(jobs).set({ status: "failed", lastError: message }).where(eq(jobs.id, id));
+        await this.jobFailedForGood({ kind: String(job.kind), jobId: id, attempts, error: message });
+      } else {
+        const delay = jobRetryDelayMs(attempts);
+        await this.deps.db.update(jobs).set({ lastError: message, lockedAt: null, lockedBy: null, runAt: new Date(this.now().getTime() + delay).toISOString() }).where(eq(jobs.id, id));
+      }
+    }
+  }
+
+  /**
+   * Keeps this worker's lease on the jobs it claimed and has not finished (audit row 113): `locked_at` moves forward every
+   * third of the lease, so a model step that takes longer than the lease, or a job waiting its turn behind slow ones in
+   * the same batch, is never claimed again by a second worker. Only while this worker still holds the job and it is
+   * still queued (a finished or released job is left alone). A renewal that fails is ignored: the next one tries again,
+   * and the lease is long enough for a missed one.
+   */
+  private keepLease(jobIds: ReadonlySet<number>): () => void {
+    const every = Math.max(1000, Math.floor(this.leaseMs / 3));
+    const timer = setInterval(() => {
+      if (!jobIds.size) return;
+      void this.deps.db
+        .update(jobs)
+        .set({ lockedAt: this.now().toISOString() })
+        .where(and(inArray(jobs.id, [...jobIds]), eq(jobs.lockedBy, this.workerId), eq(jobs.status, "queued")))
+        .catch(() => undefined);
+    }, every);
+    timer.unref?.();
+    return () => clearInterval(timer);
   }
 
   /**
@@ -321,15 +463,26 @@ export class WorkflowEngine {
   }
 
   private async handleRetry(def: WorkflowDefinition, run: RunRow, stepKey: string, seq: number, error: string, actor: Actor): Promise<"stop"> {
-    const attempts = run.attempts + 1;
+    const outage = isProviderOutage(error);
+    // A held run tried again (the hold check's probe): its count of outage tries is not ordinary failures. Another outage
+    // holds it again; any other failure is its first ordinary one, never its sixteenth.
+    const heldKeys = (run.wait as { keys?: unknown } | null | undefined)?.keys;
+    const wasHeld = Array.isArray(heldKeys) && heldKeys.includes(AI_HOLD_KEY);
+    const attempts = wasHeld && !outage ? 1 : run.attempts + 1;
     const max = def.maxAttempts ?? 3;
     if (await runHasEnded(this.deps.db, run.id)) return "stop"; // cancelled while the step ran: nothing to retry
     await this.deps.db.insert(workflowSteps).values({ runId: run.id, companyId: run.companyId, stepKey, seq, status: "error", input: {}, output: {}, attempts, error, finishedAt: this.now().toISOString() });
-    if (attempts >= max) {
+    // The AI provider not answering gets an hour of tries, then a hold that resumes by itself (never a failed run and an
+    // escalation per application). Any other failure keeps the definition's own number of tries.
+    if (outage && (wasHeld || attempts >= Math.max(max, outageAttempts()))) {
+      await this.holdForProvider(def, run, stepKey, error, actor, attempts);
+      return "stop";
+    }
+    if (!outage && attempts >= max) {
       await this.failForGood(def, run, stepKey, error, actor, attempts);
       return "stop";
     }
-    const delayMs = Math.min(10 * 60_000, 2000 * 2 ** (attempts - 1));
+    const delayMs = retryDelayMs(attempts);
     const until = new Date(this.now().getTime() + delayMs).toISOString();
     const token = randomToken(8);
     const retried = await this.deps.db.update(workflowRuns).set({ status: "waiting", attempts, lastError: error, wait: { kind: "timer", until, reason: `retry ${attempts}/${max}`, token } }).where(and(eq(workflowRuns.id, run.id), notInArray(workflowRuns.status, ENDED_STATUSES))).returning({ id: workflowRuns.id });
@@ -337,6 +490,89 @@ export class WorkflowEngine {
     await this.deps.db.insert(jobs).values({ kind: "workflow.tick", payload: { runId: run.id, wake: { kind: "timer", key: token } }, runAt: until });
     await emit(this.deps.db, { type: "workflow.retried", companyId: run.companyId, actor, subject: { type: "workflow_run", id: run.id }, payload: { step: stepKey, attempt: attempts, error, until }, correlationId: run.id });
     return "stop";
+  }
+
+  /**
+   * The AI provider has not answered for an hour of tries: the run waits on `AI_HOLD_KEY` instead of failing. Nothing is
+   * lost and nobody is asked to take over each application; ITS gets one alert for the whole outage (it stands while
+   * any run is held), and the hold check is armed to try again.
+   */
+  private async holdForProvider(def: WorkflowDefinition, run: RunRow, stepKey: string, error: string, actor: Actor, attempts: number): Promise<void> {
+    const now = this.now();
+    const wait: HeldWait = { kind: "event", eventTypes: [AI_HOLD_KEY], reason: "held: the AI provider is not answering; it resumes by itself when it answers again", token: randomToken(8), keys: [AI_HOLD_KEY], heldAt: now.toISOString() };
+    const held = await this.deps.db.update(workflowRuns).set({ status: "waiting", attempts, lastError: error, wait }).where(and(eq(workflowRuns.id, run.id), notInArray(workflowRuns.status, ENDED_STATUSES))).returning({ id: workflowRuns.id });
+    if (held.length === 0) return;
+    await emit(this.deps.db, { type: "workflow.waiting", companyId: run.companyId, actor, subject: { type: "workflow_run", id: run.id }, payload: { step: stepKey, held: true, reason: "ai_provider_outage", attempts, error, wait }, correlationId: run.id });
+    await this.ensureQueued(this.deps.db, { kind: AI_HOLD_CHECK_JOB_KIND, runAt: new Date(now.getTime() + AI_HOLD_CHECK_EVERY_MS) });
+    const account = providerProblem(error) === "account";
+    try {
+      await raiseAlertOnce(this.deps.db, {
+        kind: AI_OUTAGE_ALERT_KIND,
+        severity: "critical",
+        title: account ? "The AI provider refuses our account: applications are on hold" : "The AI provider is not answering: applications are on hold",
+        body: `A ${def.key} run stopped at "${stepKey}" after an hour of tries (${error.slice(0, 200)}). Runs like it are held, not failed: nothing is lost and no recruiter request is opened for each one. Every ${Math.round(AI_HOLD_CHECK_EVERY_MS / 60_000)} minutes one held run is tried again, and when the provider answers they all resume by themselves. ${account ? "The provider refused the account itself: check the API key or billing (credit balance)." : "Check the provider's status page and the API key."}`,
+        details: { workflowKey: def.key, step: stepKey, attempts, ...(account ? { cause: "account" } : {}) },
+      }, { now });
+    } catch (err) {
+      console.error(`[queue] could not raise the AI outage alert: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /** The runs held while the AI provider was out, the longest untouched first. */
+  async heldRuns(): Promise<HeldRun[]> {
+    const rows = await this.deps.db.select({ id: workflowRuns.id, companyId: workflowRuns.companyId, wait: workflowRuns.wait }).from(workflowRuns).where(and(eq(workflowRuns.status, "waiting"), sql`${workflowRuns.wait}->'keys' ? ${AI_HOLD_KEY}`)).orderBy(asc(workflowRuns.updatedAt), asc(workflowRuns.id));
+    return rows.map((r) => ({ id: r.id, companyId: r.companyId, token: r.wait?.token ?? null }));
+  }
+
+  /**
+   * Lets one held run go again `afterMs` from now: the hold becomes an ordinary retry timer with its count of tries back
+   * at zero, so a run that meets trouble after the outage gets the normal tries again (an hour's worth for the provider,
+   * the definition's own for anything else). The caller spreads the runs out, so a provider just recovering is not met
+   * by every held run in the same second.
+   */
+  private async releaseHeld(q: Queryable, run: HeldRun, afterMs: number): Promise<void> {
+    const until = new Date(this.now().getTime() + afterMs).toISOString();
+    const token = randomToken(8);
+    const released = await q
+      .update(workflowRuns)
+      .set({ attempts: 0, wait: { kind: "timer", until, reason: "resuming: the AI provider answers again", token } })
+      .where(and(eq(workflowRuns.id, run.id), eq(workflowRuns.status, "waiting"), sql`${workflowRuns.wait}->'keys' ? ${AI_HOLD_KEY}`))
+      .returning({ id: workflowRuns.id });
+    if (released.length) await q.insert(jobs).values({ kind: "workflow.tick", payload: { runId: run.id, wake: { kind: "timer", key: token } }, runAt: until });
+  }
+
+  /**
+   * The hold check (`AI_HOLD_CHECK_JOB_KIND`): the run held longest goes again now, as a probe. If it gets past the step
+   * (or stops for some other reason than the provider), the provider is answering, and every other held run is queued
+   * to go again too; if it is held again, the provider is still out and the check comes back later. The outage alert is
+   * resolved once no run is held. Every held run resumes where it stopped, as from a retry.
+   */
+  async checkHeldRuns(): Promise<{ held: number; resumed: number; providerAnswers: boolean }> {
+    const held = await this.heldRuns();
+    if (!held.length) {
+      await resolveAlertsOfKind(this.deps.db, AI_OUTAGE_ALERT_KIND, { now: this.now(), reason: "no work is held for the AI provider any more" });
+      return { held: 0, resumed: 0, providerAnswers: true };
+    }
+    const [probe, ...rest] = held;
+    try {
+      await this.tick(probe.id, heldWake(probe));
+    } catch (err) {
+      console.warn(`[queue] the held run ${probe.id} could not be tried again: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const [after] = await this.deps.db.select({ status: workflowRuns.status, wait: workflowRuns.wait }).from(workflowRuns).where(eq(workflowRuns.id, probe.id)).limit(1);
+    const keys = (after?.wait as { keys?: unknown } | null | undefined)?.keys;
+    const heldAgain = after?.status === "waiting" && Array.isArray(keys) && keys.includes(AI_HOLD_KEY);
+    // A probe that failed for another reason says nothing about the provider: the next check tries another run.
+    const providerAnswers = !!after && !heldAgain && after.status !== "failed";
+    if (providerAnswers) {
+      // a few seconds apart, so the recovering provider is not met by every held run at once
+      for (const [i, r] of rest.entries()) await this.releaseHeld(this.deps.db, r, (i + 1) * HELD_RELEASE_SPACING_MS);
+      for (const r of [probe, ...rest]) await emit(this.deps.db, { type: "workflow.resumed", companyId: r.companyId, actor: SYSTEM_ACTOR, subject: { type: "workflow_run", id: r.id }, payload: { reason: "ai_provider_answers" }, correlationId: r.id });
+    }
+    const stillHeld = providerAnswers ? rest.length : held.length - (heldAgain ? 0 : 1);
+    if (stillHeld > 0) await this.ensureQueued(this.deps.db, { kind: AI_HOLD_CHECK_JOB_KIND, runAt: new Date(this.now().getTime() + AI_HOLD_CHECK_EVERY_MS) });
+    else await resolveAlertsOfKind(this.deps.db, AI_OUTAGE_ALERT_KIND, { now: this.now(), reason: "the AI provider answers again; the held work resumed" });
+    return { held: held.length, resumed: providerAnswers ? held.length : 0, providerAnswers };
   }
 
   private async failForGood(def: WorkflowDefinition, run: RunRow, stepKey: string, error: string, actor: Actor, attempts = run.attempts + 1): Promise<void> {

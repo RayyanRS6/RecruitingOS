@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, like } from "drizzle-orm";
 import type { ApplicationStage, MembershipRole } from "@ros/contracts";
 import { entitlements, openFollowUp, type FollowUpStrip } from "@ros/core";
-import { newTimesDayWords } from "@ros/agents";
+import { SCORECARD_READINGS, newTimesDayWords } from "@ros/agents";
 import { applications, candidates, communications, companies, events, interviewFollowups, interviews, policies, randomToken, recruiterEscalations, screens, users, withTenant, workflowRuns } from "@ros/db";
 import { armNewTimes } from "@ros/workflows";
 import { createApp } from "./app";
@@ -422,8 +422,8 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect((await detail(owner, id)).screens[0]).toMatchObject({ status: "completed", scorecard: "writing", recruiterAsked: false });
       // The assistant's answer is unusable twice (the runner asks again once); the step says trying again cannot help, so
       // the run gives up on the first try instead of spending more model calls: no retry is ever scheduled.
-      container.fake!.failNext("screen.assess", "invalid");
-      container.fake!.failNext("screen.assess", "invalid");
+      // (each of the SCORECARD_READINGS readings: the scorecard is read three times, Wave S5)
+      for (let i = 0; i < 2 * SCORECARD_READINGS; i++) container.fake!.failNext("screen.assess", "invalid");
       await container.drain();
       container.fake!.clearScripts();
       const [run] = await container.db.select().from(workflowRuns).where(eq(workflowRuns.id, scr.workflowRunId!));

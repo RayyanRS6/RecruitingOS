@@ -153,7 +153,27 @@ the outbox (every email and text the product queues inside a transaction is sent
 committed, once), credential revocation and deletion, interview calendar-event cancellation, the daily privacy-deadline
 check, the daily maintenance sweep (expired sessions and sign-in links, finished jobs, old webhook receipts and policy
 reports, old heartbeats, interrupted sends, then the stale-worker and stale-queue checks), email retry and the SMS
-fallback. Every step is idempotent and leased; a failed step retries with backoff up to the workflow's maximum, then
-the run is marked failed and escalated, and a job that uses up its attempts raises a `job.failed` alert; both reach
-Sentry with kinds and ids only. Every poll also writes the worker's heartbeat. Until the worker runs, no email or text
+fallback. Every step is idempotent and leased; a running job renews its lease, so a slow AI step is never picked up by
+a second worker. A failed step retries with backoff up to the workflow's maximum, then the run is marked failed and
+escalated, and a job that uses up its attempts raises a `job.failed` alert; both reach Sentry with kinds and ids only.
+Every poll also writes the worker's heartbeat.
+
+Outages (Wave S5, 15 October 2026):
+
+- **AI provider.** An outage error (5xx, 408, 409, 429, a timeout or a refused connection) retries with growing waits
+  for over an hour, then the run is held (`waiting` on `ai.provider_available`), not failed, and one critical
+  `ai.provider_outage` alert is raised (emailed to the platform administrators); no recruiter request is opened per
+  application. A `workflow.ai_hold_check` job retries the oldest held run every 15 minutes; when it gets through,
+  every held run resumes and the alert resolves. A 401, 403 or credit-balance answer counts as an account problem:
+  work is held the same way and the alert says to check the key or the billing.
+- **Email and SMS.** A queued message retries for about an hour (13 tries) before it is marked failed. Postmark and
+  Twilio calls time out after 30 seconds; a Postmark send whose reply was cut off is marked "unknown" and never sent
+  again, with a delivery-unknown alert.
+- **The hourly check** (`ops.health_check`) also marks sends left in `sending` for more than five minutes as unknown,
+  and raises one `escalation.overdue` alert for each recruiter request still unclaimed after its reply-by time
+  (critical when the request is critical, otherwise high; the request's words never go in the alert).
+- **The ITS queue mailbox** (`ITS_QUEUE_EMAIL`) now also gets the recruiter requests the product raises itself
+  (a candidate asking for a person, a screening hand-off, a stopped workflow, an eligibility hold, a privacy review,
+  a scheduling problem, a decision nobody sent), once each, through the outbox. Every direct email to ITS is recorded
+  in `communications`, retried, and raises `message.delivery_failed` if it never goes. Until the worker runs, no email or text
 leaves staging: the messages wait in the queue as `queued` rows in `communications`.

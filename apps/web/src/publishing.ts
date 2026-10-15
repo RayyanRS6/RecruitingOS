@@ -247,6 +247,8 @@ export function liveEditWords(material: readonly MaterialChange[]): { heading: s
 export function savedVersionToast(r: NewVersionResponse, whoPosts: WhoPosts): { title: string; detail?: string } {
   const guard = r.guardChanges?.length ? r.guardChanges.join(" ") : "";
   const join = (...parts: Array<string | null | undefined>) => parts.filter(Boolean).join(" ") || undefined;
+  // a paused job shows the version only when it resumes
+  if (r.outcome === "approved_current" && r.paused) return { title: `Version ${r.version} is current.`, detail: join("It shows when you resume the job.", guard) };
   if (r.outcome === "approved_current") return { title: `Version ${r.version} is live.`, detail: join(outdatedBoardsLine(r.boardsShowingOldVersion ?? [], whoPosts) ?? "The job page shows it now.", guard) };
   if (r.outcome === "proposed_pending_approval") {
     if (r.needsApproval) return { title: `Saved as version ${r.version}. It waits for approval.`, detail: join(r.needsApproval.words, r.needsApproval.youMayConfirm ? "As the company's only owner, you confirm it yourself on the approval card at the top of the role page." : "The job keeps running as it is until then.", guard) };

@@ -6,9 +6,9 @@ import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ApplyRequest, CandidateSmsPreference, CandidateStep, MAX_RESUME_BYTES, SCREEN_PERSON_ROUTE_STATUSES, TapAnswer, inspectResumeFile, isCompanyVerified, type ApplicationStage, type DecisionWording, type ReviewItem, type RolePacket, type TapFormat } from "@ros/contracts";
 import { MOVED_ON_MESSAGE, SKIPPED_MESSAGE, WITHDRAW_CONFIRM_KEY, newTimesDayWords } from "@ros/agents";
-import { CLOSING_DATE_REASON, DECISION_STAGES, applyByLabel, audit, benefitsDescriptionFor, candidateNewTimesPromise, candidateStep, closingDayWords, createDataRequest, decisionTold, emit, fulfilSmsOptOut, fulfilWithdrawal, jobNoticesFor, mayWithdraw, noticesFor, notify, openFollowUpOf, openHumanReview, openPayload, sealPayload, transition, type NewTimesPromise, type Notice } from "@ros/core";
+import { CLOSING_DATE_REASON, DECISION_STAGES, applyByLabel, audit, benefitsDescriptionFor, candidateNewTimesPromise, candidateStep, closingDayWords, createDataRequest, decisionTold, emit, fulfilSmsOptOut, jobNoticesFor, mayWithdraw, noticesFor, notify, openFollowUpOf, openHumanReview, openPayload, sealPayload, transition, type NewTimesPromise, type Notice } from "@ros/core";
 import { CandidatePrivacyRequest } from "@ros/contracts";
-import { sendPrivacyAcknowledgment, sendPrivacyCompletion } from "@ros/agents";
+import { sendPrivacyAcknowledgment } from "@ros/agents";
 import { applications, candidates, communications, companies, dataRequests, events, interviewFollowups, interviews, rolePackets, roles, screens, uuidv7, withPlatform, withTenant, type Tx } from "@ros/db";
 import { LOGO_FILE, jobPostingJsonLd, refFor } from "@ros/integrations";
 import { randomToken } from "@ros/db";
@@ -16,7 +16,7 @@ import { UPLOAD_GRANT_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS, checkUploadIntent, qu
 import { clientIp, type Vars } from "../middleware/session";
 import type { Container } from "../container";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
-import { createApplication, markUploadUsed, queueLinkRequest, uploadAlreadyUsed, type ResumeInput } from "../services/applications";
+import { createApplication, markUploadUsed, queueLinkRequest, recordWithdrawal, rotateStatusLink, uploadAlreadyUsed, type ResumeInput } from "../services/applications";
 import { confirmRepeat, conversationEdit, conversationLater, conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, conversationWithdraw, findConversation, repeatConfirmationView, startApplyConversation, type ConversationRef, type ConversationView, type RepeatConfirmationView, type TurnAction } from "../services/apply-conversation";
 import { lateApplicationAllowed, sealFormOpened } from "../services/closing-date";
 import { approvedAbout, contactLineFor, logoPublicPath, logoPublicUrl, logoResponse, profileOf } from "../services/company-settings-profile";
@@ -402,7 +402,7 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
     const postedFile = !!posted && typeof posted === "object" && "size" in posted && (posted as File).size > 0;
     const resumeLost = !keptResume && (postedFile || !!grantBack);
     const still = keptSentence(resumeLost);
-    return again(onlyAcknowledgment ? `One more step: please confirm you have read the notice at the bottom of the form. ${still}` : `Please check the highlighted fields: a first name, last name, a valid email, and the confirmation at the bottom of the form are required. ${still}`, missing, { resume: keptResume, resumeLost });
+    return again(onlyAcknowledgment ? `One more step: please confirm you have read the notice at the bottom of the form. ${still}` : `${applyFormProblem(missing)} ${still}`, missing, { resume: keptResume, resumeLost });
   }
 
   let resume: ResumeInput | null = null;
@@ -478,6 +478,27 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply", rateLimit(POLICIES.appl
   // An answer that did not match an eligibility question gets the neutral receipt (E7): no conversation, nothing said about why.
   return toReceipt(c, job, parsed.data.email, next.reason === "conversation_by_email" ? "conversation_by_email" : "review");
 });
+
+/** What each field the form checks needs, in the words the error line uses (known-bugs row 72). */
+const FIELD_PROBLEM: Record<string, string> = {
+  firstName: "your first name",
+  lastName: "your last name",
+  email: "a valid email address",
+  phone: "a phone number of at least 7 digits, or leave it empty",
+  locationText: "a shorter place (120 characters at most)",
+  acknowledged: "the confirmation box at the bottom of the form",
+};
+
+/**
+ * The error line over a form sent back: it names exactly the fields that are highlighted, so a short phone number or a
+ * long place is never blamed on the name, the email or the confirmation box.
+ */
+export function applyFormProblem(missing: readonly string[]): string {
+  const named = missing.map((m) => FIELD_PROBLEM[m]).filter((x): x is string => !!x);
+  if (!named.length) return "Please check the highlighted fields and send the form again.";
+  const list = named.length === 1 ? named[0] : `${named.slice(0, -1).join(", ")} and ${named.at(-1)}`;
+  return `Please check the highlighted ${named.length === 1 ? "field" : "fields"}: ${list}.`;
+}
 
 /**
  * The receipt (Wave 0 item 0.1). Identical for a first application, a repeat one and a bot; it never names a status
@@ -757,6 +778,11 @@ export function chatCounts(screen: { status: string; startedAt?: Date | string |
   return !!screen.startedAt;
 }
 
+/** A day on the status page ("Oct 14, 2026"), in the company's time zone. */
+export function statusDay(at: string | Date, timeZone: string): string {
+  return new Date(at).toLocaleDateString("en-US", { timeZone, month: "short", day: "numeric", year: "numeric" });
+}
+
 /** The progress line as the page draws it: a circle per step (a tick once done), the words, and "done" for a screen reader. */
 function ProgressLine(props: { steps: ProgressStep[]; current: ProgressStep }) {
   const at = props.steps.indexOf(props.current);
@@ -831,6 +857,8 @@ candidatePages.get("/c/status/:token", async (c) => {
   // "Don't keep me for future roles", from the decision message's link (#future-roles) or the button: it says it was saved.
   const pool = c.req.query("pool");
   const poolSaved = (pool === "out" && poolOptOut) || (pool === "in" && !poolOptOut);
+  // Dates on the page are the company's days, never the server's (known-bugs row 73).
+  const companyZone = company?.timezone ?? "America/Los_Angeles";
   return c.html(
     <Layout title={`Your application at ${company?.name ?? ""}`} extraCss={STATUS_CSS}>
       <p class="eyebrow">{company?.name ? `${company.name} · ` : ""}Your application</p>
@@ -854,8 +882,8 @@ candidatePages.get("/c/status/:token", async (c) => {
       <div class="card status">
         {/* The same name for where they are as the progress line above: one vocabulary on the page. */}
         <div><span>Status</span><strong>{PROGRESS_STEP_LABEL[progress.current]}</strong></div>
-        <div><span>Applied</span><span>{new Date(app.createdAt).toLocaleDateString()}</span></div>
-        <div><span>Last update</span><span>{new Date(view.since).toLocaleDateString()}</span></div>
+        <div><span>Applied</span><span>{statusDay(app.createdAt, companyZone)}</span></div>
+        <div><span>Last update</span><span>{statusDay(view.since, companyZone)}</span></div>
       </div>
       <h2>Your choices</h2>
       {smsEnabled || smsOn ? (
@@ -917,6 +945,14 @@ candidatePages.get("/c/status/:token", async (c) => {
           <textarea id="pd" name="details" rows={3} maxlength={2000} placeholder="For example: my phone number is wrong, it should be ..."></textarea>
           <p class="notice">Requests made from this page are verified by the link itself. We confirm receipt and completion by email. Deleting keeps only what the law requires, without your name or contact details. A person handles every request; nothing is decided by software.</p>
           <button class="btn secondary" type="submit">Send request</button>
+        </form>
+      </details>
+      {/* Known-bugs row 48: a link shared by mistake can be replaced; the new one goes only to the email on file. */}
+      <details class="more">
+        <summary>Shared this link by mistake?</summary>
+        <form method="post" action={`/c/status/${app.statusToken}/new-link`} class="card">
+          <p>Get a new link and this one stops working. We email the new link to the address on your application.</p>
+          <button class="btn secondary" type="submit">Get a new link</button>
         </form>
       </details>
       <p class="foot"><a href="/privacy">How we handle your information</a></p>
@@ -1761,7 +1797,7 @@ function ConfirmAnswersPage(props: { view: RepeatConfirmationView; token: string
       ) : (
         <>
           <h1>{person ? "Ask a person to contact you?" : "Add these answers to your application?"}</h1>
-          <p class="lead">Someone using your email address applied again for this job and {happened}. Nothing has been added to your application yet.</p>
+          <p class="lead">Someone using your email address sent an application for this job and {happened}. Nothing has been added to your application yet.</p>
           <form method="post" action={`/c/confirm-answers/${props.token}`} class="card">
             <p>If that was you, press the button {person ? "and a person will be in touch" : "to add those answers to your application"}.</p>
             <button class="btn" type="submit">{person ? "Yes, ask a person to contact me" : "Add these answers to my application"}</button>
@@ -1857,18 +1893,38 @@ candidatePages.post("/c/status/:token/withdraw", rateLimit(POLICIES.withdraw), a
       const [role] = await tx.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
       await notify(tx, { companyId: app.companyId, kind: "candidate.withdrawn", title: `${cand.firstName} ${cand.lastName} withdrew`, body: `They withdrew from ${role.title} using the link on their status page.`, action: { label: "See talent", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
     });
-    // the withdrawal is also a recorded request, fulfilled at once, so the audit trail and the confirmation are the same as for any other request (platform role: the tenant role cannot write that table)
-    await withPlatform(container.db, async (tx) => {
-      const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
-      const actor = { kind: "candidate" as const, id: app.candidateId };
-      const req = await createDataRequest(tx, { companyId: app.companyId, kind: "withdrawal", requesterEmail: cand?.email ?? `unknown+${app.candidateId}@example.invalid`, candidateId: app.candidateId, applicationId: app.id, channel: "status_page", verified: true, actor, now: container.engine.clock() });
-      const done = await fulfilWithdrawal(tx, req, actor, container.engine.clock());
-      const [company] = await tx.select({ name: companies.name }).from(companies).where(eq(companies.id, app.companyId)).limit(1);
-      if (cand?.email) await sendPrivacyCompletion(tx, container.integrations, { row: done, companyName: company?.name ?? "the hiring team", privacyEmail: container.env.PRIVACY_EMAIL, actor });
-    });
+    // the withdrawal is also a recorded request, fulfilled at once, so the audit trail and the confirmation are the same as for any other request
+    await recordWithdrawal(container, app, "status_page");
     await container.kick();
   }
   return c.redirect(`/c/status/${app.statusToken}?withdrawn=1`);
+});
+
+/**
+ * "Get a new link" (known-bugs row 48): the status link is replaced by a new random one and this one stops working. The
+ * new link goes by email to the address on file, never to this page: whoever pressed may be someone the link was
+ * forwarded to. The answer is a page of its own, since the address it was pressed from no longer opens anything.
+ */
+candidatePages.post("/c/status/:token/new-link", rateLimit(POLICIES.withdraw), async (c) => {
+  const container = c.get("container");
+  // The token is looked up before any company is known: a platform read, not a raw query on the connection.
+  const [app] = await withPlatform(container.db, (tx) => tx.select().from(applications).where(eq(applications.statusToken, c.req.param("token") ?? "")).limit(1));
+  if (!app) return c.notFound();
+  if (await anonymizedFor(container, app.candidateId)) return linkGone(c);
+  const out = await rotateStatusLink(container, app.id, app.companyId);
+  await container.kick();
+  c.header("Cache-Control", "no-store");
+  return c.html(
+    <Layout title="Check your email">
+      <p class="eyebrow">Your application</p>
+      <h1>Your new link is on its way</h1>
+      <div class="card" role="status">
+        <p><strong>The link you used no longer works.</strong></p>
+        <p>{out.emailedTo ? `We emailed a new link to ${maskEmail(out.emailedTo)}. It can take a few minutes; look in your spam folder too.` : "We have no email address for this application, so reply to any of our emails and a person will send you a new link."}</p>
+      </div>
+      <p class="foot"><a href="/c/link-request">Lost the email? Get your link again</a> · <a href="/privacy">How we handle your information</a></p>
+    </Layout>,
+  );
 });
 
 candidatePages.post("/c/status/:token/sms", rateLimit(POLICIES.smsPref), async (c) => {

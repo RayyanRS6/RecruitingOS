@@ -1,7 +1,11 @@
 import { createHmac } from "node:crypto";
+import { thrownSendFailure } from "../send-failure";
 import type { OutboundSms, SendResult, SmsAdapter } from "../types";
 
 export type TwilioConfig = { accountSid?: string; authToken?: string; messagingServiceSid?: string; from?: string };
+
+/** How long one send may take, the reply included (audit row 121); a hung call would otherwise hold the worker's loop. */
+export const TWILIO_TIMEOUT_MS = 30_000;
 
 /**
  * Twilio Programmable Messaging (docs/15). Live only with credentials and a messaging service (A2P 10DLC campaign);
@@ -11,7 +15,7 @@ export type TwilioConfig = { accountSid?: string; authToken?: string; messagingS
 export class TwilioSmsAdapter implements SmsAdapter {
   readonly id = "twilio";
   readonly status: "live" | "not_connected";
-  constructor(private cfg: TwilioConfig, private fetchImpl: typeof fetch = fetch) {
+  constructor(private cfg: TwilioConfig, private fetchImpl: typeof fetch = fetch, private timeoutMs: number = TWILIO_TIMEOUT_MS) {
     this.status = cfg.accountSid && cfg.authToken && (cfg.messagingServiceSid || cfg.from) ? "live" : "not_connected";
   }
 
@@ -20,8 +24,11 @@ export class TwilioSmsAdapter implements SmsAdapter {
     const body = new URLSearchParams({ To: msg.to, Body: msg.body });
     if (this.cfg.messagingServiceSid) body.set("MessagingServiceSid", this.cfg.messagingServiceSid);
     else if (this.cfg.from) body.set("From", this.cfg.from);
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), this.timeoutMs);
     try {
       const res = await this.fetchImpl(`https://api.twilio.com/2010-04-01/Accounts/${this.cfg.accountSid}/Messages.json`, {
+        signal: deadline.signal,
         method: "POST",
         headers: { Authorization: `Basic ${Buffer.from(`${this.cfg.accountSid}:${this.cfg.authToken}`).toString("base64")}`, "Content-Type": "application/x-www-form-urlencoded", "Idempotency-Key": msg.idempotencyKey },
         body: body.toString(),
@@ -31,7 +38,11 @@ export class TwilioSmsAdapter implements SmsAdapter {
       const retryable = res.status === 429 || res.status >= 500;
       return { status: "failed", error: `twilio ${res.status}${json.code ? ` (${json.code})` : ""}: ${json.message ?? "send failed"}`, retryable };
     } catch (err) {
-      return { status: "failed", error: `twilio unreachable: ${err instanceof Error ? err.message : String(err)}`, retryable: true };
+      // Twilio's Messages API documents no de-duplication, so a send cut off after the request may have gone is never
+      // tried again on a guess (`thrownSendFailure`): only a failure to connect is.
+      return thrownSendFailure("twilio", err, deadline.signal.aborted, this.timeoutMs);
+    } finally {
+      clearTimeout(timer);
     }
   }
 }

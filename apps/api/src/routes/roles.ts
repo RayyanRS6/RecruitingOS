@@ -11,11 +11,11 @@ import { applyBatch, previewBatch } from "../services/review-apply";
 import { emailHolderAboutNote, emailItsQueue, queueNoticeOf, type HeldNote, type QueueNotice } from "../services/escalation-queue";
 import { COMPARE_MAX, compareCandidates } from "./compare";
 import { armClosingDate } from "@ros/workflows";
-import { untoldFallbackAt, workingDayRulesFor } from "@ros/agents";
+import { readingRunIds, untoldFallbackAt, workingDayRulesFor } from "@ros/agents";
 import { autoActionsOnOpen, boardChoices, closingDateFor } from "../services/publishing";
 import { withEmptyPay, withoutPay } from "../services/pay-redaction";
 import { assertMayApprovePacket, packetApprovalView } from "../services/packet-approval";
-import { createPacketVersion, currentVersionOf } from "../services/packet-versions";
+import { CLOSED_ROLE_MESSAGE, createPacketVersion, currentVersionOf, settleVersionsSavedWhilePaused } from "../services/packet-versions";
 import { aiRuns, applicationMarks, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviewFollowups, interviews, postings, recruiterEscalations, rolePackets, roles, screens, withTenant } from "@ros/db";
 import { actorOf, applicationScopeGuard, clientIp, requireTenant, roleScopeGuard, rolesInterviewedBy, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
@@ -168,6 +168,7 @@ roleRoutes.get("/:id/packets", requireTenant, async (c) => {
  * A human edit creates a new version; nothing is overwritten. What happens next depends on the role and the editor
  * (services/packet-versions.ts): an approver's edit to an open role is current at once; anyone else's waits for
  * approval while the role keeps running on the approved version; an edit to a pending role replaces its approval request.
+ * A paused role takes an edit like an open one; a closed role refuses it (409 `role_closed`), in plain words.
  */
 roleRoutes.post("/:id/packets", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -177,11 +178,12 @@ roleRoutes.post("/:id/packets", requireTenant, async (c) => {
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
     if (!role) throw new HttpError(404, "not_found", "Role not found.");
+    if (role.status === "closed") throw new HttpError(409, "role_closed", CLOSED_ROLE_MESSAGE);
     const made = await createPacketVersion(tx, container, { tenant: t, actor: actorOf(c), role, packet: body.packet, changeSummary: body.changeSummary });
     // `guardChanges` says what the packet guard changed on its own (a must-have it took out, the ceiling it raised), so the page can tell the person.
     // `needsApproval` says why an approver's change to a live job waits (Q10) and whether they may confirm it themselves;
     // `boardsShowingOldVersion` names the boards still showing the earlier version once a change is live (D4).
-    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId, guardChanges: made.guardChanges, needsApproval: made.needsApproval, boardsShowingOldVersion: made.boardsShowingOldVersion };
+    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId, guardChanges: made.guardChanges, needsApproval: made.needsApproval, boardsShowingOldVersion: made.boardsShowingOldVersion, ...(made.paused ? { paused: true } : {}) };
   });
   await container.kick();
   return c.json(result, 201);
@@ -241,7 +243,12 @@ for (const action of ["pause", "resume"] as const) {
       const [updated] = await tx.update(roles).set(patch).where(and(eq(roles.id, role.id), eq(roles.status, action === "pause" ? "open" : "paused"))).returning();
       if (!updated) throw new HttpError(409, action === "pause" ? "not_open" : "not_paused", "Someone changed this role a moment ago. Refresh to see where it is now.");
       await emit(tx, { type: action === "pause" ? "role.paused" : "role.resumed", companyId: t.companyId, actor: actorOf(c), subject: { type: "role", id: role.id }, payload: { reason: body.reason ?? null } });
-      if (action === "resume") await container.engine.start(tx, { workflowKey: "publish_role", companyId: t.companyId, subject: { type: "role", id: role.id }, state: { roleId: role.id, packetVersion: role.currentPacketVersion }, actor: actorOf(c) });
+      if (action === "resume") {
+        // A version saved during the pause is never dropped (row 12): one still waiting with no approval asked gets its
+        // request now; the job publishes the version that is current (an approver's edit during the pause already is).
+        await settleVersionsSavedWhilePaused(tx, container, { companyId: t.companyId, role: updated, actor: actorOf(c) });
+        await container.engine.start(tx, { workflowKey: "publish_role", companyId: t.companyId, subject: { type: "role", id: role.id }, state: { roleId: role.id, packetVersion: updated.currentPacketVersion }, actor: actorOf(c) });
+      }
       return updated;
     });
     await container.kick();
@@ -826,7 +833,8 @@ applicationRoutes.post("/:id/assessments/:assessmentId/flag", requireTenant, asy
     if (asmt.kind === "screen" && unsentScreenReadings(await tx.select({ status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(eq(screens.applicationId, asmt.applicationId)), [asmt]).has(asmt.id)) throw new HttpError(404, "not_found", "Assessment not found.");
     const at = new Date().toISOString();
     const flag = { kind: body.kind, note: body.note ?? null, by: actor, at };
-    if (asmt.aiRunId) await tx.update(aiRuns).set({ humanOverride: flag }).where(eq(aiRuns.id, asmt.aiRunId));
+    // every run behind the reading (the three readings are linked to the kept one: `linkReadingRuns` in @ros/agents)
+    if (asmt.aiRunId) await tx.update(aiRuns).set({ humanOverride: flag }).where(inArray(aiRuns.id, await readingRunIds(tx, asmt.aiRunId)));
     await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: asmt.applicationId }, payload: { action: "flag_assessment", assessmentId: asmt.id, kind: body.kind, note: body.note ?? null, aiRunId: asmt.aiRunId } });
     await audit(tx, { companyId: t.companyId, actor, action: "assessment.flagged", target: { type: "ai_run", id: asmt.aiRunId ?? asmt.id }, reason: `${body.kind}${body.note ? `: ${body.note}` : ""}` });
     // An ITS recruiter flagging a reading is ITS already: recorded, with no request to itself.

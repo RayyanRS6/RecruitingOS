@@ -216,4 +216,25 @@ describe("calendar providers (slice 5 steps 6 and 8)", () => {
     expect(calls.filter((c) => c.url.startsWith("https://oauth2.googleapis.com/token")).length).toBe(1);
     for (const c of calls) if (c.auth) expect(c.auth).toBe("Bearer ya29.fakeaccess");
   });
+
+  it("a Google 403 is retried only when it says 'slow down'; a permission refusal is not retried (audit 06, bug 102)", async () => {
+    const { GoogleCalendarProvider, googleRateLimited } = await import("./calendar/google");
+    const { CalendarError } = await import("./calendar/types");
+    const forbidden = (body: unknown) => (async (url: string) => {
+      if (url.startsWith("https://oauth2.googleapis.com/token")) return new Response(JSON.stringify({ access_token: "ya29.x", expires_in: 3600 }));
+      return new Response(JSON.stringify(body), { status: 403 });
+    }) as unknown as typeof fetch;
+    const range = { start: "2026-09-21T00:00:00Z", end: "2026-09-22T00:00:00Z" };
+    const slow = new GoogleCalendarProvider({ clientId: "cid", clientSecret: "cs", fetch: forbidden({ error: { code: 403, errors: [{ reason: "rateLimitExceeded" }] } }) });
+    const slowErr = await slow.freeBusy({ refreshToken: "r1" }, { calendarIds: ["primary"], range }).catch((e: unknown) => e);
+    expect(slowErr).toBeInstanceOf(CalendarError);
+    expect(slowErr).toMatchObject({ code: "rate_limited", retryable: true });
+    const denied = new GoogleCalendarProvider({ clientId: "cid", clientSecret: "cs", fetch: forbidden({ error: { code: 403, status: "PERMISSION_DENIED", errors: [{ reason: "insufficientPermissions" }] } }) });
+    const deniedErr = await denied.freeBusy({ refreshToken: "r2" }, { calendarIds: ["primary"], range }).catch((e: unknown) => e);
+    expect(deniedErr).toMatchObject({ code: "permission_denied", retryable: false });
+    expect(googleRateLimited(JSON.stringify({ error: { status: "RESOURCE_EXHAUSTED" } }))).toBe(true);
+    expect(googleRateLimited(JSON.stringify({ error: { errors: [{ reason: "userRateLimitExceeded" }] } }))).toBe(true);
+    expect(googleRateLimited("not json")).toBe(false);
+    expect(googleRateLimited(JSON.stringify({ error: { errors: [{ reason: "forbidden" }] } }))).toBe(false);
+  });
 });

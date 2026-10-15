@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EvidenceAssessment } from "@ros/contracts";
-import { BOARD_PACKET, CONSISTENCY_READS, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences } from "./suites";
+import { BOARD_PACKET, CONSISTENCY_READS, KEPT_IN_ANSWER, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, interviewSkillFailures, keptInInputFailures, withInterviewSkill } from "./suites";
 
 /**
  * The parts of the eval suites that call no model (docs/11): the board's determinism cases, the bias-pair check reading
@@ -59,5 +59,37 @@ describe("triage.consistency compares repeated readings of one résumé", () => 
     expect(f).toContain("reading 3: must-have findings perio:yes, rdh_license:partially, reading 1: perio:yes, rdh_license:yes");
     expect(f.some((x) => x.startsWith("reading 3: match score"))).toBe(true);
     expect(consistencyDifferences([], BOARD_PACKET)).toEqual(["no reading"]);
+  });
+});
+
+describe("the Wave S5 checks, with no model", () => {
+  const reading = (licence: EvidenceAssessment["requirementFindings"][number]["met"], skills: string[] = ["chairside"]): EvidenceAssessment => ({
+    overall: "potential", confidence: "medium", summary: "s", strengths: [], concerns: [], unknowns: [],
+    competencyFindings: skills.map((competencyKey) => ({ competencyKey, finding: "evidenced" as const, evidence: { source: "resume" as const, quote: "Chairside assisting daily" } })),
+    requirementFindings: [{ requirementKey: "rdh_license", met: licence }], anomalies: [], recommendation: "screen", rationale: "r",
+  });
+
+  it("triage.credentials names a licence read other than the founder's rule says, and expects every kind of case", () => {
+    const keys = new Set(["rdh_license"]);
+    expect(credentialFailures(reading("unknown"), keys, "unknown")).toEqual([]);
+    expect(credentialFailures(reading("no"), keys, "unknown")).toEqual(['rdh_license: read "no", expected "unknown"']);
+    expect(credentialFailures(reading("no"), new Set(), "no")).toEqual(["the role has no licence must-have to read"]);
+    expect(new Set(credentialCases.map((c) => c.expect))).toEqual(new Set(["unknown", "no", "yes"]));
+    expect(credentialCases.find((c) => c.id === "lapsed")?.resume).toContain("RDH license CA expired in 2021; renewal not started");
+  });
+
+  it("triage.interview_skills names a skill for the interviews that was asked, read or scored", () => {
+    const moved = withInterviewSkill(BOARD_PACKET as never);
+    expect(moved.key).toBe("chairside");
+    expect(interviewSkillFailures(moved.key, "Competencies: [patients] Patient care", reading("yes", ["patients"]), moved.packet)).toEqual([]);
+    const f = interviewSkillFailures(moved.key, "Competencies: [chairside] Chairside skill", reading("yes", ["chairside"]), moved.packet);
+    expect(f).toContain('the reading was asked about "chairside", a skill for the interviews');
+    expect(f).toContain('the reading the team sees has a finding on "chairside"');
+    expect(f.some((x) => x.startsWith("the match score"))).toBe(false);
+  });
+
+  it("triage.kept_in names an input that still holds the answer set aside, or never says a person kept them in", () => {
+    expect(keptInInputFailures(`Eligibility answers: {"schedule":"yes"}\nEligibility result: passed (a person on the hiring team checked the eligibility answers and kept the candidate in; ...)`)).toEqual([]);
+    expect(keptInInputFailures(`Eligibility answers: {"${KEPT_IN_ANSWER.key}":"${KEPT_IN_ANSWER.answer}"}\nEligibility result: failed ${KEPT_IN_ANSWER.key}`)).toEqual(["the model was sent the eligibility answer a person set aside", "the model was not told a person kept the candidate in", "the model was told the candidate failed eligibility"]);
   });
 });

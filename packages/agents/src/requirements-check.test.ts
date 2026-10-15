@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { RolePacket as RolePacketSchema } from "@ros/contracts";
-import { guardPacket } from "@ros/core";
+import { guardPacket, scoredSkill } from "@ros/core";
+import { triageAssessPrompt } from "@ros/ai";
 import { samplePacket } from "./fixtures/sample-packet";
 import { RequirementFixError, applyRequirementFixes, checkRequirements } from "./requirements-check";
 
@@ -64,6 +65,9 @@ describe("the requirements check", () => {
     const added = out.packet.competencies.find((c) => c.definition === "Team player with a positive attitude")!;
     expect(added).toMatchObject({ evaluatedIn: "interview", weight: 3 });
     expect(out.packet.interviews.plan[0].competencyKeys).toContain(added.key);
+    // judged in the interview only: never read from a résumé or a chat, never in the match score (known bug 18)
+    expect(scoredSkill(added)).toBe(false);
+    expect(triageAssessPrompt.system({ packet: out.packet, extraction: null, resumeText: null, applicationAnswers: { eligibility: {} }, eligibility: null }).map((b) => b.text).join("\n")).not.toContain(`[${added.key}]`);
     expect(out.packet.screening.questions.find((q) => q.key === "history")).toEqual({ key: "history", question: "What pay are you looking for?", kind: "compensation" });
     // a second tap on the same item is skipped, never applied twice
     expect(out.skipped).toEqual(["unprovable:mustHaves:mh_stay:to_interview"]);

@@ -1,6 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { availabilitySourceFor, emit, markCalendarHealthy, markCalendarNeedsAttention, notify, readConnectionSecret, type ParticipantConstraints, type TimeRange } from "@ros/core";
+import { availabilitySourceFor, emit, markCalendarHealthy, markCalendarNeedsAttention, notify, readConnectionSecret, zonedParts, type ParticipantConstraints, type TimeRange } from "@ros/core";
 import { interviewParticipants, interviews, users, type Queryable } from "@ros/db";
 import { CalendarError, type CalendarEventRef, type Integrations } from "@ros/integrations";
 
@@ -31,9 +31,13 @@ export async function clashesWithBookings(q: Queryable, input: { companyId: stri
   return rows.some((r) => r.id !== input.interviewId && !!r.startsAt && !!r.endsAt && Date.parse(r.startsAt) < end && Date.parse(r.endsAt) > start);
 }
 
-/** Interviews already on this person's plate inside the range: busy time and a per-day count for the daily maximum. */
-async function bookedFor(q: Queryable, companyId: string, userId: string, range: TimeRange, exceptInterviewId: string): Promise<{ busy: TimeRange[]; perDay: Record<string, number> }> {
-  const rows = await q.select({ id: interviews.id, startsAt: interviews.startsAt, endsAt: interviews.endsAt, timezone: interviews.timezone }).from(interviews).innerJoin(interviewParticipants, eq(interviewParticipants.interviewId, interviews.id)).where(and(eq(interviews.companyId, companyId), eq(interviewParticipants.userId, userId), eq(interviews.status, "scheduled")));
+/**
+ * Interviews already on this person's plate inside the range: busy time and a per-day count for the daily maximum. The
+ * count is kept by the person's own local day (`timeZone`), the day the maximum is checked against
+ * (core `freeRangesForDay`), so an evening interview never counts toward the next day's maximum.
+ */
+export async function bookedFor(q: Queryable, companyId: string, userId: string, range: TimeRange, exceptInterviewId: string, timeZone: string): Promise<{ busy: TimeRange[]; perDay: Record<string, number> }> {
+  const rows = await q.select({ id: interviews.id, startsAt: interviews.startsAt, endsAt: interviews.endsAt }).from(interviews).innerJoin(interviewParticipants, eq(interviewParticipants.interviewId, interviews.id)).where(and(eq(interviews.companyId, companyId), eq(interviewParticipants.userId, userId), eq(interviews.status, "scheduled")));
   const busy: TimeRange[] = [];
   const perDay: Record<string, number> = {};
   for (const r of rows) {
@@ -42,7 +46,7 @@ async function bookedFor(q: Queryable, companyId: string, userId: string, range:
     const end = new Date(r.endsAt).toISOString();
     if (end <= range.start || start >= range.end) continue;
     busy.push({ start, end });
-    const day = start.slice(0, 10);
+    const day = zonedParts(new Date(start), timeZone).dayKey;
     perDay[day] = (perDay[day] ?? 0) + 1;
   }
   return { busy, perDay };
@@ -54,11 +58,12 @@ export async function constraintsFor(
   input: { companyId: string; interviewId: string; participant: ParticipantInfo; range: TimeRange; companyTimezone: string; actor: Actor },
 ): Promise<ParticipantConstraints & { connectionId: string | null }> {
   const { source, connection, availability } = await availabilitySourceFor(q, input.companyId, input.participant.userId);
-  const booked = await bookedFor(q, input.companyId, input.participant.userId, input.range, input.interviewId);
+  const timezone = availability?.timezone ?? (connection?.config as { timeZone?: string } | undefined)?.timeZone ?? input.companyTimezone;
+  const booked = await bookedFor(q, input.companyId, input.participant.userId, input.range, input.interviewId, timezone);
   const base = {
     userId: input.participant.userId,
     optional: !!input.participant.optional,
-    timezone: availability?.timezone ?? (connection?.config as { timeZone?: string } | undefined)?.timeZone ?? input.companyTimezone,
+    timezone,
     windows: availability?.windows ?? [],
     bufferMinutes: availability?.bufferMinutes ?? 15,
     maxPerDay: availability?.maxPerDay ?? 3,
@@ -88,15 +93,58 @@ export async function constraintsFor(
   return { ...base, source: "none", busy: booked.busy };
 }
 
-/** One calendar event per connected participant, keyed so a retry finds the event instead of creating a second one. */
+/** The idempotency key of an interviewer's event for one booking (an interview and its attempt). */
+export function interviewEventKey(interviewId: string, attempt: number, userId: string): string {
+  return `interview:${interviewId}:${attempt}:${userId}`;
+}
+
+/**
+ * True when a stored event belongs to the interview's live booking: the interview is booked and the event was made for
+ * its current attempt. Such an event is never removed by a removal queued for an earlier time (audit 06, bug 101).
+ */
+export function isLiveBookingEvent(iv: Pick<typeof interviews.$inferSelect, "id" | "status" | "attempt">, userId: string, ref: Pick<CalendarEventRef, "idempotencyKey">): boolean {
+  return iv.status === "scheduled" && ref.idempotencyKey === interviewEventKey(iv.id, iv.attempt, userId);
+}
+
+/** Removes one stored event; a failure asks the person to remove it by hand and never blocks what called it. */
+async function removeEvent(q: Queryable, integrations: Integrations, input: { companyId: string; interviewId: string; userId: string; ref: CalendarEventRef; actor: Actor }): Promise<string | null> {
+  const { connection } = await availabilitySourceFor(q, input.companyId, input.userId);
+  const provider = connection ? integrations.calendars[connection.provider] : null;
+  try {
+    if (!connection || !provider) throw new Error("calendar no longer connected");
+    const refreshToken = await readConnectionSecret(q, integrations.secrets, connection, { purpose: "calendar_booking", actor: input.actor });
+    if (!refreshToken) throw new Error("credential gone");
+    await provider.cancelEvent({ refreshToken }, input.ref);
+    await emit(q, { type: "calendar.event_cancelled", companyId: input.companyId, actor: input.actor, subject: { type: "interview", id: input.interviewId }, payload: { userId: input.userId, provider: input.ref.provider, eventId: input.ref.eventId } });
+    return null;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await notify(q, { companyId: input.companyId, kind: "calendar.cancel_failed", title: "Please remove a cancelled interview from your calendar", body: `We could not remove the event ourselves (${message}).`, action: { label: "Open interviews", href: "/interviews" }, userIds: [input.userId] });
+    return message;
+  }
+}
+
+/**
+ * One calendar event per connected interviewer, keyed so a retry finds the event instead of creating a second one.
+ * The candidate is never an attendee on these events: they get one invitation, our own calendar file with the
+ * confirmation email (one UID per interview, with the meeting link), never one more Google invitation per interviewer
+ * (audit 06, bug 92). The link the first event creates goes on the others as their location. Events left from an
+ * earlier time of this interview (a reschedule whose removal has not run yet) are removed first, so the stored events
+ * are only this booking's.
+ */
 export async function createInterviewEvents(
   q: Queryable,
   integrations: Integrations,
   input: { interview: typeof interviews.$inferSelect; participants: ParticipantInfo[]; candidate: { firstName: string; lastName: string; email: string | null }; roleTitle: string; companyName: string; companyTimezone: string; actor: Actor; appBaseUrl: string },
 ): Promise<{ refs: Record<string, CalendarEventRef>; meetingUrl: string | null; failures: Array<{ userId: string; error: string }> }> {
-  const refs: Record<string, CalendarEventRef> = { ...((input.interview.calendarRefs ?? {}) as Record<string, CalendarEventRef>) };
+  const refs: Record<string, CalendarEventRef> = {};
+  for (const [userId, ref] of Object.entries((input.interview.calendarRefs ?? {}) as Record<string, CalendarEventRef>)) {
+    if (ref.idempotencyKey === interviewEventKey(input.interview.id, input.interview.attempt, userId)) refs[userId] = ref; // this booking's own, from a retry
+    else await removeEvent(q, integrations, { companyId: input.interview.companyId, interviewId: input.interview.id, userId, ref, actor: input.actor });
+  }
   const failures: Array<{ userId: string; error: string }> = [];
   let meetingUrl: string | null = input.interview.linkSource === "pasted" ? input.interview.meetingUrl : null;
+  for (const ref of Object.values(refs)) if (!meetingUrl && ref.meetingUrl) meetingUrl = ref.meetingUrl;
   for (const p of input.participants) {
     const { source, connection } = await availabilitySourceFor(q, input.interview.companyId, p.userId);
     if (source !== "calendar" || !connection) continue;
@@ -106,12 +154,13 @@ export async function createInterviewEvents(
       const refreshToken = await readConnectionSecret(q, integrations.secrets, connection, { purpose: "calendar_booking", actor: input.actor });
       if (!provider || !refreshToken) throw new CalendarError("auth_revoked", "no credential", false);
       const ref = await provider.createEvent({ refreshToken }, cfg.calendarId ?? "primary", {
-        idempotencyKey: `interview:${input.interview.id}:${input.interview.attempt}:${p.userId}`,
+        idempotencyKey: interviewEventKey(input.interview.id, input.interview.attempt, p.userId),
         title: `Interview: ${input.candidate.firstName} ${input.candidate.lastName} for ${input.roleTitle}`,
         description: `${input.interview.title} (${input.interview.durationMinutes} min). Prepared by Recruiting OS for ${input.companyName}. ${input.appBaseUrl}/interviews/${input.interview.id}`,
         start: new Date(input.interview.startsAt!).toISOString(), end: new Date(input.interview.endsAt!).toISOString(), timeZone: input.companyTimezone,
-        attendees: [{ email: p.email, name: p.name }, ...(input.candidate.email ? [{ email: input.candidate.email, name: `${input.candidate.firstName} ${input.candidate.lastName}` }] : [])],
+        attendees: [{ email: p.email, name: p.name }],
         conference: input.interview.linkSource === "calendar" && !meetingUrl ? "auto" : null,
+        location: meetingUrl,
       });
       refs[p.userId] = ref;
       if (!meetingUrl && ref.meetingUrl) meetingUrl = ref.meetingUrl;
@@ -127,9 +176,14 @@ export async function createInterviewEvents(
   return { refs, meetingUrl, failures };
 }
 
-/** Cancels every calendar event of an interview; idempotent; a failure never blocks the cancellation itself. */
+/**
+ * Cancels the calendar events of an interview's earlier time (a cancellation or a reschedule queued this job);
+ * idempotent; a failure never blocks the cancellation itself. Read under the interview's row lock when the job runs:
+ * if the interview was booked again meanwhile (a backed-up worker, a candidate who rebooked first), the new booking's
+ * events are kept, never removed (audit 06, bug 101).
+ */
 export async function cancelInterviewEvents(q: Queryable, integrations: Integrations, input: { interviewId: string; actor: Actor }): Promise<{ cancelled: number; failures: Array<{ userId: string; error: string }> }> {
-  const [iv] = await q.select().from(interviews).where(eq(interviews.id, input.interviewId)).limit(1);
+  const [iv] = await q.select().from(interviews).where(eq(interviews.id, input.interviewId)).limit(1).for("update");
   if (!iv) return { cancelled: 0, failures: [] };
   const refs = (iv.calendarRefs ?? {}) as Record<string, CalendarEventRef>;
   const userIds = Object.keys(refs);
@@ -140,21 +194,10 @@ export async function cancelInterviewEvents(q: Queryable, integrations: Integrat
   const remaining: Record<string, CalendarEventRef> = {};
   for (const p of conns) {
     const ref = refs[p.userId];
-    const { connection } = await availabilitySourceFor(q, iv.companyId, p.userId);
-    const provider = connection ? integrations.calendars[connection.provider] : null;
-    try {
-      if (!connection || !provider) throw new Error("calendar no longer connected");
-      const refreshToken = await readConnectionSecret(q, integrations.secrets, connection, { purpose: "calendar_booking", actor: input.actor });
-      if (!refreshToken) throw new Error("credential gone");
-      await provider.cancelEvent({ refreshToken }, ref);
-      cancelled++;
-      await emit(q, { type: "calendar.event_cancelled", companyId: iv.companyId, actor: input.actor, subject: { type: "interview", id: iv.id }, payload: { userId: p.userId, provider: ref.provider, eventId: ref.eventId } });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      failures.push({ userId: p.userId, error: message });
-      remaining[p.userId] = ref;
-      await notify(q, { companyId: iv.companyId, kind: "calendar.cancel_failed", title: "Please remove a cancelled interview from your calendar", body: `We could not remove the event ourselves (${message}).`, action: { label: "Open interviews", href: "/interviews" }, userIds: [p.userId] });
-    }
+    if (isLiveBookingEvent(iv, p.userId, ref)) { remaining[p.userId] = ref; continue; }
+    const error = await removeEvent(q, integrations, { companyId: iv.companyId, interviewId: iv.id, userId: p.userId, ref, actor: input.actor });
+    if (error === null) cancelled++;
+    else { failures.push({ userId: p.userId, error }); remaining[p.userId] = ref; }
   }
   await q.update(interviews).set({ calendarRefs: remaining }).where(eq(interviews.id, iv.id));
   return { cancelled, failures };

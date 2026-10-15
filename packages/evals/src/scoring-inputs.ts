@@ -24,6 +24,8 @@ export type EvalApplication = {
   eligibility: EligibilityResult | null;
   identity: ScoringIdentity;
   earlierApplications?: readonly EarlierApplication[];
+  /** A person kept them in after an eligibility answer did not match (known bug 30): the reading is told so. */
+  eligibilityKeptIn?: boolean;
 };
 
 /** Everything a prompt sends the model for one input (every system block, then every message), as one text. */

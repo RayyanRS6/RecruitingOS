@@ -7,7 +7,7 @@ import { PermissionError, applyByLabel, assertCan, benefitsDescriptionFor, jobNo
 import { companies, rolePackets, roles, withTenant } from "@ros/db";
 import type { Container } from "../container";
 import { HttpError, PERMISSION_MESSAGE } from "../middleware/errors";
-import type { Tenant, Vars } from "../middleware/session";
+import { rolesInterviewedBy, type Tenant, type Vars } from "../middleware/session";
 import { loadDraft } from "../routes/intake";
 import { approvedAbout, contactLineFor, logoMemberPath, profileOf } from "../services/company-settings-profile";
 import { applyFlowOf, jobPreview, type ApplyFlowView, type PreviewSource } from "../services/job-preview";
@@ -27,7 +27,8 @@ import { withPlainQuestionHelp } from "./question-help";
  *
  * Addresses: GET /api/v1/roles/:id/preview?version=N and GET /api/v1/intake/sessions/:id/preview answer a browser tab
  * (which asks for a page) with the page and the app's own requests with the data (routes/role-packets.ts); the same
- * pages are always at .../preview/page. `&view=apply` shows the apply form.
+ * pages are always at .../preview/page. `&view=apply` shows the apply form. These pages are mounted before the role
+ * routes (app.ts), so every refusal, an interviewer's "Role not found." included, is this plain page, never the API's JSON.
  */
 export const rolePreviewPages = new Hono<Vars>();
 export const draftPreviewPages = new Hono<Vars>();
@@ -109,10 +110,13 @@ async function rolePreview(c: Context<Vars>) {
   try {
     const roleId = c.req.param("id") ?? "";
     const t = tenantFor(c, roleId);
+    const container = c.get("container");
+    // An interviewer reads only the roles they interview for (roleScopeGuard's rule): any other answers as one that does
+    // not exist, on this page as on the data route.
+    if (t.role === "interviewer" && UUID.test(roleId) && !(await withTenant(container.db, t.companyId, (tx) => rolesInterviewedBy(tx, t.userId, roleId))).has(roleId)) throw new HttpError(404, "not_found", "Role not found.");
     assertCan(t.role, "role.read");
     assertCan(t.role, "compensation.read");
     if (!UUID.test(roleId)) throw new HttpError(404, "not_found", "Role not found.");
-    const container = c.get("container");
     const asked = c.req.query("version");
     const found = await withTenant(container.db, t.companyId, async (tx) => {
       const [role] = await tx.select().from(roles).where(eq(roles.id, roleId)).limit(1);

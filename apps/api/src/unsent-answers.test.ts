@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray } from "drizzle-orm";
 import type { RolePacket, TapAnswer } from "@ros/contracts";
-import { composeInterviewerBrief } from "@ros/agents";
+import { SCORECARD_READINGS, composeInterviewerBrief } from "@ros/agents";
 import { HANDED_TO_A_PERSON, emit, exportCandidateData } from "@ros/core";
 import { aiRuns, applications, assessments, communications, companies, events, notifications, recruiterEscalations, rolePackets, roles, screens, withTenant } from "@ros/db";
 import { createApp } from "./app";
@@ -106,6 +106,8 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
       summaryCsv: `/api/v1/roles/${roleId}/report/summary.csv`,
       funnel: `/api/v1/roles/${roleId}/screening`,
       history: "/api/v1/events",
+      // the job's Activity tab reads its own list of events: the same rule holds there (Wave S5)
+      timeline: `/api/v1/roles/${roleId}/timeline`,
       notifications: "/api/v1/notifications",
       notificationHistory: "/api/v1/notifications/history",
       ...Object.fromEntries(ids.map((id) => [`detail:${id}`, `/api/v1/applications/${id}`])),
@@ -248,8 +250,8 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     const scr = await screenOf(luisId);
     expect(scr).toMatchObject({ status: "completed" });
     expect(scr.progress.completedBy).toBe("recruiter_call");
-    // read from the notes alone
-    expect(await assessRuns()).toBe(before + 1);
+    // read from the notes alone (three readings, the middle answer kept: Wave S5)
+    expect(await assessRuns()).toBe(before + SCORECARD_READINGS);
     const [card] = await screenAssessments(luisId);
     expect(JSON.stringify(card.result)).not.toContain("ZQXL");
     const seen = await teamSurfaces([luisId]);
@@ -344,7 +346,8 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     const agent = { kind: "agent" as const, id: "screening" };
     await withTenant(container.db, companyId, async (tx) => {
       await emit(tx, { type: "screen.assessed", companyId, actor: agent, subject: { type: "screen", id: priyaScreen.id }, payload: { assessmentId: legacy.id, recommendation: "strong_interview", confidence: "high", incomplete: true } });
-      await emit(tx, { type: "assessment.created", companyId, actor: agent, subject: { type: "application", id: priya.applicationId }, payload: { kind: "screen", assessmentId: legacy.id, overall: "strong" } });
+      // naming the role too, so the job's Activity tab would list it if it did not hold it back
+      await emit(tx, { type: "assessment.created", companyId, actor: agent, subject: { type: "application", id: priya.applicationId }, payload: { kind: "screen", assessmentId: legacy.id, overall: "strong", roleId } });
     });
     // written back then, before 9 October 2026
     await container.db.update(events).set({ occurredAt: new Date(BASE - 30 * 24 * HOUR).toISOString() }).where(and(inArray(events.type, ["screen.assessed", "assessment.created"]), inArray(events.subjectId, [priyaScreen.id, priya.applicationId])));
@@ -384,7 +387,7 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     expect(scr.progress.completedBy).toBe("recruiter_call");
     expect(scr.assessmentId).toBeTruthy();
     expect(scr.assessmentId).not.toBe(legacyId);
-    expect(await assessRuns()).toBe(before + 1);
+    expect(await assessRuns()).toBe(before + SCORECARD_READINGS);
     const seen = await teamSurfaces([priya.applicationId]);
     expect(seen.all).not.toContain("ZQXP");
     expect(seen.all).not.toContain(legacyId);

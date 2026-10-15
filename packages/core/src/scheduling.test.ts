@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { buildIcs } from "./ics";
-import { computeSlots, defaultSchedulingWindow, freeRangesForDay, freshSchedulingWindow, groupSlotsByDay, missingAvailability, slotStillFree, subtractRanges, type ParticipantConstraints } from "./scheduling";
+import { DEFAULT_BUSINESS_CALENDAR } from "./business-hours";
+import { buildIcs, escapeIcsText, quoteIcsParam } from "./ics";
+import { computeSlots, defaultSchedulingWindow, freeRangesForDay, freshSchedulingWindow, groupSlotsByDay, holidaysBetween, missingAvailability, slotStillFree, subtractRanges, type ParticipantConstraints } from "./scheduling";
 
 const declared = (userId: string, over: Partial<ParticipantConstraints> = {}): ParticipantConstraints => ({ userId, source: "declared", timezone: "America/Los_Angeles", windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 3, busy: [], ...over });
 const now = new Date("2026-09-18T20:00:00Z"); // Friday 13:00 Pacific
@@ -109,11 +110,41 @@ describe("iCalendar files", () => {
     expect(ics).toContain("METHOD:REQUEST");
     expect(ics).toContain("DTSTART:20260921T170000Z");
     expect(ics).toContain("DTEND:20260921T174500Z");
-    expect(ics).toContain("SUMMARY:Working session: Hygienist; at Smile\\, Bright");
+    expect(ics).toContain("SUMMARY:Working session: Hygienist\\; at Smile\\, Bright");
     expect(ics).toContain("Line one\\nLine two\\, with a comma");
-    expect(ics.replace(/\r\n /g, "")).toContain("ATTENDEE;ROLE=REQ-PARTICIPANT;RSVP=FALSE;CN=Maria Reyes:mailto:maria@example.com");
+    expect(ics.replace(/\r\n /g, "")).toContain('ATTENDEE;ROLE=REQ-PARTICIPANT;RSVP=FALSE;CN="Maria Reyes":mailto:maria@example.com');
+    expect(ics.replace(/\r\n /g, "")).toContain('ORGANIZER;CN="Smile Bright hiring team":mailto:updates@hire.identifiedtalent.com');
     for (const line of ics.split("\r\n")) expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(76);
     expect(ics.endsWith("END:VCALENDAR\r\n")).toBe(true);
     expect(buildIcs({ uid: "x", sequence: 1, method: "CANCEL", start: "2026-09-21T17:00:00.000Z", end: "2026-09-21T17:45:00.000Z", summary: "x" })).toContain("STATUS:CANCELLED");
+  });
+
+  it("names with commas, colons, semicolons or quotes stay inside a quoted CN; text escapes every special character (audit 06, bug 94)", () => {
+    expect(escapeIcsText("a\\b;c,d\r\ne\nf")).toBe("a\\\\b\\;c\\,d\\ne\\nf");
+    expect(quoteIcsParam("Reyes, Maria: RDH; \"Mia\"")).toBe("\"Reyes, Maria: RDH; 'Mia'\"");
+    expect(quoteIcsParam("Line\nbreak\u0007")).toBe('"Line break"');
+    const ics = buildIcs({ uid: "u", sequence: 0, method: "REQUEST", start: "2026-09-21T17:00:00.000Z", end: "2026-09-21T17:45:00.000Z", summary: "s", organizer: { name: "Smile, Bright: Dental; Team", email: "a@b.test" }, attendees: [{ name: "O'Neil, Sam", email: "sam@example.com" }], stamp: new Date("2026-09-18T20:00:00Z") });
+    const unfolded = ics.replace(/\r\n /g, "");
+    expect(unfolded).toContain('ORGANIZER;CN="Smile, Bright: Dental; Team":mailto:a@b.test');
+    expect(unfolded).toContain("ATTENDEE;ROLE=REQ-PARTICIPANT;RSVP=FALSE;CN=\"O'Neil, Sam\":mailto:sam@example.com");
+  });
+});
+
+describe("public holidays (audit 06, bug 104)", () => {
+  it("no time is offered on a public holiday: the business calendar's list, else the built-in US federal one", () => {
+    // Veterans Day, Wednesday 11 November 2026
+    const input = { participants: [declared("a")], durationMinutes: 45, fromDate: "2026-11-10", toDate: "2026-11-12", companyTimezone: "America/Los_Angeles", businessDaysOnly: true, now: new Date("2026-11-06T20:00:00Z"), maxSlotsPerDay: 2 };
+    const without = computeSlots(input).slots;
+    expect(without.some((s) => s.startsAt.startsWith("2026-11-11"))).toBe(true);
+    const holidays = holidaysBetween(null, "2026-11-10", "2026-11-12");
+    expect([...holidays]).toEqual(["2026-11-11"]);
+    const withHolidays = computeSlots({ ...input, holidays }).slots;
+    expect(withHolidays.length).toBeGreaterThan(0);
+    expect(withHolidays.some((s) => s.startsAt.startsWith("2026-11-11"))).toBe(false);
+    // the business calendar's own list wins when it has one
+    const calendar = { ...DEFAULT_BUSINESS_CALENDAR, holidays: [{ date: "2026-11-12", name: "Company day off" }] };
+    expect([...holidaysBetween(calendar, "2026-11-10", "2026-11-12")]).toEqual(["2026-11-12"]);
+    // a window that counts weekends counts holidays too
+    expect(computeSlots({ ...input, businessDaysOnly: false, holidays }).slots.some((s) => s.startsAt.startsWith("2026-11-11"))).toBe(true);
   });
 });

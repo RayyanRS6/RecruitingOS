@@ -1,20 +1,21 @@
 import { Hono, type Context } from "hono";
-import { and, desc, eq, inArray, isNull, like, notInArray, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, like, notInArray } from "drizzle-orm";
 import { ConfirmBoardUpdated, CreateEscalation, DecideApproval, EscalationEstimateQuery, EscalationReply, RecordPostingUrl, ReopenEscalation, ResolveEscalation, VerifyPosting, type Actor, type CandidateNotice, type EscalationScope, type InterviewDraft, type RecruiterRequestView } from "@ros/contracts";
-import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, assertCan, audit, can, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, isBoardChannel, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, plainRequestText, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, requestOrigin, servedSummary, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, unsentScreenReadings, withoutSentimentWords, withoutUnsentInContext, withoutUnsentScreenEvents, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
-import { applications, approvalRequests, assessments, candidates, companies, escalationMessages, events, memberships, postings, recruiterEscalations, rolePackets, roles, screens, staffAccessGrants, users, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
+import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, assertCan, audit, can, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, isBoardChannel, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, plainRequestText, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, requestOrigin, servedSummary, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, withoutSentimentWords, withoutUnsentInContext, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
+import { applications, approvalRequests, candidates, companies, escalationMessages, events, memberships, postings, recruiterEscalations, rolePackets, roles, staffAccessGrants, users, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
 import { confirmPostingByHand, postingTaskDetail, queuePostingCheck, recordBoardAddress } from "./postings";
 import { actorOf, clientIp, requireRecruiterOrAdmin, requireTenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { briefViewerOf, composeBrief } from "../services/brief";
 import { escalationInScope, eventTargets, inStaffScope, staffMayAsk, staffScopeOf } from "../services/staff-scope";
 import { assertMayApprovePacket } from "../services/packet-approval";
+import { withoutUnsentChats } from "../services/screen-visibility";
 import { assertMayShareDraft } from "./intake";
 import { settleMessageApproval } from "../services/messages";
 import { declineSent, sendApprovedDecline } from "../services/application-actions";
 import { sendApprovedClosingMessages } from "../services/closing-messages";
 import { approverRolesOf, mayDecideByRole } from "../services/approvers";
-import { attachBoardSnapshot, emailItsQueue } from "../services/escalation-queue";
+import { attachBoardSnapshot, emailItsQueue, sendToIts } from "../services/escalation-queue";
 import { interviewDraftFor } from "./interviews";
 
 export const approvalRoutes = new Hono<Vars>();
@@ -190,7 +191,7 @@ escalationRoutes.post("/", requireTenant, async (c) => {
   });
   // Past the allowance: ITS is told, for billing; the request itself went ahead like any other.
   if (allowance?.over) await withPlatform(container.db, (tx) => entitlements.flagRecruiterAsksOver(tx, { companyId: t.companyId, companyName, standing: allowance, escalationId: created.id }));
-  await emailItsQueue(container, { id: created.id, kind: body.kind, slaDueAt: created.slaDueAt, urgency: preview.urgency, requiredExpertise: preview.requiredExpertise, summary: preview.summary, timeZone: calendar.timeZone });
+  await emailItsQueue(container, { id: created.id, companyId: t.companyId, kind: body.kind, slaDueAt: created.slaDueAt, urgency: preview.urgency, requiredExpertise: preview.requiredExpertise, summary: preview.summary, timeZone: calendar.timeZone });
   const over = allowance?.over && allowance.limit !== null ? ` Your plan includes ${allowance.limit} recruiter ${allowance.limit === 1 ? "request" : "requests"} and this is number ${allowance.used}. It goes ahead as usual; ITS will talk with you about the extra.` : "";
   return c.json({ id: created.id, slaDueAt: created.slaDueAt, scope, message: `A recruiter will respond by ${deadlineWords(new Date(created.slaDueAt), calendar)} (business hours are ${describeHours(calendar)}).${isUrgent(preview.urgency) ? ` ${URGENT_WORDS}` : ""} They will see ${accessWords(scope)}. ${ACCESS_LIMITS}${over}` }, 201);
 });
@@ -356,13 +357,13 @@ escalationRoutes.post("/mine/:id/reopen", requireTenant, async (c) => {
     if (sent.status === "failed") await raiseAlert(container.db, { kind: "recruiter.notify_failed", severity: "high", title: "A recruiter was not told a request was reopened", body: `A customer reopened a request ${done.recruiter.name} answered, and the email to them failed (${sent.error ?? "no reason given"}). Tell them another way; it is due by ${due}.`, companyId: t.companyId, target: { type: "escalation", id: e.id }, details: { recruiterUserId: done.recruiter.id, error: sent.error ?? null } });
     return c.json({ status: done.status, slaDueAt: done.slaDueAt, message: `Reopened. ${done.recruiter.name} (ITS recruiter) has it again and will respond by ${due}. They can see ${accessWords(scope)} until ${new Date(done.grant.expiresAt).toLocaleDateString("en-US")}, or until a day after it is resolved if that is sooner; this fresh access is recorded in your activity like any other.` });
   }
-  await container.integrations.email.send({
-    to: container.env.ITS_QUEUE_EMAIL,
-    from: `${container.env.PRODUCT_NAME} <${container.integrations.env.fromAddress}>`,
+  // Through the outbox, so a failure is recorded, retried and alerted (audit row 125).
+  await sendToIts(container, {
+    companyId: t.companyId,
     subject: `[${e.kind}] ${e.urgency} urgency, reopened: respond by ${new Date(done.slaDueAt).toLocaleString("en-US", { timeZone: calendar.timeZone })} (${calendar.timeZone})`,
     text: `A customer reopened a request: the answer did not solve it.\n\nCategory: ${e.kind}\nUrgency: ${e.urgency}\nNeeds: ${e.requiredExpertise}\nSummary: ${servedSummary(e)}\n\nAccept it in the queue to open the full request: ${container.env.APP_BASE_URL}/recruiter/queue/${e.id}`,
     idempotencyKey: `escalation-reopen:${done.messageId}`,
-    tags: { template: "escalation" },
+    template: "escalation",
   });
   return c.json({ status: done.status, slaDueAt: done.slaDueAt, message: `Reopened and back in the ITS queue. A recruiter will respond by ${due}. Whoever picks it up will see ${accessWords(scope)}. ${ACCESS_LIMITS}` });
 });
@@ -740,13 +741,8 @@ eventRoutes.get("/", requireTenant, async (c) => {
     if (type) conds.push(eq(events.type, type));
     // Scoped: read further back, keep what the grant covers, and answer with the same 200 at most.
     const found = await tx.select().from(events).where(and(...conds)).orderBy(desc(events.occurredAt)).limit(scope ? 2000 : 200);
-    // The screens the entries are about, and the readings they name with the screens of those readings' applications.
-    const screenIds = [...new Set(found.filter((e) => e.subjectType === "screen").map((e) => e.subjectId))];
-    const readingIds = [...new Set(found.map((e) => (e.payload as { assessmentId?: unknown } | null)?.assessmentId).filter((x): x is string => typeof x === "string" && UUID.test(x)))];
-    const readings = readingIds.length ? await tx.select({ id: assessments.id, kind: assessments.kind, result: assessments.result, applicationId: assessments.applicationId }).from(assessments).where(inArray(assessments.id, readingIds)) : [];
-    const readingApps = [...new Set(readings.map((r) => r.applicationId))];
-    const scr = screenIds.length || readingApps.length ? await tx.select({ id: screens.id, status: screens.status, progress: screens.progress, assessmentId: screens.assessmentId }).from(screens).where(or(screenIds.length ? inArray(screens.id, screenIds) : undefined, readingApps.length ? inArray(screens.applicationId, readingApps) : undefined)) : [];
-    const shown = scr.length || readings.length ? withoutUnsentScreenEvents(found, scr, unsentScreenReadings(scr, readings)) : found;
+    // The same rule as a job's Activity tab (`withoutUnsentChats`).
+    const shown = await withoutUnsentChats(tx, found);
     if (!scope) return shown;
     const targets = await eventTargets(tx, shown);
     return shown.filter((e) => inStaffScope(scope, targets.get(e.id) ?? {})).slice(0, 200);

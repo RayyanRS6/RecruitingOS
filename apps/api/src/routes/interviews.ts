@@ -8,6 +8,7 @@ import type { Container } from "../container";
 import { cancelNewTimesRuns } from "@ros/workflows";
 import { actorOf, applicationScopeGuard, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
+import { TERMINAL_STAGES } from "../services/application-actions";
 import { cancelInterviewInTx } from "../services/interview-cancel";
 import { INTERVIEW_FROM, OPEN_INTERVIEW, createApprovedInterview } from "../services/interview-create";
 import { exitCleanup } from "../services/exit-cleanup";
@@ -29,13 +30,44 @@ import { staffScopeOf } from "../services/staff-scope";
  * `followUp`: the candidate is under Cancelled, why, and where their new times stand (the Interviews page offers "Send new
  * times" from it). A list passes `followUps`, read once for the whole page (`followUpsOf`), instead of one read per row.
  */
-async function summary(tx: Parameters<Parameters<typeof withTenant>[2]>[0], row: typeof interviews.$inferSelect, followUps?: Map<string, FollowUpView>) {
-  const [app] = await tx.select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId, stage: applications.stage }).from(applications).where(eq(applications.id, row.applicationId)).limit(1);
-  const [cand] = await tx.select({ firstName: candidates.firstName, lastName: candidates.lastName, location: candidates.location }).from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
-  const [role] = await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
-  const parts = await tx.select({ userId: interviewParticipants.userId, status: interviewParticipants.status, name: users.name, email: users.email }).from(interviewParticipants).innerJoin(users, eq(users.id, interviewParticipants.userId)).where(eq(interviewParticipants.interviewId, row.id));
-  const view = (followUps ?? (await activeFollowUpsFor(tx, [app.id]))).get(app.id);
+type Q = Parameters<Parameters<typeof withTenant>[2]>[0];
+type InterviewRow = typeof interviews.$inferSelect;
+
+async function summary(tx: Q, row: InterviewRow, followUps?: Map<string, FollowUpView>) {
+  const [one] = await summaries(tx, [row], followUps);
+  return one;
+}
+
+/**
+ * The page's rows for a list of interviews in a fixed number of reads, whatever its length (audit 06, bug 100: no
+ * longer four reads per row): applications, candidates, roles and participants each read once for the whole list.
+ */
+async function summaries(tx: Q, rows: readonly InterviewRow[], followUps?: Map<string, FollowUpView>) {
+  if (!rows.length) return [];
+  const appIds = [...new Set(rows.map((r) => r.applicationId))];
+  const apps = new Map((await tx.select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId, stage: applications.stage }).from(applications).where(inArray(applications.id, appIds))).map((a) => [a.id, a]));
+  const candIds = [...new Set([...apps.values()].map((a) => a.candidateId))];
+  const roleIds = [...new Set([...apps.values()].map((a) => a.roleId))];
+  const cands = new Map((candIds.length ? await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName, location: candidates.location }).from(candidates).where(inArray(candidates.id, candIds)) : []).map((x) => [x.id, x]));
+  const titles = new Map((roleIds.length ? await tx.select({ id: roles.id, title: roles.title }).from(roles).where(inArray(roles.id, roleIds)) : []).map((x) => [x.id, x.title]));
+  const partRows = await tx.select({ interviewId: interviewParticipants.interviewId, userId: interviewParticipants.userId, status: interviewParticipants.status, name: users.name, email: users.email }).from(interviewParticipants).innerJoin(users, eq(users.id, interviewParticipants.userId)).where(inArray(interviewParticipants.interviewId, rows.map((r) => r.id)));
+  const partsOf = new Map<string, typeof partRows>();
+  for (const p of partRows) partsOf.set(p.interviewId, [...(partsOf.get(p.interviewId) ?? []), p]);
+  const views = followUps ?? (await activeFollowUpsFor(tx, appIds));
+  return rows.map((row) => summaryOf(row, apps.get(row.applicationId)!, cands.get(apps.get(row.applicationId)!.candidateId), titles.get(apps.get(row.applicationId)!.roleId), partsOf.get(row.id) ?? [], views));
+}
+
+function summaryOf(
+  row: InterviewRow,
+  app: Pick<typeof applications.$inferSelect, "id" | "roleId" | "candidateId" | "stage">,
+  cand: Pick<typeof candidates.$inferSelect, "firstName" | "lastName" | "location"> | undefined,
+  roleTitle: string | undefined,
+  parts: ReadonlyArray<{ userId: string; status: (typeof interviewParticipants.$inferSelect)["status"]; name: string | null; email: string }>,
+  followUps: Map<string, FollowUpView>,
+) {
+  const view = followUps.get(app.id);
   const followUp: InterviewFollowUpRef | null = view && inCancelled(app.stage, view) ? interviewFollowUpRef(view) : null;
+  const role = roleTitle === undefined ? undefined : { title: roleTitle };
   return {
     id: row.id, applicationId: row.applicationId, roleId: app.roleId, roleTitle: role?.title ?? null, roundKey: row.roundKey, title: row.title, format: row.format, durationMinutes: row.durationMinutes, status: row.status,
     startsAt: row.startsAt, endsAt: row.endsAt, timezone: row.timezone, meetingUrl: row.meetingUrl, linkSource: row.linkSource, attempt: row.attempt, offeredSlots: row.offeredSlots, selectedSlot: row.selectedSlot,
@@ -46,11 +78,6 @@ async function summary(tx: Parameters<Parameters<typeof withTenant>[2]>[0], row:
     calendarRefs: Object.fromEntries(Object.entries((row.calendarRefs ?? {}) as Record<string, { provider: string; eventId: string; htmlLink: string | null; meetingUrl: string | null }>).map(([uid, r]) => [uid, { provider: r.provider, eventId: r.eventId, htmlLink: r.htmlLink, meetingUrl: r.meetingUrl }])),
     followUp,
   };
-}
-
-/** The open follow-ups of every candidate on a page of interviews, in one read (two queries) for the whole list. */
-function followUpsOf(tx: Parameters<Parameters<typeof withTenant>[2]>[0], list: ReadonlyArray<typeof interviews.$inferSelect>): Promise<Map<string, FollowUpView>> {
-  return activeFollowUpsFor(tx, [...new Set(list.map((r) => r.applicationId))]);
 }
 
 /**
@@ -163,30 +190,23 @@ interviewRoutes.use("/:id/*", interviewScopeGuard);
 interviewRoutes.get("/", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.read");
-  const status = c.req.query("status");
+  const filter = c.req.query("status");
   const mine = c.req.query("mine") === "1" || t.role === "interviewer";
   const from = c.req.query("from");
   const to = c.req.query("to");
   const rows = await withTenant(c.get("container").db, t.companyId, async (tx) => {
+    // Every limit is part of the query (audit 06, bug 100): an interviewer's own interviews and a grant's role or
+    // candidate are chosen by the database, never filtered from the newest few hundred, so none is missed.
     const conds = [eq(interviews.companyId, t.companyId)];
-    if (status) conds.push(eq(interviews.status, status));
+    if (filter) conds.push(eq(interviews.status, filter));
     if (from) conds.push(gte(interviews.startsAt, from));
     if (to) conds.push(lte(interviews.startsAt, to));
-    let list = await tx.select().from(interviews).where(and(...conds)).orderBy(desc(interviews.createdAt)).limit(300);
-    if (mine) {
-      const ids = (await tx.select({ id: interviewParticipants.interviewId }).from(interviewParticipants).where(eq(interviewParticipants.userId, t.userId))).map((r) => r.id);
-      list = list.filter((r) => ids.includes(r.id));
-    }
-    if (t.staff?.scope.roleId) {
-      const appIds = (await tx.select({ id: applications.id }).from(applications).where(eq(applications.roleId, t.staff.scope.roleId))).map((a) => a.id);
-      list = list.filter((r) => appIds.includes(r.applicationId));
-    }
+    if (mine) conds.push(inArray(interviews.id, tx.select({ id: interviewParticipants.interviewId }).from(interviewParticipants).where(eq(interviewParticipants.userId, t.userId))));
+    if (t.staff?.scope.roleId) conds.push(inArray(interviews.applicationId, tx.select({ id: applications.id }).from(applications).where(eq(applications.roleId, t.staff.scope.roleId))));
     // a grant about one candidate shows that candidate's interviews only, the same limit as the role's applications list
-    if (t.staff?.scope.applicationId) list = list.filter((r) => r.applicationId === t.staff!.scope.applicationId);
-    const followUps = await followUpsOf(tx, list);
-    const out = [];
-    for (const r of list) out.push(await summary(tx, r, followUps));
-    return out;
+    if (t.staff?.scope.applicationId) conds.push(eq(interviews.applicationId, t.staff.scope.applicationId));
+    const list = await tx.select().from(interviews).where(and(...conds)).orderBy(desc(interviews.createdAt));
+    return summaries(tx, list);
   });
   return c.json(rows);
 });
@@ -251,10 +271,13 @@ interviewRoutes.post("/:id/outcome", requireTenant, async (c) => {
     const parts = await tx.select({ userId: interviewParticipants.userId }).from(interviewParticipants).where(eq(interviewParticipants.interviewId, iv.id));
     if (!can(t.role, "interview.manage") && !parts.some((p) => p.userId === t.userId)) throw new HttpError(403, "forbidden", "Only a participant or someone who manages interviews can record what happened.");
     if (!["scheduled", "completed"].includes(iv.status)) throw new HttpError(409, "interview_not_schedulable", `This interview is ${iv.status}.`);
-    const status = body.outcome === "happened" ? "completed" : "no_show";
+    // Answered once, as the screen asks it once (audit 06, bug 98): a "took place" is never overwritten later, as a no-show never was.
+    if (iv.outcome) throw new HttpError(409, "already_recorded", "What happened at this interview is already recorded.");
+    const ended = body.outcome === "happened" ? "completed" : "no_show";
     const actor = actorOf(c);
     const now = container.engine.clock();
-    const [u] = await tx.update(interviews).set({ outcome: body.outcome, status }).where(eq(interviews.id, iv.id)).returning();
+    const [u] = await tx.update(interviews).set({ outcome: body.outcome, status: ended }).where(and(eq(interviews.id, iv.id), isNull(interviews.outcome))).returning();
+    if (!u) throw new HttpError(409, "already_recorded", "What happened at this interview is already recorded.");
     await emit(tx, { type: "interview.outcome_recorded", companyId: t.companyId, actor, subject: { type: "interview", id: iv.id }, payload: { outcome: body.outcome } });
     const [app] = await tx.select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId, stage: applications.stage }).from(applications).where(eq(applications.id, iv.applicationId)).limit(1);
     const [cand] = app ? await tx.select({ firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(eq(candidates.id, app.candidateId)).limit(1) : [];
@@ -278,6 +301,8 @@ interviewRoutes.post("/:id/outcome", requireTenant, async (c) => {
       }
     }
     if (app && noShowOpened) await notify(tx, { companyId: t.companyId, kind: "interview.no_show", title: `${name} did not come to the interview`, body: `${iv.title}. They are under Cancelled as a no-show. Nothing goes to them automatically: send new times for the same round, or decide.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
+    // Our side missed it (founder decision L-12): the approval card offers the same round again, and its invitation says sorry.
+    else if (app && body.outcome === "no_show_interviewer" && INTERVIEW_FROM.includes(moved ? "interview_complete" : app.stage)) await notify(tx, { companyId: t.companyId, kind: "interview.decision", title: `${name}'s interview did not happen`, body: `Our interviewer missed ${iv.title}. Approve the same round again from their page; the new invitation says sorry. You can pick another round instead.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}&step=interview` } });
     else if (app && moved) await notify(tx, { companyId: t.companyId, kind: "interview.decision", title: `How did it go with ${name}?`, body: `${iv.title} is over. Next round, finalist, or not moving forward: your call, recorded with your reason.`, action: { label: "Decide", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
     return summary(tx, u);
   });
@@ -419,20 +444,26 @@ applicationInterviewRoutes.post("/:id/interviews", requireTenant, async (c) => {
  * newest interview that is over), the plan's interviewers who are still active members (the role's current plan when it
  * still has the round, as the page's own defaults do), the calendar link and the company's scheduling window. Null when
  * no interview can be approved now (their step, or one already being set up) or the plan has no round left. Posting it
- * to `requestPath` is the one approval; nothing is approved here. A round the candidate did not come to is not over: the
- * card proposes the same round again (founder decision 4A); an interviewer's no-show still counts as over.
+ * to `requestPath` is the one approval; nothing is approved here. A round that did not take place is not over, so the
+ * card proposes the same round again: the candidate did not come (founder decision 4A), or our interviewer missed it
+ * (founder decision L-12, 15 Oct 2026; `sameRoundAgain`, and the new invitation says sorry). The owner can still pick
+ * another round on the card.
  */
-export async function interviewDraftFor(tx: Tx, input: { app: Pick<typeof applications.$inferSelect, "id" | "roleId" | "companyId" | "packetVersion" | "stage">; now: Date }): Promise<InterviewDraft | null> {
+export async function interviewDraftFor(tx: Tx, input: { app: Pick<typeof applications.$inferSelect, "id" | "roleId" | "companyId" | "packetVersion" | "stage">; now: Date }): Promise<(InterviewDraft & { sameRoundAgain?: "missed_by_us" }) | null> {
   const { app } = input;
   if (!INTERVIEW_FROM.includes(app.stage)) return null;
   if ((await tx.select({ id: interviews.id }).from(interviews).where(and(eq(interviews.applicationId, app.id), inArray(interviews.status, OPEN_INTERVIEW))).limit(1)).length) return null;
   const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
   const plan = pv?.packet.interviews.plan ?? [];
   if (!plan.length) return null;
-  const over = or(eq(interviews.status, "completed"), and(eq(interviews.status, "no_show"), sql`${interviews.outcome} IS DISTINCT FROM 'no_show_candidate'`));
+  // The newest interview that ended, whichever way: one our interviewer missed asks for the same round again, unless a
+  // person decided to move on from it (a "next round" moves on as before; "new times" only says the round was offered again).
+  const [latest] = await tx.select({ roundKey: interviews.roundKey, status: interviews.status, outcome: interviews.outcome, decision: interviews.decision }).from(interviews).where(and(eq(interviews.applicationId, app.id), inArray(interviews.status, ["completed", "no_show"]))).orderBy(desc(interviews.createdAt)).limit(1);
+  const missedByUs = latest?.status === "no_show" && latest.outcome === "no_show_interviewer" && (!latest.decision || latest.decision === "new_times") ? plan.find((r) => r.key === latest.roundKey) ?? null : null;
+  const over = or(eq(interviews.status, "completed"), and(eq(interviews.status, "no_show"), sql`${interviews.outcome} IS DISTINCT FROM 'no_show_candidate'`, sql`(${interviews.outcome} IS DISTINCT FROM 'no_show_interviewer' OR (${interviews.decision} IS NOT NULL AND ${interviews.decision} <> 'new_times'))`));
   const [done] = await tx.select({ roundKey: interviews.roundKey }).from(interviews).where(and(eq(interviews.applicationId, app.id), over)).orderBy(desc(interviews.createdAt)).limit(1);
   const idx = done ? plan.findIndex((r) => r.key === done.roundKey) : -1;
-  const round = done ? plan[idx + 1] : plan[0];
+  const round = missedByUs ?? (done ? plan[idx + 1] : plan[0]);
   if (!round) return null;
   const [role] = await tx.select({ currentPacketVersion: roles.currentPacketVersion }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
   const [current] = role?.currentPacketVersion && role.currentPacketVersion !== app.packetVersion ? await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, role.currentPacketVersion))).limit(1) : [];
@@ -442,7 +473,8 @@ export async function interviewDraftFor(tx: Tx, input: { app: Pick<typeof applic
   return {
     applicationId: app.id, roleId: app.roleId, roundKey: round.key, roundTitle: round.title, durationMinutes: round.durationMinutes, format: round.format,
     interviewerUserIds: [...new Set(ids)].filter((id) => active.has(id)), linkSource: "calendar", window: defaultSchedulingWindow(input.now, company?.timezone ?? "America/Los_Angeles"),
-    requestPath: `/api/v1/applications/${app.id}/interviews`, nextRound: !!done,
+    requestPath: `/api/v1/applications/${app.id}/interviews`, nextRound: !missedByUs && !!done,
+    ...(missedByUs ? { sameRoundAgain: "missed_by_us" as const } : {}),
   };
 }
 
@@ -487,10 +519,12 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
     const [app] = await tx.select().from(applications).where(and(eq(applications.id, c.req.param("id")), eq(applications.companyId, t.companyId))).limit(1).for("update");
     if (!app) throw new HttpError(404, "not_found", "Application not found.");
     const [last] = await tx.select().from(interviews).where(and(eq(interviews.applicationId, app.id), inArray(interviews.status, ["completed", "no_show"]), isNull(interviews.decision))).orderBy(desc(interviews.createdAt)).limit(1);
-    if (last) {
-      const [decided] = await tx.update(interviews).set({ decision: body.decision, decisionNote: body.note ?? null }).where(and(eq(interviews.id, last.id), isNull(interviews.decision))).returning({ id: interviews.id });
-      if (!decided) throw new HttpError(409, "decision_changed", "Something changed a moment ago. Refresh to see where they are now.");
-    }
+    // The same rule as the screen (audit 06, bug 99): a decision after an interview needs a finished interview still
+    // undecided, for someone still in the process. Other moves have their own actions (the stage button, the hire sheet).
+    if (!last) throw new HttpError(409, "no_interview_to_decide", "No finished interview is waiting for a decision.");
+    if (TERMINAL_STAGES.includes(app.stage)) throw new HttpError(409, "no_interview_to_decide", `A candidate at "${STAGE_LABEL[app.stage]}" has no interview decision to record.`);
+    const [decided] = await tx.update(interviews).set({ decision: body.decision, decisionNote: body.note ?? null }).where(and(eq(interviews.id, last.id), isNull(interviews.decision))).returning({ id: interviews.id });
+    if (!decided) throw new HttpError(409, "decision_changed", "Something changed a moment ago. Refresh to see where they are now.");
     let stage = app.stage;
     let nextRoundKey: string | null = null;
     let dispositionSent: boolean | undefined;
@@ -516,8 +550,9 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
     } else if (body.decision === "next_round") {
       const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
       const plan = pv?.packet.interviews.plan ?? [];
-      const idx = last ? plan.findIndex((r) => r.key === last.roundKey) : -1;
-      nextRoundKey = plan[idx + 1]?.key ?? null;
+      // The round after the one just held; a round no longer in the plan has no "next" (never silently the first round).
+      const idx = plan.findIndex((r) => r.key === last.roundKey);
+      nextRoundKey = idx >= 0 ? plan[idx + 1]?.key ?? null : null;
       if (!nextRoundKey) throw new HttpError(409, "no_next_round", "The interview plan has no further round; choose finalist or not moving forward.");
       // No stage moves, but a person moved them on: out of Cancelled, and an automatic set waiting for its day does not go.
       // The other decisions move the stage, and the move takes them out (packages/core stages.ts).
@@ -537,7 +572,7 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
       hired = { outcomeId: r.row.id, roleId: r.roleId, hire: await hireFollowUp(tx, { roleId: r.roleId, hiredApplicationId: app.id, startDate: r.row.hireDate, role: t.role, scope: staffScopeOf(t) }) };
       stage = "hired";
     }
-    await emit(tx, { type: "interview.decision_recorded", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { decision: body.decision, interviewId: last?.id ?? null, note: body.note ?? null, nextRoundKey } });
+    await emit(tx, { type: "interview.decision_recorded", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { decision: body.decision, interviewId: last.id, note: body.note ?? null, nextRoundKey } });
     await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "interview.decision", decision: body.decision } });
     return { out: { ok: true, stage, nextRoundKey, ...(dispositionSent === undefined ? {} : { dispositionSent, candidateNotice, interviewsCancelled, interviewOffNotes }), ...(hired ? { outcomeId: hired.outcomeId, hire: hired.hire, statement: OUTCOME_STATEMENT } : {}) }, hired };
   });
@@ -560,15 +595,10 @@ roleInterviewRoutes.get("/:id/interviews", requireTenant, async (c) => {
   const rows = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const appIds = (await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.roleId, c.req.param("id")), eq(applications.companyId, t.companyId), ...(only ? [eq(applications.id, only)] : [])))).map((a) => a.id);
     if (!appIds.length) return [];
-    let list = await tx.select().from(interviews).where(inArray(interviews.applicationId, appIds)).orderBy(desc(interviews.createdAt));
-    if (t.role === "interviewer") {
-      const mine = new Set((await tx.select({ id: interviewParticipants.interviewId }).from(interviewParticipants).where(eq(interviewParticipants.userId, t.userId))).map((r) => r.id));
-      list = list.filter((r) => mine.has(r.id));
-    }
-    const followUps = await followUpsOf(tx, list);
-    const out = [];
-    for (const r of list) out.push(await summary(tx, r, followUps));
-    return out;
+    const conds = [inArray(interviews.applicationId, appIds)];
+    if (t.role === "interviewer") conds.push(inArray(interviews.id, tx.select({ id: interviewParticipants.interviewId }).from(interviewParticipants).where(eq(interviewParticipants.userId, t.userId))));
+    const list = await tx.select().from(interviews).where(and(...conds)).orderBy(desc(interviews.createdAt));
+    return summaries(tx, list);
   });
   return c.json(rows);
 });

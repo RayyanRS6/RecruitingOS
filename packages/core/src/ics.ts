@@ -22,8 +22,20 @@ function icsDate(iso: string | Date): string {
   const d = typeof iso === "string" ? new Date(iso) : iso;
   return d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 }
-function escapeText(s: string): string {
-  return s.replace(/\\/g, "\\\\").replace(/;/g, ";").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+/** TEXT values (RFC 5545 3.3.11): backslash, semicolon and comma are backslash-escaped, line breaks become "\n". */
+export function escapeIcsText(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r\n|\r|\n/g, "\\n");
+}
+/**
+ * A parameter value such as CN (RFC 5545 3.2): always DQUOTE-quoted, so a comma, colon or semicolon in a name stays
+ * inside it. A quoted value cannot hold a DQUOTE or a control character, so those become an apostrophe and a space.
+ */
+export function quoteIcsParam(s: string): string {
+  const clean = Array.from(s, (ch) => {
+    const code = ch.charCodeAt(0);
+    return ch === '"' ? "'" : code < 32 || code === 127 ? " " : ch;
+  }).join("");
+  return `"${clean.trim()}"`;
 }
 /** Lines longer than 75 octets are folded with CRLF plus a single space. */
 function fold(line: string): string {
@@ -54,14 +66,14 @@ export function buildIcs(ev: IcsEvent): string {
     `DTSTAMP:${icsDate(ev.stamp ?? new Date())}`,
     `DTSTART:${icsDate(ev.start)}`,
     `DTEND:${icsDate(ev.end)}`,
-    `SUMMARY:${escapeText(ev.summary)}`,
+    `SUMMARY:${escapeIcsText(ev.summary)}`,
     `STATUS:${ev.status ?? (ev.method === "CANCEL" ? "CANCELLED" : "CONFIRMED")}`,
   ];
-  if (ev.description) lines.push(`DESCRIPTION:${escapeText(ev.description)}`);
-  if (ev.location) lines.push(`LOCATION:${escapeText(ev.location)}`);
+  if (ev.description) lines.push(`DESCRIPTION:${escapeIcsText(ev.description)}`);
+  if (ev.location) lines.push(`LOCATION:${escapeIcsText(ev.location)}`);
   if (ev.url) lines.push(`URL:${ev.url}`);
-  if (ev.organizer) lines.push(`ORGANIZER;CN=${escapeText(ev.organizer.name)}:mailto:${ev.organizer.email}`);
-  for (const a of ev.attendees ?? []) lines.push(`ATTENDEE;ROLE=REQ-PARTICIPANT;RSVP=FALSE${a.name ? `;CN=${escapeText(a.name)}` : ""}:mailto:${a.email}`);
+  if (ev.organizer) lines.push(`ORGANIZER;CN=${quoteIcsParam(ev.organizer.name)}:mailto:${ev.organizer.email}`);
+  for (const a of ev.attendees ?? []) lines.push(`ATTENDEE;ROLE=REQ-PARTICIPANT;RSVP=FALSE${a.name ? `;CN=${quoteIcsParam(a.name)}` : ""}:mailto:${a.email}`);
   lines.push("END:VEVENT", "END:VCALENDAR");
   return `${lines.map(fold).join("\r\n")}\r\n`;
 }

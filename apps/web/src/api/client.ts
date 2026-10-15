@@ -278,7 +278,7 @@ export type ShareLinkResponse = { created: boolean; link: ApplicationLink; text:
 /** POST /roles/:id/closing-date. `reopened`: a later date took applications again ("Extend the date"). */
 export type ClosingDateResponse = { ok: boolean; reopened: boolean; closingDate: ClosingDateView };
 /** Saving a packet version (POST /roles/:id/packets): what became of it, and on a live job why it waits (Q10) or which boards still show the earlier version (D4). */
-export type NewVersionResponse = { version: number; outcome?: "approved_current" | "proposed_pending_approval" | "proposed"; guardChanges?: string[]; needsApproval?: { changes: string[]; words: string; youMayConfirm: boolean } | null; boardsShowingOldVersion?: string[] };
+export type NewVersionResponse = { version: number; outcome?: "approved_current" | "proposed_pending_approval" | "proposed"; guardChanges?: string[]; needsApproval?: { changes: string[]; words: string; youMayConfirm: boolean } | null; boardsShowingOldVersion?: string[]; paused?: boolean };
 /**
  * An ITS posting task as its recruiter sees it once accepted (plan D3): the job ad as the board will show it, the
  * board's own apply link, the numbered steps and where the posting stands. Nothing about applicants.

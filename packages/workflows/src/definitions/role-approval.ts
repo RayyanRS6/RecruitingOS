@@ -1,7 +1,7 @@
-import { and, eq } from "drizzle-orm";
-import type { Actor, RolePacket } from "@ros/contracts";
-import { closingDateRequired, closingDayWords, closingMoment, defaultClosingDate, emit, gate, markBoardsOutdated, notify, resolveDecisionMaker } from "@ros/core";
-import { approvalRequests, companies, rolePackets, roles } from "@ros/db";
+import { and, desc, eq } from "drizzle-orm";
+import { isCompanyVerified, type Actor, type RolePacket } from "@ros/contracts";
+import { closingDateProblem, closingDateRequired, closingDayWords, closingMoment, defaultClosingDate, emit, gate, markBoardsOutdated, notify, resolveDecisionMaker } from "@ros/core";
+import { approvalRequests, companies, events, intakeSessions, rolePackets, roles } from "@ros/db";
 import type { StepContext, WorkflowDefinition } from "../types";
 import { armClosingDate } from "./closing-date";
 
@@ -66,8 +66,11 @@ export const roleApproval: WorkflowDefinition<State> = {
       if (result.outcome === "wait_for_approval") {
         // The expiry runs on the engine's clock, the same one that wakes this run, so the request and the timer agree.
         const until = new Date(ctx.now.getTime() + PACKET_APPROVAL_WINDOW_HOURS * 3600_000).toISOString();
-        await ctx.q.update(approvalRequests).set({ expiresAt: until }).where(eq(approvalRequests.id, result.approvalRequestId));
-        const who = decisionMaker ? `${decisionMaker.name ?? decisionMaker.email} was named as the decision maker; an owner can also decide.` : "Any owner, admin or hiring manager can decide.";
+        const [req] = await ctx.q.update(approvalRequests).set({ expiresAt: until }).where(eq(approvalRequests.id, result.approvalRequestId)).returning({ requiredRoles: approvalRequests.requiredRoles });
+        // A closing date chosen in the job builder travels with the draft and lands on the new role here (row 61).
+        if (!wasOpen) await takeDraftClosingDate(ctx, role);
+        // Only the people who may actually decide are named: the company can narrow the approver list (row 67).
+        const who = decisionMaker ? `${decisionMaker.name ?? decisionMaker.email} was named as the decision maker; an owner can also decide.` : decidersInWords(req?.requiredRoles ?? []);
         await notify(ctx.q, {
           companyId: ctx.companyId,
           kind: "approval.requested",
@@ -172,10 +175,41 @@ export const roleApproval: WorkflowDefinition<State> = {
   },
 };
 
+/** The approver roles of a request, in the words the notice uses: "Any owner, admin or hiring manager can decide." */
+const ROLE_WORD: Record<string, string> = { owner: "owner", admin: "admin", hiring_manager: "hiring manager", hr: "HR team member", recruiter: "recruiter", interviewer: "interviewer" };
+export function decidersInWords(roles: readonly string[]): string {
+  const words = [...new Set(roles)].map((r) => ROLE_WORD[r] ?? r.replace(/_/g, " "));
+  if (!words.length) return "An owner can decide.";
+  const list = words.length > 1 ? `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}` : words[0];
+  return `Any ${list} can decide.`;
+}
+
+/**
+ * The closing date the person chose in the job builder (row 61): kept with the draft as a `role.closing_date_set` event
+ * on the intake session, it is set on the new role the first time it asks for approval, unless the role already has a
+ * date (set on its Share tab meanwhile) or the chosen day is no longer ahead. The timer is armed when the role opens.
+ */
+async function takeDraftClosingDate(ctx: StepContext<State>, role: typeof roles.$inferSelect): Promise<void> {
+  if (role.applicationsCloseOn || role.status !== "pending_approval") return;
+  const [session] = await ctx.q.select({ id: intakeSessions.id }).from(intakeSessions).where(eq(intakeSessions.roleId, role.id)).orderBy(desc(intakeSessions.createdAt)).limit(1);
+  if (!session) return;
+  const [last] = await ctx.q.select({ payload: events.payload }).from(events).where(and(eq(events.subjectType, "intake_session"), eq(events.subjectId, session.id), eq(events.type, "role.closing_date_set"))).orderBy(desc(events.id)).limit(1);
+  const chosen = (last?.payload as { closesOn?: unknown } | undefined)?.closesOn;
+  if (typeof chosen !== "string") return;
+  const [company] = await ctx.q.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, ctx.companyId)).limit(1);
+  if (closingDateProblem(chosen, ctx.now, company?.timezone)) return;
+  await ctx.q.update(roles).set({ applicationsCloseOn: chosen }).where(eq(roles.id, role.id));
+  await emit(ctx.q, { type: "role.closing_date_set", companyId: ctx.companyId, actor: ctx.state.requestedBy ?? ctx.actor, subject: { type: "role", id: role.id }, payload: { closesOn: chosen, previous: null, from: "job_builder" }, correlationId: ctx.run.id });
+}
+
 /**
  * Colorado expects the job ad to say when applications close (founder decision Q12, plan D5): a role there, or a remote
  * one, that opens without a closing date gets one thirty days out, in the company's time zone, which the team can change.
  * The timer is set when the role opens with a date (`arm`), or here when a date was just given.
+ *
+ * The thirty days count from when the job actually goes public (row 58): while ITS has not confirmed the company yet the
+ * job page is not up, so no default date is given here; ITS's confirmation gives one to every open role that needs it
+ * (apps/api/src/services/company-trust.ts).
  *
  * A date chosen while the role waited for approval can have passed by the time it opens. It would stop applications the
  * moment the job went up, so it is not kept: the role gets the default date when the law asks for one, or no date, and
@@ -183,18 +217,20 @@ export const roleApproval: WorkflowDefinition<State> = {
  */
 async function ensureClosingDate(ctx: StepContext<State>, role: typeof roles.$inferSelect, packet: RolePacket, arm: boolean): Promise<void> {
   let closesOn = role.applicationsCloseOn ? role.applicationsCloseOn.slice(0, 10) : null;
-  const [company] = await ctx.q.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, ctx.companyId)).limit(1);
+  const [company] = await ctx.q.select({ timezone: companies.timezone, settings: companies.settings }).from(companies).where(eq(companies.id, ctx.companyId)).limit(1);
   const required = closingDateRequired({ jobLocations: packet.identity.locations, remotePolicy: packet.identity.remotePolicy });
+  // The default date starts counting only once the job is public.
+  const goesPublic = isCompanyVerified(company?.settings);
   if (arm && closesOn && closingMoment(closesOn, company?.timezone).getTime() <= ctx.now.getTime()) {
     const passed = closesOn;
-    closesOn = required ? defaultClosingDate(ctx.now, company?.timezone) : null;
+    closesOn = required && goesPublic ? defaultClosingDate(ctx.now, company?.timezone) : null;
     await ctx.q.update(roles).set({ applicationsCloseOn: closesOn }).where(eq(roles.id, role.id));
     await emit(ctx.q, { type: "role.closing_date_set", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "role", id: role.id }, payload: { closesOn, previous: passed, defaulted: required, reason: "The closing date had passed when the role opened." }, correlationId: ctx.run.id });
     await notify(ctx.q, {
       companyId: ctx.companyId,
       kind: "stuck.closing_date_passed",
       title: `${role.title}: the closing date had passed when it opened`,
-      body: `The closing date chosen before approval, ${closingDayWords(passed)}, was over by the time the job opened, so it would have stopped applications at once. ${closesOn ? `Colorado expects a closing date on the job ad, so it is now ${closingDayWords(closesOn)}.` : "The job now takes applications until you stop them."} Choose another date on the Share tab at any time.`,
+      body: `The closing date chosen before approval, ${closingDayWords(passed)}, was over by the time the job opened, so it would have stopped applications at once. ${closesOn ? `Colorado expects a closing date on the job ad, so it is now ${closingDayWords(closesOn)}.` : required ? "Colorado expects a closing date on the job ad: it gets one thirty days after the job goes public." : "The job now takes applications until you stop them."} Choose another date on the Share tab at any time.`,
       action: { label: "Choose a closing date", href: `/roles/${role.id}?tab=posting#closing-date` },
       roles: ["owner", "admin"],
     });
@@ -202,7 +238,7 @@ async function ensureClosingDate(ctx: StepContext<State>, role: typeof roles.$in
     await armClosingDate(ctx.q, ctx.services.engine, { companyId: ctx.companyId, roleId: role.id, closesOn, actor: ctx.actor });
     return;
   }
-  if (!closesOn && required) {
+  if (!closesOn && required && goesPublic) {
     closesOn = defaultClosingDate(ctx.now, company?.timezone);
     await ctx.q.update(roles).set({ applicationsCloseOn: closesOn }).where(eq(roles.id, role.id));
     await emit(ctx.q, { type: "role.closing_date_set", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "role", id: role.id }, payload: { closesOn, previous: null, defaulted: true, reason: "Colorado expects the job ad to say when applications close." }, correlationId: ctx.run.id });

@@ -228,6 +228,8 @@ describe("allowances, plans and alerts", () => {
     const queued = (await container.db.select().from(jobs).where(eq(jobs.kind, ALERT_EMAIL_JOB_KIND))).map((j) => (j.payload as { alertId: string }).alertId);
     expect(queued).toEqual([loud.id]);
     expect(queued).not.toContain(quiet.id);
+    // tried for about an hour, like a queued message, so a short email outage never loses it (Wave S5 review)
+    expect((await container.db.select().from(jobs).where(eq(jobs.kind, ALERT_EMAIL_JOB_KIND)))[0]?.maxAttempts).toBe(13);
     await container.kick();
     await container.drain();
     const sent = mail().slice(before).filter((m) => m.subject === "Critical alert: The background worker has stopped polling");

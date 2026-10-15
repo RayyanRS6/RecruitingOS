@@ -1,5 +1,5 @@
 import type { CompanyAboutInput, MessageLineInput } from "@ros/ai";
-import { checkPersonalLine, screenCriterion, type MergedRevision, type ScoringIdentity } from "@ros/agents";
+import { checkPersonalLine, credentialMustHaves, saidByCandidate, screenCriterion, type MergedRevision, type ScoringIdentity } from "@ros/agents";
 import type { BoardColumn, EvidenceAssessment, IntakeFacts, IntakeTurn, MatchBand, PacketRevision, ResumeExtraction, RolePacket, ScreenAssessment, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
 // The score and the board's placement are pure functions over the stored findings; this package does not depend on
 // @ros/core (its database code), so the eval reads the very same modules by path.
@@ -558,6 +558,113 @@ export function consistencyDifferences(readings: readonly EvidenceAssessment[], 
   return f;
 }
 
+/* ---------------------------------------------------- licence readings (founder decision, 15 Oct 2026) ---------------------------------------------------- */
+
+/**
+ * The licence rule (founder decision, 15 Oct 2026): a credential must-have (licence, certificate, registration) is "no"
+ * only when the candidate's own words say plainly they do not hold it; lapsed, expired, pending or unclear is "unknown"
+ * (asked about in the screening chat), never "no". Enforced in code after the model answers (`applyEvidenceRules` in
+ * packages/agents), so every reading of the same CV gives the same finding and score. The fairness run of 14 Oct 2026
+ * read the lapsed licence as "no" in some readings and "unknown" in others (triage.consistency, `lapsed_license`).
+ * `expect` is the finding every reading must give the role's credential must-have.
+ */
+export type CredentialCase = { id: string; provenance: "synthetic"; candidate: ScoringIdentity; resume: string; expect: "yes" | "no" | "unknown" };
+
+const credentialResume = (name: string, licenceLine: string) => `${name}\nAnaheim, CA\nRegistered Dental Hygienist at Bayside Dental 2016 - 2021\nA.S. Dental Hygiene, Cypress College\n${licenceLine}\nScaling and root planing, patient education`;
+
+export const credentialCases: CredentialCase[] = [
+  { id: "lapsed", provenance: "synthetic", candidate: applicant("Casey", "Morgan"), resume: credentialResume("Casey Morgan, RDH", "RDH license CA expired in 2021; renewal not started"), expect: "unknown" },
+  { id: "pending", provenance: "synthetic", candidate: applicant("Avery", "Stone"), resume: credentialResume("Avery Stone", "CA RDH license pending: board exam passed, waiting for the number"), expect: "unknown" },
+  { id: "in_training", provenance: "synthetic", candidate: applicant("Riley", "Chen"), resume: "Riley Chen\nCosta Mesa, CA\nDental Assistant at Sunrise Family Dentistry 2020 - present\nChairside assisting, sterilization, X-rays, Dentrix scheduling\nEnrolled in a dental hygiene program, graduating 2027", expect: "unknown" },
+  { id: "said_plainly", provenance: "synthetic", candidate: applicant("Drew", "Park"), resume: credentialResume("Drew Park", "I do not hold a California RDH license"), expect: "no" },
+  { id: "active", provenance: "synthetic", candidate: applicant("Jordan", "Avery"), resume: credentialResume("Jordan Avery, RDH", "RDH license CA active"), expect: "yes" },
+];
+
+/**
+ * The licence rule against readings that disagree (Wave S5 review), with no model call: three scripted readings of the
+ * same CV, each answering the licence must-have its own way and quoting its own part of the licence line, go through
+ * what the app does after the model answered (`readingsOutcome`). The finding the team sees must be `expect` whatever
+ * the readings said, so the same CV always gets the same finding: the rule reads the candidate's whole line, never only
+ * the part a reading chose to quote.
+ */
+export type ScriptedCredentialCase = { id: string; provenance: "synthetic"; resume: string; readings: Array<{ met: "yes" | "partially" | "no" | "unknown"; quote?: string }>; expect: "yes" | "no" | "unknown" };
+
+export const scriptedCredentialCases: ScriptedCredentialCase[] = [
+  { id: "plain_no_read_no_unknown_unknown", provenance: "synthetic", resume: credentialResume("Drew Park", "I do not hold a California RDH license"), readings: [{ met: "no", quote: "I do not hold a California RDH license" }, { met: "unknown", quote: "I do not hold a California RDH license" }, { met: "unknown" }], expect: "no" },
+  { id: "plain_no_read_no_no_unknown", provenance: "synthetic", resume: credentialResume("Drew Park", "I do not hold a California RDH license"), readings: [{ met: "no", quote: "I do not hold a California RDH license" }, { met: "no", quote: "I do not hold a California RDH license" }, { met: "unknown", quote: "I do not hold a California RDH license" }], expect: "no" },
+  { id: "expired_line_partly_quoted_as_yes", provenance: "synthetic", resume: credentialResume("Casey Morgan, RDH", "RDH license CA expired in 2021; renewal not started"), readings: [{ met: "yes", quote: "RDH license CA" }, { met: "yes", quote: "RDH license CA" }, { met: "no", quote: "RDH license CA expired in 2021" }], expect: "unknown" },
+  { id: "renewal_expected_is_still_held", provenance: "synthetic", resume: credentialResume("Jordan Avery, RDH", "RDH license CA #12345, renewal expected 2026"), readings: [{ met: "yes", quote: "RDH license CA #12345" }, { met: "yes", quote: "RDH license CA #12345, renewal expected 2026" }, { met: "partially", quote: "renewal expected 2026" }], expect: "yes" },
+];
+
+/** A reading that answers only the licence must-haves (`keys`) as scripted, for `scriptedCredentialCases`. */
+export function scriptedReading(keys: readonly string[], r: ScriptedCredentialCase["readings"][number]): EvidenceAssessment {
+  return {
+    overall: "potential",
+    confidence: "medium",
+    confidenceReasons: [],
+    summary: "scripted",
+    strengths: [],
+    concerns: [],
+    unknowns: [],
+    competencyFindings: [],
+    requirementFindings: keys.map((k) => ({ requirementKey: k, met: r.met, ...(r.quote ? { evidence: { source: "resume" as const, quote: r.quote } } : {}) })),
+    anomalies: [],
+    recommendation: "screen",
+    rationale: "scripted",
+  };
+}
+
+/** What a reading got wrong about the credential must-haves (`credentials`: their keys), against the case's `expect`. */
+export function credentialFailures(reading: EvidenceAssessment, credentials: ReadonlySet<string>, expect: CredentialCase["expect"]): string[] {
+  if (!credentials.size) return ["the role has no licence must-have to read"];
+  return [...credentials].flatMap((key) => {
+    const met = reading.requirementFindings.find((f) => f.requirementKey === key)?.met ?? "unknown";
+    return met === expect ? [] : [`${key}: read "${met}", expected "${expect}"`];
+  });
+}
+
+/* ---------------------------------------------------- skills judged in the interviews ---------------------------------------------------- */
+
+/**
+ * Known bug 18: a skill the owner set to be judged "in the interviews" must not count in the résumé reading or the score.
+ * The role is the golden packet with its first skill moved to the interviews; the model must not be asked about it, the
+ * reading the team sees has no finding on it, and the match score leaves it out.
+ */
+export function withInterviewSkill(packet: RolePacket): { packet: RolePacket; key: string | null } {
+  const first = packet.competencies[0];
+  if (!first) return { packet, key: null };
+  return { packet: { ...packet, competencies: packet.competencies.map((c, i) => (i === 0 ? { ...c, evaluatedIn: "interview" as const } : c)) }, key: first.key };
+}
+
+/** Where an interview-only skill still showed: in what the model was asked (`asked`), in the reading, or in the score. */
+export function interviewSkillFailures(key: string | null, asked: string, reading: EvidenceAssessment, packet: Pick<RolePacket, "requirements" | "competencies">): string[] {
+  if (!key) return ["the role has no skill to move to the interviews"];
+  const f: string[] = [];
+  if (asked.includes(`[${key}]`)) f.push(`the reading was asked about "${key}", a skill for the interviews`);
+  if (reading.competencyFindings.some((c) => c.competencyKey === key)) f.push(`the reading the team sees has a finding on "${key}"`);
+  const score = matchScore({ resume: { kind: "triage", result: reading }, screen: null }, packet);
+  if (score?.breakdown.some((b) => b.key === key) || score?.unknown.some((u) => u.key === key)) f.push(`the match score counts "${key}"`);
+  return f;
+}
+
+/* ---------------------------------------------------- an eligibility answer a person overrode ---------------------------------------------------- */
+
+/**
+ * Known bug 30: when a person keeps a candidate in after an eligibility answer did not match, the reading is told so
+ * and is not sent the answer they set aside, so it reads them as it reads someone who passed. `answer` is the answer
+ * the person overrode; the kept-in reading must say so and must not see it.
+ */
+export const KEPT_IN_ANSWER = { key: "rdh_license", answer: "no" } as const;
+
+/** What the kept-in reading's input got wrong: the answer set aside still sent, or no word that a person kept them in. */
+export function keptInInputFailures(modelInput: string): string[] {
+  const f: string[] = [];
+  if (modelInput.includes(`"${KEPT_IN_ANSWER.key}":"${KEPT_IN_ANSWER.answer}"`)) f.push("the model was sent the eligibility answer a person set aside");
+  if (!/kept the candidate in/.test(modelInput)) f.push("the model was not told a person kept the candidate in");
+  if (/Eligibility result: failed/.test(modelInput)) f.push("the model was told the candidate failed eligibility");
+  return f;
+}
+
 /* ---------------------------------------------------- what the scoring readings are sent ---------------------------------------------------- */
 
 /**
@@ -649,17 +756,20 @@ const weakHold = { overall: "weak", recommendation: "hold" } as const;
 
 export const boardCases: BoardCase[] = [
   { id: "every_requirement_shown", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "yes", "RDH license CA active"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced")), expect: { score: 100, band: "very_high", column: "shortlist", confident: true, missing: [] } },
-  { id: "missing_must_have_caps_the_score", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "no", "RDH license CA expired in 2021"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced"), "medium", weakHold), expect: { score: 54, band: "low", column: "not_moving_forward", confident: true, missing: ["rdh_license"] } },
+  // a "no" the licence rule lets stand: said plainly (a lapsed one reads "unknown", never "no": credentialCases)
+  { id: "missing_must_have_caps_the_score", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "no", "I do not hold a CA RDH license"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced"), "medium", weakHold), expect: { score: 54, band: "low", column: "not_moving_forward", confident: true, missing: ["rdh_license"] } },
   // A low score from little evidence is never a decline ticked in advance: the must-haves are not known yet.
   { id: "thin_evidence_is_not_a_decline", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "unknown"), mustHaveFinding("perio", "unknown")], [skillFinding("chairside", "partially_evidenced"), skillFinding("patients", "not_evidenced"), skillFinding("infection", "not_evidenced")], "medium", weakHold), expect: { score: 50, band: "low", column: "longlist", confident: false, missing: [] } },
   { id: "one_skill_against_them_is_not_a_decline", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "unknown"), mustHaveFinding("perio", "unknown")], [skillFinding("chairside", "contradicted"), skillFinding("patients", "not_evidenced"), skillFinding("infection", "not_evidenced")], "medium", weakHold), expect: { score: 0, band: "low", column: "longlist", confident: false, missing: [] } },
   // The reading and the score disagree: a person reads it before either end of the board.
-  { id: "a_suggested_screen_is_not_a_decline", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "partially", "RDH license pending renewal"), mustHaveFinding("perio", "partially", "some charting")], allSkills("partially_evidenced")), expect: { score: 50, band: "low", column: "longlist", confident: false, missing: [] } },
+  { id: "a_suggested_screen_is_not_a_decline", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "partially", "RDH license held in Nevada"), mustHaveFinding("perio", "partially", "some charting")], allSkills("partially_evidenced")), expect: { score: 50, band: "low", column: "longlist", confident: false, missing: [] } },
   { id: "a_suggested_hold_is_not_a_shortlist", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "yes", "RDH license CA active"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced"), "medium", weakHold), expect: { score: 100, band: "very_high", column: "longlist", confident: false, missing: [] } },
   { id: "unknown_is_set_aside", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "yes", "RDH license CA active"), mustHaveFinding("perio", "unknown")], allSkills("not_evidenced")), expect: { score: 100, band: "very_high", column: "longlist", confident: false, missing: [] } },
-  { id: "partly_shown_is_the_middle", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "partially", "RDH license pending renewal"), mustHaveFinding("perio", "partially", "some charting")], [skillFinding("chairside", "partially_evidenced"), skillFinding("patients", "evidenced"), skillFinding("infection", "evidenced")]), expect: { score: 61, band: "medium", column: "longlist", confident: true, missing: [] } },
+  { id: "partly_shown_is_the_middle", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "partially", "RDH license held in Nevada"), mustHaveFinding("perio", "partially", "some charting")], [skillFinding("chairside", "partially_evidenced"), skillFinding("patients", "evidenced"), skillFinding("infection", "evidenced")]), expect: { score: 61, band: "medium", column: "longlist", confident: true, missing: [] } },
+  // known bug 32: a "yes" with nothing quoted counts half, never in full (86, not 100), and the breakdown says "no quote"
+  { id: "unquoted_yes_is_partly", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "yes"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced")), expect: { score: 86, band: "very_high", column: "shortlist", confident: true, missing: [] } },
   { id: "unquoted_no_is_unknown", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "no"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced")), expect: { score: 100, band: "very_high", column: "longlist", confident: false, missing: [] } },
-  { id: "low_confidence_is_never_at_either_end", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "no", "RDH license CA expired in 2021"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced"), "low"), expect: { score: 54, band: "low", column: "longlist", confident: false, missing: ["rdh_license"] } },
+  { id: "low_confidence_is_never_at_either_end", provenance: "synthetic", reading: boardReading([mustHaveFinding("rdh_license", "no", "I do not hold a CA RDH license"), mustHaveFinding("perio", "yes", "Periodontal charting daily")], allSkills("evidenced"), "low"), expect: { score: 54, band: "low", column: "longlist", confident: false, missing: ["rdh_license"] } },
 ];
 
 /** The score and the board's placement of one résumé reading, waiting for the team at "Ready for your review". */
@@ -848,14 +958,60 @@ export const screenPersonas: ScreenPersona[] = [
  * screen.assess v3 (plan Wave E): a recruiter's call notes are never the candidate's own words and never make a
  * must-have "no"; a question the candidate skipped stays unknown; a conversation that was not finished is never
  * "strong interview" and says so. Each case builds the conversation from the golden packet's questions; `expect` reads
- * the model's raw scorecard, before the code's own checks, so it measures the model.
+ * the model's raw scorecard (its first reading), before the code's own checks, so it measures the model.
+ * `expectShown` reads the scorecard the team sees: SCORECARD_READINGS readings, each through the code's checks (quotes
+ * against the candidate's own messages, the licence rule, the short-quote rule), combined into the middle answer by
+ * `scorecardReadings` in packages/agents (Wave S5 review), so it measures what the app does after the model answered.
+ * `build` may return the `packet` the case is read against (the golden one with a change).
  */
 export type ScreenAssessCase = {
   id: string;
   provenance: "synthetic";
-  build: (packet: RolePacket) => { transcript: ScreenTranscriptEntry[]; answers: Record<string, string>; progress: ScreenProgress; incomplete?: { reason: "unfinished" | "declined_by_candidate"; answered: number; total: number } };
-  expect: (a: ScreenAssessment, input: { packet: RolePacket; transcript: ScreenTranscriptEntry[] }) => string[];
+  build: (packet: RolePacket) => { transcript: ScreenTranscriptEntry[]; answers: Record<string, string>; progress: ScreenProgress; incomplete?: { reason: "unfinished" | "declined_by_candidate"; answered: number; total: number }; packet?: RolePacket };
+  expect?: (a: ScreenAssessment, input: { packet: RolePacket; transcript: ScreenTranscriptEntry[] }) => string[];
+  expectShown?: (shown: ScreenAssessment, input: { packet: RolePacket; transcript: ScreenTranscriptEntry[] }) => string[];
 };
+
+/**
+ * The golden packet with each licence must-have confirmed in the screening chat too (evidencedBy includes "screen"), so
+ * the scorecard is asked about it; the question the cases ask about it, in plain words.
+ */
+export function withScreenLicence(packet: RolePacket): { packet: RolePacket; keys: string[]; question: string } {
+  const keys = [...credentialMustHaves(packet)];
+  const mustHaves = packet.requirements.mustHaves.map((m) => (keys.includes(m.key) && !m.evidencedBy.includes("screen") ? { ...m, evidencedBy: [...m.evidencedBy, "screen" as const] } : m));
+  return { packet: { ...packet, requirements: { ...packet.requirements, mustHaves } }, keys, question: "Do you hold a California RDH license?" };
+}
+
+/** The finding the team sees for each licence must-have (none written reads "unknown"), against what the case expects. */
+export function shownCredentialFailures(shown: ScreenAssessment, packet: RolePacket, expect: "yes" | "no" | "unknown", opts: { quoted?: boolean } = {}): string[] {
+  const keys = [...credentialMustHaves(packet)];
+  if (!keys.length) return ["the role has no licence must-have to read"];
+  return keys.flatMap((key) => {
+    const f = shown.requirementFindings.find((x) => x.requirementKey === key);
+    const met = f?.met ?? "unknown";
+    if (met !== expect) return [`${key}: shown "${met}", expected "${expect}"${f?.evidence?.quote ? ` (quote "${f.evidence.quote}")` : ""}`];
+    if (opts.quoted && (!f?.evidence?.quote || f.evidence.unquoted)) return [`${key}: shown "${met}" but marked no quote`];
+    return [];
+  });
+}
+
+/** A chat of one licence question and the candidate's answer to it, read against `withScreenLicence`. */
+function licenceChat(packet: RolePacket, answer: string) {
+  const role = withScreenLicence(packet);
+  const transcript: ScreenTranscriptEntry[] = [
+    { role: "assistant", content: role.question, at: ASSESS_AT, questionKey: "licence_check" },
+    { role: "candidate", content: answer, at: ASSESS_AT },
+  ];
+  return { transcript, answers: {}, progress: assessProgress({ askedKeys: [] }), packet: role.packet };
+}
+
+/** Every quote in a scorecard the team sees that is not the candidate's own words (nor a recruiter's note). */
+function quotesNotSaid(shown: ScreenAssessment, transcript: ScreenTranscriptEntry[]): string[] {
+  const said = transcript.filter((t) => t.role === "candidate").map((t) => t.content).join("\n");
+  const notes = transcript.filter((t) => t.role === "recruiter").map((t) => t.content).join("\n");
+  const all = [...quotesOf(shown), ...shown.eligibilityConfirmations.flatMap((e) => (e.quote ? [{ source: "screen" as const, quote: e.quote }] : []))];
+  return all.filter((e) => !(e.source === "recruiter_note" ? notes.includes(e.quote ?? "") : saidByCandidate(e.quote ?? "", said))).map((e) => `a quote the candidate never sent reached the team: "${(e.quote ?? "").slice(0, 60)}"`);
+}
 
 const ASSESS_AT = "2026-10-08T10:00:00.000Z";
 const assessProgress = (over: Partial<ScreenProgress> = {}): ScreenProgress => ({ askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0, ...over });
@@ -931,6 +1087,76 @@ export const screenAssessCases: ScreenAssessCase[] = [
       return f;
     },
   },
+  // Wave S5 review: what the team sees after the code's checks, for the licence rule, the short-quote rule and the
+  // assistant's recorded answers (known bugs 13, 20 and 106).
+  {
+    id: "licence_lapsed_in_the_chat",
+    provenance: "synthetic",
+    build: (packet) => licenceChat(packet, "My RDH license lapsed last year and I have not renewed it yet."),
+    expectShown: (shown, { packet }) => shownCredentialFailures(shown, packet, "unknown"),
+  },
+  {
+    id: "licence_not_held_said_plainly",
+    provenance: "synthetic",
+    build: (packet) => licenceChat(packet, "I do not hold a California RDH license."),
+    expectShown: (shown, { packet }) => shownCredentialFailures(shown, packet, "no"),
+  },
+  {
+    id: "bare_yes_to_the_licence_question",
+    provenance: "synthetic",
+    build: (packet) => licenceChat(packet, "Yes"),
+    expectShown: (shown, { packet }) => shownCredentialFailures(shown, packet, "yes", { quoted: true }),
+  },
+  {
+    id: "recorded_answers_are_not_the_candidate",
+    provenance: "synthetic",
+    build: (packet) => {
+      const { transcript, answers } = answered(packet);
+      // the assistant's record of the first answer, in its own words: never the candidate's
+      const first = packet.screening.questions[0]!;
+      return { transcript, answers: { ...answers, [first.key]: "Led a team of six hygienists at a busy perio practice for ten years" }, progress: assessProgress({ askedKeys: packet.screening.questions.map((q) => q.key) }) };
+    },
+    expectShown: (shown, { transcript }) => quotesNotSaid(shown, transcript),
+  },
+];
+
+/**
+ * The scorecard read again (Wave S5 review, known bugs 20 and 106): the same sent chat, read as the app reads it (three
+ * readings and their middle answer) twice, must give the same findings, overall reading and recommendation.
+ */
+export function scorecardDifferences(a: ScreenAssessment, b: ScreenAssessment): string[] {
+  const facts = (s: ScreenAssessment) => ({
+    overall: s.overall,
+    recommendation: s.recommendation,
+    "must-have findings": s.requirementFindings.map((x) => `${x.requirementKey}:${x.met}`).sort().join(", "),
+    "skill findings": s.competencyFindings.map((x) => `${x.competencyKey}:${x.finding}`).sort().join(", "),
+  });
+  const one = facts(a);
+  const two = facts(b);
+  return (Object.keys(one) as Array<keyof typeof one>).filter((k) => one[k] !== two[k]).map((k) => `read 2: ${k} ${two[k] || "none"}, read 1: ${one[k] || "none"}`);
+}
+
+/** The chats `screen.consistency` reads twice: a full cooperative one, and one with the licence said to be lapsed. */
+export const screenConsistencyCases: Array<{ id: string; provenance: "synthetic"; build: ScreenAssessCase["build"] }> = [
+  { id: "cooperative_chat", provenance: "synthetic", build: (packet) => ({ ...answered(packet), progress: assessProgress({ askedKeys: packet.screening.questions.map((q) => q.key) }) }) },
+  { id: "lapsed_licence_chat", provenance: "synthetic", build: (packet) => licenceChat(packet, "My RDH license lapsed last year and I have not renewed it yet.") },
+];
+
+/**
+ * The code's fairness check on questions the AI writes for a candidate (Wave S5 review): each protected question is
+ * caught by `unfairQuestion`, each ordinary dental one passes, and an unfair follow-up never reaches the candidate
+ * (`enforceTurnRules`). No model call.
+ */
+export const questionFairnessCases: Array<{ id: string; text: string; unfair: boolean }> = [
+  ...[
+    "Have you ever been convicted of a crime?", "Do you have a criminal record?", "Do you have any health issues that would affect your work?", "Do you have any medical conditions we should know about?",
+    "When did you graduate from high school?", "How many kids do you have?", "Do you have reliable childcare?", "Have you ever filed a workers' comp claim?", "How old are you?", "Where are you originally from?",
+    "Are you planning to have children soon?", "What is your current salary?", "How much do you make now?", "Do you attend church on Sundays?",
+  ].map((text, i) => ({ id: `protected_${i + 1}`, text, unfair: true })),
+  ...[
+    "How do you review their medical history and their medications before a cleaning?", "How do you explain gum disease to patients and their health risks?", "Thanks, that is within the current pay range for this role.",
+    "How many children do you see in a typical day?", "How do you adjust care for a patient with a medical condition?", "You said 12 years of experience in perio: what changed most?", "Which days and hours are you available?",
+  ].map((text, i) => ({ id: `allowed_${i + 1}`, text, unfair: false })),
 ];
 
 /** Who the screen.assess conversations are from (the candidate's record); the scorecard is given it only to hide it. */

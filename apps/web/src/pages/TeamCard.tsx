@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Avatar, Button, Card, Chip, ErrorState, Field, Pill, Skeleton } from "@ros/ui";
 import { api, ApiError } from "../api/client";
+import { useNavigate, useRefresh } from "../nav";
 import { toast } from "../toast";
 
 type Member = { userId: string; role: string; status: string; email: string; name: string | null; calendar: { provider: string; status: string; email: string | null } | null; availability: { timezone: string; windows: number } | null; schedulable: boolean };
@@ -56,6 +57,8 @@ function explain(e: unknown, fallback: string): string {
  */
 export function TeamCard({ myRole, myUserId, onReauthRequired }: { myRole: string; myUserId: string; onReauthRequired?: () => void }) {
   const qc = useQueryClient();
+  const navigate = useNavigate();
+  const refreshFrame = useRefresh();
   const canManage = CAN_MANAGE_MEMBERS.includes(myRole);
   const isOwner = myRole === "owner";
   const mayGrantAdmin = CAN_GRANT_ADMIN.includes(myRole);
@@ -94,6 +97,20 @@ export function TeamCard({ myRole, myUserId, onReauthRequired }: { myRole: strin
     mutationFn: (userId: string) => api.post<{ sessionsEnded: number; message?: string }>(`/api/v1/companies/current/members/${userId}/sign-out`),
     onSuccess: (r) => { toast(r.message ?? (r.sessionsEnded ? "Signed out. They must sign in again to work here." : "They had no session open here.")); setSigningOut(null); setError(null); },
     onError: (e) => { setError(rankAware(e, "Could not sign them out.")); setSigningOut(null); },
+  });
+  // "Leave this company" (founder decision L-10): for oneself; an owner only while another owner remains (the API says so).
+  const [leaving, setLeaving] = useState(false);
+  const leave = useMutation({
+    mutationFn: () => api.post<{ movedTo: { companyId: string; companyName: string } | null; signedOut: boolean }>("/api/v1/companies/current/leave", { confirm: true }),
+    onSuccess: (r) => {
+      toast(r.movedTo ? `You left the company. You are now in ${r.movedTo.companyName}.` : "You left the company and are signed out.");
+      qc.clear();
+      // The whole frame changes (another company, or none): it is drawn again from the new session, as the company switch
+      // does. Not a full page load, which would drop the line above before anyone could read it.
+      navigate(r.movedTo ? "/" : "/login");
+      refreshFrame();
+    },
+    onError: (e) => { setError(e instanceof ApiError ? e.message : "Could not leave the company."); setLeaving(false); },
   });
   const update = useMutation({
     mutationFn: (input: { userId: string; body: { role?: string; status?: "removed" } }) => api.patch<{ sessionsEnded: number; calendarDeletionQueued: boolean; interviewsFlagged: number; interviewsCancelled?: number }>(`/api/v1/companies/current/members/${input.userId}`, input.body),
@@ -136,8 +153,21 @@ export function TeamCard({ myRole, myUserId, onReauthRequired }: { myRole: strin
                     ) : <Chip>{roleLabel(m.role)}</Chip>}
                     {canTouch && removing !== m.userId ? <Button size="sm" variant="quiet" onClick={() => { setRemoving(m.userId); setRoleChange(null); setSigningOut(null); }}>Remove</Button> : null}
                     {!self && maySignOut(myRole, m.role) && signingOut !== m.userId ? <Button size="sm" variant="quiet" ariaLabel={`Sign out everywhere: ${nameOf(m)}`} onClick={() => { setSigningOut(m.userId); setRemoving(null); setRoleChange(null); }}>Sign out everywhere</Button> : null}
+                    {self && !leaving ? <Button size="sm" variant="quiet" onClick={() => { setLeaving(true); setRemoving(null); setRoleChange(null); setSigningOut(null); }}>Leave this company</Button> : null}
                   </span>
                 </div>
+                {self && leaving ? (
+                  <Alert tone="critical">
+                    <div className="stack" style={{ gap: 6 }}>
+                      <span>Leave this company? You lose access right away. If you work for another company here, you move to it; otherwise you are signed out.</span>
+                      <details className="more">
+                        <summary>What else happens</summary>
+                        <span>Your calendar connection here is disconnected. An interview you were going to run alone is cancelled and the team is told; one others also run goes ahead with them. What you did stays in the record. {m.role === "owner" ? "An owner can leave only while another owner remains. " : ""}To close the whole company, ask ITS.</span>
+                      </details>
+                      <div className="row"><Button size="sm" variant="destructive" loading={leave.isPending} onClick={() => leave.mutate()}>Leave this company</Button><Button size="sm" variant="quiet" onClick={() => setLeaving(false)}>Stay</Button></div>
+                    </div>
+                  </Alert>
+                ) : null}
                 {signingOut === m.userId ? (
                   <Alert tone="caution">
                     <div className="stack" style={{ gap: 6 }}>
@@ -214,7 +244,7 @@ export function TeamCard({ myRole, myUserId, onReauthRequired }: { myRole: strin
             {ROLES.map((r) => <li key={r.value}><strong>{r.label}:</strong> {r.help}</li>)}
           </ul>
           <p style={{ margin: 0 }}>An invited person gets one email with a link that works for seven days, and signs in with Google or Microsoft using that address.</p>
-          <p style={{ margin: 0 }}>Interviewers never see pay. Hiring managers can approve jobs and decide on candidates. Only owners and admins can make someone an admin, and only an owner can make another owner; either needs a recent sign-in. The last owner cannot be removed. Owners and admins can sign a teammate out of this company; only an owner signs out an owner.</p>
+          <p style={{ margin: 0 }}>Interviewers never see pay. Hiring managers can approve jobs and decide on candidates. Only owners and admins can make someone an admin, and only an owner can make another owner; either needs a recent sign-in. The last owner cannot be removed. Owners and admins can sign a teammate out of this company; only an owner signs out an owner. Anyone can leave the company from their own row, an owner only while another owner remains.</p>
         </div>
       </details>
     </Card>

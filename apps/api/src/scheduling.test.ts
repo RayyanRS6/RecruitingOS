@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
-import { defaultSchedulingWindow, entitlements } from "@ros/core";
-import { applications, auditRecords, companies, integrations, interviewFollowups, interviews, notifications, recruiterEscalations, users, workflowRuns } from "@ros/db";
+import { bookedFor, cancelInterviewEvents } from "@ros/agents";
+import { defaultSchedulingWindow, entitlements, zonedParts } from "@ros/core";
+import { applications, auditRecords, communications, companies, integrations, interviewFollowups, interviews, notifications, recruiterEscalations, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter, FakeGoogleCalendarProvider, MemorySecretStore } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { unverifyCompany, verifyCompany } from "./services/company-trust";
 import { signInAs } from "./test-helpers";
 
 /**
@@ -218,8 +220,13 @@ describe("interview scheduling", () => {
     expect(row.meetingUrl).toMatch(/meet\.google\.com/);
     const events = gcal().eventsFor("owner@smile.test").filter((e) => e.status === "confirmed");
     expect(events).toHaveLength(1);
-    expect(events[0].attendees).toEqual(expect.arrayContaining(["owner@smile.test", cand.email]));
+    // the candidate is not on the interviewer's event: their one invitation is our calendar file (audit 06, bug 92)
+    expect(events[0].attendees).toEqual(["owner@smile.test"]);
     expect(events[0].idempotencyKey).toBe(`interview:${iv.id}:1:${ownerId}`);
+    const confirmation = outbox().filter((m) => m.to === cand.email && /^Confirmed:/.test(m.subject));
+    expect(confirmation).toHaveLength(1);
+    const invite = Buffer.from(confirmation[0].attachments![0].contentBase64, "base64").toString("utf8").replace(/\r\n /g, "");
+    expect(invite).toContain(row.meetingUrl!);
     // cancelling removes the event and tells the candidate; the stage returns to recommended
     const cancel = await json(owner, "POST", `/api/v1/interviews/${iv.id}/cancel`, { reason: "The interviewer is out this week." });
     expect(cancel.status).toBe(200);
@@ -285,6 +292,16 @@ describe("interview scheduling", () => {
     expect((await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.reschedule_limit")))).length).toBe(1);
     const events = gcal().eventsFor("owner@smile.test").filter((e) => e.status === "confirmed" && e.idempotencyKey.startsWith(`interview:${iv.id}:`));
     expect(events).toHaveLength(1); // never two live events for one interview
+    // a removal queued for an earlier time that runs late (a backed-up worker) never removes the new booking's event (audit 06, bug 101)
+    const live = await interview(iv.id);
+    await withTenant(container.db, companyId, (tx) => cancelInterviewEvents(tx, container.integrations, { interviewId: iv.id, actor: { kind: "system", id: "test" } }));
+    expect(gcal().eventsFor("owner@smile.test").find((e) => e.eventId === events[0].eventId)!.status).toBe("confirmed");
+    expect(Object.keys((await interview(iv.id)).calendarRefs ?? {})).toEqual([ownerId]);
+    // the daily maximum counts an interview on the interviewer's own day, not the UTC date (audit 06, bug 91)
+    const far = "Pacific/Kiritimati"; // UTC+14: a 9 am Pacific start is the next day there
+    const counted = await withTenant(container.db, companyId, (tx) => bookedFor(tx, companyId, ownerId, { start: new Date(live.startsAt!).toISOString(), end: new Date(live.endsAt!).toISOString() }, "00000000-0000-0000-0000-000000000000", far));
+    expect(counted.perDay).toEqual({ [zonedParts(new Date(live.startsAt!), far).dayKey]: 1 });
+    expect(zonedParts(new Date(live.startsAt!), far).dayKey).not.toBe(new Date(live.startsAt!).toISOString().slice(0, 10));
     await json(owner, "POST", `/api/v1/interviews/${iv.id}/cancel`, { reason: "test cleanup" });
     await container.drain();
   });
@@ -390,14 +407,73 @@ describe("interview scheduling", () => {
     expect((await json(owner, "POST", `/api/v1/interviews/${iv.id}/outcome`, { outcome: "no_show_candidate" })).status).toBe(409);
     expect(await container.db.select().from(interviewFollowups).where(eq(interviewFollowups.applicationId, cand.id))).toHaveLength(1);
 
-    // the interviewer did not come: no row, and the usual question
+    // the interviewer did not come: no row; the team is asked to approve the same round again (founder decision L-12)
     const other = await apply("Lena", "Vogel");
     const iv2 = await requestInterview(other.id);
     const row2 = await interview(iv2.id);
     expect((await json(owner, "POST", `/api/v1/interviews/${iv2.id}/book-on-behalf`, { slotId: row2.offeredSlots[0].id })).status).toBe(200);
     expect((await json(owner, "POST", `/api/v1/interviews/${iv2.id}/outcome`, { outcome: "no_show_interviewer" })).status).toBe(200);
     expect(await container.db.select().from(interviewFollowups).where(eq(interviewFollowups.applicationId, other.id))).toHaveLength(0);
-    expect(await decide("Lena Vogel")).toHaveLength(1);
+    expect(await decide("Lena Vogel")).toHaveLength(0);
+    const missed = (await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.decision")))).filter((x) => x.title === "Lena Vogel's interview did not happen");
+    expect(missed).toHaveLength(1);
+    expect(missed[0].body).toContain("Approve the same round again");
+    expect(missed[0].action).toEqual({ label: "Open the candidate", href: `/roles/${roleId}/talent?open=${other.id}&step=interview` });
+    // the approval card proposes the same round; the new invitation says sorry, and the missed interview stops asking for a decision
+    const draft = (await (await json(owner, "GET", `/api/v1/applications/${other.id}/interview-draft`)).json()) as { roundKey: string; nextRound: boolean; sameRoundAgain?: string };
+    expect(draft).toMatchObject({ roundKey: row2.roundKey, nextRound: false, sameRoundAgain: "missed_by_us" });
+    // the candidate panel's decision card offers the same round first: both actions are open to the owner
+    const detail = (await (await json(owner, "GET", `/api/v1/applications/${other.id}`)).json()) as { allowedActions: string[] };
+    expect(detail.allowedActions).toEqual(expect.arrayContaining(["interview", "record_decision"]));
+    const before = outbox().length;
+    const again = await requestInterview(other.id);
+    await container.drain();
+    const apology = outbox().slice(before).filter((m) => m.to === other.email);
+    expect(apology).toHaveLength(1);
+    expect(apology[0].subject).toMatch(/^New times for your interview:/);
+    expect(apology[0].text).toContain("We are sorry: the interviewer from Smile Bright Dental could not join your last interview");
+    expect((await interview(iv2.id)).decision).toBe("new_times");
+    await json(owner, "POST", `/api/v1/interviews/${again.id}/cancel`, { reason: "test cleanup" });
+    await container.drain();
+  });
+
+  it("what happened is recorded once: a later 'took place' or no-show is refused, as the screen asks it once (audit 06, bug 98)", async () => {
+    const cand = await apply("Ada", "Moss");
+    const iv = await requestInterview(cand.id);
+    const row = await interview(iv.id);
+    expect((await json(owner, "POST", `/api/v1/interviews/${iv.id}/book-on-behalf`, { slotId: row.offeredSlots[0].id })).status).toBe(200);
+    expect((await json(owner, "POST", `/api/v1/interviews/${iv.id}/outcome`, { outcome: "happened" })).status).toBe(200);
+    const again = await json(owner, "POST", `/api/v1/interviews/${iv.id}/outcome`, { outcome: "no_show_candidate" });
+    expect(again.status).toBe(409);
+    expect(((await again.json()) as { error: { code: string } }).error.code).toBe("already_recorded");
+    expect(await interview(iv.id)).toMatchObject({ status: "completed", outcome: "happened" });
+    // a decision needs a finished, undecided interview, as on the screen (audit 06, bug 99)
+    expect((await json(owner, "POST", `/api/v1/applications/${cand.id}/decision`, { decision: "finalist" })).status).toBe(200);
+    const none = await json(owner, "POST", `/api/v1/applications/${cand.id}/decision`, { decision: "next_round" });
+    expect(none.status).toBe(409);
+    expect(((await none.json()) as { error: { code: string } }).error.code).toBe("no_interview_to_decide");
+    const fresh = await apply("Ben", "Cole");
+    const never = await json(owner, "POST", `/api/v1/applications/${fresh.id}/decision`, { decision: "finalist" });
+    expect(never.status).toBe(409);
+  });
+
+  it("once the interview has started the candidate can no longer ask for a different time (audit 06, bug 96)", async () => {
+    const cand = await apply("Eli", "Park");
+    const iv = await requestInterview(cand.id);
+    let row = await interview(iv.id);
+    await pick(row.scheduleToken!, row.offeredSlots[0].id);
+    row = await interview(iv.id);
+    expect(row.status).toBe("scheduled");
+    setClock(Date.parse(row.startsAt!) + 10 * 60_000 - BASE);
+    const page = await (await app.request(`/c/schedule/${row.scheduleToken}/confirmed`)).text();
+    expect(page).not.toContain("Ask for a different time");
+    expect(page).toContain("This interview has started, so it can no longer be moved here.");
+    const r = await app.request(`/c/schedule/${row.scheduleToken}/reschedule`, { method: "POST" });
+    expect(r.headers.get("location")).toBe(`/c/schedule/${row.scheduleToken}/confirmed`);
+    expect(await interview(iv.id)).toMatchObject({ status: "scheduled", attempt: row.attempt, rescheduleCountCandidate: 0 });
+    setClock(0);
+    await json(owner, "POST", `/api/v1/interviews/${iv.id}/cancel`, { reason: "test cleanup" });
+    await container.drain();
   });
 
   // ---- Interview scheduling that recovers (F2, 15 Oct 2026: docs/audit/06-interviews.md bugs 1 to 5, 7 and 23) ----
@@ -687,6 +763,48 @@ describe("interview scheduling", () => {
     setClock(147 * H);
     await container.drain();
     expect(await escalations()).toHaveLength(1);
+    await json(owner, "POST", `/api/v1/interviews/${iv.id}/cancel`, { reason: "test cleanup" });
+    await container.drain();
+    setClock(0);
+  });
+
+  it("a first offer whose email waits for the ITS check starts no clock: no reminder, no expiry, until the times are actually sent (audit 06, bug 12)", async () => {
+    const its = async (verified: boolean) => {
+      const actor = { kind: "user" as const, id: ownerId, name: "ITS" };
+      await withPlatform(container.db, (tx) => (verified ? verifyCompany(tx, container, { companyId, actor, reason: "test", now: container.engine.clock() }) : unverifyCompany(tx, { companyId, actor, reason: "test" })));
+      await container.drain();
+    };
+    const cand = await apply("Ines", "Cruz");
+    await its(false);
+    const iv = await requestInterview(cand.id);
+    await container.drain();
+    const row = await interview(iv.id);
+    expect(row.status).toBe("scheduling");
+    const [held] = await container.db.select().from(communications).where(eq(communications.idempotencyKey, `slots:${iv.id}:${row.attempt}`));
+    expect(held.status).toBe("held");
+    // the wait has no deadline, so the team is told once that the times wait for the ITS check
+    const waiting = () => container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.no_availability"), eq(notifications.userId, ownerId))).then((rows) => rows.filter((x) => x.title === "Ines's interview times are waiting"));
+    expect(await waiting()).toHaveLength(1);
+    expect((await waiting())[0]!.body).toContain("wait for ITS to confirm your company");
+    // five days pass with the email still held: no reminder, and the offer does not lapse
+    setClock(5 * DAY);
+    await container.drain();
+    expect(await interview(iv.id)).toMatchObject({ status: "scheduling", scheduleToken: row.scheduleToken });
+    expect(await waiting()).toHaveLength(1);
+    expect(outbox().some((m) => m.to === cand.email && /^Reminder: pick a time/.test(m.subject))).toBe(false);
+    // ITS confirms the company: the email goes, its link still works, and only now does the offer's clock start
+    await its(true);
+    const sent = outbox().filter((m) => m.to === cand.email && /^Pick a time/.test(m.subject));
+    expect(sent).toHaveLength(1);
+    expect(sent[0].text).toContain(`/c/schedule/${row.scheduleToken}`);
+    expect((await app.request(`/c/schedule/${row.scheduleToken}`)).status).toBe(200);
+    setClock(5 * DAY + 47 * H);
+    await container.drain();
+    expect(outbox().some((m) => m.to === cand.email && /^Reminder: pick a time/.test(m.subject))).toBe(false);
+    setClock(5 * DAY + 49 * H);
+    await container.drain();
+    expect(outbox().some((m) => m.to === cand.email && /^Reminder: pick a time/.test(m.subject))).toBe(true);
+    expect((await interview(iv.id)).status).toBe("scheduling");
     await json(owner, "POST", `/api/v1/interviews/${iv.id}/cancel`, { reason: "test cleanup" });
     await container.drain();
     setClock(0);

@@ -1,4 +1,5 @@
 import { importanceOf, type EvidenceAssessment, type RolePacket, type ScreenAssessment } from "@ros/contracts";
+import { scoredSkill } from "./match-score";
 
 /**
  * "Insufficient evidence" as an explicit state (docs/spec/21 section 7, P1; docs/FOUNDER-CONTEXT.md, "What should count
@@ -99,7 +100,8 @@ export function readingConsistency(latest: AssessmentLike, packet?: (Pick<RolePa
     return { consistent: false, reason: `The AI review says ${words}, but the candidate's own words show a must-have is not met${name ? ` (${name})` : ""}: "${miss.evidence!.quote!.trim()}". Read it yourself before anything else happens.` };
   }
   if (latest.overall === "strong" && packet?.competencies) {
-    const essential = new Map(packet.competencies.filter((c) => importanceOf(c) === "essential").map((c) => [c.key, c.name]));
+    // a skill checked in the interviews only is not read from a résumé or a chat (`scoredSkill`), so it holds nothing here
+    const essential = new Map(packet.competencies.filter((c) => importanceOf(c) === "essential" && scoredSkill(c)).map((c) => [c.key, c.name]));
     const against = (latest.result.competencyFindings ?? []).find((f) => f.finding === "contradicted" && essential.has(f.competencyKey) && !!f.evidence?.quote?.trim() && !f.evidence.unquoted);
     if (against) return { consistent: false, reason: `The AI review says ${words}, but the candidate's own words go against an essential skill (${essential.get(against.competencyKey)}): "${against.evidence!.quote!.trim()}". Read it yourself before anything else happens.` };
   }

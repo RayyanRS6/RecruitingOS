@@ -1,9 +1,9 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { companyVerifiedAt, type Actor } from "@ros/contracts";
-import { audit, emit, notify, raiseAlert } from "@ros/core";
+import { BOARD_UP_STATES, audit, closingDateRequired, defaultClosingDate, emit, isBoardChannel, notify, raiseAlert, transitionPosting, type PostingState } from "@ros/core";
 import { releaseHeldCommunications } from "@ros/agents";
-import { companies, type Queryable } from "@ros/db";
-import { companyVerifiedSignal } from "@ros/workflows";
+import { companies, postings, rolePackets, roles, type Queryable } from "@ros/db";
+import { armClosingDate, companyVerifiedSignal } from "@ros/workflows";
 import type { Container } from "../container";
 
 /**
@@ -41,6 +41,7 @@ export async function verifyCompany(tx: Queryable, container: Container, input: 
   await audit(tx, { companyId: co.id, actor: input.actor, action: "company.verified", target: { type: "company", id: co.id }, reason: input.reason, details: { released } });
   // Publish runs of roles approved while the company waited resume now (packages/workflows publish-role.ts).
   await container.engine.signal(tx, { companyId: co.id, key: companyVerifiedSignal(co.id) });
+  await giveDefaultClosingDates(tx, container, { companyId: co.id, actor: input.actor, now: input.now });
   await notify(tx, {
     companyId: co.id,
     kind: "company.verified",
@@ -53,22 +54,54 @@ export async function verifyCompany(tx: Queryable, container: Container, input: 
 }
 
 /**
+ * Colorado's default closing date counts from when the job goes public (row 58): a role that opened while the company
+ * waited for this check got no default date (packages/workflows role-approval.ts), so every open or paused role whose
+ * place asks for one, and has none, gets thirty days from now, with its timer, recorded like the default given at opening.
+ */
+async function giveDefaultClosingDates(tx: Queryable, container: Container, input: { companyId: string; actor: Actor; now: Date }): Promise<number> {
+  const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, input.companyId)).limit(1);
+  const waiting = await tx.select().from(roles).where(and(eq(roles.companyId, input.companyId), inArray(roles.status, ["open", "paused"]), isNull(roles.applicationsCloseOn)));
+  let given = 0;
+  for (const role of waiting) {
+    if (!role.currentPacketVersion) continue;
+    const [pv] = await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, role.currentPacketVersion))).limit(1);
+    if (!pv || !closingDateRequired({ jobLocations: pv.packet.identity.locations, remotePolicy: pv.packet.identity.remotePolicy })) continue;
+    const closesOn = defaultClosingDate(input.now, company?.timezone);
+    await tx.update(roles).set({ applicationsCloseOn: closesOn }).where(eq(roles.id, role.id));
+    await emit(tx, { type: "role.closing_date_set", companyId: input.companyId, actor: input.actor, subject: { type: "role", id: role.id }, payload: { closesOn, previous: null, defaulted: true, reason: "Colorado expects the job ad to say when applications close; the thirty days start when the job goes public." } });
+    await armClosingDate(tx, container.engine, { companyId: input.companyId, roleId: role.id, closesOn, actor: input.actor });
+    given++;
+  }
+  return given;
+}
+
+/**
  * ITS takes its confirmation back (a mistake, or a doubt about the company): the public pages and feeds go offline at
- * once and messages to candidates wait again, including any already queued (the outbox checks before it sends). Roles,
+ * once and messages to candidates wait again, including any already queued (the outbox checks before it sends). Every
+ * job-board listing that is up (or paused after being up) is closed and named for taking down, as when a role closes
+ * (row 63): its apply link stops working with the careers page, so no candidate should meet the listing. When ITS posts
+ * for the company, a "take it down" task opens per listing; otherwise the Share tab lists them for the team. Roles,
  * candidates and decisions are untouched. The owners and admins are told in plain words; audited with the reason.
  */
-export async function unverifyCompany(tx: Queryable, input: { companyId: string; actor: Actor; reason: string }): Promise<VerificationResult | null> {
+export async function unverifyCompany(tx: Queryable, input: { companyId: string; actor: Actor; reason: string; now?: Date }): Promise<VerificationResult | null> {
   const [co] = await tx.select({ id: companies.id, name: companies.name, settings: companies.settings }).from(companies).where(eq(companies.id, input.companyId)).limit(1).for("update");
   if (!co) return null;
   if (!companyVerifiedAt(co.settings)) return { companyId: co.id, name: co.name, changed: false, verifiedAt: null, released: 0 };
   await tx.update(companies).set({ settings: sql`${companies.settings} - 'verifiedAt' - 'verifiedBy'` }).where(eq(companies.id, co.id));
-  await emit(tx, { type: "company.unverified", companyId: co.id, actor: input.actor, subject: { type: "company", id: co.id }, payload: {} });
-  await audit(tx, { companyId: co.id, actor: input.actor, action: "company.unverified", target: { type: "company", id: co.id }, reason: input.reason });
+  const now = input.now ?? new Date();
+  const up = (await tx.select().from(postings).where(eq(postings.companyId, co.id))).filter((p) => isBoardChannel(p.channel) && BOARD_UP_STATES.includes(p.status as PostingState));
+  for (const p of up) {
+    await transitionPosting(tx, { postingId: p.id, to: "closed", actor: input.actor, now, reason: "company check taken back", patch: { closureRequired: true } });
+    await emit(tx, { type: "posting.closure_required", companyId: co.id, actor: input.actor, subject: { type: "posting", id: p.id }, payload: { channel: p.channel, roleId: p.roleId, url: p.externalUrl, reason: "company check taken back" } });
+  }
+  await emit(tx, { type: "company.unverified", companyId: co.id, actor: input.actor, subject: { type: "company", id: co.id }, payload: { boardsClosed: up.length } });
+  await audit(tx, { companyId: co.id, actor: input.actor, action: "company.unverified", target: { type: "company", id: co.id }, reason: input.reason, details: { boardsClosed: up.length } });
+  const boards = up.length ? ` ${up.length === 1 ? "The job-board listing that was up is closed and must be taken down" : `The ${up.length} job-board listings that were up are closed and must be taken down`}; the Share tab of each job says which. Post them again once ITS confirms your company.` : "";
   await notify(tx, {
     companyId: co.id,
     kind: "company.unverified",
     title: "Your careers page is offline while ITS checks your company again",
-    body: "Your careers page and job pages are offline for now, and messages to candidates wait until ITS confirms your company again. Your roles, candidates and decisions are unchanged. Your ITS contact will be in touch.",
+    body: `Your careers page and job pages are offline for now, and messages to candidates wait until ITS confirms your company again.${boards} Your roles, candidates and decisions are unchanged. Your ITS contact will be in touch.`,
     action: { label: "Open Home", href: "/" },
     roles: ["owner", "admin", "hiring_manager"],
   });

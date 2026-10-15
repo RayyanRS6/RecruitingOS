@@ -118,10 +118,14 @@ describe("the match card", () => {
   });
 
   it("says when everything judged is at full marks, and says 'no quote' when nothing of theirs backs a finding", () => {
-    const all = matchBars(score(reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "yes")])));
+    const all = matchBars(score(reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "yes", "Perio charting daily")])));
     expect(all.costly).toEqual([]);
     expect(all.foldedLabel).toBe("All 2 at full marks");
-    expect(quoteSummary(all.full.find((b) => b.key === "perio")!)).toBe("Shown, from the AI review of the résumé · no quote");
+    // a "yes" with nothing of theirs quoted counts only partly (known bug 32, Wave S5), and says so
+    const bare = matchBars(score(reading("triage", [must("rdh_license", "yes", "RDH license"), must("perio", "yes")])));
+    const perio = bare.costly.find((b) => b.key === "perio")!;
+    expect(perio.pctMet).toBe(50);
+    expect(quoteSummary(perio)).toBe("Partly shown, from the AI review of the résumé · no quote");
     expect(matchBars(score(reading("triage", [must("rdh_license", "yes", "RDH")]))).foldedLabel).toBe("1 requirement at full marks");
     expect(matchBars(score(reading("triage", [must("perio", "partially", "some")]))).foldedLabel).toBeNull();
   });

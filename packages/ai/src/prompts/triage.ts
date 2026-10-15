@@ -12,7 +12,24 @@ export type TriageInput = {
   resumeText: string | null;
   applicationAnswers: { eligibility: Record<string, unknown>; noResumeSummary?: string };
   eligibility: EligibilityResult | null;
+  /**
+   * A person on the hiring team checked an eligibility answer that did not match and kept the candidate in ("Keep them
+   * in", or "Review anyway" after an eligibility decline): the reading treats them as eligible, as the team decided.
+   */
+  eligibilityKeptIn?: boolean;
 };
+
+/** The skills the reading judges: one the role checks in the interviews only is left to the interviews. */
+export function skillsForReading(p: Pick<RolePacket, "competencies">): RolePacket["competencies"] {
+  return p.competencies.filter((c) => c.evaluatedIn !== "interview");
+}
+
+/** The eligibility line of the reading's input: a person's "keep them in" is what counts, not the answer they overrode. */
+export function eligibilityLine(input: Pick<TriageInput, "eligibility" | "eligibilityKeptIn">): string {
+  if (input.eligibilityKeptIn) return "passed (a person on the hiring team checked the eligibility answers and kept the candidate in; treat them as eligible and never hold those answers against them)";
+  if (!input.eligibility) return "not evaluated";
+  return input.eligibility.passed ? "passed" : `failed ${input.eligibility.failedRules.map((f) => f.key).join(", ")}`;
+}
 
 /** The data tags of the reading's message: candidate text never carries one, so it cannot end its block early. */
 const DATA_TAGS = ["resume", "extraction", "application"] as const;
@@ -52,7 +69,7 @@ function packetBlock(p: RolePacket): string {
     `Role: ${p.identity.title} (${p.identity.employmentType.replace("_", " ")}${p.identity.schedule ? `, ${p.identity.schedule}` : ""}) at ${p.identity.locations.map((l) => [l.city, l.region].filter(Boolean).join(", ")).join("; ")}.`,
     `Must-haves: ${p.requirements.mustHaves.map((m) => `[${m.key}] ${m.text} (${m.rationale})`).join(" | ")}`,
     `Nice-to-haves: ${p.requirements.niceToHaves.map((m) => `[${m.key}] ${m.text}`).join(" | ") || "none"}`,
-    `Competencies: ${p.competencies.map((c) => `[${c.key}] ${c.name}: ${c.definition} Indicators: ${c.indicators.join("; ")}`).join(" | ")}`,
+    `Competencies: ${skillsForReading(p).map((c) => `[${c.key}] ${c.name}: ${c.definition} Indicators: ${c.indicators.join("; ")}`).join(" | ")}`,
     `Evaluation criteria: ${p.evaluation.criteria.join("; ")}. Red flags to discuss (never automatic): ${p.evaluation.redFlags.join("; ") || "none"}.`,
     `Pay: ${comp.basis} ${comp.min} to ${comp.max} ${comp.currency}.`,
   ].join("\n");
@@ -65,9 +82,12 @@ function packetBlock(p: RolePacket): string {
 // Version 4 (founder decision D-04 = C, Wave S2): the reading sees the candidate's texts with the name, email, phone,
 // street address and links replaced by placeholders, no earlier applications or their outcomes, and candidate text that
 // can never close a data tag.
+// Version 5 (Wave S5, 15 Oct 2026): a credential is "no" only when the candidate says plainly they do not hold it (a
+// lapsed, expired, pending or unclear one is "unknown"), a lone "yes" or one word is no quote, skills checked in the
+// interviews only are not listed, and a person's "keep them in" on an eligibility answer reads as eligible.
 export const triageAssessPrompt: PromptDef<TriageInput, EvidenceAssessment> = {
   key: "triage.assess",
-  version: 4,
+  version: 5,
   task: "triage.assess",
   agent: "triage",
   schema: TriageModelOutput,
@@ -81,7 +101,7 @@ export const triageAssessPrompt: PromptDef<TriageInput, EvidenceAssessment> = {
       content: [
         input.resumeText ? `<resume>\n${triageDataText(input.resumeText.slice(0, 40_000))}\n</resume>` : "<resume>(no resume text available)</resume>",
         input.extraction ? `<extraction>\n${triageDataText(JSON.stringify({ positions: input.extraction.positions, licenses: input.extraction.licenses, certifications: input.extraction.certifications, skills: input.extraction.skills, yearsOfExperienceEstimate: input.extraction.yearsOfExperienceEstimate, anomalies: input.extraction.anomalies }))}\n</extraction>` : "",
-        `<application>\n${input.applicationAnswers.noResumeSummary ? `About their recent work (in their words): ${triageDataText(input.applicationAnswers.noResumeSummary)}\n` : ""}Eligibility answers: ${triageDataText(JSON.stringify(input.applicationAnswers.eligibility))}\nEligibility result: ${input.eligibility ? (input.eligibility.passed ? "passed" : `failed ${input.eligibility.failedRules.map((f) => f.key).join(", ")}`) : "not evaluated"}\n</application>`,
+        `<application>\n${input.applicationAnswers.noResumeSummary ? `About their recent work (in their words): ${triageDataText(input.applicationAnswers.noResumeSummary)}\n` : ""}Eligibility answers: ${triageDataText(JSON.stringify(input.applicationAnswers.eligibility))}\nEligibility result: ${eligibilityLine(input)}\n</application>`,
         "Assess this application against the Role Packet.",
       ].filter(Boolean).join("\n\n"),
     },

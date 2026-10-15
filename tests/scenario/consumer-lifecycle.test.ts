@@ -155,5 +155,12 @@ describe("End-to-end hiring scenario: Glow Theory (beauty brand, 60 people) hire
     const { aiRuns } = await import("@ros/db");
     const [run] = await container.db.select().from(aiRuns).where(eq(aiRuns.id, asmt.aiRunId!));
     expect((run.humanOverride as { kind: string }).kind).toBe("missing_context");
+    // the reading is three model runs, each linked to the one it keeps, and the flag marks every one (known bugs 87, 109)
+    const linked = (await container.db.select().from(aiRuns)).filter((x) => (x.finalOutcome as { readingOf?: string } | null)?.readingOf === asmt.aiRunId);
+    expect(linked).toHaveLength(3);
+    for (const x of linked) {
+      expect((x.finalOutcome as { readings: string[] }).readings).toHaveLength(3);
+      expect((x.humanOverride as { kind: string }).kind).toBe("missing_context");
+    }
   });
 });

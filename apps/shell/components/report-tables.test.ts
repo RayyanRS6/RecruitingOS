@@ -70,6 +70,36 @@ const report = {
   outcomes: { statement: "Outcomes are what people recorded.", hired: 0, withdrew: 0, declinedByEmployer: 1, declinedOffer: 0, noHire: 0, talentPool: 0, corrections: 0, role: null, rolesByOutcome: {}, declineReasons: [{ reason: "not_a_match_skills", label: "Skills not a match", count: 1 }] },
 };
 
+describe("the Report under a recruiter grant for one candidate (Wave S5)", () => {
+  const recruiter = { ...owner, user: { ...owner.user, id: "s2", email: "rae@its.test", name: "Rae Recruiter", platformRole: "its_recruiter" }, memberships: [], staffAccess: { grantId: "g1", kind: "escalation", purpose: "One candidate", expiresAt: "2026-10-20T00:00:00Z", companyName: "Bright Dental", scope: { escalationId: "e1", roleId: "r1", applicationId: "a1" } } };
+
+  it("says plainly that the figures count that one candidate, instead of nothing", async () => {
+    const { ReportTab, ONE_CANDIDATE_REPORT } = await import("@ros/web/src/pages/RoleReport");
+    const qc = client([[["role", "r1", "report"], report], [["role", "r1", "screening"], { offered: 0, started: 0, finished: 0, unfinished: 0, stillApplying: 0, medianMinutes: null, personChosen: { contactMe: 0, sendWithout: 0 }, skipped: [] }]], recruiter);
+    const html = render(qc, createElement(ReportTab, { roleId: "r1" }));
+    expect(html.replace(/&#x27;/g, "'")).toContain(ONE_CANDIDATE_REPORT);
+    // the team's own view has no such line
+    const own = render(client([[["role", "r1", "report"], report], [["role", "r1", "screening"], { offered: 0, started: 0, finished: 0, unfinished: 0, stillApplying: 0, medianMinutes: null, personChosen: { contactMe: 0, sendWithout: 0 }, skipped: [] }]]), createElement(ReportTab, { roleId: "r1" }));
+    expect(own).not.toContain("Your recruiter access covers one candidate");
+  });
+
+  it("explains the screening chat's refusal (403 staff_scope) in words, never 'Could not load' with a retry", async () => {
+    const { ApiError } = await import("@ros/web/src/api/client");
+    const { ScreeningCard: Card, ONE_CANDIDATE_SCREENING, isOneCandidateLimit } = await import("@ros/web/src/pages/RoleReport");
+    const refusal = new ApiError(403, "staff_scope", "Your access covers one candidate, so you can't see how the screening chat goes for the role's whole group.");
+    expect(isOneCandidateLimit(refusal)).toBe(true);
+    expect(isOneCandidateLimit(new ApiError(500, "internal", "Something went wrong."))).toBe(false);
+    expect(isOneCandidateLimit(new Error("network"))).toBe(false);
+    // the refusal as the page holds it once the request was answered (no new request while the server draws the page)
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, retryOnMount: false, staleTime: Number.POSITIVE_INFINITY } } });
+    qc.setQueryData(["me"], recruiter);
+    qc.getQueryCache().build(qc, { queryKey: ["role", "r1", "screening"] }).setState({ status: "error", error: refusal, fetchStatus: "idle", errorUpdatedAt: Date.now(), errorUpdateCount: 1, fetchFailureCount: 1 });
+    const html = render(qc, createElement(Card, { roleId: "r1" })).replace(/&#x27;/g, "'");
+    expect(html).toContain(ONE_CANDIDATE_SCREENING);
+    expect(html).not.toContain("Could not load");
+  });
+});
+
 describe("the Report: figures right-aligned, figure tiles and day bars, and nothing that sorts", () => {
   it("right-aligns the must-have counts under right-aligned headings", () => {
     const mustHaves = {

@@ -23,7 +23,7 @@ export const SECRET_VALUE_PATTERNS: ReadonlyArray<RegExp> = [
   /\bAC[a-f0-9]{32}\b(?=.*(?:auth|token))/gi, // Twilio SIDs only when paired with a token in the same text
   /\bxox[baprs]-[A-Za-z0-9-]{10,}/g, // Slack
   /\bAKIA[0-9A-Z]{16}\b/g, // AWS access key ids
-  /(?<=\/c\/(?:status|screen|schedule)\/)[A-Za-z0-9_-]{20,}/g, // candidate link tokens in paths (21 Sep, item 3): the path stays, the token goes
+  /(?<=\/c\/(?:status|screen|schedule|confirm-answers)\/)[A-Za-z0-9_-]{20,}/g, // candidate link tokens in paths (21 Sep, item 3; the repeat-confirmation link, known-bugs row 80): the path stays, the token goes
   /(?<=\/c\/privacy-request\/verify\/)[A-Za-z0-9._-]{20,}/g, // the privacy-request confirmation link (a sealed token with dots), same rule
   /(?:^|[?&;\s])(access_token|refresh_token|client_secret|id_token|api_key|apikey|password|client_id_secret|token|secret|code|email|phone)=([^&\s"']+)/gi, // query strings (a person's address or number is not for logs either)
   /("(?:access_token|refresh_token|client_secret|id_token|api_key|apikey|password|authorization|private_key)"\s*:\s*")([^"]*)(")/gi, // JSON text

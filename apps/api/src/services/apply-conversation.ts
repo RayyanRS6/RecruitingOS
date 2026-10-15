@@ -5,13 +5,14 @@ import { runPromptDetached, screenTurnPrompt, type AiRuntime, type RunOutcome, t
 import {
   EMPTY_SCREEN_PROGRESS, MOVED_ON_MESSAGE, REVIEW_MESSAGE, SCREEN_COMPLETE_MESSAGE, SKIPPED_MESSAGE, TURN_CAP_REVIEW_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, modelTurnCap, modelTurnsUsed, answerWithdrawPrompt, answersOf, countConversation, createScreen, currentQuestion, declineConversation, editScreenAnswer, enforceTurnRules, flagAllowance,
   isFocusKey, loadScreenBundle, nextQuestion, pausedMessage, redactProtected, requestHuman, reviewItems, runScreenTurn, screenCommand, screenContextOf, screenIntro, sendConversationForLater, sendRepeatConfirmation,
-  sendRepeatConversationLater, sendRepeatConversationResume, startScreenConversation, statusUrlFor, submitScreenAnswers, tapWords, withFocusAnswer, withdrawPending, withdrawnMessage, type AllowanceNote, type ScreenIntro, type TurnResult,
+  sendRepeatConversationLater, sendRepeatConversationResume, startScreenConversation, statusUrlFor, submitScreenAnswers, tapWords, withFocusAnswer, withdrawPending, withdrawnMessage, type AllowanceNote, type ScreenDeps, type ScreenIntro, type TurnResult,
 } from "@ros/agents";
 import { addBusinessHours, deadlineWords, emit, entitlements, evaluateEligibility, humanResponseExpectation, loadBusinessCalendar, oneVisitPolicyAllows, resolveApplyMode, resolvePolicy, tapFormatFor, transition } from "@ros/core";
 import { applications, candidates, communications, companies, randomToken, rolePackets, roles, screens, unconfirmedScreens, withTenant, workflowRuns, type Db, type Tx } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import type { WorkflowEngine } from "@ros/workflows";
 import type { Container } from "../container";
+import { recordWithdrawal } from "./applications";
 import { screenDeps } from "./screens";
 
 /**
@@ -26,7 +27,9 @@ import { screenDeps } from "./screens";
  * application: no stage, no screen, no message thread, no history entry, no allowance. When it ends, the address on
  * file gets an email; only if its owner opens the link and confirms are the answers (or the request for a person) added
  * to their application. Unconfirmed, what was typed is wiped after seven days. A withdrawal asked for inside it is never
- * carried out from there: the email points the address owner to their own status page.
+ * carried out from there: the email points the address owner to their own status page. A first application to another
+ * role from an address the company already knows gets the same detached conversation (known-bugs row 17): a stranger
+ * never sees the first name on file, and their answers never join the real person's record unconfirmed.
  *
  * The page reads a conversation by its link with `findConversation` and `conversationView`, and acts on it with the
  * `conversation*` functions, without knowing which kind it is: both render and behave the same.
@@ -70,6 +73,13 @@ export type ApplyVisitInput = {
   application: Application;
   candidate: Candidate;
   duplicate: boolean;
+  /**
+   * The company had this person before the form was sent (an earlier application to another role). Typing someone's
+   * address must never show their first name or add to their record (known-bugs row 17), so the conversation is the
+   * same detached one a repeat submission gets: its answers join the application only once the address owner confirms
+   * by email. Absent means a new person.
+   */
+  knownPerson?: boolean;
   role: Role;
   company: Company;
   /** The role's current packet: the version the job page and the form were built from. */
@@ -97,7 +107,10 @@ export async function startApplyConversation(tx: Tx, container: Container, input
   if (!eligibility.passed) return { kind: "receipt", reason: "under_review" };
   const ent = await entitlements.check(tx, company.id, entitlements.TEXT_SCREENS, 1);
   const usedUp = !ent.ok && company.planKey !== "design_partner";
-  if (input.duplicate) {
+  // A repeat submission, or a first application to this role from an address the company already knows: the same page
+  // as a new person's, on a detached conversation. A known person's new application goes on to the team as the form path
+  // takes it (the intake workflow reads it, and any screening invitation goes to the address on file).
+  if (input.duplicate || input.knownPerson) {
     if (usedUp) return { kind: "receipt", reason: "conversation_by_email" };
     // Past the day's conversations for this application, the same receipt as when the month's are used up: no row, no
     // link, no model calls. Never an existing conversation's link instead: that would show one person's words to the next.
@@ -695,7 +708,9 @@ export async function conversationTurn(container: Container, ref: ConversationRe
   if (!message && !input.skip && !input.tap) return { kind: "error", message: "Please type an answer first." };
   const action = { message, skip: !!input.skip, tap: input.tap ?? null };
   if (ref.kind === "screen") {
-    const r = await runScreenTurn(container.db, ref.companyId, screenDeps(container), { screenId: ref.id, message, channel: "web", actor: WEB_ACTOR, skip: action.skip, tap: action.tap });
+    const noted = withdrawalsNoted(container);
+    const r = await runScreenTurn(container.db, ref.companyId, noted.deps, { screenId: ref.id, message, channel: "web", actor: WEB_ACTOR, skip: action.skip, tap: action.tap });
+    await noted.record();
     await container.kick();
     return r;
   }
@@ -761,19 +776,45 @@ export async function conversationPerson(container: Container, ref: Conversation
 
 /** The answer to "do you want to withdraw?" on the page. In a detached conversation nothing is withdrawn (see above). */
 export async function conversationWithdraw(container: Container, ref: ConversationRef, confirm: boolean): Promise<string | null> {
+  const noted = withdrawalsNoted(container);
   const msg = await withTenant(container.db, ref.companyId, async (tx) => {
     if (ref.kind === "screen") {
       const b = await loadScreenBundle(tx, ref.id);
       if (!b) return null;
-      return answerWithdrawPrompt(tx, screenDeps(container), { screenId: ref.id, confirm, channel: "web", actor: { kind: "candidate", id: b.candidate.id } });
+      return answerWithdrawPrompt(tx, noted.deps, { screenId: ref.id, confirm, channel: "web", actor: { kind: "candidate", id: b.candidate.id } });
     }
     const d = await loadDetached(tx, ref.id, { lock: true });
     if (!d || d.row.discardedAt || !withdrawPending(d.row.transcript)) return null;
     const r = await detachedWithdraw(tx, depsOf(container), d, confirm);
     return r.kind === "reply" ? r.message : null;
   });
+  await noted.record();
   await container.kick();
   return msg;
+}
+
+/**
+ * The screening agent's deps with withdrawals noted: a confirmed "withdraw" in the screening chat is, once its
+ * transaction has committed, also a recorded request with a confirmation email, as from the status page (known-bugs
+ * row 74). `record` runs after the chat's transaction and does nothing when nobody withdrew.
+ */
+function withdrawalsNoted(container: Container): { deps: ScreenDeps; record: () => Promise<void> } {
+  const base = screenDeps(container);
+  const withdrawn: Array<{ companyId: string; applicationId: string }> = [];
+  const deps: ScreenDeps = {
+    ...base,
+    onWithdrawn: async (q, input) => {
+      await base.onWithdrawn?.(q, input);
+      withdrawn.push({ companyId: input.companyId, applicationId: input.applicationId });
+    },
+  };
+  const record = async () => {
+    for (const w of withdrawn.splice(0)) {
+      const [app] = await withTenant(container.db, w.companyId, (tx) => tx.select({ id: applications.id, companyId: applications.companyId, candidateId: applications.candidateId }).from(applications).where(eq(applications.id, w.applicationId)).limit(1));
+      if (app) await recordWithdrawal(container, app, "screening_chat");
+    }
+  };
+  return { deps, record };
 }
 
 /** An answer changed on the "check your answers" page (E10): typed `text`, or a `tap`. */

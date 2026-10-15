@@ -57,6 +57,22 @@ describe("Team card: signing a teammate out", () => {
   });
 });
 
+describe("Team card: leaving the company (founder decision L-10)", () => {
+  it("everyone gets 'Leave this company' on their own row only, whatever their role", () => {
+    for (const [role, id] of [["owner", "u-owner"], ["admin", "u-admin"], ["hr", "u-hr"], ["interviewer", "u-int"]]) {
+      const html = card(role, id);
+      expect(html.match(/>Leave this company</g), role).toHaveLength(1);
+      // on the row that says "(you)"
+      const own = html.slice(html.indexOf("(you)"), html.indexOf("(you)") + 2000);
+      expect(own, role).toContain(">Leave this company<");
+    }
+  });
+
+  it("says who can leave", () => {
+    expect(text(card("owner", "u-owner"))).toContain("Anyone can leave the company from their own row, an owner only while another owner remains.");
+  });
+});
+
 describe("Team card: pending invitations", () => {
   it("an interviewer or a hiring manager never sees them", () => {
     for (const role of ["interviewer", "hiring_manager"]) {

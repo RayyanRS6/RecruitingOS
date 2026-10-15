@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PostmarkEmailAdapter } from "./postmark";
+import { POSTMARK_TIMEOUT_MS, PostmarkEmailAdapter } from "./postmark";
 import { parsePostmarkEvent } from "./postmark-webhooks";
 
 /** J19: the Postmark adapter against a fake fetch (nothing here reaches the network), and the webhook parser for subscription changes (H10). */
@@ -34,9 +34,29 @@ describe("Postmark email adapter", () => {
     expect(await new PostmarkEmailAdapter("server-token-for-tests-000000", fetchWith(429, {})).send(message)).toMatchObject({ status: "failed", error: "postmark 429: unknown", retryable: true });
   });
 
-  it("a network error is retryable and never throws", async () => {
-    const adapter = new PostmarkEmailAdapter("server-token-for-tests-000000", (async () => { throw new TypeError("fetch failed: ECONNRESET"); }) as unknown as typeof fetch);
-    expect(await adapter.send(message)).toEqual({ status: "failed", error: "fetch failed: ECONNRESET", retryable: true });
+  it("a failure to connect is retryable and never throws; a connection that broke after sending may have delivered it", async () => {
+    const refused = new PostmarkEmailAdapter("server-token-for-tests-000000", (async () => { throw new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } }); }) as unknown as typeof fetch);
+    expect(await refused.send(message)).toEqual({ status: "failed", error: "postmark unreachable: fetch failed", retryable: true });
+    // Postmark has no idempotency key: a reset after the request went is never sent again on a guess (Wave S5 review)
+    const reset = new PostmarkEmailAdapter("server-token-for-tests-000000", (async () => { throw new TypeError("fetch failed: ECONNRESET"); }) as unknown as typeof fetch);
+    expect(await reset.send(message)).toMatchObject({ status: "failed", retryable: false, uncertain: true });
+  });
+
+  it("a call that hangs is cut off by its timeout and is not sent again on a guess (audit row 121); every call carries the deadline", async () => {
+    expect(POSTMARK_TIMEOUT_MS).toBe(30_000);
+    const signals: Array<AbortSignal | null | undefined> = [];
+    const hanging = ((_url: string | URL | Request, init?: RequestInit) => {
+      signals.push(init?.signal);
+      return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("This operation was aborted"))));
+    }) as typeof fetch;
+    const result = await new PostmarkEmailAdapter("server-token-for-tests-000000", hanging, 50).send(message);
+    expect(result).toEqual({ status: "failed", error: "postmark did not answer within 0 seconds; it may have been delivered", retryable: false, uncertain: true });
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+    // a reply that started (200) but whose body was cut off may have gone: not sent again on a guess
+    const slowBody = ((_url: string | URL | Request, init?: RequestInit) => Promise.resolve({ ok: true, status: 200, json: () => new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted")))) } as unknown as Response)) as typeof fetch;
+    const cut = await new PostmarkEmailAdapter("server-token-for-tests-000000", slowBody, 50).send(message);
+    expect(cut).toMatchObject({ status: "failed", retryable: false, uncertain: true });
+    expect((cut as { error: string }).error).toMatch(/may have been delivered/);
   });
 
   it("without a token nothing is sent and the adapter says so", async () => {

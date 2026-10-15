@@ -258,6 +258,8 @@ export function applyRequirementFixes<T extends DraftRolePacket>(packet: T, fixI
       continue;
     }
     if (plan.op === "to_interview") {
+      // judged in the interview only: no résumé reading or screening chat is asked about it, and the match score leaves
+      // it out (`scoredSkill` in @ros/core), as the owner was told (known bug 18)
       const taken = new Set(next.competencies.map((c) => c.key));
       const competency: Competency = { key: competencyKey(item.text, taken), name: competencyName(item.text), definition: item.text, weight: 3, evaluatedIn: "interview", indicators: ["A concrete example from past work"] };
       next.competencies = [...next.competencies, competency];

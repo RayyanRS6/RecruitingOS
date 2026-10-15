@@ -1,15 +1,45 @@
-import { and, desc, eq, isNull, like } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, like, lt, sql } from "drizzle-orm";
 import type { Actor, EscalationThreadEntry } from "@ros/contracts";
 import {
-  applications, assessments, candidates, communications, companies, documents, escalationMessages, events, intakeSessions, interviews, recruiterEscalations,
+  adminAlerts, applications, assessments, candidates, communications, companies, documents, escalationMessages, events, intakeSessions, interviews, jobs, recruiterEscalations,
   rolePackets, roles, scorecards, screens, staffAccessGrants, users, type EscalationMessageKind, type EscalationMessageSide, type Queryable,
 } from "@ros/db";
+import { raiseAlert } from "./alerts";
 import { emit } from "./events";
 import { escalationReplyBy, type CalendarSource } from "./business-hours";
 import { loadBusinessCalendar } from "./business-calendar";
 import { ESCALATION_ACCESS_DAYS, endStaffGrant, grantStaffAccess, type StaffGrant } from "./staff-access";
 import { defaultUrgency, genericSummary, requestOrigin, requiredExpertise, servedSummary, type EscalationUrgency } from "./escalation-preview";
 import { screenAnswersOf, teamScreenView, unsentScreenReadings, withoutUnsentConversation, withoutUnsentScreenEvents } from "./screen-answers";
+
+/**
+ * The queued job that emails the ITS queue mailbox about a request the system raised (Wave S5 C2, audit row 36): a
+ * candidate who asked for a person, a screening hand-off, a stopped workflow, an eligibility hold, a privacy review, a
+ * scheduling problem, a decision nobody sent. Requests a person on the team raises are emailed by the route that takes
+ * them, as before. The job is written in the request's own transaction, so a request that rolls back emails nobody; the
+ * email itself goes through the outbox under the key `escalation:<id>`, so a caller that already queued its own notice
+ * under that key (the stuck-role ladder) is never doubled.
+ */
+export const ESCALATION_QUEUE_EMAIL_JOB_KIND = "escalation.queue_email";
+
+/**
+ * Whether system-raised requests queue that email, and on which clock the job is due. The process that registers the
+ * job's handler switches it on (apps/api/src/container.ts), like `setAlertEmails`, so a process or a test without the
+ * handler never queues a job nobody can run.
+ */
+let queueEmailClock: (() => Date) | null = null;
+export function setEscalationQueueEmails(clock: (() => Date) | null): void {
+  queueEmailClock = clock;
+}
+
+/**
+ * Whether a new request is the system's own (or a candidate's, through the product), as opposed to one a person on the
+ * team or an ITS recruiter raised: only those are emailed from here. ITS posting tasks are ITS's own board work, listed
+ * in the queue and on the job's Share tab, and are not emailed.
+ */
+export function raisedWithoutAPerson(input: { requestedBy: Actor; postingId?: string | null }): boolean {
+  return !input.postingId && input.requestedBy.kind !== "user" && input.requestedBy.kind !== "recruiter";
+}
 
 /**
  * "Ask a recruiter." Captures the complete context so the recruiter never has to ask
@@ -31,6 +61,8 @@ export async function createEscalation(
     postingId?: string | null;
     summary?: string;
     context?: Record<string, unknown>;
+    /** Email the ITS queue mailbox from here; by default only for a request no person raised (`raisedWithoutAPerson`). */
+    tellQueue?: boolean;
   },
 ): Promise<{ id: string; slaDueAt: string }> {
   const now = input.now ?? new Date();
@@ -64,7 +96,68 @@ export async function createEscalation(
     payload: { kind: input.kind, roleId: input.roleId ?? null, applicationId: input.applicationId ?? null, ...(input.intakeSessionId ? { intakeSessionId: input.intakeSessionId } : {}), ...(input.postingId ? { postingId: input.postingId } : {}) },
     correlationId: input.workflowRunId ?? null,
   });
+  if (queueEmailClock && (input.tellQueue ?? raisedWithoutAPerson(input))) {
+    await q.insert(jobs).values({ kind: ESCALATION_QUEUE_EMAIL_JOB_KIND, payload: { escalationId: row.id, companyId: input.companyId }, runAt: queueEmailClock().toISOString(), maxAttempts: 5 });
+  }
   return { id: row.id, slaDueAt };
+}
+
+/** The alert a request raises once its reply-by time has passed with nobody on it (audit row 38). */
+export const ESCALATION_OVERDUE_ALERT_KIND = "escalation.overdue";
+/** The one alert emailed when more than `OVERDUE_EMAILS_AT_ONCE` requests are found late in the same check. */
+export const ESCALATION_OVERDUE_BACKLOG_ALERT_KIND = "escalation.overdue_backlog";
+export const OVERDUE_EMAILS_AT_ONCE = 5;
+
+/**
+ * Requests past their reply-by time that nobody has picked up (still `open`) raise one alert each, once for each
+ * reply-by time (a reopened request has a new one, and is alerted again if that passes too). The alert names the
+ * category, urgency and how late it is, never the request's words. An alert whose request has since been picked up,
+ * answered or cancelled is resolved. Platform side: run it in a platform transaction (the hourly check does).
+ */
+export async function alertOverdueEscalations(q: Queryable, now: Date = new Date()): Promise<{ raised: number; resolved: number }> {
+  // Only requests not yet alerted for this reply-by time, in SQL: however many old ones stay open, a request that goes
+  // late later is always among those read.
+  const notYetAlerted = sql`NOT EXISTS (SELECT 1 FROM ${adminAlerts} WHERE ${adminAlerts.kind} = ${ESCALATION_OVERDUE_ALERT_KIND} AND ${adminAlerts.target}->>'id' = ${recruiterEscalations.id}::text AND (${adminAlerts.details}->>'slaDueAt')::timestamptz = ${recruiterEscalations.slaDueAt})`;
+  const overdue = await q
+    .select({ id: recruiterEscalations.id, companyId: recruiterEscalations.companyId, kind: recruiterEscalations.kind, urgency: recruiterEscalations.urgency, slaDueAt: recruiterEscalations.slaDueAt, createdAt: recruiterEscalations.createdAt })
+    .from(recruiterEscalations)
+    .where(and(eq(recruiterEscalations.status, "open"), lt(recruiterEscalations.slaDueAt, now.toISOString()), notYetAlerted))
+    .orderBy(asc(recruiterEscalations.slaDueAt))
+    .limit(500);
+  // A backlog found at once (the first run after a deploy, or after the check could not run): each request is listed in
+  // the console, and one summary alert is the only one emailed, instead of an email per critical request.
+  const backlog = overdue.length > OVERDUE_EMAILS_AT_ONCE;
+  if (backlog) {
+    await raiseAlert(q, {
+      kind: ESCALATION_OVERDUE_BACKLOG_ALERT_KIND,
+      severity: "critical",
+      title: `${overdue.length} recruiter requests are past their reply-by time`,
+      body: `${overdue.length} open requests have waited past their reply-by time with nobody on them (${overdue.filter((e) => e.urgency === "critical").length} of them critical). Each is listed in the console; open the recruiter queue and accept them, or tell the customers when someone will.`,
+      details: { count: overdue.length },
+    });
+  }
+  let raised = 0;
+  for (const e of overdue) {
+    if (!e.slaDueAt) continue;
+    const lateHours = Math.max(0, Math.round((now.getTime() - Date.parse(e.slaDueAt)) / 3_600_000));
+    await raiseAlert(q, {
+      kind: ESCALATION_OVERDUE_ALERT_KIND,
+      severity: e.urgency === "critical" && !backlog ? "critical" : "high",
+      title: `A recruiter request is past its reply-by time: ${e.kind}`,
+      body: `A ${e.urgency} urgency ${e.kind} request has waited past its reply-by time (${lateHours < 1 ? "less than an hour" : `${lateHours} hour${lateHours === 1 ? "" : "s"}`} late) and nobody has picked it up. Open the recruiter queue and accept it, or tell the customer when someone will.`,
+      companyId: e.companyId,
+      target: { type: "escalation", id: e.id },
+      details: { slaDueAt: e.slaDueAt, kind: e.kind, urgency: e.urgency },
+    });
+    raised += 1;
+  }
+  // Alerts about requests someone has picked up (or that were answered or cancelled) since are over.
+  const standing = await q.select({ id: adminAlerts.id, target: adminAlerts.target }).from(adminAlerts).where(and(eq(adminAlerts.kind, ESCALATION_OVERDUE_ALERT_KIND), inArray(adminAlerts.status, ["open", "acknowledged"])));
+  const ids = [...new Set(standing.map((a) => a.target?.id).filter((x): x is string => !!x))];
+  const stillOpen = new Set(ids.length ? (await q.select({ id: recruiterEscalations.id }).from(recruiterEscalations).where(and(inArray(recruiterEscalations.id, ids), eq(recruiterEscalations.status, "open")))).map((r) => r.id) : []);
+  const over = standing.filter((a) => a.target?.id && !stillOpen.has(a.target.id)).map((a) => a.id);
+  if (over.length) await q.update(adminAlerts).set({ status: "resolved", resolvedAt: now.toISOString() }).where(inArray(adminAlerts.id, over));
+  return { raised, resolved: over.length };
 }
 
 const URGENCY_RANK: Record<string, number> = { critical: 3, high: 2, normal: 1, low: 0 };

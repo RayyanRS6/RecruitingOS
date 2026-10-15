@@ -88,7 +88,17 @@ export type AcknowledgedConversation = { state: "open"; url: string; questions: 
  * next (plan E8): the conversation that goes with the application as it stands, otherwise that a conversation may
  * follow by email.
  */
-export async function sendAcknowledgment(q: Queryable, integrations: Integrations, input: MessageInput & { appBaseUrl: string; /** Texting is off by default (decision M2); the email then promises an online conversation only. */ smsEnabled?: boolean; conversation?: AcknowledgedConversation | null }): Promise<SendResult> {
+export async function sendAcknowledgment(q: Queryable, integrations: Integrations, input: MessageInput & {
+  appBaseUrl: string;
+  /** Texting is off by default (decision M2); the email then promises an online conversation only. */
+  smsEnabled?: boolean;
+  conversation?: AcknowledgedConversation | null;
+  /**
+   * The address already belonged to someone on the company's records (known-bugs row 17): anyone can type an address, so
+   * the email says it was sent using it, and how to say it was not them.
+   */
+  knownAddress?: boolean;
+}): Promise<SendResult> {
   const { application, candidate, company, packet } = input;
   const statusUrl = `${input.appBaseUrl}/c/status/${application.statusToken}`;
   const disclosure = packet.communication.disclosureText || disclosureLine(company.name);
@@ -104,7 +114,7 @@ export async function sendAcknowledgment(q: Queryable, integrations: Integration
         : `1. Possibly a short written conversation with ${company.name}'s AI assistant (${screenHow}, about ${packet.screening.maxMinutes} minutes). If so, we email you the link.`;
   const text = `Hi ${candidate.firstName},
 
-Thank you for applying for the ${packet.identity.title} position at ${company.name}. We received your application. People on the hiring team review it and make every decision.
+Thank you for applying for the ${packet.identity.title} position at ${company.name}. We received your application. People on the hiring team review it and make every decision.${input.knownAddress ? "\n\nThis application was sent using your email address. If you did not send it, reply to this email and a person will look into it." : ""}
 
 What happens next:
 ${first}

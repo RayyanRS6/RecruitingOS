@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
-import { inspectResumeFile, type Actor } from "@ros/contracts";
-import { sendRepeatApplicationNotice, sendStatusLinks } from "@ros/agents";
-import { CLOSING_DATE_REASON, audit, dedupeKey, emit, normalizeEmailForDedupe, normalizePhone, transition } from "@ros/core";
-import { applications, candidates, companies, documents, events, lowercaseToken, randomToken, rolePackets, roles, uuidv7, withPlatform, withTenant, type ApplicationAcknowledgment, type Db, type Tx } from "@ros/db";
+import { and, desc, eq, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
+import { SCREEN_PERSON_ROUTE_STATUSES, inspectResumeFile, type Actor } from "@ros/contracts";
+import { fromAddress, queueCommunication, replyToFor, sendPrivacyCompletion, sendRepeatApplicationNotice, sendStatusLinks, statusUrlFor } from "@ros/agents";
+import { CLOSING_DATE_REASON, audit, createDataRequest, dedupeKey, emit, fulfilWithdrawal, normalizeEmailForDedupe, normalizePhone, transition } from "@ros/core";
+import { applications, candidates, companies, documents, events, interviews, lowercaseToken, randomToken, rolePackets, roles, screens, uuidv7, withPlatform, withTenant, type ApplicationAcknowledgment, type ConsentRecord, type Db, type Tx } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import type { Container } from "../container";
 import { quarantineKey } from "../uploads";
@@ -79,26 +79,27 @@ export async function createApplication(tx: Tx, container: Container, input: New
   const now = new Date().toISOString();
 
   let candidate = key ? (await tx.select().from(candidates).where(and(eq(candidates.companyId, input.companyId), eq(candidates.dedupeKey, key))).limit(1))[0] : undefined;
+  // Whether the company already had this person before this submission: the one-visit flow then never greets the name on
+  // file nor adds what was typed to their record without the address owner's say-so (services/apply-conversation.ts).
+  let knownPerson = !!candidate;
   if (!candidate) {
-    const consent = {
-      application_terms: { granted: true, at: now, source: input.consentSource, ip: input.ip, ...(input.acknowledgment ? { acknowledged: true } : {}) },
-      ai_notice: { granted: true, at: now, source: input.consentSource, noticeVersion: input.noticeVersionsShown.join(",") },
-      ...(input.smsConsent ? { sms: { granted: true, at: now, source: input.consentSource, ip: input.ip } } : {}),
-    };
-    [candidate] = await tx
-      .insert(candidates)
-      .values({ companyId: input.companyId, firstName: input.firstName, lastName: input.lastName, email, phone, locationText: input.locationText ?? null, dedupeKey: key, firstSource: input.source, consent })
-      .returning();
-    await emit(tx, { type: "candidate.created", companyId: input.companyId, actor, subject: { type: "candidate", id: candidate.id }, payload: { source: input.source } });
-    if (input.smsConsent) await emit(tx, { type: "consent.granted", companyId: input.companyId, actor: { kind: "candidate", id: candidate.id }, subject: { type: "candidate", id: candidate.id }, payload: { purpose: "sms", source: input.consentSource } });
+    const created = await insertCandidateOnce(tx, { companyId: input.companyId, firstName: input.firstName, lastName: input.lastName, email, phone, locationText: input.locationText ?? null, dedupeKey: key, firstSource: input.source, consent: consentOf(input, now) });
+    candidate = created.candidate;
+    knownPerson = !created.inserted;
+    if (created.inserted) {
+      await emit(tx, { type: "candidate.created", companyId: input.companyId, actor, subject: { type: "candidate", id: candidate.id }, payload: { source: input.source } });
+      if (input.smsConsent) await emit(tx, { type: "consent.granted", companyId: input.companyId, actor: { kind: "candidate", id: candidate.id }, subject: { type: "candidate", id: candidate.id }, payload: { purpose: "sms", source: input.consentSource } });
+    }
   }
 
   const [existing] = await tx.select().from(applications).where(and(eq(applications.roleId, role.id), eq(applications.candidateId, candidate.id))).limit(1);
   if (existing) {
     await settleRepeatSubmission(tx, container, { input, actor, application: existing, candidate, roleTitle: role.title });
-    return { application: existing, candidate, duplicate: true };
+    return { application: existing, candidate, duplicate: true, knownPerson: true };
   }
-  let [application] = await tx
+  // Two submissions for the same role and person at the same moment (a double press): the second waits for the first's
+  // row, finds it, and is settled as a repeat instead of failing on the unique key (known-bugs row 78).
+  const [inserted] = await tx
     .insert(applications)
     .values({
       companyId: input.companyId,
@@ -114,7 +115,15 @@ export async function createApplication(tx: Tx, container: Container, input: New
       // The reply address's token (F12): its own random value, never the status token, lowercase because it travels in an email address.
       replyToken: lowercaseToken(16),
     })
+    .onConflictDoNothing({ target: [applications.roleId, applications.candidateId] })
     .returning();
+  if (!inserted) {
+    const [raced] = await tx.select().from(applications).where(and(eq(applications.roleId, role.id), eq(applications.candidateId, candidate.id))).limit(1);
+    if (!raced) throw new Error("the application could not be recorded");
+    await settleRepeatSubmission(tx, container, { input, actor, application: raced, candidate, roleTitle: role.title });
+    return { application: raced, candidate, duplicate: true, knownPerson: true };
+  }
+  let application = inserted;
 
   if (input.resume) {
     const r = input.resume;
@@ -160,7 +169,40 @@ export async function createApplication(tx: Tx, container: Container, input: New
     idempotencyKey: `application_intake:${application.id}`,
     actor,
   });
-  return { application, candidate, duplicate: false };
+  return { application, candidate, duplicate: false, knownPerson };
+}
+
+/**
+ * What the new person's consent record says, honestly by channel (known-bugs row 16). The apply form showed the
+ * application terms and the AI notice and the person ticked the box, so both are recorded with the versions shown. An
+ * application that arrived by email saw no form: nothing is recorded as granted. What they do get is the acknowledgment
+ * email, queued in the intake workflow's first step, which carries the AI disclosure line and their status link (whose
+ * page has "How AI is used"); `notices_by_email` says so, with `granted: false` because nothing was agreed to. No AI
+ * reads their application until that email has actually gone (the intake workflow's `ai_notice` step, which then moves
+ * `at` to when it went); if it never goes, nothing is read by AI and the team reviews it.
+ */
+export function consentOf(input: Pick<NewApplication, "consentSource" | "acknowledgment" | "noticeVersionsShown" | "smsConsent" | "ip">, now: string): ConsentRecord {
+  const out: ConsentRecord = {};
+  if (input.consentSource === "email_in") out.notices_by_email = { granted: false, at: now, source: input.consentSource, noticeVersion: "acknowledgment_email" };
+  else {
+    out.application_terms = { granted: true, at: now, source: input.consentSource, ip: input.ip, ...(input.acknowledgment ? { acknowledged: true } : {}) };
+    out.ai_notice = { granted: true, at: now, source: input.consentSource, noticeVersion: input.noticeVersionsShown.join(",") };
+  }
+  if (input.smsConsent) out.sms = { granted: true, at: now, source: input.consentSource, ip: input.ip };
+  return out;
+}
+
+/**
+ * Adds a person under their address key, or finds the one another submission added at the same moment (known-bugs row
+ * 78): the insert waits for the other transaction's row on the company's unique key and then does nothing, and the
+ * person is read again. `inserted` says which happened.
+ */
+export async function insertCandidateOnce(tx: Tx, values: typeof candidates.$inferInsert): Promise<{ candidate: Candidate; inserted: boolean }> {
+  const [row] = await tx.insert(candidates).values(values).onConflictDoNothing({ target: [candidates.companyId, candidates.dedupeKey] }).returning();
+  if (row) return { candidate: row, inserted: true };
+  const [found] = values.dedupeKey ? await tx.select().from(candidates).where(and(eq(candidates.companyId, values.companyId), eq(candidates.dedupeKey, values.dedupeKey))).limit(1) : [];
+  if (!found) throw new Error("the candidate could not be recorded");
+  return { candidate: found, inserted: false };
 }
 
 /**
@@ -218,10 +260,10 @@ export async function queueLinkRequest(container: Container, typedEmail: string)
  * the page answered the same whether or not anything was found. Returns how many emails were queued (for tests only).
  */
 export async function emailStatusLinks(deps: { db: Db; integrations: Integrations; jobsBaseUrl: string }, typedEmail: string, now: Date): Promise<number> {
-  const key = dedupeKey(typedEmail, null);
-  if (!key) return 0;
+  const match = addressMatch(typedEmail);
+  if (!match) return 0;
   // No tenant is known yet: the address is looked up across companies, then each company's part runs as that company.
-  const people = await withPlatform(deps.db, (tx) => tx.select({ id: candidates.id, companyId: candidates.companyId }).from(candidates).where(and(eq(candidates.dedupeKey, key), isNull(candidates.anonymizedAt))).limit(20));
+  const people = await withPlatform(deps.db, (tx) => tx.select({ id: candidates.id, companyId: candidates.companyId }).from(candidates).where(and(match, isNull(candidates.anonymizedAt))).limit(20));
   let queued = 0;
   for (const person of people) {
     await withTenant(deps.db, person.companyId, async (tx) => {
@@ -236,6 +278,102 @@ export async function emailStatusLinks(deps: { db: Db; integrations: Integration
     });
   }
   return queued;
+}
+
+/**
+ * The one address-matching rule for finding a person by a typed address (known-bugs row 68), shared by "Lost your link?"
+ * and the public privacy form: the folded key the company de-duplicates on (case, Gmail's dots, a plus part), or the
+ * exact address on file (a record written before its key was re-keyed). Null for something that is not an address.
+ */
+export function addressMatch(typedEmail: string): SQL | null {
+  const key = dedupeKey(typedEmail, null);
+  if (!key) return null;
+  return or(eq(candidates.dedupeKey, key), eq(candidates.email, typedEmail.trim().toLowerCase())) ?? null;
+}
+
+/**
+ * "Get a new link" on the status page (known-bugs row 48): the private link is replaced by a new random one, the old one
+ * stops working at once, and the new one goes by email to the address on file, never to the page (whoever pressed the
+ * button may be someone the link was forwarded to). The email is recorded like every other candidate email. Returns the
+ * masked-ready address it went to, or null when there is no address on file (the page then says to reply to an email).
+ */
+export async function rotateStatusLink(container: Container, applicationId: string, companyId: string): Promise<{ emailedTo: string | null }> {
+  const now = container.engine.clock();
+  return withTenant(container.db, companyId, async (tx) => {
+    const [app] = await tx.select().from(applications).where(eq(applications.id, applicationId)).limit(1).for("update");
+    if (!app) return { emailedTo: null };
+    const [candidate] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
+    const [company] = await tx.select().from(companies).where(eq(companies.id, app.companyId)).limit(1);
+    const [role] = await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
+    const token = randomToken(24);
+    const [fresh] = await tx.update(applications).set({ statusToken: token }).where(eq(applications.id, app.id)).returning();
+    // The links the old status page showed stop working too (Wave S5 review): the open screening chat and the interview
+    // scheduling pages get new random links, which the new status page shows; the old ones could still cancel or
+    // reschedule an interview, or carry on the chat.
+    for (const iv of await tx.select({ id: interviews.id }).from(interviews).where(and(eq(interviews.applicationId, app.id), inArray(interviews.status, ["scheduling", "scheduled"]), isNotNull(interviews.scheduleToken)))) {
+      await tx.update(interviews).set({ scheduleToken: randomToken(24) }).where(eq(interviews.id, iv.id));
+    }
+    for (const s of await tx.select({ id: screens.id }).from(screens).where(and(eq(screens.applicationId, app.id), inArray(screens.status, [...SCREEN_PERSON_ROUTE_STATUSES])))) {
+      await tx.update(screens).set({ token: randomToken(24) }).where(eq(screens.id, s.id));
+    }
+    if (!candidate?.email || !company) return { emailedTo: null };
+    const roleTitle = role?.title ?? "your application";
+    const text = `Hi ${candidate.firstName},
+
+You asked for a new link to your application for ${roleTitle} at ${company.name}. Here it is:
+${statusUrlFor(container.env.JOBS_BASE_URL, fresh)}
+
+The old link no longer works, so anyone you shared it with can no longer open your status page. The links in our earlier emails to your screening chat or your interview times have changed too: open them from your application page. Keep this email: there is no account or password.
+
+If you did not ask for this, reply to this email and a person will look into it.
+
+The hiring team at ${company.name}`;
+    // The key names the rotation by a hash of the new link, never the link itself.
+    await queueCommunication(tx, container.integrations, {
+      channel: "email",
+      companyId: company.id,
+      candidateId: candidate.id,
+      applicationId: app.id,
+      to: candidate.email,
+      from: fromAddress(company, container.integrations),
+      replyTo: replyToFor(fresh, container.integrations),
+      subject: `Your new application link: ${company.name}`,
+      text,
+      templateKey: "status_link_new",
+      idempotencyKey: `status_link_new:${app.id}:${createHash("sha256").update(token).digest("hex").slice(0, 16)}`,
+      tags: { template: "status_link_new", applicationId: app.id },
+      actor: { kind: "candidate", id: candidate.id },
+      disclosureIncluded: false,
+    }, now);
+    return { emailedTo: candidate.email };
+  });
+}
+
+/**
+ * A withdrawal is also a recorded request, fulfilled at once, so the audit trail and the confirmation email are the same
+ * however the candidate withdrew: the status page's button, or "Yes, withdraw my application" in the screening chat
+ * (known-bugs row 74). Runs as the platform after the withdrawal committed (the tenant role cannot write that table).
+ */
+export async function recordWithdrawal(container: Container, app: { id: string; companyId: string; candidateId: string }, via: "status_page" | "screening_chat"): Promise<void> {
+  await withPlatform(container.db, async (tx) => {
+    const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
+    const actor = { kind: "candidate" as const, id: app.candidateId };
+    const req = await createDataRequest(tx, {
+      companyId: app.companyId,
+      kind: "withdrawal",
+      requesterEmail: cand?.email ?? `unknown+${app.candidateId}@example.invalid`,
+      candidateId: app.candidateId,
+      applicationId: app.id,
+      channel: "status_page",
+      verified: true,
+      ...(via === "screening_chat" ? { details: "Withdrawn in the screening chat.", verificationNote: "the request came through the candidate's own screening chat link" } : {}),
+      actor,
+      now: container.engine.clock(),
+    });
+    const done = await fulfilWithdrawal(tx, req, actor, container.engine.clock());
+    const [company] = await tx.select({ name: companies.name }).from(companies).where(eq(companies.id, app.companyId)).limit(1);
+    if (cand?.email) await sendPrivacyCompletion(tx, container.integrations, { row: done, companyName: company?.name ?? "the hiring team", privacyEmail: container.env.PRIVACY_EMAIL, actor });
+  });
 }
 
 export { normalizeEmailForDedupe };

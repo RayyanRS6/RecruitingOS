@@ -32,8 +32,9 @@ describe("the screening assistant states pay as the job page does (plan 0.8)", (
   const system = (c: ScreenContext) => screenTurnPrompt.system(c).map((b) => b.text).join("\n");
 
   it("gives the range the law makes the public page show, even when the owner chose not to", () => {
-    // Version 4 (a close that promises no time) keeps the pay rule of version 2.
-    expect(screenTurnPrompt.version).toBe(4);
+    // Version 4 (a close that promises no time) keeps the pay rule of version 2; version 5 (Wave S5) leaves out skills
+    // checked in the interviews only.
+    expect(screenTurnPrompt.version).toBe(5);
     expect(system(ctx())).toContain("never state or suggest a time");
     expect(system(ctx())).not.toMatch(/few days/);
     expect(system(ctx(true))).toContain("Posted pay: hourly 45 to 55 USD.");

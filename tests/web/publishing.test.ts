@@ -187,6 +187,8 @@ describe("a change to a live job (D4, founder decision Q10)", () => {
     expect(liveEditWords(["pay"]).confirm).toBe("Save and ask for approval");
     expect(savedVersionToast({ version: 4, outcome: "approved_current", boardsShowingOldVersion: ["indeed"] }, "its")).toEqual({ title: "Version 4 is live.", detail: "Indeed still shows the earlier version. ITS has a task to update it from your company's account." });
     expect(savedVersionToast({ version: 4, outcome: "approved_current", boardsShowingOldVersion: [] }, "its")).toEqual({ title: "Version 4 is live.", detail: "The job page shows it now." });
+    // a paused job: current, shown once it resumes (never "live")
+    expect(savedVersionToast({ version: 4, outcome: "approved_current", boardsShowingOldVersion: [], paused: true }, "its")).toEqual({ title: "Version 4 is current.", detail: "It shows when you resume the job." });
     expect(savedVersionToast({ version: 5, outcome: "proposed_pending_approval", needsApproval: { changes: ["pay"], words: "This changes the pay, so it needs the same approval as a new role before it goes live.", youMayConfirm: true } }, "its").detail).toMatch(/As the company's only owner, you confirm it yourself on the approval card/);
     expect(savedVersionToast({ version: 5, outcome: "proposed_pending_approval", needsApproval: null }, "its").title).toBe("Saved as version 5. It takes effect once an approver says yes.");
     expect(savedVersionToast({ version: 2, outcome: "proposed", guardChanges: ["The ceiling was raised to the top of the range."] }, "self")).toEqual({ title: "Saved as version 2 with the draft.", detail: "The ceiling was raised to the top of the range." });
