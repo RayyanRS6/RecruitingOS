@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { SEND_MAX_ATTEMPTS, queueCommunication, sendQueuedCommunication } from "@ros/agents";
 import type { Actor } from "@ros/contracts";
-import { loadBusinessCalendar } from "@ros/core";
+import { loadBusinessCalendar, servedSummary } from "@ros/core";
 import { recruiterEscalations, users, withPlatform, withTenant, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import type { Tenant } from "../middleware/session";
@@ -24,11 +24,14 @@ function originOf(requestedBy: Actor): QueueNoticeOrigin {
   return "system";
 }
 
-/** The queue notice of a request just created, read back in the caller's tenant transaction. */
+/**
+ * The queue notice of a request just created, read back in the caller's tenant transaction. The summary is served as the
+ * queue shows it (`servedSummary`: one Recruiting OS raised says so); who raised it is read for that and never sent.
+ */
 export async function queueNoticeOf(tx: Tx, escalationId: string): Promise<QueueNotice | null> {
-  const [row] = await tx.select({ companyId: recruiterEscalations.companyId, kind: recruiterEscalations.kind, slaDueAt: recruiterEscalations.slaDueAt, urgency: recruiterEscalations.urgency, requiredExpertise: recruiterEscalations.requiredExpertise, summary: recruiterEscalations.summary, requestedBy: recruiterEscalations.requestedBy }).from(recruiterEscalations).where(eq(recruiterEscalations.id, escalationId)).limit(1);
+  const [row] = await tx.select({ companyId: recruiterEscalations.companyId, kind: recruiterEscalations.kind, slaDueAt: recruiterEscalations.slaDueAt, urgency: recruiterEscalations.urgency, requiredExpertise: recruiterEscalations.requiredExpertise, summary: recruiterEscalations.summary, requestedBy: recruiterEscalations.requestedBy, roleId: recruiterEscalations.roleId, applicationId: recruiterEscalations.applicationId }).from(recruiterEscalations).where(eq(recruiterEscalations.id, escalationId)).limit(1);
   if (!row?.slaDueAt) return null;
-  return { id: escalationId, companyId: row.companyId, origin: originOf(row.requestedBy), kind: row.kind, slaDueAt: row.slaDueAt, urgency: row.urgency, requiredExpertise: row.requiredExpertise, summary: row.summary, timeZone: (await loadBusinessCalendar(tx)).timeZone };
+  return { id: escalationId, companyId: row.companyId, origin: originOf(row.requestedBy), kind: row.kind, slaDueAt: row.slaDueAt, urgency: row.urgency, requiredExpertise: row.requiredExpertise, summary: servedSummary(row), timeZone: (await loadBusinessCalendar(tx)).timeZone };
 }
 
 const OPENING: Record<QueueNoticeOrigin, string> = {

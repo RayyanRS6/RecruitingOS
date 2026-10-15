@@ -74,7 +74,7 @@ The "Kanvis difference" column uses the research labels. OBSERVED means seen on 
 | Only Claude Haiku 5.5 (every task) and Claude Sonnet 5.5 (only the whole job draft). | 13 Oct | `ai/routing.test.ts`, `ai/runner.test.ts` | n/a |
 | Three readings per application, keeping the middle answer, at high effort. The candidate is never named in a reading. | 13 Oct | `agents/triage-readings.test.ts`, the fairness test button | n/a |
 | No automatic rejection. Final hiring decisions are always a person's. | Standing | `scenario/lifecycle.test.ts` (step 6), `core/core.test.ts` | n/a |
-| Hosting stays Vercel + Supabase + Railway. | 9 Oct | (no test: `apps/shell/vercel.json` and `railway.json` must not change without the founder) | n/a |
+| Hosting stays Vercel + Supabase + Railway. | 9 Oct | (no test: `apps/shell/vercel.json` and the Railway worker's dashboard settings must not change without the founder; `railway.json` was removed on 15 Oct (to-do item 6)) | n/a |
 
 - [ ] The change undoes none of the rules above, and every test named above still passes.
 - [ ] No new UI library or package was added for looks (check the `package.json` diffs).

@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { desc, eq, gte, inArray, sql } from "drizzle-orm";
-import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, suppressAddress, describeHours, unsentScreenReadings, withoutUnsentRunOutput, withoutUnsentScreenEvents, zonedToUtc, APPLY_FLOW_FALLBACK } from "@ros/core";
+import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, audit, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, servedSummary, suppressAddress, describeHours, unsentScreenReadings, withoutUnsentRunOutput, withoutUnsentScreenEvents, zonedToUtc, APPLY_FLOW_FALLBACK } from "@ros/core";
 import { ApplyFlowDefaultChange, BreakGlass, BusinessCalendarInput, CompanyVerificationChange, JobBoardAccessChange, PlanChange, RecalculateDeadlines, companyOnboarding, companyVerifiedAt, type Actor } from "@ros/contracts";
 import { HELD_STATUS } from "@ros/agents";
 import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, integrations, jobs, plans, recruiterEscalations, roles, screens, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
@@ -353,7 +353,7 @@ adminRoutes.get("/costs", async (c) => {
 adminRoutes.get("/escalations", async (c) => {
   const db = c.get("container").db;
   const rows = await db
-    .select({ id: recruiterEscalations.id, companyName: companies.name, roleTitle: roles.title, kind: recruiterEscalations.kind, status: recruiterEscalations.status, urgency: recruiterEscalations.urgency, requiredExpertise: recruiterEscalations.requiredExpertise, summary: recruiterEscalations.summary, slaDueAt: recruiterEscalations.slaDueAt, createdAt: recruiterEscalations.createdAt, claimedAt: recruiterEscalations.claimedAt, firstResponseAt: recruiterEscalations.firstResponseAt, resolvedAt: recruiterEscalations.resolvedAt, minutesSpent: recruiterEscalations.minutesSpent, assignedTo: users.email, accessExpiresAt: recruiterEscalations.accessExpiresAt })
+    .select({ id: recruiterEscalations.id, companyName: companies.name, roleTitle: roles.title, kind: recruiterEscalations.kind, status: recruiterEscalations.status, urgency: recruiterEscalations.urgency, requiredExpertise: recruiterEscalations.requiredExpertise, summary: recruiterEscalations.summary, slaDueAt: recruiterEscalations.slaDueAt, createdAt: recruiterEscalations.createdAt, claimedAt: recruiterEscalations.claimedAt, firstResponseAt: recruiterEscalations.firstResponseAt, resolvedAt: recruiterEscalations.resolvedAt, minutesSpent: recruiterEscalations.minutesSpent, assignedTo: users.email, accessExpiresAt: recruiterEscalations.accessExpiresAt, requestedBy: recruiterEscalations.requestedBy, roleId: recruiterEscalations.roleId, applicationId: recruiterEscalations.applicationId })
     .from(recruiterEscalations)
     .innerJoin(companies, eq(companies.id, recruiterEscalations.companyId))
     .leftJoin(roles, eq(roles.id, recruiterEscalations.roleId))
@@ -364,7 +364,8 @@ adminRoutes.get("/escalations", async (c) => {
   const byCompany = new Map<string, string[]>();
   for (const r of rows) byCompany.set(r.companyName, [...(byCompany.get(r.companyName) ?? []), r.id]);
   await audit(db, { companyId: null, actor: { kind: "user", id: s.user.id, name: s.user.name ?? s.user.email }, action: "escalation.preview_viewed", reason: "admin console", details: { escalationIds: rows.map((r) => r.id), fields: "preview" } });
-  return c.json(rows);
+  // The summary as the queue shows it (one Recruiting OS raised says so); who raised it and the ids are read for that only.
+  return c.json(rows.map(({ requestedBy, roleId, applicationId, ...r }) => ({ ...r, summary: servedSummary({ ...r, requestedBy, roleId, applicationId }) })));
 });
 
 /**

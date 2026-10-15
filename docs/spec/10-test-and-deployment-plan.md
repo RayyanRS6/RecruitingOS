@@ -37,7 +37,7 @@ Configuration by environment variable (see `docs/14`); production boot refuses d
 ## 4. Infrastructure (D8 decided; the full topology is in `docs/14`)
 
 - App and API: one Next.js deployment on Vercel (`apps/shell`) with the Hono API mounted inside it, one origin, health check `/healthz`.
-- Worker: one always-on process on Railway (`railway.json`, `WORKER_INLINE=false`), health check `GET /healthz` on its own port, restarted by Railway when it stops polling.
+- Worker: one always-on process on Railway (settings in the Railway dashboard, `WORKER_INLINE=false`), health check `GET /healthz` on its own port, restarted by Railway when it stops polling.
 - Database: Supabase Postgres with row-level security, separate roles for the app, the worker and migrations; point-in-time recovery before real data.
 - Storage: a private Supabase Storage bucket; uploads land in quarantine and are checked by the worker before anything reads them.
 - Email: Postmark server with a verified sending domain (SPF, DKIM, DMARC) and an inbound domain (MX) (D7).

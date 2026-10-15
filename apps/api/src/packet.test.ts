@@ -500,7 +500,9 @@ describe("role packets: editor, approval rules, sent back, interview plan, timel
     expect(d.packetApproval.pending).toMatchObject({ version: 4, editWhileOpen: true });
     // the publish run the resume started carries the version that is current, not the one the job had when it paused
     const publishes = (await container.db.select().from(workflowRuns).where(eq(workflowRuns.workflowKey, "publish_role"))).filter((r) => (r.subject as { id: string }).id === opened.roleId).sort((a, b) => a.id.localeCompare(b.id)); // ids are time-ordered
-    expect((publishes.at(-1)?.state as { packetVersion: number }).packetVersion).toBe(3);
+    const lastPublish = publishes.at(-1);
+    expect(lastPublish).toBeDefined();
+    expect((lastPublish?.state as { packetVersion?: number } | undefined)?.packetVersion).toBe(3);
   });
 
   it("a closed job refuses a new version on every route, in plain words (row 64)", async () => {

@@ -494,6 +494,68 @@ describe("the recruiter queue's pills, search and request (Wave S6, 2.3)", () =>
   });
 });
 
+describe("a request in the recruiter queue: who raised it, and who it is about once accepted (I11, 15 October 2026)", () => {
+  const summary = "Raised automatically by Recruiting OS: one candidate's application needs a recruiter's review.";
+  const preview = { id: "r1", status: "open", kind: "review", urgency: "normal", requiredExpertise: "candidate evaluation; dental hiring", summary, companyName: "Salman Family Dental", roleTitle: "Dental assistant", slaDueAt: null, slaRemainingMinutes: null, businessMinutesRemaining: null, overdue: false, createdAt: "2026-10-15T10:00:00.000Z", claimedByMe: false, claimed: false };
+
+  it("before Accept: says Recruiting OS raised it, and that Accept shows who it is about; no name", () => {
+    const qc = client();
+    qc.setQueryData(["escalations"], [preview]);
+    qc.setQueryData(["escalation", "r1"], { ...preview, accessGranted: false, why: "claim it to open the full context" });
+    const words = text(render(qc, createElement(RecruiterQueue)));
+    // the queue list: the role, then who raised it and why
+    expect(words).toContain(`Dental assistant · ${summary}`);
+    expect(words).toContain(summary);
+    expect(words).toContain("Accept to open the full request and see who or what it is about.");
+    expect(words).toContain("Your access covers only what the request is about, ends a day after it is resolved, and every page you open is recorded for the customer.");
+    expect(words).toContain("Accept this request");
+    expect(words).not.toContain("About:");
+  });
+
+  it("after Accept: the candidate and the role at the top of the request card", () => {
+    const qc = client();
+    const held = { ...preview, status: "claimed", claimedByMe: true, claimed: true };
+    qc.setQueryData(["escalations"], [held]);
+    qc.setQueryData(["escalation", "r1"], {
+      ...held, accessGranted: true, why: null, companyId: "co1", roleId: "role1", applicationId: "app1", question: "Processing this application stopped after 4 tries and needs a person to take over.",
+      contextSnapshot: { company: { name: "Salman Family Dental", vertical: "dental", sizeBand: "1-19" }, role: { title: "Dental assistant", status: "open" }, candidate: { name: "Lena Ortiz", email: "lena.ortiz@example.com", phone: null }, application: { stage: "triaged" } },
+      thread: [{ id: "r1:question", side: "customer", kind: "question", body: "Processing this application stopped after 4 tries and needs a person to take over.", by: null, at: "2026-10-15T10:00:00.000Z", raisedBy: "system" }],
+      reopenedCount: 0, grant: { id: "g1", purpose: `review: ${summary}`, expiresAt: "2026-10-29T10:00:00.000Z", scope: { roleId: "role1", applicationId: "app1" } },
+    });
+    const words = text(render(qc, createElement(RecruiterQueue)));
+    expect(words).toContain("About: Lena Ortiz · Dental assistant");
+    // at the very top of the request card (the queue list on the left comes first): under its title, before the card's
+    // summary and the request itself
+    const about = words.indexOf("About: Lena Ortiz");
+    expect(about).toBeGreaterThan(words.indexOf("review · Salman Family Dental · Dental assistant"));
+    expect(about).toBeLessThan(words.lastIndexOf(summary));
+    expect(about).toBeLessThan(words.indexOf("Processing this application stopped"));
+    expect(words).not.toContain("Accept to open the full request");
+    // the conversation says who raised it, as the summary above it does: never "The customer asked"
+    expect(words).toContain("Raised automatically by Recruiting OS · ");
+    expect(words.indexOf("Raised automatically by Recruiting OS · ")).toBeLessThan(words.indexOf("Processing this application stopped"));
+    expect(words).not.toContain("The customer asked");
+    expect(words).not.toContain("The customer's request");
+  });
+
+  it("the page header and the empty queue do not say every request comes from a customer", () => {
+    const qc = client();
+    qc.setQueryData(["escalations"], []);
+    const words = text(render(qc, createElement(RecruiterQueue)));
+    expect(words).toContain("Requests from customers, and ones Recruiting OS raised automatically: urgent ones first");
+    expect(words).toContain("Requests appear here.");
+    expect(words).not.toContain("Customer requests appear here.");
+  });
+
+  it("after Accept with no candidate (a role request): no About line", () => {
+    const qc = client();
+    const held = { ...preview, summary: "The customer wants a recruiter to review the candidates for this role.", status: "claimed", claimedByMe: true, claimed: true };
+    qc.setQueryData(["escalations"], [held]);
+    qc.setQueryData(["escalation", "r1"], { ...held, accessGranted: true, why: null, companyId: "co1", roleId: "role1", applicationId: null, question: "Who should we call first?", contextSnapshot: { role: { title: "Dental assistant", status: "open" } }, thread: [], reopenedCount: 0, grant: { id: "g1", purpose: "review", expiresAt: "2026-10-29T10:00:00.000Z", scope: { roleId: "role1", applicationId: null } } });
+    expect(text(render(qc, createElement(RecruiterQueue)))).not.toContain("About:");
+  });
+});
+
 describe("Setup: how candidates see the company, and the job boards (Q13, D3, Q11)", () => {
   const company = (settings: Record<string, unknown>) => ({ id: "co1", name: "Bright Dental", slug: "bright-dental", vertical: "dental", sizeBand: "20-49", timezone: "America/Los_Angeles", planKey: "pilot", status: "active", locations: [{ city: "Irvine", region: "CA" }], settings: { verifiedAt: "2026-10-01T00:00:00.000Z", ...settings }, integrations: [{ kind: "jobboard", provider: "indeed", status: "not_connected" }], ai: { provider: "fake" } });
   const page = (settings: Record<string, unknown>) => {

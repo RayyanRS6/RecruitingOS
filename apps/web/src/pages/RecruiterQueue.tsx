@@ -30,6 +30,13 @@ export function queueStatusWord(e: Pick<Preview, "status" | "claimedByMe">): { l
   return { label: "Another recruiter has it", tone: "neutral" };
 }
 
+/**
+ * Before accepting (founder decision I11): what Accept shows, then the access it gives. The preview never names the
+ * candidate or carries the customer's words, so the recruiter learns who or what it is about (one candidate, one role,
+ * or all of the customer's hiring) only after accepting.
+ */
+const BEFORE_ACCEPT = "Accept to open the full request and see who or what it is about. Your access covers only what the request is about, ends a day after it is resolved, and every page you open is recorded for the customer.";
+
 function remainingText(e: Preview): string {
   if (e.businessMinutesRemaining == null) return "no deadline";
   const m = Math.abs(e.businessMinutesRemaining);
@@ -95,7 +102,7 @@ export function queueEmpty(view: QueueView, anyAtAll: boolean): { title: string;
   if (view.show === "yours") return { title: "Nothing is yours right now", body: "Requests you accept show here.", action: "all" };
   if (view.show === "overdue") return { title: "Nothing overdue", body: "Every request is within its reply-by time.", action: "all" };
   if (view.show === "done") return { title: "Nothing done yet", body: "Requests show here once they are resolved.", action: "all" };
-  return anyAtAll ? { title: "Nothing to show", body: "Try another view.", action: "all" } : { title: "Queue is empty", body: "Customer requests appear here.", action: null };
+  return anyAtAll ? { title: "Nothing to show", body: "Try another view.", action: "all" } : { title: "Queue is empty", body: "Requests appear here.", action: null };
 }
 
 /** The second line of a row: the expertise needed and the time left, or, once done, when it was asked. */
@@ -159,7 +166,7 @@ export function RecruiterQueue() {
 
   return (
     <div className="stack" style={{ gap: 18 }}>
-      <PageHeader eyebrow="ITS recruiters" title="Recruiter queue" sub="Requests from customers: urgent ones first, then the soonest deadline." />
+      <PageHeader eyebrow="ITS recruiters" title="Recruiter queue" sub="Requests from customers, and ones Recruiting OS raised automatically: urgent ones first, then the soonest deadline." />
       <details className="more">
         <summary>How the queue works</summary>
         <p className="small" style={{ margin: 0 }}>Urgency changes the order, never the reply-by time. Accept one to open the request itself; your access is limited to that request and ends a day after it is resolved.</p>
@@ -185,7 +192,7 @@ export function RecruiterQueue() {
                   <li key={e.id} className="list-item" aria-current={selected ? "true" : undefined} style={selected ? { background: "var(--surface-2)" } : undefined}>
                     <span className="list-item-main">
                       <Link to={`/recruiter/queue/${e.id}${qs}`} style={{ textDecoration: "none", color: "inherit" }}><strong>{queueKindLabel(e.kind)} · {e.companyName}</strong></Link>
-                      <span className="sub">{e.roleTitle ? `${e.roleTitle}: ` : ""}{e.summary}</span>
+                      <span className="sub">{e.roleTitle ? `${e.roleTitle} · ` : ""}{e.summary}</span>
                       <span className="sub" style={e.overdue ? { color: "var(--critical)" } : undefined}>{deadlineLine(e)}</span>
                     </span>
                     <span className="list-item-end">
@@ -357,9 +364,12 @@ function EscalationDetail({ id }: { id: string }) {
   // "What the request is about": the context cards, folded, with how many there are.
   const aboutCount = [ctx.company, ctx.intakeSession, ctx.role && ctx.packet, snapshotOf(e.contextSnapshot), ctx.candidate].filter(Boolean).length;
   const stillOpen = e.status !== "resolved" && e.status !== "cancelled";
+  // Who the request is about, once accepted: the candidate's name opens only under the grant (founder decision I11).
+  const aboutRole = ctx.role?.title ?? e.roleTitle;
   return (
     <div className="stack">
       <Card title={`${queueKindLabel(e.kind)} · ${e.companyName}${e.roleTitle ? ` · ${e.roleTitle}` : ""}`} aside={<div className="row"><Pill size="sm" tone={URGENCY_TONE[e.urgency]}>{URGENCY_WORD[e.urgency]}</Pill><Pill size="sm" tone={st.tone}>{st.label}</Pill></div>}>
+        {e.accessGranted && ctx.candidate?.name ? <p style={{ margin: "0 0 6px" }}><strong>About:</strong> {ctx.candidate.name}{aboutRole ? ` · ${aboutRole}` : ""}</p> : null}
         {hasActions ? (
           <div className="row" style={{ marginBottom: 12 }}>
             {e.status === "open" ? <Button size="sm" variant="primary" loading={claim.isPending} onClick={() => claim.mutate()}>{isPostingTaskKind(e.kind) ? "Accept this task" : "Accept this request"}</Button> : null}
@@ -379,7 +389,7 @@ function EscalationDetail({ id }: { id: string }) {
               {e.thread.map((m) => <li key={m.id} style={{ padding: "4px 0" }}><p className="small muted" style={{ margin: 0 }}>{queueThreadHeading(m)} · {new Date(m.at).toLocaleString()}</p><p style={{ whiteSpace: "pre-wrap", margin: "2px 0 0" }}>{m.body}</p></li>)}
             </ol>
           </div>
-        ) : e.accessGranted && e.question ? <div style={{ marginTop: 10 }}><p className="small muted">The customer's request</p><p style={{ whiteSpace: "pre-wrap" }}>{e.question}</p></div> : null}
+        ) : e.accessGranted && e.question ? <div style={{ marginTop: 10 }}><p className="small muted">The request</p><p style={{ whiteSpace: "pre-wrap" }}>{e.question}</p></div> : null}
         {e.resolution ? <Alert tone="info">Resolved: {e.resolution}{e.minutesSpent != null ? ` (${e.minutesSpent} min)` : ""}</Alert> : null}
       </Card>
       {e.postingTask ? (
@@ -396,7 +406,7 @@ function EscalationDetail({ id }: { id: string }) {
           ) : null}
         </>
       ) : !e.accessGranted ? (
-        <Alert tone="neutral">{isPostingTaskKind(e.kind) ? POSTING_TASK_BEFORE_ACCEPT : e.why === "claim it to open the full context" ? "Accept the request to open the customer's own words and context. Access is limited to what the request covers (one candidate, one role, or all of their hiring when they chose that), ends a day after the request is resolved, and every page you open is recorded for the customer." : e.why}</Alert>
+        <Alert tone="neutral">{isPostingTaskKind(e.kind) ? POSTING_TASK_BEFORE_ACCEPT : e.why === "claim it to open the full context" ? BEFORE_ACCEPT : e.why}</Alert>
       ) : (
         <>
           {/* A candidate who chose a person over the assistant (plan E3, Q16): the call, then the notes on their Screen tab. */}
