@@ -210,18 +210,22 @@ export async function assessApplication(db: Db, ai: AiRuntime, input: AssessInpu
 }
 
 /**
- * The readings as the team sees them, combined into the middle answer. Quotes are checked against the ORIGINAL words,
+ * The readings as the team sees them, combined into the middle answer, then settled (`triageSettlement`: the skill floor
+ * of Wave S9 round 4, the overall reading and the recommendation). Quotes are checked against the ORIGINAL words,
  * and shown as the candidate wrote them: one the model wrote around a placeholder is mapped back first
  * (`restoreReadingQuotes`); one that cannot be fails the check. The model's own words (summary, claims, unknowns) keep no
  * placeholder either: "[name]" reads "the candidate". A skill the role checks in the interviews only is left out of the
  * reading (the prompt does not list it; a finding the model wrote anyway is dropped). The flags about the résumé itself
- * are the readings' and the extraction's, not only the kept reading's (`withResumeFlags`). Shared with the fairness
- * evals (packages/evals), so they check exactly what the app does after the model has answered.
+ * are the readings' and the extraction's, not only the kept reading's (`withResumeFlags`). Wave S9 round 4: a skill one
+ * reading of three showed on a checked quote of the candidate's own work is partly shown, never more; never over a
+ * verified "contradicted"; never from a dated job line or a yes/no answer on the form; never for a must-have
+ * (`skillFloor`, read from the same checked texts as the quotes); the scorecard is not affected. Shared with the
+ * fairness evals (packages/evals), so they check exactly what the app does after the model has answered.
  */
 export function readingsOutcome(readings: ReadonlyArray<RunOutcome<Reading>>, view: Pick<ScoringView, "restore">, input: Pick<AssessInput, "resumeText" | "applicationAnswers" | "packet"> & Partial<Pick<AssessInput, "eligibility" | "eligibilityKeptIn" | "extraction">>): RunOutcome<Reading> {
   const sources = assessmentSources(input);
   const checked = readings.map((r) => (r.ok ? { ...r, output: withoutInterviewSkills(withoutPlaceholders(restoreReadingQuotes(r.output, view, sources)), input.packet) } : r));
-  const out = combineOutcomes(checked, sources, credentialMustHaves(input.packet), findingSubjects(input.packet), triageSettlement(input.packet, input));
+  const out = combineOutcomes(checked, sources, credentialMustHaves(input.packet), findingSubjects(input.packet), triageSettlement(input.packet, input, sources));
   return out.ok ? { ...out, output: withResumeFlags(out.output, checked.flatMap((r) => (r.ok ? [r.output] : [])), input.extraction ?? null) } : out;
 }
 
@@ -309,20 +313,99 @@ export function settledRecommendation(overall: Overall, opts: { eligible: boolea
 export type ReadingSettlement<R extends Combinable> = {
   /** The overall reading from the combined findings, and what each reading said overall (`said`). */
   overallOf: (findings: Pick<Combinable, "requirementFindings" | "competencyFindings">, said: readonly Combinable["overall"][]) => Combinable["overall"];
+  /**
+   * The competency findings once the middle answers are taken, settled further from the readings themselves before the
+   * overall reading is worked out (the résumé reading's skill floor, Wave S9 round 4: `skillFloor`). The scorecard gives
+   * none, so its findings stay the middle answers.
+   */
+  skills?: (settled: Combinable["competencyFindings"], readings: readonly R[]) => Combinable["competencyFindings"];
   /** Anything that follows from it (the résumé reading: its recommendation). */
   finish?: (reading: R) => R;
 };
 
 /**
- * The résumé reading's settlement: the overall reading from its findings, and the recommendation that goes with it.
- * Eligible unless the eligibility answers were checked and did not match, with no person keeping them in.
+ * The résumé reading's settlement: the skill floor (`skillFloor`, Wave S9 round 4), the overall reading from its
+ * findings, and the recommendation that goes with it. Eligible unless the eligibility answers were checked and did not
+ * match, with no person keeping them in. `sources`: the candidate's texts the quotes were checked against
+ * (`assessmentSources`), which the floor reads the line around a quote from; without them, worked out from `input`.
+ * The skill floor: a skill one reading of three showed on a checked quote of the candidate's own work is partly shown,
+ * never more; never over a verified "contradicted"; never from a dated job line or a yes/no answer on the form
+ * (`liftableQuote`); never for a must-have. The scorecard is not affected (it gives no settlement).
  */
-export function triageSettlement(packet: Pick<RolePacket, "requirements" | "competencies">, input: Pick<AssessInput, "resumeText" | "applicationAnswers"> & Partial<Pick<AssessInput, "eligibility" | "eligibilityKeptIn">>): ReadingSettlement<Reading> {
+export function triageSettlement(packet: Pick<RolePacket, "requirements" | "competencies">, input: Pick<AssessInput, "resumeText" | "applicationAnswers"> & Partial<Pick<AssessInput, "eligibility" | "eligibilityKeptIn">>, sources?: Partial<Record<EvidenceSource, string>>): ReadingSettlement<Reading> {
   const hasWork = !!input.resumeText?.trim() || !!input.applicationAnswers.noResumeSummary?.trim();
   const eligible = !!input.eligibilityKeptIn || input.eligibility?.passed !== false;
+  const liftable = liftableQuote(sources ?? assessmentSources(input));
   return {
     overallOf: (findings, said) => settledOverall(findings, packet, { hasWork, said }),
+    skills: (settled, readings) => skillFloor(settled, readings, liftable),
     finish: (r) => ({ ...r, recommendation: settledRecommendation(r.overall, { eligible }) }),
+  };
+}
+
+/** Whether evidence carries a checked quote, as the match score reads it: something quoted, and not marked "no quote". */
+const checkedQuote = (e: Evidence | undefined): e is Evidence => !!e?.quote?.trim() && !e.unquoted;
+
+/**
+ * The skill floor of the résumé reading (Wave S9 round 4; the real-model runs of 15 Oct 2026): a competency whose middle
+ * answer is "not evidenced", but which one of the readings showed (partly or fully) on a checked quote that may lift it
+ * (`liftable`, `liftableQuote`: never a dated job line or a yes/no answer on the form), settles at "partially evidenced"
+ * with that quote. Never higher than partly shown, never when any reading said "contradicted" on a checked quote, and
+ * never for a must-have (only competency findings are read). It only ever moves a finding toward the candidate, so the
+ * score stays monotonic, and the quote it keeps is chosen by the readings' content (partly before fully shown, then by
+ * the quote), never by the order the readings came back in. Pure; exported for the tests.
+ */
+export function skillFloor(settled: Combinable["competencyFindings"], readings: readonly Pick<Combinable, "competencyFindings">[], liftable: (e: Evidence) => boolean): Combinable["competencyFindings"] {
+  const rank = (f: CompetencyFinding) => (f.finding === "partially_evidenced" ? 0 : 1);
+  return settled.map((f): CompetencyFinding => {
+    if (f.finding !== "not_evidenced") return f;
+    const said = readings.flatMap((r) => {
+      const first = r.competencyFindings.find((x) => x.competencyKey === f.competencyKey);
+      return first ? [first] : [];
+    });
+    if (said.some((x) => x.finding === "contradicted" && checkedQuote(x.evidence))) return f;
+    const shown = said
+      .filter((x) => (x.finding === "partially_evidenced" || x.finding === "evidenced") && checkedQuote(x.evidence) && liftable(x.evidence))
+      .sort((a, b) => rank(a) - rank(b) || (a.evidence?.quote ?? "").localeCompare(b.evidence?.quote ?? "") || JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    const lift = shown[0];
+    if (!lift?.evidence) return f;
+    return { competencyKey: f.competencyKey, finding: "partially_evidenced", evidence: lift.evidence, ...(lift.finding === "partially_evidenced" && lift.note ? { note: lift.note } : {}) };
+  });
+}
+
+/**
+ * A line with a span of years on it ("2016 - 2021", "2019 – Present", "2014 to 2019"): a job's title, employer and
+ * dates, which on its own is no evidence of a competency (the prompt's own rule), so it never lifts one (`liftableQuote`).
+ */
+export const DATED_JOB_LINE = /\b(?:19|20)\d{2}\s*(?:-|–|—|to|until)\s*(?:(?:19|20)\d{2}|present|current|now|today)\b/i;
+
+/** Whether a quote sits in an answer on the form that is a yes or a no to its question (`answerInContext`). */
+function yesNoFormAnswer(quote: string, application: string): boolean {
+  const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+  const q = norm(quote);
+  if (!q) return false;
+  for (const raw of application.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!norm(line).includes(q)) continue;
+    const asked = line.match(/^(.+\?)\s+(\S.*)$/);
+    if (asked && answerInContext(asked[1] ?? "", asked[2] ?? "") !== null) return true;
+  }
+  return false;
+}
+
+/**
+ * Which checked quotes may lift a skill under the skill floor (`skillFloor`), read from the candidate's texts by source
+ * (`assessmentSources`): never a yes or no answer on the form ("Do you hold an active CA RDH license? Yes."), and never
+ * a line with a span of years on it (`DATED_JOB_LINE`: a job title, an employer and dates), read as the whole line
+ * around the quote (`sentenceAround`), or the quote itself when the line is not found. A title, an employer, years in a
+ * job or a yes/no answer is not on its own evidence of a competency (the prompt's own rule). Anything else may.
+ */
+export function liftableQuote(sources: Partial<Record<EvidenceSource, string>>): (e: Evidence) => boolean {
+  return (e) => {
+    const quote = e.quote ?? "";
+    if (e.source === "application" && yesNoFormAnswer(quote, sources.application ?? "")) return false;
+    const line = sentenceAround(quote, sources[e.source] ?? "") ?? quote;
+    return !DATED_JOB_LINE.test(line);
   };
 }
 
@@ -426,14 +509,15 @@ export function combineOutcomes(runs: ReadonlyArray<RunOutcome<Reading>>, source
  * `combineOutcomes` for any kind of reading (the résumé reading, the screening scorecard): `check` puts each reading
  * through its evidence rules first; `what` names what was read, for the reason given when fewer readings came back.
  * The run kept is the first usable one; `linkReadingRuns` ties the others to it. With `settle` (the résumé reading,
- * Wave S7) the overall reading is worked out from the combined findings, also when fewer readings came back.
+ * Wave S7) the overall reading is worked out from the combined findings, also when fewer readings came back; its skill
+ * floor (`skills`, Wave S9 round 4) applies only when all the readings came back, as the first is used otherwise.
  */
 export function combineRunOutcomes<R extends Combinable>(runs: ReadonlyArray<RunOutcome<R>>, check: (r: R) => R, what: string, count = TRIAGE_READINGS, settle?: ReadingSettlement<R>): RunOutcome<R> {
   const ok = runs.filter((r): r is Extract<RunOutcome<R>, { ok: true }> => r.ok);
   if (!ok.length) return runs.find((r): r is Extract<RunOutcome<R>, { ok: false }> => !r.ok && r.reason === "error") ?? runs[0]!;
   const readings = ok.map((r) => check(r.output));
   const finish = settle?.finish ?? ((r: R) => r);
-  if (readings.length >= count) return { ...ok[0]!, output: finish(combineReadings(readings, settle ? { overallOf: settle.overallOf } : {})) };
+  if (readings.length >= count) return { ...ok[0]!, output: finish(combineReadings(readings, settle ? { overallOf: settle.overallOf, skills: settle.skills } : {})) };
   const one = readings[0]!;
   const reason = `the assistant could read ${what} ${readings.length === 1 ? "once" : `${readings.length} times`} instead of ${count}`;
   return { ...ok[0]!, output: finish({ ...one, ...(settle ? { overall: settle.overallOf(one, [one.overall]) } : {}), confidenceReasons: [...(one.confidenceReasons ?? []), reason].slice(-6) }) };
@@ -469,11 +553,15 @@ function middleOverall(values: readonly Combinable["overall"][]): Combinable["ov
  * - the overall reading and the confidence are the middle on their own order ("unknown" only when most readings say so);
  *   with `overallOf` (the résumé reading, Wave S7) the overall reading is worked out from the combined findings
  *   instead (`settledOverall`), so it moves only when a finding moves;
+ * - with `skills` (the résumé reading, Wave S9 round 4: `skillFloor`) the competency findings are settled further from
+ *   the readings before that: a skill one reading of three showed on a checked quote of the candidate's own work is
+ *   partly shown, never more; never over a verified "contradicted"; never from a dated job line or a yes/no answer;
+ *   never for a must-have. The scorecard gives none, so it is not affected;
  * - the recommendation, the confidence reasons and the words (summary, strengths, concerns, questions) all come from one
  *   reading, the closest to that result, so they never contradict each other (for a scorecard also the answers, the pay
  *   and availability it recorded, and the eligibility confirmations).
  */
-export function combineReadings<R extends Combinable>(readings: readonly R[], opts: { overallOf?: ReadingSettlement<R>["overallOf"] } = {}): R {
+export function combineReadings<R extends Combinable>(readings: readonly R[], opts: { overallOf?: ReadingSettlement<R>["overallOf"]; skills?: ReadingSettlement<R>["skills"] } = {}): R {
   const reqKeys = [...new Set(readings.flatMap((r) => r.requirementFindings.map((f) => f.requirementKey)))].sort();
   const compKeys = [...new Set(readings.flatMap((r) => r.competencyFindings.map((f) => f.competencyKey)))].sort();
   const reqOf = (r: R, k: string) => r.requirementFindings.find((f) => f.requirementKey === k);
@@ -493,13 +581,16 @@ export function combineReadings<R extends Combinable>(readings: readonly R[], op
   if (!opts.overallOf) {
     const overall = middleOverall(readings.map((r) => r.overall));
     const chosen = closestTo(overall);
-    return { ...chosen.closest, overall, confidence, requirementFindings: chosen.requirementFindings, competencyFindings: chosen.competencyFindings };
+    const competencyFindings = opts.skills ? opts.skills(chosen.competencyFindings, readings) : chosen.competencyFindings;
+    return { ...chosen.closest, overall, confidence, requirementFindings: chosen.requirementFindings, competencyFindings };
   }
-  // Settled in code: the findings (with their evidence) are picked without looking at what each reading said overall, the
-  // overall reading is worked out from them, and the words come from the reading closest to it.
+  // Settled in code: the findings (with their evidence) are picked without looking at what each reading said overall,
+  // the skills settled further from the readings when asked (`skills`), the overall reading is worked out from them, and
+  // the words come from the reading closest to it.
   const settled = closestTo(null);
-  const overall = opts.overallOf(settled, readings.map((r) => r.overall));
-  return { ...closestTo(overall).closest, overall, confidence, requirementFindings: settled.requirementFindings, competencyFindings: settled.competencyFindings };
+  const findings = opts.skills ? { ...settled, competencyFindings: opts.skills(settled.competencyFindings, readings) } : settled;
+  const overall = opts.overallOf(findings, readings.map((r) => r.overall));
+  return { ...closestTo(overall).closest, overall, confidence, requirementFindings: findings.requirementFindings, competencyFindings: findings.competencyFindings };
 }
 
 /**

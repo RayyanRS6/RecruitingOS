@@ -834,7 +834,10 @@ export function boardCaseFailures(bc: BoardCase): string[] {
  * - the overall reading is worked out from the settled findings, so it cannot move on its own between readings (the
  *   "assistant not yet a hygienist" and "lapsed licence" cases moved between "potential" and "unknown");
  * - an answer on the form reaches the reading as a sentence, the question then the answer, which is the candidate's own
- *   words for the quote check, and never as the form's field names (a reading had quoted '"rdh_license":"yes"').
+ *   words for the quote check, and never as the form's field names (a reading had quoted '"rdh_license":"yes"');
+ * - Wave S9 round 4 (the real-model runs of 15 Oct 2026, said_plainly at 25 or 32): a skill one reading of three showed on
+ *   a checked quote of the candidate's own work is partly shown, never more, whatever order the readings came in
+ *   (`skillFloor` in packages/agents), and a dated job line never lifts one.
  */
 export type FairnessRuleCase = { id: string; provenance: "synthetic"; failures: () => string[] };
 
@@ -884,6 +887,60 @@ function settledAcross(resume: string, base: EvidenceAssessment, sets: ReadonlyA
   const ok = outs.flatMap((o) => (o.ok ? [o.output] : []));
   if (ok.length !== outs.length) return ["a set of scripted readings gave no reading"];
   return consistencyDifferences(ok, BOARD_PACKET).map((x) => x.replace(/^reading (\d+)/, "set $1").replace(/reading 1/, "set 1"));
+}
+
+/**
+ * The skill floor's cases (Wave S9 round 4): the said_plainly CV of the licence cases (`credentialCases`), read against a
+ * role with the licence, perio and two essential skills, as the golden packet of the real-model runs had them.
+ */
+const SAID_PLAINLY_CV = credentialResume("Drew Park", "I do not hold a California RDH license");
+const DUTY_LINE = "Scaling and root planing, patient education";
+const FLOOR_ROLE = {
+  requirements: { mustHaves: [{ key: "rdh_license", text: "Active CA RDH license", rationale: "law", evidencedBy: ["resume"] }, { key: "perio", text: "Periodontal therapy", rationale: "the work", evidencedBy: ["resume"] }], niceToHaves: [], eligibility: [] },
+  competencies: [
+    { key: "clinical_quality", name: "Clinical quality", definition: "Thorough, gentle periodontal care to a high standard.", weight: 5, evaluatedIn: "both", indicators: ["charts accurately"] },
+    { key: "patient_communication", name: "Patient communication", definition: "Explains care plainly and builds trust.", weight: 5, evaluatedIn: "both", indicators: ["explains findings"] },
+  ],
+} as unknown as RolePacket;
+/** One reading of the said_plainly CV: the licence "no" on its plain line, perio partly shown on the duty line, and the two skills as given. */
+const plainNoReading = (clinical: CompF, patients: CompF) => boardReading([mustHaveFinding("rdh_license", "no", "I do not hold a California RDH license"), mustHaveFinding("perio", "partially", DUTY_LINE)], [clinical, patients]);
+const notShown = (key: string): CompF => ({ competencyKey: key, finding: "not_evidenced" });
+const partlyOn = (key: string, quote: string): CompF => ({ competencyKey: key, finding: "partially_evidenced", evidence: { source: "resume", quote } });
+const NONE_SHOWN = plainNoReading(notShown("clinical_quality"), notShown("patient_communication"));
+
+/** Each rotation of three scripted readings through what the app does (`readingsOutcome`): the skills and the score. */
+function floorRotations(readings: readonly [EvidenceAssessment, EvidenceAssessment, EvidenceAssessment]) {
+  const [a, b, c] = readings;
+  return [[a, b, c], [b, c, a], [c, a, b]].map((set) => {
+    const out = readingsOutcome(set.map((output, i) => ({ ok: true as const, output, runId: `floor_${i + 1}`, model: "scripted" })), asIs, { resumeText: SAID_PLAINLY_CV, applicationAnswers: { eligibility: {} }, packet: FLOOR_ROLE });
+    return out.ok ? { skills: out.output.competencyFindings, score: matchScore({ resume: { kind: "triage", result: out.output }, screen: null }, FLOOR_ROLE) } : null;
+  });
+}
+
+/**
+ * What a set of scripted readings got wrong under the skill floor: a rotation that read the skills or scored differently
+ * from the first, a score below the one with no skill shown (or, with `sameScoreAsNone`, any other score), or the
+ * clinical skill not read as `want`.
+ */
+function floorFailures(readings: readonly [EvidenceAssessment, EvidenceAssessment, EvidenceAssessment], want: CompF["finding"], sameScoreAsNone: boolean): string[] {
+  const outs = floorRotations(readings);
+  const none = floorRotations([NONE_SHOWN, NONE_SHOWN, NONE_SHOWN])[0];
+  const first = outs[0];
+  if (!first || !none || outs.some((o) => !o)) return ["a set of scripted readings gave no reading"];
+  const skills = (s: CompF[]) => s.map((x) => `${x.competencyKey}:${x.finding}${x.evidence?.quote ? ` ("${x.evidence.quote}")` : ""}`).join(", ");
+  const f: string[] = [];
+  outs.forEach((o, i) => {
+    if (!o || i === 0) return;
+    if (JSON.stringify(o.skills) !== JSON.stringify(first.skills)) f.push(`rotation ${i + 1}: skills ${skills(o.skills)}, rotation 1: ${skills(first.skills)}`);
+    if (JSON.stringify(o.score) !== JSON.stringify(first.score)) f.push(`rotation ${i + 1}: match score ${o.score?.score ?? "none"}, rotation 1: ${first.score?.score ?? "none"}`);
+  });
+  const got = first.skills.find((x) => x.competencyKey === "clinical_quality")?.finding ?? "none";
+  if (got !== want) f.push(`clinical_quality read "${got}", expected "${want}"`);
+  const score = first.score?.score ?? null;
+  const noneScore = none.score?.score ?? null;
+  if (score === null || noneScore === null || score < noneScore) f.push(`match score ${score ?? "none"} is below ${noneScore ?? "none"}, the score with no skill shown`);
+  else if (sameScoreAsNone && score !== noneScore) f.push(`match score ${score}, expected ${noneScore} as with no skill shown`);
+  return f;
 }
 
 /** A role with two questions on the form, for the answer sentences. */
@@ -952,6 +1009,19 @@ export const fairnessRuleCases: FairnessRuleCase[] = [
       if (kept?.met !== "yes" || kept.evidence?.quote !== sentence || kept.evidence.unquoted) f.push(`the app did not keep the answer sentence as evidence: ${JSON.stringify(kept)}`);
       return f;
     },
+  },
+  // Wave S9 round 4: one reading of three read the duty line as partly showing a skill, the other two did not; the score
+  // the candidate sees moved between 25 and 32 with which reading came where. Every rotation must read and score the same.
+  {
+    id: "one_reading_shows_a_duty_line_scores_the_same",
+    provenance: "synthetic",
+    failures: () => floorFailures([plainNoReading(partlyOn("clinical_quality", DUTY_LINE), notShown("patient_communication")), NONE_SHOWN, NONE_SHOWN], "partially_evidenced", false),
+  },
+  // A job title, an employer and dates are not on their own evidence of a skill: such a line never lifts one.
+  {
+    id: "a_job_line_never_lifts_a_skill",
+    provenance: "synthetic",
+    failures: () => floorFailures([plainNoReading(partlyOn("clinical_quality", "Registered Dental Hygienist at Bayside Dental 2016 - 2021"), notShown("patient_communication")), NONE_SHOWN, NONE_SHOWN], "not_evidenced", true),
   },
 ];
 

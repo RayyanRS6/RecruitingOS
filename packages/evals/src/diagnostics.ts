@@ -21,9 +21,11 @@ export type CaseDiagnostics = {
   shown?: Array<TraceOutput & { label: string }>;
   /**
    * The role a scorecard was read against (Wave S9 round 3): the job draft is compiled afresh on each run, and which
-   * question is about which skill, and each skill's definition, decide how its answers are read.
+   * question is about which skill, and each skill's definition, decide how its answers are read. The triage suites
+   * (Wave S9 round 4) record the compiled golden packet a résumé was read against, which changes every run: each skill's
+   * `importance` and `indicators` too, as the résumé reading is shown them (no questions: the reading is asked none).
    */
-  role?: { questions: Array<{ key: string; kind: string; skill?: string; text: string }>; skills: Array<{ key: string; name: string; definition: string; evaluatedIn?: string }> };
+  role?: { questions: Array<{ key: string; kind: string; skill?: string; text: string }>; skills: Array<{ key: string; name: string; definition: string; evaluatedIn?: string; importance?: string; indicators?: string[] }> };
   /** The write-up as the model wrote it, or why the call gave nothing usable. */
   writeup?: TraceOutput;
 };

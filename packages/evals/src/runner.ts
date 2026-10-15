@@ -6,7 +6,7 @@ import {
   INTAKE_COMPILE_MAX_TOKENS, REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, SCORING_VIEW_VERSION, TRIAGE_READINGS, advanceProgress, assessmentSources, basisFor, credentialMustHaves, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, hasPlaceholder, mergeFacts, mergeRevision, readingsOutcome, redactProtected, registerFakeHandlers,
   SCORECARD_READINGS, resolveBenchmark, scorecardOutcome, scorecardReadings, unfairQuestion, verifyQuotes, type BenchmarkResult, type ScoringIdentity,
 } from "@ros/agents";
-import type { EvidenceAssessment, IntakeFacts, IntakeMessage, ResumeExtraction, RolePacket, ScreenAssessment, ScreeningQuestion, ScreenProgress, ScreenTurn } from "@ros/contracts";
+import { importanceOf, type EvidenceAssessment, type IntakeFacts, type IntakeMessage, type ResumeExtraction, type RolePacket, type ScreenAssessment, type ScreeningQuestion, type ScreenProgress, type ScreenTurn } from "@ros/contracts";
 import { createDb, migrate } from "@ros/db";
 import { findPlaybook, matchPlaybookRole } from "@ros/playbooks";
 import { runChatSuite } from "./chat-suite";
@@ -206,6 +206,19 @@ async function main() {
         diagnostics: { readings: a.runs.map((r, i) => ({ label: `reading ${i + 1}`, ...traceOutcome(r) })), shown: [{ label: "shown", ...traceOutcome(a.combined) }] },
       };
     };
+    /**
+     * Wave S9 round 4: each model call of one read as the model wrote it (on the scoring view, before the checks), or
+     * why it gave nothing, so a drift in the model or a lift by the skill floor (`skillFloor` in packages/agents: a
+     * combined "partially" over two "not_evidenced" calls) can be seen and compared across runs.
+     */
+    const callNotes = (read: number, calls: Awaited<ReturnType<typeof assess>>["runs"]): string[] => calls.map((r, j) => (r.ok ? findingsOf(`read ${read} call ${j + 1}`, r.output) : `read ${read} call ${j + 1}: none (${r.reason})`));
+    /**
+     * And the golden packet the triage suites read against, compiled afresh on every run (Wave S9 round 4): its
+     * must-haves, and each skill with its importance, definition and indicators, as the résumé reading is shown them. One
+     * note on the first consistency case, and the role of a failing consistency or licence case (diagnostics.ts).
+     */
+    const packetNote = `packet: must-haves: ${packet.requirements.mustHaves.map((m) => `${m.key} "${clipText(m.text, 120)}"`).join(" | ") || "none"} || skills: ${packet.competencies.map((c) => `${c.key} [${importanceOf(c)}${c.evaluatedIn === "interview" ? ", interviews only" : ""}] "${clipText(c.definition, 200)}" indicators: ${clipText(c.indicators.join("; "), 200)}`).join(" | ") || "none"}`;
+    const packetRole: NonNullable<CaseDiagnostics["role"]> = { questions: [], skills: packet.competencies.map((c) => ({ key: c.key, name: c.name, definition: clipText(c.definition), evaluatedIn: c.evaluatedIn, importance: importanceOf(c), indicators: c.indicators.map((x) => clipText(x)) })) };
     /** A quote the model wrote is grounded when it is in what the model was given (the hidden view, placeholders and all). */
     const groundedIn = (raws: EvidenceAssessment[], seen: ReturnType<typeof assessmentSources>) => raws.flatMap((raw, i) => assessmentQuotesGrounded(raw, { resume: seen.resume ?? "", application: seen.application ?? "" }).map((x) => `reading ${i + 1}: ${x}`));
     for (const c of triageEdgeCases) {
@@ -242,17 +255,22 @@ async function main() {
     results["triage.bias_pairs"] = { cases: bias, passRate: bias.filter((x) => x.pass).length / bias.length };
 
     // Consistency (docs/11; plan Wave F gate): the same résumé read again must read, score and place the same each time.
+    // Each read's combined reading, then each of its model calls as the model wrote it (Wave S9 round 4).
     const steady: (typeof results)[string]["cases"] = [];
-    for (const c of consistencyCases) {
+    for (const [n, c] of consistencyCases.entries()) {
       const reads: EvidenceAssessment[] = [];
+      const notes: string[] = n === 0 ? [packetNote] : [];
       let failed: string | null = null;
       for (let i = 1; i <= CONSISTENCY_READS && !failed; i++) {
-        const r = (await assess(`${c.id}_read_${i}`, c.resume, { candidate: c.candidate })).combined;
-        if (r.ok) reads.push(r.output);
-        else failed = r.error;
+        const a = await assess(`${c.id}_read_${i}`, c.resume, { candidate: c.candidate });
+        if (a.combined.ok) {
+          reads.push(a.combined.output);
+          notes.push(findingsOf(`reading ${i}`, a.combined.output));
+        } else failed = a.combined.error;
+        notes.push(...callNotes(i, a.runs));
       }
       const f = failed ? [failed] : consistencyDifferences(reads, packet);
-      steady.push({ id: c.id, pass: f.length === 0, failures: f, notes: reads.map((r, i) => findingsOf(`reading ${i + 1}`, r)) });
+      steady.push({ id: c.id, pass: f.length === 0, failures: f, notes, ...(f.length ? { diagnostics: { role: packetRole } } : {}) });
     }
     results["triage.consistency"] = { cases: steady, passRate: steady.filter((x) => x.pass).length / steady.length };
 
@@ -263,17 +281,21 @@ async function main() {
     const licence: (typeof results)[string]["cases"] = [];
     for (const c of credentialCases) {
       const reads: EvidenceAssessment[] = [];
+      const notes: string[] = [];
       const f: string[] = [];
       for (let i = 1; i <= 2; i++) {
-        const r = (await assess(`${c.id}_licence_${i}`, c.resume, { candidate: c.candidate })).combined;
+        const a = await assess(`${c.id}_licence_${i}`, c.resume, { candidate: c.candidate });
+        const r = a.combined;
         if (!r.ok) f.push(r.error);
         else {
           reads.push(r.output);
+          notes.push(findingsOf(`reading ${i}`, r.output));
           f.push(...credentialFailures(r.output, credentials, c.expect).map((x) => `reading ${i}: ${x}`));
         }
+        notes.push(...callNotes(i, a.runs));
       }
       if (reads.length > 1) f.push(...consistencyDifferences(reads, packet));
-      licence.push({ id: c.id, pass: f.length === 0, failures: f, notes: reads.map((r, i) => findingsOf(`reading ${i + 1}`, r)) });
+      licence.push({ id: c.id, pass: f.length === 0, failures: f, notes, ...(f.length ? { diagnostics: { role: packetRole } } : {}) });
     }
     // Readings that disagree, scripted (no model call): the finding the team sees rests on the candidate's words, so it
     // is the same whatever each reading said and whichever part of the licence line it quoted.

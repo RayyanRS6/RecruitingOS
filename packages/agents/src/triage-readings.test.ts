@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { RunOutcome } from "@ros/ai";
 import type { EvidenceAssessment } from "@ros/contracts";
-import { applyEvidenceRules, assessmentSources, combineOutcomes, combineReadings, credentialFinding, credentialMustHaves, findingSubjects, plainlyNotHeld, readingsOutcome, settledOverall, settledRecommendation, shownNotHeld, verifyAssessmentQuotes, withResumeFlags } from "./triage";
+import { matchScore } from "@ros/core";
+import { DATED_JOB_LINE, applyEvidenceRules, assessmentSources, combineOutcomes, combineReadings, combineRunOutcomes, credentialFinding, credentialMustHaves, findingSubjects, liftableQuote, plainlyNotHeld, readingsOutcome, settledOverall, settledRecommendation, shownNotHeld, skillFloor, triageSettlement, verifyAssessmentQuotes, withResumeFlags } from "./triage";
 
 /**
  * The fairness run on Haiku 5.5 (14 Oct 2026): one résumé read three times scored 83, 71 and 67, and an expired licence
@@ -204,6 +205,195 @@ describe("the overall reading, worked out from the settled findings (Wave S7)", 
 
   it("leaves the scorecard's overall reading as the middle of its readings (no settlement given)", () => {
     expect(combineReadings([reading("no", "yes", "evidenced", { overall: "weak" }), reading("no", "yes", "evidenced", { overall: "strong" }), reading("no", "yes", "evidenced", { overall: "strong" })]).overall).toBe("strong");
+  });
+});
+
+/**
+ * Wave S9 round 4 (real-model runs of 15 Oct 2026, triage.credentials said_plainly): the only findings that moved were
+ * skills on a bare duty line, read partly shown by one reading and not shown by the other two, which moved the score a
+ * candidate sees between 25 and 32. A skill one reading of three showed on a checked quote of the candidate's own work is
+ * now partly shown, never more; never over a verified "contradicted"; never from a dated job line or a yes/no answer on
+ * the form; never for a must-have; and the scorecard is not affected.
+ */
+describe("a skill one reading showed on a checked quote (Wave S9 round 4)", () => {
+  const DUTY = "Scaling and root planing, patient education";
+  const PLAIN_NO_LINE = "I do not hold a California RDH license";
+  const JOB_LINE = "Registered Dental Hygienist at Bayside Dental 2016 - 2021";
+  const FORM_LINE = "Do you hold an active CA RDH license? Yes.";
+  /** The said_plainly CV of the fairness evals (packages/evals `credentialCases`). */
+  const PLAIN_NO = `Drew Park\nAnaheim, CA\n${JOB_LINE}\nA.S. Dental Hygiene, Cypress College\n${PLAIN_NO_LINE}\n${DUTY}`;
+  const PACKET = {
+    requirements: {
+      mustHaves: [{ key: "licence", text: "Active CA RDH license", rationale: "law", evidencedBy: ["resume"] }, { key: "perio", text: "Periodontal therapy", rationale: "work", evidencedBy: ["resume"] }],
+      niceToHaves: [],
+      eligibility: [{ key: "el_license", type: "license", question: "Do you hold an active CA RDH license?", expectation: {}, rationale: "Required by law.", knockout: true }],
+    },
+    competencies: [
+      { key: "clinical", name: "Clinical care", definition: "Thorough, gentle periodontal care.", weight: 5, evaluatedIn: "both", indicators: ["charts accurately"] },
+      { key: "patients", name: "Patient communication", definition: "Explains care plainly and builds trust.", weight: 5, evaluatedIn: "both", indicators: ["explains findings"] },
+    ],
+  } as never;
+  type Skill = EvidenceAssessment["competencyFindings"][number];
+  type Must = EvidenceAssessment["requirementFindings"][number];
+  const skill = (key: string, finding: Found, quote?: string, source: "resume" | "application" = "resume"): Skill => ({ competencyKey: key, finding, ...(quote ? { evidence: { source, quote } } : {}) });
+  const plainNo: Must = { requirementKey: "licence", met: "no", evidence: { source: "resume", quote: PLAIN_NO_LINE } };
+  const perioPartly: Must = { requirementKey: "perio", met: "partially", evidence: { source: "resume", quote: DUTY } };
+  const read = (clinical: Skill, patients: Skill, requirementFindings: Must[] = [plainNo, perioPartly], over: Partial<EvidenceAssessment> = {}): EvidenceAssessment =>
+    reading(null, "unknown", "not_evidenced", { requirementFindings, competencyFindings: [clinical, patients], summary: `${clinical.finding}/${patients.finding}`, ...over });
+  const ok = (out: EvidenceAssessment, runId: string): RunOutcome<EvidenceAssessment> => ({ ok: true, output: out, runId, model: "m" });
+  const view = { restore: (s: string) => s };
+  const input = (resumeText: string) => ({ packet: PACKET, resumeText, applicationAnswers: { eligibility: { el_license: "yes" } } });
+  const outcome = (readings: readonly EvidenceAssessment[], resumeText = PLAIN_NO) => {
+    const out = readingsOutcome(readings.map((r, i) => ok(r, `r${i}`)), view, input(resumeText));
+    if (!out.ok) throw new Error("expected readings");
+    return out.output;
+  };
+  const scoreOf = (a: EvidenceAssessment) => matchScore({ resume: { kind: "triage", result: a }, screen: null }, PACKET);
+  const skillOf = (a: EvidenceAssessment, key: string) => a.competencyFindings.find((f) => f.competencyKey === key);
+  const orders = <T>(xs: readonly [T, T, T]): T[][] => {
+    const [a, b, c] = xs;
+    return [[a, b, c], [a, c, b], [b, a, c], [b, c, a], [c, a, b], [c, b, a]];
+  };
+  const shownOnDuty = read(skill("clinical", "partially_evidenced", DUTY), skill("patients", "not_evidenced"));
+  const noneShown = read(skill("clinical", "not_evidenced"), skill("patients", "not_evidenced"));
+
+  it("settles a duty line one reading of three showed at partly shown, the same in every order", () => {
+    const outs = orders([shownOnDuty, noneShown, noneShown]).map((o) => outcome(o));
+    for (const out of outs) {
+      expect(skillOf(out, "clinical")).toEqual({ competencyKey: "clinical", finding: "partially_evidenced", evidence: { source: "resume", quote: DUTY } });
+      expect(skillOf(out, "patients")?.finding).toBe("not_evidenced");
+      expect(out.requirementFindings.map((f) => `${f.requirementKey}:${f.met}`)).toEqual(["licence:no", "perio:partially"]);
+      expect(out.competencyFindings).toEqual(outs[0]!.competencyFindings);
+      expect(decided(out)).toEqual(decided(outs[0]!));
+      expect(scoreOf(out)).toEqual(scoreOf(outs[0]!));
+    }
+  });
+
+  it("never lowers the score: 25 with no skill shown, 32 with one partly shown, 36 with both", () => {
+    const none = outcome([noneShown, noneShown, noneShown]);
+    const one = outcome([shownOnDuty, noneShown, noneShown]);
+    const patientsOnDuty = read(skill("clinical", "not_evidenced"), skill("patients", "partially_evidenced", DUTY));
+    const both = orders([shownOnDuty, patientsOnDuty, noneShown]).map((o) => outcome(o));
+    expect(scoreOf(none)?.score).toBe(25);
+    expect(scoreOf(one)?.score).toBe(32);
+    for (const out of both) {
+      expect(out.competencyFindings.map((f) => `${f.competencyKey}:${f.finding}`)).toEqual(["clinical:partially_evidenced", "patients:partially_evidenced"]);
+      expect(scoreOf(out)?.score).toBe(36);
+    }
+    // the must-have not met still holds the score down and is named, whatever the skills
+    expect(scoreOf(one)?.missingMustHave.map((m) => m.key)).toEqual(["licence"]);
+  });
+
+  it("lifts a skill one reading showed in full to partly shown, never to shown", () => {
+    const full = read(skill("clinical", "evidenced", DUTY, "resume"), skill("patients", "not_evidenced"), [plainNo, perioPartly]);
+    full.competencyFindings[0] = { ...full.competencyFindings[0]!, note: "the reading's own note" };
+    for (const o of orders([full, noneShown, noneShown])) {
+      // the note of a reading that said shown is not kept: it would say more than partly shown
+      expect(skillOf(outcome(o), "clinical")).toEqual({ competencyKey: "clinical", finding: "partially_evidenced", evidence: { source: "resume", quote: DUTY } });
+    }
+    // a reading that said partly shown keeps its note
+    const noted = read(skill("clinical", "partially_evidenced", DUTY), skill("patients", "not_evidenced"));
+    noted.competencyFindings[0] = { ...noted.competencyFindings[0]!, note: "names the procedure only" };
+    expect(skillOf(outcome([noneShown, noted, noneShown]), "clinical")).toMatchObject({ finding: "partially_evidenced", note: "names the procedure only" });
+  });
+
+  it("never lifts over a checked 'contradicted', and leaves every other middle answer as it was", () => {
+    const against = read(skill("clinical", "contradicted", "A.S. Dental Hygiene, Cypress College"), skill("patients", "not_evidenced"));
+    expect(skillOf(outcome([against, noneShown, shownOnDuty]), "clinical")?.finding).toBe("not_evidenced");
+    expect(skillOf(outcome([against, against, shownOnDuty]), "clinical")?.finding).toBe("contradicted");
+    expect(skillOf(outcome([shownOnDuty, shownOnDuty, noneShown]), "clinical")?.finding).toBe("partially_evidenced");
+    // a "contradicted" with nothing quoted is no evidence against them, so it does not stop the floor
+    const saidAgainst = read(skill("clinical", "contradicted"), skill("patients", "not_evidenced"));
+    expect(skillOf(outcome([saidAgainst, noneShown, shownOnDuty]), "clinical")?.finding).toBe("partially_evidenced");
+  });
+
+  it("never lifts on a quote that failed the check or says too little", () => {
+    const invented = read(skill("clinical", "partially_evidenced", "Led the periodontal program for six years"), skill("patients", "not_evidenced"));
+    expect(skillOf(outcome([invented, noneShown, noneShown]), "clinical")?.finding).toBe("not_evidenced");
+    const thin = read(skill("clinical", "partially_evidenced", "Dentrix"), skill("patients", "not_evidenced"));
+    expect(skillOf(outcome([thin, noneShown, noneShown]), "clinical")?.finding).toBe("not_evidenced");
+    // one word that is in the résumé is still too little
+    const oneWord = read(skill("clinical", "partially_evidenced", "Scaling"), skill("patients", "not_evidenced"));
+    expect(skillOf(outcome([oneWord, noneShown, noneShown]), "clinical")?.finding).toBe("not_evidenced");
+  });
+
+  it("never lifts on a dated job line or a yes/no answer on the form", () => {
+    const jobLine = read(skill("clinical", "partially_evidenced", JOB_LINE), skill("patients", "not_evidenced"));
+    expect(skillOf(outcome([jobLine, noneShown, noneShown]), "clinical")?.finding).toBe("not_evidenced");
+    expect(scoreOf(outcome([jobLine, noneShown, noneShown]))?.score).toBe(25);
+    // a part of the job line is read with the whole line
+    const employer = read(skill("clinical", "partially_evidenced", "Registered Dental Hygienist at Bayside Dental"), skill("patients", "not_evidenced"));
+    expect(skillOf(outcome([employer, noneShown, noneShown]), "clinical")?.finding).toBe("not_evidenced");
+    const formLine = read(skill("clinical", "partially_evidenced", FORM_LINE, "application"), skill("patients", "not_evidenced"));
+    expect(skillOf(outcome([formLine, noneShown, noneShown]), "clinical")?.finding).toBe("not_evidenced");
+    // both quotes pass the check: it is the floor's own rule that keeps them from lifting the skill
+    const sources = assessmentSources(input(PLAIN_NO));
+    expect(sources.application).toContain(FORM_LINE);
+    const settled = [skill("clinical", "not_evidenced"), skill("patients", "not_evidenced")];
+    for (const shown of [jobLine, formLine]) {
+      const checked = verifyAssessmentQuotes(shown, sources);
+      expect(checked.competencyFindings[0]?.evidence?.unquoted).toBeUndefined();
+      expect(skillFloor(settled, [checked, noneShown, noneShown], () => true)[0]?.finding).toBe("partially_evidenced");
+      expect(skillFloor(settled, [checked, noneShown, noneShown], liftableQuote(sources))[0]?.finding).toBe("not_evidenced");
+    }
+  });
+
+  it("never floors a must-have", () => {
+    const active = PLAIN_NO.replace(PLAIN_NO_LINE, "RDH license CA active");
+    const licence = (met: Must["met"]): Must => ({ requirementKey: "licence", met, ...(met === "yes" ? { evidence: { source: "resume", quote: "RDH license CA active" } } : {}) });
+    const unknownLicence = read(skill("clinical", "not_evidenced"), skill("patients", "not_evidenced"), [licence("unknown"), perioPartly]);
+    const yesLicence = read(skill("clinical", "not_evidenced"), skill("patients", "not_evidenced"), [licence("yes"), perioPartly]);
+    for (const o of orders([unknownLicence, unknownLicence, yesLicence])) expect(metOf(outcome(o, active), "licence")).toBe("unknown");
+  });
+
+  it("leaves the scorecard as it was: no settlement, no floor", () => {
+    const runs = [ok(noneShown, "r1"), ok(noneShown, "r2"), ok(shownOnDuty, "r3")];
+    const out = combineRunOutcomes(runs, (r) => r, "this screening chat", 3);
+    expect(out.ok && skillOf(out.output, "clinical")?.finding).toBe("not_evidenced");
+    expect(combineReadings([noneShown, noneShown, shownOnDuty]).competencyFindings.map((f) => f.finding)).toEqual(["not_evidenced", "not_evidenced"]);
+  });
+
+  it("works the overall reading and the recommendation out from the floored finding", () => {
+    const bare = `Drew Park\nAnaheim, CA\n${JOB_LINE}\n${DUTY}`;
+    const unknowns: Must[] = [{ requirementKey: "licence", met: "unknown" }, { requirementKey: "perio", met: "unknown" }];
+    const saying = (overall: EvidenceAssessment["overall"], recommendation: EvidenceAssessment["recommendation"], clinical: Skill) => read(clinical, skill("patients", "not_evidenced"), unknowns, { overall, recommendation });
+    const readings: [EvidenceAssessment, EvidenceAssessment, EvidenceAssessment] = [saying("unknown", "review_manually", skill("clinical", "not_evidenced")), saying("unknown", "review_manually", skill("clinical", "not_evidenced")), saying("potential", "screen", skill("clinical", "partially_evidenced", DUTY))];
+    for (const o of orders(readings)) {
+      const out = outcome(o, bare);
+      expect(skillOf(out, "clinical")?.finding).toBe("partially_evidenced");
+      expect(out).toMatchObject({ overall: "potential", recommendation: "screen" });
+    }
+    // without the floor, the same readings gave "unknown" and asked a person to look
+    const app = input(bare);
+    const sources = assessmentSources(app);
+    const settle = { ...triageSettlement(PACKET, app, sources), skills: undefined };
+    const before = combineOutcomes(readings.map((r, i) => ok(r, `r${i}`)), sources, credentialMustHaves(PACKET), findingSubjects(PACKET), settle);
+    expect(before.ok && { overall: before.output.overall, recommendation: before.output.recommendation }).toEqual({ overall: "unknown", recommendation: "review_manually" });
+  });
+
+  it("uses the first reading as before when fewer than three came back", () => {
+    const invalid: RunOutcome<EvidenceAssessment> = { ok: false, runId: "rx", model: "m", reason: "invalid", error: "no valid output" };
+    const out = readingsOutcome([invalid, ok(noneShown, "r1"), ok(shownOnDuty, "r2")], view, input(PLAIN_NO));
+    expect(out.ok && skillOf(out.output, "clinical")?.finding).toBe("not_evidenced");
+  });
+
+  it("reads which quotes may lift a skill from the candidate's whole line", () => {
+    const resume = ["Hygienist at Harbor Dental 2016 - 2021", "Hygienist at Pacific Smiles 2019 – Present", "Dental Assistant at Sunrise 2014 to 2019", DUTY, "Graduated 2015, A.S. Dental Hygiene"].join("\n");
+    const written = "I chart perio for about eight patients a day and teach home care to each of them";
+    const application = [written, FORM_LINE, "Can you work the posted schedule? No.", "Which practice software have you used? Dentrix and Eaglesoft every day."].join("\n");
+    const liftable = liftableQuote({ resume, application, candidate_statement: written });
+    const at = (quote: string, source: "resume" | "application" | "candidate_statement" = "resume") => liftable({ source, quote });
+    for (const q of ["Hygienist at Harbor Dental 2016 - 2021", "Hygienist at Pacific Smiles", "Dental Assistant at Sunrise 2014 to 2019"]) expect(at(q), q).toBe(false);
+    for (const q of [DUTY, "Graduated 2015, A.S. Dental Hygiene"]) expect(at(q), q).toBe(true);
+    expect(at("I chart perio for about eight patients a day", "application")).toBe(true);
+    expect(at("teach home care to each of them", "candidate_statement")).toBe(true);
+    expect(at(FORM_LINE, "application")).toBe(false);
+    expect(at("Can you work the posted schedule? No.", "application")).toBe(false);
+    expect(at("Which practice software have you used? Dentrix and Eaglesoft every day.", "application")).toBe(true);
+    // a quote whose line is not found is read alone
+    expect(at("Hygienist at Coastal Dental 2020 - now")).toBe(false);
+    for (const s of ["2016 - 2021", "2019 – Present", "2014 to 2019", "2018—current", "2020 until today"]) expect(DATED_JOB_LINE.test(s), s).toBe(true);
+    for (const s of ["Graduated 2015", "2,019 patients", "since 2019"]) expect(DATED_JOB_LINE.test(s), s).toBe(false);
   });
 });
 
