@@ -598,7 +598,7 @@ D-03 needs no switch: under A it is wording only; under B, C or D it is a policy
 
 ### 10.3 Deploy order
 
-Migrations first (`migrate.yml`), then the worker on Railway (so new workflows exist before anything starts them), then the Vercel app. Hosting stays Vercel, Supabase and Railway; `railway.json` and `apps/shell/vercel.json` do not change.
+Migrations first (`migrate.yml`), then the worker on Railway (so new workflows exist before anything starts them), then the Vercel app. Hosting stays Vercel, Supabase and Railway; `apps/shell/vercel.json` and the Railway worker's dashboard settings do not change (`railway.json` was removed on 15 Oct 2026; the dashboard holds the same values).
 
 ---
 

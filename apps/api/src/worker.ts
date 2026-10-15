@@ -9,7 +9,7 @@ import { WorkerHealth, listeningPort, startHealthServer } from "./worker-health"
  *
  * Health (H1): every poll writes a heartbeat row (when, queue depth, oldest waiting job), and a tiny HTTP server on
  * PORT answers GET /healthz with 200 while polls succeed and 503 once the last successful poll is older than three
- * poll intervals plus thirty seconds. Railway probes it and restarts the worker on 503 (railway.json).
+ * poll intervals plus thirty seconds. Railway probes it and restarts the worker on 503 (the worker service's settings: docs/runbooks/railway-worker.md).
  */
 const container = await createContainer({ env: { ...process.env, WORKER_INLINE: "false" }, role: "worker" });
 const version = (process.env.RAILWAY_GIT_COMMIT_SHA ?? process.env.VERCEL_GIT_COMMIT_SHA ?? "").slice(0, 12) || null;

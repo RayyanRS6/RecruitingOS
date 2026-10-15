@@ -68,19 +68,29 @@ export function pickedUpWords(r: Pick<RecruiterRequestView, "status" | "recruite
   return requestState(r.status) === "waiting" ? "Not picked up yet" : null;
 }
 
+/** Over a request nobody on the team raised (`raisedBy`, 15 October 2026): Recruiting OS on its own, or a candidate. */
+const RAISED_BY_WORDS: Record<NonNullable<EscalationThreadEntry["raisedBy"]>, string> = {
+  system: "Raised automatically by Recruiting OS",
+  candidate: "A candidate asked for a person",
+};
+
 /** The heading over one entry of the conversation. */
 export function threadHeading(entry: EscalationThreadEntry): string {
   switch (entry.kind) {
-    case "question": return entry.by ? `${entry.by} asked` : "The request";
+    case "question": return entry.raisedBy ? RAISED_BY_WORDS[entry.raisedBy] : entry.by ? `${entry.by} asked` : "The request";
     case "answer": return `${entry.by ?? "The recruiter"} answered`;
     case "reopen": return `${entry.by ?? "Your team"} reopened it`;
     default: return entry.side === "recruiter" ? `${entry.by ?? "The recruiter"} wrote` : `${entry.by ?? "Your team"} added a note`;
   }
 }
 
-/** The same heading in the recruiter queue, where the other side is "the customer" (their names stay with the company). */
+/**
+ * The same heading in the recruiter queue, where the other side is "the customer" (their names stay with the company).
+ * A request Recruiting OS or a candidate raised says so instead of "The customer asked".
+ */
 export function queueThreadHeading(entry: EscalationThreadEntry): string {
   if (entry.side === "recruiter") return threadHeading(entry);
+  if (entry.kind === "question" && entry.raisedBy) return RAISED_BY_WORDS[entry.raisedBy];
   return entry.kind === "question" ? "The customer asked" : entry.kind === "reopen" ? "The customer reopened it" : "The customer added a note";
 }
 

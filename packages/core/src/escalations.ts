@@ -9,7 +9,7 @@ import { emit } from "./events";
 import { escalationReplyBy, type CalendarSource } from "./business-hours";
 import { loadBusinessCalendar } from "./business-calendar";
 import { ESCALATION_ACCESS_DAYS, endStaffGrant, grantStaffAccess, type StaffGrant } from "./staff-access";
-import { defaultUrgency, genericSummary, requiredExpertise, type EscalationUrgency } from "./escalation-preview";
+import { defaultUrgency, genericSummary, requestOrigin, requiredExpertise, servedSummary, type EscalationUrgency } from "./escalation-preview";
 import { screenAnswersOf, teamScreenView, unsentScreenReadings, withoutUnsentConversation, withoutUnsentScreenEvents } from "./screen-answers";
 
 /**
@@ -223,7 +223,7 @@ export async function reopenEscalation(
     grant = await grantStaffAccess(q, {
       userId: recruiter.id, userName: recruiter.name, companyId: e.companyId, kind: "escalation",
       scope: { escalationId: e.id, roleId: e.roleId, applicationId: e.applicationId },
-      purpose: `${e.kind}: ${e.summary || "customer request"} Reopened by the team.`, grantedBy: input.actor, expiresAt: new Date(now.getTime() + ESCALATION_ACCESS_DAYS * 86_400_000), now,
+      purpose: `${e.kind}: ${servedSummary(e) || "customer request"} Reopened by the team.`, grantedBy: input.actor, expiresAt: new Date(now.getTime() + ESCALATION_ACCESS_DAYS * 86_400_000), now,
     });
     await q.update(recruiterEscalations).set({ status: "claimed", resolvedAt: null, slaDueAt, accessExpiresAt: grant.expiresAt }).where(eq(recruiterEscalations.id, e.id));
   } else {
@@ -248,9 +248,11 @@ async function recruiterWhoCanReturn(q: Queryable, e: EscalationRow): Promise<{ 
  * A request's thread as the team reads it: the question, then every note, answer and reopening in order. A request
  * answered before the thread existed (migration 0029) shows its one answer. For the recruiter (`forRecruiter`), the
  * customer's side carries no names: the names of the company's team stay with the company, as the queue screen says.
+ * A request nobody on the team raised says who did on its question (`raisedBy`: Recruiting OS on its own, or a
+ * candidate), so neither side reads it as the customer asking (15 October 2026).
  */
 export function escalationThread(
-  e: Pick<EscalationRow, "id" | "question" | "createdAt" | "requestedBy" | "resolution" | "resolvedAt">,
+  e: Pick<EscalationRow, "id" | "question" | "createdAt" | "requestedBy" | "resolution" | "resolvedAt"> & Partial<Pick<EscalationRow, "kind" | "summary" | "roleId" | "applicationId">>,
   messages: ReadonlyArray<Pick<EscalationMessageRow, "id" | "side" | "kind" | "author" | "body" | "createdAt">>,
   recruiterName: string | null,
   opts: { forRecruiter?: boolean } = {},
@@ -258,7 +260,10 @@ export function escalationThread(
   const named = (side: EscalationThreadEntry["side"], name: string | null | undefined) => (opts.forRecruiter && side === "customer" ? null : name ?? null);
   const askedBy = e.requestedBy.kind === "recruiter" ? "recruiter" : "customer";
   const asker = e.requestedBy.kind === "user" || e.requestedBy.kind === "recruiter" ? named(askedBy, e.requestedBy.name) : null;
-  const out: EscalationThreadEntry[] = [{ id: `${e.id}:question`, side: askedBy, kind: "question", body: e.question, by: asker, at: e.createdAt }];
+  const origin = requestOrigin({ kind: e.kind ?? "", summary: e.summary ?? "", requestedBy: e.requestedBy, roleId: e.roleId ?? null, applicationId: e.applicationId ?? null });
+  const question: EscalationThreadEntry = { id: `${e.id}:question`, side: askedBy, kind: "question", body: e.question, by: asker, at: e.createdAt };
+  if (origin === "system" || origin === "candidate") question.raisedBy = origin;
+  const out: EscalationThreadEntry[] = [question];
   const ordered = [...messages].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
   for (const m of ordered) out.push({ id: m.id, side: m.side, kind: m.kind, body: m.body, by: named(m.side, m.author.name), at: m.createdAt });
   if (e.resolution && !ordered.some((m) => m.kind === "answer")) out.push({ id: `${e.id}:answer`, side: "recruiter", kind: "answer", body: e.resolution, by: recruiterName, at: e.resolvedAt ?? e.createdAt });
