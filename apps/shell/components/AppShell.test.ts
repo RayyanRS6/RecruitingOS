@@ -230,6 +230,12 @@ describe("the rail", () => {
     expect(render(meAs("owner"), { roles })).not.toContain("rail-collapse");
   });
 
+  it("keeps a long job name inside the rail, cut short with its count or word still in view", () => {
+    const css = readFileSync(new URL("../../../packages/ui/src/tokens.css", import.meta.url), "utf8");
+    expect(css).toMatch(/\.rail-sub \{[^}]*display: grid; grid-template-columns: minmax\(0, 1fr\);/);
+    expect(css).toMatch(/\.rail-sub \.rail-sub-title \{[^}]*min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;/);
+  });
+
   it("offers the light/dark theme switch beside Sign out, on every page and in the folded rail too", () => {
     for (const path of ["/", "/roles/r-open/talent"]) {
       nav.path = path;
