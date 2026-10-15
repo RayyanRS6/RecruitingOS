@@ -207,6 +207,22 @@ export function callNotesMayStayOpen(a: Pick<ApplicationDetail, "screens">): boo
   return a.screens.length > 0;
 }
 
+/**
+ * The questions the notes can be filed under: the ones the conversation asks, as the API keeps a note's question only
+ * when the conversation has it (apps/api/src/services/screens.ts). Its open questions first; then, for one created since
+ * Wave S8 (`progress.asks`), a Kanvis-style chat, and the one the notes start when there is none, the written questions
+ * (`packetLabels.written`: the company's own, or the job's screening questions when it set none); for one from before,
+ * the job's screening questions. An older answer without `written` gives the screening questions, as before.
+ */
+export function callNotesQuestions(a: Pick<ApplicationDetail, "screens" | "packetLabels">): Array<{ key: string; question: string }> {
+  const latest = a.screens[0];
+  const focus = (latest?.progress.focusQuestions ?? []).map((f) => ({ key: f.key, question: f.question }));
+  const writtenList = !latest || latest.progress.asks === "written" || !!latest.progress.chat;
+  const asked = writtenList && a.packetLabels.written ? a.packetLabels.written.map((w) => ({ key: w.key, question: w.question })) : a.packetLabels.questions;
+  const keys = new Set(focus.map((f) => f.key));
+  return [...focus, ...asked.filter((q) => !keys.has(q.key))];
+}
+
 /** What POST /applications/:id/screen/recruiter-notes takes, from the form; null when nothing was written. */
 export function callNotesBody(byQuestion: Record<string, string>, other: string, complete: boolean): { notes: Array<{ questionKey?: string; text: string }>; complete: boolean } | null {
   const notes: Array<{ questionKey?: string; text: string }> = Object.entries(byQuestion).filter(([, text]) => text.trim()).map(([questionKey, text]) => ({ questionKey, text: text.trim() }));

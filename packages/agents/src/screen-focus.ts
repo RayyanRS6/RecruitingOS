@@ -1,5 +1,5 @@
 import type { EvidenceAssessment, RolePacket, ScreenProgress } from "@ros/contracts";
-import { PROTECTED_QUESTION_RULES, PROXY_RULES, screenAnswersOf } from "@ros/core";
+import { PROTECTED_QUESTION_RULES, PROXY_RULES, screenAnswersOf, writtenQuestionsOf } from "@ros/core";
 
 /**
  * "Ask about this in a screen" (docs/spec/21 section 7, P1): the owner turns the résumé assessment's open questions
@@ -105,13 +105,36 @@ export function focusedPacket(packet: RolePacket, progress: Pick<ScreenProgress,
 }
 
 /**
- * The packet handed to the screen invitation: the focus questions counted in "N questions", and the intro sentence at
- * the head of the human-alternative line, which the invitation prints right after the link. The message templates live
- * in coordinator.ts and are shared by every screen; this keeps one template.
+ * Wave S8: the packet as a chat without a plan asks it (by text, or on the web from an emailed link). A screen created
+ * since (`progress.asks` "written") asks what the web chat asks: the résumé reading's open questions first, then the
+ * company's written questions when it set any (`writtenQuestionsOf`), each in its own words, its private note
+ * (`lookFor`) given to the models as the model answer only (the turn rules keep it from the candidate). A job with no
+ * written questions, and a screen from before, read exactly as they always did (`focusedPacket`). No closing question:
+ * that belongs to a chat's plan. Every reader of such a chat goes through this (`chatPacket`, the opening by text, the
+ * invitation's count), and reading it twice gives the same.
  */
-export function packetForFocusedInvite(packet: RolePacket, progress: Pick<ScreenProgress, "focusQuestions"> | null | undefined): RolePacket {
-  const p = focusedPacket(packet, progress);
-  if (p === packet) return packet;
+export function unplannedChatPacket(packet: RolePacket, progress: Pick<ScreenProgress, "focusQuestions" | "asks"> | null | undefined): RolePacket {
+  const focused = focusedPacket(packet, progress);
+  const written = writtenQuestionsOf(packet);
+  if (progress?.asks !== "written" || !written.some((w) => w.source === "company")) return focused;
+  const focus = new Set((progress.focusQuestions ?? []).map((f) => f.key));
+  const notes = new Map((packet.companyQuestions?.written ?? []).map((w) => [w.key, w.lookFor] as const));
+  const asked = written.filter((w) => !focus.has(w.key)).map((w) => {
+    const note = notes.get(w.key);
+    return { key: w.key, question: w.question, kind: "behavioral" as const, ...(note ? { modelAnswer: note } : {}) };
+  });
+  return { ...packet, screening: { ...packet.screening, questions: [...focused.screening.questions.filter((q) => focus.has(q.key)), ...asked] } };
+}
+
+/**
+ * The packet handed to the screen invitation: the questions the chat asks counted in "N questions" (the focus questions,
+ * and on a screen created since Wave S8 the company's written questions, `unplannedChatPacket`), and, when it starts
+ * with the focus questions, the intro sentence at the head of the human-alternative line, which the invitation prints
+ * right after the link. The message templates live in coordinator.ts and are shared by every screen; this keeps one template.
+ */
+export function packetForFocusedInvite(packet: RolePacket, progress: Pick<ScreenProgress, "focusQuestions" | "asks"> | null | undefined): RolePacket {
+  const p = unplannedChatPacket(packet, progress);
+  if (!progress?.focusQuestions?.length) return p;
   return { ...p, communication: { ...p.communication, humanAlternativeText: `${FOCUS_INTRO}\n\n${p.communication.humanAlternativeText}` } };
 }
 

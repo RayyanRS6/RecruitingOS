@@ -167,7 +167,8 @@ export const screen: WorkflowDefinition<State> = {
         // only in the same transaction that queues the invitation. The allowance counts the conversation at its first
         // answer, never here (plan E9).
         if (ctx.state.screenId !== scr.id) {
-          // A focused screen's invitation counts the open questions and says the conversation starts with them.
+          // The invitation counts the questions the chat asks (the open questions, and since Wave S8 the company's
+          // written questions), and a focused screen's says the conversation starts with the open questions.
           const sent = await sendScreenInvite(ctx.q, ctx.services.integrations, { application: app, candidate, role, company, packet: packetForFocusedInvite(packet, scr.progress), actor: ctx.actor, correlationId: ctx.run.id, appBaseUrl: ctx.services.env.jobsBaseUrl, screen: { id: scr.id, token: scr.token, channel }, opening });
           if (sent.email.status === "failed" && !candidate.email && channel !== "sms") return { kind: "fail", error: "candidate has no email and no SMS consent; nobody can be reached", retryable: false };
         }

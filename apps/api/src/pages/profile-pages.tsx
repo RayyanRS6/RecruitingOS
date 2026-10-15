@@ -46,6 +46,11 @@ function factDay(at: string, timeZone: string): string {
   return new Date(at).toLocaleDateString("en-US", { timeZone, month: "short", day: "numeric", year: "numeric" });
 }
 
+/** Where a fact came from, said the same on the record and on the next application's form (Wave S8): "From your chat on <job>, <date>". */
+export function fromChatLine(from: Pick<LearnedFact["from"], "roleTitle" | "at">, timeZone: string): string {
+  return `From your chat on ${from.roleTitle}, ${factDay(from.at, timeZone)}`;
+}
+
 /**
  * "What your chats added" on the application record (spec step 10): each fact the candidate said in a chat they sent,
  * "From your chat on <job>, <date>", with a way to change or remove it, and the way to apply for another role at the
@@ -61,12 +66,12 @@ export function LearnedFactsSection(props: LearnedFactsSectionProps) {
       {saved ? <div class={saved.error ? "err" : "card"} role={saved.error ? "alert" : "status"}><p>{saved.text}</p></div> : null}
       {facts.length ? (
         <>
-          <p>Things you told us yourself in a chat you sent. {companyName} keeps them with your applications here, never with another company, for you to check. Change or remove any of them.</p>
+          <p>Things you told us yourself in a chat you sent. {companyName} keeps them with your applications here, never with another company, for you to check. Change or remove any of them. When you apply for another role here with your details, the form lists them for you to keep or untick.</p>
           <ul class="roles">
             {facts.map((f) => (
               <li class="card">
                 <p><strong>{f.text}</strong></p>
-                <p class="meta">{KIND_LABEL[f.kind]} · From your chat on {f.from.roleTitle}, {factDay(f.from.at, props.timeZone)}{f.editedAt ? " · changed by you" : ""}</p>
+                <p class="meta">{KIND_LABEL[f.kind]} · {fromChatLine(f.from, props.timeZone)}{f.editedAt ? " · changed by you" : ""}</p>
                 <details class="more">
                   <summary>Change or remove<span class="sr-only">: {f.text}</span></summary>
                   <form method="post" action={`${base}/facts/${encodeURIComponent(f.id)}`}>
@@ -118,7 +123,7 @@ function OtherRolesPage(props: { companyName: string; slug: string | null; roles
       <p class="back"><a href={`/c/status/${props.statusToken}`}>Back to your application</a></p>
       <p class="eyebrow">{companyName} · Your applications</p>
       <h1>Apply for another role at {companyName}</h1>
-      <p class="lead">We email a link to the address on your application. It opens that job's form with your details filled in (your name, contact details, where you are and the summary of your work), for you to check and change. What you told us in your chats stays with your applications here, for you to check. Nothing goes to another company.</p>
+      <p class="lead">We email a link to the address on your application. It opens that job's form with your details filled in (your name, contact details, where you are and the summary of your work), for you to check and change. The form also lists what you told us in your chats here, for you to keep or untick. Nothing goes to another company.</p>
       {props.sent ? <div class="card" role="status"><p><strong>Check your email.</strong> The link is on its way to the address on your application. It can take a few minutes; look in your spam or promotions folder too.</p></div> : null}
       {props.roles.length ? (
         <ul class="roles">

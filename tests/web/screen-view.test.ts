@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Screen, ScreeningFunnel, TimelineEvent } from "../../apps/web/src/api/client";
-import { APPLIED_IN_ONE_VISIT, DIDNT_FINISH_LINE, SCREEN_STATUS_LABEL, STILL_APPLYING_LINE, answerLines, callNotesBody, callNotesMayStayOpen, callNotesState, callNotesToast, funnelLines, generalNotes, hiddenAnswersLine, isRecruiterNote, minutesWords, offeredWithApplication, overviewScreenLine, recruiterNoteLabel, screenOrigin, shareWords, transcriptBubble, unansweredWords } from "../../apps/web/src/screen-view";
+import { APPLIED_IN_ONE_VISIT, DIDNT_FINISH_LINE, SCREEN_STATUS_LABEL, STILL_APPLYING_LINE, answerLines, callNotesBody, callNotesMayStayOpen, callNotesQuestions, callNotesState, callNotesToast, funnelLines, generalNotes, hiddenAnswersLine, isRecruiterNote, minutesWords, offeredWithApplication, overviewScreenLine, recruiterNoteLabel, screenOrigin, shareWords, transcriptBubble, unansweredWords } from "../../apps/web/src/screen-view";
 
 /**
  * The screening conversation as the team reads it (plan Wave E): "Applied and talked in one visit", questions the
@@ -199,6 +199,20 @@ describe("a recruiter's notes from a call (plan E3)", () => {
     expect(callNotesBody({}, "Left a voicemail.", false)).toEqual({ notes: [{ text: "Left a voicemail." }], complete: false });
     expect(callNotesToast({ completed: true }, "Sofia").detail).toContain("never as their own words");
     expect(callNotesToast({ completed: false }, "Sofia")).toEqual({ title: "Notes added.", detail: "The conversation stays open for Sofia." });
+  });
+
+  it("lists the questions the conversation asks, so each note keeps its question (Wave S8: the written ones on a conversation created since)", () => {
+    const written = [{ key: "wq_calm", question: "Tell us about a time you calmed a nervous patient.", required: true, source: "company" as const }];
+    const labels = { mustHaves: [], competencies: [], questions: questions.slice(0, 2), written };
+    const keys = (screens: Screen[], packetLabels: typeof labels | Omit<typeof labels, "written"> = labels) => callNotesQuestions({ screens, packetLabels }).map((q) => q.key);
+    // since Wave S8, and the conversation the notes start when there is none: the written questions
+    expect(keys([screen({ status: "human_requested", progress: { askedKeys: [], currentQuestionKey: null, asks: "written" } })])).toEqual(["wq_calm"]);
+    expect(keys([])).toEqual(["wq_calm"]);
+    // its open questions first, as it asks them
+    expect(keys([screen({ status: "in_progress", progress: { askedKeys: [], currentQuestionKey: null, asks: "written", focusQuestions: [{ key: "unknown_1", question: "Is your license current?" }] } })])).toEqual(["unknown_1", "wq_calm"]);
+    // one from before asks the job's screening questions; an older answer without `written` gives them too
+    expect(keys([screen({ status: "in_progress" })])).toEqual(["q_saturdays", "q_pay"]);
+    expect(keys([], { mustHaves: [], competencies: [], questions: questions.slice(0, 2) })).toEqual(["q_saturdays", "q_pay"]);
   });
 });
 

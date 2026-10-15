@@ -2,8 +2,8 @@
 /** @jsxImportSource hono/jsx */
 import { Hono, type Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
-import { ApplyRequest, MAX_RESUME_BYTES, inspectResumeFile, type CompanyQuestions, type DraftRolePacket, type QuickQuestionView, type RolePacket } from "@ros/contracts";
-import { answerCvLines } from "@ros/agents";
+import { ApplyRequest, MAX_RESUME_BYTES, inspectResumeFile, type CompanyQuestions, type DraftRolePacket, type LearnedFact, type QuickQuestionView, type RolePacket } from "@ros/contracts";
+import { answerCvLines, chatFactsWithKept } from "@ros/agents";
 import { applicationAnswerSentences, candidateNotices, emit, openPayload, quickQuestionsOf, sealPayload, type Notice } from "@ros/core";
 import { randomToken, uuidv7, withTenant } from "@ros/db";
 import { refFor } from "@ros/integrations";
@@ -17,7 +17,7 @@ import { startApplyConversation } from "../services/apply-conversation";
 import { lateApplicationAllowed, sealFormOpened } from "../services/closing-date";
 import { contactLineFor, type ContactLine } from "../services/company-settings-profile";
 import { applyTimeLine, type ApplyFlowView } from "../services/job-preview";
-import { reusedDetailsFor, type ReusedDetails } from "../services/profile-facts";
+import { factsToKeep, keepFactsOn, keptFactsOf, reusedDetailsFor, type ReusedDetails } from "../services/profile-facts";
 import { CONVERSATION_COOKIE, CONVERSATION_PURPOSE, acceptingApplications, jobFlow, jobNotices, loadJob, maskEmail, screenPath, type ConversationPayload, type Job } from "./candidate-shared";
 import { Icon } from "./icons";
 import { JobFacts, publicPay } from "./job-facts";
@@ -25,6 +25,7 @@ import { ContactLink, HelpLine, PreviewNote, type PreviewInfo } from "./job-page
 import { JOURNEY_CSS, Journey } from "./journey";
 import { Layout, currentNonce } from "./layout";
 import { clearApplicationSource, resolveApplicationSource } from "./links";
+import { fromChatLine } from "./profile-pages";
 import { quickQuestionHelp, withPlainQuestionHelp } from "./question-help";
 
 /**
@@ -103,13 +104,22 @@ export type ApplyFormMarks = { fromResume: string[]; suggested: string[]; reused
 export type ApplyFormReading = { filename: string; outcome: Exclude<ResumeReading["outcome"], "refused"> | "skipped" };
 
 /**
+ * Wave S8: "From your earlier chats at <Company>", on a form opened from the emailed reuse link only. `token`: that sealed
+ * link, carried in the form so Send opens it again; `facts`: what the candidate's sent chats here taught their record,
+ * read through the link; `kept`: the ids still ticked (all of them when the form opens); `timeZone`: the company's, for
+ * the dates.
+ */
+export type EarlierFactsState = { token: string; facts: LearnedFact[]; kept: string[]; timeZone: string };
+
+/**
  * What a re-rendered form keeps (D12): every typed value, every answer (the eligibility questions' and the company's
  * quick questions', by question key), both checkboxes, which fields were missing, and a resume the browser already
  * uploaded directly (its sealed grant goes back into the form, so the file stays attached). A file posted inside the
  * form itself cannot be put back by any browser: `resumeLost` makes the page say so instead of claiming everything is
- * still there. Wave S7 adds the marks and the résumé reading the page shows ("Check your details").
+ * still there. Wave S7 adds the marks and the résumé reading the page shows ("Check your details"); Wave S8 the facts
+ * from earlier chats a form opened from the reuse link lists, ticked as they were.
  */
-export type ApplyFormState = { values: Record<string, string>; answers: Record<string, string | string[]>; acknowledged: boolean; smsConsent: boolean; missing: string[]; resume: { grant: string; filename: string } | null; resumeLost: boolean; marks?: Partial<ApplyFormMarks>; reading?: ApplyFormReading | null };
+export type ApplyFormState = { values: Record<string, string>; answers: Record<string, string | string[]>; acknowledged: boolean; smsConsent: boolean; missing: string[]; resume: { grant: string; filename: string } | null; resumeLost: boolean; marks?: Partial<ApplyFormMarks>; reading?: ApplyFormReading | null; earlier?: EarlierFactsState | null };
 
 /** The sentence a re-shown form ends its error with: true about what is still on the page. */
 export function keptSentence(resumeLost: boolean): string {
@@ -322,6 +332,36 @@ function QuickQuestions(props: { company: string; questions: QuickQuestionView[]
   );
 }
 
+/**
+ * "From your earlier chats at <Company>" (Wave S8): each fact the candidate's sent chats here taught their record, its
+ * words and where it came from, with a box ticked to start with. What is still ticked at Send goes with this
+ * application; only the facts' ids are sent back, with the sealed link so Send can read them again. Plain boxes inside
+ * the form: it works without script.
+ */
+function EarlierFacts(props: { company: string; earlier: EarlierFactsState }) {
+  const { earlier } = props;
+  const kept = new Set(earlier.kept);
+  return (
+    <div class="card earlier">
+      <fieldset aria-describedby="earlier-note">
+        <legend>From your earlier chats at {props.company}</legend>
+        <p class="meta" id="earlier-note">Untick anything that is no longer true. {props.company} sees what you keep as part of this application.</p>
+        <input type="hidden" name="reuse" value={earlier.token} />
+        <ul>
+          {earlier.facts.map((f) => (
+            <li>
+              <label class="check" for={`keep-${f.id}`}>
+                <input id={`keep-${f.id}`} type="checkbox" name="keep" value={f.id} checked={kept.has(f.id) || undefined} />
+                <span>{f.text}<small>{fromChatLine(f.from, earlier.timeZone)}</small></span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      </fieldset>
+    </div>
+  );
+}
+
 /** The fields themselves, shared by the real form and the preview's form that sends nothing. */
 function ApplyFields(props: ApplyFormProps & { questions: QuickQuestionView[] }) {
   const v = props.state?.values ?? {};
@@ -341,6 +381,8 @@ function ApplyFields(props: ApplyFormProps & { questions: QuickQuestionView[] })
   const guided = (key: NoResumeKey) => v[`nr_${key}`] || (key === "recentWork" ? v.noResume ?? "" : "");
   const noResumeOpen = missing.has("noResume") || NO_RESUME_QUESTIONS.some((q) => !!guided(q.key));
   const showSummary = !!(v.workSummary ?? "").trim() || checking;
+  // Only a form opened from the emailed reuse link lists anything from earlier; a preview never does.
+  const earlier = props.preview ? null : props.state?.earlier ?? null;
   return (
     <>
       {reading ? (
@@ -386,6 +428,7 @@ function ApplyFields(props: ApplyFormProps & { questions: QuickQuestionView[] })
           <textarea id="workSummary" name="workSummary" rows={5} maxlength={WORK_SUMMARY_MAX} aria-invalid={invalid("workSummary")} aria-describedby={described("workSummary")}>{v.workSummary ?? ""}</textarea>
         </>
       ) : null}
+      {earlier?.facts.length ? <EarlierFacts company={props.company.name} earlier={earlier} /> : null}
       <QuickQuestions company={props.company.name} questions={props.questions} answers={answers} missing={missing} suggested={new Set(props.state?.marks?.suggested ?? [])} />
       <TransparencyBlock company={props.company} notices={shown} privacyEmail={props.privacyEmail} acknowledged={!!props.state?.acknowledged} missing={missing.has("acknowledged")} resumeLost={!!props.state?.resumeLost} />
     </>
@@ -426,7 +469,7 @@ export function ApplyFormPage(props: ApplyFormProps) {
       <p class="lead">{`${applyTimeLine(props.packet, { companyName: props.company.name, flow: props.flow })} ${props.flow === "one_visit" ? "First, this form; no" : "No"} cover letter needed.`}</p>
       <HelpLine contact={props.company.contact} class="notice" />
       {props.error ? <div class="err" role="alert">{props.error}</div> : null}
-      {!preview && !reading && props.links.reuse && !(props.state?.marks?.reused ?? []).length ? <ReuseFold company={props.company.name} action={props.links.reuse} /> : null}
+      {!preview && !reading && props.links.reuse && !(props.state?.marks?.reused ?? []).length && !props.state?.earlier ? <ReuseFold company={props.company.name} action={props.links.reuse} /> : null}
       {preview ? (
         <div class="form-preview">
           <fieldset disabled>
@@ -482,6 +525,9 @@ ol.questions .req { color: var(--ink-3); font-size: 14px; font-weight: 400; }
 .number-row input[type=number] { max-width: 220px; }
 .number-row span { color: var(--ink-2); }
 details.reuse { margin: 16px 0; }
+.earlier legend { margin: 0 0 4px; color: var(--ink); font-size: 17px; font-weight: 600; }
+.earlier ul { display: grid; gap: 2px; margin: 8px 0 0; padding: 0; list-style: none; }
+.earlier .check { margin: 8px 0; }
 details.replace { margin-top: 24px; }
 .reading { display: grid; gap: 6px; }
 `;
@@ -545,7 +591,8 @@ type QuickProblem = { field: string; question: string; problem: string };
  * A posted apply form, read the same way by "Send my application", "Read my resume" and the page that waits for the
  * reading: the typed values, every answer (by question key), the eligibility answers as the server has always read them
  * (`elig_<key>`), the company's quick answers that are answers the question takes (`q_<key>`: one of its options, or a
- * number within its limits) and the ones that are not, and the form's hidden fields.
+ * number within its limits) and the ones that are not, and the form's hidden fields. Wave S8: `reuse`, the sealed reuse
+ * link a form opened from it carries, and `keep`, the ids of the earlier facts still ticked (ids only, never words).
  */
 export type PostedApplyForm = {
   values: Record<string, string>;
@@ -558,6 +605,8 @@ export type PostedApplyForm = {
   grant: string;
   formOpened: string;
   website: string;
+  reuse: string;
+  keep: string[];
 };
 
 function bodyString(body: Record<string, unknown>) {
@@ -608,6 +657,9 @@ export function postedApplyForm(body: Record<string, unknown>, questions: QuickQ
     if (problem) quickProblems.push({ field: q.field, question: q.question, problem });
     else quickAnswers[q.key] = typed.slice(0, 40);
   }
+  const reuse = str("reuse");
+  const ticked = Array.isArray(body.keep) ? body.keep : [body.keep];
+  const keep = [...new Set(ticked.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter((x) => x.length > 0 && x.length <= 40))].slice(0, 20);
   return {
     values,
     answers,
@@ -620,6 +672,9 @@ export function postedApplyForm(body: Record<string, unknown>, questions: QuickQ
     grant: str("uploadGrant"),
     formOpened: str("formOpened"),
     website: str("website"),
+    // a link longer than any sealed one is not one (services/profile-facts.ts refuses it too), so it is not carried on
+    reuse: reuse.length <= 2000 ? reuse : "",
+    keep,
   };
 }
 
@@ -661,10 +716,27 @@ export function withResumeReading(form: { values: Record<string, string>; answer
   return { values, answers, fromResume, suggested };
 }
 
-/** The details an earlier application to this company filled in (S7-F's link), marked "From your earlier application". */
-export function reusedState(details: ReusedDetails): Partial<ApplyFormState> {
+/**
+ * The details an earlier application to this company filled in (S7-F's link), marked "From your earlier application";
+ * given the link itself (Wave S8), also the facts the candidate's earlier chats here taught their record, every one
+ * ticked to start with.
+ */
+export function reusedState(details: ReusedDetails, link?: { token: string; timeZone: string }): Partial<ApplyFormState> {
   const values: Record<string, string> = { firstName: details.firstName, lastName: details.lastName, email: details.email, phone: details.phone ?? "", locationText: details.locationText ?? "", workSummary: details.workSummary ?? "" };
-  return { values, marks: { reused: DETAIL_FIELDS.filter((f) => !!values[f]?.trim()) } };
+  const earlier: EarlierFactsState | null = link && details.facts.length ? { token: link.token, facts: details.facts, kept: details.facts.map((f) => f.id), timeZone: link.timeZone } : null;
+  return { values, marks: { reused: DETAIL_FIELDS.filter((f) => !!values[f]?.trim()) }, ...(earlier ? { earlier } : {}) };
+}
+
+/**
+ * The earlier facts a posted form shows again (a reading, a form sent back, the page that waits): the link it carries is
+ * opened again, so only what that link still opens is listed, ticked as the candidate left it. Null without a link.
+ */
+async function earlierFormState(container: Container, job: Job, posted: Pick<PostedApplyForm, "reuse" | "keep">): Promise<EarlierFactsState | null> {
+  if (!posted.reuse) return null;
+  const details = await reusedDetailsFor(container, { companyId: job.company.id, roleId: job.role.id, token: posted.reuse });
+  if (!details?.facts.length) return null;
+  const ticked = new Set(posted.keep);
+  return { token: posted.reuse, facts: details.facts, kept: details.facts.filter((f) => ticked.has(f.id)).map((f) => f.id), timeZone: job.company.timezone };
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */
@@ -685,6 +757,9 @@ function HiddenForm(props: { posted: PostedApplyForm; questions: QuickQuestionVi
       {posted.smsConsent ? <input type="hidden" name="smsConsent" value="yes" /> : null}
       <input type="hidden" name="uploadGrant" value={props.grant} />
       <input type="hidden" name="formOpened" value={props.formOpened} />
+      {/* Wave S8: the reuse link and the earlier facts still ticked go on with the form, ids only. */}
+      {posted.reuse ? <input type="hidden" name="reuse" value={posted.reuse} /> : null}
+      {posted.reuse ? posted.keep.map((id) => <input type="hidden" name="keep" value={id} />) : null}
     </>
   );
 }
@@ -832,11 +907,12 @@ candidatePages.get("/careers/:slug/jobs/:roleId/apply", async (c) => {
   if (!job || !acceptingApplications(job.role)) return c.notFound();
   // Funnel measurement without identity (correction 14): a random per-visit reference, no candidate data, no client script; the source comes from the tracked-link cookie when there is one.
   void container.integrations.analytics.capture({ name: "application_started", subjectRef: randomToken(12), companyRef: refFor(job.company.id, container.integrations.analyticsSalt), at: new Date().toISOString(), properties: { source: resolveApplicationSource(c, job.role.id).source } }).catch(() => undefined);
-  // Applied to this company before (S7-F): the emailed link fills in the details on file, each marked for checking.
+  // Applied to this company before (S7-F): the emailed link fills in the details on file, each marked for checking, and
+  // (Wave S8) lists what their earlier chats here added, each ticked. Without the link nothing earlier is shown.
   const reuse = c.req.query("reuse") ?? "";
   const reused = reuse ? await reusedDetailsFor(container, { companyId: job.company.id, roleId: job.role.id, token: reuse }) : null;
   if (reuse) c.header("Cache-Control", "no-store");
-  return c.html(<ApplyFormPage {...applyFormFor(container, job, await jobFlow(container, job))} formOpened={sealFormOpened(container.env.SESSION_SECRET, job.role.id, container.engine.clock())} state={reused ? reusedState(reused) : undefined} />);
+  return c.html(<ApplyFormPage {...applyFormFor(container, job, await jobFlow(container, job))} formOpened={sealFormOpened(container.env.SESSION_SECRET, job.role.id, container.engine.clock())} state={reused ? reusedState(reused, { token: reuse, timeZone: job.company.timezone }) : undefined} />);
 });
 
 /**
@@ -900,7 +976,10 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POL
   const posted = postedApplyForm(body, questions, container.env.SMS_ENABLED);
   if (posted.website) return toReceipt(c, job, posted.values.email);
   const now = container.engine.clock();
-  const show = (error: string, resumeLost: boolean) => c.html(<ApplyFormPage {...form} formOpened={formOpened} error={error} state={{ values: posted.values, answers: posted.answers, acknowledged: posted.acknowledged, smsConsent: posted.smsConsent, missing: [], resume: null, resumeLost }} />, 400);
+  // A form opened from the reuse link lists its earlier facts again, as they were ticked (Wave S8).
+  const earlier = await earlierFormState(container, job, posted);
+  if (earlier) c.header("Cache-Control", "no-store");
+  const show = (error: string, resumeLost: boolean) => c.html(<ApplyFormPage {...form} formOpened={formOpened} error={error} state={{ values: posted.values, answers: posted.answers, acknowledged: posted.acknowledged, smsConsent: posted.smsConsent, missing: [], resume: null, resumeLost, earlier }} />, 400);
 
   let upload: UploadGrantPayload | null = null;
   const file = postedFile(body);
@@ -951,7 +1030,7 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/read", rateLimit(READ_POL
   }
   const checked = checkedForm(container, posted, questions, { grant, filename: upload.filename }, reading ?? { v: 1, uploadId: upload.uploadId, outcome: "failed", aiRunId: null, readAt: now.toISOString(), details: null, facts: null });
   c.header("Cache-Control", "no-store");
-  return c.html(<ApplyFormPage {...form} formOpened={formOpened} error={checked.error} state={checked.state} />);
+  return c.html(<ApplyFormPage {...form} formOpened={formOpened} error={checked.error} state={{ ...checked.state, earlier }} />);
 });
 
 /** "Continue" on the page that waits for a reading: the details once it is done, that page again while it is not. */
@@ -969,11 +1048,13 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/details", rateLimit(READ_
   const posted = postedApplyForm(body, questions, container.env.SMS_ENABLED);
   const held = heldUpload(container, job, posted.grant);
   c.header("Cache-Control", "no-store");
-  if (!held) return c.html(<ApplyFormPage {...form} formOpened={formOpened} error={UPLOAD_EXPIRED} state={{ values: posted.values, answers: posted.answers, acknowledged: posted.acknowledged, smsConsent: posted.smsConsent, missing: [], resume: null, resumeLost: true }} />, 400);
+  // A form opened from the reuse link lists its earlier facts again, as they were ticked (Wave S8).
+  const earlier = await earlierFormState(container, job, posted);
+  if (!held) return c.html(<ApplyFormPage {...form} formOpened={formOpened} error={UPLOAD_EXPIRED} state={{ values: posted.values, answers: posted.answers, acknowledged: posted.acknowledged, smsConsent: posted.smsConsent, missing: [], resume: null, resumeLost: true, earlier }} />, 400);
   const reading = await readingFor(container.integrations.storage, held);
   if (!reading && str("skip") !== "yes") return c.html(<ReadingPage company={job.company} title={job.packet.identity.title} flow={flow} links={applyLinks(job)} posted={posted} questions={questions} grant={posted.grant} filename={held.filename} formOpened={formOpened} still />);
   const checked = checkedForm(container, posted, questions, { grant: posted.grant, filename: held.filename }, reading);
-  return c.html(<ApplyFormPage {...form} formOpened={formOpened} error={checked.error} state={checked.state} />);
+  return c.html(<ApplyFormPage {...form} formOpened={formOpened} error={checked.error} state={{ ...checked.state, earlier }} />);
 });
 
 /** The waiting page's question (with script): is the reading done? Only for the upload the asking page holds. */
@@ -1023,7 +1104,10 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
   // the form. A file posted inside the form (or a grant that no longer opens) cannot be put back, and the page says so.
   const keptResume = held ? { grant: posted.grant, filename: held.filename } : null;
   const resumeLost = !keptResume && (!!postedFile(body) || !!posted.grant);
-  const state = (missing: string[] = [], resume: Pick<ApplyFormState, "resume" | "resumeLost"> = { resume: null, resumeLost: false }): Partial<ApplyFormState> => ({ values, answers, acknowledged, smsConsent, missing, ...resume, marks: { fromResume: marked.fromResume, suggested: marked.suggested }, reading: resume.resume ? readView : null });
+  // A form opened from the reuse link and sent back lists its earlier facts again, as they were ticked (Wave S8).
+  const earlier = await earlierFormState(container, job, posted);
+  if (earlier) c.header("Cache-Control", "no-store");
+  const state = (missing: string[] = [], resume: Pick<ApplyFormState, "resume" | "resumeLost"> = { resume: null, resumeLost: false }): Partial<ApplyFormState> => ({ values, answers, acknowledged, smsConsent, missing, ...resume, marks: { fromResume: marked.fromResume, suggested: marked.suggested }, reading: resume.resume ? readView : null, earlier });
   const again = (error: string, missing: string[] = [], resume?: Pick<ApplyFormState, "resume" | "resumeLost">) => c.html(<ApplyFormPage {...form} formOpened={formOpened} error={error} state={state(missing, resume)} />, 400);
   // Honeypot: a filled hidden field gets exactly the receipt a person gets, and nothing is recorded.
   if (posted.website) return toReceipt(c, job, values.email);
@@ -1091,6 +1175,9 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
     cv: [...readCv, ...answerCvLines({ workSummary: parsed.data.workSummary ?? null, noResume: parsed.data.noResumeAnswers ?? null })].slice(0, 20),
     formAnswers: applicationAnswerSentences(packet, { eligibility: eligibilityAnswers, quick: parsed.data.quickAnswers ?? null }).map((s) => s.sentence).slice(0, 20),
   };
+  // The earlier facts still ticked on a form opened from the reuse link (Wave S8): the link is opened again, the address
+  // typed must be the one on file, and only ids come from the form (services/profile-facts.ts). Without a link, nothing.
+  const keeping = await factsToKeep(container, { companyId: company.id, roleId: role.id, token: posted.reuse, typedEmail: parsed.data.email, ids: posted.keep });
 
   // The consent record carries the address the trusted proxy reports, never one the client wrote into the header.
   const ip = clientIp(c);
@@ -1126,8 +1213,12 @@ async function sendApplication(c: Context<Vars>): Promise<Response> {
       resume,
       ip,
     }, { kind: "candidate", id: "applicant" }, { closingGrace: admitted.late });
+    // Kept only on a new application of the very person the link is for (a repeat submission changes nothing on file):
+    // this application's own answers, which its chat reads as the candidate's own words and does not ask again.
+    const kept = keeping && !created.duplicate && created.candidate.id === keeping.candidateId ? keptFactsOf(keeping.facts, container.engine.clock().toISOString()) : [];
+    await keepFactsOn(tx, { applicationId: created.application.id, facts: kept });
     // The conversation offered in the same visit (plan E1), or the receipt: decided in this transaction, from what was typed.
-    return startApplyConversation(tx, container, { ...created, role, company, packet, typedFirstName: parsed.data.firstName, eligibilityAnswers, quickAnswers: parsed.data.quickAnswers ?? null, typedFacts });
+    return startApplyConversation(tx, container, { ...created, role, company, packet, typedFirstName: parsed.data.firstName, eligibilityAnswers, quickAnswers: parsed.data.quickAnswers ?? null, typedFacts: chatFactsWithKept(typedFacts, kept) });
   });
   await container.kick();
   clearApplicationSource(c);

@@ -4,10 +4,10 @@ import { FakeProvider, screenAssessPrompt, screenTurnPrompt, type RunOutcome, ty
 import { CHAT_WRAP_KEY, chatCounter } from "@ros/core";
 import {
   CHAT_CALM_LINE, CHAT_LADDER_QUESTION, CHAT_WRAP_QUESTION, EMPTY_SCREEN_PROGRESS, SCORECARD_READINGS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, candidateWordsOf, chatClosingMessage, chatFactsFor, chatGaps, chatNextLine, chatOpening, chatPacket, enforceChatTurn, enforceTurnRules, gapQuestion,
-  nextQuestion, recruiterNotesOf, redactProtected, reviewItems, saidByCandidate, scorecardReadings, screenAnswerOf, screenCommand, screenContextOf, screenIntro, verifyScreenQuotes, withChatPlan, withdrawPending, type ChatFacts,
+  newScreenProgress, nextQuestion, recruiterNotesOf, redactProtected, reviewItems, saidByCandidate, scorecardReadings, screenAnswerOf, screenCommand, screenContextOf, screenIntro, verifyScreenQuotes, withChatPlan, withdrawPending, type ChatFacts,
 } from "./screening";
 import { answerInContext } from "./triage";
-import { focusQuestionsFrom, unfairQuestion } from "./screen-focus";
+import { FOCUS_INTRO, focusQuestionsFrom, focusedPacket, packetForFocusedInvite, unfairQuestion } from "./screen-focus";
 import { registerFakeHandlers } from "./fake-handlers";
 
 /**
@@ -628,6 +628,131 @@ describe("the Kanvis-style chat", () => {
       "0 of 2 required · About your experience", "0 of 2 required · About your experience", "0 of 2 required · About your experience", "0 of 2 required · About your experience", "0 of 2 required · About your experience",
       "0 of 2 required · Required questions", "1 of 2 required · Required questions", "1 of 2 required · Required questions", "2 of 2 required · Wrapping up", "2 of 2 required · Wrapping up",
     ]);
+  });
+
+  /**
+   * Wave S8 (spec-s8-followups.md section A): a chat without a plan, by text or on the web from an emailed link, asks
+   * what the web chat asks, the company's written questions, after the résumé reading's open questions; a chat created
+   * before keeps the list it began with; and the private note never reaches the candidate there either.
+   */
+  describe("without a plan (Wave S8: by text, or from an emailed link)", () => {
+    const focus = [{ key: "unknown_1", question: "Is your teaching certificate current?" }];
+    const noted = /everyday analogy|checks understanding/;
+
+    it("asks the company's written questions after the open questions, each as written, its note only as the model answer, and no closing question", () => {
+      const fresh = newScreenProgress();
+      expect(fresh).toEqual({ ...EMPTY_SCREEN_PROGRESS, asks: "written" });
+      const asked = chatPacket(role, fresh).screening.questions;
+      expect(asked).toEqual([
+        { key: "wq_explain", question: "How would you explain what a sensor is to six-year-olds?", kind: "behavioral", modelAnswer: "uses a concrete everyday analogy and checks understanding with the children" },
+        { key: "wq_room", question: "Several kits fail at once in a class of twenty. How do you handle the room?", kind: "behavioral" },
+      ]);
+      const opened = newScreenProgress(focus);
+      expect(chatPacket(role, opened).screening.questions.map((q) => q.key)).toEqual(["unknown_1", "wq_explain", "wq_room"]);
+      // reading it twice gives the same
+      expect(chatPacket(chatPacket(role, opened), opened).screening.questions).toEqual(chatPacket(role, opened).screening.questions);
+      // the invitation and the web page's introduction count the questions it asks
+      expect(packetForFocusedInvite(role, fresh).screening.questions).toHaveLength(2);
+      expect(packetForFocusedInvite(role, fresh).communication.humanAlternativeText).toBe("Reply HUMAN.");
+      expect(packetForFocusedInvite(role, opened).screening.questions).toHaveLength(3);
+      expect(packetForFocusedInvite(role, opened).communication.humanAlternativeText).toBe(`${FOCUS_INTRO}\n\nReply HUMAN.`);
+      expect(screenIntro({ companyName: "Robotronics", firstName: "Meerub", packet: chatPacket(role, fresh) }).questions).toBe(2);
+    });
+
+    it("a chat created before keeps the list it began with, and a job with no written questions asks exactly what it did", () => {
+      expect(chatPacket(role, EMPTY_SCREEN_PROGRESS)).toBe(role);
+      expect(chatPacket(role, { ...EMPTY_SCREEN_PROGRESS, focusQuestions: focus }).screening.questions.map((q) => q.key)).toEqual(["unknown_1", "pay"]);
+      expect(packetForFocusedInvite(role, EMPTY_SCREEN_PROGRESS)).toBe(role);
+      const old = { ...role, companyQuestions: undefined } as unknown as RolePacket;
+      const none = { ...role, companyQuestions: { quick: [], written: [] } } as unknown as RolePacket;
+      expect(chatPacket(old, newScreenProgress())).toBe(old);
+      expect(chatPacket(none, newScreenProgress())).toBe(none);
+      expect(chatPacket(old, newScreenProgress(focus))).toEqual(focusedPacket(old, { focusQuestions: focus }));
+    });
+
+    it("never says a question's private note, even in part: the model's sentences that repeat it are left out, the disclosure and the packet's question stay", () => {
+      const p: ScreenProgress = { ...newScreenProgress(), askedKeys: ["wq_explain"], currentQuestionKey: "wq_explain" };
+      const pk = chatPacket(role, p);
+      // a follow-up that repeats the note goes back to the question in its own words, as a planned chat's does
+      const push = enforceTurnRules(turnOf({ followUpReason: "push", messageToCandidate: "Thanks. Would you use a concrete everyday analogy and checks understanding with the children?" }), pk, p, {});
+      expect(push.messageToCandidate).toBe("How would you explain what a sensor is to six-year-olds?");
+      // one that still asks something of its own keeps it
+      const own = enforceTurnRules(turnOf({ followUpReason: "push", messageToCandidate: "The team wants someone who uses a concrete everyday analogy and checks understanding with the children. Which sensor would you start with?" }), pk, p, {});
+      expect(own.messageToCandidate).toBe("Which sensor would you start with?");
+      // moving on: what is left of the acknowledgment, then the next question in the packet's words
+      const moved = enforceTurnRules(turnOf({ questionKey: "wq_room", answerRecorded: { questionKey: "wq_explain", answer: "Like a thirsty finger.", complete: true }, messageToCandidate: "That uses a concrete everyday analogy and checks understanding with the children." }), pk, p, {});
+      expect(moved.messageToCandidate).toBe("Thanks. Several kits fail at once in a class of twenty. How do you handle the room?");
+      // the opening by text keeps its disclosure and the first question
+      const start = newScreenProgress();
+      const opening = enforceTurnRules(turnOf({ questionKey: "wq_explain", messageToCandidate: "Hi Meerub, this is the hiring team at Robotronics, using an AI assistant for a short screening. Reply HUMAN at any time to reach a person.\n\nWe look for someone who uses a concrete everyday analogy and checks understanding with the children.\n\nFirst question: How would you explain what a sensor is to six-year-olds?" }), chatPacket(role, start), start, {});
+      expect(opening.messageToCandidate).toBe("Hi Meerub, this is the hiring team at Robotronics, using an AI assistant for a short screening. Reply HUMAN at any time to reach a person. First question: How would you explain what a sensor is to six-year-olds?");
+      // a close and a hand-over that repeat it say the code's words
+      const last: ScreenProgress = { ...p, askedKeys: ["wq_explain", "wq_room"], currentQuestionKey: "wq_room" };
+      const close = enforceTurnRules(turnOf({ done: true, answerRecorded: { questionKey: "wq_room", answer: "I fix the kit blocking the most people first.", complete: true }, messageToCandidate: "Thank you. You uses a concrete everyday analogy and checks understanding with the children." }), pk, last, { wq_explain: "Like a thirsty finger." });
+      expect(close.messageToCandidate).toBe(`Thanks, that is everything I needed. ${SCREEN_NEXT_LINE} Reply HUMAN at any time to reach a person.`);
+      const human = enforceTurnRules(turnOf({ humanRequested: true, messageToCandidate: "Sure. Someone who uses a concrete everyday analogy and checks understanding with the children will call." }), pk, p, {});
+      expect(human.messageToCandidate).toBe("Understood. A person from the hiring team will follow up with you.");
+      for (const t of [push, own, moved, opening, close, human]) expect(t.messageToCandidate).not.toMatch(noted);
+      // words that do not repeat it pass as they were
+      expect(enforceTurnRules(turnOf({ followUpReason: "push", messageToCandidate: "You mentioned a thirsty finger. What did the children say?" }), pk, p, {}).messageToCandidate).toBe("You mentioned a thirsty finger. What did the children say?");
+    });
+
+    it("a written question as long as a company may write it (400 characters) is asked by text as it is, in full", () => {
+      const long = `Tell us ${"about the kits, the room and the children, ".repeat(8)}and how you start the lesson?`;
+      expect(long.length).toBeLessThanOrEqual(400);
+      const wordy = { ...role, companyQuestions: { quick: [], written: [{ key: "wq_long", question: long, required: true }] } } as unknown as RolePacket;
+      const start = newScreenProgress();
+      expect(enforceTurnRules(turnOf({ questionKey: "wq_long", messageToCandidate: "Hi Meerub, this is the hiring team at Robotronics. Reply HUMAN at any time to reach a person." }), chatPacket(wordy, start), start, {}).messageToCandidate).toBe(`Hi Meerub, this is the hiring team at Robotronics. Reply HUMAN at any time to reach a person. ${long}`);
+    });
+
+    it("a question of several sentences that shares words with its own note is asked once, whole, when another note is left out", () => {
+      const room = "Several kits fail at once in a class of twenty. How do you handle the room?";
+      const both = { ...role, companyQuestions: { quick: [], written: [...(role.companyQuestions?.written ?? []).filter((w) => w.key === "wq_explain"), { key: "wq_room", question: room, required: true, lookFor: "notices when several kits fail at once and triages calmly" }] } } as unknown as RolePacket;
+      const p: ScreenProgress = { ...newScreenProgress(), askedKeys: ["wq_explain"], currentQuestionKey: "wq_explain" };
+      const pk = chatPacket(both, p);
+      const moved = enforceTurnRules(turnOf({ questionKey: "wq_room", answerRecorded: { questionKey: "wq_explain", answer: "Like a thirsty finger.", complete: true }, messageToCandidate: `That uses a concrete everyday analogy and checks understanding with the children. ${room}` }), pk, p, {});
+      expect(moved.messageToCandidate).toBe(`Thanks. ${room}`);
+      // a follow-up on it that repeats the other note goes back to it, whole
+      const onRoom: ScreenProgress = { ...p, askedKeys: ["wq_explain", "wq_room"], currentQuestionKey: "wq_room" };
+      const push = enforceTurnRules(turnOf({ followUpReason: "push", messageToCandidate: `We look for someone who uses a concrete everyday analogy and checks understanding with the children. ${room}` }), pk, onRoom, { wq_explain: "Like a thirsty finger." });
+      expect(push.messageToCandidate).toBe(room);
+      for (const t of [moved, push]) expect(t.messageToCandidate).not.toMatch(/everyday analogy|triages calmly/);
+    });
+
+    it("the local stand-in asks the written questions by text, records each answer under its key, and closes", async () => {
+      const fake = new FakeProvider();
+      registerFakeHandlers(fake);
+      const rt = { provider: fake, models: { judgment: "fake", standard: "fake", fast: "fake" } };
+      const { callPrompt } = await import("@ros/ai");
+      let progress = newScreenProgress();
+      const pk = chatPacket(role, progress);
+      const transcript: ScreenTranscriptEntry[] = [];
+      const answers: Record<string, string> = {};
+      const say = async (latest: string | null): Promise<ScreenTurn> => {
+        if (latest !== null) transcript.push({ role: "candidate", content: latest, at, channel: "sms" });
+        const ctx = screenContextOf({ companyName: "Robotronics", companyLocations: [], noticeOverrides: undefined, packet: pk, firstName: "Meerub", focusUnknowns: [], facts: null }, { channel: "sms", progress, answers, transcript }, latest);
+        expect(ctx.chat).toBeNull();
+        const r = await callPrompt(rt, screenTurnPrompt, ctx, { companyId: null });
+        if (r.result.kind !== "ok") throw new Error(r.result.kind);
+        const turn = enforceTurnRules(r.result.output, pk, progress, answers);
+        progress = advanceProgress(progress, turn);
+        if (turn.answerRecorded) answers[turn.answerRecorded.questionKey] = turn.answerRecorded.answer;
+        transcript.push({ role: "assistant", content: turn.messageToCandidate, at, channel: "sms", questionKey: turn.questionKey ?? undefined });
+        return turn;
+      };
+      const opening = await say(null);
+      expect(opening.questionKey).toBe("wq_explain");
+      expect(opening.messageToCandidate).toContain("How would you explain what a sensor is to six-year-olds?");
+      const explain = "In 2024 I told 20 children a sensor is like a thirsty finger that feels the soil.";
+      const room = "In 2023 I paired the 6 working kits with the broken ones and fixed them in turn.";
+      expect((await say(explain)).messageToCandidate).toBe("Thanks. Several kits fail at once in a class of twenty. How do you handle the room?");
+      expect((await say(room)).done).toBe(true);
+      expect(answers).toEqual({ wq_explain: explain, wq_room: room });
+      expect(transcript.filter((t) => t.role === "assistant" && t.questionKey).map((t) => t.questionKey)).toEqual(["wq_explain", "wq_room"]);
+      // never the job's own screening question, never the note
+      expect(transcript.some((t) => /pay range/.test(t.content))).toBe(false);
+      expect(transcript.some((t) => noted.test(t.content))).toBe(false);
+    });
   });
 });
 

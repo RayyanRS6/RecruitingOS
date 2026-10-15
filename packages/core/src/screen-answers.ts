@@ -65,10 +65,15 @@ export function isRecruiterNoteEntry(t: Pick<ScreenTranscriptEntry, "role" | "so
   return t.role === "recruiter" || t.source === "recruiter_call";
 }
 
-/** What is left of the progress of a conversation the team may not read: how it was offered, a pause, and the open questions without their answers. */
+/**
+ * What is left of the progress of a conversation the team may not read: how it was offered, which list it asks (Wave
+ * S8, `asks`: a recruiter's call notes are filed under the questions it asks), a pause, and the open questions without
+ * their answers.
+ */
 function unsentProgress(p: ScreenProgress | null | undefined): ScreenProgress {
   const out: ScreenProgress = { askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0 };
   if (p?.flow) out.flow = p.flow;
+  if (p?.asks) out.asks = p.asks;
   if (p?.pausedAt) out.pausedAt = p.pausedAt;
   if (p?.completedBy) out.completedBy = p.completedBy;
   if (p?.focusQuestions) out.focusQuestions = withoutFocusAnswers(p).focusQuestions;

@@ -203,6 +203,25 @@ export const LearnedFact = z.object({
 });
 export type LearnedFact = z.infer<typeof LearnedFact>;
 
+/**
+ * Wave S8: a fact from the candidate's earlier chats at the company that they kept on their next application, ticked
+ * on a form opened from the emailed reuse link ("From your earlier chats at <Company>"), stored on that new application
+ * in `applications.answers.kept`. Their own words for this application, confirmed when they sent it, like a form answer;
+ * the chat reads them as their own words and never asks again what they settle. `from` is the chat that taught it, for
+ * their record and the team; it never reaches the résumé reading's input (D-04 C: no earlier application, job title or
+ * outcome there). Erased with the application's answers on a deletion request and part of an access export with them;
+ * changing or removing the fact on the candidate's record changes or removes it here too.
+ */
+export const KeptFact = z.object({
+  id: z.string().min(1).max(40),
+  kind: LearnedFactKind,
+  text: z.string().trim().min(1).max(200),
+  from: LearnedFact.shape.from,
+  keptAt: z.string(),
+  editedAt: z.string().optional(),
+});
+export type KeptFact = z.infer<typeof KeptFact>;
+
 /* ------------------------------------------------------------------------------------------------------------ */
 /* (e) The score a candidate sees, and the ITS switch                                                            */
 /* ------------------------------------------------------------------------------------------------------------ */

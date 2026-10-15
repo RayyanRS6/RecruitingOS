@@ -223,6 +223,15 @@ describe("the panel's wiring", () => {
     expect(client).toContain('formAnswers?: Array<{ key: string; source: "eligibility" | "company"; sentence: string; fromCv: boolean }>');
   });
 
+  it("shows the facts from earlier chats they kept on the form, in their own words, as the form promised them (Wave S8)", () => {
+    const sections = read("../../apps/web/src/pages/candidate-panel/sections.tsx");
+    expect(sections).toContain('export const KEPT_FACTS_LABEL = "Kept from their earlier chats here, confirmed on this application";');
+    expect(sections).toContain("{kept.map((k) => <li key={k.id}>{k.text}</li>)}");
+    expect(sections).toContain('Pick<ApplicationDetail, "formAnswers" | "workSummary" | "keptFacts">');
+    const client = read("../../apps/web/src/api/client.ts");
+    expect(client).toContain("keptFacts?: Array<{ id: string; kind: string; text: string; keptAt: string; editedAt: string | null }>");
+  });
+
   it("lists each reading's must-haves and skills most serious first, skills with their quotes, notes and importance", () => {
     const card = read("../../apps/web/src/pages/candidate-panel/assessment.tsx");
     expect(card).toContain("orderRequirementFindings(result.requirementFindings, labels.mustHaves)");

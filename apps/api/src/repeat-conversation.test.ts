@@ -323,4 +323,20 @@ describe("a repeat submission's conversation is detached until the address owner
     expect(capped.payload).toMatchObject({ detached: true, ending: "review", cap });
     container.fake!.clearScripts();
   });
+
+  it("what the record holds from earlier chats (learned, or kept on an application) never reaches a repeat submission's chat: it names only what that visit typed (Wave S8)", async () => {
+    const first = await applyNow({ first: "Lia", email: "lia@repeat.test" });
+    const onFile = await reload(first.applicationId);
+    const from = { applicationId: onFile.id, screenId: null, roleTitle: "Earlier Robotics Cohort", at: new Date(BASE).toISOString() };
+    await container.db.update(applications).set({ answers: { ...onFile.answers, learned: [{ id: "lf_lia_learned", kind: "experience", text: "I ran perio maintenance for a whole county clinic.", quote: "I ran perio maintenance for a whole county clinic.", from }], kept: [{ id: "lf_lia_kept", kind: "logistics", text: "I bike to work along the river trail.", from, keptAt: new Date(BASE).toISOString() }] } }).where(eq(applications.id, onFile.id));
+    // typing her address again, without the emailed link: a detached chat with nothing from her record
+    const again = await applyNow({ first: "Someone", email: "lia@repeat.test" });
+    const ref = await refOf(again.outcome);
+    expect(ref.kind).toBe("detached");
+    await conversationStart(container, ref);
+    const [row] = await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.id, ref.id));
+    expect(row.progress.typedFacts?.cv).toEqual([]);
+    const view = (await conversationView(container.db, ref))!;
+    for (const seen of [JSON.stringify(row), JSON.stringify(view)]) expect(seen).not.toMatch(/county clinic|river trail|Earlier Robotics Cohort|lf_lia_/);
+  });
 });
