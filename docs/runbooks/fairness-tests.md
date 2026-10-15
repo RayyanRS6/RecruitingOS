@@ -31,7 +31,10 @@ whenever you want reassurance. It costs about ten cents.
 ## Run it
 
 1. In GitHub, open **Actions**, then **fairness** in the list on the left.
-2. **Run workflow**, keep the branch `main`, **Run workflow**.
+2. **Run workflow**, keep the branch `main`. Under **Which tests**, keep `resume,triage` for the CV checks above, or
+   choose `screen,chat` for the screening chat (one restatement and one question per message, no guesses, the private
+   note never said, no question asked twice, a fair close), its scorecard and the answers written up for Review & send,
+   or the last option for both. The chat tests make more calls and cost more than ten cents. **Run workflow**.
 3. After a few minutes, open the run. Its **Summary** says in plain words whether every check passed, which models ran
    and what the run cost, and names anything that needs a look.
 
