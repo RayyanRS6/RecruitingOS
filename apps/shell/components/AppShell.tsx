@@ -12,6 +12,7 @@ import { clearAllQuickStarts } from "@ros/web/src/pages/new-role/quick-start";
 import { canSeeTalent, canStartHire } from "@ros/web/src/roles";
 import { browserStorage, isFormControl, isStartHireShortcut, SHORTCUT_CHANGED_EVENT, START_HIRE_HREF, START_HIRE_KEY, startHireShortcutOn } from "@ros/web/src/start-hire";
 import type { Me } from "../lib/session";
+import { shownTheme, type Theme, themeCookie } from "../lib/theme";
 import "./app-shell.css";
 
 /**
@@ -56,7 +57,7 @@ export function rememberRailCollapsed(storage: Storage | null, collapsed: boolea
  * start one (N opens it from anywhere outside a text field, on a page with nothing changed), Home, Jobs with the jobs
  * being worked on listed underneath (for members only; a live job opens on its Candidates), Candidates, Interviews,
  * Settings (Queue and Console for ITS staff, the console's five sections listed under Console for platform
- * administrators), and who is signed in with Sign out. On a job's own pages it folds to a column of icons; on every other
+ * administrators), and who is signed in with Sign out and the light/dark theme switch. On a job's own pages it folds to a column of icons; on every other
  * page the button at its top folds it the same way (founder answer F3), and this browser remembers the choice. Under 900px
  * it becomes a top bar: Start a hire and Sign out stay in it, and the links fold behind a Menu button. (The routes keep
  * their old names: /, /roles, /talent, /setup.)
@@ -142,6 +143,25 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
     const next = !collapsed;
     setCollapsed(next);
     rememberRailCollapsed(browserStorage(), next);
+  };
+
+  // The light/dark switch beside Sign out. The server drew the page in the theme picked last on this browser; with none
+  // picked the page follows the device, which only the browser knows, so the icon settles after the first render. A pick
+  // shows at once and is remembered in a cookie (lib/theme.ts). The button keeps one name and says whether it is on.
+  const [dark, setDark] = useState(false);
+  useEffect(() => {
+    const device = window.matchMedia("(prefers-color-scheme: dark)");
+    const read = () => setDark(shownTheme(document.documentElement.dataset.theme, device.matches) === "dark");
+    read();
+    device.addEventListener("change", read);
+    return () => device.removeEventListener("change", read);
+  }, []);
+  const toggleTheme = () => {
+    const next: Theme = dark ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    // biome-ignore lint/suspicious/noDocumentCookie: one small preference cookie; the Cookie Store API is missing from the older browsers we support
+    document.cookie = themeCookie(next, window.location.protocol === "https:");
+    setDark(next === "dark");
   };
 
   // The phone menu belongs to the page it was opened on: following a link closes it. Escape closes it too.
@@ -292,7 +312,12 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
               {me.user.name ? <span>{me.user.email}</span> : null}
             </span>
           </div>
-          <Button variant="quiet" size="sm" onClick={logout}>Sign out</Button>
+          <div className="foot-actions">
+            <Button variant="quiet" size="sm" onClick={logout}>Sign out</Button>
+            <button type="button" className="icon-btn sm theme-switch" aria-label="Dark theme" aria-pressed={dark} title={dark ? "Switch to the light theme" : "Switch to the dark theme"} onClick={toggleTheme}>
+              <Icon name={dark ? "sun" : "moon"} />
+            </button>
+          </div>
         </div>
       </nav>
       <main className="main" id="main">

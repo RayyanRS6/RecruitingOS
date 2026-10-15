@@ -64,6 +64,9 @@ export const GLYPHS = {
   // Full screen and back (the résumé inside the candidate panel, plan H5).
   expand: { stroke: ["M4 9V4h5", "M20 9V4h-5", "M4 15v5h5", "M20 15v5h-5"] },
   shrink: { stroke: ["M9 4v5H4", "M15 4v5h5", "M9 20v-5H4", "M15 20v-5h5"] },
+  // The light and dark theme switch at the foot of the rail.
+  sun: { stroke: [circle(12, 12, 4), "M12 2.5v2", "M12 19.5v2", "M2.5 12h2", "M19.5 12h2", "m5.3 5.3 1.4 1.4", "m17.3 17.3 1.4 1.4", "m5.3 18.7 1.4-1.4", "m17.3 6.7 1.4-1.4"] },
+  moon: { stroke: ["M20.5 14.2A8.5 8.5 0 1 1 9.8 3.5a6.8 6.8 0 0 0 10.7 10.7Z"] },
 } satisfies Record<string, Glyph>;
 
 /** Second names for the same drawing, matching the places they stand for (the rail's Today, Roles, Talent, Interviews). */
