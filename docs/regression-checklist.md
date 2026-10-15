@@ -34,7 +34,7 @@ Built on 14 October 2026 from the verified product audit (`docs/audit/01-platfor
 |---|---|
 | Any screen's look: CSS, layout, components, wording | 0, 1, 2 (the routes of those screens), 8, and the journeys in 4 that use those screens |
 | Who can see or do something | 0, 1, 3, and the journeys in 4 for those people |
-| The careers page, the job page, applying, or the conversation | 0, 1, 2.1–2.2, 4.3–4.5, 6 (email), 7, 8 (phone) |
+| The careers page, the job page, applying, or the conversation | 0, 1, 2.1–2.2, 4.3–4.5, 4.18, 6 (email), 7, 8 (phone) |
 | An AI prompt, a model, the effort setting, the reading or the score | 0, 1, 4.6, 4.7, 7 (including the fairness test button) |
 | The database (new tables, columns, migrations) | 0, 1, 5 |
 | Emails, texts or notifications | 0, 1, 4.8, 4.12, 6 |
@@ -838,7 +838,8 @@ Who: the candidate and the ITS platform admin.
   - the status link answers 410 ("link gone");
   - the files are deleted and the application is withdrawn;
   - booked interviews are called off (the interviewers are told and nothing is written to the candidate);
-  - the person leaves the Cancelled column.
+  - the person leaves the Cancelled column;
+  - the facts their chats added, and the facts they kept on a new application from earlier chats, are erased too (4.18).
 - [ ] **Do:** withdraw from another status page. **Expect:** a confirmation email, and the withdrawal is recorded.
 - [ ] Automated: `api/privacy-requests.test.ts`, `api/storage-uploads.test.ts` (anonymising files), `api/interview-loop.test.ts` (deletion ends the process), `api/new-times.test.ts` (deletion while new times wait), `api/candidate-status-thread.test.ts`.
   Gap: **no browser test opens the Privacy requests tab.**
@@ -924,6 +925,24 @@ Go through each of the 13 sections and check that it saves and reloads:
 - [ ] **An eligibility "no" only holds** (CMP-057). Who: candidates; owners. **Expect:** the applicant is held for a person with Keep them in, Review anyway and decline with the eligibility wording; reminders follow; nothing is declined automatically. Automated: `core/eligibility.test.ts`, `api/app.test.ts` ("holds an ineligible applicant for a person"). Known issue: an owner's override is not passed to the AI (KB #30).
 - [ ] **Applications by email** (CMP-051). Who: candidates applying from a job board's email; owners. **Expect:** an email to the role's intake address becomes an application; one held while a role is paused or switched off is not dropped. Automated: `api/inbound-auth.test.ts`, `api/held-email-replay.test.ts`, `api/repeat-application.test.ts`. Known issue: consent recorded wrongly (KB #16); the inbound domain is not configured on staging.
 - [ ] **The later-path screening invitation by email** (CMP-069). Who: candidates on roles not using the one-visit flow. **Expect:** an eligible applicant is invited to a screen by email under the company's policy, or the owner approves it first under "ask me first"; an unanswered invitation is reminded once, then expires and the owner is told. Automated: `api/slice2.test.ts`, `api/app.test.ts`, `api/intelligence.test.ts`.
+
+### 4.18 Written questions in every chat, and keeping facts when applying again (Wave S8)
+
+Who: candidates (on a phone first), and the owner. Emailed links need the local app (`/dev/outbox`); texts need `SMS_ENABLED=true` locally, as `scenario/lifecycle.test.ts` does.
+
+- [ ] **Do:** on a job with written questions, invite an applicant to a screening chat by email (a role not using the one-visit flow). **Expect:** after any questions the résumé reading left open, the chat asks your written questions, not the job's screening questions, with no closing question and no **Review and send**. The invitation's question count matches. Once the chat is finished, the answers show on the candidate panel under the written questions, and the candidate's record shows facts in their own words under "What your chats added".
+- [ ] **Do:** the same on a job with no written questions. **Expect:** exactly the questions it asked before Wave S8 (the job's screening questions).
+- [ ] **Do:** run a chat by text on a job with written questions. **Expect:** each written question arrives as written (a long one in several parts). STOP, HELP and the quiet hours behave as before. When the chat is finished, the record learns from it.
+- [ ] **Do:** look at a chat that was started before Wave S8 (a screen with no Wave S8 mark on its progress; manually only with a database copy from before the change). **Expect:** it asks exactly the list it began with; nothing changes part-way through.
+- [ ] **Do:** give a written question a "What a good answer shows" note, then run a chat in the same visit, one by email and one by text, and try to get the assistant to repeat the note. **Expect:** the note never appears on a candidate page, in an email or in a text. In the chat in the same visit, a message that repeats it goes back to the question in its own words. In a chat by email or by text, the sentences that repeat it are left out and the rest stays (the opening keeps its disclosure, and the next question is asked once, whole); a close or a hand-over that repeats it uses the standard words.
+- [ ] **Do:** as a recruiter, add notes from a call on such a chat (by email or by text, or on an applicant with no chat yet). **Expect:** the form lists the questions the chat asks (the written questions, after any open questions from the résumé reading), and each note filed under one keeps its question. The interviewer brief and the role's figures name those answers by the written question, never by a key.
+- [ ] **Do:** as a candidate who sent a chat to the company, press "Use the details you gave before" on another of its jobs and open the emailed link (or use "Apply for another role" on the application record). **Expect:** the form fills in the details and lists **From your earlier chats at** the company's name: each fact with "From your chat on" the job and the date, each ticked, and the line "Untick anything that is no longer true." It works without JavaScript.
+- [ ] **Do:** untick one fact, keep the others, and send. **Expect:** the team sees only the kept facts, as part of the new application (Overview → Full breakdown → **Questions from the form**, under "Kept from their earlier chats here"); the unticked one is not on it. The chat does not ask again what a kept fact settles, in the same visit or from a link emailed later.
+- [ ] **Do:** send the same form with a different email address typed. **Expect:** the application goes in as usual and keeps no earlier fact.
+- [ ] **Do:** on the plain form (no emailed link), type an address that applied before. **Expect:** nothing from earlier is shown or kept, and nothing on the form, the receipt or the chat says the address applied before.
+- [ ] **Do:** ask for a copy of that person's data, then fulfil a deletion request for them. **Expect:** the copy includes the kept facts; the deletion erases them with everything else (4.13).
+- [ ] Automated: `agents/screening.test.ts` (the questions of a chat without a plan, a chat without the mark unchanged, a repeated note left out, a question of several sentences asked once), `api/written-questions-channels.test.ts` (text and emailed chats ask the written questions, no note, no write-up, the record learns once; an old screen unchanged; a recruiter's notes keep their written question; the interviewer brief and the role's figures name them), `api/kept-facts.test.ts` (the reuse form's facts; forged, other-person and other-company ids and a different email keep nothing; kept facts reach the chat, in the visit and from a later link; the team sees them; no earlier application in the reading; changes and removals carry through), `api/repeat-conversation.test.ts` (nothing from the record reaches a repeat submission's chat), `api/profile-facts.test.ts` (the emailed link opens the form with the facts), `api/apply-details.test.ts`, `api/privacy-requests.test.ts` (the copy and the deletion), `web/screen-view.test.ts` (the call-notes form's questions), `core/screen-answers.test.ts`, then `api/slice2.test.ts`, `api/app.test.ts`, `api/screen-keywords.test.ts`, `api/contact-hours.test.ts`, `scenario/lifecycle.test.ts` (texts) and `api/scoring-earlier-applications.test.ts` (still passes: no earlier application reaches the scoring).
+- [ ] Known issue, do not make worse: the first name on file reaches a stranger who types that address (KB #17). The reuse form must add no new way to learn anything about an address.
 
 ---
 
@@ -1047,6 +1066,7 @@ The tests and CI use fakes for everything. Staging state comes from `docs/audit/
 - [ ] **Private criteria never reach candidates.**
   - The job page, the apply form and the conversation never show the private pay ceiling, deal-breakers, red flags, internal notes, skill weights, evaluation criteria, the decision maker or the interviewers (`PACKET_VISIBILITY`, `packages/contracts/src/domain/role-packet.ts:293-329`).
   - The screening AI is not given the pay ceiling, deal-breakers, red flags or internal notes (`packages/ai/src/prompts/screen.ts:62-75`).
+  - A written question's "What a good answer shows" note is given to the chat but never said to a candidate, in any chat: the web chat in the same visit, one emailed later, or one by text (Wave S8). In the chat in the same visit a message that repeats it goes back to the question in its own words; in a chat by email or by text the sentences that repeat it are left out and the rest stays, and a close or a hand-over uses the standard words. Manual and automated checks in 4.18.
   - Manual: fill those fields on a test role, then read the job page, the preview, and a whole conversation.
   - Automated: `api/job-page.test.ts`, `api/job-preview-page.test.ts`, `api/job-builder.test.ts` (pay redaction).
 - [ ] **Team notes never reach the AI or candidates.** Automated: `api/hire-and-notes.test.ts` (nothing in `packages/ai` or `packages/agents` reads notes).

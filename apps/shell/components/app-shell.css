@@ -1,6 +1,6 @@
 /*
  * The signed-in frame's own pieces that tokens.css (packages/ui) does not style yet: the phone menu in the top bar, the
- * signed-in person at the foot of the rail, and the cards old links jump to. Built only from the design tokens. Selectors start
+ * signed-in person and the theme switch at the foot of the rail, and the cards old links jump to. Built only from the design tokens. Selectors start
  * from .rail or .shell so they outrank the shared .btn rules whatever order the two stylesheets load in. (The company
  * chip's settings link needs nothing here: the rail's link rules in tokens.css leave .icon-btn links alone.)
  */
@@ -14,7 +14,10 @@
 .rail .rail-collapse { position: absolute; top: 14px; right: 8px; }
 .shell[data-rail="compact"] .rail .rail-collapse { position: static; align-self: center; margin-bottom: 8px; }
 .shell[data-collapsed="true"] .main { max-width: 1280px; }
+/* Sign out and the light/dark switch share one row at the foot of the rail; the folded rail stacks them. */
+.rail .foot .foot-actions { display: flex; align-items: center; justify-content: space-between; gap: 4px; width: 100%; }
 @media (min-width: 901px) {
+  .shell[data-rail="compact"] .rail .foot .foot-actions { flex-direction: column; }
   /* Folded, the console's five sections stay in the rail as icons with their word, like the other links. */
   .shell[data-rail="compact"] .rail .console-sub { display: grid; margin: 0; padding: 0; border: 0; }
   .shell[data-rail="compact"] .console-sub .rail-sub-title { white-space: normal; }
@@ -30,6 +33,7 @@
 @media (max-width: 900px) {
   .rail .rail-menu-toggle { display: inline-flex; }
   .rail .rail-collapse { display: none; }
+  .rail .foot .foot-actions { width: auto; }
   .rail .rail-links { display: none; order: 20; width: 100%; padding-top: 6px; margin-top: 6px; border-top: 1px solid var(--line); }
   .rail .rail-links[data-open="true"] { display: flex; }
   /* Inside the open menu the section names and the roles under Roles come back, on a role's pages too. */

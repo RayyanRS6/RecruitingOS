@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Actor, RecruiterCallNotes, ScreeningFunnel, ScreenTranscriptEntry } from "@ros/contracts";
-import { audit, disclosureLine, emit, isStillApplying, screeningFunnel, transition, unsentScreenReadings } from "@ros/core";
+import { audit, disclosureLine, emit, isStillApplying, screeningFunnel, transition, unsentScreenReadings, writtenQuestionsOf } from "@ros/core";
 import { createScreen, deliver, loadScreenBundle, type ScreenDeps } from "@ros/agents";
 import { applications, assessments, candidates, companies, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
 import { HttpError } from "../middleware/errors";
@@ -117,7 +117,10 @@ export async function roleScreeningFunnel(tx: Tx, roleId: string): Promise<Scree
   for (const r of rows) if (!latest.has(r.applicationId)) latest.set(r.applicationId, r);
   const [role] = await tx.select({ version: roles.currentPacketVersion }).from(roles).where(eq(roles.id, roleId)).limit(1);
   const [pv] = role?.version ? await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, role.version))).limit(1) : [];
-  return screeningFunnel([...latest.values()], pv?.packet.screening.questions.map((q) => ({ key: q.key, question: q.question })) ?? []);
+  // A chat that asked the company's written questions (Wave S7 in the visit; S8 by text or from an emailed link) keeps
+  // its skips under their keys: named in the company's words too (`writtenQuestionsOf`, never what it looks for).
+  const named = pv ? [...pv.packet.screening.questions, ...writtenQuestionsOf(pv.packet)].map((q) => ({ key: q.key, question: q.question })) : [];
+  return screeningFunnel([...latest.values()], named);
 }
 
 /** "Still applying" (plan E6) for each application of a list: offered the conversation with the application and not finished yet. */

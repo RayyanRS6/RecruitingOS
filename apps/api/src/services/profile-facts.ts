@@ -1,9 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
 import { and, desc, eq, isNull } from "drizzle-orm";
-import { LearnedFact, isCompanyVerified, type LearnedFactKind, type RolePacket, type ScreenProgress, type ScreenTranscriptEntry, type ScreeningQuestion, type WriteupAnswer } from "@ros/contracts";
-import { candidateWordsOf, fromAddress, loadScreenBundle, queueCommunication, redactProtected, replyToFor, saidByCandidate, statusUrlFor } from "@ros/agents";
+import { LearnedFact, isCompanyVerified, type KeptFact, type LearnedFactKind, type RolePacket, type ScreenProgress, type ScreenTranscriptEntry, type ScreeningQuestion, type WriteupAnswer } from "@ros/contracts";
+import { KEPT_FACTS_MAX, candidateWordsOf, fromAddress, loadScreenBundle, queueCommunication, redactProtected, replyToFor, saidByCandidate, statusUrlFor } from "@ros/agents";
 import { openPayload, screenAnswersOf, screenAnswersSent, sealPayload, writtenQuestionsOf } from "@ros/core";
-import { applications, candidates, companies, roles, unconfirmedScreens, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
+import { applications, candidates, companies, roles, unconfirmedScreens, withPlatform, withTenant, type ApplicationAnswers, type Db, type Tx } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import type { WorkflowEngine } from "@ros/workflows";
 import type { Container } from "../container";
@@ -25,6 +25,10 @@ import { addressMatch } from "./applications";
  * - Reuse: "Applied here before? Use your details" emails the address on file (only) a sealed link that opens this job's
  *   form with the details filled in; the page answers the same whether or not the address is known. The application
  *   record offers the same for another open role at the company, its private link being the key.
+ * - Wave S8 (spec-s8-followups.md, B): that form also lists the facts, each ticked ("From your earlier chats at
+ *   <Company>"); the ones still ticked at Send are kept on the new application (`answers.kept`) and go to its chat as
+ *   the candidate's own words. Only their ids come from the form; the link is opened again and the words read again
+ *   here, and the address typed must be the one on file. Without the link nothing earlier is shown or used.
  */
 
 /* ------------------------------------------------------------------------------------------------------------ */
@@ -190,6 +194,8 @@ export type FactChange = "changed" | "removed" | "empty" | "personal" | "missing
  * The fact may sit on any of their applications at the company (the profile is company-scoped). A change keeps their
  * new words exactly, unless a sentence is about a protected characteristic, which is left out as in the chat; a removal
  * takes the words out at once and keeps only that a fact was removed, so the chat it came from never teaches it again.
+ * Wave S8: the same fact kept on a later application (`answers.kept`) says the new words too, or goes with the removal,
+ * so "your applications here keep your new words" and "no longer kept with your applications here" stay true.
  */
 export async function changeLearnedFact(container: Container, input: { companyId: string; candidateId: string; factId: string; action: "change" | "remove"; text?: string | null }): Promise<FactChange> {
   const now = container.engine.clock().toISOString();
@@ -199,18 +205,21 @@ export async function changeLearnedFact(container: Container, input: { companyId
   if (input.action === "change" && words.startsWith("(answer recorded")) return "personal";
   return withTenant(container.db, input.companyId, async (tx) => {
     const apps = await tx.select({ id: applications.id, answers: applications.answers }).from(applications).where(and(eq(applications.companyId, input.companyId), eq(applications.candidateId, input.candidateId))).for("update");
+    const learnedOf = (answers: ApplicationAnswers) => (Array.isArray(answers.learned) ? answers.learned : []);
+    const origin = apps.find((a) => learnedOf(a.answers).some((f) => f.id === input.factId));
+    const fact = origin ? learnedOf(origin.answers).find((f) => f.id === input.factId) : undefined;
+    if (!origin || !fact || fact.removedAt) return "missing";
+    const next: LearnedFact = input.action === "remove" ? { id: fact.id, kind: fact.kind, text: "Removed", quote: "", from: fact.from, removedAt: now } : { ...fact, text: clipWords(words, 200, false), editedAt: now };
     for (const app of apps) {
-      const list = Array.isArray(app.answers.learned) ? app.answers.learned : [];
-      const at = list.findIndex((f) => f.id === input.factId);
-      if (at < 0) continue;
-      const fact = list[at];
-      if (fact.removedAt) return "missing";
-      const next: LearnedFact = input.action === "remove" ? { id: fact.id, kind: fact.kind, text: "Removed", quote: "", from: fact.from, removedAt: now } : { ...fact, text: clipWords(words, 200, false), editedAt: now };
-      const learned = list.map((f, i) => (i === at ? next : f));
-      await tx.update(applications).set({ answers: { ...app.answers, learned } }).where(eq(applications.id, app.id));
-      return input.action === "remove" ? "removed" : "changed";
+      const keptList = Array.isArray(app.answers.kept) ? app.answers.kept : [];
+      const holdsKept = keptList.some((k) => k.id === input.factId);
+      if (app.id !== origin.id && !holdsKept) continue;
+      const { kept: _kept, learned: _learned, ...rest } = app.answers;
+      const learned = learnedOf(app.answers).map((f) => (f.id === input.factId ? next : f));
+      const kept = input.action === "remove" ? keptList.filter((k) => k.id !== input.factId) : keptList.map((k) => (k.id === input.factId ? { ...k, text: next.text, editedAt: now } : k));
+      await tx.update(applications).set({ answers: { ...rest, ...(app.answers.learned ? { learned } : {}), ...(kept.length ? { kept } : {}) } }).where(eq(applications.id, app.id));
     }
-    return "missing";
+    return input.action === "remove" ? "removed" : "changed";
   });
 }
 
@@ -223,9 +232,11 @@ export async function changeLearnedFact(container: Container, input: { companyId
  * details", same company only): the details on their record and what their sent chats taught it. The link is emailed to
  * the address on file only, or offered on their own application record, and arrives on the apply form as `?reuse=<token>`;
  * the form (S7-B) asks for this and shows every value as "From your earlier application — check it". Null for a token
- * that does not open, is for another company or job, has expired, or whose person was deleted.
+ * that does not open, is for another company or job, has expired, or whose person was deleted. `candidateId` (Wave S8):
+ * whose facts these are, so Send keeps them only on that person's new application; it is never put on the page.
+ * `facts`: the newest `KEPT_FACTS_MAX`, the ones the form lists.
  */
-export type ReusedDetails = { firstName: string; lastName: string; email: string; phone: string | null; locationText: string | null; workSummary: string | null; facts: LearnedFact[] };
+export type ReusedDetails = { candidateId: string; firstName: string; lastName: string; email: string; phone: string | null; locationText: string | null; workSummary: string | null; facts: LearnedFact[] };
 
 const REUSE_PURPOSE = "profile-reuse";
 /** How long the emailed link works. */
@@ -263,9 +274,49 @@ export async function reusedDetailsFor(container: Container, input: { companyId:
     if (!apps.length) return null;
     if (p.s && !apps.some((a) => statusHash(a.statusToken) === p.s)) return null;
     const workSummary = apps.find((a) => typeof a.answers.workSummary === "string" && a.answers.workSummary.trim())?.answers.workSummary ?? null;
-    return { firstName: cand.firstName, lastName: cand.lastName, email: cand.email, phone: cand.phone, locationText: cand.locationText, workSummary, facts: await learnedFactsFor(tx, { companyId: input.companyId, candidateId: cand.id }) };
+    return { candidateId: cand.id, firstName: cand.firstName, lastName: cand.lastName, email: cand.email, phone: cand.phone, locationText: cand.locationText, workSummary, facts: (await learnedFactsFor(tx, { companyId: input.companyId, candidateId: cand.id })).slice(0, KEPT_FACTS_MAX) };
   });
 }
+
+/* ------------------------------------------------------------------------------------------------------------ */
+/* Keeping earlier facts on the next application (Wave S8)                                                       */
+/* ------------------------------------------------------------------------------------------------------------ */
+
+/**
+ * The facts a form opened from the reuse link keeps, at Send: the link is opened again (`reusedDetailsFor`: the same
+ * company, job, person, deletion, merge and record-link checks as when the form was shown), the address typed must be
+ * the one on file (`addressMatch`, the one rule for finding a person by a typed address), and only the facts whose ids
+ * were still ticked and that are that person's are kept, in the words the record holds now. The form's own words are
+ * never read: only ids. Null when nothing is kept.
+ */
+export async function factsToKeep(container: Container, input: { companyId: string; roleId: string; token: string; typedEmail: string; ids: readonly string[] }): Promise<{ candidateId: string; facts: LearnedFact[] } | null> {
+  if (!input.token || !input.ids.length) return null;
+  const match = addressMatch(input.typedEmail);
+  if (!match) return null;
+  const details = await reusedDetailsFor(container, { companyId: input.companyId, roleId: input.roleId, token: input.token });
+  if (!details) return null;
+  const ticked = new Set(input.ids);
+  const facts = details.facts.filter((f) => ticked.has(f.id));
+  if (!facts.length) return null;
+  const [same] = await withTenant(container.db, input.companyId, (tx) => tx.select({ id: candidates.id }).from(candidates).where(and(eq(candidates.id, details.candidateId), eq(candidates.companyId, input.companyId), match)).limit(1));
+  return same ? { candidateId: details.candidateId, facts } : null;
+}
+
+/** The kept facts as the new application stores them (`answers.kept`): the record's words today, and when they were kept. */
+export function keptFactsOf(facts: readonly LearnedFact[], at: string): KeptFact[] {
+  return facts.slice(0, KEPT_FACTS_MAX).map((f) => ({ id: f.id, kind: f.kind, text: f.text, from: f.from, keptAt: at }));
+}
+
+/** Stores the kept facts on the new application, in the apply form's own transaction. */
+export async function keepFactsOn(tx: Tx, input: { applicationId: string; facts: readonly KeptFact[] }): Promise<void> {
+  if (!input.facts.length) return;
+  const [app] = await tx.select({ answers: applications.answers }).from(applications).where(eq(applications.id, input.applicationId)).limit(1).for("update");
+  if (!app) return;
+  await tx.update(applications).set({ answers: { ...app.answers, kept: [...input.facts] } }).where(eq(applications.id, input.applicationId));
+}
+
+// What the chat reads of them (`keptFactLines`, `chatFactsWithKept`) lives with the chat's other facts in @ros/agents,
+// so the chat in the visit and one whose link was emailed later (`chatFactsOf`) read them alike.
 
 /** The queue job that answers "Use the details I gave before" (registered by `registerProfileJobs`). */
 export const REUSE_LINK_JOB_KIND = "candidate.reuse_link";

@@ -19,6 +19,7 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
   let slug = "";
   let roleId = "";
   let elig: Array<{ key: string }> = [];
+  let firstQuestionKey = "";
   const BASE = (() => { const d = new Date(); d.setUTCHours(19, 0, 0, 0); return d.getTime(); })(); // noon Pacific: inside texting hours
   let offset = 0;
   const setClock = (ms: number) => { offset = ms; (container.engine as unknown as { now: () => Date }).now = () => new Date(BASE + offset); };
@@ -77,9 +78,10 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     roleId = compiled.roleId;
     await json("POST", `/api/v1/roles/${roleId}/approve`, { version: 1 });
     await container.drain();
-    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { status: string; currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
+    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { status: string; currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> }; screening: { questions: Array<{ key: string }> } } } };
     expect(role.status).toBe("open");
     elig = role.currentPacket.packet.requirements.eligibility;
+    firstQuestionKey = role.currentPacket.packet.screening.questions[0].key;
   });
   afterAll(async () => { await container.close(); });
 
@@ -99,6 +101,8 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     mariaToken = scr.token;
     expect(scr.status).toBe("invited");
     expect(scr.channel).toBe("web");
+    // Wave S8: a chat created now asks the company's written questions; this job has none, so it asks its screening questions as before
+    expect(scr.progress.asks).toBe("written");
     const invite = emailOutbox().find((m) => m.to === "maria.reyes@example.com" && /screening conversation/.test(m.subject))!;
     expect(invite.text).toContain(`/c/screen/${scr.token}`);
     expect(invite.text).toMatch(/HUMAN/);
@@ -198,6 +202,9 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(opening.body).toMatch(/AI assistant/);
     expect(opening.body).toMatch(/HUMAN/);
     expect(scr.transcript[0].role).toBe("assistant");
+    // the job has no written questions of its own: the text asks its first screening question, as before (Wave S8)
+    expect(scr.progress.asks).toBe("written");
+    expect(scr.transcript[0].questionKey).toBe(firstQuestionKey);
     const r = await form("/webhooks/twilio/inbound", { From: "+19495550199", To: "+15550001111", Body: "HUMAN", MessageSid: "SM1" });
     expect(r.status).toBe(200);
     expect(await r.text()).toMatch(/<Response>/);

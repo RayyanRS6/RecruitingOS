@@ -116,9 +116,30 @@ describe("reading a résumé for the form: what it fills in and suggests (pure)"
   });
 
   it("an earlier application's details (S7-F's emailed link) fill the form, each marked as from that application", () => {
-    const state = reusedState({ firstName: "Dana", lastName: "Kept", email: "dana.kept@example.com", phone: null, locationText: "Irvine, CA", workSummary: null, facts: [] });
+    const details = { candidateId: "cand-1", firstName: "Dana", lastName: "Kept", email: "dana.kept@example.com", phone: null, locationText: "Irvine, CA", workSummary: null, facts: [] };
+    const state = reusedState(details);
     expect(state.values).toEqual({ firstName: "Dana", lastName: "Kept", email: "dana.kept@example.com", phone: "", locationText: "Irvine, CA", workSummary: "" });
     expect(state.marks?.reused).toEqual(["firstName", "lastName", "email", "locationText"]);
+    // Wave S8: the person's id never reaches the form's values, and with no facts there is nothing to list
+    expect(JSON.stringify(state)).not.toContain("cand-1");
+    expect(state.earlier).toBeUndefined();
+    expect(reusedState(details, { token: "sealed", timeZone: "America/Los_Angeles" }).earlier).toBeUndefined();
+    // with facts and the link: each one listed, every one ticked to start with, the link carried
+    const fact = { id: "lf_one", kind: "skill" as const, text: "I chart perio exams in Dentrix every day.", quote: "I chart perio exams in Dentrix every day.", from: { applicationId: "app-1", screenId: "scr-1", roleTitle: "Dental Hygienist", at: "2026-10-01T10:00:00.000Z" } };
+    const withFacts = reusedState({ ...details, facts: [fact, { ...fact, id: "lf_two", text: "I drive my own car." }] }, { token: "sealed", timeZone: "America/Los_Angeles" });
+    expect(withFacts.earlier).toMatchObject({ token: "sealed", kept: ["lf_one", "lf_two"], timeZone: "America/Los_Angeles" });
+    // without the link (the record's own page, a test) nothing earlier is listed
+    expect(reusedState({ ...details, facts: [fact] }).earlier).toBeUndefined();
+  });
+
+  it("a posted form carries the reuse link and the ids still ticked, never anything else of the earlier facts (Wave S8)", () => {
+    const posted = postedApplyForm({ reuse: "sealed-link", keep: ["lf_one", " lf_two ", "lf_one", "", "x".repeat(41)] }, [], false);
+    expect(posted.reuse).toBe("sealed-link");
+    expect(posted.keep).toEqual(["lf_one", "lf_two"]);
+    expect(postedApplyForm({ keep: "lf_one" }, [], false).keep).toEqual(["lf_one"]);
+    expect(postedApplyForm({}, [], false)).toMatchObject({ reuse: "", keep: [] });
+    // a link longer than any sealed one is not carried on
+    expect(postedApplyForm({ reuse: "x".repeat(2001) }, [], false).reuse).toBe("");
   });
 
   it("the form's own styles and the steps header use only the page's tokens, no colours of their own, no button rules and no motion", () => {

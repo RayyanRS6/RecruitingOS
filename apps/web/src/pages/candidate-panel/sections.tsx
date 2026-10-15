@@ -119,16 +119,21 @@ function EligibilityAnswers({ a }: { a: ApplicationDetail }) {
 /** Said next to an answer the form suggested from the résumé and the candidate left as it was. */
 export const SUGGESTED_FROM_RESUME_KEPT = "Suggested from the résumé, kept by the candidate";
 export const WORK_SUMMARY_LABEL = "Their summary of their work (checked by them)";
+/** Over the facts from earlier chats they kept on the form (Wave S8): the form told them the company sees what they keep. */
+export const KEPT_FACTS_LABEL = "Kept from their earlier chats here, confirmed on this application";
 
 /**
  * "Questions from the form" (Wave S7): every answer to the form's questions, the eligibility ones and the company's own
  * quick questions, in the same sentence the candidate's record and the AI read, each marked when it was suggested from
- * the résumé and kept; then the summary of their work they checked. Nothing for an application without any.
+ * the résumé and kept; then the summary of their work they checked; then (Wave S8) the facts from their earlier chats
+ * here that they kept ticked on a form opened from the emailed reuse link, in their own words. Nothing for an
+ * application without any.
  */
-export function FormAnswers({ a }: { a: Pick<ApplicationDetail, "formAnswers" | "workSummary"> }) {
+export function FormAnswers({ a }: { a: Pick<ApplicationDetail, "formAnswers" | "workSummary" | "keptFacts"> }) {
   const answers = a.formAnswers ?? [];
   const summary = a.workSummary ?? null;
-  if (!answers.length && !summary) return null;
+  const kept = a.keptFacts ?? [];
+  if (!answers.length && !summary && !kept.length) return null;
   return (
     <Card title="Questions from the form">
       {answers.length ? (
@@ -140,6 +145,14 @@ export function FormAnswers({ a }: { a: Pick<ApplicationDetail, "formAnswers" | 
         <div className="small" style={{ marginTop: answers.length ? 10 : 0 }}>
           <p className="muted" style={{ margin: "0 0 4px" }}>{WORK_SUMMARY_LABEL}</p>
           <p style={{ margin: 0, whiteSpace: "pre-line" }}>{summary.text}</p>
+        </div>
+      ) : null}
+      {kept.length ? (
+        <div className="small" style={{ marginTop: answers.length || summary ? 10 : 0 }}>
+          <p className="muted" style={{ margin: "0 0 4px" }}>{KEPT_FACTS_LABEL}</p>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {kept.map((k) => <li key={k.id}>{k.text}</li>)}
+          </ul>
         </div>
       ) : null}
     </Card>

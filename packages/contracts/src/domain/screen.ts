@@ -107,6 +107,13 @@ export const ScreenProgress = z.object({
    * (`teamScreenView`), erased with the candidate's words (`withoutCandidateWords` in @ros/core).
    */
   writeup: ScreenWriteup.optional(),
+  /**
+   * Wave S8, "written": a chat without a plan (by text, or on the web from an emailed link) asks what the web chat asks,
+   * the company's written questions when it set any (`writtenQuestionsOf` in @ros/core), after the résumé reading's open
+   * questions. Set when the screen is created, so a chat started before keeps the list it began with: absent, it asks
+   * the job's screening questions as it always did.
+   */
+  asks: z.enum(["written"]).optional(),
 });
 export type ScreenProgress = z.infer<typeof ScreenProgress>;
 

@@ -13,6 +13,7 @@ import type { Integrations } from "@ros/integrations";
 import type { WorkflowEngine } from "@ros/workflows";
 import type { Container } from "../container";
 import { recordWithdrawal } from "./applications";
+import { learnFromSentChat } from "./profile-facts";
 import { screenDeps } from "./screens";
 
 /**
@@ -776,6 +777,16 @@ export async function conversationTurn(container: Container, ref: ConversationRe
     const noted = withdrawalsNoted(container);
     const r = await runScreenTurn(container.db, ref.companyId, noted.deps, { screenId: ref.id, message, channel: "web", actor: WEB_ACTOR, skip: action.skip, tap: action.tap });
     await noted.record();
+    // A chat whose link was emailed has no Review & send: its last answer sends it (the chat offered in the visit ends on
+    // Review & send instead, never `done` here), so the candidate's record learns from it then, from their own words
+    // only (Wave S8, as Send does). Best effort: the answer is saved already, and learning is idempotent.
+    if (r.kind === "reply" && r.done && !r.withdrawn) {
+      try {
+        await learnFromSentChat(container, ref);
+      } catch (err) {
+        console.warn(`[screen] learning from the sent chat failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     await container.kick();
     return r;
   }

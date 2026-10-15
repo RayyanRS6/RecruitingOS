@@ -5,6 +5,7 @@ import { applications, candidates, communications, screens, withTenant } from "@
 import { parseTwilioInbound, smsKeyword, verifyTwilioSignature } from "@ros/integrations";
 import { runScreenTurn } from "@ros/agents";
 import type { Vars } from "../middleware/session";
+import { learnFromSentChat } from "../services/profile-facts";
 import { screenDeps } from "../services/screens";
 
 /**
@@ -51,16 +52,16 @@ twilioWebhook.post("/inbound", async (c) => {
   }
 
   // Find the most recent open screen among this person's applications.
-  let target: { screenId: string; companyId: string } | null = null;
+  let target: { screenId: string; companyId: string; applicationId: string } | null = null;
   for (const p of people) {
     const rows = await container.db
-      .select({ screenId: screens.id, companyId: screens.companyId, updatedAt: screens.updatedAt })
+      .select({ screenId: screens.id, companyId: screens.companyId, applicationId: screens.applicationId, updatedAt: screens.updatedAt })
       .from(screens)
       .innerJoin(applications, eq(applications.id, screens.applicationId))
       .where(and(eq(applications.candidateId, p.id), inArray(screens.status, ["invited", "reminded", "in_progress"])))
       .orderBy(desc(screens.updatedAt))
       .limit(1);
-    if (rows[0] && (!target || rows[0].updatedAt > (target as { updatedAt?: string }).updatedAt!)) target = { screenId: rows[0].screenId, companyId: rows[0].companyId };
+    if (rows[0] && (!target || rows[0].updatedAt > (target as { updatedAt?: string }).updatedAt!)) target = { screenId: rows[0].screenId, companyId: rows[0].companyId, applicationId: rows[0].applicationId };
   }
   if (!target) {
     // No open conversation: keep the message on the record so a person can answer it.
@@ -75,7 +76,17 @@ twilioWebhook.post("/inbound", async (c) => {
     return c.body(EMPTY_TWIML, 200, { "Content-Type": "text/xml" });
   }
   const t = target;
-  await runScreenTurn(container.db, t.companyId, screenDeps(container), { screenId: t.screenId, message: sms.body, channel: "sms", actor: { kind: "system", id: "sms_inbound" }, providerMessageId: sms.messageSid ?? null });
+  const result = await runScreenTurn(container.db, t.companyId, screenDeps(container), { screenId: t.screenId, message: sms.body, channel: "sms", actor: { kind: "system", id: "sms_inbound" }, providerMessageId: sms.messageSid ?? null });
+  // A chat by text has no Review & send: its last answer sends it, so the candidate's record learns from it then, from
+  // their own words only (Wave S8, as Send does on the web). Best effort: the reply is on its way already, and learning
+  // is idempotent.
+  if (result.kind === "reply" && result.done && !result.withdrawn) {
+    try {
+      await learnFromSentChat(container, { kind: "screen", id: t.screenId, companyId: t.companyId, applicationId: t.applicationId, token: "" });
+    } catch (err) {
+      console.warn(`[sms] learning from the sent chat failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   await container.kick();
   return c.body(EMPTY_TWIML, 200, { "Content-Type": "text/xml" });
 });

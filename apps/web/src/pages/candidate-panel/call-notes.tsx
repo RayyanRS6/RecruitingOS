@@ -5,7 +5,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Button, Card, Field } from "@ros/ui";
 import { api, ApiError, type ApplicationDetail } from "../../api/client";
 import { toast } from "../../toast";
-import { callNotesBody, callNotesMayStayOpen, callNotesToast } from "../../screen-view";
+import { callNotesBody, callNotesMayStayOpen, callNotesQuestions, callNotesToast } from "../../screen-view";
 import { useDraft, useRefreshCandidate } from "./hooks";
 import { Why } from "./why";
 
@@ -25,6 +25,8 @@ export function CallNotesCard({ a, roleId, prominent }: { a: ApplicationDetail; 
   const refresh = useRefreshCandidate(a.id, roleId);
   // With no conversation yet, the notes are the screening and always finish it.
   const mayStayOpen = callNotesMayStayOpen(a);
+  // The questions the conversation asks (Wave S8: on one created since, the company's written questions), so each note keeps its question.
+  const questions = callNotesQuestions(a);
   const body = callNotesBody(byQuestion, other, complete || !mayStayOpen);
   const save = useMutation({
     mutationFn: () => api.post<{ ok: true; screenId: string; completed: boolean }>(`/api/v1/applications/${a.id}/screen/recruiter-notes`, body),
@@ -55,7 +57,7 @@ export function CallNotesCard({ a, roleId, prominent }: { a: ApplicationDetail; 
         <span>Your notes are kept as yours and labelled as notes from a call. They are never shown or quoted as {first}'s own words, never used to say a must-have is not met, and {first} does not see them.</span>
       </Why>
       <div className="stack" style={{ gap: 8, marginTop: 10 }}>
-        {a.packetLabels.questions.map((q) => (
+        {questions.map((q) => (
           <Field key={q.key} label={q.question} htmlFor={`call-note-${q.key}`}>
             <textarea id={`call-note-${q.key}`} className="textarea" rows={2} maxLength={4000} value={byQuestion[q.key] ?? ""} onChange={(e) => setByQuestion((now) => ({ ...now, [q.key]: e.target.value }))} />
           </Field>

@@ -5,7 +5,7 @@ import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSen
 import { applications, assessments, candidates, companies, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { deliverSms, recordInbound, sendPersonRequestedNote } from "./coordinator";
-import { FOCUS_INTRO, answersOf, focusedPacket, isFocusKey, unfairQuestion, withFocusAnswer, type FocusQuestion } from "./screen-focus";
+import { FOCUS_INTRO, answersOf, focusedPacket, isFocusKey, unfairQuestion, unplannedChatPacket, withFocusAnswer, type FocusQuestion } from "./screen-focus";
 import { PLACEHOLDER, SCORING_VIEW_VERSION, restoreQuotes, scoringView, withoutPlaceholders, type ScoringIdentity, type ScoringView } from "./scoring-view";
 import { TRIAGE_READINGS, answerInContext, applyEvidenceRules, combineRunOutcomes, credentialMustHaves, findingSubjects, jobWords, linkReadingRuns, sentenceAround, withoutInterviewSkills } from "./triage";
 
@@ -100,13 +100,22 @@ export function pausedMessage(companyName: string): string {
 }
 
 /**
+ * The progress a new screen starts with: the open questions it opens with, and (Wave S8) `asks` "written", so a chat
+ * without a plan asks the company's written questions (`chatPacket`) while one created before keeps the list it began
+ * with. The opening by text is prepared from the same before the row exists (`prepareScreenOpening`).
+ */
+export function newScreenProgress(focusQuestions?: FocusQuestion[] | null): ScreenProgress {
+  return { ...EMPTY_SCREEN_PROGRESS, ...(focusQuestions?.length ? { focusQuestions } : {}), asks: "written" };
+}
+
+/**
  * `focusQuestions` ("Ask about this in a screen"): asked before the packet's own questions; fixed on the row at creation.
  * `invitedVia` "apply" and `flow` "one_visit": the conversation offered in the same visit as the application (E1).
  */
 export async function createScreen(q: Queryable, input: { companyId: string; applicationId: string; channel: ScreenChannel; workflowRunId?: string | null; expiresAt: string; now: Date; focusQuestions?: FocusQuestion[] | null; invitedVia?: ScreenInvitedVia | null; flow?: "one_visit" | null }): Promise<ScreenRow> {
   const existing = await q.select().from(screens).where(and(eq(screens.applicationId, input.applicationId), inArray(screens.status, [...SCREEN_PERSON_ROUTE_STATUSES]))).limit(1);
   if (existing[0]) return existing[0];
-  let progress: ScreenProgress = input.focusQuestions?.length ? { ...EMPTY_SCREEN_PROGRESS, focusQuestions: input.focusQuestions } : EMPTY_SCREEN_PROGRESS;
+  let progress = newScreenProgress(input.focusQuestions);
   if (input.flow) progress = { ...progress, flow: input.flow };
   const [row] = await q
     .insert(screens)
@@ -248,7 +257,8 @@ export type ScreenIntro = { title: string; disclosure: string; aiNotice: { versi
 export function screenIntro(input: { companyName: string; firstName: string; packet: RolePacket; noticeOverrides?: CompanyRow["settings"]["notices"]; focus?: boolean; /** The chat runs in sections (`withChatPlan`): it asks the company's written questions. */ chat?: boolean }): ScreenIntro {
   const { packet, companyName } = input;
   // A Kanvis-style chat whose company wrote its own questions (Wave S7) asks those; every other conversation asks the
-  // questions of the packet it reads (the job's screening questions, with the résumé reading's open questions first).
+  // questions of the packet it reads (`chatPacket`: the résumé reading's open questions first, then the company's
+  // written questions on a chat created since Wave S8, or the job's screening questions).
   const written = input.chat ? packet.companyQuestions?.written?.length ?? 0 : 0;
   const n = written ? written + packet.screening.questions.filter((q) => isFocusKey(q.key)).length : packet.screening.questions.length;
   const notice = noticesFor(["*"], input.noticeOverrides).find((x) => x.key === "ai_use");
@@ -275,7 +285,8 @@ export function screenIntro(input: { companyName: string; firstName: string; pac
  * each turn; the model reads each reply (`reading`) and writes the words, and the code holds every turn to the rules:
  * one neutral restatement and one question, one push for specifics, the analog and the smaller version, "No" settled as
  * not known with a calm line, no filler, no inference, the closing question, and the fairness check on every question.
- * Every other conversation (by email later, by text, or one from before) runs exactly as it did.
+ * Every other conversation (by email later, by text) runs without a plan, as it did; since Wave S8 it asks the
+ * company's written questions too (`unplannedChatPacket`), and one from before keeps the list it began with.
  */
 
 type ApplicationRow = typeof applications.$inferSelect;
@@ -307,10 +318,37 @@ export function answerCvLines(answers: { workSummary?: string | null; noResume?:
   return cv;
 }
 
-/** The candidate's CV as a few plain lines (their own information: the chat names it), and the form's answers as sentences. */
+/** Wave S8: the most facts from earlier chats a reuse form lists, and so the most one application keeps (`answers.kept`). */
+export const KEPT_FACTS_MAX = 8;
+/** The longest a chat's facts list is (`ScreenProgress.typedFacts` holds at most 20 lines). */
+const CHAT_FACT_LINES = 20;
+
+/**
+ * What the chat reads of the facts from earlier chats the candidate kept on the form (Wave S8): each one as their own
+ * words, in the wording the form's answers about their work already use (`answerCvLines`), so the chat names them,
+ * never as a résumé line, and never asks again what they settle (`chatGaps` reads these lines). Nothing about an
+ * earlier chat, job or application.
+ */
+export function keptFactLines(facts: ReadonlyArray<{ text: string }>): string[] {
+  return facts.slice(0, KEPT_FACTS_MAX).map((f) => `Their own words about their work: ${f.text}`.replace(/\s+/g, " ").trim().slice(0, 300));
+}
+
+/** The facts with the kept ones added after the CV's lines; the kept ones keep their place within the limit. */
+export function chatFactsWithKept(facts: ChatFacts, kept: ReadonlyArray<{ text: string }>): ChatFacts {
+  const lines = keptFactLines(kept);
+  if (!lines.length) return facts;
+  return { cv: [...facts.cv.slice(0, CHAT_FACT_LINES - lines.length), ...lines], formAnswers: facts.formAnswers };
+}
+
+/**
+ * The candidate's CV as a few plain lines (their own information: the chat names it), and the form's answers as
+ * sentences; with the facts from earlier chats they kept on the form (Wave S8, `answers.kept`), so a chat whose link
+ * was emailed later reads them as the chat in the visit does.
+ */
 export function chatFactsOf(packet: RolePacket, app: Pick<ApplicationRow, "extraction" | "answers">): ChatFacts {
   const answers = app.answers ?? {};
-  return { cv: [...cvLinesOf(app.extraction), ...answerCvLines(answers)], formAnswers: applicationAnswerSentences(packet, answers).map((s) => s.sentence) };
+  const facts = { cv: [...cvLinesOf(app.extraction), ...answerCvLines(answers)], formAnswers: applicationAnswerSentences(packet, answers).map((s) => s.sentence) };
+  return chatFactsWithKept(facts, Array.isArray(answers.kept) ? answers.kept : []);
 }
 
 /** The closing question, in code's words (the model may say it its own way, with the first name). */
@@ -344,13 +382,14 @@ export function chatClosingMessage(closing: string | null | undefined, companyNa
  * The questions as a Kanvis-style chat asks them, for every reader of the packet (the turn rules, the page, the
  * scorecard): the plan's items in order (an open question from the résumé reading as it was; a must-have as
  * `gapQuestion`; a company question as written, its private note given to the models as the model answer; a job's own
- * screening question as it is), then the closing question. Without a plan: the résumé reading's open questions first,
- * then the packet's (`focusedPacket`), as before. Reading it twice gives the same.
+ * screening question as it is), then the closing question. Without a plan (`unplannedChatPacket`): the résumé reading's
+ * open questions first, then on a chat created since Wave S8 the company's written questions mapped the same way, or
+ * the packet's own (`focusedPacket`), as before. Reading it twice gives the same.
  */
-export function chatPacket(packet: RolePacket, progress: Pick<ScreenProgress, "focusQuestions" | "chat"> | null | undefined): RolePacket {
-  const focused = focusedPacket(packet, progress);
+export function chatPacket(packet: RolePacket, progress: Pick<ScreenProgress, "focusQuestions" | "chat" | "asks"> | null | undefined): RolePacket {
   const plan = progress?.chat;
-  if (!plan) return focused;
+  if (!plan) return unplannedChatPacket(packet, progress);
+  const focused = focusedPacket(packet, progress);
   const own = new Map(focused.screening.questions.filter((q) => q.key !== CHAT_WRAP_KEY).map((q) => [q.key, q]));
   const written = new Map((packet.companyQuestions?.written ?? []).map((w) => [w.key, w]));
   const must = new Map((packet.requirements?.mustHaves ?? []).map((m) => [m.key, m]));
@@ -632,9 +671,10 @@ export async function prepareScreenOpening(db: Db, ai: AiRuntime, input: { compa
   if (input.screen?.transcript.some((t) => t.role === "assistant")) return null;
   const b = await withTenant(db, input.companyId, (q) => loadApplicationBundle(q, input.applicationId));
   if (!b) return null;
-  const state: ConversationState = input.screen ?? { channel: input.channel, progress: input.focusQuestions?.length ? { ...EMPTY_SCREEN_PROGRESS, focusQuestions: input.focusQuestions } : EMPTY_SCREEN_PROGRESS, answers: {}, transcript: [] };
-  const focused = { ...b, packet: focusedPacket(b.packet, state.progress) };
-  return runPromptDetached(db, ai, screenTurnPrompt, contextOf(focused, state, null), { companyId: input.companyId, workflowRunId: input.workflowRunId ?? null, inputRef: { applicationId: input.applicationId, turn: 0 } });
+  // Before the row exists, the progress `createScreen` will give it, so the opening asks what the chat will (Wave S8).
+  const state: ConversationState = input.screen ?? { channel: input.channel, progress: newScreenProgress(input.focusQuestions), answers: {}, transcript: [] };
+  const asked = { ...b, packet: chatPacket(b.packet, state.progress) };
+  return runPromptDetached(db, ai, screenTurnPrompt, contextOf(asked, state, null), { companyId: input.companyId, workflowRunId: input.workflowRunId ?? null, inputRef: { applicationId: input.applicationId, turn: 0 } });
 }
 
 /** Phase two of the opening: writes the first assistant message onto the screen, unless one is already there. */
@@ -649,7 +689,7 @@ export async function applyScreenOpening(q: Queryable, input: { companyId: strin
     await emit(q, { type: "ai.run_failed", companyId: input.companyId, actor: { kind: "agent", id: "screening", runId: out.runId }, subject: { type: "screen", id: fresh.id }, payload: { reason: out.reason, error: out.error, turn: 0 } });
     return { error: out.error };
   }
-  const turn = enforceTurnRules(out.output, focusedPacket(input.packet, fresh.progress), fresh.progress, answersOf(fresh));
+  const turn = enforceTurnRules(out.output, chatPacket(input.packet, fresh.progress), fresh.progress, answersOf(fresh));
   const entry: ScreenTranscriptEntry = { role: "assistant", content: turn.messageToCandidate, at: new Date().toISOString(), questionKey: turn.questionKey ?? undefined, channel: fresh.channel as ScreenChannel, aiRunId: out.runId };
   const progress = advanceProgress(fresh.progress, turn);
   await q.update(screens).set({ transcript: [...fresh.transcript, entry], progress }).where(eq(screens.id, fresh.id));
@@ -1225,9 +1265,9 @@ export async function submitScreenAnswers(q: Queryable, deps: ScreenDeps, input:
 /**
  * The rules the packet sets that the model must not break: one question at a time, two follow-ups at most, a bounded
  * conversation, skipped questions left alone, and every packet question asked in the packet's own words (the model
- * writes the acknowledgment; the question is added here when it did not write it word for word). `chat` (a Kanvis-style
- * chat, Wave S7): the follow-ups, the end of the questions and the shape of each message are `enforceChatTurn`'s, and
- * the model asks each item in its own words.
+ * writes the acknowledgment; the question is added here when it did not write it word for word), and no private note
+ * said (`withoutPrivateNotes`, Wave S8). `chat` (a Kanvis-style chat, Wave S7): the follow-ups, the end of the questions,
+ * the notes and the shape of each message are `enforceChatTurn`'s, and the model asks each item in its own words.
  */
 export function enforceTurnRules(turn: ScreenTurn, packet: RolePacket, progress: ScreenProgress, answers: Record<string, string>, opts: { chat?: boolean } = {}): ScreenTurn {
   const keys = packet.screening.questions.map((q) => q.key);
@@ -1275,6 +1315,9 @@ export function enforceTurnRules(turn: ScreenTurn, packet: RolePacket, progress:
     }
   }
   if (t.answerRecorded && !t.answerRecorded.answer.trim()) t = { ...t, answerRecorded: null };
+  // A chat without a plan gives the model each written question's private note as its model answer (Wave S8): the note
+  // is never said to the candidate either, even in part, as `enforceChatTurn` holds a planned chat to it.
+  if (!opts.chat) t = withoutPrivateNotes(t, packet, current);
   // The packet's question in the packet's own words (plan E2): added after the model's acknowledgment when it is not there.
   // (A Kanvis-style chat asks in the model's words; `enforceChatTurn` adds the item's question only when there is none.)
   if (!opts.chat && t.questionKey && !t.done && !t.humanRequested) {
@@ -1282,6 +1325,32 @@ export function enforceTurnRules(turn: ScreenTurn, packet: RolePacket, progress:
     if (!t.messageToCandidate.includes(q.question)) t = { ...t, messageToCandidate: `${t.messageToCandidate.trim()} ${q.question}`.trim() };
   }
   return t;
+}
+
+/**
+ * A turn of a chat without a plan, with no private note in it (Wave S8; `echoesNote`, the check a planned chat has). The
+ * model's sentences that echo a note are left out; a question in the packet's own words is the company's to ask and is
+ * not the model's words. Moving on to a question (the opening by text among them, whose disclosure stays) keeps the rest,
+ * or says "Thanks." before the question; a follow-up keeps the rest when it still asks something, or goes back to the
+ * question in its own words, as a planned chat's does; a hand-over and a close say the code's words instead, as the
+ * fairness check does.
+ */
+function withoutPrivateNotes(t: ScreenTurn, packet: RolePacket, current: string | null): ScreenTurn {
+  const notes = (packet.companyQuestions?.written ?? []).flatMap((w) => (w.lookFor ? [w.lookFor] : []));
+  if (!notes.length) return t;
+  const modelWords = (text: string) => packet.screening.questions.reduce((s, q) => s.split(q.question).join(" "), text);
+  const echoes = (text: string) => notes.some((n) => echoesNote(modelWords(text), n));
+  if (!echoes(t.messageToCandidate)) return t;
+  if (t.humanRequested) return { ...t, messageToCandidate: "Understood. A person from the hiring team will follow up with you." };
+  if (t.done) return { ...t, messageToCandidate: `Thanks, that is everything I needed. ${SCREEN_NEXT_LINE} Reply HUMAN at any time to reach a person.` };
+  // The packet's questions come out whole before the split: a question of several sentences, one of which shares words
+  // with its own note, would otherwise lose that sentence and be asked again after what is left of it. Moving on adds
+  // the question back below, and a follow-up goes back to it.
+  const kept = sentencesOf(modelWords(t.messageToCandidate)).filter((s) => !echoes(s)).join(" ");
+  const keeps = !!kept && !echoes(kept);
+  if (t.questionKey) return { ...t, messageToCandidate: keeps ? kept : "Thanks." };
+  const asking = current ? packet.screening.questions.find((q) => q.key === current)?.question : undefined;
+  return { ...t, messageToCandidate: keeps && /\?/.test(kept) ? kept : asking ?? "Thanks." };
 }
 
 /**

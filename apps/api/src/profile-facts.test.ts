@@ -242,8 +242,10 @@ describe("the record learns per company, the candidate changes it, and the detai
     const empty = await html(LearnedFactsSection({ facts: [], statusToken, companyName: "Profile Dental", timeZone: "America/Los_Angeles", saved: "removed" }));
     expect(empty).toContain("Nothing yet.");
     expect(empty).toContain("Removed. It is no longer kept with your applications here.");
-    // the page promises only what is done: the facts are kept for the candidate to check, never said to be filled in
+    // the page promises only what is done: the facts are kept for the candidate to check, never said to be filled in;
+    // the next application's form lists them for the candidate to keep or untick (Wave S8)
     expect(page).not.toMatch(/fills them in|filled in when/);
+    expect(page).toContain("When you apply for another role here with your details, the form lists them for you to keep or untick.");
 
     const changed = await form(`/c/status/${statusToken}/facts/${target.id}`, { action: "change", text: "Active CA RDH license, renewed March 2026." });
     expect(changed.status).toBe(303);
@@ -282,8 +284,13 @@ describe("the record learns per company, the candidate changes it, and the detai
     expect(link.startsWith(`/careers/${slug}/jobs/${otherRoleId}/apply?reuse=`)).toBe(true);
     const token = decodeURIComponent(new URL(link, "https://x.test").searchParams.get("reuse")!);
     const details = await reusedDetailsFor(container, { companyId, roleId: otherRoleId, token });
-    expect(details).toMatchObject({ firstName: "Maria", lastName: "Reyes", email: "maria.reyes@example.com", locationText: "Tustin, CA" });
+    expect(details).toMatchObject({ candidateId, firstName: "Maria", lastName: "Reyes", email: "maria.reyes@example.com", locationText: "Tustin, CA" });
     expect(details!.facts.map((f) => f.text)).toEqual(["I also teach flossing classes at the community center."]);
+    // Wave S8: the emailed link opens the form with what her chats added, ticked, for her to keep or untick
+    const opened = (await (await app.request(link)).text()).replace(/&#39;/g, "'");
+    expect(opened).toContain("<legend>From your earlier chats at Profile Dental</legend>");
+    expect(opened).toContain(`name="keep" value="${details!.facts[0].id}" checked=""/><span>I also teach flossing classes at the community center.<small>From your chat on ${packet.identity.title}, `);
+    expect(opened).toContain("Untick anything that is no longer true. Profile Dental sees what you keep as part of this application.");
     // another job, another company, a changed token, an expired one: nothing
     expect(await reusedDetailsFor(container, { companyId, roleId, token })).toBeNull();
     expect(await reusedDetailsFor(container, { companyId: "00000000-0000-0000-0000-000000000000", roleId: otherRoleId, token })).toBeNull();
@@ -307,6 +314,7 @@ describe("the record learns per company, the candidate changes it, and the detai
     expect(page.status).toBe(200);
     const body = await page.text();
     expect(body).toContain("Apply for another role at Profile Dental");
+    expect(body).toContain("The form also lists what you told us in your chats here, for you to keep or untick.");
     // a forwarded status link must not open a form filled with the person's details: no reuse link on the page
     expect(body).not.toContain("reuse=");
     expect(body).toContain(`<form method="post" action="/c/status/${statusToken}/apply-another/${otherRoleId}">`);

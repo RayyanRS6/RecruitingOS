@@ -31,6 +31,8 @@ describe("whether the team may read a conversation", () => {
     expect(view.progress).toEqual({ askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0, flow: "one_visit", focusQuestions: [{ key: "unknown_1", question: "Is your license active?", whyItMatters: "Must-have" }] });
     expect(JSON.stringify(view)).not.toContain("RDH 12345");
     expect(JSON.stringify(view)).not.toContain("Yes, since 2019");
+    // which list it asks (Wave S8) is no answer of theirs: it stays, so a recruiter's call notes go under those questions
+    expect(teamScreenView(screen("human_requested", { asks: "written" })).progress.asks).toBe("written");
   });
 
   it("a sent conversation is shown whole", () => {

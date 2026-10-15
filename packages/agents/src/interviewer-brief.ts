@@ -77,7 +77,9 @@ export async function composeInterviewerBrief(q: Queryable, input: { application
   const screenAsmt = rows.find(isScreenAssessment) ?? null;
   const resumeAsmt = (rows.find((r) => r.kind !== "screen") as (AssessmentRow & { result: EvidenceAssessment }) | undefined) ?? null;
   const answered = screenRows.filter(screenAnswersSent).map((s) => ({ ...s, all: answersOf(s) })).find((s) => Object.keys(s.all).length > 0) ?? null;
-  const questionText = (key: string) => answered?.progress.focusQuestions?.find((f) => f.key === key)?.question ?? input.packet.screening.questions.find((x) => x.key === key)?.question ?? key.replace(/_/g, " ");
+  // A chat that asked the company's written questions (Wave S7 in the visit; S8 by text or from an emailed link) keeps
+  // their answers under the written questions' keys: the brief names them in the company's words, never by key.
+  const questionText = (key: string) => answered?.progress.focusQuestions?.find((f) => f.key === key)?.question ?? input.packet.screening.questions.find((x) => x.key === key)?.question ?? input.packet.companyQuestions?.written?.find((w) => w.key === key)?.question ?? key.replace(/_/g, " ");
 
   const requirementFinding = (key: string) => screenAsmt?.result.requirementFindings?.find((r) => r.requirementKey === key) ?? resumeAsmt?.result.requirementFindings?.find((r) => r.requirementKey === key) ?? null;
   const competencyFinding = (key: string) => screenAsmt?.result.competencyFindings?.find((c) => c.competencyKey === key) ?? resumeAsmt?.result.competencyFindings?.find((c) => c.competencyKey === key) ?? null;

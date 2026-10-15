@@ -10,6 +10,7 @@ import type {
   IntakeFacts,
   IntakeMessage,
   IntakeServerState,
+  KeptFact,
   LearnedFact,
   Location,
   MarkKind,
@@ -276,7 +277,8 @@ export type ApplicationAcknowledgment = { at: string; noticeVersions: string[]; 
  * words, or a number as typed); `fromCv`, the form fields (`firstName`, `locationText`, `q_<key>`, `elig_<key>`, ...)
  * whose value the CV filled and the candidate kept as it was ("From your CV — check it"); `workSummary`, the short
  * summary of their work the CV reading wrote and they checked; `learned`, what the profile learned from this
- * application's sent chat (`LearnedFact`).
+ * application's sent chat (`LearnedFact`). Wave S8: `kept`, the facts from their earlier chats at the company they kept
+ * on this application's form, opened from the emailed reuse link (`KeptFact`); never part of the résumé reading's input.
  */
 export type ApplicationAnswers = {
   eligibility?: Record<string, unknown>;
@@ -288,6 +290,7 @@ export type ApplicationAnswers = {
   fromCv?: string[];
   workSummary?: string;
   learned?: LearnedFact[];
+  kept?: KeptFact[];
 };
 
 export const applications = pgTable(
