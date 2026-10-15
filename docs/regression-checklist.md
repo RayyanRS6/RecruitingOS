@@ -1149,7 +1149,7 @@ These could not be confirmed from the code on 14 Oct 2026. A change that depends
   - TOTP;
   - the JWT signing method;
   - whether the production `ros_app` and `ros_worker` roles match the migrations.
-- [ ] **The real AI:** whether the fairness workflow ran after PRs #36–#38, and with what result (only 90-day artifacts would show it); real-model behaviour of the job draft, the conversation, the scorecard and adversarial candidate text.
+- [ ] **The real AI:** the fairness workflow ran on the real models after Wave S7 (run 38717936154, 15 Oct 2026) and passed all 11 résumé-reading and scoring suites it runs; the run after Wave S5 had failed two bias pairs, fixed in S7. Still not run on the real models: the screening chat and the scorecard suites (the workflow runs only the résumé and scoring groups), the job draft, and adversarial candidate text.
 - [ ] **Real Postgres:** tenant isolation on Supabase (`TEST_DATABASE_URL` runs are optional and manual).
 - [ ] **Operations:**
   - whether any uptime monitor polls `/healthz?strict=1`;
@@ -1158,7 +1158,7 @@ These could not be confirmed from the code on 14 Oct 2026. A change that depends
 - [ ] **Backups:** the restore drill has never been done (`docs/readiness/05`).
 - [ ] **Load:** there is no automated load or performance check; only the manual `scripts/load-apply.ts`.
 - [ ] **This laptop versus CI:** local vitest took about 16 minutes against the 4 to 6 expected, and `node_modules` here is laid out differently from pnpm's.
-- [ ] **Kanvis:** their recruiter side was never used (waitlist only), and Apply was never pressed. Anything marked INFERRED or UNKNOWN about Kanvis is not evidence for how our product should behave.
+- [ ] **Kanvis:** their recruiter side was never used (waitlist only). On the candidate side, one complete application (the AI interview and the score included) was observed on 15 Oct 2026 on the founder's own account. Anything marked INFERRED or UNKNOWN about Kanvis is not evidence for how our product should behave.
 - [ ] **Counsel:** the answers in `docs/spec/11-counsel-register.md` are still open, so live use with real candidates waits on them.
 
 ---
