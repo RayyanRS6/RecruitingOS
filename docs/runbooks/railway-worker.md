@@ -19,7 +19,7 @@ file was removed that day. **When production is created, enter the same values o
 
 1. Railway, workspace Identified Talent Solutions (your default workspace), project `recruiting-os-staging`.
 2. On the project canvas, click **New** (top right), then **GitHub Repo**.
-3. Choose `identified-talent-solutions/recruiting-os`. If it is not listed, Railway's GitHub app has no access to
+3. Choose `RayyanRS6/RecruitingOS` (the repository since 16 October 2026). If it is not listed, Railway's GitHub app has no access to
    the repository yet: choose **Configure GitHub App**, grant access to that one repository only, and return.
 4. Railway adds a service for the repository and connects its default branch, `main`. If the canvas shows staged
    changes with a **Deploy** button, do not click it yet: the variables come first (screen 3). If a deployment starts
@@ -34,7 +34,7 @@ in the service's Settings.
 Select the service, **Settings** tab:
 
 - **Service name**: `worker`.
-- **Source**: repository `identified-talent-solutions/recruiting-os`, branch `main`, root directory left as the
+- **Source**: repository `RayyanRS6/RecruitingOS`, branch `main`, auto-deploy on, root directory left as the
   repository root (the worker runs from the root through `pnpm worker:start`).
 - **Watch paths** (optional, reduces rebuilds): `apps/api/**`, `packages/**`, `package.json`, `pnpm-lock.yaml`,
   `pnpm-workspace.yaml`.
