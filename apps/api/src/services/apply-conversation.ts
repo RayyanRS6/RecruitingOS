@@ -388,7 +388,7 @@ async function finishDetachedTurn(tx: Tx, deps: ConversationDeps, id: string, ou
   }
   // A Kanvis-style chat is held to its own rules, exactly as a first application's (`finishScreenTurn`).
   const latest = [...row.transcript].reverse().find((t) => t.role === "candidate")?.content ?? null;
-  const enforced = row.progress.chat ? enforceChatTurn(out.output, packet, row.progress, answersOf(row), { transcript: row.transcript, latest }) : { turn: enforceTurnRules(out.output, packet, row.progress, answersOf(row)), move: null };
+  const enforced = row.progress.chat ? enforceChatTurn(out.output, packet, row.progress, answersOf(row), { transcript: row.transcript, latest }) : { turn: enforceTurnRules(out.output, packet, row.progress, answersOf(row), { transcript: row.transcript, latest }), move: null };
   let turn = enforced.turn;
   if (turn.humanRequested) {
     turn = !/business/i.test(turn.messageToCandidate) ? { ...turn, messageToCandidate: `${turn.messageToCandidate} You can expect to hear from a person ${humanResponseExpectation(new Date(), await loadBusinessCalendar(tx))}.` } : turn;

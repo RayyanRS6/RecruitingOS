@@ -679,26 +679,44 @@ const NO_ANSWER = /^(?:no|nope|not really|i do not|i don['’]t|i have not|i hav
 const HOLD_QUESTION = /\b(?:do|did|does)\s+you\s+(?:currently\s+|still\s+)?(have|hold)\b\s*(.*)$/i;
 const ARE_YOU_QUESTION = /\bare\s+you\s+(?:currently\s+|still\s+)?((?:licensed|certified|registered)\b.*)$/i;
 
-/**
- * A short chat answer read with the question it replies to, as one statement the evidence rules can read: a bare "No"
- * to "Do you hold a California RDH license?" reads "I do not hold a California RDH license", a bare "Yes" reads "I hold
- * a California RDH license". A yes or no to any other closed question reads as the question followed by the answer.
- * Anything else ("Maybe", "Dentrix") is not a plain answer to a closed question: null, so it stays too short to count.
- * Pure; exported for the scorecard and the tests.
- */
-export function answerInContext(question: string, answer: string): string | null {
+/** The last question in an assistant's message ("Thanks, that helps. Next: Do you hold ...?"), or the whole message. */
+const lastQuestionOf = (question: string): string => {
   const q = question.replace(/\s+/g, " ").trim();
+  return q.split(/(?<=[.!?:])\s+/).filter((s) => s.endsWith("?")).at(-1) ?? q;
+};
+
+/**
+ * A yes or no to a closed question about holding something ("Do you hold ...?", "Do you have ...?", "Are you licensed
+ * ...?"), as the statement it makes and whether it says held: a bare "No" to "Do you hold a California RDH license?" is
+ * { held: false, statement: "I do not hold a California RDH license" }. Null for any other question, and for anything
+ * but a yes or a no. Pure; exported for the scorecard (`plainCredentialAnswers`) and the tests.
+ */
+export function closedAnswer(question: string, answer: string): { held: boolean; statement: string } | null {
   const a = answer.replace(/\s+/g, " ").trim().toLowerCase();
-  const yes = YES_ANSWER.test(a) && !NO_ANSWER.test(a);
   const no = NO_ANSWER.test(a);
-  // the last question in the assistant's message ("Thanks, that helps. Next: Do you hold ...?")
-  const asked = q.split(/(?<=[.!?:])\s+/).filter((s) => s.endsWith("?")).at(-1) ?? q;
+  const yes = YES_ANSWER.test(a) && !no;
+  if (!yes && !no) return null;
+  const asked = lastQuestionOf(question);
   const hold = asked.match(HOLD_QUESTION);
   const are = asked.match(ARE_YOU_QUESTION);
   const rest = (s: string) => s.replace(/[?.!\s]+$/, "");
-  if (hold && (yes || no)) return `${no ? `I do not ${hold[1]!.toLowerCase()}` : `I ${hold[1]!.toLowerCase()}`} ${rest(hold[2] ?? "")}`.trim();
-  if (are && (yes || no)) return `${no ? "I am not" : "I am"} ${rest(are[1] ?? "")}`.trim();
-  return yes || no ? `${asked} ${answer.trim()}` : null;
+  if (hold) return { held: yes, statement: `${no ? `I do not ${hold[1]!.toLowerCase()}` : `I ${hold[1]!.toLowerCase()}`} ${rest(hold[2] ?? "")}`.trim() };
+  if (are) return { held: yes, statement: `${no ? "I am not" : "I am"} ${rest(are[1] ?? "")}`.trim() };
+  return null;
+}
+
+/**
+ * A short chat answer read with the question it replies to, as one statement the evidence rules can read: a bare "No"
+ * to "Do you hold a California RDH license?" reads "I do not hold a California RDH license", a bare "Yes" reads "I hold
+ * a California RDH license" (`closedAnswer`). A yes or no to any other closed question reads as the question followed by
+ * the answer. Anything else ("Maybe", "Dentrix") is not a plain answer to a closed question: null, so it stays too short
+ * to count. Pure; exported for the scorecard and the tests.
+ */
+export function answerInContext(question: string, answer: string): string | null {
+  const closed = closedAnswer(question, answer);
+  if (closed) return closed.statement;
+  const a = answer.replace(/\s+/g, " ").trim().toLowerCase();
+  return YES_ANSWER.test(a) || NO_ANSWER.test(a) ? `${lastQuestionOf(question)} ${answer.trim()}` : null;
 }
 
 /**

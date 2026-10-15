@@ -200,8 +200,9 @@ describe("no number from the model", () => {
     // Version 3 (plan Wave E): recruiter call notes kept apart, skipped questions unknown, unfinished conversations read
     // for what they have; version 4: the same definitions of each finding as the résumé reading; version 5 (D-04 = C):
     // the conversation through the scoring view; version 6: the answers and the progress in their own <answers> block;
-    // version 7 (Wave S5): read three times, the licence rule, a lone "yes" is no quote.
-    expect(screenAssessPrompt.version).toBe(7);
+    // version 7 (Wave S5): read three times, the licence rule, a lone "yes" is no quote; version 8 (Wave S9): a whole
+    // "Yes" or "No" to the closed question about a must-have is a plain answer to it.
+    expect(screenAssessPrompt.version).toBe(8);
     const input = { packet: PACKET as never, extraction: null, resumeText: RESUME, applicationAnswers: { eligibility: {} }, eligibility: null };
     expect(triageAssessPrompt.system(input).map((b) => b.text).join("\n")).not.toMatch(/secondaryScore|0 to 100/);
     fake.scriptNext("triage.assess", { ...reading(), secondaryScore: 87 });

@@ -62,9 +62,12 @@ const WRITEUP_SYSTEM = `You write up a job candidate's answers to a company's wr
 
 Rules:
 - Exactly one entry per question in the list, by its key, in the list's order.
-- answer: the candidate's own answer to that question in the first person ("I ..."), in their own words, lightly condensed: keep their facts, numbers, names, examples and wording; leave out filler, repetition and greetings. Use only what the candidate wrote (lines starting "candidate"). Never add a fact, skill, number, example, tool, opinion or feeling they did not write, never improve or praise it, and never grade it. The assistant's lines are questions, not the candidate's words: nothing from them goes into an answer as if the candidate said it.
-- An answer can come from anywhere in the chat: the reply to that question, a reply to another one, or a later message that added to it. When the candidate changed an answer ("candidate [changed key]"), the changed words are their answer.
-- "No", "Not yet", "I haven't", "I don't know" and "I've never done that" stay what they are: say so plainly in the answer ("No, I have not ..."). Never turn a no, a not yet or an unknown into a yes, and never infer experience or ability they did not describe.
+- answer: the candidate's own answer to that question, in their own words and their own voice (as "I", never "the candidate" or "they"), lightly condensed: keep their facts, numbers, names, examples and wording; leave out filler, repetition and greetings. Their voice does not mean a full sentence: a short reply stays as short as they wrote it ("Twice a week." stays "Twice a week."; "No, never." stays "No, never."). Use only what the candidate wrote (lines starting "candidate"). Never add a fact, skill, number, example, tool, opinion or feeling they did not write, never improve or praise it, and never grade it.
+- Never restate the question, and never take words from it or from the assistant's lines to fill out a reply: the page shows each question right above its answer. The assistant's lines are questions, not the candidate's words: nothing from them goes into an answer as if the candidate said it.
+- Write the answer, never the conversation: no "I said", "I was asked", "when asked" or "I replied".
+- An answer can come from anywhere in the chat: the reply to that question, a reply to another one, or a later message that adds to their answer. When the candidate changed an answer ("candidate [changed key]"), the changed words are their answer.
+- "No", "Not yet", "I haven't", "I don't know" and "I've never done that" stay what they are, in their own words, and stop there: never complete a no with the question's words. Never turn a no, a not yet or an unknown into a yes, and never infer experience or ability they did not describe. A plain no to the question itself is a full answer: status "answered".
+- The assistant's follow-up questions, and a "no" or "not really" to them, are not part of the answer: the answer keeps what the candidate did say to the question. When a follow-up asked for something the question asks for (an example, a specific moment) and they did not give it, the status is "partly" and the note says what is missing.
 - status: "answered" when their words answer the question; "partly" when they answer some of it and not the rest (for example the question asks for an example and they gave none); "not_given" when the chat holds no answer to it, and then answer is "".
 - quotes: up to 6 pieces copied character for character from the candidate's lines that the answer rests on, each a few words to a sentence. Code checks every quote against what the candidate sent and drops any it cannot find.
 - note: null when the answer is complete. Only for "partly" or "not_given", one short neutral sentence in your own voice saying what is missing, for example "No example was given of a time this happened." Never inside the answer, never a judgement of the candidate, never advice, never about anything the question did not ask, and never about what the team is looking for. The candidate reads it.
@@ -74,9 +77,15 @@ Rules:
 ${FAIRNESS_RULES}`;
 
 // Version 1 (Wave S7, 15 Oct 2026): first version.
+// Version 2 (Wave S9, the first real-model run of the write-up, 15 Oct 2026): the candidate's voice is not a full
+// sentence, so a short reply stays short; never the question's or the assistant's words to fill one out (version 1's
+// template "No, I have not ..." made the model finish "No, I haven't." with the question's words, and its "I ..." turned
+// "About eight." into a sentence about patients); the answer, never the conversation ("I said", "when asked"); and a
+// "no" to a follow-up that asked for an example is "partly" with the note, never part of the answer. The code already
+// refused all three (`settleWriteup`), so only the model's own answers change.
 export const screenWriteupPrompt: PromptDef<WriteupContext, WriteupModelOutput> = {
   key: "screen.writeup",
-  version: 1,
+  version: 2,
   task: "screen.writeup",
   agent: "screening",
   schema: WriteupModelOutput,

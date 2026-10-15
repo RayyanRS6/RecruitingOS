@@ -6,11 +6,12 @@ import {
   INTAKE_COMPILE_MAX_TOKENS, REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, SCORING_VIEW_VERSION, TRIAGE_READINGS, advanceProgress, assessmentSources, basisFor, credentialMustHaves, editableView, enforceTurnRules, factsFromExtraction, finalizePacket, hasPlaceholder, mergeFacts, mergeRevision, readingsOutcome, redactProtected, registerFakeHandlers,
   SCORECARD_READINGS, resolveBenchmark, scorecardOutcome, scorecardReadings, unfairQuestion, verifyQuotes, type BenchmarkResult, type ScoringIdentity,
 } from "@ros/agents";
-import type { EvidenceAssessment, IntakeFacts, IntakeMessage, ResumeExtraction, RolePacket, ScreenProgress, ScreenTurn } from "@ros/contracts";
+import type { EvidenceAssessment, IntakeFacts, IntakeMessage, ResumeExtraction, RolePacket, ScreenAssessment, ScreeningQuestion, ScreenProgress, ScreenTurn } from "@ros/contracts";
 import { createDb, migrate } from "@ros/db";
 import { findPlaybook, matchPlaybookRole } from "@ros/playbooks";
 import { runChatSuite } from "./chat-suite";
-import { writeupCaseFailures, writeupCases, writeupContextOf } from "./writeup-suite";
+import { clipText, traceOutcome, traceTranscript, traceTurn, type CaseDiagnostics } from "./diagnostics";
+import { writeupCaseFailures, writeupCaseNotes, writeupCases, writeupContextOf } from "./writeup-suite";
 import { leakedDetails, lostEvidence, modelInputDifference, scorecardModelInput, triageModelInput, type EarlierApplication, type EvalApplication } from "./scoring-inputs";
 import { CONSISTENCY_READS, EMPTY_FACTS, KEPT_IN_ANSWER, RDH_FACTS, fairnessRuleCases, formAnswers, SCREEN_CANDIDATE, aboutCases, lineCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, interviewSkillFailures, keptInInputFailures, withInterviewSkill, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, questionFairnessCases, quotesAreGrounded, redactionCases, resumeCases, reviseCases, scorecardDifferences, screenAssessCases, screenConsistencyCases, screenPersonas, screenRedactionCases, scriptedCredentialCases, scriptedReading, triageEdgeCases, type IntakeCase, type ScreenAssessCase } from "./suites";
 
@@ -42,8 +43,12 @@ async function main() {
     rt = await createRuntime(env, fake);
   } else rt = await createRuntime(env);
   const q = handle.db;
-  /** `notes`: what each reading decided, with its quotes, so a failed fairness case can be traced to the words. */
-  const results: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; costUsd?: number; notes?: string[] }>; passRate: number }> = {};
+  /**
+   * `notes`: what each reading decided, with its quotes, so a failed fairness case can be traced to the words.
+   * `diagnostics`: on a failing screening chat, scorecard or write-up case only, the chat and what the model returned
+   * before the code's checks (diagnostics.ts; synthetic data).
+   */
+  const results: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; costUsd?: number; notes?: string[]; diagnostics?: CaseDiagnostics }>; passRate: number }> = {};
   const findingsOf = (label: string, a: EvidenceAssessment) => `${label}: ${a.overall}; ${a.requirementFindings.map((x) => `${x.requirementKey}=${x.met}${x.evidence?.quote ? ` ("${x.evidence.quote}")` : ""}`).join("; ")} | skills: ${a.competencyFindings.map((x) => `${x.competencyKey}=${x.finding}${x.evidence?.quote ? ` ("${x.evidence.quote.slice(0, 50)}")` : ""}`).join("; ")}`;
 
   // The eval has no live wage service: the market check falls back to the playbook's table, as production does when the
@@ -371,32 +376,54 @@ async function main() {
       let humanRequested = false;
       let done = false;
       const ctx = (latest: string | null): ScreenContext => ({ company: { name: "Eval Dental" }, packet, candidate: { firstName: "Alex" }, channel: "web", progress, answers, transcript, focusUnknowns: [], latestCandidateMessage: latest });
+      // Wave S9: what a failing case needs to be diagnosed (synthetic data): every message, the model's own turn and the
+      // turn after the code's rules, with the progress, and the answers by key.
+      const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
+      const trace: string[] = [`questions: ${packet.screening.questions.map((x) => `${x.key} (${x.kind})`).join(", ")}`];
+      // and the full record behind those lines (diagnostics.ts): each turn as the model returned it and after the rules
+      const traced: NonNullable<CaseDiagnostics["turns"]> = [];
       const step = async (latest: string | null) => {
         const r = await runPrompt(q, rt, screenTurnPrompt, ctx(latest), { companyId: null, inputRef: { eval: persona.id, turn: transcript.length } });
         if (!r.ok) { failures.push(`turn failed: ${r.error}`); return false; }
-        const t = enforceTurnRules(r.output, packet, progress, answers);
+        // what the app does with the turn (finishScreenTurn): the conversation and the message it answers go with it
+        const t = enforceTurnRules(r.output, packet, progress, answers, { transcript, latest });
         if (t.answerRecorded) answers = { ...answers, [t.answerRecorded.questionKey]: redactProtected(t.answerRecorded.answer) };
         progress = advanceProgress(progress, t);
         transcript.push({ role: "assistant", content: t.messageToCandidate, at: new Date().toISOString(), questionKey: t.questionKey ?? undefined });
         turns.push(t);
+        traced.push({ model: traceTurn(r.output), afterRules: traceTurn(t) });
+        trace.push(`model: ${cut(JSON.stringify(r.output), 500)}`, `turn: questionKey=${t.questionKey ?? "-"} followUp=${t.followUpReason ?? "-"} recorded=${t.answerRecorded ? `${t.answerRecorded.questionKey}: ${cut(t.answerRecorded.answer, 120)}` : "-"} sentiment=${t.sentiment} asked=${t.candidateAskedAbout ?? "-"} done=${t.done} human=${t.humanRequested} | ${cut(t.messageToCandidate, 200)}`, `progress: current=${progress.currentQuestionKey ?? "-"} asked=${progress.askedKeys.join(",")} followUps=${JSON.stringify(progress.followUps)} confused=${progress.confusedTurns}`);
         humanRequested = humanRequested || t.humanRequested;
         done = done || t.done;
         return !t.humanRequested && !t.done;
       };
-      let go = await step(null);
-      for (const m of persona.messages) {
-        if (!go) break;
+      const say = async (m: string) => {
         transcript.push({ role: "candidate", content: m, at: new Date().toISOString() });
-        go = await step(m);
+        trace.push(`candidate: ${cut(m, 200)}`);
+        return step(m);
+      };
+      let go = await step(null);
+      if (persona.answer) {
+        // A persona that answers what it is asked (Wave S9): the question the last turn moved to, or, when it stayed on
+        // the question (a follow-up), the follow-up on it; never more replies than the conversation may take.
+        const replied: ScreeningQuestion[] = [];
+        for (let i = 0; go && i < 3 * packet.screening.questions.length + 2; i++) {
+          const last = turns.at(-1);
+          const question = packet.screening.questions.find((x) => x.key === (last?.questionKey ?? progress.currentQuestionKey));
+          const m = question ? persona.answer({ question, followUp: !last?.questionKey, replied }) : null;
+          if (!question || m === null) break;
+          replied.push(question);
+          go = await say(m);
+        }
+      } else {
+        for (const m of persona.messages) {
+          if (!go) break;
+          go = await say(m);
+        }
       }
-      // a cooperative candidate keeps answering until the assistant closes
-      let guard = 0;
-      while (go && persona.id === "cooperative" && guard++ < 6) {
-        transcript.push({ role: "candidate", content: "Yes, that works for me and I can say more if it helps.", at: new Date().toISOString() });
-        go = await step("Yes, that works for me and I can say more if it helps.");
-      }
-      if (failures.length === 0) failures.push(...persona.expect({ turns, answers, humanRequested, done }));
-      out.push({ id: persona.id, pass: failures.length === 0, failures });
+      const said = transcript.filter((x) => x.role === "candidate").map((x) => x.content);
+      if (failures.length === 0) failures.push(...persona.expect({ turns, answers, humanRequested, done, packet, said }));
+      out.push({ id: persona.id, pass: failures.length === 0, failures, ...(failures.length ? { notes: [...trace, `answers: ${cut(JSON.stringify(answers), 800)}`], diagnostics: { transcript: traceTranscript(transcript), turns: traced, answers: Object.fromEntries(Object.entries(answers).map(([k, a]) => [k, clipText(a)])) } } : {}) });
     }
     results["screen.conversation"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
   }
@@ -416,7 +443,41 @@ async function main() {
     const readings = await Promise.all(Array.from({ length: SCORECARD_READINGS }, (_, i) => runPrompt(q, rt, screenAssessPrompt, seen, { companyId: null, inputRef: { eval: id, reading: i + 1, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() } })));
     // what the app does once the model has answered, not a copy of it
     const shown = scorecardReadings(readings, view, { transcript: input.transcript, answers: input.answers, progress: input.progress }, role);
-    return { shown, raws: readings.flatMap((r) => (r.ok ? [r.output] : [])), role };
+    return { shown, raws: readings.flatMap((r) => (r.ok ? [r.output] : [])), role, readings, view };
+  };
+
+  /**
+   * Wave S9: what a failing scorecard case needs to be diagnosed next time (synthetic data): the chat, the must-haves the
+   * scorecard reads (their words decide which question a short answer is about), each reading as the model wrote it
+   * (must-haves with their quotes, its reasons, unknowns and anomalies) and after the code's checks, and what was shown.
+   */
+  const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
+  const mustHavesOf = (a: Pick<ScreenAssessment, "requirementFindings">) => a.requirementFindings.map((x) => `${x.requirementKey}=${x.met}${x.evidence ? ` (${x.evidence.quote ? `"${clip(x.evidence.quote, 80)}"` : "no quote"}, ${x.evidence.source})` : ""}`).join("; ") || "none written";
+  const scorecardNotes = (input: ReturnType<ScreenAssessCase["build"]>, chat: Awaited<ReturnType<typeof scoreChat>>): string[] => {
+    const screen = { transcript: input.transcript, answers: input.answers, progress: input.progress };
+    const credentials = credentialMustHaves(chat.role);
+    return [
+      ...input.transcript.slice(0, 20).map((t) => `${t.role}: ${clip(t.content, 200)}`),
+      `must-haves: ${chat.role.requirements.mustHaves.filter((m) => credentials.has(m.key) || m.evidencedBy.includes("screen")).map((m) => `${m.key} "${m.text}" [${m.evidencedBy.join(",")}]${credentials.has(m.key) ? " credential" : ""}`).join(" | ") || "none"}`,
+      ...chat.readings.flatMap((r, i) =>
+        r.ok
+          ? [
+              `reading ${i + 1}: ${mustHavesOf(r.output)} | ${r.output.overall}, ${r.output.recommendation} | reasons: ${clip((r.output.confidenceReasons ?? []).join("; "), 200)} | unknowns: ${clip(r.output.unknowns.map((u) => u.question).join("; "), 200)} | anomalies: ${clip(r.output.anomalies.map((a) => a.detail).join("; "), 200)}`,
+              `reading ${i + 1} after the checks: ${mustHavesOf(scorecardOutcome(r.output, chat.view, screen, chat.role))}`,
+            ]
+          : [`reading ${i + 1}: none (${r.reason}: ${clip(r.error, 200)})`],
+      ),
+      ...(chat.shown.ok ? [`shown: ${mustHavesOf(chat.shown.output)} | ${chat.shown.output.overall}, ${chat.shown.output.recommendation}`] : []),
+    ];
+  };
+  /** And the full record behind those lines (diagnostics.ts): the chat, each reading as the model wrote it, and what was shown; `chats`: each read of it. */
+  const scorecardDiagnostics = (input: ReturnType<ScreenAssessCase["build"]>, chats: Array<Awaited<ReturnType<typeof scoreChat>>>): CaseDiagnostics => {
+    const read = (n: number) => (chats.length > 1 ? `read ${n + 1}, ` : "");
+    return {
+      transcript: traceTranscript(input.transcript),
+      readings: chats.flatMap((chat, n) => chat.readings.map((r, i) => ({ label: `${read(n)}reading ${i + 1}`, ...traceOutcome(r) }))),
+      shown: chats.map((chat, n) => ({ label: `${read(n)}shown`, ...traceOutcome(chat.shown) })),
+    };
   };
 
   if (runs("screen.assess")) {
@@ -424,10 +485,11 @@ async function main() {
     const out: (typeof results)[string]["cases"] = [];
     for (const c of screenAssessCases) {
       const input = c.build(packet);
-      const { shown, raws, role } = await scoreChat(c.id, packet, input);
-      if (!shown.ok || !raws[0]) { out.push({ id: c.id, pass: false, failures: [`assess failed: ${shown.ok ? "no reading came back" : shown.error}`] }); continue; }
+      const chat = await scoreChat(c.id, packet, input);
+      const { shown, raws, role } = chat;
+      if (!shown.ok || !raws[0]) { out.push({ id: c.id, pass: false, failures: [`assess failed: ${shown.ok ? "no reading came back" : shown.error}`], notes: scorecardNotes(input, chat), diagnostics: scorecardDiagnostics(input, [chat]) }); continue; }
       const f = [...(c.expect?.(raws[0], { packet: role, transcript: input.transcript }) ?? []), ...(c.expectShown?.(shown.output, { packet: role, transcript: input.transcript }) ?? []).map((x) => `shown: ${x}`)];
-      out.push({ id: c.id, pass: f.length === 0, failures: f });
+      out.push({ id: c.id, pass: f.length === 0, failures: f, ...(f.length ? { notes: scorecardNotes(input, chat), diagnostics: scorecardDiagnostics(input, [chat]) } : {}) });
     }
     results["screen.assess"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
   }
@@ -440,9 +502,10 @@ async function main() {
       const input = c.build(packet);
       const one = await scoreChat(`${c.id}_read_1`, packet, input);
       const two = await scoreChat(`${c.id}_read_2`, packet, input);
-      if (!one.shown.ok || !two.shown.ok) { out.push({ id: c.id, pass: false, failures: [one.shown, two.shown].flatMap((x) => (x.ok ? [] : [x.error])) }); continue; }
+      if (!one.shown.ok || !two.shown.ok) { out.push({ id: c.id, pass: false, failures: [one.shown, two.shown].flatMap((x) => (x.ok ? [] : [x.error])), diagnostics: scorecardDiagnostics(input, [one, two]) }); continue; }
       const f = scorecardDifferences(one.shown.output, two.shown.output);
-      out.push({ id: c.id, pass: f.length === 0, failures: f });
+      // Wave S9: a case that read differently keeps both reads' notes and full record (synthetic data)
+      out.push({ id: c.id, pass: f.length === 0, failures: f, ...(f.length ? { notes: [...scorecardNotes(input, one).map((n) => `read 1 ${n}`), ...scorecardNotes(input, two).filter((n) => n.startsWith("reading") || n.startsWith("shown")).map((n) => `read 2 ${n}`)], diagnostics: scorecardDiagnostics(input, [one, two]) } : {}) });
     }
     results["screen.consistency"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
   }
@@ -490,7 +553,7 @@ async function main() {
   if (familyRuns("chat")) {
     const chat = await runChatSuite(async (ctx, c) => {
       const r = await runPrompt(q, rt, screenTurnPrompt, ctx, { companyId: null, inputRef: { eval: `chat_${c.id}` } });
-      return r.ok ? r.output : null;
+      return r.ok ? r.output : `${r.reason}: ${clipText(r.error)}`;
     }, runs);
     Object.assign(results, chat);
   }
@@ -502,7 +565,8 @@ async function main() {
     for (const c of writeupCases) {
       const r = await runPrompt(q, rt, screenWriteupPrompt, writeupContextOf(c), { companyId: null, inputRef: { eval: c.id } });
       const f = writeupCaseFailures(c, r.ok ? r.output : null);
-      out.push({ id: c.id, pass: f.length === 0, failures: f });
+      // Wave S9: a failing case keeps what the model wrote and what Review & send would show, with why (synthetic data)
+      out.push({ id: c.id, pass: f.length === 0, failures: f, ...(f.length ? { notes: writeupCaseNotes(c, r.ok ? r.output : null, r.ok ? null : `${r.reason}: ${r.error}`), diagnostics: { transcript: traceTranscript(c.transcript), writeup: traceOutcome(r) } } : {}) });
     }
     results["screen.writeup"] = { cases: out, passRate: out.filter((x) => x.pass).length / Math.max(1, out.length) };
   }

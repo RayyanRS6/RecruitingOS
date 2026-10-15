@@ -118,7 +118,8 @@ describe("Review & send", () => {
     expect(w.answers.map((a) => a.questionKey)).toEqual(view.written.map((q) => q.key));
     expect(w.answers.map((a) => a.questionKey)).toEqual(expect.arrayContaining(["license_confirm", "hard_moment", "pay"]));
     expect(w.aiRunId).toBeTruthy();
-    expect(w.promptVersion).toBe(1);
+    // screen.writeup version 2 (Wave S9): a short reply stays short, and never the question's words
+    expect(w.promptVersion).toBe(2);
     // each question's answer is the candidate's own words; the skipped one is a skip, with nothing written for them
     expect(w.answers.find((a) => a.questionKey === "license_confirm")).toMatchObject({ answer: "Yes", status: "answered", by: "writeup", note: null });
     expect(w.answers.find((a) => a.questionKey === "hard_moment")).toMatchObject({ answer: "", status: "skipped", note: null });

@@ -14,7 +14,8 @@ type Result = {
   suites?: string[] | "all";
   costUsd?: number;
   calls?: number;
-  results: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; notes?: string[] }>; passRate: number }>;
+  /** `diagnostics`: a failing case's full record (diagnostics.ts), kept in the file and not shown on the page. */
+  results: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; notes?: string[]; diagnostics?: unknown }>; passRate: number }>;
 };
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -69,6 +70,10 @@ export function summarize(r: Result, thresholds: Record<string, { minPassRate: n
         lines.push(`- **${x.words.name}**, case \`${c.id}\`: ${c.failures.join("; ") || "failed"}`);
         for (const note of c.notes ?? []) lines.push(`  - ${note}`);
       }
+    }
+    if (bad.some((x) => x.failed.some((c) => c.diagnostics))) {
+      lines.push("");
+      lines.push("For the screening chat, scorecard and write-up cases above, the result file keeps the whole chat and what the AI returned before the app's checks (under `diagnostics`; the fairness run keeps the file as the fairness-results download for 90 days).");
     }
   }
   return lines.join("\n");

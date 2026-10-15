@@ -126,6 +126,17 @@ export function groundedIn(answer: string, candidateText: string): boolean {
   return found / content.length >= 0.8;
 }
 
+/**
+ * The words of an answer that are not the candidate's, as `groundedIn` counts them: a number they did not write, or a
+ * content word that shares no stem with theirs. For a reader working out why an answer was refused (the evals' notes).
+ */
+export function wordsNotTheirs(answer: string, candidateText: string): string[] {
+  const theirs = wordsOf(candidateText);
+  const exact = new Set(theirs);
+  const stems = new Set(theirs.map(stem));
+  return [...new Set(wordsOf(answer).filter((w) => (/\d/.test(w) ? !exact.has(w) : w.length >= 4 && !PLAIN.has(w) && !exact.has(w) && !stems.has(stem(w)))))];
+}
+
 /** An answer written about the candidate rather than in their voice, or with a note written into it. */
 const NOT_THEIR_VOICE = /\b(the candidate|the applicant|candidate's|applicant's|(he|she|they) (said|stated|mentioned|explained|described|noted|reported|indicated)|note from the assistant)\b|(?:^|[.!?)]\s*)note\s*:|\(note\b/i;
 
@@ -184,6 +195,30 @@ function noteOf(note: string | null | undefined): string | null {
   return text;
 }
 
+/** The quotes of a model answer that are pieces of what the candidate sent (`said`), with no protected detail. */
+function keptQuotes(quotes: readonly string[], said: string): string[] {
+  return [...new Set(quotes.map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x && saidByCandidate(x, said) && redactProtected(x) === x))].slice(0, MAX_QUOTES);
+}
+
+/**
+ * Why the model's answer to one question is not kept: the first rule it breaks, or null when it is sound. `own`: their
+ * replies to that question; `said`: everything they sent. One place for `settleWriteup` and the evals' notes (Wave S9),
+ * so a refused answer says why.
+ */
+export function writeupRefusal(m: Pick<ModelAnswer, "answer" | "status" | "quotes" | "note">, own: readonly string[], said: string): string | null {
+  const answer = m.answer.replace(/[ \t]+/g, " ").trim();
+  const note = m.status === "partly" ? noteOf(m.note) ?? WRITEUP_PARTLY_NOTE : null;
+  if (redactProtected(answer) !== answer) return "a sentence about a protected trait";
+  if (!keptQuotes(m.quotes, said).length && !saidByCandidate(answer, said)) return "no quote of theirs";
+  if (!groundedIn(answer, said)) return "words they did not write";
+  if (NOT_THEIR_VOICE.test(answer)) return "not in their voice";
+  if (note && answer.toLowerCase().includes(note.toLowerCase())) return "the note inside the answer";
+  if (own.length && plainNo(own.join(" ")) && !NEGATION.test(answer)) return "their plain no lost";
+  // a no inside a longer reply stays a no: never "managed a budget" from "never managed a budget"
+  if (own.length && !keepsNegations(answer, own.join(" "))) return "a no in their reply lost";
+  return null;
+}
+
 /**
  * The model's write-up held to the rules (see the top of this file), one answer per question in order. `output` null:
  * the model gave nothing usable, and the code draft is used. `declined`: the skips on record (`progress.declined`).
@@ -205,23 +240,14 @@ export function settleWriteup(
     if (!own.length && skips.has(q.key)) return { questionKey: q.key, answer: "", status: "skipped", quotes: [], note: null, by: "writeup" };
     const m = output?.answers.find((a) => a.questionKey === q.key);
     if (!m) return fallback;
-    const quotes = [...new Set(m.quotes.map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x && saidByCandidate(x, said) && redactProtected(x) === x))].slice(0, MAX_QUOTES);
     const answer = m.answer.replace(/[ \t]+/g, " ").trim();
     // nothing given: their reply on record wins over the model's "not given"
     if (m.status === "not_given" || !answer) return own.length ? fallback : { questionKey: q.key, answer: "", status: "not_given", quotes: [], note: noteOf(m.note) ?? WRITEUP_NOT_GIVEN_NOTE, by: "writeup" };
     const note = m.status === "partly" ? noteOf(m.note) ?? WRITEUP_PARTLY_NOTE : null;
-    // a sentence about a protected trait: their own words, with that sentence left out as recorded answers do, instead
-    const sound =
-      redactProtected(answer) === answer &&
-      (quotes.length > 0 || saidByCandidate(answer, said)) &&
-      groundedIn(answer, said) &&
-      !NOT_THEIR_VOICE.test(answer) &&
-      !(note && answer.toLowerCase().includes(note.toLowerCase())) &&
-      !(own.length && plainNo(own.join(" ")) && !NEGATION.test(answer)) &&
-      // a no inside a longer reply stays a no: never "managed a budget" from "never managed a budget"
-      (!own.length || keepsNegations(answer, own.join(" ")));
-    if (!sound) return own.length ? fallback : { questionKey: q.key, answer: "", status: "not_given", quotes: [], note: WRITEUP_NOT_GIVEN_NOTE, by: "writeup" };
-    return { questionKey: q.key, answer, status: m.status, quotes, note, by: "writeup" };
+    // an answer that breaks a rule gives their own words instead (with a sentence about a protected trait left out, as
+    // recorded answers do), or nothing when they gave none
+    if (writeupRefusal(m, own, said)) return own.length ? fallback : { questionKey: q.key, answer: "", status: "not_given", quotes: [], note: WRITEUP_NOT_GIVEN_NOTE, by: "writeup" };
+    return { questionKey: q.key, answer, status: m.status, quotes: keptQuotes(m.quotes, said), note, by: "writeup" };
   });
   return { v: 1, writtenAt: meta.at, aiRunId: meta.aiRunId, promptVersion: meta.promptVersion, answers };
 }

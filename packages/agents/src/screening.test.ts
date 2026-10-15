@@ -3,10 +3,10 @@ import type { RolePacket, ScreenAssessment, ScreenProgress, ScreenTranscriptEntr
 import { FakeProvider, screenAssessPrompt, screenTurnPrompt, type RunOutcome, type ScreenContext } from "@ros/ai";
 import { CHAT_WRAP_KEY, chatCounter } from "@ros/core";
 import {
-  CHAT_CALM_LINE, CHAT_LADDER_QUESTION, CHAT_WRAP_QUESTION, EMPTY_SCREEN_PROGRESS, SCORECARD_READINGS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, candidateWordsOf, chatClosingMessage, chatFactsFor, chatGaps, chatNextLine, chatOpening, chatPacket, enforceChatTurn, enforceTurnRules, gapQuestion,
-  newScreenProgress, nextQuestion, recruiterNotesOf, redactProtected, reviewItems, saidByCandidate, scorecardReadings, screenAnswerOf, screenCommand, screenContextOf, screenIntro, verifyScreenQuotes, withChatPlan, withdrawPending, type ChatFacts,
+  CHAT_CALM_LINE, CHAT_LADDER_QUESTION, CHAT_WRAP_QUESTION, CONFUSED_OFFER, EMPTY_SCREEN_PROGRESS, SCORECARD_READINGS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, candidateWordsOf, chatClosingMessage, chatFactsFor, chatGaps, chatNextLine, chatOpening, chatPacket, enforceChatTurn, enforceTurnRules, gapQuestion,
+  newScreenProgress, nextQuestion, onlyQuestions, plainCredentialAnswers, recruiterNotesOf, redactProtected, reviewItems, saidByCandidate, scorecardReadings, screenAnswerOf, screenCommand, screenContextOf, screenIntro, seemsConfused, verifyScreenQuotes, withChatPlan, withdrawPending, type ChatFacts,
 } from "./screening";
-import { answerInContext } from "./triage";
+import { answerInContext, credentialMustHaves } from "./triage";
 import { FOCUS_INTRO, focusQuestionsFrom, focusedPacket, packetForFocusedInvite, unfairQuestion } from "./screen-focus";
 import { registerFakeHandlers } from "./fake-handlers";
 
@@ -288,6 +288,79 @@ describe("the scorecard trusts only what the candidate sent (known bug 13)", () 
   });
 });
 
+/**
+ * Wave S9 (the first real-model run of the scorecard): a plain "Yes" or "No" to the closed question about a credential
+ * is a plain answer, settled in code whatever each reading wrote (the founder's licence rule: a plain yes is yes, a
+ * plain no is no), and left to the model whenever the candidate said anything more about it.
+ */
+describe("a plain yes or no to the licence question settles the licence", () => {
+  const packet = { requirements: { mustHaves: [{ key: "licence", text: "Active CA RDH license", rationale: "law", evidencedBy: ["screen"] }, { key: "perio", text: "Periodontal charting", rationale: "r", evidencedBy: ["screen"] }], niceToHaves: [], eligibility: [] }, competencies: [] } as unknown as RolePacket;
+  const subjects = new Map([["licence", "Active CA RDH license"], ["permit", "California local anesthesia permit"]]);
+  const at = "2026-10-15T10:00:00.000Z";
+  const asked = (content: string, questionKey?: string): ScreenTranscriptEntry => ({ role: "assistant", content, at, ...(questionKey ? { questionKey } : {}) });
+  const said = (content: string, over: Partial<ScreenTranscriptEntry> = {}): ScreenTranscriptEntry => ({ role: "candidate", content, at, ...over });
+  const LICENCE_Q = asked("Do you hold a California RDH license?", "licence_check");
+  const card = (requirementFindings: ScreenAssessment["requirementFindings"]): ScreenAssessment => ({ overall: "potential", confidence: "medium", summary: "s", strengths: [], concerns: [], unknowns: [], competencyFindings: [], requirementFindings, anomalies: [], questionFindings: [], compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation: "interview", rationale: "r" });
+  const ok = (output: ScreenAssessment, runId: string): RunOutcome<ScreenAssessment> => ({ ok: true, output, runId, model: "m" });
+  const shown = (transcript: ScreenTranscriptEntry[], readings: ScreenAssessment[]) => {
+    const out = scorecardReadings(readings.map((r, i) => ok(r, `r${i + 1}`)), { restore: (s: string) => s }, { transcript, answers: {}, progress: EMPTY_SCREEN_PROGRESS }, packet);
+    if (!out.ok) throw new Error("expected a scorecard");
+    return out.output.requirementFindings.find((f) => f.requirementKey === "licence");
+  };
+  // what the real model wrote (15 Oct 2026): "unknown" with nothing quoted, or the licence left out
+  const unread = [card([{ requirementKey: "licence", met: "unknown" }]), card([]), card([{ requirementKey: "licence", met: "unknown", evidence: { source: "screen", quote: "Yes" } }])];
+
+  it("a bare 'Yes' is 'yes', quoted as sent, whatever each reading wrote; a bare 'No' is 'no'", () => {
+    expect(shown([LICENCE_Q, said("Yes")], unread)).toEqual({ requirementKey: "licence", met: "yes", evidence: { source: "screen", quote: "Yes" } });
+    expect(shown([LICENCE_Q, said("No")], unread)).toEqual({ requirementKey: "licence", met: "no", evidence: { source: "screen", quote: "No" } });
+    // a model quote with a full stop the candidate never typed fails the quote check, and the answer still settles it
+    expect(shown([LICENCE_Q, said("Yes")], [0, 1, 2].map(() => card([{ requirementKey: "licence", met: "yes", evidence: { source: "screen", quote: "Yes." } }])))).toMatchObject({ met: "yes", evidence: { quote: "Yes" } });
+    // and the reasons say why
+    const out = scorecardReadings(unread.map((r, i) => ok(r, `r${i + 1}`)), { restore: (s: string) => s }, { transcript: [LICENCE_Q, said("Yes")], answers: {}, progress: EMPTY_SCREEN_PROGRESS }, packet);
+    if (out.ok) expect(out.output.confidenceReasons?.at(-1)).toBe("a licence or certificate is read from the candidate's plain yes or no to the question about it");
+  });
+
+  it("is left to the model when they said more about it, changed it, or said elsewhere it lapsed", () => {
+    // a lapse said while the question was asked, or later in the chat
+    expect(plainCredentialAnswers([LICENCE_Q, said("Yes"), asked("Is it current?"), said("It lapsed in June.")], credentialMustHaves(packet), subjects).size).toBe(0);
+    expect(plainCredentialAnswers([LICENCE_Q, said("Yes"), asked("Which days can you work?", "days"), said("Monday to Friday. My RDH license lapsed in June though.")], credentialMustHaves(packet), subjects).size).toBe(0);
+    expect(shown([LICENCE_Q, said("Yes"), asked("Is it current?"), said("It lapsed in June.")], unread)).toMatchObject({ met: "unknown" });
+    // an answer changed on "check your answers"
+    expect(plainCredentialAnswers([LICENCE_Q, said("Yes"), asked("Which days can you work?", "days"), said("Monday to Friday."), said("No", { questionKey: "licence_check", source: "edit" })], credentialMustHaves(packet), subjects).size).toBe(0);
+    // a plain "No" with anything else said about the licence elsewhere
+    expect(plainCredentialAnswers([LICENCE_Q, said("No"), asked("Which days can you work?", "days"), said("Any day. I have an RDH license in Nevada.")], credentialMustHaves(packet), subjects).size).toBe(0);
+    // a question of their own or a confused reply on the way changes nothing
+    expect([...plainCredentialAnswers([LICENCE_Q, said("What do you mean?"), asked("Do you hold a California RDH license? Reply HUMAN for a person."), said("Yes I do")], credentialMustHaves(packet), subjects)]).toEqual([["licence", { met: "yes", quote: "Yes I do" }]]);
+    // a yes or no with another word in it is not plain: the model reads it, so a lapsed, pending or out-of-state licence
+    // is never settled as "yes" or "no" from its first word (Wave S9 review; the licence rule)
+    for (const m of ["Yes, lapsed", "Yes, expired", "Yes, pending", "Yes, in Nevada", "Yes, Nevada.", "No, pending", "No, it lapsed", "No, expired"]) expect(plainCredentialAnswers([LICENCE_Q, said(m)], credentialMustHaves(packet), subjects).size, m).toBe(0);
+    expect(shown([LICENCE_Q, said("Yes, lapsed")], unread)).toMatchObject({ met: "unknown" });
+    expect(shown([LICENCE_Q, said("No, pending")], unread)).toMatchObject({ met: "unknown" });
+    for (const m of ["Yes", "Yes.", "Yes I do", "yes, I have.", "Yep!", "No, I don't", "No", "I do"]) expect(plainCredentialAnswers([LICENCE_Q, said(m)], credentialMustHaves(packet), subjects).size, m).toBe(1);
+  });
+
+  it("a 'Yes' to another question never settles the licence, and a 'Yes' to the licence question never settles a permit", () => {
+    expect(plainCredentialAnswers([asked("Can you work Saturdays?", "saturdays"), said("Yes")], credentialMustHaves(packet), subjects).size).toBe(0);
+    expect(shown([asked("Can you work Saturdays?", "saturdays"), said("Yes")], unread)).toMatchObject({ met: "unknown" });
+    const two = plainCredentialAnswers([LICENCE_Q, said("Yes")], new Set(["licence", "permit"]), subjects);
+    expect([...two.keys()]).toEqual(["licence"]);
+    expect([...plainCredentialAnswers([asked("Do you hold a local anesthesia permit?", "permit_check"), said("No")], new Set(["licence", "permit"]), subjects)]).toEqual([["permit", { met: "no", quote: "No" }]]);
+    // a must-have worded apart from the question ("CA dental hygienist" for "California RDH") is still the only licence
+    const worded = new Map([["hyg", "Active CA dental hygienist license"], ["driver", "Valid driver's license"]]);
+    expect([...plainCredentialAnswers([LICENCE_Q, said("Yes")], new Set(["hyg"]), worded)]).toEqual([["hyg", { met: "yes", quote: "Yes" }]]);
+    // and with two licences it fits neither better: left to the model
+    expect(plainCredentialAnswers([LICENCE_Q, said("Yes")], new Set(["hyg", "driver"]), worded).size).toBe(0);
+    // a "No" to an active licence is not said plainly: unknown (the licence rule), never "no"
+    expect(plainCredentialAnswers([asked("Do you have an active RDH license?", "licence_check"), said("No")], credentialMustHaves(packet), subjects).get("licence")).toEqual({ met: "unknown", quote: "No" });
+    // a question about an everyday licence of another kind is never about the job's only licence (Wave S9 review)
+    expect(plainCredentialAnswers([asked("Do you have a valid driver's license?", "drive"), said("Yes")], credentialMustHaves(packet), subjects).size).toBe(0);
+    const rn = new Map([["rn", "Active RN license"]]);
+    for (const q of ["Do you have a valid driver's license and a reliable car?", "Are you licensed to drive a forklift?"]) expect(plainCredentialAnswers([asked(q, "drive"), said("Yes")], new Set(["rn"]), rn).size, q).toBe(0);
+    // while the question about the job's own licence still settles it
+    expect([...plainCredentialAnswers([asked("Do you hold an RN license?", "rn_check"), said("Yes")], new Set(["rn"]), rn)]).toEqual([["rn", { met: "yes", quote: "Yes" }]]);
+  });
+});
+
 describe("the scorecard is read three times, like the résumé (known bugs 20 and 106)", () => {
   const packet = { requirements: { mustHaves: [{ key: "licence", text: "Active CA RDH license", rationale: "law", evidencedBy: ["screen"] }], niceToHaves: [], eligibility: [] }, competencies: [{ key: "chairside", name: "Chairside", definition: "d", weight: 5, evaluatedIn: "both", indicators: ["x"] }, { key: "leadership", name: "Leadership", definition: "d", weight: 3, evaluatedIn: "interview", indicators: ["x"] }] } as unknown as RolePacket;
   const said = "My RDH license expired last spring and the renewal is in progress.\nI anticipate the next instrument every time.";
@@ -363,6 +436,138 @@ describe("AI-written questions pass the code's fairness check before a candidate
       { question: "Can you tell me about your perio charting?", whyItMatters: "must-have" },
     ]);
     expect(qs.map((q) => [q.key, q.question])).toEqual([["unknown_1", "Is your CA RDH license active?"], ["unknown_2", "Can you tell me about your perio charting?"]]);
+  });
+});
+
+/**
+ * Wave S9 (the first real-model run of the screening chat, 15 Oct 2026): in a chat without a plan, what the candidate
+ * wrote decides what is recorded, and the code decides what kind of turn it is, whatever the model labelled. Each case
+ * here is a turn the real model could write.
+ */
+describe("a chat without a plan holds every turn to what the candidate wrote (Wave S9)", () => {
+  const rdh = { screening: { questions: [{ key: "licence", question: "Can you confirm your RDH license state and whether it is currently active?", kind: "eligibility" }, { key: "experience", question: "Tell me about your most recent work.", kind: "skills" }, { key: "pay", question: "What hourly range are you looking for?", kind: "compensation" }], maxMinutes: 10 } } as unknown as RolePacket;
+  const at = "2026-10-15T10:00:00.000Z";
+  const turnOf = (over: Partial<ScreenTurn>): ScreenTurn => ({ messageToCandidate: "Thanks.", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false, ...over });
+  /** The conversation: a string is the candidate's, `ask` the assistant's (with the question it moved to). */
+  const chat = (...lines: Array<string | { ask: string; key?: string }>): ScreenTranscriptEntry[] => lines.map((l) => (typeof l === "string" ? { role: "candidate" as const, content: l, at } : { role: "assistant" as const, content: l.ask, at, ...(l.key ? { questionKey: l.key } : {}) }));
+  const askExperience = { ask: "Tell me about your most recent work.", key: "experience" };
+  const onExperience: ScreenProgress = { ...EMPTY_SCREEN_PROGRESS, askedKeys: ["licence", "experience"], currentQuestionKey: "experience" };
+  const rules = (t: ScreenTurn, progress: ScreenProgress, transcript: ScreenTranscriptEntry[], answers: Record<string, string> = { licence: "Yes, active in California." }) => enforceTurnRules(t, rdh, progress, answers, { transcript, latest: [...transcript].reverse().find((x) => x.role === "candidate")?.content ?? null });
+
+  it("a question the candidate asks is never their answer; an answer in the same message is kept; their question answered, the question comes back", () => {
+    const pay = rules(turnOf({ candidateAskedAbout: "pay", messageToCandidate: "The posted range is $45 to $55 an hour.", answerRecorded: { questionKey: "experience", answer: "Before I go on, what does this pay per hour?", complete: false } }), onExperience, chat(askExperience, "Before I go on, what does this pay per hour?"));
+    expect(pay).toMatchObject({ answerRecorded: null, followUpReason: null, questionKey: null });
+    expect(pay.messageToCandidate).toBe("The posted range is $45 to $55 an hour. Tell me about your most recent work.");
+    // an earlier answer recorded again on that turn is not this message's (it is kept when the question settles), and
+    // "moving on" to the question it is on is going back to it, not a follow-up
+    const back = rules(turnOf({ candidateAskedAbout: "pay", questionKey: "experience", messageToCandidate: "The posted range is $45 to $55 an hour. Back to my question:", answerRecorded: { questionKey: "experience", answer: "Six years in a family practice.", complete: true } }), onExperience, chat(askExperience, "Six years in a family practice.", { ask: "How many patients a day?" }, "Ok. What does it pay?"));
+    expect(back).toMatchObject({ answerRecorded: null, followUpReason: null, questionKey: null });
+    expect(back.messageToCandidate).toBe("The posted range is $45 to $55 an hour. Back to my question: Tell me about your most recent work.");
+    const onLicence: ScreenProgress = { ...EMPTY_SCREEN_PROGRESS, askedKeys: ["licence"], currentQuestionKey: "licence" };
+    const mixed = rules(turnOf({ candidateAskedAbout: "pay", messageToCandidate: "The posted range is $45 to $55 an hour.", answerRecorded: { questionKey: "licence", answer: "Yes, active in CA. What does it pay?", complete: true } }), onLicence, chat({ ask: "Can you confirm your RDH license state and whether it is currently active?", key: "licence" }, "Yes, active in CA. What does it pay?"), {});
+    expect(mixed.answerRecorded).toEqual({ questionKey: "licence", answer: "Yes, active in CA.", complete: true });
+    for (const m of ["Before I go on, what does this pay per hour?", "Ok. What are the hours?", "Is it full time?", "Hi, what does it pay?", "Ok, so isn’t it full time?", "???"]) expect(onlyQuestions(m), m).toBe(true);
+    for (const m of ["Yes. What are the hours?", "Six years.", "??? what do you mean"]) expect(onlyQuestions(m), m).toBe(false);
+    // an answer said with a rising "?" is still their answer, recorded as they wrote it (Wave S9 review)
+    for (const m of ["I'm looking for $52 an hour, is that ok?", "Yes, I have an active CA license, why?", "5 years, why?", "Monday to Friday?", "Yes?", "Around $50 an hour?", "Maybe 50 to 54?"]) expect(onlyQuestions(m), m).toBe(false);
+    const onPay: ScreenProgress = { ...EMPTY_SCREEN_PROGRESS, askedKeys: ["licence", "experience", "pay"], currentQuestionKey: "pay" };
+    const rising = rules(turnOf({ done: true, answerRecorded: { questionKey: "pay", answer: "Around $50 an hour?", complete: true } }), onPay, chat({ ask: "What hourly range are you looking for?", key: "pay" }, "Around $50 an hour?"), { licence: "Yes", experience: "Nine a day." });
+    expect(rising).toMatchObject({ done: true, answerRecorded: { questionKey: "pay", answer: "Around $50 an hour?", complete: true } });
+    const unasked = rules(turnOf({ questionKey: "pay" }), onExperience, chat(askExperience, "5 years, why?"));
+    expect(unasked).toMatchObject({ questionKey: "pay", answerRecorded: { questionKey: "experience", answer: "5 years, why?" } });
+    // and a question of theirs after an answer in the same message leaves the answer
+    const okay = rules(turnOf({ questionKey: "pay", answerRecorded: { questionKey: "experience", answer: "Six years in a family practice. Is that enough?", complete: true } }), onExperience, chat(askExperience, "Six years in a family practice. Is that enough?"));
+    expect(okay.answerRecorded).toEqual({ questionKey: "experience", answer: "Six years in a family practice.", complete: true });
+  });
+
+  it("a follow-up is counted whatever the model labelled: one that stays and asks, or the question asked again; the cap still moves on with what they said", () => {
+    const thin = chat(askExperience, "Cleanings mostly");
+    const unlabelled = rules(turnOf({ messageToCandidate: "You mentioned cleanings: how many patients a day?" }), onExperience, thin);
+    expect(unlabelled).toMatchObject({ questionKey: null, followUpReason: "asked for more", answerRecorded: null });
+    expect(advanceProgress(onExperience, unlabelled).followUps.experience).toBe(1);
+    // the model "moves on" to the question it is already on: a follow-up, and the question is not added a second time
+    const reasked = rules(turnOf({ questionKey: "experience", messageToCandidate: "You mentioned cleanings. Tell me about your most recent work." }), onExperience, thin);
+    expect(reasked).toMatchObject({ questionKey: null, followUpReason: "asked again" });
+    expect(reasked.messageToCandidate).toBe("You mentioned cleanings. Tell me about your most recent work.");
+    expect(rules(turnOf({ questionKey: "experience", messageToCandidate: "Thanks." }), onExperience, thin).messageToCandidate).toBe("Thanks. Tell me about your most recent work.");
+    // two follow-ups asked already: the third moves on, and every reply about the question is its answer
+    const capped = rules(turnOf({ messageToCandidate: "And how many of those a day?" }), { ...onExperience, followUps: { experience: 2 } }, chat(askExperience, "Cleanings mostly", { ask: "Which cleanings?" }, "Adult prophies", { ask: "How long each?" }, "An hour"));
+    expect(capped).toMatchObject({ questionKey: "pay", followUpReason: null, answerRecorded: { questionKey: "experience", answer: "Cleanings mostly Adult prophies An hour", complete: false } });
+    expect(capped.messageToCandidate).toBe("Thanks, that helps. Next: What hourly range are you looking for?");
+    // and so does a follow-up the fairness check stops
+    const unfair = rules(turnOf({ followUpReason: "push", messageToCandidate: "You mentioned school runs. How old are your kids?" }), onExperience, chat(askExperience, "Cleanings, around the school runs"));
+    expect(unfair).toMatchObject({ questionKey: "pay", answerRecorded: { questionKey: "experience", answer: "Cleanings, around the school runs", complete: false } });
+  });
+
+  it("a confused reply gets the same question again and the offer of a person: never recorded, never moved past, never closed", () => {
+    const lost = chat(askExperience, "??? what do you mean");
+    // read as an answer and moved on: the code stays on the question, records nothing and offers a person
+    const t = rules(turnOf({ questionKey: "pay", answerRecorded: { questionKey: "experience", answer: "??? what do you mean", complete: false } }), onExperience, lost);
+    expect(t).toMatchObject({ sentiment: "confused", questionKey: null, followUpReason: "the candidate seemed confused", answerRecorded: null, done: false, humanRequested: false });
+    expect(t.messageToCandidate).toBe(`No problem. Tell me about your most recent work. ${CONFUSED_OFFER}`);
+    expect(advanceProgress(onExperience, t)).toMatchObject({ currentQuestionKey: "experience", confusedTurns: 1, followUps: { experience: 1 } });
+    // a rephrasing the model wrote stays as it is, and offers a person once
+    const own = rules(turnOf({ sentiment: "confused", followUpReason: "confused", messageToCandidate: "Sorry, I meant: what did a usual day at your last job look like? You can also reply HUMAN for a person." }), onExperience, lost);
+    expect(own.messageToCandidate).toBe("Sorry, I meant: what did a usual day at your last job look like? You can also reply HUMAN for a person.");
+    expect(rules(turnOf({ done: true, sentiment: "confused", messageToCandidate: "Thanks, that is all." }), onExperience, lost)).toMatchObject({ done: false, questionKey: null, messageToCandidate: `No problem. Tell me about your most recent work. ${CONFUSED_OFFER}` });
+    // a first confusion is offered a person, not handed over unasked; one right after another may be
+    const handed = turnOf({ humanRequested: true, sentiment: "confused", messageToCandidate: "A person from the hiring team will follow up with you." });
+    expect(rules(handed, onExperience, lost)).toMatchObject({ humanRequested: false, sentiment: "confused", questionKey: null, messageToCandidate: `No problem. Tell me about your most recent work. ${CONFUSED_OFFER}` });
+    expect(rules(handed, { ...onExperience, confusedTurns: 1 }, lost)).toMatchObject({ humanRequested: true, messageToCandidate: "A person from the hiring team will follow up with you." });
+    for (const m of ["???", "What do you mean?", "Sorry, I don't understand", "huh?", "I'm confused.", "??? what do you mean"]) expect(seemsConfused(m), m).toBe(true);
+    for (const m of ["What do you mean by perio charting?", "Yes", "I see nine patients a day.", ""]) expect(seemsConfused(m), m).toBe(false);
+    // the reply after it is the answer; the confused one is never part of it
+    const after = rules(turnOf({ questionKey: "pay", answerRecorded: { questionKey: "experience", answer: "Hygiene at a family practice, nine patients a day.", complete: true } }), { ...onExperience, followUps: { experience: 1 }, confusedTurns: 1 }, [...lost, { role: "assistant", content: t.messageToCandidate, at }, { role: "candidate", content: "Hygiene at a family practice, nine patients a day.", at }]);
+    expect(after.answerRecorded).toEqual({ questionKey: "experience", answer: "Hygiene at a family practice, nine patients a day.", complete: true });
+  });
+
+  it("every question is asked: a close before the end goes on, an acknowledgment that asks nothing moves on once the question has an answer (and asks it again before), a question written out is the move to it, and the opening asks the first", () => {
+    const answered = chat(askExperience, "Nine patients a day.");
+    const early = rules(turnOf({ done: true, messageToCandidate: "Thanks Alex, that is everything I needed.", answerRecorded: { questionKey: "experience", answer: "Nine patients a day.", complete: true } }), onExperience, answered);
+    expect(early).toMatchObject({ done: false, questionKey: "pay", answerRecorded: { questionKey: "experience", answer: "Nine patients a day." } });
+    expect(early.messageToCandidate).toBe("Thanks. What hourly range are you looking for?");
+    const ack = rules(turnOf({ messageToCandidate: "Got it, thanks.", answerRecorded: { questionKey: "experience", answer: "Nine patients a day.", complete: true } }), onExperience, answered);
+    expect(ack).toMatchObject({ questionKey: "pay", answerRecorded: { questionKey: "experience", answer: "Nine patients a day.", complete: true } });
+    expect(ack.messageToCandidate).toBe("Got it, thanks. What hourly range are you looking for?");
+    // an answer recorded on an earlier turn (before a follow-up) counts too
+    expect(rules(turnOf({ messageToCandidate: "Got it, thanks." }), onExperience, answered, { licence: "Yes", experience: "Nine patients a day." })).toMatchObject({ questionKey: "pay", answerRecorded: { questionKey: "experience", answer: "Nine patients a day." } });
+    expect(rules(turnOf({ messageToCandidate: "Thanks. What hourly range are you looking for?" }), onExperience, answered)).toMatchObject({ questionKey: "pay", followUpReason: null });
+    // after the last question, an acknowledgment is the close, with the answer kept
+    const last: ScreenProgress = { ...EMPTY_SCREEN_PROGRESS, askedKeys: ["licence", "experience", "pay"], currentQuestionKey: "pay" };
+    const end = rules(turnOf({ messageToCandidate: "Thanks.", answerRecorded: { questionKey: "pay", answer: "I'm looking for $52 an hour.", complete: true } }), last, chat({ ask: "What hourly range are you looking for?", key: "pay" }, "I'm looking for $52 an hour."), { licence: "Yes", experience: "Nine a day." });
+    expect(end).toMatchObject({ done: true, questionKey: null, answerRecorded: { questionKey: "pay", answer: "I'm looking for $52 an hour." } });
+    expect(end.messageToCandidate).toBe(`Thanks, that is everything I needed. ${SCREEN_NEXT_LINE} Reply HUMAN at any time to reach a person.`);
+    // Wave S9 review: before the question has an answer, an acknowledgment that asks nothing is the question asked again
+    // (a follow-up, so the cap holds), never a move on or a close with "One sec" as the answer
+    const wait = rules(turnOf({ messageToCandidate: "Sure, take your time." }), onExperience, chat(askExperience, "One sec, let me check my notes."));
+    expect(wait).toMatchObject({ questionKey: null, done: false, followUpReason: "asked again", answerRecorded: null });
+    expect(wait.messageToCandidate).toBe("Sure, take your time. Tell me about your most recent work.");
+    const lastWait = rules(turnOf({ messageToCandidate: "Sure, take your time." }), last, chat({ ask: "What hourly range are you looking for?", key: "pay" }, "One sec, let me check my notes."), { licence: "Yes", experience: "Nine a day." });
+    expect(lastWait).toMatchObject({ done: false, questionKey: null, answerRecorded: null });
+    expect(lastWait.messageToCandidate).toBe("Sure, take your time. What hourly range are you looking for?");
+    // and a close before it has an answer goes back to it, never on to the next question with that line as the answer
+    const gone = rules(turnOf({ done: true, messageToCandidate: "Understood, thank you for your time." }), onExperience, chat(askExperience, "I'm no longer interested, thanks"));
+    expect(gone).toMatchObject({ done: false, questionKey: null, followUpReason: "asked again", answerRecorded: null });
+    expect(gone.messageToCandidate).toBe("Thanks. Tell me about your most recent work.");
+    const opening = enforceTurnRules(turnOf({ messageToCandidate: "Hi Alex, this is the hiring team's AI assistant. Reply HUMAN at any time to reach a person." }), rdh, EMPTY_SCREEN_PROGRESS, {}, { transcript: [], latest: null });
+    expect(opening.questionKey).toBe("licence");
+    expect(opening.messageToCandidate).toBe("Hi Alex, this is the hiring team's AI assistant. Reply HUMAN at any time to reach a person. Can you confirm your RDH license state and whether it is currently active?");
+  });
+
+  it("an answer recorded is the candidate's own words: reworded, or missing their first words, it is what they wrote; a personal detail left out stays out", () => {
+    const two = chat(askExperience, "Cleanings mostly", { ask: "You mentioned cleanings: how many a day?" }, "I see 9 patients a day and chart perio maintenance in Dentrix.");
+    const followed: ScreenProgress = { ...onExperience, followUps: { experience: 1 } };
+    const reworded = rules(turnOf({ questionKey: "pay", answerRecorded: { questionKey: "experience", answer: "Mostly cleanings; about nine patients daily, charting in Dentrix.", complete: true } }), followed, two);
+    expect(reworded.answerRecorded).toEqual({ questionKey: "experience", answer: "Cleanings mostly I see 9 patients a day and chart perio maintenance in Dentrix.", complete: true });
+    const lastOnly = rules(turnOf({ questionKey: "pay", answerRecorded: { questionKey: "experience", answer: "I see 9 patients a day and chart perio maintenance in Dentrix.", complete: true } }), followed, two);
+    expect(lastOnly.answerRecorded?.answer).toBe("Cleanings mostly I see 9 patients a day and chart perio maintenance in Dentrix.");
+    // the pay answer, word for word, however the model copied it
+    const pay: ScreenProgress = { ...EMPTY_SCREEN_PROGRESS, askedKeys: ["licence", "experience", "pay"], currentQuestionKey: "pay" };
+    expect(rules(turnOf({ done: true, answerRecorded: { questionKey: "pay", answer: "$52/hour", complete: true } }), pay, chat({ ask: "What hourly range are you looking for?", key: "pay" }, "I'm looking for $52 an hour."), { licence: "Yes", experience: "Nine a day." }).answerRecorded?.answer).toBe("I'm looking for $52 an hour.");
+    const personal = chat(askExperience, "I'm 52 and I chart perio in Dentrix every day.");
+    expect(rules(turnOf({ questionKey: "pay", answerRecorded: { questionKey: "experience", answer: "I chart perio in Dentrix every day.", complete: true } }), onExperience, personal).answerRecorded?.answer).toBe("I chart perio in Dentrix every day.");
+    // and the code never puts the detail back
+    expect(rules(turnOf({ questionKey: "pay" }), onExperience, personal).answerRecorded?.answer).toBe("(answer recorded; personal details omitted)");
   });
 });
 
@@ -512,6 +717,51 @@ describe("the Kanvis-style chat", () => {
     expect(p.chat?.items[1].state).toBe("unknown");
     expect(p.chat?.section).toBe("required");
     expect(chatCounter(p.chat)?.label).toBe("0 of 2 required · Required questions");
+  });
+
+  it("records nothing while an item is still being asked, whatever the model put in answerRecorded (Wave S9: the real model recorded a bare 'yes' on the push)", () => {
+    const p = askingNow(start(["arduino", "english"]), "arduino", ["arduino"]);
+    const push = enforceChatTurn(turnOf({ reading: "vague", followUpReason: "nothing specific yet", answerRecorded: { questionKey: "arduino", answer: "Yes", complete: false }, messageToCandidate: "You said yes.\n\nCould you tell me about one specific time?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "Yes"), latest: "Yes" });
+    expect(push.move).toEqual({ key: "arduino", move: "push" });
+    expect(push.turn.answerRecorded).toBeNull();
+    // the analog and the smaller version too: a "No" on the way never stands as the answer for a skill
+    const e = askingNow(start(["arduino", "english"]), "english", ["arduino", "english"]);
+    const analog = enforceChatTurn(turnOf({ reading: "not_done", followUpReason: "ladder", answerRecorded: { questionKey: "english", answer: "No, I haven't", complete: true }, messageToCandidate: "Not done that exactly? Tell me about something similar from your own work." }), chatPacket(role, e), e, {}, { transcript: said("Q", "No, I haven't"), latest: "No, I haven't" });
+    expect(analog.move).toEqual({ key: "english", move: "analog" });
+    expect(analog.turn.answerRecorded).toBeNull();
+    const s = advanceProgress(e, analog.turn, analog.move);
+    const smaller = enforceChatTurn(turnOf({ reading: "not_done", followUpReason: "ladder", answerRecorded: { questionKey: "english", answer: "No, I haven't Not really", complete: true }, messageToCandidate: "Even a small moment?" }), chatPacket(role, s), s, {}, { transcript: said("Q", "No, I haven't", "Not really"), latest: "Not really" });
+    expect(smaller.move).toEqual({ key: "english", move: "smaller" });
+    expect(smaller.turn.answerRecorded).toBeNull();
+    // words with something in them are kept while the push is asked, so "Keep my answer and move on" keeps them (E11)
+    const some = enforceChatTurn(turnOf({ reading: "vague", followUpReason: "nothing specific yet", messageToCandidate: "Could you tell me about one specific time?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "Cleanings and charting"), latest: "Cleanings and charting" });
+    expect(some.move).toEqual({ key: "arduino", move: "push" });
+    expect(some.turn.answerRecorded).toEqual({ questionKey: "arduino", answer: "Cleanings and charting", complete: false });
+    // once the item settles, every reply about it is its answer
+    const q = advanceProgress(p, push.turn, push.move);
+    const settled = enforceChatTurn(turnOf({ reading: "concrete", questionKey: "english", messageToCandidate: "You built a pump." }), chatPacket(role, q), q, {}, { transcript: said("Q", "Yes", "I built a water pump with an Arduino at CUST"), latest: "I built a water pump with an Arduino at CUST" });
+    expect(settled.turn.answerRecorded).toEqual({ questionKey: "arduino", answer: "Yes I built a water pump with an Arduino at CUST", complete: true });
+    // a confused reply or a question of their own on the way is never part of it, and never keeps a bare "yes" on the
+    // push from reading as nothing (Wave S9 review)
+    const lostThenYes = enforceChatTurn(turnOf({ reading: "vague", followUpReason: "nothing specific yet", answerRecorded: { questionKey: "arduino", answer: "??? what do you mean Yes", complete: false }, messageToCandidate: "Could you tell me about one specific time?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "??? what do you mean", "Yes"), latest: "Yes" });
+    expect(lostThenYes.move).toEqual({ key: "arduino", move: "push" });
+    expect(lostThenYes.turn.answerRecorded).toBeNull();
+    const settledAfter = enforceChatTurn(turnOf({ reading: "concrete", questionKey: "english", messageToCandidate: "You built a pump." }), chatPacket(role, q), q, {}, { transcript: said("Q", "??? what do you mean", "Yes", "Is it full time?", "I built a water pump with an Arduino."), latest: "I built a water pump with an Arduino." });
+    expect(settledAfter.turn.answerRecorded).toEqual({ questionKey: "arduino", answer: "Yes I built a water pump with an Arduino.", complete: true });
+  });
+
+  it("a confused candidate gets the item's question again and the offer of a person; a question they ask is never read as their reply (Wave S9)", () => {
+    const p = askingNow(start([]), "wq_explain", ["wq_explain"]);
+    const lost = enforceChatTurn(turnOf({ reading: "vague", questionKey: "wq_room", answerRecorded: { questionKey: "wq_explain", answer: "??? what do you mean", complete: false }, messageToCandidate: "Noted. Several kits fail at once in a class of twenty. How do you handle the room?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "??? what do you mean"), latest: "??? what do you mean" });
+    expect(lost.move).toBeNull();
+    expect(lost.turn).toMatchObject({ sentiment: "confused", questionKey: null, answerRecorded: null, done: false });
+    expect(lost.turn.messageToCandidate).toBe(`No problem.\n\nHow would you explain what a sensor is to six-year-olds?\n\n${CONFUSED_OFFER}`);
+    expect(advanceProgress(p, lost.turn, lost.move).currentQuestionKey).toBe("wq_explain");
+    // their own question: nothing read, nothing recorded, the item still asked
+    const asks = enforceChatTurn(turnOf({ reading: "vague", followUpReason: "push", answerRecorded: { questionKey: "wq_explain", answer: "Is it full time?", complete: false }, messageToCandidate: "A person can tell you more about that. How would you explain a sensor to six-year-olds?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "Is it full time?"), latest: "Is it full time?" });
+    expect(asks.move).toBeNull();
+    expect(asks.turn.answerRecorded).toBeNull();
+    expect(advanceProgress(p, asks.turn, asks.move).chat?.items.find((i) => i.key === "wq_explain")).toMatchObject({ state: "asking", pushes: 0 });
   });
 
   it("a written question: the analog, then not known, keeping their own words; a yes-or-no question takes 'No' as its answer", () => {

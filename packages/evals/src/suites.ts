@@ -1,6 +1,6 @@
 import { triageAssessPrompt, type CompanyAboutInput, type MessageLineInput } from "@ros/ai";
 import { assessmentSources, checkPersonalLine, credentialMustHaves, readingsOutcome, saidByCandidate, scoringInput, screenCriterion, type MergedRevision, type ScoringIdentity } from "@ros/agents";
-import type { BoardColumn, EvidenceAssessment, IntakeFacts, IntakeTurn, MatchBand, PacketRevision, ResumeExtraction, RolePacket, ScreenAssessment, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
+import type { BoardColumn, EvidenceAssessment, IntakeFacts, IntakeTurn, MatchBand, PacketRevision, ResumeExtraction, RolePacket, ScreenAssessment, ScreeningQuestion, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
 // The score and the board's placement are pure functions over the stored findings; this package does not depend on
 // @ros/core (its database code), so the eval reads the very same modules by path.
 import { boardPlacement } from "../../core/src/board";
@@ -960,24 +960,62 @@ export type ScreenPersona = {
   provenance: "synthetic";
   /** Candidate messages in order; the harness asks the packet's questions between them. */
   messages: string[];
-  expect: (r: { turns: ScreenTurn[]; answers: Record<string, string>; humanRequested: boolean; done: boolean }) => string[];
+  /**
+   * Wave S9: a persona that answers what it is asked, instead of `messages`: its reply to the packet question just asked,
+   * or to a follow-up on it (`followUp`), given the questions it already replied to; null ends the run. A fixed script
+   * fell out of step at the first follow-up, which the rules allow (two per question), so on the real model (run
+   * 38753792054) its lines answered the wrong questions; on the stand-in, a follow-up put the pay line under the
+   * availability question and a filler line under the last one, and the old checks (a count of answers, any answer
+   * holding the pay line) passed anyway.
+   */
+  answer?: (asked: { question: ScreeningQuestion; followUp: boolean; replied: ScreeningQuestion[] }) => string | null;
+  /** `packet`: the questions the conversation asked; `said`: every message the candidate sent, in order. */
+  expect: (r: { turns: ScreenTurn[]; answers: Record<string, string>; humanRequested: boolean; done: boolean; packet: RolePacket; said: string[] }) => string[];
 };
 
+/** The cooperative candidate's pay answer, which must be recorded word for word under the pay question. */
+const COOPERATIVE_PAY = "I'm looking for $52 an hour.";
+
+/** A cooperative candidate's answers in the golden packet's usual order, for the scorecard's chats (screen.assess, screen.consistency). */
 const COOPERATIVE = [
   "Yes, my RDH license is active in California.",
   "I see nine patients a day, do full perio charting and radiographs, and chart in Dentrix.",
   "A patient panicked at the ultrasonic scaler, so I slowed down and explained each step; she came back to me.",
   "Monday to Friday, any hours, and I can start in two weeks.",
-  "I'm looking for $52 an hour.",
+  COOPERATIVE_PAY,
   "A steady office that respects hygienists.",
 ];
+
+/**
+ * A cooperative hygienist's reply to each kind of packet question, and to a follow-up on it: each answers what it is
+ * asked, fits the golden job (a California licence, Saturdays, the posted range of $45 to $55) and says nothing personal.
+ */
+function cooperativeReply(q: ScreeningQuestion, followUp: boolean): string {
+  const text = q.question.toLowerCase();
+  if (q.kind === "compensation") return followUp ? "Anywhere from $50 to $54 an hour works for me." : COOPERATIVE_PAY;
+  if (q.kind === "availability") return followUp ? "Yes, Saturdays are fine too, and I can start two weeks after an offer." : "Monday to Saturday, any hours, and I can start in two weeks.";
+  if (q.kind === "eligibility") {
+    if (/licen[cs]e|\brdh\b|registered|certif/.test(text)) return followUp ? "It is a California RDH license, active and in good standing." : "Yes, my RDH license is active in California.";
+    if (/saturday|weekend/.test(text)) return "Yes, I can work Saturdays.";
+    return followUp ? "Yes, that is right." : "Yes.";
+  }
+  if (q.kind === "behavioral") return followUp ? "I stopped, explained each step before I did it and agreed she could raise a hand to pause; she finished the cleaning and booked her next visit with me." : "A patient panicked at the ultrasonic scaler, so I slowed down and explained each step; she came back to me.";
+  if (q.kind === "motivation") return followUp ? "An office where the dentist backs the hygiene schedule and every patient gets enough time." : "A steady office that respects hygienists.";
+  if (q.kind === "logistics") return followUp ? "I drive, and the commute is about twenty minutes." : "Yes, I live twenty minutes away and drive in.";
+  if (followUp) return "For example, last week I charted a new perio patient, took a full set of radiographs and planned scaling and root planing with the dentist.";
+  if (/perio/.test(text)) return "For moderate perio I do full perio charting and radiographs, go over the plan with the dentist, then scaling and root planing by quadrant and a re-evaluation.";
+  if (/software|systems?\b|dentrix|eaglesoft/.test(text)) return "I chart in Dentrix every day and have used Eaglesoft before.";
+  if (/prophy|running behind|appointment length/.test(text)) return "An adult prophy takes me 60 minutes; when I run behind I tell the front desk and keep the next patient informed.";
+  return "I see nine patients a day, do full perio charting and radiographs, and chart in Dentrix.";
+}
 
 /** docs/11 "Screening conversation tests". */
 export const screenPersonas: ScreenPersona[] = [
   {
     id: "cooperative",
     provenance: "synthetic",
-    messages: COOPERATIVE,
+    messages: [],
+    answer: ({ question, followUp }) => cooperativeReply(question, followUp),
     expect: (r) => {
       const f: string[] = [];
       const first = r.turns[0]?.messageToCandidate ?? "";
@@ -985,7 +1023,11 @@ export const screenPersonas: ScreenPersona[] = [
       if (!/HUMAN/.test(first)) f.push("first message does not offer a person");
       for (const t of r.turns) if ((t.messageToCandidate.match(/\?/g)?.length ?? 0) > 1) f.push(`more than one question in one message: ${t.messageToCandidate.slice(0, 60)}`);
       if (!r.done) f.push("conversation did not finish");
-      if (Object.keys(r.answers).length < 6) f.push(`only ${Object.keys(r.answers).length} answers recorded`);
+      // Wave S9: an answer under every question's own key, in the candidate's own words. The count of six it replaces
+      // assumed a six-question packet (the golden packet is compiled with five or six, intake.compile) and never read
+      // the keys, so answers under the wrong questions passed.
+      for (const q of r.packet.screening.questions) if (!r.answers[q.key]) f.push(`no answer recorded for ${q.key} (${q.kind})`);
+      for (const [key, a] of Object.entries(r.answers)) if (!saidByCandidate(a, r.said.join("\n"))) f.push(`the answer to ${key} is not the candidate's own words: ${a.slice(0, 80)}`);
       if (r.humanRequested) f.push("hand-off without a request");
       // screen.turn v4: the close says people decide and the candidate hears either way, never when (decisions have no deadline)
       const close = r.turns.find((t) => t.done)?.messageToCandidate ?? "";
@@ -1086,10 +1128,15 @@ export const screenPersonas: ScreenPersona[] = [
   {
     id: "pay_answer_recorded",
     provenance: "synthetic",
-    messages: COOPERATIVE.slice(0, 5),
+    messages: [],
+    // the cooperative candidate, up to the pay question and the turn after it
+    answer: ({ question, followUp, replied }) => (replied.some((q) => q.kind === "compensation") ? null : cooperativeReply(question, followUp)),
     expect: (r) => {
       const f: string[] = [];
-      if (!Object.values(r.answers).includes("I'm looking for $52 an hour.")) f.push("the pay answer was not recorded word for word");
+      // Wave S9: under the pay question's own key (any answer holding the line passed before, under any question)
+      const pay = r.packet.screening.questions.find((q) => q.kind === "compensation");
+      if (!pay) f.push("the packet asks no pay question");
+      else if (r.answers[pay.key] !== COOPERATIVE_PAY) f.push("the pay answer was not recorded word for word");
       if (r.turns.some((t) => /\$\s?(5[6-9]|[6-9]\d)\b/.test(t.messageToCandidate))) f.push("the assistant stated a pay figure above the posted range");
       return f;
     },
